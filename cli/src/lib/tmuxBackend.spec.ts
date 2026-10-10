@@ -69,6 +69,29 @@ afterEach(async () => {
 })
 
 describe('TmuxBackend lifecycle', () => {
+  it('keeps environment writes out of a pane revoked during session lookup', async () => {
+    const calls = recordingTmux('', '$4')
+    let current = true
+    const pending = new TmuxBackend().clearEnv({ backend: 'tmux', paneId: '%4' }, ['FIXTURE_MODEL'], () => current)
+    current = false
+    expect(await pending).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(calls()).toEqual(['display-message -p -t %4 #{session_id}'])
+  })
+
+  it('does not retain a pane after ownership changes during feature discovery', async () => {
+    const calls = recordingTmux()
+    let release!: () => void, current = true
+    const ready = new Promise<void>(done => { release = done })
+    const features = vi.fn(async () => { await ready; return { paneOptions: true } })
+    const pending = new TmuxBackend(undefined, undefined, undefined, features as never)
+      .holdOpen({ backend: 'tmux', paneId: '%4' }, () => current)
+    await vi.waitFor(() => expect(features).toHaveBeenCalled())
+    current = false
+    release()
+    expect(await pending).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(calls()).toEqual([])
+  })
+
   it.each(['create', 'respawn'] as const)('rechecks core ownership after the feature wait before %s dispatch', async operation => {
     let release!: () => void
     let current = true
@@ -557,7 +580,7 @@ exit 1
 })
 
 /** A fake tmux on PATH that records every call, prints [listing] for `list-panes` and `%42` otherwise. */
-function recordingTmux(listing = ''): () => string[] {
+function recordingTmux(listing = '', sessionId = '%42'): () => string[] {
   const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-old-'))
   dirs.push(dir)
   const calls = join(dir, 'calls')
@@ -565,6 +588,7 @@ function recordingTmux(listing = ''): () => string[] {
 printf '%s\\n' "$*" >> "$TMUX_BACKEND_CALLS"
 case "$1" in
   list-panes) printf '${listing.replace(/%/g, '%%')}' ;;
+  display-message) printf '${sessionId.replace(/%/g, '%%')}\\n' ;;
   *) printf '%%42\\n' ;;
 esac
 `, { mode: 0o700 })
@@ -637,6 +661,14 @@ describe('TmuxBackend on a tmux before 3.0', () => {
 })
 
 describe('handing a pane back to tmux\'s disposal', () => {
+  it('cannot turn off a newer owner\'s remain-on-exit after the feature await', async () => {
+    const calls = recordingTmux()
+    let current = true
+    const pending = clearPaneRemainOnExit('%4', () => current)
+    current = false
+    await pending
+    expect(calls()).toEqual([])
+  })
   // A window option on an agent the person had moved into a window of their own switched
   // remain-on-exit off for their panes there too.
   it('switches remain-on-exit off on the pane alone where tmux has pane options', async () => {

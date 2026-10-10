@@ -1350,10 +1350,11 @@ export function tmuxPaneInfo(pane: string, socket?: string): Promise<TmuxPaneInf
  * Called as soon as a created pane becomes a real agent: from then on it must vanish when its engine
  * exits, exactly like a pane the user started themselves, rather than lingering as a dead pane.
  */
-export async function clearPaneRemainOnExit(pane: string): Promise<void> {
+export async function clearPaneRemainOnExit(pane: string, current?: () => boolean): Promise<void> {
   // The pane's own option where tmux has one (`paneOptionScope`): restarting an agent the person had
   // moved into a window of their own must not switch remain-on-exit off for their panes there.
   const scope = paneOptionScope(await tmuxFeatures())
+  if (current?.() === false) return
   return new Promise((resolve) => {
     run('tmux', ['set-option', scope, '-t', pane, 'remain-on-exit', 'off'], { timeout: 2_000 }, () => resolve())
   })

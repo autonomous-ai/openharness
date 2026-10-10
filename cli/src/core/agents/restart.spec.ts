@@ -253,7 +253,7 @@ describe('restarting an agent', () => {
       expect(bypassPermissionFor).toHaveBeenCalledWith(agent(), expect.any(Function))
       expect(run.deps.liveBypassPermission).toHaveBeenCalledWith(agent())
       expect(run.deps.downgradedPermission).toHaveBeenCalledWith(agent(), true, 'restart')
-      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(agent(), runtime, { env: { GRID_KEY: 'k' } }, 'auto')
+      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(agent(), runtime, { env: { GRID_KEY: 'k' } }, 'auto', expect.any(Function))
       const [target, bypass, swapDeps] = vi.mocked(restartAgent).mock.calls[0]
       expect(target).toEqual({ engine: 'claude', sessionId: 's1' })
       expect(bypass).toBe(true)
@@ -277,7 +277,7 @@ describe('restarting an agent', () => {
       const run = setup(grid, { downgradedPermission: vi.fn(async () => ({ bypassPermission: false })) as never })
       vi.mocked(restartAgent).mockResolvedValueOnce({ ok: true, resumed: false, processIdentity: newProcess } as never)
       expect(await run.restart('a1')).toEqual({ ok: true, session: grid, resumed: false })
-      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(grid, runtime, { env: { GRID_KEY: 'k' } }, null)
+      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(grid, runtime, { env: { GRID_KEY: 'k' } }, null, expect.any(Function))
       expect(vi.mocked(restartAgent).mock.calls[0][1]).toBe(false)
       expect(console.log).toHaveBeenCalledWith('[restart] a1 claude · fresh session · grid Home')
     })

@@ -345,9 +345,10 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * `respawn-pane` inherits it — so respawning with no `-e` flags would leave the old grid in place
    * while reporting a clean swap. This is what makes "back to your own login" actually true.
    */
-  async clearEnv(runtime: TmuxRuntimeRef, names: readonly string[]): Promise<TerminalActionResult> {
+  async clearEnv(runtime: TmuxRuntimeRef, names: readonly string[], current?: () => boolean): Promise<TerminalActionResult> {
     if (!names.length) return legacyActionResult(true, 'tmux clear environment')
     const sessionId = await this.resolveSessionId(runtime.paneId)
+    if (current?.() === false) return terminalActionNotStarted('The harness changed before clearing its environment')
     if (!sessionId) return terminalActionNotStarted('tmux session could not be resolved from pane')
     const ok = await new Promise<boolean>((resolve) => {
       run('tmux', clearEnvArgs(sessionId, names), { timeout: 5_000 }, (error) => resolve(!error))
@@ -373,8 +374,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * re-arming it here tmux destroys the pane — and, being its only pane, the whole session — the
    * instant the old process exits.
    */
-  async holdOpen(runtime: TmuxRuntimeRef): Promise<TerminalActionResult> {
+  async holdOpen(runtime: TmuxRuntimeRef, current?: () => boolean): Promise<TerminalActionResult> {
     const scope = paneOptionScope(await this.features())
+    if (current?.() === false) return terminalActionNotStarted('The harness changed before retaining its pane')
     const ok = await new Promise<boolean>((resolve) => {
       run('tmux', ['set-option', scope, '-t', runtime.paneId, 'remain-on-exit', 'on'], { timeout: 2_000 }, (error) => {
         resolve(!error)

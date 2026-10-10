@@ -54,6 +54,7 @@ export async function captureResumeIdentity(session: RegisteredSession): Promise
     ? { sessionId: explicit, transcriptPath: await findResumedTranscript(session.engine, explicit, options) ?? undefined }
     : await findLiveSession(session.engine, session.cwd, Date.parse(expected.startMarker), {
       ...options, hermesHome: session.hermesHome ?? undefined, pid: expected.pid, bornOnly: true,
+      ...(session.forkedFrom?.sessionId ? { excludedSessionId: session.forkedFrom.sessionId } : {}),
       expectedProcess: expected, nativeBudget: budget,
     }))
   // Codex's open-file finder verifies this owner, all candidate headers and its descriptor

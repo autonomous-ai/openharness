@@ -448,6 +448,17 @@ it('an unbound observation of the same process keeps its confirmed conversation'
   store.save({ ...saved, sessionId: '', transcriptPath: null, title: 'Renamed', boundAt: null, source: null })
   expect(store.get(saved.agentId)).toMatchObject({ sessionId: saved.sessionId, transcriptPath: '/history.jsonl', title: 'Renamed', boundAt: 1, source: 'hook' })
 })
+it.each(['same', 'missing', 'different'] as const)('preserves an unbound Hermes conversation only with a compatible home: %s', async mode => {
+  const { saved, store } = await fixture()
+  Object.assign(saved, { engine: 'hermes', hermesHome: '/fixture/hermes' })
+  store.save(saved)
+  const hermesHome = mode === 'missing' ? undefined : mode === 'same' ? saved.hermesHome : '/fixture/other-hermes'
+  store.save({ ...saved, sessionId: '', transcriptPath: null, hermesHome })
+  expect(store.get(saved.agentId)).toMatchObject({
+    sessionId: mode === 'different' ? '' : saved.sessionId,
+    hermesHome: mode === 'different' ? hermesHome : saved.hermesHome,
+  })
+})
 it('a pathless observation of the same conversation keeps its captured native path', async () => {
   const { saved, store } = await fixture()
   saved.hermesHome = '/fixture/hermes'

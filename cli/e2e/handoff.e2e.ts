@@ -117,11 +117,15 @@ describe('change agent in the edge host', () => {
     expect((await client.request('agent_delete', { agentId: forkId }, 30_000)).error).toBeUndefined()
     client.close()
     await d.stop()
-    // Exercise the handoff reader against the exact pending row observed above. Stop's separate
-    // resume-identity capture can find the source named on a fork's argv; it is not the state this
-    // case covers. With the daemon off, seed the retained unbound record as the store would save it.
+    // Stop must preserve the actual unbound fork and its parent. A recent-file
+    // guess used to give the fork its parent's identity, then ownership settlement
+    // set the parent aside. Verify the saved records before restarting the daemon.
     const savedPath = join(d.dataDir, 'stopped-agents', `${forkId}.json`)
-    writeFileSync(savedPath, JSON.stringify({ version: 1, session: { ...pending, active: false, launch: { state: 'ready' } } }))
+    expect(JSON.parse(readFileSync(savedPath, 'utf8')).session).toMatchObject({
+      agentId: forkId, sessionId: '', forkedFrom: pending.forkedFrom,
+    })
+    expect(JSON.parse(readFileSync(join(d.dataDir, 'stopped-agents', `${agentId}.json`), 'utf8')).session)
+      .toMatchObject({ agentId, sessionId: pending.forkedFrom.sessionId })
     await d.start()
     await until('handoff to reconnect after the restart', () => d.log().split('[services] handoff connected').length >= 3 || null, 30_000, 200)
     const restarted = await LocalClient.connect(d)

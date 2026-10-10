@@ -17,7 +17,9 @@ const hasSqlite = (() => {
 })()
 const d = hasSqlite ? describe : describe.skip
 
-const SID = 'ses_testABC123'
+let sessionNumber = 0
+let SID = 'ses_testABC123'
+beforeEach(() => { SID = `ses_testABC${++sessionNumber}` })
 const OTHER = 'ses_otherXYZ789'
 const OLD = { providerID: 'opencode', modelID: 'big-pickle' }
 const NEW = { providerID: 'minhduccm90-cecb9724', modelID: 'Qwen3.6-35B-A3B' }
@@ -233,11 +235,12 @@ describe('switchOpencodeSessionModel (opencode v2, `opencode api`)', () => {
       .resolves.toMatchObject({ ok: false, code: 'OPENCODE_SESSION_NOT_FOUND', detail: expect.stringContaining('Session not found') })
   })
 
-  it('refuses when the session still reads back on another model after a second try', async () => {
+  it('holds when the session still reads back on another model after a second read', async () => {
     const { run, calls } = fakeApi({ get: () => JSON.stringify({ data: { id: SID, model: { id: OLD.modelID, providerID: OLD.providerID } } }) })
     await expect(switchOpencodeSessionModel(SID, NEW, { run, retryDelayMs: 0 }))
       .resolves.toMatchObject({ ok: false, code: 'OPENCODE_MODEL_SWITCH_FAILED', detail: expect.stringContaining('opencode/big-pickle') })
-    expect(calls.filter((c) => c[1] === 'session.switchModel')).toHaveLength(2)
+    expect(calls.filter((c) => c[1] === 'session.switchModel')).toHaveLength(1)
+    expect(calls.filter((c) => c[1] === 'session.get')).toHaveLength(2)
   })
 
   // `provider/model#variant` is opencode's own way to name an effort (`opencode run -m`): on v2 the
@@ -251,7 +254,7 @@ describe('switchOpencodeSessionModel (opencode v2, `opencode api`)', () => {
       .resolves.toMatchObject({ ok: false, code: 'OPENCODE_MODEL_SWITCH_FAILED' })
   })
 
-  it('tries once more when the first switch did not land, and is done when the second does', async () => {
+  it('reads once more when the first observation lags behind the switch', async () => {
     let reads = 0
     const { run, calls } = fakeApi({ get: () => {
       reads += 1
@@ -259,7 +262,8 @@ describe('switchOpencodeSessionModel (opencode v2, `opencode api`)', () => {
       return JSON.stringify({ data: { id: SID, model: { id: m.modelID, providerID: m.providerID } } })
     } })
     await expect(switchOpencodeSessionModel(SID, NEW, { run, retryDelayMs: 0 })).resolves.toEqual({ ok: true })
-    expect(calls.filter((c) => c[1] === 'session.switchModel')).toHaveLength(2)
+    expect(calls.filter((c) => c[1] === 'session.switchModel')).toHaveLength(1)
+    expect(calls.filter((c) => c[1] === 'session.get')).toHaveLength(2)
   })
 
   it('does not try again where a second try cannot help (no such session)', async () => {
@@ -277,13 +281,13 @@ describe('switchOpencodeSessionModel (opencode v2, `opencode api`)', () => {
     expect(calls.map((c) => c[1])).toEqual(['model.list'])
   })
 
-  it('switches without the check when the catalogue cannot be read, or was not asked for (a grid declared per pane)', async () => {
+  it('holds for an unreadable required catalog; a grid declared per pane does not ask for the catalog', async () => {
     const { run, calls } = fakeApi({ list: () => { throw exitError('', 'HTTP 500') } })
-    await expect(switchOpencodeSessionModel(SID, NEW, { run, checkCatalog: true })).resolves.toEqual({ ok: true })
+    await expect(switchOpencodeSessionModel(SID, NEW, { run, checkCatalog: true })).resolves.toMatchObject({ ok: false })
     const plain = fakeApi({ list: () => JSON.stringify({ data: [] }) })
     await expect(switchOpencodeSessionModel(SID, NEW, { run: plain.run })).resolves.toEqual({ ok: true })
     expect(plain.calls.map((c) => c[1])).not.toContain('model.list')
-    expect(calls.map((c) => c[1])).toContain('session.switchModel')
+    expect(calls.map((c) => c[1])).toEqual(['model.list'])
   })
 
   it('refuses when opencode is not installed, or the id is not a session id', async () => {
