@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Synapse</title>
+<style>
+  :root {
+    --bg: #020305; --text: #d7dae0; --muted: #8a909b; --faint: #4d535d; --line: #1b1f26;
+    --gold: #ffd89a; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 12px/1.5 var(--mono); }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #ink { pointer-events: none; }
+  #vignette { position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 46%, transparent 52%, rgba(0,0,0,.55) 100%); }
+  #veil { position: fixed; inset: 0; pointer-events: none; opacity: 0; }
+
+  .chrome { transition: opacity .8s; }
+  body.arriving .chrome { opacity: 0; }
+  #top { position: fixed; left: 16px; top: 12px; right: 16px; display: flex; gap: 14px; align-items: baseline; pointer-events: none; color: var(--faint); white-space: nowrap; overflow: hidden; }
+  #top b { color: var(--muted); font-weight: 500; letter-spacing: .32em; text-transform: lowercase; }
+  #stats { overflow: hidden; text-overflow: ellipsis; }
+
+  #title { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; opacity: 0; }
+  #title .t1 { font-size: 30px; letter-spacing: .9em; padding-left: .9em; color: #e9ecf2; font-weight: 300; text-transform: lowercase; }
+  #title .t2 { margin-top: 18px; color: var(--muted); letter-spacing: .08em; min-height: 1.5em; }
+
+  #clock { position: fixed; left: 0; right: 0; top: 34px; text-align: center; pointer-events: none; opacity: 0; transition: opacity .35s; }
+  #clock .d { font-size: 30px; letter-spacing: .34em; padding-left: .34em; font-weight: 300; color: #eef0f4; }
+  #clock .s { margin-top: 4px; color: var(--muted); letter-spacing: .06em; }
+  #clock .s i { font-style: normal; color: var(--gold); }
+
+  #strip { position: fixed; top: auto; left: 16px; right: 16px; bottom: 34px; height: 44px; width: calc(100% - 32px); opacity: 0; transition: opacity .35s; pointer-events: none; }
+
+  #prompt { position: fixed; left: 50%; transform: translateX(-50%); bottom: 40px; display: flex; align-items: baseline; gap: 8px; max-width: calc(100% - 32px);
+    padding: 7px 14px; border: 1px solid #262b33; border-radius: 4px; background: rgba(6,8,11,.78); backdrop-filter: blur(6px);
+    font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; white-space: nowrap; }
+  #prompt.on { opacity: 1; }
+  #prompt .caret { color: var(--gold); }
+  #q { color: #f2f3f5; overflow: hidden; text-overflow: ellipsis; }
+  #cursor { display: inline-block; width: .6em; height: 1.05em; background: #f2f3f5; transform: translateY(2px); animation: blink 1.05s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  #count { color: var(--faint); margin-left: 8px; font-size: 12px; }
+
+  #rhythm { position: fixed; left: 16px; bottom: 12px; color: var(--faint); pointer-events: none; white-space: nowrap; opacity: 0; transition: opacity .6s; }
+  #keys { position: fixed; left: 0; right: 0; bottom: 12px; text-align: center; color: var(--faint); pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 16px; }
+  #keys kbd { font: inherit; color: var(--muted); }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); letter-spacing: .3em; pointer-events: none; }
+
+  #dive { position: fixed; inset: 0; display: flex; justify-content: center; overflow: hidden; opacity: 0; pointer-events: none; transition: opacity .45s; }
+  #dive.on { opacity: 1; pointer-events: auto; }
+  #dive .scroll { width: 100%; height: 100%; overflow-y: auto; padding: 9vh 24px 120px;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 44px, #000 calc(100% - 96px), transparent calc(100% - 40px));
+    mask-image: linear-gradient(to bottom, transparent 0, #000 44px, #000 calc(100% - 96px), transparent calc(100% - 40px)); scrollbar-width: thin; scrollbar-color: #2a2f37 transparent; }
+  #dive .col { max-width: 78ch; margin: 0 auto; transform: translateY(10px); transition: transform .6s cubic-bezier(.2,.7,.2,1); }
+  #dive.on .col { transform: none; }
+  #dive .kicker { color: var(--muted); letter-spacing: .14em; text-transform: uppercase; font-size: 11px; display: flex; flex-wrap: wrap; gap: 0 12px; align-items: center; }
+  #dive .kicker .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; box-shadow: 0 0 10px currentColor; background: currentColor; }
+  #dive h1 { font-size: 30px; line-height: 1.25; font-weight: 400; color: #f4f5f7; margin: 16px 0 10px; letter-spacing: -.005em; text-wrap: balance; overflow-wrap: anywhere; }
+  #dive h1.long { font-size: 21px; line-height: 1.45; }
+  #dive .desc { color: #a9afba; font-size: 14px; margin: 0 0 22px; }
+  #dive .body { color: #c9cdd4; font-size: 13.5px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; border-left: 1px solid #262b33; padding-left: 18px; }
+  #dive .body .h { color: #eef0f3; font-weight: 600; display: block; margin-top: .6em; }
+  #dive .body .em { color: #f0d9b0; }
+  #dive .meta { color: var(--faint); margin-top: 18px; font-size: 11px; overflow-wrap: anywhere; }
+  #dive .group { margin-top: 30px; }
+  #dive .group h2 { font-size: 11px; font-weight: 400; color: var(--muted); letter-spacing: .14em; text-transform: uppercase; margin: 0 0 8px; }
+  #dive .row { display: flex; gap: 10px; align-items: baseline; padding: 6px 10px; margin: 0 -10px; border-radius: 3px; color: #b8bdc6; cursor: pointer; }
+  #dive .row .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; transform: translateY(-1px); }
+  #dive .row .txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #dive .row .when { flex: none; color: var(--faint); font-size: 11px; }
+  #dive .row.sel { background: rgba(255,255,255,.07); color: #f4f5f7; }
+  #dive .row.sel::before { content: '›'; color: var(--gold); margin-left: -2px; }
+  #dive .row.self { color: var(--gold); }
+</style>
+</head>
+<body class="arriving">
+<canvas id="gl" aria-label="A brain built from your memories"></canvas>
+<canvas id="ink"></canvas>
+<div id="vignette"></div>
+<div id="veil"></div>
+<div id="loading">gathering memories</div>
+<header id="top" class="chrome"><b>synapse</b><span id="stats"></span></header>
+<div id="title"><div class="t1">synapse</div><div class="t2"></div></div>
+<div id="clock"><div class="d"></div><div class="s"></div></div>
+<canvas id="strip"></canvas>
+<div id="prompt"><span class="caret">›</span><span id="q"></span><span id="cursor"></span><span id="count"></span></div>
+<section id="dive" aria-live="polite"><div class="scroll"><div class="col"></div></div></section>
+<div id="rhythm"></div>
+<footer id="keys" class="chrome"></footer>
+<script src="memory-data.js"></script>
+<script src="synapse.js"></script>
+</body>
+</html>
