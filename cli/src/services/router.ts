@@ -35,11 +35,17 @@ function options(raw: unknown): RouteOption[] {
 function sessions(raw: unknown): RouteSession[] {
   if (!Array.isArray(raw)) return []
   return raw.slice(0, MAX_SESSIONS).flatMap((row) => {
-    const { id, name, asks, about, stoppedAgoMs } = (row ?? {}) as { id?: unknown; name?: unknown; asks?: unknown; about?: unknown; stoppedAgoMs?: unknown }
+    const { id, name, asks, about, stoppedAgoMs, machine, conversation } = (row ?? {}) as { id?: unknown; name?: unknown; asks?: unknown; about?: unknown; stoppedAgoMs?: unknown; machine?: unknown; conversation?: unknown }
     if (typeof id !== 'string' || typeof name !== 'string' || id.length > 4200 || name.length > 300) return []
     const said = Array.isArray(asks) ? asks.filter((ask): ask is string => typeof ask === 'string').slice(0, 3).map((ask) => ask.slice(0, 500)) : []
     const stopped = typeof stoppedAgoMs === 'number' && Number.isFinite(stoppedAgoMs) && stoppedAgoMs >= 0 ? { stoppedAgoMs } : {}
-    return [{ id, name, asks: said, ...(typeof about === 'string' && about.trim() ? { about: about.slice(0, 500) } : {}), ...stopped }]
+    return [{
+      id, name, asks: said,
+      ...(typeof about === 'string' && about.trim() ? { about: about.slice(0, 500) } : {}),
+      ...stopped,
+      ...(typeof machine === 'string' && machine.trim() && machine.length <= 100 ? { machine } : {}),
+      ...(typeof conversation === 'string' && conversation && conversation.length <= 200 ? { conversation } : {}),
+    }]
   })
 }
 

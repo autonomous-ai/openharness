@@ -36,6 +36,10 @@ class TaskRouteChoices {
           if (value.about != null) 'about': value.about,
           if (value.stoppedFor case final stopped?)
             'stoppedAgoMs': stopped.inMilliseconds,
+          'machine': value.machine,
+          if (value.conversation case final conversation?
+              when conversation.isNotEmpty)
+            'conversation': conversation,
         },
     ],
     'projects': [
@@ -64,7 +68,10 @@ bool _usable(String folder) =>
     !folder.contains('/.harness/') &&
     folder.length <= 4096;
 
-const _sessionCap = 40;
+/// The candidates sent, at most: the router shows Jev forty, after it drops twins and empty leftovers, so
+/// it is sent more to choose from — live sessions first, then stopped ones (cli/src/lib/routeDecide.ts
+/// `offered`).
+const _sessionCap = 80;
 
 /// How long a stopped session stays one a task can be for. The rail keeps every stopped session it ever
 /// ran; a week is what a person picks back up ("the lamp work from Tuesday"), and past it the list only
@@ -125,9 +132,9 @@ TaskRouteChoices taskRouteChoices(AppNotifier app, {DateTime? now}) {
       ),
   };
   // Live sessions, and stopped ones active in the last [stoppedSessionsWithin] that can resume their own
-  // conversation — a follow-up typed into a fresh one would land with none of what it follows. The most
-  // recently active first, and at most [_sessionCap]: the first try sent all two hundred the rail keeps,
-  // and the one the task was for was not among the forty Jev was shown.
+  // conversation — a follow-up typed into a fresh one would land with none of what it follows. Live ones
+  // first, then stopped ones, each the most recently active first, and at most [_sessionCap]: sorted by
+  // activity alone, stopped leftovers took the places of live sessions on the owner's desk.
   final live =
       [
         for (final machine in machines)
@@ -139,6 +146,9 @@ TaskRouteChoices taskRouteChoices(AppNotifier app, {DateTime? now}) {
                         agent.lastActivityAt?.isAfter(since) == true)))
               (machine: machine, agent: agent),
       ]..sort((a, b) {
+        final stopped =
+            (a.agent.isStopped ? 1 : 0) - (b.agent.isStopped ? 1 : 0);
+        if (stopped != 0) return stopped;
         final at = a.agent.lastActivityAt, bt = b.agent.lastActivityAt;
         return bt == null
             ? (at == null ? 0 : -1)
@@ -166,6 +176,7 @@ TaskRouteChoices taskRouteChoices(AppNotifier app, {DateTime? now}) {
         about:
             _recent[app]?['${machine.machine.machineId}\n${agent.id}']?.about ??
             _about(_preview(app, machine.machine.machineId, agent)),
+        conversation: agent.sessionId,
         // Never less than nothing: a machine whose clock runs ahead would otherwise read as live.
         stoppedFor: agent.isStopped
             ? _atLeastZero(
@@ -284,6 +295,9 @@ typedef TaskRouteSession = ({
   /// How long ago a stopped session was last active; null for a live one. Jev is told, so a live "lamp
   /// v2" is not mistaken for the stopped "lamp v1" of last week.
   Duration? stoppedFor,
+
+  /// Its conversation: the same one listed twice (resumed, renamed) is one session to the router.
+  String? conversation,
 });
 
 SessionPreview? _preview(AppNotifier app, String machineId, Agent agent) =>

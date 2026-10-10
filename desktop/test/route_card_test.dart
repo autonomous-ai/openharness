@@ -229,11 +229,13 @@ Agent _agent(
 );
 
 void main() {
-  test('the router is offered live sessions on reachable machines, newest first, forty at most', () {
+  test('the router is offered sessions on reachable machines: live ones first, newest first, eighty at most', () {
     final app = _App();
     addTearDown(app.dispose);
     app.machineStates['m']!.agents = [
-      for (var i = 0; i < 50; i++) _agent('a$i', minutesAgo: i),
+      // A stopped session more recent than every live one still comes after them.
+      _agent('recent', status: 'stopped', sessionId: 'c-r', minutesAgo: 0),
+      for (var i = 0; i < 90; i++) _agent('a$i', minutesAgo: i + 1),
       _agent('stopped', status: 'stopped'),
       const Agent(
         id: 'sh',
@@ -255,7 +257,15 @@ void main() {
       app,
       now: _now,
     ).sessions.values.map((s) => s.agentId).toList();
-    expect(ids, [for (var i = 0; i < 40; i++) 'a$i']);
+    expect(ids, [for (var i = 0; i < 80; i++) 'a$i']);
+    app.machineStates['m']!.agents = [
+      _agent('recent', status: 'stopped', sessionId: 'c-r', minutesAgo: 0),
+      for (var i = 0; i < 3; i++) _agent('a$i', minutesAgo: i + 1),
+    ];
+    expect(
+      taskRouteChoices(app, now: _now).sessions.values.map((s) => s.agentId),
+      ['a0', 'a1', 'a2', 'recent'],
+    );
   });
 
   test('a stopped session is offered for a week, when it can resume its own conversation', () {
@@ -297,16 +307,22 @@ void main() {
       app,
       now: _now,
     ).sessions.values.map((s) => s.agentId).toList();
-    expect(ids, ['tuesday', 'live']);
-    // Jev is told it is stopped, and since when; a live one says nothing of the kind.
+    // Live first, whatever is more recent.
+    expect(ids, ['live', 'tuesday']);
+    // Jev is told it is stopped, and since when; a live one says nothing of the kind. Each says where it
+    // runs, and which conversation it is.
     final sent = {
       for (final row
           in taskRouteChoices(app, now: _now).toPayload()['sessions'] as List)
-        (row as Map)['id']: row['stoppedAgoMs'],
+        (row as Map)['id']: (
+          row['stoppedAgoMs'],
+          row['machine'],
+          row['conversation'],
+        ),
     };
     expect(sent, {
-      'm\ntuesday': const Duration(days: 4).inMilliseconds,
-      'm\nlive': null,
+      'm\ntuesday': (const Duration(days: 4).inMilliseconds, 'Office', 'c-1'),
+      'm\nlive': (null, 'Office', null),
     });
     // A machine whose clock runs ahead still reads as stopped, never as live.
     final ahead = taskRouteChoices(

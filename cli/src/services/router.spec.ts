@@ -113,6 +113,14 @@ describe('what a client sends', () => {
     for (const odd of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY, '3600000']) expect(sent(odd), String(odd)).toEqual({ id: 'a1', name: 'lamp v1', asks: [] })
   })
 
+  it('says where a session runs and which conversation it is, when those are short strings', () => {
+    const sent = (machine: unknown, conversation: unknown) => routeInput({ text: 'go', sessions: [{ id: 'a1', name: 'X Posts', machine, conversation }] })?.sessions[0]
+    expect(sent('M2', 'c-1')).toEqual({ id: 'a1', name: 'X Posts', asks: [], machine: 'M2', conversation: 'c-1' })
+    for (const [machine, conversation] of [[undefined, undefined], ['  ', ''], ['m'.repeat(101), 'c'.repeat(201)], [4, ['c']]]) {
+      expect(sent(machine, conversation), String(machine)).toEqual({ id: 'a1', name: 'X Posts', asks: [] })
+    }
+  })
+
   it('says where the last task went only with a session id and a finite time', () => {
     const last = (value: unknown) => routeInput({ text: 'go', last: value })!
     expect(last({ id: 'a1', agoMs: 0 }).last).toEqual({ id: 'a1', agoMs: 0 })
