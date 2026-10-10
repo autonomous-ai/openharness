@@ -57,6 +57,11 @@ mutations = [
     ('retained legacy open turn ignored', 'src/core/transcripts/turnReplacement.ts', 'normalizers.sessionTurnState(id) ?? state.turnOpen', 'state.turnOpen', controls),
     ('core Cancel wiring disconnected', 'src/core/main.ts', 'beforeCancel: attach.beforeCancel,', '', 'e2e/enginehomes.e2e.ts'),
 ]
+# A receipt can reuse unaffected mutants while a changed composed assertion runs again.
+selected = set(sys.argv[2:])
+if selected:
+    assert selected <= {label for label, *_ in mutations}, 'Unknown mutation label'
+    mutations = [entry for entry in mutations if entry[0] in selected]
 env = {**os.environ, 'TZ': 'UTC', 'TMPDIR': '/tmp'}
 for key in list(env):
     if key in ['TMUX', 'TMUX_PANE'] or key.startswith('RECORD_'):
@@ -73,7 +78,10 @@ def run(specs):
 
 
 for e2e in [False, True]:
-    baseline = run(sorted({target for _, _, _, _, target in mutations if target.startswith('e2e/') == e2e}))
+    specs = sorted({target for _, _, _, _, target in mutations if target.startswith('e2e/') == e2e})
+    if not specs:
+        continue
+    baseline = run(specs)
     if baseline.returncode:
         print(baseline.stdout + baseline.stderr)
         raise SystemExit('baseline failed; no mutants ran')

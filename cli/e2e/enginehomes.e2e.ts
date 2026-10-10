@@ -283,12 +283,10 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const saved = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as Row[]
     expect(saved.find(value => value.agentId === bound!.id)).toMatchObject({ sessionId: bound!.sessionId, transcriptPath: file })
     writeFileSync(file, complete)
-    const recovery = await until('the original cancellation to hold across the rewritten file', async () => {
-      const value = await row(client, bound!.id)
-      expect(value?.identityHold).toMatch(/^Waiting for transcript interpretation:/)
-      return value
-    }, 45_000)
-    expect(recovery.identityHold, recovery.identityHold).toMatch(/control boundary|replaced or truncated|boundary is an incomplete record/)
+    await expect.poll(async () => (await row(client, bound!.id))?.identityHold, { timeout: 45_000, interval: 200 })
+      .toEqual(expect.stringMatching(/^Waiting for transcript interpretation:/))
+    const recovery = await row(client, bound!.id)
+    expect(recovery?.identityHold).toEqual(expect.stringMatching(/control boundary|replaced or truncated|boundary is an incomplete record/))
     const confirmed = client.next(isTurn('agent_activity', bound!.id), 15_000, 'current cancellation acknowledged by core')
     client.send('cancel', { agentId: bound!.id })
     await confirmed
