@@ -138,11 +138,10 @@ describe('the hook client', () => {
     renameSync(file, backup); mkdirSync(file)
     try {
       await type(d, agent.tmuxPane, 'typed during registry hold')
-      const held = await until('admission hold to reach the actual session frame', async () => {
+      await expect(until('admission hold to reach the actual session frame', async () => {
         const current = await row(client, agent.id)
         return current?.identityHold?.includes('durable hook admission') ? current : null
-      }, 30_000)
-      expect(held).toMatchObject({ sessionId: agent.sessionId, status: 'active', name: agent.name, permissionMode: MODE.codex.mode })
+      }, 30_000)).resolves.toMatchObject({ sessionId: agent.sessionId, status: 'active', name: agent.name, permissionMode: MODE.codex.mode })
       expect(accepted()).toBe(1)
       expect(statSync(file).isDirectory()).toBe(true)
     } finally { rmdirSync(file); renameSync(backup, file) }

@@ -358,7 +358,10 @@ describe('hook notify terminal scope', () => {
     ])
     expect(requests.map(request => request.body.status)).toEqual(['error', 'error'])
     expect(deliveries[0]).toEqual(deliveries[1])
-    if (acknowledgement !== 'applied') expect(JSON.parse(readFileSync(join(dataDir, 'cursor-pending-tasks.json'), 'utf8'))).toHaveLength(1)
+    if (acknowledgement !== 'applied') {
+      expect(() => readFileSync(join(dataDir, 'cursor-pending-tasks.json'), 'utf8')).not.toThrow()
+      expect(JSON.parse(readFileSync(join(dataDir, 'cursor-pending-tasks.json'), 'utf8'))).toHaveLength(1)
+    }
     else expect(() => readFileSync(join(dataDir, 'cursor-pending-tasks.json'), 'utf8')).toThrow()
   })
 

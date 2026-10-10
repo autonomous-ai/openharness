@@ -6,12 +6,15 @@ import { afterEach, expect, it, vi } from 'vitest'
 import type { Server } from 'node:http'
 
 const failures = vi.hoisted(() => new Map<string, string>())
+const inspection = vi.hoisted(() => ({ read: undefined as ((path: string) => void) | undefined }))
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
   const guarded = (name: 'lstat' | 'opendir') => async (path: string, ...args: unknown[]) => {
     const code = failures.get(`${name}:${path}`)
     if (code) throw Object.assign(new Error('controlled filesystem failure'), { code })
-    return Reflect.apply(fs[name], fs, [path, ...args])
+    const result = await Reflect.apply(fs[name], fs, [path, ...args])
+    inspection.read?.(path)
+    return result
   }
   return { ...fs, lstat: guarded('lstat'), opendir: guarded('opendir') }
 })
@@ -23,6 +26,7 @@ afterEach(async () => {
   server = undefined
   vi.restoreAllMocks(); vi.unstubAllEnvs()
   failures.clear()
+  inspection.read = undefined
   if (root) rmSync(root, { recursive: true, force: true })
 })
 async function fixture(options: { waitOnResolution?: number } = {}) {
@@ -80,6 +84,22 @@ async function fixture(options: { waitOnResolution?: number } = {}) {
     seed: (sessionId: string) => registry.register({ engine: 'hermes', sessionId, tmuxPane: '%1', cwd: root, processIdentity }),
   }
 }
+
+it('holds when the known home changes during source inspection instead of publishing the old proof', async () => {
+  const f = await fixture()
+  const own = '20261009_120000_aabbcc', other = join(root, 'another-home')
+  f.store(f.home, [[own, 'cli']])
+  f.store(other, [])
+  inspection.read = path => {
+    if (path !== join(f.home, 'state.db')) return
+    inspection.read = undefined
+    f.knownHome(other)
+  }
+  await f.hook(own)
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('fresh evidence after the binding changed'))).toBe(true))
+  expect(f.current()).toMatchObject({ sessionId: '', hermesHome: other })
+  expect(f.registered).not.toHaveBeenCalled()
+})
 
 it('holds an unreadable store without binding and retries after the store recovers', async () => {
   const f = await fixture()
