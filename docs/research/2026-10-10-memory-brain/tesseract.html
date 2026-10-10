@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tesseract</title>
+<meta name="description" content="Your months unrolled as a corridor of days: fly through time, pull a memory's string, type to recall.">
+<style>
+  :root {
+    --bg: #060608;
+    --ink: #ece4d4;
+    --dim: #9a9285;
+    --faint: #625d55;
+    --gold: #f4c56c;
+    --cool: #96d4ff;
+    --rule: rgba(233, 221, 199, .16);
+    --panel: rgba(8, 8, 11, .94);
+    --mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  }
+  * { box-sizing: border-box }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden;
+    font: 12px/1.5 var(--mono); -webkit-font-smoothing: antialiased }
+  #scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; outline: none }
+  #vignette { position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(125% 95% at 50% 46%, transparent 52%, rgba(0, 0, 0, .62) 100%) }
+
+  .hud { transition: opacity .6s ease }
+  body.arriving .hud { opacity: 0 }
+  body.reading .hud.fadeable { opacity: .18 }
+
+  #day { position: fixed; left: 18px; top: 14px; max-width: 44vw; pointer-events: none }
+  #date { font-size: 19px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink); white-space: nowrap }
+  #ago { color: var(--dim); margin-top: 1px }
+  #counts { margin-top: 9px; color: var(--ink) }
+  #chips { margin-top: 3px; color: var(--dim); display: flex; flex-wrap: wrap; gap: 2px 14px }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; flex: none }
+  .note { color: var(--faint); margin-top: 4px; max-width: 42ch }
+
+  #corner { position: fixed; right: 18px; top: 14px; text-align: right; color: var(--faint); max-width: 40vw; pointer-events: none }
+  #lane { color: var(--dim); margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+  #lane b { color: var(--ink); font-weight: normal }
+
+  #ticker { position: fixed; left: 50%; transform: translateX(-50%); bottom: 60px; width: min(900px, calc(100vw - 32px)) }
+  .row { display: flex; gap: 12px; white-space: nowrap; overflow: hidden; color: var(--dim); padding: 1px 10px;
+    border-left: 2px solid transparent; opacity: .62; cursor: default }
+  .row .time { color: var(--faint); flex: none; width: 7ch; text-align: right }
+  .row .who { flex: none; width: 13ch; overflow: hidden; text-overflow: ellipsis }
+  .row .where { flex: none; width: 17ch; overflow: hidden; text-overflow: ellipsis; color: var(--faint) }
+  .row .text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis }
+  .row.mem .text { color: #efe2c4 }
+  .row.mem .text::before { content: "▮ "; color: var(--gold) }
+  .row.sel { opacity: 1; color: var(--ink); background: linear-gradient(90deg, rgba(244, 197, 108, .10), rgba(244, 197, 108, 0) 85%);
+    border-left-color: var(--gold); white-space: normal; padding-top: 3px; padding-bottom: 3px }
+  .row.sel .time { color: var(--gold) }
+  .row.sel .who, .row.sel .where { white-space: nowrap }
+  .row.lit .time { color: var(--gold) }
+  .row.lit .time::before { content: "◆"; margin-right: 4px; font-size: 8px; vertical-align: 1px }
+  .row .time { white-space: nowrap }
+  .row.sel .text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal }
+  .row.quiet { opacity: .7; color: var(--faint); justify-content: center }
+  mark { background: none; color: var(--cool); text-decoration: underline; text-decoration-color: rgba(150, 212, 255, .5); text-underline-offset: 2px }
+
+  #status { position: fixed; left: 50%; transform: translateX(-50%); bottom: 32px; width: min(900px, calc(100vw - 32px));
+    padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--dim); min-height: 18px }
+  #status .q { color: var(--cool) }
+  #status .q::after { content: "▏"; animation: blink 1.05s steps(1) infinite; color: var(--cool) }
+  #status .pulled { color: var(--gold) }
+  #status .k { color: var(--faint) }
+  @keyframes blink { 50% { opacity: 0 } }
+
+  #hint { position: fixed; left: 0; right: 0; bottom: 9px; text-align: center; color: var(--faint); font-size: 11px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 16px; pointer-events: none }
+  #hint b { color: var(--dim); font-weight: normal }
+
+  #load { position: fixed; left: 50%; top: 46%; transform: translate(-50%, -50%); color: var(--faint); letter-spacing: .2em; text-transform: uppercase; font-size: 11px }
+
+  #card { position: fixed; left: 50%; top: 47%; transform: translate(-50%, -50%); width: min(700px, calc(100vw - 32px));
+    max-height: 74vh; overflow: auto; background: var(--panel); border: 1px solid var(--rule);
+    box-shadow: 0 40px 120px rgba(0, 0, 0, .7), 0 0 0 1px rgba(0, 0, 0, .6); padding: 18px 22px 16px; scrollbar-width: thin }
+  #card[hidden], #about[hidden] { display: none }
+  #card .kick { color: var(--dim); display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: center }
+  #card h2 { font-size: 16px; font-weight: normal; margin: 10px 0 4px; color: var(--ink); line-height: 1.35 }
+  #card .desc { color: var(--dim); margin: 0 0 10px }
+  #card .body { white-space: pre-wrap; word-break: break-word; margin: 12px 0 0; color: #e6dccb; font: inherit; line-height: 1.6 }
+  #card .meta { color: var(--faint); margin-top: 14px; word-break: break-all }
+  #card .foot { color: var(--faint); margin-top: 14px; border-top: 1px solid var(--rule); padding-top: 9px }
+  #card .foot b { color: var(--gold); font-weight: normal }
+  #card ul { list-style: none; padding: 0; margin: 10px 0 0 }
+  #card li { padding: 3px 0; color: #e6dccb; display: flex; gap: 8px; align-items: baseline }
+  #card li .when { color: var(--faint); margin-left: auto; flex: none }
+  #card .tag { color: var(--gold) }
+
+  #about { position: fixed; overflow: hidden; pointer-events: auto; padding: 2.6% 3.2% 1%; font-size: 13px; line-height: 1.55;
+    display: flex; flex-direction: column;
+    background: linear-gradient(180deg, rgba(10, 9, 8, .62), rgba(8, 8, 10, .40) 70%, rgba(8, 8, 10, 0)); transition: opacity .25s }
+  #about .ah { display: flex; align-items: baseline; gap: 4px 16px; margin-bottom: 16px; flex-wrap: wrap; flex: none }
+  #about h1 { font-size: 16px; letter-spacing: .3em; text-transform: uppercase; font-weight: normal; margin: 0; color: var(--gold) }
+  #about .intro { color: var(--dim) }
+  #about .scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: none;
+    scroll-padding: 6px 0 26px;
+    -webkit-mask-image: linear-gradient(180deg, #000 92%, transparent); mask-image: linear-gradient(180deg, #000 92%, transparent) }
+  #about .scroll::-webkit-scrollbar { display: none }
+  #about .cols { column-count: 2; column-gap: 5% }
+  #about .sec { break-inside: avoid-column; margin-bottom: 16px }
+  #about h3 { font-size: 10px; letter-spacing: .24em; text-transform: uppercase; font-weight: normal; color: #8a7a5c; margin: 0 0 5px }
+  #about .line { color: #d9cfbd; padding: 2px 6px; margin-left: -8px; border-left: 2px solid transparent; break-inside: avoid; cursor: default }
+  #about .line .c { white-space: nowrap; margin-left: 6px }
+  #about .line .c .dot { width: 5px; height: 5px; margin-right: 3px }
+  #about .line.sel { color: var(--ink); border-left-color: var(--gold); background: rgba(244, 197, 108, .08) }
+  #about.small { font-size: 11.5px; line-height: 1.45 }
+  #about.small .sec { margin-bottom: 10px }
+  #about.small .ah { margin-bottom: 10px }
+  #about.narrow { font-size: 11px }
+  #about.narrow .cols { column-count: 1 }
+</style>
+</head>
+<body class="arriving">
+<canvas id="scene" tabindex="0" aria-label="Tesseract: your days as a corridor"></canvas>
+<div id="vignette"></div>
+<div id="load">unfolding</div>
+
+<div id="day" class="hud fadeable">
+  <div id="date"></div>
+  <div id="ago"></div>
+  <div id="counts"></div>
+  <div id="chips"></div>
+  <div id="daynote" class="note"></div>
+</div>
+<div id="corner" class="hud fadeable">
+  <div id="source"></div>
+  <div id="lane"></div>
+</div>
+<div id="ticker" class="hud fadeable"></div>
+<div id="status" class="hud"></div>
+<div id="hint" class="hud"></div>
+
+<div id="about" hidden></div>
+<div id="card" hidden role="dialog" aria-modal="true"></div>
+
+<script src="memory-data.js"></script>
+<script src="tesseract.js"></script>
+</body>
+</html>
