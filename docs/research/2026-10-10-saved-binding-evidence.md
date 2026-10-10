@@ -83,7 +83,7 @@ The e2e fixture initially read a transcript path from a public frame which corre
 does not expose it; it now reads only its disposable daemon's private registry.
 An initial registry unit run was invalidated by macOS sandbox rejection of uptime;
 the authorized rerun isolated one incomplete healthy header fixture, now corrected.
-Final receipts, exact-head review and measured results follow before landing.
+Final exact-source receipts and review are recorded in [PR #1133](https://github.com/autonomous-ai/openharness/pull/1133) before landing.
 
 The initial full validation receipt `20261010T021955.961388Z-42225` passed types,
 274 focused tests in 14 files, architecture, core/services (1,960 tests, 100%),
@@ -121,6 +121,35 @@ the operation reduces the former many-home traversal cost. These samples are cos
 evidence for the specified workloads, not a host-independent performance gate.
 The later first-Cancel and ordinary-Stop corrections affect neither measured import/call path; these
 measurements do not cover active cancellation latency.
+
+## Eager Cancel cost
+
+The additional [Cancel workload](2026-10-10-cancel-cost.mts) and [raw results](2026-10-10-cancel-cost.json)
+compare complete eager core Cancel calls on main `c7d460b1d` and reviewed `c061a7697`.
+Three interleaved fresh-process repetitions ran alone at 04:34:20–04:34:29 UTC, using
+the same Node 22.23.2/macOS x64 toolchain. Each of the 24 processes measures 100 calls.
+Every call starts with a distinct user record appended to the private transcript and
+an open real Claude parser; all 2,400 calls close it and issue exactly one stubbed
+interrupt, with no interpretation hold. First-Cancel samples use a fresh attachment
+controller; retained samples keep 100 successive cancellation boundaries. Histories
+start at 79 bytes or approximately 16 MiB. File setup and prompt ingestion are
+outside each latency and CPU interval. No daemon, terminal, worker or actual signal
+participates; this measures core control overhead, not terminal delivery or recovery replay.
+
+| History / control ledger | Former / candidate median ms | Candidate p95 ms | Former / candidate CPU ms per 100 calls | Former / candidate peak RSS MiB |
+| --- | ---: | ---: | ---: | ---: |
+| Small / first | 0.0024 / 0.0719 | 0.1326 | 0.95 / 9.17 | 89.43 / 93.09 |
+| Large / first | 0.0022 / 0.0688 | 0.1434 | 2.25 / 13.27 | 123.48 / 123.98 |
+| Small / retained | 0.0022 / 0.1189 | 0.2146 | 0.84 / 13.47 | 88.62 / 90.38 |
+| Large / retained | 0.0020 / 0.1068 | 0.2537 | 2.17 / 21.62 | 120.27 / 122.27 |
+
+Latency percentiles combine the 300 calls per source/workload. CPU and peak RSS are
+medians of three processes; RSS includes module loading and private fixture setup.
+The bounded file witnesses add measurable work (about 0.07–0.12 ms median here)
+without reading the whole transcript. These measurements establish cost for these
+workloads; they are not a performance guarantee on another filesystem or host.
+Run the script from the repository root with `CANCEL_COST_CLI` selecting the source
+CLI tree, `TZ=UTC TMPDIR=/tmp`, and the selected Node toolchain's `tsx` loader.
 
 ## Remaining scope and timing
 
@@ -175,8 +204,15 @@ The former core HTTP hook-admission golden was recorded separately from main
 unchanged. Additional actual-composition regressions cover both inline parsing and
 the real worker request/transport/reconstruction path. At 04:23 UTC, 230 affected
 core tests passed at 100% coverage for the changed attachment, replacement-control
-and turn-hook modules. Full gates, private lanes, mutations and review are still
-required on the final source before this PR can land.
+and turn-hook modules. Independent review approved production head `4a05df81a`
+and the assertion-only successor `c061a7697` against main `c7d460b1d` with no
+remaining blockers in this PR's scope. Forty deliberately broken safeguards failed
+assertions after an unchanged baseline. The final composition mutant exposed a
+TypeError in the e2e assertion rather than a valid assertion failure; the corrected
+test now polls the expected held reason directly, and its baseline/mutant is rerun.
+The two interrupted preliminary validation batches are not counted as complete.
+PR #1133 records the final required full gates, private lanes, composed resume and
+all 41 mutation outcomes before merge.
 
 The task resumed October 9 at 22:25:51 UTC. This step's golden was committed October
 10 at 01:39:46 UTC, while the preceding independent adoption validation finished.
