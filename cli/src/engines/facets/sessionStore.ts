@@ -33,7 +33,10 @@ export interface SessionStoreContract {
    * What a session file's first record says about it, read within `maxBytes`: its `type`, and where it keeps
    * the id, the folder, the field whose presence marks a session another one delegated to, and that one's parent.
    */
-  first?: { type: string; id: readonly string[]; cwd: readonly string[]; child: readonly string[]; parent: readonly string[]; maxBytes: number }
+  first?: { type: string; id: readonly string[]; cwd: readonly string[]; child: readonly string[]; parent: readonly string[]; maxBytes: number
+    /** Native source variants that can conclusively exclude the delegated variant. */
+    source?: { field: readonly string[]; values: readonly string[]; named: readonly string[]; legacyMissing: boolean }
+  }
   /**
    * How a scan of the store tells which folder a session belongs to. `first`: the first record above, a child
    * never counts. `head`: the first `cwd` in its opening lines, never a file below a `childFolder` segment or one

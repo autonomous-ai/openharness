@@ -62,6 +62,8 @@ export function listPaneTitles(): Promise<Map<string, string>> {
 export interface ProcessRow extends ProcessIdentity {
   parentPid: number
   args: string
+  /** Kernel argv boundaries, when available. Native control must not parse prompt text as flags. */
+  nativeArgv?: readonly string[]
   /** Ephemeral evidence only; never persisted or sent to another machine. */
   imagePath?: string
   imageFileKey?: string
@@ -82,7 +84,8 @@ export function argvTokens(args: string): string[] {
 /** Discovery only needs a command prefix. Do not tokenize a shell script or
  * prompt suffix once per candidate engine. Keep the same token grammar as
  * argvTokens, but stop scanning as soon as the consumer has enough evidence. */
-function argvPrefix(args: string): () => string | undefined {
+function argvPrefix(args: string, nativeArgv?: readonly string[]): () => string | undefined {
+  if (nativeArgv) { let index = 0; return () => nativeArgv[index++] }
   const pattern = new RegExp(ARGV_TOKEN)
   let done = false
   return () => {
@@ -145,8 +148,8 @@ function processEntrypoint(args: string, next = argvPrefix(args)): string {
  * In particular, Codex startup runs `codex --help` before the real resume. Adopting
  * that short-lived PID ends a restart too early and discovery then evicts its pane.
  * Only a standalone probe argument counts: prompt text and option values do not. */
-function engineCapabilityProbe(args: string): boolean {
-  const next = argvPrefix(args)
+function engineCapabilityProbe(args: string, nativeArgv?: readonly string[]): boolean {
+  const next = argvPrefix(args, nativeArgv)
   if (!processEntrypoint(args, next)) return false
   const option = next()
   return (option === '--help' || option === '-h' || option === '--version' || option === '-V')
@@ -705,12 +708,12 @@ export const ENGINE_PROCESS_SIGNATURES: Readonly<Record<RegisteredSession['engin
 }
 
 function heuristicEngineProcessMatchScore(
-  row: Pick<ProcessRow, 'executable' | 'args' | 'imageFileKey' | 'entrypointFileKey'>,
+  row: Pick<ProcessRow, 'executable' | 'args' | 'nativeArgv' | 'imageFileKey' | 'entrypointFileKey'>,
   engine: RegisteredSession['engine'],
   ownership = agentCommandOwnershipSnapshot(),
 ): number {
   const executable = basename(row.executable).toLowerCase()
-  const entrypoint = processEntrypoint(row.args).toLowerCase()
+  const entrypoint = processEntrypoint(row.args, argvPrefix(row.args, row.nativeArgv)).toLowerCase()
   const entrybase = basename(entrypoint).toLowerCase()
   // Antigravity also ships an IDE-side `agy` inside its .app bundle. It is not the terminal engine,
   // even when an AGY_PATH override happens to use the same basename.
@@ -768,11 +771,11 @@ export interface EngineProcessMatch {
  * File identity wins; basename/package rules are compatibility fallbacks for launchers and scripts.
  */
 export function engineProcessMatch(
-  row: Pick<ProcessRow, 'executable' | 'args' | 'imagePath' | 'imageFileKey' | 'entrypointFileKey'>,
+  row: Pick<ProcessRow, 'executable' | 'args' | 'nativeArgv' | 'imagePath' | 'imageFileKey' | 'entrypointFileKey'>,
   engine: RegisteredSession['engine'],
   ownership = agentCommandOwnershipSnapshot(),
 ): EngineProcessMatch {
-  if (engineCapabilityProbe(row.args)) return { score: 0, evidence: 'none' }
+  if (engineCapabilityProbe(row.args, row.nativeArgv)) return { score: 0, evidence: 'none' }
   const owners = engineFileOwners([row.imageFileKey, row.entrypointFileKey], ownership)
   if (owners.length === 1) {
     return owners[0] === engine
@@ -799,7 +802,7 @@ export function engineProcessMatch(
 
 /** Compatibility surface for callers that only need ordering. */
 export function engineProcessMatchScore(
-  row: Pick<ProcessRow, 'executable' | 'args' | 'imagePath' | 'imageFileKey' | 'entrypointFileKey'>,
+  row: Pick<ProcessRow, 'executable' | 'args' | 'nativeArgv' | 'imagePath' | 'imageFileKey' | 'entrypointFileKey'>,
   engine: RegisteredSession['engine'],
   ownership = agentCommandOwnershipSnapshot(),
 ): number {
@@ -956,9 +959,21 @@ function flagsInOrder(tokens: readonly string[], want: readonly string[]): boole
 }
 
 /** The session id an engine was told to resume, or null when argv does not name one. */
-export function resumeSessionId(engine: RegisteredSession['engine'], args: string): string | null {
+export function resumeSessionId(engine: RegisteredSession['engine'], args: string, nativeArgv?: readonly string[]): string | null {
   const spec = RESUME_ARGS[engine]
   if (!spec) return null
+  if (nativeArgv) {
+    if (spec.unless?.some(flag => nativeArgv.includes(flag))) return null
+    for (const flag of spec.flags) {
+      for (let index = 0; index < nativeArgv.length; index++) {
+        const token = nativeArgv[index]
+        const value = token.toLowerCase() === flag.toLowerCase() ? nativeArgv[index + 1]
+          : token.toLowerCase().startsWith(`${flag.toLowerCase()}=`) ? token.slice(flag.length + 1) : undefined
+        if (value && spec.id.test(value)) return value
+      }
+    }
+    return null
+  }
   if (spec.unless) {
     const tokens = argvTokens(args)
     if (spec.unless.some((flag) => tokens.includes(flag))) return null

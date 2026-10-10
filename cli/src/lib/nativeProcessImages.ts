@@ -135,7 +135,7 @@ export function parseNativeProcessImages(
   return { images, unavailable }
 }
 
-async function bundledHelper(): Promise<{ path: string; key: string } | null> {
+export async function bundledProcessImageHelper(options: { retryUnavailable?: boolean } = {}): Promise<{ path: string; key: string } | null> {
   const source = typeof __DARWIN_PROCESS_IMAGES__ === 'undefined' ? undefined : __DARWIN_PROCESS_IMAGES__
   if (typeof source !== 'string') return null
   if (source !== artifactSource) {
@@ -146,7 +146,9 @@ async function bundledHelper(): Promise<{ path: string; key: string } | null> {
   const artifact = artifactValue
   if (!artifact || typeof artifact.sha256 !== 'string') return null
   const key = `${env.ADAPTER_RUNTIME_DIR}\0${artifact.sha256}`
-  if ((retryAfter.get(key) ?? 0) > performance.now()) return null
+  // Optional discovery backs off failed probes. Control must confirm recovery on its own
+  // deadline: its healthy owner may be unrelated to the failed discovery request.
+  if (!options.retryUnavailable && (retryAfter.get(key) ?? 0) > performance.now()) return null
   let helper = prepared.get(key)
   if (!helper) {
     helper = prepareProcessImageHelper(artifact, env.ADAPTER_RUNTIME_DIR)
@@ -154,13 +156,21 @@ async function bundledHelper(): Promise<{ path: string; key: string } | null> {
         if (!path) {
           prepared.delete(key)
           retryAfter.set(key, performance.now() + 60_000)
-        }
+        } else retryAfter.delete(key)
         return path
       })
     prepared.set(key, helper)
   }
   const path = await helper
   return path ? { path, key } : null
+}
+
+/** An evicted extracted file can be recreated from pinned bundle bytes. This forgets
+ * preparation only; no process result is cached or made available by a spawn failure. */
+export function invalidateProcessImageHelper(key: string, delay = 0): void {
+  prepared.delete(key)
+  if (delay) retryAfter.set(key, performance.now() + delay)
+  else retryAfter.delete(key)
 }
 
 /** A fresh kernel query on every call. Only the immutable executable's
@@ -175,7 +185,7 @@ export async function nativeProcessImages(
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     // A slow cache filesystem must not block discovery or start a late helper.
-    const helper = await Promise.race([bundledHelper(), new Promise<null>(resolve => {
+    const helper = await Promise.race([bundledProcessImageHelper(), new Promise<null>(resolve => {
       timer = setTimeout(() => resolve(null), timeout)
     })])
     const remaining = Math.floor(deadline - performance.now())
@@ -187,8 +197,7 @@ export async function nativeProcessImages(
           if (error && !result.images.size) {
             // A missing/blocked helper must not become a failed spawn every
             // reconcile. Retry preparation later; ordinary discovery continues.
-            prepared.delete(helper.key)
-            retryAfter.set(helper.key, performance.now() + 60_000)
+            invalidateProcessImageHelper(helper.key, 60_000)
           }
           resolve(result)
         })

@@ -1,0 +1,165 @@
+{
+  "descriptors:native": [
+    "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000001.jsonl",
+    "<root>/notes"
+  ],
+  "descriptors:empty": [],
+  "descriptors:invalid": [],
+  "process:native-ignores-nested-tool": [
+    "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000001.jsonl",
+    "<root>/notes"
+  ],
+  "process:other-engine": [],
+  "process:launcher-child": [
+    "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000001.jsonl",
+    "<root>/notes"
+  ],
+  "process:direct-native-child": [
+    "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000001.jsonl"
+  ],
+  "identity:one": {
+    "sessionId": "aaaaaaaa-1111-4222-8333-000000000011",
+    "transcriptPath": "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000011.jsonl"
+  },
+  "identity:repeated-descriptors": {
+    "sessionId": "aaaaaaaa-1111-4222-8333-000000000011",
+    "transcriptPath": "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000011.jsonl"
+  },
+  "identity:alias": {
+    "sessionId": "aaaaaaaa-1111-4222-8333-000000000011",
+    "transcriptPath": "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000011.jsonl"
+  },
+  "identity:child-excluded": {
+    "sessionId": "aaaaaaaa-1111-4222-8333-000000000011",
+    "transcriptPath": "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000011.jsonl"
+  },
+  "identity:other-cwd-excluded": {
+    "sessionId": "aaaaaaaa-1111-4222-8333-000000000011",
+    "transcriptPath": "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000011.jsonl"
+  },
+  "identity:outside-profile-excluded": {
+    "sessionId": "aaaaaaaa-1111-4222-8333-000000000011",
+    "transcriptPath": "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000011.jsonl"
+  },
+  "identity:only-child": null,
+  "identity:only-other-cwd": null,
+  "identity:empty": null,
+  "identity:moved-home": {
+    "sessionId": "aaaaaaaa-1111-4222-8333-000000000014",
+    "transcriptPath": "<root>/other-home/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000014.jsonl"
+  },
+  "identity:other-engine": null,
+  "capture:native": {
+    "agentId": "fixture-agent",
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4222-8333-000000000021",
+    "transcriptPath": "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000021.jsonl",
+    "cwd": "<root>/work",
+    "codexHome": "<root>/codex",
+    "processIdentity": {
+      "pid": 42,
+      "executable": "/fixture-tools/codex",
+      "startMarker": "Fri Oct  9 11:59:00 2026",
+      "startTicks": 4200
+    },
+    "source": "stop-repair",
+    "boundAt": 1791547200000
+  },
+  "capture:complete-binding": {
+    "agentId": "fixture-agent",
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4222-8333-000000000021",
+    "transcriptPath": "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000021.jsonl",
+    "cwd": "<root>/work",
+    "codexHome": "<root>/codex",
+    "processIdentity": {
+      "pid": 42,
+      "executable": "/fixture-tools/codex",
+      "startMarker": "Fri Oct  9 11:59:00 2026",
+      "startTicks": 4200
+    },
+    "source": "discovery",
+    "boundAt": 0
+  },
+  "capture:terminal": {
+    "agentId": "fixture-agent",
+    "engine": "terminal",
+    "sessionId": "",
+    "transcriptPath": null,
+    "cwd": "<root>/work",
+    "codexHome": "<root>/codex",
+    "processIdentity": {
+      "pid": 42,
+      "executable": "/fixture-tools/codex",
+      "startMarker": "Fri Oct  9 11:59:00 2026",
+      "startTicks": 4200
+    },
+    "source": "discovery",
+    "boundAt": 0
+  },
+  "capture:launcher": {
+    "agentId": "fixture-agent",
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4222-8333-000000000021",
+    "transcriptPath": "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000021.jsonl",
+    "cwd": "<root>/work",
+    "codexHome": "<root>/codex",
+    "processIdentity": {
+      "pid": 42,
+      "executable": "/fixture-tools/node",
+      "startMarker": "Fri Oct  9 11:59:00 2026",
+      "startTicks": 4200
+    },
+    "source": "stop-repair",
+    "boundAt": 1791547200000
+  },
+  "capture:complete-empty": {
+    "agentId": "fixture-agent",
+    "engine": "codex",
+    "sessionId": "",
+    "transcriptPath": null,
+    "cwd": "<root>/work",
+    "codexHome": "<root>/codex",
+    "processIdentity": {
+      "pid": 42,
+      "executable": "/fixture-tools/node",
+      "startMarker": "Fri Oct  9 11:59:00 2026",
+      "startTicks": 4200
+    },
+    "source": "discovery",
+    "boundAt": 0
+  },
+  "darwin:descriptors": [
+    "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000031.jsonl",
+    "<root>/notes-mac"
+  ],
+  "darwin:empty": [],
+  "darwin:identity": {
+    "sessionId": "aaaaaaaa-1111-4222-8333-000000000031",
+    "transcriptPath": "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000031.jsonl"
+  },
+  "darwin:capture": {
+    "agentId": "fixture-agent",
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4222-8333-000000000031",
+    "transcriptPath": "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000031.jsonl",
+    "cwd": "<root>/work",
+    "codexHome": "<root>/codex",
+    "processIdentity": {
+      "pid": 42,
+      "executable": "/fixture-tools/codex",
+      "startMarker": "Fri Oct  9 11:59:00 2026",
+      "startTicks": 4200
+    },
+    "source": "stop-repair",
+    "boundAt": 1791547200000
+  },
+  "darwin:unicode": {
+    "sessionId": "aaaaaaaa-1111-4222-8333-000000000032",
+    "transcriptPath": "<root>/café-home/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000032.jsonl"
+  },
+  "darwin:launcher": [
+    "<root>/codex/sessions/day/rollout-aaaaaaaa-1111-4222-8333-000000000031.jsonl",
+    "<root>/notes-mac"
+  ]
+}

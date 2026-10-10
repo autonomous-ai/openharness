@@ -14,6 +14,11 @@ const control = vi.hoisted(() => ({
   processes: [] as import('../../lib/tmux.js').ProcessRow[],
 }))
 vi.mock('../../lib/tmux.js', async original => ({ ...await original<object>(), processRows: async () => control.processes }))
+vi.mock('../../lib/processEvidence.js', async () => {
+  const { nativeConversationFixture } = await import('../../testing/nativeConversationEvidence.js')
+  return { readProcessEvidence: (...args: Parameters<typeof import('../../lib/processEvidence.js')['readProcessEvidence']>) =>
+    nativeConversationFixture(async () => [], async () => control.processes).processes(...args) }
+})
 vi.mock('../../lib/deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn(), terminateDeletedAgent: vi.fn(async () => 'gone') }))
 vi.mock('../../core/engines/cursorTasks.js', () => ({ removePendingCursorTasks: vi.fn(async () => {}) }))
 vi.mock('node:child_process', async original => ({ ...await original<object>(),

@@ -7,17 +7,30 @@ export class IdentityReadUnavailable extends Error {
   constructor(reason: string, message = `Conversation identity is held: ${reason}.`) { super(message) }
 }
 
-export type IdentityVersion = Pick<Stats, 'dev' | 'ino' | 'size' | 'mtimeMs' | 'ctimeMs'>
+export type IdentityVersion = Pick<Stats, 'dev' | 'ino' | 'size' | 'mtimeMs' | 'ctimeMs'> & {
+  /** Descriptor numbers can exceed Number's exact range; never round kernel ownership evidence. */
+  fileKey?: { device: bigint; inode: bigint }
+}
 
 /** Shared across every directory/root in one lookup, including entries that are not transcripts. */
 export const identityScanBudget = () => ({ remaining: 4096 })
 
 /** A regular file only. Nonblocking open prevents a native-store FIFO from hanging session control. */
-export async function identityBytes(path: string, maxBytes: number, expected?: IdentityVersion): Promise<Buffer> {
+export async function identityBytes(path: string, maxBytes: number, expected?: IdentityVersion,
+  budget?: { step(bytes?: number): void },
+): Promise<Buffer> {
+  budget?.step()
   const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK)
   try {
+    budget?.step()
     const before = await handle.stat()
     if (!before.isFile()) throw new IdentityReadUnavailable('the native record is not a regular file')
+    if (expected?.fileKey) {
+      const exact = await handle.stat({ bigint: true })
+      if (exact.dev !== expected.fileKey.device || exact.ino !== expected.fileKey.inode) {
+        throw new IdentityReadUnavailable('the opened native record is not the file held by the process')
+      }
+    }
     // A pathname can switch to another inode and back while a caller awaits its header. The
     // opened descriptor must be the candidate that authorized this read, not only the path at return.
     if (expected && (before.dev !== expected.dev || before.ino !== expected.ino || before.size !== expected.size
@@ -27,12 +40,17 @@ export async function identityBytes(path: string, maxBytes: number, expected?: I
     const length = Math.min(before.size, maxBytes)
     const bytes = Buffer.alloc(length)
     let read = 0
+    let calls = 0
     while (read < length) {
+      budget?.step()
+      if (budget && ++calls > 64) throw new IdentityReadUnavailable('the native header read-operation limit was reached')
       const next = await handle.read(bytes, read, length - read, read)
+      budget?.step(next.bytesRead)
       if (!next.bytesRead) throw new IdentityReadUnavailable('the native record ended during the read')
       read += next.bytesRead
     }
     const after = await handle.stat()
+    budget?.step()
     if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
       throw new IdentityReadUnavailable('the native record changed during the read')
     }
@@ -43,6 +61,7 @@ export async function identityBytes(path: string, maxBytes: number, expected?: I
     })
     try {
       const now = await current.stat()
+      budget?.step()
       if (now.dev !== before.dev || now.ino !== before.ino || now.size !== before.size
         || now.mtimeMs !== before.mtimeMs || now.ctimeMs !== before.ctimeMs) {
         throw new IdentityReadUnavailable('the native record was replaced during the read')

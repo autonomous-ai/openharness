@@ -14,8 +14,7 @@
  *     unbound until its next turn, which is recoverable — mis-binding is not.
  */
 
-import { execFile } from 'child_process'
-import { readdir, readlink, realpath, stat } from 'fs/promises'
+import { realpath, stat } from 'fs/promises'
 import { basename, dirname, isAbsolute, join, sep } from 'path'
 import { env } from '../config/env.js'
 import type { SessionStoreContract } from '../engines/facets/sessionStore.js'
@@ -36,7 +35,11 @@ import { recordCwd } from '../engines/kit/sessionLocation.js'
 import { sqliteReadAll, type SqliteParam } from './sqliteRead.js'
 import { sqlitePreflightMessage } from './sqliteAvailability.js'
 import { nativeSessionRoots } from './engineHomes.js'
-import { argvTokens, engineProcessMatchScore, processRows, type ProcessRow } from './tmux.js'
+import { nativeOpenFileSession, type NativeConversationOptions } from './nativeConversation.js'
+import type { ProcessIdentity } from './terminalTypes.js'
+import { NativeEvidenceBudget } from '../engines/kit/nativeEvidence.js'
+import { verifyProcessRecord } from '../engines/kit/processRecordEvidence.js'
+import { NativePaths } from '../engines/kit/nativePaths.js'
 
 /**
  * Clock granularity only. `ps` reports start time to the second, so a file created in the same second
@@ -323,7 +326,7 @@ async function storeSession(
   store: SessionStoreContract,
   cwd: string,
   startedAtMs: number,
-  opts?: { bornOnly?: boolean; pid?: number; codexHome?: string },
+  opts?: { bornOnly?: boolean; pid?: number; codexHome?: string; expectedProcess?: ProcessIdentity; nativeBudget?: NativeEvidenceBudget },
 ): Promise<RepairedSession | null> {
   const scan = scanMeta(engine, store.scan, cwd)
   if ('record' in store.live) {
@@ -332,7 +335,7 @@ async function storeSession(
   }
   const sessions = repairRoots(engine, opts?.codexHome)
   const found = opts?.pid && 'open' in store.live
-    ? await openFileSessionOf(engine, opts.pid, sessions, cwd)
+    ? await openFileSessionOf(engine, opts.pid, sessions, cwd, { expected: opts.expectedProcess, budget: opts.nativeBudget })
     : await fileEngineSession(sessions, cwd, startedAtMs, scan,
       { ...opts, ...(store.scan.from === 'head' ? { excludedDirectory: store.scan.childFolder } : {}) })
   // The login shell may adopt another home during any native read. Its unseen candidates
@@ -349,7 +352,7 @@ export async function findLiveSession(
   startedAtMs: number,
   // codexHome: the specific agent's own profile (its CODEX_HOME), when it isn't this machine's default —
   // see RegisteredSession.codexHome. Read only for an engine whose sessions follow one (`sessions.profile`).
-  opts?: { bornOnly?: boolean; pid?: number; codexHome?: string; hermesHome?: string },
+  opts?: { bornOnly?: boolean; pid?: number; codexHome?: string; hermesHome?: string; expectedProcess?: ProcessIdentity; nativeBudget?: NativeEvidenceBudget },
 ): Promise<RepairedSession | null> {
   const store = sessionStoreOf(engine)
   if (store) return storeSession(engine, store, cwd, startedAtMs, opts)
@@ -574,78 +577,12 @@ export async function findResumedTranscript(
   return found
 }
 
-/** The files a process holds open: `/proc` on Linux, `lsof` elsewhere. Empty when neither can say. */
-export async function openFiles(pid: number): Promise<string[]> {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return []
-  if (process.platform === 'linux') {
-    const fds = await readdir(`/proc/${pid}/fd`).catch(() => [] as string[])
-    const paths = await Promise.all(fds.map((fd) => readlink(`/proc/${pid}/fd/${fd}`).catch(() => null)))
-    return paths.filter((path): path is string => !!path && path.startsWith('/'))
-  }
-  const stdout = await new Promise<string>((resolve) => {
-    // `-Fn`: one `n<path>` line per open file. A process that is gone answers nothing.
-    execFile('lsof', ['-n', '-P', '-p', String(pid), '-Fn'], { timeout: 3_000 }, (_error, out) => resolve(out ?? ''))
-  })
-  return stdout.split('\n').filter((line) => line.startsWith('n/')).map((line) => line.slice(1))
-}
-
-type ProcessTable = () => Promise<readonly Pick<ProcessRow, 'pid' | 'parentPid' | 'executable' | 'args'>[] | null>
-
-/**
- * The files a process of an engine that holds its session file open (`live.open`) has open, its native child's
- * too behind a launcher (the declared `launcher`, npm's Node one): the launcher holds no session file, its child
- * does. October 6 ownership E2E: removing the folder guess exposed that distinction for a manually started Codex
- * with no hook. Only one direct child of that engine is read, never a nested tool. Empty for another engine.
- */
-export async function processFilesOf(
-  engine: AgentEngine,
-  pid: number,
-  files: typeof openFiles = openFiles,
-  processes: ProcessTable = processRows,
-): Promise<string[]> {
-  const live = sessionStoreOf(engine)?.live
-  if (!live || !('open' in live)) return []
-  const { file, launcher } = live.open
-  const own = await files(pid)
-  if (own.some(path => file.test(path))) return own
-  const rows = await processes()
-  const wrapper = rows?.find(row => row.pid === pid)
-  if (!wrapper || ![wrapper.executable, argvTokens(wrapper.args)[0] ?? '']
-    .some(path => launcher.test(basename(path)))) return own
-  const children = rows!.filter(row => row.parentPid === pid && engineProcessMatchScore(row, engine) > 0)
-  return children.length === 1 ? [...own, ...await files(children[0].pid)] : own
-}
-
-/**
- * The conversation a process of an engine that holds its session file open (`live.open`) is writing: the one
- * such file it holds below `sessionsRoot`, in `cwd`, never a child's. Null for another engine.
- *
- * The one way to name a fork's conversation when its start-up hook was lost (a daemon restart in its
- * first second). `codex fork <id>` names only its source in argv, and a fork shares its source's
- * folder with every sibling started near it, so a scan of that folder finds them all and must refuse
- * to guess — the fork stayed without a conversation for good (e2e/chaos.e2e.ts).
- */
-export async function openFileSessionOf(
-  engine: AgentEngine,
-  pid: number,
-  sessionsRoot: string | string[],
-  cwd: string,
-  files: (pid: number) => Promise<string[]> = (one) => processFilesOf(engine, one),
+/** Complete native evidence is the sole descriptor authority for discovery and Stop. */
+export { nativeOpenFiles as openFiles, nativeProcessFiles as processFilesOf } from './nativeConversation.js'
+export function openFileSessionOf(engine: AgentEngine, pid: number, roots: string | string[], cwd: string,
+  options: NativeConversationOptions = {},
 ): Promise<RepairedSession | null> {
-  const live = sessionStoreOf(engine)?.live
-  if (!live || !('open' in live)) return null
-  const roots = await Promise.all((typeof sessionsRoot === 'string' ? [sessionsRoot] : sessionsRoot)
-    .map((one) => realpath(one).catch(() => one)))
-  const found = new Map<string, RepairedSession>()
-  for (const path of await files(pid)) {
-    if (!live.open.file.test(path)) continue
-    const real = await realpath(path).catch(() => path)
-    if (!roots.some((root) => real.startsWith(`${root}${sep}`))) continue
-    const meta = await sessionIdentityMetaOf(engine, real)
-    if (!meta || meta.isSubagent || !meta.id || !meta.cwd || !await sameDir(meta.cwd, cwd)) continue
-    found.set(real, { sessionId: meta.id, transcriptPath: real })
-  }
-  return found.size === 1 ? [...found.values()][0] : null
+  return nativeOpenFileSession(engine, pid, typeof roots === 'string' ? [roots] : roots, cwd, options)
 }
 
 /**
@@ -655,9 +592,20 @@ export async function openFileSessionOf(
  * so Stop captures it before signalling the engine. Null for another engine.
  */
 export async function processSessionOf(engine: AgentEngine, pid: number, cwd: string, startedAtMs: number): Promise<RepairedSession | null> {
+  const proof = await processSessionEvidence(engine, pid, cwd, startedAtMs)
+  proof.verify()
+  return proof.session
+}
+
+/** Stop retains this proof across its final process probe and any fallback lookup. */
+export async function processSessionEvidence(engine: AgentEngine, pid: number, cwd: string, startedAtMs: number,
+  budget = new NativeEvidenceBudget(),
+): Promise<{ session: RepairedSession | null; verify(): void }> {
   const live = sessionStoreOf(engine)?.live
-  if (!live || !('record' in live)) return null
-  if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isFinite(startedAtMs)) return null
+  if (!live || !('record' in live) || !Number.isSafeInteger(pid) || pid <= 0 || !Number.isFinite(startedAtMs)) {
+    return { session: null, verify() {} }
+  }
+  const paths = new NativePaths(budget)
   const rule = live.record
   let result: RepairedSession | null = null
   let selected: string | undefined
@@ -669,6 +617,7 @@ export async function processSessionOf(engine: AgentEngine, pid: number, cwd: st
   })
   for (const sessions of roots) {
     const file = join(dirname(sessions), rule.folder, `${pid}${rule.suffix}`)
+    await paths.resolve(file, true)
     const text = await read(file)
     records.push({ file, text })
     if (text === null) continue
@@ -682,14 +631,20 @@ export async function processSessionOf(engine: AgentEngine, pid: number, cwd: st
   }
   // A conversation can change inside the same process while another home is being read.
   // Recheck absent/stale claims too: a newly created claim invalidates the earlier pool.
-  // Read the authoritative claim last: otherwise it can change while the later homes
-  // are being rechecked. No asynchronous work follows that final native read.
+  // Read the authoritative claim last, retaining the whole pool for the caller's final fence.
+  // Stop still has an asynchronous process probe to finish before it can use this claim.
   const recheck = [...records.filter(record => record.file !== selected), ...records.filter(record => record.file === selected)]
   for (const { file, text } of recheck) {
     if (await read(file) !== text) throw new IdentityReadUnavailable('the process records changed during discovery')
   }
-  if (repairRoots(engine).join('\0') !== roots.join('\0')) throw new IdentityReadUnavailable('the known session homes changed during discovery')
-  return result
+  const verify = () => {
+    budget.step()
+    if (repairRoots(engine).join('\0') !== roots.join('\0')) throw new IdentityReadUnavailable('the known session homes changed during discovery')
+    paths.verify()
+    // No asynchronous work follows the selected record. This includes negative and stale claims.
+    for (const { file, text } of recheck) verifyProcessRecord(file, text, budget)
+  }
+  return { session: result, verify }
 }
 
 type ProcessRecordRule = Extract<SessionStoreContract['live'], { record: unknown }>['record']

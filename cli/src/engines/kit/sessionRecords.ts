@@ -62,7 +62,7 @@ function valueAt(value: unknown, path: readonly string[]): unknown {
   return at
 }
 
-function firstRecordMeta(firstLine: string, first: NonNullable<SessionStoreContract['first']>): SessionMeta | null {
+export function firstRecordMeta(firstLine: string, first: NonNullable<SessionStoreContract['first']>): SessionMeta | null {
   const record = object(JSON.parse(firstLine))
   if (record?.type !== first.type || !object(valueAt(record, first.id.slice(0, -1)))) return null
   const id = valueAt(record, first.id)

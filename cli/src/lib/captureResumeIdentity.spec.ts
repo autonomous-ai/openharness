@@ -1,11 +1,17 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { engineKeepsTranscriptFile, validTranscriptPath, type RegisteredSession } from './registry.js'
-import { findLiveSession, findResumedTranscript, processSessionOf } from './sessionRepair.js'
+import { findLiveSession, findResumedTranscript, processSessionEvidence } from './sessionRepair.js'
 import { processRows, resumeSessionId } from './tmux.js'
 vi.mock('./registry.js', () => ({ validTranscriptPath: vi.fn(() => true), engineKeepsTranscriptFile: vi.fn(() => true) }))
-vi.mock('./sessionRepair.js', () => ({ processSessionOf: vi.fn(), findLiveSession: vi.fn(), findResumedTranscript: vi.fn() }))
+vi.mock('./sessionRepair.js', () => ({ processSessionEvidence: vi.fn(), findLiveSession: vi.fn(), findResumedTranscript: vi.fn() }))
 vi.mock('./tmux.js', () => ({ processRows: vi.fn(), resumeSessionId: vi.fn() }))
+vi.mock('./processEvidence.js', async () => {
+  const { nativeConversationFixture } = await import('../testing/nativeConversationEvidence.js')
+  const { processRows } = await import('./tmux.js')
+  return { readProcessEvidence: (...args: Parameters<typeof import('./processEvidence.js')['readProcessEvidence']>) =>
+    nativeConversationFixture(async () => [], processRows).processes(...args) }
+})
 let row: RegisteredSession
 beforeEach(() => {
   vi.resetAllMocks()
@@ -15,7 +21,7 @@ beforeEach(() => {
   vi.mocked(validTranscriptPath).mockReturnValue(true)
   vi.mocked(engineKeepsTranscriptFile).mockReturnValue(true)
   vi.mocked(resumeSessionId).mockReturnValue(null)
-  vi.mocked(processSessionOf).mockResolvedValue(null)
+  vi.mocked(processSessionEvidence).mockResolvedValue({ session: null, verify: vi.fn() })
   vi.mocked(findLiveSession).mockResolvedValue(null)
   vi.mocked(findResumedTranscript).mockResolvedValue(null)
 })
@@ -83,7 +89,9 @@ it.each(['identity', 'cwd', 'unknown', 'gone', 'pid', 'executable', 'start'])('r
   if (mode === 'pid') row.processIdentity!.pid++
   if (mode === 'executable') row.processIdentity!.executable = 'other'
   if (mode === 'start') row.processIdentity!.startMarker = 'later'
-  expect(await captureResumeIdentity(row)).toBe(row); expect(findLiveSession).not.toHaveBeenCalled()
+  if (['unknown', 'executable', 'start'].includes(mode)) await expect(captureResumeIdentity(row)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  else expect(await captureResumeIdentity(row)).toBe(row)
+  expect(findLiveSession).not.toHaveBeenCalled()
 })
 it.each(['claude', 'codex'] as const)('captures an explicit %s resume without guessing by directory', async engine => {
   row.engine = engine; vi.mocked(resumeSessionId).mockReturnValue('exact')
@@ -99,15 +107,15 @@ it('keeps an explicit file-backed resume unbound while its transcript is still u
 })
 it('prefers current Claude native metadata to old resume argv', async () => {
   vi.mocked(resumeSessionId).mockReturnValue('old')
-  vi.mocked(processSessionOf).mockResolvedValue({ sessionId: 'current', transcriptPath: '/current' })
+  vi.mocked(processSessionEvidence).mockResolvedValue({ session: { sessionId: 'current', transcriptPath: '/current' }, verify: vi.fn() })
   expect(await captureResumeIdentity(row)).toMatchObject({ sessionId: 'current' }); expect(findResumedTranscript).not.toHaveBeenCalled()
-  expect(processSessionOf).toHaveBeenCalledWith('claude', 77, '/work', Date.parse(row.processIdentity!.startMarker))
+  expect(processSessionEvidence).toHaveBeenCalledWith('claude', 77, '/work', Date.parse(row.processIdentity!.startMarker), expect.anything())
 })
 it('captures a unique fresh session before its first hook arrives', async () => {
   vi.mocked(findLiveSession).mockResolvedValue({ sessionId: 'new', transcriptPath: '/new' })
   expect(await captureResumeIdentity(row)).toMatchObject({ sessionId: 'new', transcriptPath: '/new' })
   expect(row.sessionId).toBe('')
-  expect(findLiveSession).toHaveBeenCalledWith('claude', '/work', Date.parse(row.processIdentity!.startMarker), { pid: 77, bornOnly: true, codexHome: undefined })
+  expect(findLiveSession).toHaveBeenCalledWith('claude', '/work', Date.parse(row.processIdentity!.startMarker), expect.objectContaining({ pid: 77, bornOnly: true, codexHome: undefined, expectedProcess: row.processIdentity }))
 })
 it.each([null, { sessionId: 'missing' }, { sessionId: 'unsafe', transcriptPath: '/unsafe' }])('does not bind ambiguous or unsafe history: %s', async found => {
   vi.mocked(findLiveSession).mockResolvedValue(found); vi.mocked(validTranscriptPath).mockReturnValue(false)

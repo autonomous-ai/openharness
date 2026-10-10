@@ -1,3 +1,4 @@
+import { nativeConversationFixture } from '../testing/nativeConversationEvidence.js'
 /**
  * Where Claude Code and Codex keep their sessions, and what core reads there, answer for answer: recorded
  * from the code as it stood before their session stores became declared data applied by the kit
@@ -28,6 +29,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 
 const fixtureClock = vi.hoisted(() => ({ root: '', now: Date.parse('2026-10-09T00:00:00Z') }))
+vi.mock('../lib/bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
+vi.mock('../lib/processLiveness.js', async original => ({ ...await original<object>(),
+  processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
+}))
+vi.mock('../lib/processEvidence.js', async () => {
+  const { nativeConversationFixture } = await import('../testing/nativeConversationEvidence.js')
+  return { readProcessEvidence: nativeConversationFixture(async () => [], async () => []).processes }
+})
 vi.mock('fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
   return { ...fs, stat: async (path: string, ...args: unknown[]) => {
@@ -349,7 +358,7 @@ async function findCases(): Promise<Record<string, unknown>> {
   }
   for (const [name, files] of Object.entries(held)) {
     for (const [cwdName, cwd] of [['a', work('a')], ['c', work('c')]] as const) {
-      cases[`open files · ${name} · ${cwdName}`] = await attempt(() => s.openFileSessionOf('codex', 7, sessions, cwd, async () => files))
+      cases[`open files · ${name} · ${cwdName}`] = await attempt(() => s.openFileSessionOf('codex', 7, sessions, cwd, { sources: nativeConversationFixture(async () => files) }))
     }
   }
   // Only a file named as a rollout counts, however its first record reads.
@@ -357,9 +366,9 @@ async function findCases(): Promise<Record<string, unknown>> {
   write(join(heldRoot, `rollout-held-${B}.jsonl`), jsonl(meta(B, work('a'))))
   write(join(heldRoot, `notes-${C}.jsonl`), jsonl(meta(C, work('a'))))
   cases['open files · a rollout and another session-shaped file'] = await attempt(() => s.openFileSessionOf('codex', 7, heldRoot, work('a'),
-    async () => [join(heldRoot, `notes-${C}.jsonl`), join(heldRoot, `rollout-held-${B}.jsonl`)]))
-  cases['open files · one root'] = await attempt(() => s.openFileSessionOf('codex', 7, join(root, 'codex', 'sessions'), work('a'), async () => [paths.codexA]))
-  cases['open files · claude'] = await attempt(() => s.openFileSessionOf('claude', 7, sessions, work('a'), async () => [paths.codexA]))
+    { sources: nativeConversationFixture(async () => [join(heldRoot, `notes-${C}.jsonl`), join(heldRoot, `rollout-held-${B}.jsonl`)]) }))
+  cases['open files · one root'] = await attempt(() => s.openFileSessionOf('codex', 7, join(root, 'codex', 'sessions'), work('a'), { sources: nativeConversationFixture(async () => [paths.codexA]) }))
+  cases['open files · claude'] = await attempt(() => s.openFileSessionOf('claude', 7, sessions, work('a'), { sources: nativeConversationFixture(async () => [paths.codexA]) }))
   const rows = (args: string, executable: string) => async () => [
     { pid: 7, parentPid: 1, executable, args },
     { pid: 8, parentPid: 7, executable: 'codex', args: 'codex --no-daemon' },
@@ -372,12 +381,12 @@ async function findCases(): Promise<Record<string, unknown>> {
     ['nodejs launcher', [], '/usr/bin/nodejs /opt/codex.js', '/usr/bin/nodejs'],
     ['not a launcher', ['/dev/null'], 'python3 x', 'python3'],
   ] as const) {
-    cases[`process files · ${name}`] = await attempt(() => s.processFilesOf('codex', 7, filesOf({ 7: [...own], 8: [paths.codexB] }), rows(launcher, executable)))
+    cases[`process files · ${name}`] = await attempt(() => s.processFilesOf('codex', 7, { sources: nativeConversationFixture(filesOf({ 7: [...own], 8: [paths.codexB] }), rows(launcher, executable)) }))
   }
-  cases['process files · no process table'] = await attempt(() => s.processFilesOf('codex', 7, filesOf({ 7: ['/dev/null'] }), async () => null))
-  cases['process files · two children'] = await attempt(() => s.processFilesOf('codex', 7, filesOf({ 7: [], 8: [paths.codexB], 10: [paths.codexA] }), async () => [
+  cases['process files · no process table'] = await attempt(() => s.processFilesOf('codex', 7, { sources: nativeConversationFixture(filesOf({ 7: ['/dev/null'] }), async () => null) }))
+  cases['process files · two children'] = await attempt(() => s.processFilesOf('codex', 7, { sources: nativeConversationFixture(filesOf({ 7: [], 8: [paths.codexB], 10: [paths.codexA] }), async () => [
     { pid: 7, parentPid: 1, executable: 'node', args: 'node /opt/codex.js' },
-    { pid: 8, parentPid: 7, executable: 'codex', args: 'codex' }, { pid: 10, parentPid: 7, executable: 'codex', args: 'codex' }]))
+    { pid: 8, parentPid: 7, executable: 'codex', args: 'codex' }, { pid: 10, parentPid: 7, executable: 'codex', args: 'codex' }]) }))
   return cases
 }
 
@@ -607,8 +616,16 @@ describe('core finds sessions where it did before Claude Code and Codex declared
             [`process record · ${home} · no transcript`, 'the process names a conversation whose transcript is unavailable'] as const,
             [`process record · ${home} · another folder`, 'the current process record names a different working directory'] as const,
           ]))
-          const reason = section === 'find' ? held.get(key) : undefined
-          if (reason) expect(value, `${platform} · ${key} · former refusal`).toBeNull()
+          const descriptorCorrections = new Map<string, { before: unknown; reason: string }>([
+            ...['a', 'c'].map(cwd => [`open files · outside the sessions · ${cwd}`, {
+              before: null, reason: 'the open rollout pathname does not name the process file',
+            }] as const),
+            ['process files · no process table', { before: ['/dev/null'], reason: 'the native process graph is incomplete' }],
+            ['process files · two children', { before: [], reason: 'more than one native child could own the conversation' }],
+          ])
+          const corrected = section === 'find' ? descriptorCorrections.get(key) : undefined
+          const reason = corrected?.reason ?? (section === 'find' ? held.get(key) : undefined)
+          if (reason) expect(value, `${platform} · ${key} · former refusal`).toEqual(corrected ? corrected.before : null)
           expect(actual[section]![key], `${platform} · ${section} · ${key}`)
             .toEqual(reason ? { threw: `Conversation identity is held: ${reason}.` } : value)
         }

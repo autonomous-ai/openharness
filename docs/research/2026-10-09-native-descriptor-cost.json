@@ -1,0 +1,823 @@
+{
+  "startedAt": "2026-10-10T00:20:09.836589+00:00",
+  "finishedAt": "2026-10-10T00:21:16.562389+00:00",
+  "formerSource": "5b2be2586ab0e50a857ffe3378adc378060ffcf3",
+  "currentSource": "03bb04f5266d503e2fe745f1ef1e41b9a8cc9589",
+  "processCount": 30,
+  "callsPerProcess": 5,
+  "quantileConvention": "sorted[floor((n-1)*p)]",
+  "samples": [
+    {
+      "workload": "one",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        172.0074,
+        169.1529,
+        168.2557,
+        168.7189,
+        169.1506
+      ],
+      "cpuMs": 12.288,
+      "peakRssMiB": 94.0078125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 0,
+      "wholeProcessWallMs": 1236.388651188463,
+      "wholeProcessCpuMs": 1368.356
+    },
+    {
+      "workload": "one",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        1169.4033,
+        515.3629,
+        534.8183,
+        509.1663,
+        505.9962
+      ],
+      "cpuMs": 138.3,
+      "peakRssMiB": 103.65234375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 0,
+      "wholeProcessWallMs": 3599.7926210984588,
+      "wholeProcessCpuMs": 3121.056
+    },
+    {
+      "workload": "duplicate",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        173.7415,
+        170.1411,
+        171.0964,
+        172.1451,
+        169.3039
+      ],
+      "cpuMs": 14.456,
+      "peakRssMiB": 95.921875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 0,
+      "wholeProcessWallMs": 1201.8355820327997,
+      "wholeProcessCpuMs": 1316.1389999999997
+    },
+    {
+      "workload": "duplicate",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        799.7955,
+        512.3228,
+        507.7611,
+        513.1433,
+        505.5341
+      ],
+      "cpuMs": 137.005,
+      "peakRssMiB": 104.05859375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 0,
+      "wholeProcessWallMs": 3191.3781040348113,
+      "wholeProcessCpuMs": 3061.2530000000006
+    },
+    {
+      "workload": "competing",
+      "iterations": 5,
+      "outcomes": {
+        "empty": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        172.4985,
+        168.9362,
+        168.349,
+        168.7892,
+        171.0296
+      ],
+      "cpuMs": 14.175,
+      "peakRssMiB": 95.515625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 0,
+      "wholeProcessWallMs": 1194.3191229365766,
+      "wholeProcessCpuMs": 1303.9569999999987
+    },
+    {
+      "workload": "competing",
+      "iterations": 5,
+      "outcomes": {
+        "held": 5
+      },
+      "holds": [
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation."
+      ],
+      "latenciesMs": [
+        797.3283,
+        506.5648,
+        511.6254,
+        508.9164,
+        505.2044
+      ],
+      "cpuMs": 137.961,
+      "peakRssMiB": 108.80078125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 0,
+      "wholeProcessWallMs": 3187.6896638423204,
+      "wholeProcessCpuMs": 3060.3630000000026
+    },
+    {
+      "workload": "one",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        791.8722,
+        503.5982,
+        509.586,
+        502.3817,
+        505.4674
+      ],
+      "cpuMs": 132.352,
+      "peakRssMiB": 103.73046875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 1,
+      "wholeProcessWallMs": 3168.405038304627,
+      "wholeProcessCpuMs": 3038.8649999999975
+    },
+    {
+      "workload": "one",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        170.6877,
+        169.2673,
+        176.1874,
+        169.5407,
+        170.1227
+      ],
+      "cpuMs": 12.203,
+      "peakRssMiB": 96.16796875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 1,
+      "wholeProcessWallMs": 1207.822288852185,
+      "wholeProcessCpuMs": 1320.01
+    },
+    {
+      "workload": "duplicate",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        797.291,
+        506.5197,
+        503.9559,
+        506.1163,
+        504.8387
+      ],
+      "cpuMs": 132.996,
+      "peakRssMiB": 105.0703125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 1,
+      "wholeProcessWallMs": 3173.7845139577985,
+      "wholeProcessCpuMs": 3039.308000000002
+    },
+    {
+      "workload": "duplicate",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        171.5934,
+        170.3639,
+        169.5574,
+        169.4989,
+        169.1871
+      ],
+      "cpuMs": 14.326,
+      "peakRssMiB": 92.20703125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 1,
+      "wholeProcessWallMs": 1201.0723878629506,
+      "wholeProcessCpuMs": 1323.5139999999994
+    },
+    {
+      "workload": "competing",
+      "iterations": 5,
+      "outcomes": {
+        "held": 5
+      },
+      "holds": [
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation."
+      ],
+      "latenciesMs": [
+        791.2534,
+        505.3703,
+        503.4909,
+        562.7571,
+        510.5001
+      ],
+      "cpuMs": 139.237,
+      "peakRssMiB": 104.484375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 1,
+      "wholeProcessWallMs": 3246.1578962393105,
+      "wholeProcessCpuMs": 3079.808
+    },
+    {
+      "workload": "competing",
+      "iterations": 5,
+      "outcomes": {
+        "empty": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        171.3002,
+        174.1752,
+        172.5919,
+        170.9621,
+        170.7226
+      ],
+      "cpuMs": 15.143,
+      "peakRssMiB": 96.6171875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 1,
+      "wholeProcessWallMs": 1214.1418689861894,
+      "wholeProcessCpuMs": 1329.576000000003
+    },
+    {
+      "workload": "one",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        170.909,
+        169.0114,
+        175.8541,
+        169.9756,
+        172.7186
+      ],
+      "cpuMs": 12.715,
+      "peakRssMiB": 94.99609375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 2,
+      "wholeProcessWallMs": 1203.8684277795255,
+      "wholeProcessCpuMs": 1314.820999999995
+    },
+    {
+      "workload": "one",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        788.9856,
+        504.9359,
+        507.3789,
+        507.4093,
+        509.8551
+      ],
+      "cpuMs": 133.613,
+      "peakRssMiB": 106.20703125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 2,
+      "wholeProcessWallMs": 3178.8271660916507,
+      "wholeProcessCpuMs": 3046.6280000000056
+    },
+    {
+      "workload": "duplicate",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        171.3285,
+        168.6798,
+        168.5582,
+        168.9792,
+        170.4366
+      ],
+      "cpuMs": 14.108,
+      "peakRssMiB": 94.79296875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 2,
+      "wholeProcessWallMs": 1202.5171122513711,
+      "wholeProcessCpuMs": 1324.0029999999977
+    },
+    {
+      "workload": "duplicate",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        795.5358,
+        506.9994,
+        505.6213,
+        505.6656,
+        505.2529
+      ],
+      "cpuMs": 137.921,
+      "peakRssMiB": 101.68359375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 2,
+      "wholeProcessWallMs": 3182.002102956176,
+      "wholeProcessCpuMs": 3065.7270000000026
+    },
+    {
+      "workload": "competing",
+      "iterations": 5,
+      "outcomes": {
+        "empty": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        170.9231,
+        169.4549,
+        169.3231,
+        170.891,
+        168.909
+      ],
+      "cpuMs": 14.382,
+      "peakRssMiB": 91.88671875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 2,
+      "wholeProcessWallMs": 1197.7533069439232,
+      "wholeProcessCpuMs": 1311.001999999995
+    },
+    {
+      "workload": "competing",
+      "iterations": 5,
+      "outcomes": {
+        "held": 5
+      },
+      "holds": [
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation."
+      ],
+      "latenciesMs": [
+        808.2856,
+        513.9248,
+        506.8023,
+        510.4386,
+        505.0993
+      ],
+      "cpuMs": 142.103,
+      "peakRssMiB": 107.66796875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 2,
+      "wholeProcessWallMs": 3210.6240172870457,
+      "wholeProcessCpuMs": 3083.116000000004
+    },
+    {
+      "workload": "one",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        820.6938,
+        509.1637,
+        505.3085,
+        508.7921,
+        507.5542
+      ],
+      "cpuMs": 137.643,
+      "peakRssMiB": 102.6328125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 3,
+      "wholeProcessWallMs": 3212.2653909027576,
+      "wholeProcessCpuMs": 3065.908999999998
+    },
+    {
+      "workload": "one",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        171.0879,
+        168.5093,
+        168.912,
+        168.7493,
+        170.839
+      ],
+      "cpuMs": 12.45,
+      "peakRssMiB": 97.09765625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 3,
+      "wholeProcessWallMs": 1194.9855629354715,
+      "wholeProcessCpuMs": 1314.3719999999987
+    },
+    {
+      "workload": "duplicate",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        1004.8723,
+        525.505,
+        515.9014,
+        500.4594,
+        510.3873
+      ],
+      "cpuMs": 159.245,
+      "peakRssMiB": 111.65234375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 3,
+      "wholeProcessWallMs": 3521.6087796725333,
+      "wholeProcessCpuMs": 3361.9249999999993
+    },
+    {
+      "workload": "duplicate",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        172.3221,
+        170.1254,
+        170.1656,
+        170.4508,
+        169.2894
+      ],
+      "cpuMs": 14.552,
+      "peakRssMiB": 94.125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 3,
+      "wholeProcessWallMs": 1198.623792733997,
+      "wholeProcessCpuMs": 1308.4850000000047
+    },
+    {
+      "workload": "competing",
+      "iterations": 5,
+      "outcomes": {
+        "held": 5
+      },
+      "holds": [
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation."
+      ],
+      "latenciesMs": [
+        798.2459,
+        513.4137,
+        506.7101,
+        507.6731,
+        504.6198
+      ],
+      "cpuMs": 137.932,
+      "peakRssMiB": 107.69140625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 3,
+      "wholeProcessWallMs": 3189.6598460152745,
+      "wholeProcessCpuMs": 3062.9029999999916
+    },
+    {
+      "workload": "competing",
+      "iterations": 5,
+      "outcomes": {
+        "empty": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        171.7811,
+        169.4175,
+        169.5682,
+        169.3236,
+        172.308
+      ],
+      "cpuMs": 14.42,
+      "peakRssMiB": 93.73046875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 3,
+      "wholeProcessWallMs": 1207.1407423354685,
+      "wholeProcessCpuMs": 1329.293000000007
+    },
+    {
+      "workload": "one",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        170.9423,
+        167.6045,
+        169.4886,
+        169.7393,
+        169.5783
+      ],
+      "cpuMs": 12.397,
+      "peakRssMiB": 96.5,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 4,
+      "wholeProcessWallMs": 1200.1481861807406,
+      "wholeProcessCpuMs": 1313.3449999999982
+    },
+    {
+      "workload": "one",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        821.1068,
+        502.5129,
+        508.6648,
+        502.5291,
+        510.3555
+      ],
+      "cpuMs": 135.348,
+      "peakRssMiB": 102.7578125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 4,
+      "wholeProcessWallMs": 3199.5812356472015,
+      "wholeProcessCpuMs": 3045.9239999999995
+    },
+    {
+      "workload": "duplicate",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        173.2767,
+        170.3651,
+        169.6515,
+        169.5583,
+        168.7383
+      ],
+      "cpuMs": 14.542,
+      "peakRssMiB": 95.8671875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 4,
+      "wholeProcessWallMs": 1200.0730680301785,
+      "wholeProcessCpuMs": 1314.0040000000042
+    },
+    {
+      "workload": "duplicate",
+      "iterations": 5,
+      "outcomes": {
+        "bound": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        789.3203,
+        505.9601,
+        509.0536,
+        519.3348,
+        516.4937
+      ],
+      "cpuMs": 134.688,
+      "peakRssMiB": 105.2890625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 4,
+      "wholeProcessWallMs": 3218.1469560600817,
+      "wholeProcessCpuMs": 3079.9299999999976
+    },
+    {
+      "workload": "competing",
+      "iterations": 5,
+      "outcomes": {
+        "empty": 5
+      },
+      "holds": [],
+      "latenciesMs": [
+        171.011,
+        169.9408,
+        169.975,
+        170.5364,
+        170.074
+      ],
+      "cpuMs": 14.296,
+      "peakRssMiB": 92.6015625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "former",
+      "repeat": 4,
+      "wholeProcessWallMs": 1212.8505548462272,
+      "wholeProcessCpuMs": 1331.1640000000011
+    },
+    {
+      "workload": "competing",
+      "iterations": 5,
+      "outcomes": {
+        "held": 5
+      },
+      "holds": [
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation.",
+        "Conversation identity is held: more than one open rollout could own the conversation."
+      ],
+      "latenciesMs": [
+        792.3395,
+        504.8263,
+        504.478,
+        505.5195,
+        513.6121
+      ],
+      "cpuMs": 137.025,
+      "peakRssMiB": 106.28125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "current",
+      "repeat": 4,
+      "wholeProcessWallMs": 3171.9114631414413,
+      "wholeProcessCpuMs": 3044.826999999998
+    }
+  ],
+  "summary": [
+    {
+      "source": "former",
+      "workload": "one",
+      "calls": 25,
+      "medianMs": 169.5783,
+      "p95Ms": 172.7186,
+      "meanLookupCpuMs": 2.48212,
+      "meanFreshProcessCpuMs": 1326.1807999999983,
+      "meanPeakRssMiB": 95.75390625
+    },
+    {
+      "source": "current",
+      "workload": "one",
+      "calls": 25,
+      "medianMs": 508.7921,
+      "p95Ms": 820.6938,
+      "meanLookupCpuMs": 27.09024,
+      "meanFreshProcessCpuMs": 3063.6764000000003,
+      "meanPeakRssMiB": 103.79609375
+    },
+    {
+      "source": "former",
+      "workload": "duplicate",
+      "calls": 25,
+      "medianMs": 170.1411,
+      "p95Ms": 172.3221,
+      "meanLookupCpuMs": 2.87936,
+      "meanFreshProcessCpuMs": 1317.2290000000012,
+      "meanPeakRssMiB": 94.5828125
+    },
+    {
+      "source": "current",
+      "workload": "duplicate",
+      "calls": 25,
+      "medianMs": 509.0536,
+      "p95Ms": 797.291,
+      "meanLookupCpuMs": 28.0742,
+      "meanFreshProcessCpuMs": 3121.6286000000005,
+      "meanPeakRssMiB": 105.55078125
+    },
+    {
+      "source": "former",
+      "workload": "competing",
+      "calls": 25,
+      "medianMs": 170.5364,
+      "p95Ms": 172.4985,
+      "meanLookupCpuMs": 2.89664,
+      "meanFreshProcessCpuMs": 1320.9984000000009,
+      "meanPeakRssMiB": 94.0703125
+    },
+    {
+      "source": "current",
+      "workload": "competing",
+      "calls": 25,
+      "medianMs": 508.9164,
+      "p95Ms": 797.3283,
+      "meanLookupCpuMs": 27.77032,
+      "meanFreshProcessCpuMs": 3066.2033999999994,
+      "meanPeakRssMiB": 106.98515625
+    }
+  ]
+}

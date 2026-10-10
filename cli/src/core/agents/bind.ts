@@ -342,6 +342,7 @@ export function createBinding({
       const located = await read(() => findLiveSession(observed.engine, observed.cwd, startedAtMs, {
         bornOnly: true,
         pid: observed.processIdentity.pid,
+        expectedProcess: observed.processIdentity,
         codexHome: agent.codexHome ?? undefined,
         hermesHome: agent.hermesHome ?? undefined,
       }))
