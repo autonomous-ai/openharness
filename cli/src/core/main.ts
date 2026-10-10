@@ -1683,6 +1683,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   const turnHooks = createTurnHooks({
     holdStop: attach.holdStop,
+    afterStop: attach.afterStop,
     resolve: (id) => registry.resolve(id),
     normalizers,
     emit: (sessionId, events) => emitSessionEvents(sessionId, events),

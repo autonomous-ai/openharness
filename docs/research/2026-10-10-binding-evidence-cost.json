@@ -905,5 +905,5 @@
       "arch": "x64"
     }
   ],
-  "scope": "Whole registry load and native descriptor workloads. Measured source 937e9e6d4; the later first ordinary cancellation correction touches only core/transcripts/attach.ts and turnReplacement.ts and their specs, outside these workload import/call paths. Active cancellation latency is not covered by these measurements."
+  "scope": "Whole registry load and native descriptor workloads. Measured source 937e9e6d4; the later ordinary Cancel and Stop corrections touch only core recovery/control modules and their main wiring/specs, outside these workload import/call paths. Active cancellation latency is not covered by these measurements."
 }

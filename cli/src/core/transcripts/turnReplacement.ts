@@ -98,16 +98,18 @@ export function createTurnReplacements(normalizers: Pick<SessionNormalizers, 'li
     pending.set(session.sessionId, replacement)
     return replacement
   }
+  const remember = (session: RegisteredSession) => {
+    let record = pending.get(session.sessionId)
+    if (record?.binding !== JSON.stringify([session.agentId, session.sessionId, session.engine])) {
+      record = create(session, false)
+      pending.set(session.sessionId, record)
+    }
+    return record
+  }
   return { stage,
     retains: (session: RegisteredSession) => pending.get(session.sessionId)?.binding === JSON.stringify([session.agentId, session.sessionId, session.engine]),
-    cancel: (session: RegisteredSession) => {
-      let record = pending.get(session.sessionId)
-      if (record?.binding !== JSON.stringify([session.agentId, session.sessionId, session.engine])) {
-        record = create(session, false)
-        pending.set(session.sessionId, record)
-      }
-      return record.cancel(session.transcriptPath)
-    },
+    cancel: (session: RegisteredSession) => remember(session).cancel(session.transcriptPath),
+    stop: (session: RegisteredSession) => remember(session).stop(),
     forget: (sessionId: string) => { pending.delete(sessionId) },
   }
 }

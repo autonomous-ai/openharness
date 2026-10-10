@@ -65,7 +65,7 @@ function setup(mode: 'inline' | 'worker', content = prompt('T1')) {
     cursorSubagents: { forget: vi.fn() }, input: { cancel: vi.fn(), cancelConfirmed: vi.fn(async () => true) },
     device: () => undefined, stopHeartbeat: vi.fn(), questionWatcher: { stop: vi.fn() }, mirror: { cancel: vi.fn() },
     turnActivity: { observe: vi.fn(), snapshot: vi.fn() }, turnStartedAt: new Map(), agentIdFor: () => row.agentId, clients: { send: vi.fn() } })
-  const hooks = createTurnHooks({ resolve: () => row, normalizers, holdStop: attach.holdStop,
+  const hooks = createTurnHooks({ resolve: () => row, normalizers, holdStop: attach.holdStop, afterStop: attach.afterStop,
     emit, drain: async () => watcher.pollSession(row.sessionId), onCursorTaskStart: vi.fn(),
     cursorTaskHooks: { wait: async () => {} }, cursorSubagents: { closeParent: vi.fn() }, announceTurnAborted: vi.fn(),
     armAgyIdleWatch: vi.fn(), clearAgyIdleWatch: vi.fn(), mirror: { noteEngineStopped: vi.fn() }, dataDir: root })
@@ -248,4 +248,31 @@ it.each(['inline', 'worker'] as const)('%s preserves an ordinary Cancel through 
   expect(t.row.interpretationHold).toBeUndefined()
   expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(false)
   expect(t.settled).not.toHaveBeenCalled()
+})
+
+it.each([
+  ['inline', false], ['worker', false], ['inline', true], ['worker', true],
+] as const)('%s retains an ordinary successful Stop through first recovery (later turn=%s)', async (mode, later) => {
+  const t = setup(mode)
+  await t.attach.attachSession(t.row)
+  const live = t.normalizers.liveParsers.get(t.row.sessionId)
+  t.hooks.onTurnStop({ sessionId: t.row.sessionId })
+  await vi.waitFor(() => expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(false), { timeout: 3_000 })
+  expect(t.normalizers.liveParsers.get(t.row.sessionId)).toBe(live)
+  expect(t.row.interpretationHold).toBeUndefined()
+  if (later) {
+    appendFileSync(t.file, prompt('T2'))
+    await t.watcher.pollSession(t.row.sessionId)
+    expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(true)
+  }
+  const sent = t.emit.mock.calls.length
+  t.hold(); t.recover(); await t.attach.attachSession(t.row)
+  expect(t.row.interpretationHold).toContain('Stop could not be matched')
+  expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(later)
+  expect(t.emit).toHaveBeenCalledTimes(sent)
+  await t.cancel(t.row.agentId)
+  appendFileSync(t.file, prompt('T3'))
+  await t.attach.attachSession(t.row)
+  expect(t.row.interpretationHold).toBeUndefined()
+  expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(true)
 })

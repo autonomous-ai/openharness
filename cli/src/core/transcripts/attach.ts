@@ -118,6 +118,7 @@ export function createAttach({
     holdInterpretation(session, 'Stop could not be matched to its turn; Cancel can resolve this hold.')
     return true
   }
+  const afterStop = (session: RegisteredSession): void => { turnReplacements.stop(session) }
   /**
    * Sessions that attached before their transcript existed, so nothing was folded and nothing has ever
    * been streamed for them.
@@ -702,7 +703,7 @@ export function createAttach({
       }
     }, authority)
   }
-  return { attachSession, attaches, neverFoldedHistory, replayedFirstTurn, forget, beforeCancel, holdStop, holdInterpretation }
+  return { attachSession, attaches, neverFoldedHistory, replayedFirstTurn, forget, beforeCancel, afterStop, holdStop, holdInterpretation }
 }
 
 export type Attach = ReturnType<typeof createAttach>

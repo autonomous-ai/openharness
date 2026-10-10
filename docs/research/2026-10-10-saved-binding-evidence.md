@@ -119,7 +119,7 @@ median for a process's five operations; peak RSS is the median of process peaks.
 The single-home batch pays for complete file/header evidence; sharing roots within
 the operation reduces the former many-home traversal cost. These samples are cost
 evidence for the specified workloads, not a host-independent performance gate.
-The later first-Cancel correction affects neither measured import/call path; these
+The later first-Cancel and ordinary-Stop corrections affect neither measured import/call path; these
 measurements do not cover active cancellation latency.
 
 ## Remaining scope and timing
@@ -151,7 +151,10 @@ Clearing a hold without authority cannot release the watcher's pending bytes.
 Cancellation remains eager, never waits on a worker, and cancelled history does not
 produce a completion recap. New prompts after the recorded boundary remain open.
 
-Uncorrelated Stop is deliberately retained as an explicit hold. An empty parser or
+A successful ordinary native Stop is retained too, without replacing its live
+parser or delaying its completion. The first later reconstruction cannot discard
+that completion and reopen its still-open disk history. Uncorrelated Stop is
+deliberately retained as an explicit hold. An empty parser or
 an older completed turn does not establish which turn a delayed Stop belongs to.
 Existing positive stale Claude timestamps remain usable; otherwise a subsequent
 explicit Cancel resolves the hold. Exact per-engine Stop correlation remains in
@@ -162,7 +165,7 @@ control intent across daemon restart remains part of the lifecycle completion wo
 The former core HTTP hook-admission golden was recorded separately from main
 `c7d460b1d` in `d331c49a4`; its twenty Linux/macOS observations and artifact are
 unchanged. Additional actual-composition regressions cover both inline parsing and
-the real worker request/transport/reconstruction path. At 04:00 UTC, 209 affected
+the real worker request/transport/reconstruction path. At 04:16 UTC, 224 affected
 core tests passed at 100% coverage for the changed attachment, replacement-control
 and turn-hook modules. Full gates, private lanes, mutations and review are still
 required on the final source before this PR can land.

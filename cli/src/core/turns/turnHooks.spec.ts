@@ -506,3 +506,22 @@ it('rejects delayed engine emissions after its binding changes, even if the hold
     expect(run.deps.emit).not.toHaveBeenCalled()
   } finally { spy.mockRestore() }
 })
+
+it.each([
+  ['cursor', 'error'], ['commandcode', undefined], ['devin', undefined], ['grok', 'error'],
+  ['copilot', 'error'], ['copilot', undefined], ['agy', 'error'], ['agy', undefined],
+])('retains successful native %s completion (status=%s) without waiting for a reader', async (engine, status) => {
+  vi.useFakeTimers()
+  try {
+    const afterStop = vi.fn(), run = setup(engine!, { afterStop }), state = engineState()
+    const maps = { cursor: run.normalizers.cursorNormalizers, commandcode: run.normalizers.commandcodeNormalizers,
+      devin: run.normalizers.devinReaders, grok: run.normalizers.grokNormalizers,
+      copilot: run.normalizers.copilotNormalizers, agy: run.normalizers.agyNormalizers }
+    ;(maps[engine as keyof typeof maps] as Map<string, unknown>).set('s1', state)
+    run.hooks.onTurnStop({ sessionId: 's1', status })
+    await vi.runAllTimersAsync()
+    expect(afterStop).toHaveBeenCalledOnce()
+    expect(afterStop).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', engine }))
+    expect(state.turnOpen).toBe(false)
+  } finally { vi.useRealTimers() }
+})
