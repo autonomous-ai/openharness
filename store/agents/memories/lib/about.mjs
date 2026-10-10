@@ -97,9 +97,14 @@ export function readAbout(dir) {
 
 /**
  * Replace the profile. The previous one is kept as about-you.prev.md; a half-written file never shows.
- * A build here gets the next generation; a copy of another machine's build keeps that build's (`gen`).
+ *
+ * A build here is numbered `max(now, highest seen + 1)`: later than anything any machine has told this
+ * one, and — between builds made without seeing each other, a new machine's first and an old machine's
+ * last — the later one in time. A copy of another machine's build keeps that build's number (`gen`)
+ * and never moves this one backwards: an older number, or the same number with text that ranks lower
+ * (lib/fleet.mjs newestAbout), is left unwritten and `null` is returned.
  */
-export function writeAbout(dir, text, { gen } = {}) {
+export function writeAbout(dir, text, { gen, now = Date.now() } = {}) {
   const value = String(text ?? '')
   if (!value.trim()) throw new Error('Refusing to write an empty About You.')
   if (Buffer.byteLength(value) > MAX_ABOUT) throw new Error(`About You is limited to ${MAX_ABOUT / 1024} KB; keep it short.`)
@@ -109,6 +114,12 @@ export function writeAbout(dir, text, { gen } = {}) {
   if (/harness-memories:about-you|<\/?about-you/i.test(value)) throw new Error('About You cannot contain "<about-you" or the harness-memories marker.')
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   const path = join(dir, ABOUT_FILE)
+  if (Number.isInteger(gen)) {
+    const have = readMeta(dir).gen
+    let current = null
+    try { current = readFileSync(path, 'utf8') } catch { /* nothing here yet */ }
+    if (current !== null && (gen < have || (gen === have && current.trimEnd() >= value.trimEnd()))) return null
+  }
   const previous = join(dir, PREVIOUS_FILE)
   const temporary = join(dir, `.${ABOUT_FILE}.${process.pid}.tmp`)
   // Never write through a link someone left at one of these names: remove whatever is there, then
@@ -120,7 +131,7 @@ export function writeAbout(dir, text, { gen } = {}) {
   writeFileSync(temporary, value.endsWith('\n') ? value : value + '\n', { mode: 0o600, flag: 'wx' })
   renameSync(temporary, path)
   const meta = readMeta(dir)
-  const next = Number.isInteger(gen) ? gen : Math.max(meta.gen, meta.seen) + 1
+  const next = Number.isInteger(gen) ? gen : Math.max(now, meta.gen + 1, meta.seen + 1)
   writeMeta(dir, { gen: next, seen: Math.max(meta.seen, next) })
   return path
 }

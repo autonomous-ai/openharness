@@ -45,10 +45,10 @@ export function merge(local, remotes, here) {
   // This machine's projects stay as they are, two folders with one name included. Another machine's
   // project joins this machine's project of the same name when there is exactly one — the same
   // repository, in a different folder there — and is a project of its own otherwise.
-  const projects = new Map((local.projects ?? []).map((project) => [project.key, { ...project, memories: [...project.memories], engines: { ...project.engines }, machines: [machine.name] }]))
+  const projects = new Map((local.projects ?? []).map((project) => [project.key, { ...project, memories: [...project.memories], engines: { ...project.engines }, machines: [machine.name], here: true }]))
   for (const remote of answered) {
     for (const project of remote.snapshot.projects ?? []) {
-      const named = [...projects.values()].filter((entry) => entry.name === project.name && entry.machines.includes(machine.name))
+      const named = [...projects.values()].filter((entry) => entry.name === project.name && entry.here)
       const key = named.length === 1 ? named[0].key : `${remote.id}|${project.key}`
       const entry = projects.get(key) ?? { ...project, key, memories: [], sessions: 0, asks: 0, engines: {}, lastAt: null, machines: [] }
       entry.memories.push(...project.memories.map((id) => `${remote.id}|${id}`))

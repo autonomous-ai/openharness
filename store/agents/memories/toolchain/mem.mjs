@@ -192,6 +192,10 @@ export async function run(argv, { out = (line) => process.stdout.write(line + '\
         size -= row.body.length - cut.length
         row.body = cut.length < row.body.length ? cut + '\n…' : cut
       }
+      while (size > budget && answer.memories.length) {
+        const dropped = answer.memories.pop()
+        size -= JSON.stringify(dropped).length + 1
+      }
       print(answer)
       return 0
     }

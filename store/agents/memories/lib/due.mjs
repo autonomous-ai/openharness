@@ -35,7 +35,6 @@ export function due(snap, { now = Date.now(), newMessages = NEW_MESSAGES, minInt
 }
 
 /** The turn the pane gives its own agent: plain words, as if the person had typed them. */
-export function buildRequest(state, { deliveryOff = false } = {}) {
-  const build = state.first ? 'Build my About You' : 'Update my About You with what I have said since it was last built'
-  return deliveryOff ? `${build}.` : `${build}, and use it in every agent.`
+export function buildRequest(state) {
+  return state.first ? 'Build my About You.' : 'Update my About You with what I have said since it was last built.'
 }

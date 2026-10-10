@@ -79,8 +79,9 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
         // About You built and nobody has chosen on or off, on any machine this one knows of: on, as the
         // default — at the earliest time a choice can have, so the person's first click on Off, here or
         // on any machine, outranks it everywhere.
+        // With other machines, only once they have been asked: a choice may be waiting on one of them.
         const anyChoice = newestChoice(local, machines?.remotes ?? [], machines?.here)
-        if (local.about && !anyChoice) {
+        if (local.about && !anyChoice && (!fleet || machines)) {
           try { deliver('on', { env, home, choiceAt: DEFAULT_CHOICE_AT, exact: true }); local = await snapshot({ env, home, now: now() }) } catch { /* shown as off */ }
         }
         // Delivery on and a copy out of date (About You edited by hand, or a newer Memories writes copies
@@ -126,7 +127,9 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
       const asked = await attempt('machines', () => askMachines({ machinesReport: fleet.machinesReport, request: fleet.request }))
       if (asked) {
         machines = { ...asked, at: now() }
-        for (const remote of machines.remotes) if (Number.isInteger(remote.snapshot?.about?.gen)) noteSeen(memory, remote.snapshot.about.gen)
+        for (const remote of machines.remotes) {
+          if (Number.isInteger(remote.snapshot?.about?.gen)) await attempt('About You', () => noteSeen(memory, remote.snapshot.about.gen))
+        }
       }
       if (!local) await attempt('this computer', () => look())
       if (machines && local) {
@@ -164,14 +167,14 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
     const known = newestChoice(local ?? {}, machines?.remotes ?? [], machines?.here)
     const at = Math.max(now(), (known?.at ?? 0) + 1)
     let here
-    try { here = deliver(on ? 'on' : 'off', { env, home, choiceAt: at, exact: true }) } catch (error) {
+    try { here = deliver(on ? 'on' : 'off', { env, home, choiceAt: at }) } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
     const sentTo = []
     const failed = []
     if (fleet && machines) {
       for (const remote of machines.remotes.filter((r) => r.snapshot)) {
-        try { await fleet.request(remote.id, 'memory_deliver', { on, choiceAt: at }); sentTo.push(remote.name) }
+        try { await fleet.request(remote.id, 'memory_deliver', { on, choiceAt: here.choiceAt }); sentTo.push(remote.name) }
         catch (error) { failed.push({ name: remote.name, error: error instanceof Error ? error.message : String(error) }) }
       }
     }
