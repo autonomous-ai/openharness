@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { JevChoice, JevChoiceAnswer } from './jev/jevClient.js'
 import { JevUnavailable } from './jev/jevClient.js'
-import { decideRoute, JEV_LEAD_P, JEV_LEAD_RATIO, JEV_SURE_P, jevPick, type RouteDeps, type RouteInput, type RouteOption, type RouteSession } from './routeDecide.js'
+import { decideRoute, JEV_LEAD_OPTIONS, JEV_LEAD_P, JEV_LEAD_RATIO, JEV_SURE_P, jevPick, type RouteDeps, type RouteInput, type RouteOption, type RouteSession } from './routeDecide.js'
 
 /** A choice of [choice] at [p] over [options], the rest shared evenly among the others. */
 function said(choice: string, p: number, options: string[]): JevChoiceAnswer {
@@ -39,21 +39,29 @@ describe('Jev\'s pick', () => {
     expect(jevPick(said('s0', 0.59, ['s0', 'new']), ['s0', 'new'])).toBeUndefined()
   })
 
-  it('is its choice below 0.6 when it leads clearly: 0.4 or more, and twice the next option, new work included', () => {
-    expect([JEV_LEAD_P, JEV_LEAD_RATIO]).toEqual([0.4, 2])
-    const options = ['s0', 's1', 's2', 'new']
+  it('is a session below 0.6 when it leads clearly over six options or more: 0.4 or more, and twice the next, new work included', () => {
+    expect([JEV_LEAD_P, JEV_LEAD_RATIO, JEV_LEAD_OPTIONS]).toEqual([0.4, 2, 6])
+    const options = ['s0', 's1', 's2', 's3', 's4', 'new']
+    const lead = (p: number[]) => jevPick({ choice: 's0', probabilities: Object.fromEntries(options.map((id, i) => [id, p[i]])) }, options, true)
     // The owner's desk, 2026-10-10: the right session at 0.45, the rest spread thin.
-    expect(jevPick({ choice: 's0', probabilities: { s0: 0.45, s1: 0.2, s2: 0.15, new: 0.2 } }, options)).toBe('s0')
-    expect(jevPick({ choice: 's0', probabilities: { s0: 0.4, s1: 0.2, s2: 0.2, new: 0.2 } }, options)).toBe('s0')
+    expect(lead([0.45, 0.15, 0.1, 0.05, 0.05, 0.2])).toBe('s0')
+    expect(lead([0.4, 0.2, 0.1, 0.05, 0.05, 0.2])).toBe('s0')
     // Torn with new work, or with a session like it: new work.
-    expect(jevPick({ choice: 's0', probabilities: { s0: 0.45, s1: 0.1, s2: 0.1, new: 0.35 } }, options)).toBeUndefined()
-    expect(jevPick({ choice: 's0', probabilities: { s0: 0.5, s1: 0.3, s2: 0.1, new: 0.1 } }, options)).toBeUndefined()
+    expect(lead([0.45, 0.1, 0.05, 0.05, 0, 0.35])).toBeUndefined()
+    expect(lead([0.5, 0.3, 0.05, 0.05, 0, 0.1])).toBeUndefined()
     // Never below 0.4, however thin the rest.
-    expect(jevPick({ choice: 's0', probabilities: { s0: 0.39, s1: 0.01, s2: 0.01, new: 0.01 } }, options)).toBeUndefined()
+    expect(lead([0.39, 0.01, 0.01, 0.01, 0.01, 0.01])).toBeUndefined()
     // A "choice" that is not Jev's likeliest is not a lead.
-    expect(jevPick({ choice: 's0', probabilities: { s0: 0.45, s1: 0.5, s2: 0.05, new: 0 } }, options)).toBeUndefined()
-    // Asked over one option, nothing comes second.
-    expect(jevPick({ choice: 'new', probabilities: { new: 0.4 } }, ['new'])).toBe('new')
+    expect(lead([0.45, 0.5, 0.05, 0, 0, 0])).toBeUndefined()
+  })
+
+  it('takes no lead over fewer than six options, or where it was not asked for', () => {
+    // 0.4 of four options is 0.6 somewhere else: no spread to excuse it.
+    const four = ['s0', 's1', 's2', 'new']
+    expect(jevPick({ choice: 's0', probabilities: { s0: 0.45, s1: 0.2, s2: 0.15, new: 0.2 } }, four, true)).toBeUndefined()
+    // The project and the agent fall back to the pane the person is in: the bar stands for them.
+    const six = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5']
+    expect(jevPick({ choice: 'p0', probabilities: { p0: 0.45, p1: 0.15, p2: 0.1, p3: 0.1, p4: 0.1, p5: 0.1 } }, six)).toBeUndefined()
   })
 
   it('is nothing for an answer that is not a whole one over those options', () => {
@@ -214,10 +222,24 @@ describe('where a task goes', () => {
   })
 
   it('goes to a session Jev leads with clearly below 0.6, and traces how far ahead it was', async () => {
-    const verdict = await decideRoute(input(), { jev: jev({ target: { choice: 's1', probabilities: { s0: 0.2, s1: 0.45, new: 0.35 } } }) })
-    expect(verdict.kind).toBe('new')
-    const led = await decideRoute(input(), { jev: jev({ target: { choice: 's1', probabilities: { s0: 0.2, s1: 0.57, new: 0.23 } } }) })
-    expect(led).toEqual({ kind: 'session', id: 'a2', p: 0.57, trace: '2 sessions · jev: "Prometheus alerts" 0.57, then "new" 0.23' })
+    const desk = [...DESK, session('a3', 'lamp GTM'), session('a4', 'Memories'), session('a5', 'onboarding')]
+    const answer = (s1: number, other: number) => ({ target: { choice: 's1', probabilities: { s0: 0.05, s1, s2: 0.05, s3: 0.05, s4: 0.05, new: other } } })
+    expect((await decideRoute(input({ sessions: desk }), { jev: jev(answer(0.45, 0.35)) })).kind).toBe('new')
+    const led = await decideRoute(input({ sessions: desk }), { jev: jev(answer(0.57, 0.23)) })
+    expect(led).toEqual({ kind: 'session', id: 'a2', p: 0.57, trace: '5 sessions · jev: "Prometheus alerts" 0.57, then "new" 0.23' })
+    // Two sessions and new work are three options: the bar stands.
+    expect((await decideRoute(input(), { jev: jev({ target: { choice: 's1', probabilities: { s0: 0.2, s1: 0.57, new: 0.23 } } }) })).kind).toBe('new')
+  })
+
+  it('tells Jev which sessions are stopped, and how long ago they were last active', async () => {
+    const remote = jev({ target: said('new', 0.9, ['s0', 's1', 's2', 'new']) })
+    const stopped = (id: string, name: string, stoppedAgoMs: number): RouteSession => ({ ...session(id, name), stoppedAgoMs })
+    await decideRoute(input({ sessions: [stopped('a1', 'lamp v1', 3 * 86_400_000), stopped('a2', 'lamp v2', 5 * 3_600_000), stopped('a3', 'notes', 60_000)] }), { jev: remote })
+    expect(remote.mock.calls[0][1].target.criteria).toMatchObject({
+      s0: 'lamp v1 — stopped, last active 3 days ago',
+      s1: 'lamp v2 — stopped, last active 5 hours ago',
+      s2: 'notes — stopped, last active 1 minute ago',
+    })
   })
 
   it('traces what Jev said even when it is no session on the desk, or nothing', async () => {

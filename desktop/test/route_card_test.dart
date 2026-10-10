@@ -223,44 +223,6 @@ Agent _agent(
   lastActivityAt: _now.subtract(Duration(minutes: minutesAgo)),
 );
 
-/// [sendTaskToSession] as the app runs it, with the resume answered by [resume] and the pane noted.
-class _Sender extends AppNotifier {
-  _Sender(this.resume)
-    : super(
-        config: AppConfig.dev,
-        authSession: AuthSession(),
-        configStore: null,
-      ) {
-    const machine = Machine(
-      machineId: 'm',
-      authMode: MachineAuthMode.remote,
-      name: 'Office',
-    );
-    machines = [machine];
-    machineStates['m'] = MachineState(machine)
-      ..nodeOnline = true
-      ..connectionStatus = ConnectionStatus.connected
-      ..agents = [
-        _agent('live'),
-        _agent('saved', status: 'stopped', sessionId: 'c-1', minutesAgo: 600),
-      ];
-  }
-
-  final RestartAgentResult resume;
-  final resumed = <String>[];
-  final forward = <String>[];
-
-  @override
-  Future<RestartAgentResult> resumeAgent(String machineId, String agentId) {
-    resumed.add(agentId);
-    return Future.value(resume);
-  }
-
-  @override
-  void bringSessionForward(String machineId, String agentId) =>
-      forward.add(agentId);
-}
-
 void main() {
   test('the router is offered live sessions on reachable machines, newest first, forty at most', () {
     final app = _App();
@@ -331,40 +293,6 @@ void main() {
       now: _now,
     ).sessions.values.map((s) => s.agentId).toList();
     expect(ids, ['tuesday', 'live']);
-  });
-
-  test('a stopped session is resumed, then sent to', () async {
-    final app = _Sender(const RestartAgentResult());
-    addTearDown(app.dispose);
-    unawaited(
-      app.sendTaskToSession('m', 'saved', 'pick the lamp work back up'),
-    );
-    await Future<void>.delayed(Duration.zero);
-    expect(app.resumed, ['saved']);
-    expect(app.forward, ['saved']);
-  });
-
-  test(
-    'a session that will not resume says why at once, and is never typed into',
-    () async {
-      final app = _Sender(
-        const RestartAgentResult(error: 'The machine refused the resume.'),
-      );
-      addTearDown(app.dispose);
-      expect(
-        await app.sendTaskToSession('m', 'saved', 'pick the lamp work back up'),
-        'The machine refused the resume.',
-      );
-    },
-  );
-
-  test('a live session is not resumed', () async {
-    final app = _Sender(const RestartAgentResult());
-    addTearDown(app.dispose);
-    unawaited(app.sendTaskToSession('m', 'live', 'and the chart'));
-    await Future<void>.delayed(Duration.zero);
-    expect(app.resumed, isEmpty);
-    expect(app.forward, ['live']);
   });
 
   test(

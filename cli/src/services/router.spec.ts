@@ -107,6 +107,12 @@ describe('what a client sends', () => {
     expect(routeInput({ text: 'go', projects: options })!.projects[0]).not.toHaveProperty('extra')
   })
 
+  it('says how long ago a stopped session was last active, when that is a time', () => {
+    const sent = (stoppedAgoMs: unknown) => routeInput({ text: 'go', sessions: [{ id: 'a1', name: 'lamp v1', stoppedAgoMs }] })?.sessions[0]
+    expect(sent(3_600_000)).toEqual({ id: 'a1', name: 'lamp v1', asks: [], stoppedAgoMs: 3_600_000 })
+    for (const odd of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY, '3600000']) expect(sent(odd), String(odd)).toEqual({ id: 'a1', name: 'lamp v1', asks: [] })
+  })
+
   it('says where the last task went only with a session id and a finite time', () => {
     const last = (value: unknown) => routeInput({ text: 'go', last: value })!
     expect(last({ id: 'a1', agoMs: 0 }).last).toEqual({ id: 'a1', agoMs: 0 })

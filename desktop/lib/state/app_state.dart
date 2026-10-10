@@ -4181,42 +4181,27 @@ class AppNotifier extends ChangeNotifier {
   /// the pane comes forward first, and a person who sees the wrong one and presses Esc stops the send.
   /// Returns what went wrong, or null.
   ///
-  /// A stopped session is resumed first, its own conversation, as opening it from ⌘P does; the task goes
-  /// in once it takes input. A resume that fails says why at once rather than after the wait for a pane
-  /// that will not come, and nothing is typed after that.
+  /// A stopped session is resumed first, its own conversation, and its pane comes forward only once its
+  /// terminal is up — as ⌘P opens one, so a resume that fails leaves no pane behind and says why, and
+  /// an Esc while it resumes sends nothing.
   Future<String?> sendTaskToSession(
     String machineId,
     String agentId,
     String task, {
     bool Function()? stillWanted,
   }) async {
-    final stopped =
-        stateOf(machineId)?.agents
-            .where((agent) => agent.id == agentId)
-            .firstOrNull
-            ?.isStopped ==
-        true;
-    String? resumeFailed;
-    final resumed = stopped
-        ? resumeAgent(
-            machineId,
-            agentId,
-          ).then((result) => resumeFailed = result.error)
-        : null;
+    if (await resumeStoppedSession(machineId, agentId) case final failure?) {
+      return failure;
+    }
+    if (stillWanted != null && !stillWanted()) return 'Nothing was sent.';
     bringSessionForward(machineId, agentId);
-    final delivered = deliverTask(
+    return deliverTask(
       this,
       machineId: machineId,
       agentId: agentId,
       task: task,
-      stillWanted: () =>
-          resumeFailed == null && (stillWanted == null || stillWanted()),
+      stillWanted: stillWanted,
     );
-    if (resumed == null) return delivered;
-    return Future.any([
-      delivered,
-      resumed.then((failure) => failure ?? delivered),
-    ]);
   }
 
   /// The session's own pane, wherever it is: its tab comes forward and the pane takes focus. Only a
@@ -12581,6 +12566,60 @@ class AppNotifier extends ChangeNotifier {
 
   AgentRestartAttempt? pendingAgentRestart(String machineId, String agentId) =>
       _agentRestarts[(machineId, agentId)];
+
+  /// Resume a stopped session's own conversation and wait for its terminal: null once it is up, or when
+  /// the session was not stopped; otherwise why not. ⌘P opens a stopped session this way, and ⌘B sends to
+  /// one, so both wait alike and fail alike.
+  Future<String?> resumeStoppedSession(String machineId, String agentId) async {
+    final agent = stateOf(machineId)?.agents
+        .where((agent) => agent.id == agentId)
+        .firstOrNull;
+    if (agent?.isStopped != true) return null;
+    final machine = stateOf(machineId);
+    final terminalReady = Completer<void>();
+    void observeRuntime() {
+      if (terminalReady.isCompleted ||
+          !identical(machine, stateOf(machineId)) ||
+          pendingAgentStop(machineId, agentId) != null) {
+        return;
+      }
+      final current = stateOf(machineId)?.agents
+          .where((row) => row.id == agentId)
+          .firstOrNull;
+      // This opens a view of the allocated terminal, not a claim that history
+      // has loaded. The native CLI may need login or hook review before it can
+      // confirm the conversation; the receipt keeps verifying in the background.
+      //
+      // The conversation has to be the one asked for — unless none was: a resume
+      // that was always going to open a new one (an engine with no resume argv, a
+      // harness paused with nothing recorded) reports a different id because it
+      // did as it was told, and the tile it opened is still this harness's.
+      final fresh =
+          agent?.resumesFreshConversation == true ||
+          current?.resumesFreshConversation == true;
+      if (current?.terminalAvailable == true &&
+          (fresh || current?.sessionId == agent!.sessionId) &&
+          current?.launchState != 'failed' &&
+          current?.isStopped == false) {
+        terminalReady.complete();
+      }
+    }
+
+    addListener(observeRuntime);
+    try {
+      final confirmed = resumeAgent(
+        machineId,
+        agentId,
+      ).then((result) => result.error);
+      observeRuntime();
+      return await Future.any<String?>([
+        confirmed,
+        terminalReady.future.then((_) => null),
+      ]);
+    } finally {
+      removeListener(observeRuntime);
+    }
+  }
 
   /// Attach to a running harness or resume its saved conversation immediately.
   Future<RestartAgentResult> resumeAgent(String machineId, String agentId) {

@@ -448,56 +448,8 @@ Future<void> _resumeStoppedDestination(
   final machineId = destination.machineId;
   final agentId = destination.agentId;
   if (machineId == null || agentId == null) return;
-  final agent = app
-      .stateOf(machineId)
-      ?.agents
-      .where((agent) => agent.id == agentId)
-      .firstOrNull;
-  if (agent?.isStopped != true) return;
-  final machine = app.stateOf(machineId);
-  final terminalReady = Completer<void>();
-  void observeRuntime() {
-    if (terminalReady.isCompleted ||
-        !identical(machine, app.stateOf(machineId)) ||
-        app.pendingAgentStop(machineId, agentId) != null) {
-      return;
-    }
-    final current = app
-        .stateOf(machineId)
-        ?.agents
-        .where((row) => row.id == agentId)
-        .firstOrNull;
-    // This opens a view of the allocated terminal, not a claim that history
-    // has loaded. The native CLI may need login or hook review before it can
-    // confirm the conversation; the receipt keeps verifying in the background.
-    //
-    // The conversation has to be the one asked for — unless none was: a resume
-    // that was always going to open a new one (an engine with no resume argv, a
-    // harness paused with nothing recorded) reports a different id because it
-    // did as it was told, and the tile it opened is still this harness's.
-    final fresh =
-        agent?.resumesFreshConversation == true ||
-        current?.resumesFreshConversation == true;
-    if (current?.terminalAvailable == true &&
-        (fresh || current?.sessionId == agent!.sessionId) &&
-        current?.launchState != 'failed' &&
-        current?.isStopped == false) {
-      terminalReady.complete();
-    }
-  }
-
-  app.addListener(observeRuntime);
-  try {
-    final confirmed = app.resumeAgent(machineId, agentId).then((result) {
-      if (result.error case final error?) {
-        throw SwarmResumeFailure(destination, error);
-      }
-    });
-    observeRuntime();
-    await Future.any([confirmed, terminalReady.future]);
-  } finally {
-    app.removeListener(observeRuntime);
-  }
+  final failure = await app.resumeStoppedSession(machineId, agentId);
+  if (failure != null) throw SwarmResumeFailure(destination, failure);
 }
 
 ({String text, String terminalText, int? branchOffset}) _harnessDetail(

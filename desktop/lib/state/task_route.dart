@@ -34,6 +34,8 @@ class TaskRouteChoices {
           'name': value.name,
           'asks': value.asks,
           if (value.about != null) 'about': value.about,
+          if (value.stoppedFor case final stopped?)
+            'stoppedAgoMs': stopped.inMilliseconds,
         },
     ],
     'projects': [
@@ -162,6 +164,9 @@ TaskRouteChoices taskRouteChoices(AppNotifier app, {DateTime? now}) {
         about:
             _recent[app]?['${machine.machine.machineId}\n${agent.id}']?.about ??
             _about(_preview(app, machine.machine.machineId, agent)),
+        stoppedFor: agent.isStopped
+            ? (now ?? DateTime.now()).difference(agent.lastActivityAt!)
+            : null,
       ),
   };
   final engines = <String>{'claude', 'codex'};
@@ -270,6 +275,10 @@ typedef TaskRouteSession = ({
   String engine,
   List<String> asks,
   String? about,
+
+  /// How long ago a stopped session was last active; null for a live one. Jev is told, so a live "lamp
+  /// v2" is not mistaken for the stopped "lamp v1" of last week.
+  Duration? stoppedFor,
 });
 
 SessionPreview? _preview(AppNotifier app, String machineId, Agent agent) =>

@@ -42,8 +42,10 @@ with its last prompts and its last three turn summaries), the person's project
 folders and the agents they use (`desktop/lib/state/task_route.dart`). The router
 answers "this session" or "new work, in this project, with this agent". The client
 acts through its own doors: the desktop types the task into the session's pane
-(`deliverTask`), resuming a stopped session first as ⌘P does, or creates the harness
-(`_createFromTask`). So the router needs
+(`deliverTask`), or creates the harness (`_createFromTask`). A stopped session is
+resumed first and its pane comes forward once its terminal is up
+(`resumeStoppedSession`, shared with ⌘P), so a resume that fails leaves no pane and
+says why. So the router needs
 nothing from the core, keeps no session list, and reaches no other machine.
 
 Request (`ROUTER_REQUESTS` in `cli/src/core/api.ts`): `route_decide`. A daemon
@@ -57,15 +59,19 @@ One request to **Jev 1.13** through OpenRouter's Decisions API
 (`cli/src/lib/jev/jevClient.ts`, `cli/src/lib/routeDecide.ts`): "A person typed
 this message to continue their work. Which of their ongoing sessions is it for?"
 (or "none of them: new, unrelated work"), which project and which agent. A pick is
-taken at 0.6 or more, or below that when it leads clearly: 0.4 or more and at least
-twice the next option, "new" included. Otherwise the task is new work, and a project
-or agent Jev is unsure of comes from the pane the person is in.
+taken at 0.6 or more. A session is also taken below that when it leads clearly over
+six options or more: 0.4 or more and at least twice the next option, "new" included.
+Otherwise the task is new work, and a project or agent Jev is unsure of (under 0.6)
+comes from the pane the person is in. A stopped session is described to Jev as
+stopped, with how long ago it was last active.
 
 Why the lead: a wrong send costs a conversation, a needless new harness costs a
 harness, so the bar leans to new work. But Jev's probabilities are spread over every
 session it is shown, and on the owner's desk every miss was Jev's right pick at 0.45
 or 0.57. A pick that is twice anything else is Jev preferring it clearly; a pick
-torn with new work, or with a session much like it, still becomes new work. The log
+torn with new work, or with a session much like it, still becomes new work. Over
+fewer than six options there is no spread to excuse a low pick (0.4 of four is 0.6
+elsewhere), so the bar stands. The log
 records the runner-up with every decision, to set these numbers from real use. The session the person last sent
 to (within ten minutes) is told to Jev, so a short follow-up finds it.
 
