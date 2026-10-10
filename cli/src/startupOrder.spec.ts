@@ -250,10 +250,10 @@ describe('the core\'s request gate (core/main.ts)', () => {
     const ready = at('coreLink.ready()', opened)
     const logged = at("console.log('[cli] ready')", ready)
     const tail = source.slice(opened, from + text.length).split('\n').map((line) => line.trim()).filter(Boolean)
-    // Readiness never waits on a service: the agents the boot held for one are launched after it, in the background
-    // (core/agents/heldLaunches.ts).
+    // Readiness never waits on a service: held agents and saved manual requests
+    // start their dependency recovery only after the master knows core is ready.
     expect(tail).toEqual(['backend.openRequests()', 'daemonBoot.openRequests = null', 'coreLink.ready()', "console.log('[cli] ready')",
-      'void heldLaunches.restoreHeld()', 'externalResumes.open()'])
+      'void heldLaunches.restoreHeld()', 'externalResumes.open()', 'launches.open()'])
     expect(logged).toBeGreaterThan(ready)
   })
 })

@@ -10,6 +10,7 @@ golden = 'src/core/agents/launchRequests.golden.spec.ts'
 receipt = 'src/lib/agentCreationReceipt.spec.ts'
 requests = 'src/core/agents/launches.spec.ts'
 scheduler = 'src/core/agents/pendingLaunches.spec.ts'
+startup = 'src/startupOrder.spec.ts'
 mutations = [
     ('drop resolved model', 'src/core/agents/launches.ts', '    input.grid = target\n    return () => executeCreate', '    input.grid = null\n    return () => executeCreate', golden),
     ('drop Codex profile', 'src/core/agents/launches.ts', '      codexHome,\n      dsh,', '      codexHome: null,\n      dsh,', golden),
@@ -24,6 +25,7 @@ mutations = [
     ('drop cancellation claim', 'src/lib/agentCreationReceipt.ts', "this.publish(this.intentFile(id, 'claim'), { fingerprint: receipt.fingerprint, token: randomUUID(), kind: 'cancel' }, true)", 'void receipt', receipt),
     ('unbounded retry window', 'src/core/agents/pendingLaunches.ts', 'const windowSize = 128', 'const windowSize = 1_000_000', scheduler),
     ('omit retry read budget', 'src/core/agents/pendingLaunches.ts', 'started < 4 && !stopped && performance.now() - began < 20', 'started < 4 && !stopped', scheduler),
+    ('recover manual launches before readiness', 'src/core/main.ts', '  coreLink.ready()', '  launches.open()\n  coreLink.ready()', startup),
 ]
 env = {**os.environ, 'TZ': 'UTC', 'TMPDIR': '/tmp'}
 for name in ['TMUX', 'TMUX_PANE', 'RECORD_LAUNCH_REQUESTS_GOLDEN']:
@@ -35,7 +37,7 @@ def run(specs):
                           cwd=cli, env=env, capture_output=True, text=True, timeout=180)
 
 
-baseline = run([golden, receipt, requests, scheduler])
+baseline = run([golden, receipt, requests, scheduler, startup])
 if baseline.returncode:
     print(baseline.stdout + baseline.stderr)
     raise SystemExit('baseline failed; no mutants ran')
