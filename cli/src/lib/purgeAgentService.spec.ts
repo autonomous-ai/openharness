@@ -21,7 +21,9 @@ beforeEach(() => {
   mkdirSync(join(codexHome, 'sessions'), { recursive: true }); mkdirSync(cwd)
   session = registry.openPendingAgent({ engine: 'codex', cwd, codexHome, runtimes: [{ backend: 'tmux', paneId: '%77' }] })!
   Object.assign(session, { sessionId: 'selected-session', launch: { state: 'ready' }, transcriptPath: join(codexHome, 'sessions', 'selected-session.jsonl') })
-  writeFileSync(session.transcriptPath!, 'selected conversation')
+  writeFileSync(session.transcriptPath!, JSON.stringify({ type: 'session_meta', payload: {
+    id: session.sessionId, cwd, source: 'cli',
+  } }) + '\n')
   writeFileSync(join(codexHome, 'sessions', 'other.jsonl'), 'another conversation')
   writeFileSync(join(cwd, 'project.txt'), 'project files stay')
   stopped = new StoppedAgentStore(join(root, 'stopped'))

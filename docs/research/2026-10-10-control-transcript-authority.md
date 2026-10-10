@@ -128,12 +128,24 @@ the other 288 cases in that earlier affected run passed. A focused run initially
 sandbox uptime restrictions and a real alias-opening regression, both diagnosed before
 the subsequent authorized green runs.
 
-All 29 deliberately broken wiring variants failed by assertion after their unchanged
+All 29 initial deliberately broken wiring variants failed by assertion after their unchanged
 baseline passed, using `cli/scripts/handoff-2026-10-08/mutate-control-authority.py` in
 an owned disposable worktree. The runner restores each changed file and requires a
 behavioral assertion, not a compile failure. This includes the former-code golden
 connections as well as physical identity, opening records, draft/checkpoint publication,
 Stop grants and signals, Resume ownership/dispatch and Close retry.
+
+The first ready-PR Linux run found three fixture failures. Two checkpoint tests used
+non-JSON text in place of a native Codex header; their fixture now contains a matching
+`session_meta` record. The older session-store golden also recorded successful capture
+for an unknown Claude conversation and a delegated Codex rollout. These are named safety
+corrections, not healthy compatibility cases. Its artifact stays byte-identical: the
+test first asserts each exact former answer, then requires `IDENTITY_UNAVAILABLE` and
+the unchanged original input. The child case retains its original null path; it does
+not synthesize the formerly discovered delegated path after catching an error. All 18
+tests in the two affected files pass. Removing this older golden's saved-conversation
+hold also failed by assertion after its unchanged baseline passed, bringing the total
+to 30 proven mutations. No product code changed for these fixture corrections.
 
 Private acceptance covers the complete `ends`, `machine`, `races`, `enginehomes`,
 `chaos` and `tmuxsocket` lanes, including the original mid-turn tmux crash and new

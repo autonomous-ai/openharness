@@ -13,6 +13,9 @@ checkpoint = 'src/lib/sessionCheckpoint.ts'
 stop = 'src/lib/stopAgentService.ts'
 resume = 'src/lib/resumeAgentService.ts'
 mutations = [
+    ('legacy capture accepts an unusable saved conversation', 'src/lib/captureResumeIdentity.ts',
+     "return nativeUnavailable('the saved conversation file is unavailable')", 'return session',
+     'src/engines/sessionStore.golden.spec.ts', 'homes, transcripts, finders'),
     ('capture omits eager identity', 'src/lib/captureResumeIdentity.ts',
      'if (proof.path) controlTranscriptEvidence(session.engine, id, proof.path, options.codexHome, session.cwd).verify()',
      'void proof', control, 'eagerly checks the saved claude'),
