@@ -148,6 +148,8 @@ export class StoppedAgentStore {
     }
     // A later Resume is an explicit new visit, never an instruction to close it again.
     delete snapshot.closePlan
+    // A hold describes this daemon's current observation, never durable conversation evidence.
+    delete snapshot.identityHold
     // A snapshot without a tmux pane omits the legacy alias just like registry persistence.
     if (!snapshot.tmuxPane) delete (snapshot as Partial<RegisteredSession>).tmuxPane
     atomicWriteJson(join(this.directory, `${session.agentId}.json`), { version: 1, session: snapshot })

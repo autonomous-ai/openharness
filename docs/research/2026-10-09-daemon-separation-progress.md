@@ -212,3 +212,10 @@ and the final unavailable-service/readiness audit. Line counts do not establish 
 ## Fresh Hermes stores and retained Stop homes
 
 [PR #1120](https://github.com/autonomous-ai/openharness/pull/1120) merged as `a847441e5` at 16:39:44 UTC on October 9. Fresh complete native pools hold unreadable, ambiguous, oversized or changing evidence; Stop preserves the proven home. The [report](2026-10-09-hermes-store-pools.md) contains the unchanged golden, 27 assertion-failing mutants, full coverage/native acceptance and matched cost. Final source had independent exact-head/base approval and every automatic head check, including `ci/required`. Implementation/review corrections ended at 15:52, local acceptance and cost by 15:57, and final documentation review at 16:00. CI waiting and integration extended to 16:39 after the recorded legacy-golden safety correction and three documentation-only main advances. The merge helper ran 16:39:30–16:39:44. Publication remains zero. Native identity as a group remains open; exact resume is next, followed by legacy records, saved-home failure handling and shared hold visibility.
+
+
+## Native descriptor evidence and durable home adoption
+
+[PR #1131](https://github.com/autonomous-ai/openharness/pull/1131) merged as `9eafacf3b512a0b1ffd23e0d446115896b01f7ed` on October 10 at 00:33:06 UTC. Its [report](2026-10-09-native-descriptor-evidence.md) records the unchanged 29-observation golden, 21 assertion-failing mutations, native/private acceptance, full coverage, 150 matched cost samples, and exact-head/base independent review. Automatic CI run `38008750415` completed all applicable checks including `ci/required`. Merge verification ran 00:32:53–00:33:06. No release occurred.
+
+The owner resumed the paused task on October 9 at 22:25:51 UTC. Work is now on [durable home adoption](2026-10-10-durable-home-adoption.md), including crash recovery, retained observations, core hook retries and a staged registry batch. Validation and review are in progress; this is not a claim that the native-identity group or the complete refactor is finished.

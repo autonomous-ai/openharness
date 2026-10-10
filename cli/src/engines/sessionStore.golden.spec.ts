@@ -1,3 +1,4 @@
+import { clearEngineHomeFixture } from '../testing/engineHomeFixture.js'
 import { nativeConversationFixture } from '../testing/nativeConversationEvidence.js'
 /**
  * Where Claude Code and Codex keep their sessions, and what core reads there, answer for answer: recorded
@@ -29,6 +30,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 
 const fixtureClock = vi.hoisted(() => ({ root: '', now: Date.parse('2026-10-09T00:00:00Z') }))
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+
 vi.mock('../lib/bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
 vi.mock('../lib/processLiveness.js', async original => ({ ...await original<object>(),
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
@@ -162,13 +165,13 @@ afterAll(() => {
 /** The person's moved homes: adopted, so remembered in the data folder, as the core does at start. */
 function adoptMoved(): unknown {
   m.homes.resetEngineHomes()
-  rmSync(join(root, 'data', 'engine-homes.json'), { force: true })
+  clearEngineHomeFixture(join(root, 'data'))
   return m.homes.adoptEngineHomes({ CLAUDE_CONFIG_DIR: join(root, 'moved-claude'), CODEX_HOME: join(root, 'moved-codex') },
     { claudeHome: join(root, 'claude'), codexHome: join(root, 'codex') })
 }
 function forgetMoved(): void {
   m.homes.resetEngineHomes()
-  rmSync(join(root, 'data', 'engine-homes.json'), { force: true })
+  clearEngineHomeFixture(join(root, 'data'))
 }
 
 // --------------------------------------------------------------------------------------------- homes
@@ -191,7 +194,7 @@ async function homeCases(): Promise<Record<string, unknown>> {
     ],
     sessionClaudeHome: [h.sessionClaudeHome({ transcriptPath: paths.claudeMoved }), h.sessionClaudeHome({ transcriptPath: paths.claudeA }),
       h.sessionClaudeHome({ transcriptPath: paths.outside }), h.sessionClaudeHome({})],
-    saved: existsSync(join(root, 'data', 'engine-homes.json')) ? readFileSync(join(root, 'data', 'engine-homes.json'), 'utf8') : null,
+    saved: (() => { h.resetEngineHomes(); const catalog = h.movedEngineHomes(); return Object.values(catalog).some(homes => homes.length) ? JSON.stringify(catalog) + '\n' : null })(),
   })
   forgetMoved()
   cases['none moved'] = norm(probe())

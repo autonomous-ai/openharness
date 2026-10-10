@@ -6,13 +6,15 @@
  * engine takes them whatever the daemon's own environment says: the desktop app starts the daemon
  * without the profile. An agent must still bind, take turns and come back after a restart.
  */
+import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
-import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { assertHooksContained, CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { sharedCodex } from './harness/sharedCodex.js'
 
 type Engine = 'claude' | 'codex'
@@ -50,9 +52,62 @@ const codexCommands = (sessionId: string): string[] =>
   execFileSync('ps', ['-A', '-o', 'command='], { encoding: 'utf8' }).split('\n')
     .filter((line) => /^codex\s/.test(line.trim()) && line.includes(sessionId))
 
+it.each(['legacy', 'journal', 'unconfirmed'] as const)('refuses an uncontained %s home before starting any daemon', source => {
+  const root = mkdtempSync(join(tmpdir(), 'home-containment-'))
+  try {
+    const env = { HOME: root, CODEX_HOME: join(root, 'codex'), ZDOTDIR: root, ADAPTER_DATA_DIR: root, HOOK_INSTALL_ENGINES: 'codex' }
+    const file = join(root, 'engine-homes.json'), homes = { claude: [], codex: ['/fixture-unowned-home'] }
+    if (source === 'legacy') writeFileSync(file, JSON.stringify(homes), { mode: 0o600 })
+    else {
+      mkdirSync(file + '.adoptions', { mode: 0o700 }); mkdirSync(file + '.confirmations', { mode: 0o700 })
+      const record = JSON.stringify({ version: 1, previous: null, legacyRequired: false, homes }) + '\n'
+      writeFileSync(join(file + '.adoptions', '000.json'), record, { mode: 0o600 })
+      if (source === 'journal') writeFileSync(file + '.adopted', createHash('sha256').update(record).digest('hex') + '\n', { mode: 0o600 })
+    }
+    expect(() => assertHooksContained(root, env)).toThrow(source === 'unconfirmed' ? 'unconfirmed adoption' : 'installs hooks only inside')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
 describe('the person\'s engines keeping their data elsewhere', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
+
+  it('keeps readiness and a terminal available while a moved-home write is held, then retries and restores it', async () => {
+    const d = await IsolatedDaemon.create(); daemon = d
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    const home = join(d.root, 'codex-durable'), fault = join(d.root, 'adoption-unavailable')
+    mkdirSync(home, { mode: 0o700 })
+    writeFileSync(fault, 'hold', { mode: 0o600 })
+    d.env.HARNESS_HOME_ADOPTION_FAULT_FILE = fault
+    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/homeAdoptionFault.mjs')).href}`
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), `export CODEX_HOME=${JSON.stringify(home)}\n`)
+    await d.start()
+    let client = await LocalClient.connect(d)
+    await until('the explicit durable adoption hold', () => d.log().includes('[hooks] home adoption held'))
+    expect(existsSync(join(home, 'hooks.json'))).toBe(false)
+    const terminal = await client.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
+    expect(terminal.error, JSON.stringify(terminal)).toBeUndefined()
+    expect((await row(client, terminal.agent.id))?.status).toBe('active')
+    renameSync(fault, fault + '.recovered')
+    await until('the pending home to receive hooks after durability recovers', () => existsSync(join(home, 'hooks.json')), 30_000)
+    await until('the adoption recovery acknowledgement', () => d.log().includes('[hooks] home adoption recovered'), 30_000)
+    const created = await client.request('agent_create', { engine: 'codex', cwd: d.projectsDir, bypassPermission: true }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const bound = await until('the recovered home to bind', async () => {
+      const value = await row(client, created.agent.id); return value?.sessionId ? value : null
+    }, 45_000)
+    await turn(client, bound.id, 'durable adoption recovered')
+    client.close(); await d.stop()
+    // The new boot must discover the saved home even after the login shell stops naming it.
+    writeFileSync(join(d.env.ZDOTDIR!, '.zshrc'), '')
+    await d.start(); client = await LocalClient.connect(d)
+    const restored = await until('the durable home after restart without its shell variable', async () => {
+      const value = await row(client, bound.id); return value?.sessionId === bound.sessionId ? value : null
+    }, 45_000)
+    expect(restored.transcriptPath).toBe(bound.transcriptPath)
+    await turn(client, bound.id, 'the saved home survived restart')
+    client.close()
+  }, 240_000)
 
   it.each(['claude', 'codex'] as const)('%s model picker follows the login shell home', async engine => {
     const d = await IsolatedDaemon.create(); daemon = d

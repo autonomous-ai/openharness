@@ -81,3 +81,6 @@ it.each(['claude', 'codex'] as const)('a bound %s conversation keeps its origina
   expect(models).toContain(engine === 'claude' ? 'sonnet' : 'previous-model')
   expect(models).not.toContain(engine === 'claude' ? 'haiku' : 'current-model')
 })
+
+// Filesystem durability deadlines are exercised separately from these deterministic fixture reads.
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))

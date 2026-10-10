@@ -41,7 +41,7 @@ import { machineNames } from './machineNames.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { env } from '../config/env.js'
-import { sessionFolderOf, sessionRoots } from './engineHomes.js'
+import { engineHomeSnapshot, sessionFolderOf, sessionRoots, type EngineHomeSnapshot } from './engineHomes.js'
 import { findSessionFileOf, sessionMetaOf } from '../engines/sessionFiles.js'
 import { isSessionStoreEngine, sessionStoreContracts, sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import { admitHook } from '../engines/hooks.js'
@@ -91,6 +91,8 @@ export interface RegisteredSession {
   active: boolean
   /** Harness-created panes can be rendered before their engine process exists. Absent on legacy rows. */
   launch?: AgentLaunch
+  /** Fresh evidence is unavailable; retain the binding and expose its reason without persisting an authority verdict. */
+  identityHold?: string
   /** Enter on stopped work must never become a fresh conversation, including after a daemon restart. */
   resumeOnly?: true
   /** External admission survives a crash independently of any conversation Harness already owns. */
@@ -551,8 +553,9 @@ function tmuxProjection(runtimes: readonly TerminalRuntimeRef[]): string {
 }
 
 function persistedRow(entry: RegisteredSession): RegisteredSession | Omit<RegisteredSession, 'tmuxPane'> {
-  if (entry.tmuxPane) return { ...entry, runtimes: entry.runtimes.map((runtime) => ({ ...runtime })) }
-  const { tmuxPane: _legacy, ...row } = entry
+  const { identityHold: _hold, ...saved } = entry
+  if (saved.tmuxPane) return { ...saved, runtimes: saved.runtimes.map((runtime) => ({ ...runtime })) }
+  const { tmuxPane: _legacy, ...row } = saved
   return { ...row, runtimes: row.runtimes.map((runtime) => ({ ...runtime })) }
 }
 
@@ -588,7 +591,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, ...rest } = row
+  const { identityHold: _identityHold, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
@@ -961,8 +964,8 @@ export function engineKeepsTranscriptFile(engine: AgentEngine): boolean {
  * home the person moved in their shell profile (lib/engineHomes.ts). An agent's own profile (its CODEX_HOME) is
  * its only one, for an engine whose sessions follow one.
  */
-function transcriptRoots(engine: AgentEngine, root: (() => string) | 'store', codexHome?: string): string[] {
-  return root === 'store' ? sessionRoots(engine, codexHome) : [root()]
+function transcriptRoots(engine: AgentEngine, root: (() => string) | 'store', codexHome?: string, snapshot?: EngineHomeSnapshot): string[] {
+  return root === 'store' ? sessionRoots(engine, codexHome, snapshot) : [root()]
 }
 
 export function validTranscriptPath(engine: AgentEngine, filePath: string, codexHome?: string, allowMissing = false): boolean {
@@ -974,7 +977,7 @@ export function inspectTranscriptPath(engine: AgentEngine, filePath: string): bo
   return checkTranscriptPath(engine, filePath, undefined, false, true)
 }
 
-function checkTranscriptPath(engine: AgentEngine, filePath: string, codexHome: string | undefined, allowMissing: boolean, strict: boolean): boolean {
+function checkTranscriptPath(engine: AgentEngine, filePath: string, codexHome: string | undefined, allowMissing: boolean, strict: boolean, snapshot?: EngineHomeSnapshot): boolean {
   const rootFor = TRANSCRIPT_ROOT[engine]
   if (!rootFor) return false
   try {
@@ -985,7 +988,7 @@ function checkTranscriptPath(engine: AgentEngine, filePath: string, codexHome: s
       catch (error) { if (strict) throw error; return false }
     }
     const st = statSync(missing ? dirname(actual) : actual)
-    if (!(missing ? st.isDirectory() : st.isFile()) || !transcriptRoots(engine, rootFor, codexHome).some(within)) return false
+    if (!(missing ? st.isDirectory() : st.isFile()) || !transcriptRoots(engine, rootFor, codexHome, snapshot).some(within)) return false
     if (engine === 'cursor') {
       const id = basename(actual).replace(/\.jsonl$/, '')
       if (!id || basename(dirname(actual)) !== id || basename(dirname(dirname(actual))) !== 'agent-transcripts') return false
@@ -1091,6 +1094,7 @@ class Registry {
     if (entry.sessionId && this.sessionIndex.get(entry.sessionId) === entry.agentId) {
       this.sessionIndex.delete(entry.sessionId)
     }
+    delete entry.identityHold
     entry.sessionId = ''
     entry.boundAt = null
     entry.transcriptPath = null
@@ -1167,10 +1171,30 @@ class Registry {
         // pre-reboot pids on disk with no second chance to notice — force the cleared snapshot out.
         changed = true
       }
+      // One fresh catalog proof serves this synchronous batch. No row is indexed or saved until
+      // that proof is checked again; a changed or unavailable catalog preserves its former bindings.
+      let snapshot: EngineHomeSnapshot | undefined, unavailableHomes: unknown
+      const dependent = new Map<string, Partial<RegisteredSession>>()
+      const staged = new Map<string, RegisteredSession>()
+      const catalogFor = (engine: AgentEngine, profile?: string): EngineHomeSnapshot | undefined => {
+        if (TRANSCRIPT_ROOT[engine] !== 'store' || sessionStoreOf(engine)?.sessions.profile && profile) return undefined
+        if (unavailableHomes) throw unavailableHomes
+        try { return snapshot ??= engineHomeSnapshot() }
+        catch (error) { unavailableHomes = error; throw error }
+      }
+      const preserve = (row: RegisteredSession, original: Partial<RegisteredSession>, error: unknown): void => {
+        row.sessionId = typeof original.sessionId === 'string' ? original.sessionId : ''
+        row.boundAt = row.sessionId ? original.boundAt ?? original.registeredAt ?? row.registeredAt : null
+        row.transcriptPath = typeof original.transcriptPath === 'string' && original.transcriptPath ? original.transcriptPath : null
+        row.source = row.sessionId && typeof original.source === 'string' ? original.source : null
+        row.projectDir = typeof original.projectDir === 'string' ? original.projectDir : row.transcriptPath ? basename(dirname(row.transcriptPath)) : row.sessionId || row.agentId
+        row.identityHold = error instanceof Error ? error.message : String(error)
+      }
       for (const raw of Array.isArray(arr) ? arr : []) {
         const engine = normalizedAgentEngine(raw?.engine)
         const runtimes = normalizedRuntimes(raw?.runtimes, raw?.tmuxPane)
         const pane = tmuxProjection(runtimes)
+        if (!runtimes.length) { changed = true; continue }
         let transcriptPath =
           typeof raw?.transcriptPath === 'string' && raw.transcriptPath
             ? raw.transcriptPath
@@ -1186,39 +1210,45 @@ class Registry {
         // binding with the child's file: put the parent's own back, found by its id in the same home (or its
         // profile), else release the binding. Declared by the engine's session store (`repairsOverwrittenParent`)
         // and read with the kit, in core.
-        let repairedParentTranscript = false
-        if (isSessionStoreEngine(engine) && sessionStoreContracts[engine].repairsOverwrittenParent && transcriptPath) {
-          const meta = sessionMetaOf(engine, transcriptPath)
-          if (meta?.isSubagent) {
-            const repaired = meta.parentThreadId === rawSessionId
-              ? findSessionFileOf(engine, rawSessionId, sessionFolderOf(engine, { profile: rawCodexHome, transcriptPath }))
-              : null
-            if (!repaired || !validTranscriptPath(engine, repaired, rawCodexHome) || sessionMetaOf(engine, repaired)?.isSubagent) {
-              changed = true
-              bound = false
-              transcriptPath = null
-            } else {
-              console.log(`[registry] repaired ${sessionStoreContracts[engine].label} parent ${rawSessionId.slice(0, 8)} transcript after child hook overwrite`)
-              transcriptPath = repaired
-              repairedParentTranscript = true
-              changed = true
+        let repairedParentTranscript = false, homeError: unknown
+        const needsCatalog = !!transcriptPath && TRANSCRIPT_ROOT[engine] === 'store' && !(sessionStoreOf(engine)?.sessions.profile && rawCodexHome)
+        try {
+          const rowSnapshot = needsCatalog ? catalogFor(engine, rawCodexHome) : undefined
+          if (isSessionStoreEngine(engine) && sessionStoreContracts[engine].repairsOverwrittenParent && transcriptPath) {
+            const meta = sessionMetaOf(engine, transcriptPath)
+            if (meta?.isSubagent) {
+              const repaired = meta.parentThreadId === rawSessionId
+                ? findSessionFileOf(engine, rawSessionId, sessionFolderOf(engine, { profile: rawCodexHome, transcriptPath }, rowSnapshot))
+                : null
+              if (!repaired || !checkTranscriptPath(engine, repaired, rawCodexHome, false, false, rowSnapshot) || sessionMetaOf(engine, repaired)?.isSubagent) {
+                changed = true
+                bound = false
+                transcriptPath = null
+              } else {
+                console.log(`[registry] repaired ${sessionStoreContracts[engine].label} parent ${rawSessionId.slice(0, 8)} transcript after child hook overwrite`)
+                transcriptPath = repaired
+                repairedParentTranscript = true
+                changed = true
+              }
             }
           }
-        }
-        // A process agent remains valid without a session. A missing/invalid transcript releases only the
-        // binding so the discovery/store repair path can bind it again if appropriate.
-        if (!bound) transcriptPath = null
-        if (!runtimes.length) {
-          changed = true
-          continue
-        }
-        if (
-          (bound && engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && !transcriptPath)
-          || (bound && transcriptPath !== null && !validTranscriptPath(engine, transcriptPath, rawCodexHome))
-        ) {
-          bound = false
-          transcriptPath = null
-          changed = true
+          // A process agent remains valid without a session. A missing/invalid transcript releases only the
+          // binding so the discovery/store repair path can bind it again if appropriate.
+          if (!bound) transcriptPath = null
+          if (
+            (bound && engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && !transcriptPath)
+            || (bound && transcriptPath !== null && !checkTranscriptPath(engine, transcriptPath, rawCodexHome, false, false, rowSnapshot))
+          ) {
+            bound = false
+            transcriptPath = null
+            changed = true
+          }
+        } catch (error) {
+          if (!(error instanceof IdentityReadUnavailable)) throw error
+          homeError = error
+          transcriptPath = typeof raw.transcriptPath === 'string' && raw.transcriptPath ? raw.transcriptPath : null
+          bound = !!rawSessionId
+          repairedParentTranscript = false
         }
         // Old launcher-owned records used launcherId as the public id. Preserve it while process discovery
         // validates/adopts the live runtime, then save the record without the legacy ownership field.
@@ -1299,11 +1329,23 @@ class Registry {
           || raw.lastTranscriptAt == null
           || legacyLauncherId !== ''
         ) changed = true
-        if (this.agents.has(s.agentId)) {
+        if (staged.has(s.agentId)) {
           this.quarantine('contains duplicate agent identities')
           return
         }
-        this.index(s)
+        if (needsCatalog) dependent.set(s.agentId, raw)
+        if (homeError) preserve(s, raw, homeError)
+        staged.set(s.agentId, s)
+      }
+      if (snapshot) {
+        try { snapshot.verify() }
+        catch (error) {
+          for (const [id, raw] of dependent) preserve(staged.get(id)!, raw, error)
+        }
+      }
+      for (const row of staged.values()) {
+        this.index(row)
+        if (row.identityHold) console.log(`[registry] ${row.agentId.slice(0, 8)} binding held · ${row.identityHold}`)
       }
       if (!validatedRows(this.list().map(persistedRow))) {
         this.quarantine('violates global identity invariants')
@@ -2529,12 +2571,15 @@ class Registry {
         for (const row of rows) {
           const entry = previous.get(row.agentId) ?? row
           if (entry !== row) {
+            const identityHold = entry.engine === row.engine && entry.sessionId === row.sessionId
+              && entry.transcriptPath === row.transcriptPath && entry.codexHome === row.codexHome ? entry.identityHold : undefined
             // External deletions count too: retaining a cancelled closePlan here would make the
             // next observation write it back and turn a cancelled close into pending work again.
             for (const key of Object.keys(entry)) {
               if (!Object.hasOwn(row, key)) delete (entry as unknown as Record<string, unknown>)[key]
             }
             Object.assign(entry, row)
+            if (identityHold) entry.identityHold = identityHold
           }
           this.index(entry)
         }

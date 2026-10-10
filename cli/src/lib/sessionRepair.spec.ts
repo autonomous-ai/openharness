@@ -1,3 +1,4 @@
+import { clearEngineHomeFixture } from '../testing/engineHomeFixture.js'
 import { nativeConversationFixture } from '../testing/nativeConversationEvidence.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'fs'
@@ -620,7 +621,7 @@ describe('session repair — homes the person moved', () => {
   }
   afterEach(async () => {
     delete process.env.CODEX_HOME
-    rmSync(join(process.env.ADAPTER_DATA_DIR!, 'engine-homes.json'), { force: true })
+    clearEngineHomeFixture(process.env.ADAPTER_DATA_DIR!)
     ;(await import('./engineHomes.js')).resetEngineHomes()
   })
 
@@ -818,7 +819,7 @@ describe('findResumedTranscript', () => {
       // An agent's own Codex profile is its only home.
       await expect(findResumedTranscript('codex', codexId, { codexHome: tempRoot() })).resolves.toBeNull()
     } finally {
-      rmSync(join(process.env.ADAPTER_DATA_DIR!, 'engine-homes.json'), { force: true })
+      clearEngineHomeFixture(process.env.ADAPTER_DATA_DIR!)
       homes.resetEngineHomes()
     }
   })
@@ -923,3 +924,6 @@ describe('hermes repair across profile homes', () => {
     expect(await findLiveSession('hermes', CWD, STARTED_AT, { bornOnly: true })).toBeNull()
   })
 })
+
+// Filesystem durability deadlines are exercised separately from these deterministic fixture reads.
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))

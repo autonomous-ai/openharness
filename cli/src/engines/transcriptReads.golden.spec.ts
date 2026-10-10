@@ -1,3 +1,4 @@
+import { clearEngineHomeFixture } from '../testing/engineHomeFixture.js'
 /**
  * What core and the readers make of Claude Code's and Codex's conversations on disk, answer for answer: recorded
  * from the code as it stood before their adoption, activity and paging rules became declared data the kit applies,
@@ -93,13 +94,13 @@ afterAll(() => {
 
 function adoptMoved(): void {
   m.homes.resetEngineHomes()
-  rmSync(join(root, 'data', 'engine-homes.json'), { force: true })
+  clearEngineHomeFixture(join(root, 'data'))
   m.homes.adoptEngineHomes({ CLAUDE_CONFIG_DIR: join(root, 'moved-claude'), CODEX_HOME: join(root, 'moved-codex') },
     { claudeHome: join(root, 'claude'), codexHome: join(root, 'codex') })
 }
 function forgetMoved(): void {
   m.homes.resetEngineHomes()
-  rmSync(join(root, 'data', 'engine-homes.json'), { force: true })
+  clearEngineHomeFixture(join(root, 'data'))
 }
 
 // --------------------------------------------------------------------------------------------- adoption
@@ -598,3 +599,6 @@ describe('core reads Claude Code\'s and Codex\'s conversations as it did before 
     expect(text).not.toMatch(/\/Users\/|\/home\/runner/)
   })
 })
+
+// Filesystem durability deadlines are exercised separately from these deterministic fixture reads.
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))

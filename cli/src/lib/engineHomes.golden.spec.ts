@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 
 const shell = vi.hoisted(() => ({ environment: {} as NodeJS.ProcessEnv }))
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 vi.mock('./loginShellEnv.js', () => ({ loginShellEnvironment: () => shell.environment }))
 vi.mock('node:child_process', () => {
   const forbidden = () => { throw new Error('Host binaries are forbidden in this golden') }
@@ -60,7 +61,8 @@ it('records declared roots, durable adoption, profiles and bound-home selection'
   }
   const claude = path('moved-claude'), codex = path('moved-codex'), profile = path('profile')
   check('adopt:both', homes.adoptHomes({ CLAUDE_CONFIG_DIR: ` ${claude}/ `, CODEX_HOME: `${codex}/` }))
-  check('adopt:saved', JSON.parse(readFileSync(saved(), 'utf8')))
+  homes.resetEngineHomes()
+  check('adopt:saved', homes.movedEngineHomes())
   check('adopt:duplicate', homes.adoptHomes({ CLAUDE_CONFIG_DIR: claude, CODEX_HOME: codex }))
   check('adopt:roots', [homes.nativeSessionRoots('claude'), homes.nativeSessionRoots('codex')])
   check('adopt:home-roots', [homes.homeRoots('CODEX_HOME'), homes.homeRoots('CLAUDE_PROJECTS_DIR')])

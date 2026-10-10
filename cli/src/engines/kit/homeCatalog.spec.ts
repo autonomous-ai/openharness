@@ -10,7 +10,7 @@ vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), per
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   return { ...actual, lstatSync: vi.fn(actual.lstatSync), openSync: vi.fn(actual.openSync),
-    readSync: vi.fn(actual.readSync), fstatSync: vi.fn(actual.fstatSync), closeSync: vi.fn(actual.closeSync), renameSync: vi.fn(actual.renameSync) }
+    readSync: vi.fn(actual.readSync), fstatSync: vi.fn(actual.fstatSync), closeSync: vi.fn(actual.closeSync), linkSync: vi.fn(actual.linkSync) }
 })
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
@@ -36,7 +36,7 @@ function transcript(home: string): string {
 beforeEach(async () => {
   actual = await vi.importActual<typeof fs>('node:fs')
   vi.mocked(asyncFs.opendir).mockReset().mockImplementation((await vi.importActual<typeof asyncFs>('node:fs/promises')).opendir)
-  for (const name of ['lstatSync', 'openSync', 'readSync', 'fstatSync', 'closeSync', 'renameSync'] as const) {
+  for (const name of ['lstatSync', 'openSync', 'readSync', 'fstatSync', 'closeSync', 'linkSync'] as const) {
     vi.mocked(fs[name]).mockReset().mockImplementation(actual[name] as never)
   }
   clock.now = 0
@@ -80,7 +80,7 @@ describe('fresh complete native home evidence', () => {
     expect(homes.movedHomes('codex')).toEqual([])
     await expect(repair.findResumedTranscript('codex', ID)).resolves.toBe(own)
     write(text); actual.utimesSync(catalog(), before.atime, new Date('2026-10-09T00:00:00Z'))
-    expect(homes.movedHomes('codex')).toEqual([]) // This compatibility behavior is intentionally not the new authority.
+    expect(homes.movedHomes('codex')).toEqual([path('moved')]) // The durable catalog reader now refreshes legacy callers too.
     await expect(repair.findResumedTranscript('codex', ID)).rejects.toThrow('more than one transcript')
   })
 
@@ -157,14 +157,15 @@ describe('fresh complete native home evidence', () => {
     } finally { Array.prototype[Symbol.iterator] = iterator }
   })
 
-  it('does not exclude a known competitor after legacy adoption failed to persist', async () => {
+  it('does not exclude a pending competitor after durable adoption failed to persist', async () => {
     transcript(path('codex')); transcript(path('unsaved'))
     write({ codex: [] })
-    vi.mocked(fs.renameSync).mockImplementation(() => { throw new Error('fixture disk unavailable') })
-    expect(homes.adoptHomes({ CODEX_HOME: path('unsaved') })).toMatchObject({ codex: path('unsaved') })
+    vi.mocked(fs.linkSync).mockImplementation(() => { throw new Error('fixture disk unavailable') })
+    expect(() => homes.adoptHomes({ CODEX_HOME: path('unsaved') })).toThrow('durable adoption')
     expect(JSON.parse(actual.readFileSync(catalog(), 'utf8'))).toEqual({ codex: [] })
-    await expect(repair.findResumedTranscript('codex', ID)).rejects.toThrow('previously observed or unsaved home')
-    write({ codex: [path('unsaved')] })
+    await expect(repair.findResumedTranscript('codex', ID)).rejects.toThrow(/incomplete record pool|previously observed or unsaved home/)
+    vi.mocked(fs.linkSync).mockImplementation(actual.linkSync)
+    homes.confirmHomes({ CODEX_HOME: path('unsaved') })
     await expect(repair.findResumedTranscript('codex', ID)).rejects.toThrow('more than one transcript')
   })
 

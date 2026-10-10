@@ -2429,3 +2429,6 @@ describe('fork origin record — persistence edges', () => {
     expect(reloaded.byAgent(entry.agentId)?.forkedFrom).toEqual({ agentId: 'p', name: 'P' })
   })
 })
+
+// Filesystem durability deadlines are exercised separately from these deterministic fixture reads.
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
