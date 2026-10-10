@@ -154,7 +154,12 @@ Future<(TaskRouteDecision?, _Daemon)> _decided(Object Function() answer) async {
     ..connectionStatus = ConnectionStatus.connected
     ..agentLoadStatus = AgentLoadStatus.loaded
     ..agents = const [
-      Agent(id: 'a0', name: 'Analyze', engine: 'codex', terminalAvailable: true),
+      Agent(
+        id: 'a0',
+        name: 'Analyze',
+        engine: 'codex',
+        terminalAvailable: true,
+      ),
     ];
   final decision = await app.routeDecide('go', taskRouteChoices(app));
   return (decision, daemon);
@@ -200,18 +205,22 @@ Future<void> _say(WidgetTester tester, String text) async {
 
 const _session = 'm\na0';
 
-Agent _agent(String id, {String status = 'idle', int minutesAgo = 0}) => Agent(
+final _now = DateTime(2026, 10, 10, 12);
+
+Agent _agent(
+  String id, {
+  String status = 'idle',
+  int minutesAgo = 0,
+  String engine = 'claude',
+  String? sessionId,
+}) => Agent(
   id: id,
   name: 'Session $id',
-  engine: 'claude',
+  engine: engine,
   status: status,
-  terminalAvailable: true,
-  lastActivityAt: DateTime(
-    2026,
-    10,
-    10,
-    12,
-  ).subtract(Duration(minutes: minutesAgo)),
+  sessionId: sessionId,
+  terminalAvailable: status != 'stopped',
+  lastActivityAt: _now.subtract(Duration(minutes: minutesAgo)),
 );
 
 void main() {
@@ -237,10 +246,69 @@ void main() {
     app.machineStates['off'] = MachineState(away)
       ..nodeOnline = false
       ..agents = [_agent('far')];
-    final ids = taskRouteChoices(app).sessions.values
-        .map((s) => s.agentId)
-        .toList();
+    final ids = taskRouteChoices(
+      app,
+      now: _now,
+    ).sessions.values.map((s) => s.agentId).toList();
     expect(ids, [for (var i = 0; i < 40; i++) 'a$i']);
+  });
+
+  test('a stopped session is offered for a week, when it can resume its own conversation', () {
+    final app = _App();
+    addTearDown(app.dispose);
+    const day = 24 * 60;
+    app.machineStates['m']!.agents = [
+      _agent('live', minutesAgo: 30 * day),
+      _agent(
+        'tuesday',
+        status: 'stopped',
+        sessionId: 'c-1',
+        minutesAgo: 4 * day,
+      ),
+      _agent(
+        'lastweek',
+        status: 'stopped',
+        sessionId: 'c-2',
+        minutesAgo: 8 * day,
+      ),
+      // Nothing of its conversation to go back to: a follow-up would land in a new one.
+      _agent('unsaved', status: 'stopped', minutesAgo: 60),
+      _agent(
+        'other',
+        status: 'stopped',
+        sessionId: 'c-3',
+        engine: 'gemini',
+        minutesAgo: 60,
+      ),
+      const Agent(
+        id: 'undated',
+        name: 'Undated',
+        engine: 'claude',
+        status: 'stopped',
+        sessionId: 'c-4',
+      ),
+    ];
+    final ids = taskRouteChoices(
+      app,
+      now: _now,
+    ).sessions.values.map((s) => s.agentId).toList();
+    expect(ids, ['tuesday', 'live']);
+    // Jev is told it is stopped, and since when; a live one says nothing of the kind.
+    final sent = {
+      for (final row
+          in taskRouteChoices(app, now: _now).toPayload()['sessions'] as List)
+        (row as Map)['id']: row['stoppedAgoMs'],
+    };
+    expect(sent, {
+      'm\ntuesday': const Duration(days: 4).inMilliseconds,
+      'm\nlive': null,
+    });
+    // A machine whose clock runs ahead still reads as stopped, never as live.
+    final ahead = taskRouteChoices(
+      app,
+      now: _now.subtract(const Duration(days: 5)),
+    );
+    expect(ahead.sessions['m\ntuesday']?.stoppedFor, Duration.zero);
   });
 
   test(
@@ -281,12 +349,15 @@ void main() {
     expect(start?.request, isNull);
   });
 
-  test('a folder that could not be read is nowhere to start, not a plain folder', () async {
-    final app = _App();
-    addTearDown(app.dispose);
-    app.gitProjectReaderForTest = (_, _) async => {'error': 'UNAVAILABLE'};
-    expect(await newWorkFolder(app, 'm', '/repos/harness'), isNull);
-  });
+  test(
+    'a folder that could not be read is nowhere to start, not a plain folder',
+    () async {
+      final app = _App();
+      addTearDown(app.dispose);
+      app.gitProjectReaderForTest = (_, _) async => {'error': 'UNAVAILABLE'};
+      expect(await newWorkFolder(app, 'm', '/repos/harness'), isNull);
+    },
+  );
 
   testWidgets('each session goes with what it was last asked and last did', (
     tester,
@@ -444,11 +515,16 @@ void main() {
       },
     );
 
-    test('a daemon without the router hands the card back to the old one', () async {
-      final (decision, daemon) = await _decided(() => _refused('UNSUPPORTED'));
-      expect(decision, isNull);
-      expect(daemon.asked, 1);
-    });
+    test(
+      'a daemon without the router hands the card back to the old one',
+      () async {
+        final (decision, daemon) = await _decided(
+          () => _refused('UNSUPPORTED'),
+        );
+        expect(decision, isNull);
+        expect(daemon.asked, 1);
+      },
+    );
   });
 
   testWidgets('when Jev cannot be asked, the box says so and sends nothing', (

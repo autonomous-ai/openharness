@@ -107,6 +107,12 @@ describe('what a client sends', () => {
     expect(routeInput({ text: 'go', projects: options })!.projects[0]).not.toHaveProperty('extra')
   })
 
+  it('says how long ago a stopped session was last active, when that is a time', () => {
+    const sent = (stoppedAgoMs: unknown) => routeInput({ text: 'go', sessions: [{ id: 'a1', name: 'lamp v1', stoppedAgoMs }] })?.sessions[0]
+    expect(sent(3_600_000)).toEqual({ id: 'a1', name: 'lamp v1', asks: [], stoppedAgoMs: 3_600_000 })
+    for (const odd of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY, '3600000']) expect(sent(odd), String(odd)).toEqual({ id: 'a1', name: 'lamp v1', asks: [] })
+  })
+
   it('says where the last task went only with a session id and a finite time', () => {
     const last = (value: unknown) => routeInput({ text: 'go', last: value })!
     expect(last({ id: 'a1', agoMs: 0 }).last).toEqual({ id: 'a1', agoMs: 0 })
@@ -141,7 +147,7 @@ describe('the router', () => {
     const { router: made, lines } = router({ jev })
     expect(await startRouter(fakeCore(), made).route_decide!({ text: 'refund it', sessions: DESK }, OWNER))
       .toEqual({ decided: 'session', id: 'a1', via: 'jev' })
-    expect(lines).toEqual(['session — 2 sessions · jev: "billing retries" 0.80'])
+    expect(lines).toEqual(['session — 2 sessions · jev: "billing retries" 0.80, then "Prometheus alerts" 0.10'])
     // Jev was asked the task as the client sent it, trimmed.
     expect(jev).toHaveBeenCalledWith({ message: 'refund it' }, expect.objectContaining({ target: expect.any(Object) }), undefined)
   })
@@ -160,15 +166,15 @@ describe('the router', () => {
       agents: [{ id: 'claude', name: 'Claude Code' }, { id: 'codex', name: 'Codex' }],
     }, OWNER)
     expect(answer).toEqual({ decided: 'new', via: 'jev', reason: 'Jev: new work', project: '/Users/me/Pictures', agent: 'claude' })
-    expect(lines).toEqual(['new (Jev: new work) — 2 sessions · jev: "new" 0.90'])
+    expect(lines).toEqual(['new (Jev: new work) — 2 sessions · jev: "new" 0.90, then "billing retries" 0.05'])
   })
 
   it('answers new work with no project or agent when Jev was not sure, for the client to place', async () => {
-    const jev = vi.fn(async () => ({ target: said('s1', 0.5, ['s0', 's1', 'new']) }))
+    const jev = vi.fn(async () => ({ target: { choice: 's1', probabilities: { s0: 0.3, s1: 0.5, new: 0.2 } } }))
     const { router: made, lines } = router({ jev })
     expect(await startRouter(fakeCore(), made).route_decide!({ text: 'go', sessions: DESK }, OWNER))
       .toEqual({ decided: 'new', via: 'unsure', reason: 'Jev was not sure' })
-    expect(lines).toEqual(['new (Jev was not sure) — 2 sessions · jev: "Prometheus alerts" 0.50'])
+    expect(lines).toEqual(['new (Jev was not sure) — 2 sessions · jev: "Prometheus alerts" 0.50, then "billing retries" 0.30'])
     // And decides the same without a log.
     expect(await startRouter(fakeCore(), { jev }).route_decide!({ text: 'go', sessions: DESK }, OWNER))
       .toEqual({ decided: 'new', via: 'unsure', reason: 'Jev was not sure' })
