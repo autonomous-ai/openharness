@@ -42,6 +42,9 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
   // The one write the pane can make — the About You switch — needs this token, served inside the page:
   // another page in the browser cannot read it, so it cannot flip the switch.
   const token = randomBytes(24).toString('base64url')
+  // Which viewer process served the page. A page from an earlier process (the viewer restarted under
+  // it: an update, a crash) holds a token this one never minted, so it reloads itself (viewer/app.js).
+  const instance = randomBytes(6).toString('hex')
   let current = null
   let local = null
   let machines = null // { here, remotes, at } from the last ask
@@ -78,7 +81,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
           refreshedAt = now()
           try { deliver('refresh', { env, home }); local = await snapshot({ env, home, now: now() }) } catch { /* the pane shows the older copy */ }
         }
-        const next = machines ? merge(local, machines.remotes, machines.here) : { ...local, machines: [] }
+        const next = { ...(machines ? merge(local, machines.remotes, machines.here) : { ...local, machines: [] }), instance }
         const print = fingerprint(next) + JSON.stringify(next.machines.map((machine) => [machine.id, machine.ok, machine.error]))
         const changed = print !== printed
         current = next
@@ -222,7 +225,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
       if (!asset) { json(res, 404, { error: 'Not found' }); return }
       let content = await readFile(join(PACKAGE, 'viewer', asset[0]), 'utf8')
       // The token goes in a meta tag, not an inline script: the policy stays script-src 'self'.
-      if (asset[0] === 'index.html') content = content.replace('__MEMORIES_TOKEN__', token)
+      if (asset[0] === 'index.html') content = content.replace('__MEMORIES_TOKEN__', token).replace('__MEMORIES_INSTANCE__', instance)
       res.writeHead(200, {
         ...headers,
         'content-type': asset[1],

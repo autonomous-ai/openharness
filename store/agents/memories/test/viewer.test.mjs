@@ -35,6 +35,9 @@ test('the page is served with a policy that runs only its own scripts', async ()
   assert.equal(page.status, 200)
   assert.match(page.headers['content-security-policy'], /script-src 'self'/)
   assert.match(page.body, /<script type="module" src="app.js">/)
+  const instance = /name="memories-instance" content="([0-9a-f]{12})"/.exec(page.body)?.[1]
+  assert.ok(instance, 'the page knows which viewer served it')
+  assert.equal(JSON.parse((await get('/api/state')).body).instance, instance, 'and the snapshot says the same, so a restart is noticed')
   for (const asset of ['/app.js', '/app.css', '/markdown.js', '/fuzzy.js', '/heatmap.js']) assert.equal((await get(asset)).status, 200, asset)
 })
 

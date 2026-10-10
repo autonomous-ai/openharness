@@ -715,7 +715,11 @@ document.addEventListener('keydown', (event) => {
 
 // ── live: a snapshot on connect and whenever something changed ─────────────────────────────────
 
+const instance = document.querySelector('meta[name="memories-instance"]')?.content ?? ''
+
 function receive(snap) {
+  // The viewer restarted under this page: its token is gone, so the switch would refuse. Reload.
+  if (snap.instance && instance && snap.instance !== instance) { location.reload(); return }
   const firstLoad = !state.snap
   const ids = new Set(snap.memories.map((memory) => memory.id))
   if (state.known) for (const id of ids) if (!state.known.has(id)) state.fresh.set(id, Date.now())
