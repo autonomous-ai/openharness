@@ -1,0 +1,294 @@
+{
+  "linux:claude": {
+    "events": [
+      [
+        "launch-prepare",
+        "claude",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+      ],
+      [
+        "history-prepare",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+      ],
+      [
+        "create",
+        [
+          "<engine>",
+          "claude",
+          "--resume",
+          "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+        ]
+      ],
+      [
+        "grid"
+      ],
+      [
+        "announce",
+        "claude",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+        "starting"
+      ],
+      [
+        "announce",
+        "claude",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+        "ready"
+      ],
+      [
+        "attach",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+      ]
+    ],
+    "result": {
+      "ok": true,
+      "resumed": true,
+      "engine": "claude",
+      "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "source": null,
+      "launch": {
+        "state": "ready"
+      }
+    },
+    "reserved": false
+  },
+  "linux:codex": {
+    "events": [
+      [
+        "launch-prepare",
+        "codex",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+      ],
+      [
+        "history-prepare",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+      ],
+      [
+        "create",
+        [
+          "<engine>",
+          "codex",
+          "--resume",
+          "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+        ]
+      ],
+      [
+        "grid"
+      ],
+      [
+        "announce",
+        "codex",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+        "starting"
+      ],
+      [
+        "announce",
+        "codex",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+        "ready"
+      ],
+      [
+        "attach",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+      ]
+    ],
+    "result": {
+      "ok": true,
+      "resumed": true,
+      "engine": "codex",
+      "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "source": null,
+      "launch": {
+        "state": "ready"
+      }
+    },
+    "reserved": false
+  },
+  "linux:terminal": {
+    "events": [
+      [
+        "launch-prepare",
+        "terminal",
+        ""
+      ],
+      [
+        "create",
+        [
+          "<engine>",
+          "terminal"
+        ]
+      ],
+      [
+        "grid"
+      ],
+      [
+        "announce",
+        "terminal",
+        "",
+        "starting"
+      ],
+      [
+        "announce",
+        "terminal",
+        "",
+        "ready"
+      ]
+    ],
+    "result": {
+      "ok": true,
+      "resumed": true,
+      "engine": "terminal",
+      "sessionId": "",
+      "source": null,
+      "launch": {
+        "state": "ready"
+      }
+    },
+    "reserved": false
+  },
+  "darwin:claude": {
+    "events": [
+      [
+        "launch-prepare",
+        "claude",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+      ],
+      [
+        "history-prepare",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+      ],
+      [
+        "create",
+        [
+          "<engine>",
+          "claude",
+          "--resume",
+          "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+        ]
+      ],
+      [
+        "grid"
+      ],
+      [
+        "announce",
+        "claude",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+        "starting"
+      ],
+      [
+        "announce",
+        "claude",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+        "ready"
+      ],
+      [
+        "attach",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+      ]
+    ],
+    "result": {
+      "ok": true,
+      "resumed": true,
+      "engine": "claude",
+      "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "source": null,
+      "launch": {
+        "state": "ready"
+      }
+    },
+    "reserved": false
+  },
+  "darwin:codex": {
+    "events": [
+      [
+        "launch-prepare",
+        "codex",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+      ],
+      [
+        "history-prepare",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+      ],
+      [
+        "create",
+        [
+          "<engine>",
+          "codex",
+          "--resume",
+          "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+        ]
+      ],
+      [
+        "grid"
+      ],
+      [
+        "announce",
+        "codex",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+        "starting"
+      ],
+      [
+        "announce",
+        "codex",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+        "ready"
+      ],
+      [
+        "attach",
+        "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+      ]
+    ],
+    "result": {
+      "ok": true,
+      "resumed": true,
+      "engine": "codex",
+      "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "source": null,
+      "launch": {
+        "state": "ready"
+      }
+    },
+    "reserved": false
+  },
+  "darwin:terminal": {
+    "events": [
+      [
+        "launch-prepare",
+        "terminal",
+        ""
+      ],
+      [
+        "create",
+        [
+          "<engine>",
+          "terminal"
+        ]
+      ],
+      [
+        "grid"
+      ],
+      [
+        "announce",
+        "terminal",
+        "",
+        "starting"
+      ],
+      [
+        "announce",
+        "terminal",
+        "",
+        "ready"
+      ]
+    ],
+    "result": {
+      "ok": true,
+      "resumed": true,
+      "engine": "terminal",
+      "sessionId": "",
+      "source": null,
+      "launch": {
+        "state": "ready"
+      }
+    },
+    "reserved": false
+  }
+}
