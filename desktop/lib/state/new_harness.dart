@@ -1026,7 +1026,7 @@ class NewHarnessController extends ChangeNotifier {
       _modelCatalog!.sections.any(
         (section) =>
             section.name == model.grid &&
-            section.harnessModels.any((candidate) => candidate.id == model.id),
+            section.models.any((candidate) => candidate.id == model.id),
       );
 
   String? get modelNotice {
@@ -1045,7 +1045,7 @@ class NewHarnessController extends ChangeNotifier {
     if (_model != null && !_modelAvailable(_model!)) {
       return 'The selected model is unavailable. Choose another model or your subscription.';
     }
-    if (catalog.sections.every((section) => section.harnessModels.isEmpty)) {
+    if (catalog.sections.every((section) => section.models.isEmpty)) {
       return 'No models are running on your machines. Open Manage Models to start one.';
     }
     return null;
@@ -1101,7 +1101,7 @@ class NewHarnessController extends ChangeNotifier {
           catalog!.canRunLocally(_engine))
         for (final section in catalog.sections)
           ..._ranked([
-            for (final model in section.harnessModels)
+            for (final model in section.models)
               NewHarnessOption(
                 id: _modelId(
                   GridModel(id: model.id, node: model.node, grid: section.name),
@@ -1141,7 +1141,7 @@ class NewHarnessController extends ChangeNotifier {
         (catalog?.supportsModelLaunch == true && catalog!.canRunLocally(_engine)
             ? catalog.sections.fold<int>(
                 0,
-                (count, section) => count + section.harnessModels.length,
+                (count, section) => count + section.models.length,
               )
             : 0);
     return groups;

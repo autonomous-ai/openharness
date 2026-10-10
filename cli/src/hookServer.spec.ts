@@ -7,52 +7,13 @@ import { startHookServer, type HookServerHandlers, chooseHookAgent, hookFiredAt,
 import { registry, type RegisteredSession } from './lib/registry.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
-import { CommandBarService } from './lib/commandBar.js'
-import { routedCommandBar } from './lib/commandBarHttp.js'
-import { COMMAND_BAR_REQUESTS, emptyPorts } from './core/api.js'
-import { createServiceHost } from './core/serviceHost.js'
-import { startCommandBar, type Commands } from './services/commandBar.js'
-import { fakeCore } from './testing/fakeCore.js'
 import { ENGINES } from './engines/types.js'
 import { engineHooks } from './engines/hooks.js'
 
 let server: Server | null = null
 
-describe('native command bar endpoints', () => {
-  /** The command bar in this process, behind the core's door to it, as `HARNESSD_SERVICES=none` runs it. */
-  const commandBar = (commands: Commands) => {
-    const host = createServiceHost(emptyPorts(), { log: () => {} })
-    host.serve('commandBar', (core) => startCommandBar(core, commands), fakeCore(), COMMAND_BAR_REQUESTS)
-    return routedCommandBar({ serviceRouter: host.route, onConnectionClosed: host.closeConnection })
-  }
-
-  it('requires a native local header and rejects browser origins before evaluating', async () => {
-    const decide = vi.fn()
-    const { base } = await start({ onCommandBar: commandBar({ status: vi.fn(), decide }) })
-    const attempts: Record<string, string>[] = [{}, { 'x-adapter-local': '1', origin: 'https://example.com' }]
-    for (const headers of attempts) {
-      const response = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: '{}' })
-      expect(response.status).toBe(403)
-    }
-    expect(decide).not.toHaveBeenCalled()
-  })
-
-  it('returns configuration without credentials and wraps useful setup errors', async () => {
-    const { base } = await start({ onCommandBar: commandBar(new CommandBarService({ key: async () => null })) })
-    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-    const status = await fetch(`${base}/api/command-bar/status`, { headers })
-    expect(await status.json()).toMatchObject({ success: true, data: { configured: false, provider: 'OpenRouter' } })
-    const response = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: JSON.stringify({ prompt: 'hello', candidates: [] }) })
-    expect(response.status).toBe(503)
-    expect(await response.json()).toMatchObject({ success: false, error: { code: 'OPENROUTER_REQUIRED' } })
-    const bad = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: '{' })
-    expect(bad.status).toBe(400)
-    const large = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: 'x'.repeat(129_000) })
-    expect(large.status).toBe(413)
-  })
-})
-
 afterEach(async () => {
+  vi.restoreAllMocks()
   if (!server) return
   await new Promise<void>((resolve) => server!.close(() => resolve()))
   server = null
@@ -80,11 +41,13 @@ describe('process-owned hook server', () => {
   it('honors engine admission before registering or announcing a prompt, including a failed check', async () => {
     const admit = vi.spyOn(engineHooks.codex, 'admit')
       .mockReturnValueOnce({ accepted: false, reason: 'codex_subagent' })
-      .mockImplementationOnce(() => { throw new Error('rollout unavailable') })
+      .mockImplementation(() => { throw new Error('rollout unavailable') })
+    const agent = { engine: 'codex', agentId: 'parent', runtimes: [{ backend: 'tmux', paneId: '%41' }], primaryRuntimeKey: 'tmux\u0000%41', processIdentity: { pid: 4242, startMarker: 'fixture', executable: '<codex>' } } as RegisteredSession
+    const byAgent = vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
     try {
       const onPromptSubmitted = vi.fn()
       const { handlers, base, headers } = await start({
-        resolveHookAgent: async () => ({ engine: 'codex', agentId: 'parent' }) as RegisteredSession,
+        resolveHookAgent: async () => agent,
         onPromptSubmitted,
       })
       for (const reason of ['codex_subagent', 'engine_hook_failed']) {
@@ -92,11 +55,11 @@ describe('process-owned hook server', () => {
           method: 'POST', headers,
           body: JSON.stringify({ engine: 'codex', tmuxPane: '%41', sessionId: 'child', hookEvent: 'UserPromptSubmit' }),
         })
-        expect(await response.json()).toEqual({ ignored: true, reason })
+        expect(await response.json()).toEqual(reason === 'engine_hook_failed' ? { pending: true } : { ignored: true, reason })
       }
       expect(handlers.onRegistered).not.toHaveBeenCalled()
       expect(onPromptSubmitted).not.toHaveBeenCalled()
-    } finally { admit.mockRestore() }
+    } finally { admit.mockRestore(); byAgent.mockRestore() }
   })
 
   it('runs targeted resolution and rejects a hook without a matching pane engine process', async () => {
@@ -166,7 +129,8 @@ describe('process-owned hook server', () => {
         new Promise<'held'>((resolve) => setTimeout(() => resolve('held'), 2_000)),
       ])
       expect(reply).not.toBe('held')
-      expect(await (reply as Response).json()).toEqual({ pending: true })
+      expect((reply as Response).status).toBe(202)
+      expect(await (reply as Response).json()).toMatchObject({ pending: false, retry: true })
       // The wait ends with no agent for it: said in the log, and nothing is answered twice.
       found(null)
       await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[hooks] session- session-start ignored · no_matching_engine_process'))
@@ -207,9 +171,10 @@ describe('process-owned hook server', () => {
 
   it('treats SessionEnd as a reconciliation hint and exposes no launcher websocket endpoint', async () => {
     const onSessionEnd = vi.fn()
-    const resolveHookAgent = vi.fn(async () => ({
-      engine: 'claude', sessionId: 'session-1', agentId: 'agent-1',
-    } as never))
+    const agent = { engine: 'claude', sessionId: 'session-1', agentId: 'agent-1', runtimes: [], processIdentity: null } as unknown as RegisteredSession
+    vi.spyOn(registry, 'bySession').mockReturnValue(agent)
+    vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    const resolveHookAgent = vi.fn(async () => agent)
     const { base, headers } = await start({ onSessionEnd, resolveHookAgent })
     const ended = await fetch(`${base}/api/hook/session-end`, {
       method: 'POST',
@@ -280,7 +245,10 @@ describe('process-owned hook server', () => {
 
   it('hands a Stop on with when its engine ran it, and holds it as long as a test asks', async () => {
     const onTurnStop = vi.fn()
-    const resolveHookAgent = vi.fn(async () => ({ engine: 'claude', sessionId: 'real-session', agentId: 'agent-1' } as never))
+    const agent = { engine: 'claude', sessionId: 'real-session', agentId: 'agent-1', runtimes: [], processIdentity: null } as unknown as RegisteredSession
+    vi.spyOn(registry, 'bySession').mockReturnValue(agent)
+    vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    const resolveHookAgent = vi.fn(async () => agent)
     const stop = (base: string, headers: Record<string, string>) => fetch(`${base}/api/hook/turn-stop`, {
       method: 'POST', headers, body: JSON.stringify({ engine: 'claude', sessionId: 'real-session', tmuxPane: '%1', callerPid: 123 }),
     })
@@ -429,13 +397,13 @@ describe('knownTranscriptFor', () => {
     expect(knownTranscriptFor({ engine: 'claude', sessionId, transcriptPath: known }, { ...row, transcriptPath: join(root, 'other.jsonl') })).toBe(known)
   })
 
-  it('keeps the announcement if the engine lookup fails', () => {
+  it('retains a failed native correction as unavailable evidence', () => {
     const lookup = vi.spyOn(engineHooks.claude, 'transcriptFor')
       .mockImplementationOnce(() => { throw new Error('lookup failed') })
       .mockImplementationOnce(() => { throw 'lookup failed again' })
     try {
-      expect(knownTranscriptFor({ sessionId, transcriptPath: announced }, row)).toBe(announced)
-      expect(knownTranscriptFor({ sessionId, transcriptPath: announced }, row)).toBe(announced)
+      expect(() => knownTranscriptFor({ sessionId, transcriptPath: announced }, row)).toThrow()
+      expect(() => knownTranscriptFor({ sessionId, transcriptPath: announced }, row)).toThrow()
     } finally { lookup.mockRestore() }
   })
 
@@ -559,7 +527,8 @@ describe('requests must name this server', () => {
     const hook = await fetch(`${base}/api/hook/session-start`, {
       method: 'POST', headers, body: JSON.stringify({ engine: 'codex', tmuxPane: '%41', sessionId: '019fea92-e31a-7692-9c35-f616e9d458b7' }),
     })
-    expect(await hook.json()).toEqual({ pending: true })
+    expect(hook.status).toBe(202)
+    expect(await hook.json()).toMatchObject({ pending: false, retry: true })
     expect(error).toHaveBeenCalledWith('[hooks] GET /api/status failed:', 'status read failed')
     expect(error).toHaveBeenCalledWith('[hooks] GET /api/status failed:', expect.stringContaining('BigInt'))
     await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[hooks] POST /api/hook/session-start failed:', 'resolution failed after the answer'))
@@ -632,8 +601,8 @@ describe('the daemon socket', () => {
     const dir = mkdtempSync('/tmp/hsock-')
     const socketPath = join(dir, 'daemon.sock')
     const onStatus = vi.fn(() => ({ ok: true }))
-    const door = { ask: vi.fn(async () => ({ status: 200, body: { success: true, data: { configured: false } } })), closed: vi.fn() }
-    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus, onCommandBar: door }, { socketPath })
+    const onAutonomousDeviceRequest = vi.fn(async () => ({ status: 200, body: { ok: true } }))
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus, onAutonomousDeviceRequest }, { socketPath })
     server = started.server
     try {
       expect(started.localSocket?.path).toBe(socketPath)
@@ -641,9 +610,11 @@ describe('the daemon socket', () => {
       expect(await viaSocket(socketPath, 'GET', '/api/status')).toBe(200)
       expect(await viaSocket(socketPath, 'GET', '/api/status', { host: 'rebind.evil.example' })).toBe(200)
       expect(onStatus).toHaveBeenCalledTimes(2)
-      // The command bar asked for a loopback PEER; a socket peer has no address and is let in.
-      expect(await viaSocket(socketPath, 'GET', '/api/command-bar/status', { 'x-adapter-local': '1' })).toBe(200)
-      expect(await viaSocket(socketPath, 'GET', '/api/command-bar/status')).toBe(403)
+      // The device routes ask for a loopback PEER; a socket peer has no address and is let in.
+      const bearer = { authorization: `Bearer ${readHookCredential(env.ADAPTER_DATA_DIR)}` }
+      expect(await viaSocket(socketPath, 'GET', '/api/autonomous-device/status', bearer)).toBe(200)
+      expect(await viaSocket(socketPath, 'GET', '/api/autonomous-device/status')).toBe(403)
+      expect(onAutonomousDeviceRequest).toHaveBeenCalledTimes(1)
       // Mutations still need the CSRF header, hooks still need their credential.
       expect(await viaSocket(socketPath, 'POST', '/api/group/sync')).toBe(403)
       expect(await viaSocket(socketPath, 'POST', '/api/hook/session-start')).not.toBe(200)
@@ -740,3 +711,21 @@ describe('the device history and dismiss endpoints', () => {
     expect((await post({ confirm: true, head: 'x' })).status).toBe(400)
   })
 })
+
+
+it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start', '/api/hook/turn-stop'])(
+  'refuses a binding changed during process resolution on %s', async path => {
+    const row = { engine: 'claude', sessionId: 'race-session', agentId: 'race-agent', runtimes: [], processIdentity: null,
+      evidenceRevision: 1 } as unknown as RegisteredSession
+    vi.spyOn(registry, 'bySession').mockReturnValue(row)
+    vi.spyOn(registry, 'byAgent').mockReturnValue(row)
+    const mutation = vi.fn()
+    const { base, headers } = await start({ onSessionEnd: mutation, onTurnStart: mutation, onToolStart: mutation, onTurnStop: mutation,
+      resolveHookAgent: async () => { await Promise.resolve(); row.evidenceRevision = 2; return row } })
+    const response = await fetch(`${base}${path}`, { method: 'POST', headers,
+      body: JSON.stringify({ engine: 'claude', sessionId: row.sessionId, tmuxPane: '%1', callerPid: 4242,
+        toolUseId: 'fixture-tool', toolName: 'Task' }) })
+    expect(response.status).toBe(403)
+    expect(mutation).not.toHaveBeenCalled()
+  },
+)

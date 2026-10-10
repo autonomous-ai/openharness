@@ -161,7 +161,7 @@ An example may also carry an HTTPS `video` URL (≤ 2048 characters), with `imag
 “Watch recorded run” opens the existing native web player on supported platforms, with a browser
 fallback. Browsing a detail page loads only its pictures; the video loads after a click, fits the
 whole native pane, and stops when the recording closes. Older clients keep showing the prompt
-and picture. The eight hands-on recordings reuse their original PNG/MP4 assets in `docs/images/`
+and picture. The seven hands-on recordings reuse their original PNG/MP4 assets in `docs/images/`
 rather than the JPEG convention above.
 
 Recordings appear in the desktop Store's **Featured** tab. **Discover** keeps its
@@ -177,8 +177,7 @@ Example prompts and captions are searchable too.
 The matching recorded prompts and captions live in `hands-on.json` under `demo`. Run
 `node store/tools/hands-on.mjs --sync-store` to place each recording first in its harness's
 examples, preserving the others. `--check` verifies the pairs and local assets. Suggested
-starting prompts remain separate from the actual projects shown; the Jev Sheets recording is
-explicitly labeled offline practice with fictional rows.
+starting prompts remain separate from the actual projects shown.
 
 **In a repository of its own**: add `store/registry/<owner>/<name>.json` in a pull request.
 
@@ -304,8 +303,8 @@ flag in its `store.json` does it:
 
 ```sh
 node store/tools/listing.mjs                       # every package, listed or UNLISTED
-node store/tools/listing.mjs unlist jev-pong       # take it off the shelf
-node store/tools/listing.mjs list jev-pong         # put it back (the flag is removed)
+node store/tools/listing.mjs unlist web-studio     # take it off the shelf
+node store/tools/listing.mjs list web-studio       # put it back (the flag is removed)
 ```
 
 An unlisted package keeps its folder, its history and its tests, and the rules above still hold for

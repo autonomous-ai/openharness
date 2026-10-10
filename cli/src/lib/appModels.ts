@@ -4,9 +4,8 @@
  * architecture. Grid's llama.cpp starts one only when its app is not installed here. */
 import { execFile, spawn } from 'node:child_process'
 import { closeSync, openSync } from 'node:fs'
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { createServer, type AddressInfo } from 'node:net'
-import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { processExists } from './processLiveness.js'
 
@@ -28,11 +27,6 @@ export interface AppModel {
   /** The app's own binary (`ollama`, `lms`, `llama-server`); absent for `grid`. */
   binary?: string
   sizeBytes: number; quant?: string; contextLength?: number; kvBytesPerToken?: number
-  /** `decision`: a decision (System One) model its app answers at `/v1/systemone` — listed with the Jev models,
-   *  never a harness's model. */
-  kind?: 'decision'
-  /** The app version it needs, when the one installed here is older: Start says to update rather than fail. */
-  needs?: string
 }
 
 /** One engine this daemon started for a picker model, kept on disk so Stop and the list outlive a restart. */
@@ -66,8 +60,7 @@ export function cacheName(name: string): string {
  * The picker's models from other apps: Ollama's and llama.cpp's from the Model Manager's own scan
  * (`fleet models --json`, whose `startWith` is the rule), LM Studio's from `lms ls`, the only place that
  * names the key `lms load` takes. Only what a coding agent can run: 64K or more, tool calls not ruled out,
- * and a file the engine reads — and Ollama's decision models ([ollamaDecisionModels]), marked as such. A scan
- * that fails is no models, never an error over the whole picker.
+ * and a file the engine reads. A scan that fails is no models, never an error over the whole picker.
  */
 export async function scanAppModels({ node, packageDir, env, run = exec }: {
   node: string; packageDir: string | null; env: NodeJS.ProcessEnv; run?: Exec
@@ -106,14 +99,6 @@ export async function scanAppModels({ node, packageDir, env, run = exec }: {
       ...(context ? { contextLength: context } : {}), ...(num(gguf.kvBytesPerToken) ? { kvBytesPerToken: num(gguf.kvBytesPerToken) } : {}) })
   }
 
-  // Ollama's decision models are read from its own store: they are never a coding agent's, and the GGUF one
-  // that passes for a chat model above is listed once, as what it is.
-  const ollama = installed('ollama')
-  const decisions = await ollamaDecisionModels(ollamaStore(env), str(ollama?.path), str(ollama?.version))
-  const deciding = new Set(decisions.map(d => d.ref))
-  for (let i = result.length - 1; i >= 0; i--) if (result[i]!.app === 'ollama' && deciding.has(result[i]!.ref)) result.splice(i, 1)
-  if (ollama) result.push(...decisions)
-
   if (lmsUsable) {
     const listed = await run(lms, ['ls', '--json'], { env, timeout: 30_000 })
     let models: Record<string, any>[] = []
@@ -129,67 +114,6 @@ export async function scanAppModels({ node, packageDir, env, run = exec }: {
       const name = modelKey.split('/').pop()!
       result.push({ id: `app:lm-studio:${modelKey}`, name, app: 'lm-studio', engine: 'lm-studio', ref: modelKey, binary: lms,
         sizeBytes: num(m.sizeBytes) ?? 0, ...(context ? { contextLength: context } : {}) })
-    }
-  }
-  return result
-}
-
-/** The first Ollama that answers System One decisions at `/v1/systemone`. */
-export const MIN_OLLAMA_DECISION = '0.35.0'
-
-/** Where Ollama keeps its models: `OLLAMA_MODELS`, else its default — the store an `ollama serve` started with
- *  this daemon's environment reads, so a model listed from it is one that serve can load. */
-export const ollamaStore = (env: NodeJS.ProcessEnv): string => env.OLLAMA_MODELS || join(env.HOME || homedir(), '.ollama', 'models')
-
-const versionParts = (v: string): number[] | null => {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(v.trim())
-  return match ? match.slice(1).map(Number) : null
-}
-/** Whether version [a] is older than [b]; false when either cannot be read. */
-const olderThan = (a: string, b: string): boolean => {
-  const [x, y] = [versionParts(a), versionParts(b)]
-  if (!x || !y) return false
-  const at = x.findIndex((part, i) => part !== y[i])
-  return at >= 0 && x[at]! < y[at]!
-}
-
-/**
- * Ollama's decision models (Tev, Nimble, Clef in its library), read from its manifests: the Model Manager's
- * scan reads only GGUF weights, and Ollama 0.40 keeps these as MLX safetensors, so tev1 was in no list [run].
- * A model's config says it decides (`"capabilities": ["decision"]`) and the Ollama it needs (`requires`). One
- * the [installed] Ollama is too old for is still listed, with what it [AppModel.needs], so Start says to update.
- * Layout: `manifests/<registry>/<namespace>/<model>/<tag>`, named `<model>:<tag>` in Ollama's own library.
- */
-export async function ollamaDecisionModels(store: string, binary: string, installed: string): Promise<AppModel[]> {
-  const dirs = async (path: string) => (await readdir(path, { withFileTypes: true }).catch(() => [])).filter(d => d.isDirectory()).map(d => d.name)
-  const blob = (digest: unknown) => /^sha256:[0-9a-f]{64}$/.test(str(digest)) ? join(store, 'blobs', str(digest).replace(':', '-')) : null
-  const result: AppModel[] = []
-  const manifests = join(store, 'manifests')
-  for (const registry of await dirs(manifests)) {
-    for (const namespace of await dirs(join(manifests, registry))) {
-      for (const model of await dirs(join(manifests, registry, namespace))) {
-        const folder = join(manifests, registry, namespace, model)
-        for (const tag of (await readdir(folder, { withFileTypes: true }).catch(() => [])).filter(d => d.isFile()).map(d => d.name)) {
-          let manifest: Record<string, any>, config: Record<string, any>
-          try {
-            manifest = obj(JSON.parse(await readFile(join(folder, tag), 'utf8')))
-            const path = blob(obj(manifest.config).digest)
-            if (!path) continue
-            config = obj(JSON.parse(await readFile(path, 'utf8')))
-          } catch { continue }
-          if (!Array.isArray(config.capabilities) || !config.capabilities.includes('decision')) continue
-          const named = registry === 'registry.ollama.ai' ? namespace === 'library' ? model : `${namespace}/${model}` : `${registry}/${namespace}/${model}`
-          const ref = `${named}:${tag}`
-          // The grid lists it under its plain name, as `ollama run` takes it.
-          const name = tag === 'latest' ? named : ref
-          if (!safe(name) || !safe(ref)) continue
-          const required = [str(config.requires), MIN_OLLAMA_DECISION].filter(versionParts).reduce((most, v) => olderThan(most, v) ? v : most)
-          const sizeBytes = rows(manifest.layers).reduce((sum, layer) => sum + (num(layer.size) ?? 0), 0)
-          result.push({ id: `jev:ollama:${ref}`, name, app: 'ollama', engine: 'ollama', ref, ...(binary ? { binary } : {}), sizeBytes,
-            ...(str(config.file_type) ? { quant: str(config.file_type).toUpperCase() } : {}), kind: 'decision',
-            ...(olderThan(installed, required) ? { needs: required } : {}) })
-        }
-      }
     }
   }
   return result
@@ -219,18 +143,16 @@ function freePort(): Promise<number> {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-/** llama-server's arguments for [model] on loopback [port]. Several slots share one window (`--kv-unified`),
- *  as llama-server's own default does, so any one request can still use all of it. */
-export function llamaServerArgs(model: Pick<AppModel, 'ref' | 'name'>, ctx: number, port: number, slots = 1): string[] {
-  return ['-m', model.ref, '--alias', model.name, '--ctx-size', String(ctx), '--parallel', String(slots),
-    ...(slots > 1 ? ['--kv-unified'] : []), '-ngl', '999', '--host', '127.0.0.1', '--port', String(port)]
+/** llama-server's arguments for [model] on loopback [port]: one slot, so a harness's one conversation has the
+ *  whole window. */
+export function llamaServerArgs(model: Pick<AppModel, 'ref' | 'name'>, ctx: number, port: number): string[] {
+  return ['-m', model.ref, '--alias', model.name, '--ctx-size', String(ctx), '--parallel', '1',
+    '-ngl', '999', '--host', '127.0.0.1', '--port', String(port)]
 }
 
 /** Starting, checking and stopping the engines, injected so the lifecycle can be tested without them. */
 export interface AppEngineOps {
-  /** `slots`: how many requests the engine works on at once. A harness's model has one, so its whole window
-   *  is one conversation's; a Jev model's questions are short and many, and each is its own request. */
-  start(model: AppModel, ctx: number, logDir: string, slots?: number): Promise<Omit<AppEngineRecord, 'spec' | 'modelId' | 'grid' | 'name'>>
+  start(model: AppModel, ctx: number, logDir: string): Promise<Omit<AppEngineRecord, 'spec' | 'modelId' | 'grid' | 'name'>>
   alive(record: AppEngineRecord): Promise<boolean>
   /** The window the engine says it loaded, after a first request; undefined when it does not say. */
   loadedContext(record: AppEngineRecord): Promise<number | undefined>
@@ -245,18 +167,6 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
       const response = await request(url, { signal: AbortSignal.timeout(5_000), redirect: 'error' })
       return { status: response.status, body: obj(await response.json().catch(() => ({}))) }
     } catch { return { status: 0, body: {} } }
-  }
-  /** Whether [model] at [base] answers one System One question within [ms]. */
-  const decides = async (base: string, model: string, ms: number): Promise<boolean> => {
-    try {
-      const response = await request(`${base}/systemone`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ model, state: 'I was charged twice. Please refund the duplicate.',
-          questions: { refund: { type: 'noul', instructions: 'Is a refund requested?' } } }),
-        signal: AbortSignal.timeout(ms), redirect: 'error',
-      })
-      return typeof obj(obj(obj(response.ok ? await response.json() : {}).answers).refund).noul === 'number'
-    } catch { return false }
   }
   /** Up when [url] answers 200; a 503 is a model still loading. Gives up early if the process exits. */
   const ready = async (url: string, ms: number, pid?: number): Promise<boolean> => {
@@ -289,27 +199,20 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
   }
 
   return {
-    async start(model, ctx, logDir, slots = 1) {
+    async start(model, ctx, logDir) {
       const binary = model.binary!
       if (model.engine === 'ollama') {
         // Its own server beside the person's Ollama app, never on the app's 11434: the window is a server
         // setting, and theirs ran every model at 16K [run]. Same model store, so nothing is copied.
         const port = await freePort()
         const pid = await background(binary, ['serve'], { OLLAMA_HOST: `127.0.0.1:${port}`, OLLAMA_CONTEXT_LENGTH: String(ctx),
-          OLLAMA_NUM_PARALLEL: String(slots), OLLAMA_KEEP_ALIVE: '-1' }, logDir, `ollama-${port}.log`)
+          OLLAMA_NUM_PARALLEL: '1', OLLAMA_KEEP_ALIVE: '-1' }, logDir, `ollama-${port}.log`)
         if (!await ready(`http://127.0.0.1:${port}/api/version`, 60_000, pid)) throw new AppStartError('Ollama could not start. Try again.')
-        // Ollama loads a model on its first request, and Grid's join asks a decision model one question with 15 s
-        // to answer (remote/probe.py `_PROBE_TIMEOUT`): a model still loading then joins without its decisions.
-        // So it is asked here first, with a load's time, and an Ollama that cannot run it says so now.
-        if (model.kind === 'decision' && !await decides(`http://127.0.0.1:${port}/v1`, model.ref, 5 * 60_000)) {
-          try { process.kill(-pid, 'SIGTERM') } catch { /* gone */ }
-          throw new AppStartError(`Ollama could not load ${model.name}. Close some apps, then try again.`)
-        }
         return { engine: 'ollama', served: model.ref, alias: model.name, port, binary, pid }
       }
       if (model.engine === 'llama.cpp') {
         const port = await freePort()
-        const pid = await background(binary, llamaServerArgs(model, ctx, port, slots), {}, logDir, `llama-${port}.log`)
+        const pid = await background(binary, llamaServerArgs(model, ctx, port), {}, logDir, `llama-${port}.log`)
         if (!await ready(`http://127.0.0.1:${port}/health`, 10 * 60_000, pid)) {
           try { process.kill(-pid, 'SIGTERM') } catch { /* gone */ }
           throw new AppStartError('llama.cpp could not load the model. Try again.')
@@ -327,7 +230,7 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
       }
       const port = typeof status.port === 'number' ? status.port : 0
       if (!port) throw new AppStartError('LM Studio could not start its server. Open LM Studio and try again.')
-      const loaded = await run(binary, ['load', model.ref, '--context-length', String(ctx), '--gpu', 'max', '--parallel', String(slots),
+      const loaded = await run(binary, ['load', model.ref, '--context-length', String(ctx), '--gpu', 'max', '--parallel', '1',
         '--identifier', model.name, '-y'], { env, timeout: 10 * 60_000 })
       if (!loaded.ok) {
         if (startedServer) await run(binary, ['server', 'stop'], { env, timeout: 30_000 })

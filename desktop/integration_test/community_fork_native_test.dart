@@ -92,7 +92,6 @@ void main() {
           'ribbon-lamp': 'scenes/hello.py',
           'signal-study': 'circuit.txt',
           'alpine-drift': 'src/main.ts',
-          'better-questions': 'sheet.json',
           'two-futures': 'out/rollout.qpos.json',
           'molecular-shapes': 'molecules/hello.py',
           'lantern-room': 'track.strudel',

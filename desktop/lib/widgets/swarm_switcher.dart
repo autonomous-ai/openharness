@@ -547,7 +547,6 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
   final _resultsKey = GlobalKey();
   double _rowHeight = 56;
   double _modelHeadingHeight = 28;
-  double _modelGroupHeadingHeight = 36;
   double _twoLineRowHeight = 56;
   bool _desktopRows = false;
   bool _revealScheduled = false;
@@ -559,52 +558,31 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
   (Size, double)? _geometry;
   SwarmSearchController get search => widget.search;
 
-  /// The model list as drawn: each section's heading, then its rows — under a heading for its group,
-  /// Chat models or Decision models, whenever a decision model is listed. [key] is the section's own
-  /// ([ModelSearchSection.key]), which stays put while a heading such as `Get for this Mac · 64 GB`
-  /// follows its machine; a group's is [_groupKey] and its label.
+  /// The model list as drawn: each section's heading, then its rows. [key] is the section's own
+  /// label, which stays put while a heading such as `Get for this Mac · 64 GB` follows its machine.
   List<({int? index, String? heading, String? key})> get _modelRows {
     if (!search.isModelMode) return const [];
-    final shown = <ModelSearchSection, List<int>>{};
+    final items = <({int? index, String? heading, String? key})>[];
     for (final section in ModelSearchSection.values) {
       final indices = [
         for (final (index, row) in search.rows.indexed)
           if (search.modelSection(row) == section) index,
       ];
       // An empty section still says it is there, so there is somewhere to add to — except the
-      // downloads, which a machine with the whole catalog, or none, has nothing under, what is
-      // shared with you while Grid is not set up (the Set up row under Your models stands for
-      // it), and decision models, which nobody adds from here.
+      // downloads, which a machine with the whole catalog, or none, has nothing under, and what is
+      // shared with you while Grid is not set up: the Set up row under Your models stands for it.
       if (indices.isEmpty &&
           (search.matchQuery.trim().isNotEmpty ||
               section == ModelSearchSection.catalog ||
-              section.group == ModelSearchGroup.decision ||
               (section == ModelSearchSection.shared &&
                   search.gridSetupOffered))) {
         continue;
       }
-      shown[section] = indices;
-    }
-    // One kind alone needs no heading for it: the list reads as it did before decision models.
-    final grouped = shown.keys.any(
-      (section) => section.group == ModelSearchGroup.decision,
-    );
-    final items = <({int? index, String? heading, String? key})>[];
-    ModelSearchGroup? group;
-    for (final MapEntry(key: section, value: indices) in shown.entries) {
       if (items.isNotEmpty) items.add((index: null, heading: null, key: null));
-      if (grouped && section.group != group) {
-        group = section.group;
-        items.add((
-          index: null,
-          heading: group.label,
-          key: '$_groupKey${group.label}',
-        ));
-      }
       items.add((
         index: null,
         heading: search.modelSectionLabel(section),
-        key: section.key,
+        key: section.label,
       ));
       items.addAll(
         indices.map((index) => (index: index, heading: null, key: null)),
@@ -613,21 +591,10 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
     return items;
   }
 
-  static const _groupKey = 'group:';
-
-  bool _isGroupHeading(({int? index, String? heading, String? key}) item) =>
-      item.key?.startsWith(_groupKey) == true;
-
   double _modelItemHeight(({int? index, String? heading, String? key}) item) {
     if (!_desktopRows) return _rowHeight;
     final index = item.index;
-    if (index == null) {
-      return item.heading == null
-          ? 8
-          : _isGroupHeading(item)
-          ? _modelGroupHeadingHeight
-          : _modelHeadingHeight;
-    }
+    if (index == null) return item.heading == null ? 8 : _modelHeadingHeight;
     // A shared model's row is two lines: its name, and the machine serving it under it.
     return search.modelRowNameEnd(search.rows[index]) != null
         ? _twoLineRowHeight
@@ -907,7 +874,6 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
         }
         _desktopRows = desktop;
         _modelHeadingHeight = scale.scale(12) * 1.45 + 12;
-        _modelGroupHeadingHeight = scale.scale(16) * 1.45 + 26;
         final height = widget.fitRows
             ? _fittedHeight(
                 constraints,
@@ -1342,16 +1308,6 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                                 }
                                 if (item.heading == null) {
                                   return const SizedBox();
-                                }
-                                if (desktop && _isGroupHeading(item)) {
-                                  return _ModelGroupHeading(
-                                    key: ValueKey('model-section:${item.key}'),
-                                    label: item.heading!,
-                                    decision:
-                                        item.key ==
-                                        '$_groupKey${ModelSearchGroup.decision.label}',
-                                    first: index == 0,
-                                  );
                                 }
                                 return Semantics(
                                   header: true,
@@ -2002,7 +1958,6 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                       !widget.search.isModelDownloadsRow(row) &&
                       !widget.search.isGridSetupRow(row) &&
                       !widget.search.canExpandApi(row) &&
-                      !widget.search.isJevRow(row) &&
                       !widget.search.canSelectModel(row) &&
                       !widget.search.canGetModel(row))
             ? theme.foreground.withValues(alpha: .28)
@@ -2481,61 +2436,6 @@ class SwarmSearchCount extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-}
-
-/// A kind of model at the head of its sections — Chat models, Decision models — set apart from the
-/// section headings under it so the list reads as two parts: its mark, a larger and heavier label, and
-/// a rule above every kind after the first.
-class _ModelGroupHeading extends StatelessWidget {
-  const _ModelGroupHeading({
-    super.key,
-    required this.label,
-    required this.decision,
-    required this.first,
-  });
-
-  final String label;
-  final bool decision;
-  final bool first;
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    return Semantics(
-      header: true,
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 14),
-        padding: EdgeInsets.only(top: first ? 6 : 14),
-        decoration: first
-            ? null
-            : BoxDecoration(
-                border: Border(top: BorderSide(color: DesktopChrome.rim)),
-              ),
-        alignment: Alignment.centerLeft,
-        child: Row(
-          children: [
-            Icon(
-              decision ? AppIcons.signpost : AppIcons.messagesSquare,
-              size: 18,
-              color: DesktopChrome.foreground,
-            ),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: DesktopChrome.text(
-                  size: 16,
-                  color: DesktopChrome.foreground,
-                ).copyWith(fontWeight: FontWeight.w600),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

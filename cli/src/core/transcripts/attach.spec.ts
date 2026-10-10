@@ -1366,6 +1366,81 @@ it('keeps normal Stop on its existing path and contains a rejected recovery sche
   expect(row.interpretationHold).toBe('waiting for evidence')
   run.attach.forget(row.sessionId)
 })
+it.each(['cursor', 'commandcode'] as const)('holds a %s catch-hook completion before a missing parser can hydrate a newer turn', async engine => {
+  const run = setup(), row = session(engine, transcript([{ open: true, events: [started('newer turn')] }]))
+  expect(run.attach.holdAdmissionStop(row, false)).toBe(true)
+  expect(row.interpretationHold).toContain('Stop could not be matched')
+  await run.attach.attachSession(row, true)
+  expect(row.interpretationHold).toContain('Stop could not be matched')
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
+it('holds rebuilt admission interpretation even when a parser still exists, preserving normal immediate Stop', async () => {
+  const run = setup(), row = session('commandcode', transcript([]))
+  await run.attach.attachSession(row)
+  expect(run.attach.holdAdmissionStop(row, false)).toBe(false)
+  row.identityHold = 'native source unavailable'
+  expect(run.attach.holdAdmissionStop(row, false)).toBe(true)
+  delete row.identityHold
+  row.interpretationHold = 'rebuilding interpretation'
+  expect(run.attach.holdAdmissionStop(row, false)).toBe(true)
+  delete row.interpretationHold
+  expect(run.attach.holdAdmissionStop(row, true)).toBe(true)
+  run.attach.forget(row.sessionId)
+})
+it.each(['queued', 'running', 'relaunch'] as const)('retains a Stop while existing interpretation has a %s replacement', async phase => {
+  const marks = createRelaunchMarks(), run = setup({ relaunchMarks: marks, concurrency: 1 })
+  const row = session('commandcode', transcript([{ open: true, events: [started('later turn')] }]))
+  await run.attach.attachSession(row)
+  vi.mocked(run.deps.emit).mockClear()
+  let finish!: () => void
+  let blocker: Promise<boolean> | undefined, reset: Promise<boolean> | undefined
+  if (phase === 'relaunch') marks.note(row.sessionId, 0, true)
+  else {
+    vi.mocked(run.deps.terminalGone).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(false) }))
+    if (phase === 'queued') blocker = run.attach.attachSession(session('claude', transcript([])))
+    reset = run.attach.attachSession(row, true)
+  }
+  expect(run.attach.holdAdmissionStop(row, false)).toBe(true)
+  expect(row.interpretationHold).toContain('Stop could not be matched')
+  if (finish) finish()
+  await blocker; await reset
+  await run.attach.attachSession(row, true)
+  expect(row.interpretationHold).toBeTruthy()
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
+it('acknowledges retained Stop despite an announcement failure so later Cancel remains authoritative', async () => {
+  const announceSession = vi.fn((): void => { throw new Error('fixture announcement failed') })
+  const run = setup({ announceSession }), row = session('claude', transcript([CLAUDE_PROMPT]))
+  expect(run.attach.holdAdmissionStop(row, true)).toBe(true)
+  expect(row.interpretationHold).toContain('Stop could not be matched')
+  announceSession.mockImplementation(() => {})
+  run.attach.beforeCancel(row)
+  run.normalizers.closeTurns(row.sessionId)
+  await run.attach.attachSession(row, true)
+  expect(row.interpretationHold).toBeUndefined()
+  expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(false)
+  run.attach.forget(row.sessionId)
+})
+it('revokes captured Stop admission on Cancel, a new conversation and forget without revoking a sibling', () => {
+  const run = setup(), row = session('cursor'), sibling = session('commandcode')
+  const first = run.attach.captureAdmissionStop(row), same = run.attach.captureAdmissionStop(row)
+  const other = run.attach.captureAdmissionStop(sibling)
+  expect(first()).toBe(true); expect(same()).toBe(true)
+  run.attach.beforeCancel(row)
+  expect(first()).toBe(false); expect(same()).toBe(false); expect(other()).toBe(true)
+  const next = run.attach.captureAdmissionStop(row)
+  expect(next()).toBe(true)
+  const rebound = run.attach.captureAdmissionStop({ ...row, sessionId: 'new-conversation' })
+  expect(next()).toBe(false); expect(rebound()).toBe(true)
+  run.attach.forget(row.sessionId)
+  expect(rebound()).toBe(true)
+  run.attach.forget('new-conversation')
+  expect(rebound()).toBe(false); expect(other()).toBe(true)
+  run.attach.forget(sibling.sessionId)
+  expect(other()).toBe(false)
+})
 it('recovers a legacy reader without control cuts and holds one that cannot replay them', async () => {
   const run = setup(), row = session('muse', transcript([]), { evidenceRevision: 2, interpretationHold: 'pending' })
   await run.attach.attachSession(row)

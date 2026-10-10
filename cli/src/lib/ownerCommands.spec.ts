@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { OwnerCommands } from './ownerCommands.js'
 
 describe('owner browser commands', () => {
-  it('leaves the command bar to its own service', async () => {
+  it('refuses anything but task delivery', async () => {
     const commands = new OwnerCommands()
     commands.onRouteTask = vi.fn()
-    expect(await commands.request('one', 'command_bar', { request: { prompt: 'Send a task', candidates: [] } })).toEqual({ error: 'UNSUPPORTED' })
+    expect(await commands.request('one', 'agent_close', { text: 'Send a task' })).toEqual({ error: 'UNSUPPORTED' })
     expect(commands.onRouteTask).not.toHaveBeenCalled()
   })
 

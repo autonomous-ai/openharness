@@ -11,7 +11,6 @@ export const communityHarnessMarkers = {
   'autonomous/typst': 'main.typ',
   'autonomous/circuitjs': 'circuit.txt',
   'autonomous/godogen': 'studio.json',
-  'autonomous/jev-sheets': 'sheet.json',
   'autonomous/mujoco': 'sim/hello.py',
   'autonomous/rdkit': 'molecules/hello.py',
   'autonomous/strudel': 'track.strudel',

@@ -181,12 +181,6 @@ const storeStories = <String, StoreStory>{
       'Compare two approaches to my project. Research the tradeoffs and preserve the disagreements.',
     ],
   ),
-  'autonomous/jev-sheets': StoreStory(
-    benefit: 'Ask a question of every row in your spreadsheet.',
-    prompts: [
-      'Group these customer reviews by theme and show the uncertain answers.',
-    ],
-  ),
   'autonomous/ollama': StoreStory(
     benefit: 'Find a model that fits your machine and put it to work.',
     prompts: ['Show which local models fit this machine and help me try one.'],
@@ -216,7 +210,6 @@ const _browseBenefits = <String, String>{
   'autonomous/generative-art': 'Draw with code. Explore the variations.',
   'autonomous/godogen': 'Build a world you can play.',
   'autonomous/home-assistant': 'Make your home work your way.',
-  'autonomous/jev-browser': 'Turn web pages into answers you can use.',
   'autonomous/juce-agent-toolkit': 'Shape a synth. Find your sound.',
   'autonomous/kicad': 'Design a board. Explore every connection.',
   'autonomous/lab-bench': 'Turn a good question into an experiment.',

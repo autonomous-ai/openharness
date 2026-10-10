@@ -273,6 +273,7 @@ function boundedPrompt(prompt) {
  * (e2e/stall.e2e.ts).
  */
 /** This process's start, epoch ms: the engine ran the hook then. */
+const DELIVERY_ID = randomUUID()
 const FIRED_AT = Date.now() - Math.round(process.uptime() * 1000)
 
 function post(port, path, body, onResponse) {
@@ -294,6 +295,7 @@ function post(port, path, body, onResponse) {
           // When the engine ran this hook: this process's start, not its arrival, which can be seconds later on
           // a loaded machine, after the engine has moved on to its next prompt (src/hookServer.ts hookFiredAt).
           'X-Harness-Hook-Fired-At': String(FIRED_AT),
+          'X-Harness-Hook-Delivery-Id': DELIVERY_ID,
         },
         timeout: Math.max(1, Math.min(500, remainingBudget())),
       },
@@ -306,6 +308,8 @@ function post(port, path, body, onResponse) {
           let reply
           try { if (response.length <= 16_384) reply = JSON.parse(response) } catch { /* no structured reply */ }
           if (res.statusCode === 429 || (res.statusCode === 202 && reply?.retry === true)) { resolve('held'); return }
+          if (path === '/api/hook/turn-stop' && ok && reply?.pending === true) { resolve('held'); return }
+          if (path === '/api/hook/turn-stop' && ok && reply?.duplicate === true) { resolve('duplicate'); return }
           if (ok && onResponse && response.length <= 16_384) {
             try { onResponse(JSON.parse(response)) } catch { /* Unavailable context never blocks a turn. */ }
           }
@@ -1709,6 +1713,7 @@ async function main() {
       engine,
       hookEvent: event,
       sessionId,
+      status: input.status,
       transcriptPath: input.transcript_path,
       cwd: Array.isArray(input.workspace_roots) ? input.workspace_roots[0] : input.cwd,
       ...terminalHookFields(tmuxPane),
@@ -1744,6 +1749,7 @@ async function main() {
         engine,
         hookEvent: event,
         sessionId: input.session_id,
+        status: event === 'StopFailure' ? 'error' : undefined,
         transcriptPath: existsPath(input.transcript_path) ? input.transcript_path : undefined,
         cwd: input.cwd,
         ...terminalHookFields(tmuxPane),

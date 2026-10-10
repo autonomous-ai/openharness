@@ -37,7 +37,6 @@ const Set<String> encryptedDownTypes = {
   'api_connections',
   'connectors',
   'orchestrator',
-  'command_bar',
   'route_task',
   'route_send',
   'grid_fleet_models_list',

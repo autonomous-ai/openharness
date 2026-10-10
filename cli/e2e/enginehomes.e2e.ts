@@ -487,7 +487,8 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     expect(held?.engine).toBe('claude')
     expect(held?.sessionId).toBeFalsy()
     expect(held?.status).toBe('active')
-    const sibling = await client.request('agent_create', { engine: 'codex', cwd: d.projectsDir, bypassPermission: true }, 90_000)
+    // This sibling's explicit profile is independent of the deliberately unreadable home catalog.
+    const sibling = await client.request('agent_create', { engine: 'codex', cwd: d.projectsDir, codexHome: d.env.CODEX_HOME, bypassPermission: true }, 90_000)
     expect(sibling.error, JSON.stringify(sibling)).toBeUndefined()
     await until('the independent sibling to bind', async () => (await row(client, sibling.agent.id))?.sessionId, 45_000)
     const stopped = await client.request('agent_delete', { agentId: tile.id }, 60_000)

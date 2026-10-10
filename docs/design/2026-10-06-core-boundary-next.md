@@ -31,6 +31,9 @@
 > the orchestrator, the teams with Tab collaboration, Share and the command bar. Each process and what it
 > hosts is in [../../cli/src/services/AGENTS.md](../../cli/src/services/AGENTS.md).
 >
+> **Update, 2026-10-10.** The command bar experiment (⌘⇧J) is removed: its service, process, socket request
+> and `/api/command-bar/*` routes are gone. Its mentions below are the plan as it was written.
+>
 > **Boundary follow-through, 2026-10-07.** Account/backend HTTP and `machines.json` move to the
 > gateway; the core reads reported state with an account-bound stale fallback. Bundled harness setup
 > moves to the Store; one shared lean asset file avoids duplicating bundled bytes. Shell request policy

@@ -858,12 +858,7 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
                 if let Some(want) = in_use.or(top) { picker.select(&want); picker.placed = picker.selected_id.clone() }
             }
             picker.right_half = true;
-            // (On a Jev model there is nothing to use: Enter copies how to call it.)
-            picker.hints = match picker.selected_id.as_deref() {
-                Some(id) if id.starts_with("mv:jev:") => vec![("enter", "copy how to call it")],
-                Some(id) if id.starts_with("mv:jevlocal:") => vec![("enter", "get · start · copy"), ("C-s", "stop it")],
-                _ => vec![("enter", "use · get"), ("C-s", "stop a local model")],
-            };
+            picker.hints = vec![("enter", "use · get"), ("C-s", "stop a local model")];
             picker.empty = if crate::models::target(app).is_none() { crate::models::no_target_why(app) } else { "Loading its models…".into() };
             picker.status = crate::models::target(app).and_then(|t| app.fleet.agent(&t.machine, &t.agent)).map(|a| a.name.clone()).unwrap_or_default();
         }

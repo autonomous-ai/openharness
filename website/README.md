@@ -125,15 +125,14 @@ by account environment. The feed loads 30 publications per page as visitors scro
 100 comments. Search filters loaded projects. Public navigation and downloads use the production
 account plane; staging API isolation is supported for backend testing.
 
-The examples live in `public/open-harnesses/`: nine self-contained Codex projects, the eight
+The examples live in `public/open-harnesses/`: nine self-contained Codex projects, the seven
 featured projects from `store/hands-on.json`, and the existing Harness Store Marp keynote. The
 featured projects reuse the Store's posters and recordings from `docs/images/`, plus editable
 source from its fixtures/templates (the Go2 trajectory comes from the existing MuJoCo project).
 Their detail page plays the existing recording and labels the conversation as a published brief,
 not the original session transcript. Forks carry the source and available native output (GLB,
-PDF, molecules and trajectory data); recordings stay on the web. The Jev Sheets example remains
-explicitly offline practice with fictional rows. Blender's portable `blender-design.json` restores
-the viewer's Shape Lab controls when imported.
+PDF, molecules and trajectory data); recordings stay on the web. Blender's portable
+`blender-design.json` restores the viewer's Shape Lab controls when imported.
 
 `source-files.json` lists each named harness's portable files. Binary artifacts use base64 in the
 snapshot and decode back to their original bytes in desktop imports and ZIPs. The snapshot limit

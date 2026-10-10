@@ -16,7 +16,7 @@
  *   conversation the hook named, with everything the daemon kept for it, and working.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, statSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -125,6 +125,91 @@ describe('the hook client', () => {
     await d.start()
     return d
   }
+
+  it('keeps a real native prompt visibly held through an unavailable registry and admits it after recovery', async () => {
+    const d = await fresh(), client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'codex', 'held-native-admission')
+    await turn(client, agent.id, 'before registry hold')
+    const file = join(d.dataDir, 'registry.json'), backup = file + '.fixture-backup'
+    const accepted = () => [...d.log().matchAll(new RegExp(`\\[hooks\\] ${agent.sessionId.slice(0, 8)} UserPromptSubmit · engine=codex`, 'g'))].length
+    await until('the first native prompt acknowledgement', () => accepted() === 1)
+    // The fixture owns this entire data directory. A directory at the file's path
+    // makes reads/writes fail even under a privileged CI account; no host chmod assumptions.
+    renameSync(file, backup); mkdirSync(file)
+    try {
+      await type(d, agent.tmuxPane, 'typed during registry hold')
+      await expect(until('admission hold to reach the actual session frame', async () => {
+        const current = await row(client, agent.id)
+        return current?.identityHold?.includes('durable hook admission') ? current : null
+      }, 30_000)).resolves.toMatchObject({ sessionId: agent.sessionId, status: 'active', name: agent.name, permissionMode: MODE.codex.mode })
+      expect(accepted()).toBe(1)
+      expect(statSync(file).isDirectory()).toBe(true)
+    } finally { rmdirSync(file); renameSync(backup, file) }
+    await until('the exact pending native prompt acknowledgement', () => accepted() === 2, 30_000)
+    await until('admission hold to clear after the durable commit', async () => !(await row(client, agent.id))?.identityHold, 30_000)
+    expect(rowOnDisk(d, agent.id)).toMatchObject({ sessionId: agent.sessionId, permissionMode: MODE.codex.mode })
+    expect((await row(client, agent.id))?.name).toBe(agent.name)
+    client.close()
+  })
+
+  it('keeps a later Cursor turn open when Cancel superseded its linked Stop registration', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    onTestFailed(() => console.log(d.log()))
+    const home = join(d.root, 'cursor'), binary = join(d.root, 'bin', 'cursor-agent')
+    Object.assign(d.env, { CURSOR_HOME: home, CURSOR_CONFIG_DIR: home, CURSOR_DATA_DIR: home, CURSOR_PATH: binary })
+    mkdirSync(home, { recursive: true })
+    const pidFile = join(d.root, 'cursor.pid')
+    writeFileSync(binary, `#!${process.execPath}
+if (process.argv.includes('--version')) { console.log('2026.10.10'); process.exit(0) }
+if (process.argv.includes('--help')) { console.log('--force --resume'); process.exit(0) }
+process.title = 'cursor-agent'.padEnd(120)
+require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
+process.on('SIGINT', () => {})
+console.log('fixture-cursor-ready')
+setInterval(() => {}, 1000)
+`, { mode: 0o755 })
+    const cwd = join(d.projectsDir, 'cursor'); mkdirSync(cwd)
+    const sessionId = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
+    const transcriptDir = join(home, 'projects', 'fixture', 'agent-transcripts', sessionId)
+    mkdirSync(transcriptDir, { recursive: true })
+    const transcriptPath = join(transcriptDir, sessionId + '.jsonl')
+    const prompt = (text: string) => JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text }] } }) + '\n'
+    writeFileSync(transcriptPath, prompt('first Cursor turn'))
+    await d.start()
+    const client = await LocalClient.connect(d)
+    try {
+      const created = await client.request('agent_create', { engine: 'cursor', cwd, bypassPermission: true }, 60_000)
+      expect(created.error, JSON.stringify(created)).toBeUndefined()
+      const agentId = created.agent.id, pane = created.agent.terminal?.runtimes?.[0]?.paneId ?? created.agent.tmuxPane
+      await until('the private Cursor process', async () => (await d.capture(pane)).includes('fixture-cursor-ready'), 20_000)
+      const callerPid = Number(readFileSync(pidFile, 'utf8'))
+      const hook = async (event: string, delivery?: string, firedAt?: number, endpoint = 'session-start') => {
+        const response = await fetch(`http://127.0.0.1:${d.port}/api/hook/${endpoint}`, {
+          method: 'POST', headers: { 'content-type': 'application/json', 'x-harness-hook-token': d.hookCredential(),
+            ...(delivery ? { 'x-harness-hook-delivery-id': delivery } : {}),
+            ...(firedAt ? { 'x-harness-hook-fired-at': String(firedAt) } : {}) },
+          body: JSON.stringify({ engine: 'cursor', sessionId, tmuxPane: pane, cwd, callerPid, transcriptPath, hookEvent: event }),
+        })
+        return { status: response.status, body: await response.json() }
+      }
+      const initial = await hook('sessionStart')
+      expect(initial.status, JSON.stringify(initial)).toBeLessThan(300)
+      expect(initial.body.ignored, JSON.stringify(initial)).toBeUndefined()
+      await bound(client, agentId, sessionId)
+      await until('the existing Cursor parser', () => new RegExp(`\\[agent\\] ${agentId.slice(0, 8)} attached · engine=cursor`).test(d.log()), 20_000)
+      const delivery = 'fixture-cursor-stop-0001', firedAt = Date.now()
+      expect(await hook('stop', delivery, firedAt)).toEqual({ status: 200, body: { ok: true } })
+      const cancelled = client.next(frame => frame.agentId === agentId && frame.type === 'agent_activity'
+        && frame.payload?.activity?.state === 'idle', 20_000)
+      client.send('cancel', { agentId }); await cancelled
+      const later = client.next(isTurn('turn_started', agentId), 20_000)
+      appendFileSync(transcriptPath, prompt('later Cursor turn'))
+      expect((await later).payload?.userMessage).toBe('later Cursor turn')
+      expect(await hook('stop', delivery, firedAt, 'turn-stop')).toEqual({ status: 200, body: { ok: true, duplicate: true } })
+      expect((await row(client, agentId))?.identityHold).toBeFalsy()
+      expect(d.coresStarted()).toBe(1)
+    } finally { client.close() }
+  })
 
   it.each(engines)('%s: an answer later than 500 ms is not an outage, and the hook leaves the registry to the daemon', async (engine) => {
     const d = await fresh()

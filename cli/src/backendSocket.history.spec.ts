@@ -42,15 +42,21 @@ describe.each([
     mkdirSync(root, { recursive: true })
     dir = mkdtempSync(join(root, 'history-'))
     file = join(dir, 'transcript.jsonl')
-    writeFileSync(file, scenario().join('\n') + '\n')
+    const paneId = `%${++pane}`
+    sessionId = `${engine}-history-${pane}`
+    const lines = scenario()
+    if (engine === 'codex') {
+      const header = JSON.parse(lines[0])
+      header.payload.id = sessionId
+      lines[0] = JSON.stringify(header)
+    }
+    writeFileSync(file, lines.join('\n') + '\n')
     socket = relaySocket('fixture')
     bindHistory(socket)
     frames = []
     socket.registerLocalClient('local:history', { sendFrame: (frame) => { frames.push(frame as never); return true }, sendBinary: () => true })
-    const paneId = `%${++pane}`
     agentId = registry.openPendingAgent({ engine, runtimes: [{ backend: 'tmux', paneId }], cwd: dir })!.agentId
-    sessionId = `${engine}-history-${pane}`
-    registry.register({ engine, sessionId, transcriptPath: file, tmuxPane: paneId, cwd: dir })
+    expect(registry.register({ engine, sessionId, transcriptPath: file, tmuxPane: paneId, cwd: dir })).not.toBeNull()
   })
 
   afterEach(async () => {
