@@ -43,6 +43,8 @@ export type TerminateOutcome =
   | 'failed'
 
 export interface TerminateDeps {
+  /** Stop or a newer binding can revoke this operation while native identity is being read. */
+  current?: () => boolean
   /** Three-valued exact identity check. Probe failure is not evidence that the process is gone. */
   checkRuntime: (session: RegisteredSession) => Promise<RuntimeCheck>
   /** `process.kill`. Throws on EPERM/ESRCH like the real one. */
@@ -64,6 +66,7 @@ export async function terminateDeletedAgent(
   killGraceMs = FALLBACK_KILL_GRACE_MS,
 ): Promise<TerminateOutcome> {
   await deps.sleep(checkAfterMs)
+  if (deps.current?.() === false) return 'not-ours'
 
   const check = async (): Promise<RuntimeCheck> => {
     try { return await deps.checkRuntime(session) }
@@ -72,6 +75,7 @@ export async function terminateDeletedAgent(
   // PID + start marker validation is what prevents a recycled PID from receiving our signal. Unknown
   // means we cannot prove the target and must leave the runtime suppressed rather than call it gone.
   const initial = await check()
+  if (deps.current?.() === false) return 'not-ours'
   if (initial.state === 'gone') return 'gone'
   if (initial.state === 'unknown') {
     deps.log(`[delete] could not validate ${session.engine} runtime: ${initial.reason}`)
@@ -82,6 +86,7 @@ export async function terminateDeletedAgent(
   if (!pid) return 'not-ours'
 
   const signal = (sig: NodeJS.Signals): boolean => {
+    if (deps.current?.() === false) return false
     try { deps.kill(pid, sig); return true } catch (err) {
       const code = (err as NodeJS.ErrnoException)?.code
       // ESRCH = it exited between the check and the signal. Anything else (EPERM…) is a real failure to
@@ -99,12 +104,14 @@ export async function terminateDeletedAgent(
   for (let waited = 0; waited < killGraceMs; waited += POLL_MS) {
     await deps.sleep(POLL_MS)
     const current = await check()
+    if (deps.current?.() === false) return 'not-ours'
     if (current.state === 'gone') return 'terminated'
   }
 
   // Revalidate at the escalation boundary. A process-table timeout or PID replacement after SIGTERM is
   // not permission to send SIGKILL to the saved number.
   const beforeKill = await check()
+  if (deps.current?.() === false) return 'not-ours'
   if (beforeKill.state === 'gone') return 'terminated'
   if (beforeKill.state === 'unknown') {
     deps.log(`[delete] could not revalidate ${session.engine} before SIGKILL: ${beforeKill.reason}`)

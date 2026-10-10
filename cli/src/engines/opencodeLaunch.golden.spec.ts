@@ -73,7 +73,7 @@ fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({binary:'opencode',ar
 if(args[0]==='--version') console.log(${JSON.stringify(version)});
 else if(args[1]==='model.list') console.log(JSON.stringify({data:[{providerID:'fixture',id:'model'}]}));
 else if(args[1]==='session.switchModel') { fs.writeFileSync(${JSON.stringify(join(root, 'model.json'))}, args[args.indexOf('-d')+1]); console.log('{}'); }
-else if(args[1]==='session.get') console.log(JSON.stringify({data:JSON.parse(fs.readFileSync(${JSON.stringify(join(root, 'model.json'))},'utf8'))}));
+else if(args[1]==='session.get') console.log(JSON.stringify({data:{id:'ses_fixture',...JSON.parse(fs.readFileSync(${JSON.stringify(join(root, 'model.json'))},'utf8'))}}));
 else { console.error('Unexpected fixture command'); process.exitCode=1; }
 `, { mode: 0o755 })
   }
@@ -141,8 +141,8 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
       captureTerminal: async () => 'fixture idle', readScreen: async () => ({ pane: { idle: true } }),
       acquireTerminalControl: () => () => event(['release']), relaunchOverrides: shapes.relaunch,
       downgradedPermission: async () => ({ bypassPermission: false, permissionMode: null }),
-      agentReconciler: { holdRoute: () => event(['holdRoute']), releaseRoute: () => event(['releaseRoute']) },
-      restartJobs: { busy: () => false, cancel: () => event(['cancel']) },
+      agentReconciler: { holdRoute: () => { event(['holdRoute']); return () => event(['releaseRoute']) } },
+      restartJobs: { busy: () => false, cancel: () => event(['cancel']), revision: () => 0 },
       paneSwapDeps: (s: RegisteredSession, _pane: unknown, overrides: { extraArgs: string[]; env: unknown; clearEnv: string[] }) => ({
         holdOpen: async () => { event(['holdOpen']); return { ok: true } },
         terminate: async () => { event(['terminate']); return 'gone' },

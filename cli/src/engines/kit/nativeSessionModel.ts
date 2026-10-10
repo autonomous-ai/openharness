@@ -5,8 +5,9 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
 export interface NativeSessionModel { providerID: string; modelID: string }
-export type NativeModelResult = { ok: true } | { ok: false; code: string; detail: string }
+export type NativeModelResult = { ok: true } | { ok: false; code: string; detail: string; effect?: 'uncertain' }
 export type NativeApiRun = (args: string[], options: { cwd?: string }) => Promise<{ stdout: string }>
+export interface NativeModelAuthority { current?: () => boolean }
 export interface NativeModelRule {
   label: string; serviceMajor: number; id: RegExp; modelFlags: readonly string[]; modelEquals: string; variantSeparator: string
   errors: { sqliteMissing: string; sessionMissing: string; writeFailed: string; binaryMissing: string; switchFailed: string; unknownModel: string }
@@ -16,9 +17,19 @@ export interface NativeModelRule {
     fields: { data: string; model: string; id: string; alternativeId: string; provider: string; variant: string } }
 }
 const execFileAsync = promisify(execFile)
+class NativeDispatchCancelled extends Error {}
 
-export function createSessionModelControl(rule: NativeModelRule, binary: () => string) {
+export function createSessionModelControl(rule: NativeModelRule, binary: () => string | Promise<string>) {
   const ID_RE = rule.id
+  const changed = (dispatched = false): NativeModelResult => ({ ok: false, code: 'AGENT_CHANGED',
+    detail: `The harness changed or stopped during native model preparation.${dispatched ? ' The native model change may already have applied.' : ''}`,
+    ...(dispatched ? { effect: 'uncertain' as const } : {}) })
+  // An uncertain write cannot be forgotten just because its request returned. Keep
+  // one receipt per conversation until a later read confirms it. At capacity, hold
+  // new work instead of evicting a receipt and making a blind retry possible.
+  type Pending = { model: NativeSessionModel; cwd?: string; store?: string; busy: boolean; dispatched: boolean; executable?: Promise<string> }
+  const pending = new Map<string, Pending>()
+  const capacity = 256
   /** A SQL string literal — the only way a value reaches the statement. */
   function lit(value: string): string {
     return `'${value.replace(/'/g, "''")}'`
@@ -57,7 +68,11 @@ export function createSessionModelControl(rule: NativeModelRule, binary: () => s
     dbPath: string,
     sessionId: string,
     model: NativeSessionModel,
+    authority: NativeModelAuthority = {},
   ): Promise<NativeModelResult> {
+    if (authority.current?.() === false) return changed()
+    if (pending.has(sessionId)) return { ok: false, code: rule.errors.switchFailed, effect: 'uncertain',
+      detail: 'Waiting to confirm the earlier native API model change. A changed or unavailable version cannot authorize a SQLite fallback.' }
     if (!ID_RE.test(sessionId)) {
       return { ok: false, code: rule.errors.sessionMissing, detail: `not an ${rule.label} session id: ${sessionId}` }
     }
@@ -103,12 +118,20 @@ export function createSessionModelControl(rule: NativeModelRule, binary: () => s
     return { ok: true }
   }
 
-  const runNative: NativeApiRun = async (args, options) => {
-    // Bounded like the sqlite3 write: the service answers in well under a second (77ms measured).
-    const { stdout } = await execFileAsync(binary(), args, {
-      ...(options.cwd ? { cwd: options.cwd } : {}), timeout: rule.api.timeoutMs, killSignal: 'SIGKILL',
-    })
-    return { stdout }
+  const nativeRun = (authority: NativeModelAuthority, selection: { executable?: Promise<string> }): NativeApiRun => {
+    // Resolve once for this operation, before its first native command. Resolving
+    // through a login shell can yield; cancellation must be checked afterwards.
+    return async (args, options) => {
+      selection.executable ??= Promise.resolve().then(binary)
+      const executable = await selection.executable
+      if (authority.current?.() === false) throw new NativeDispatchCancelled('Native model operation was cancelled before dispatch')
+      return new Promise((done, failed) => {
+        const child = execFile(executable, args, { ...(options.cwd ? { cwd: options.cwd } : {}),
+          timeout: rule.api.timeoutMs, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, encoding: 'utf8',
+        }, (error, stdout, stderr) => { if (error) failed(Object.assign(error, { stdout, stderr })); else done({ stdout }) })
+        child.stdin?.end()
+      })
+    }
   }
 
   /** What a failed `opencode api` call said: the body is on stdout, the HTTP status on stderr. */
@@ -129,31 +152,77 @@ export function createSessionModelControl(rule: NativeModelRule, binary: () => s
    * Measured on 2.0.18 that the service stores any id (`opencode/does-not-exist` reads back as set),
    * so with `checkCatalog` the model is looked for in `model.list` first — for a model of opencode's
    * own; a grid's provider is declared in its pane's own config, which the service never reads. A
-   * switch that did not land is tried once more, after `retryDelayMs`; one that cannot (no such
-   * session, no opencode, an unknown model) is not.
+   * lost reply does not prove the switch was not applied. Reconciliation retries
+   * only the read: another write could overwrite a later choice made in the TUI.
    */
   async function switchSessionModel(
     sessionId: string,
     model: NativeSessionModel,
-    options: { cwd?: string; run?: NativeApiRun; checkCatalog?: boolean; retryDelayMs?: number } = {},
+    options: { cwd?: string; store?: string; run?: NativeApiRun; checkCatalog?: boolean; retryDelayMs?: number } & NativeModelAuthority = {},
   ): Promise<NativeModelResult> {
+    options = { ...options }
+    const current = () => options.current?.() !== false
+    if (!current()) return changed()
     if (!ID_RE.test(sessionId)) {
       return { ok: false, code: rule.errors.sessionMissing, detail: `not an ${rule.label} session id: ${sessionId}` }
     }
-    const run = options.run ?? runNative
-    if (options.checkCatalog) {
-      const known = await listsModel(run, model, options.cwd)
-      if (known === false) {
-        return { ok: false, code: rule.errors.unknownModel, detail: `${rule.label} has no ${model.providerID}/${model.modelID} — \`${rule.label} models\` lists the ones it has` }
+    const requested = { ...model }
+    const previous = pending.get(sessionId)
+    const held = (detail: string): NativeModelResult => ({ ok: false, code: rule.errors.switchFailed, detail,
+      ...(previous?.dispatched ? { effect: 'uncertain' as const } : {}) })
+    if (previous?.busy) return held('Waiting for the native model operation already running for this conversation. No additional change was sent.')
+    if (previous && (previous.cwd !== options.cwd || previous.store !== options.store)) {
+      return held('Waiting to confirm the earlier native model change in its original store and folder. No additional change was sent.')
+    }
+    if (!previous && pending.size >= capacity) return held('Waiting for outstanding native model changes to be confirmed. No model change was sent.')
+    const receipt: Pending = previous ?? { model: requested, cwd: options.cwd, store: options.store, busy: false, dispatched: false }
+    receipt.busy = true
+    pending.set(sessionId, receipt)
+    const run = options.run ?? nativeRun(options, receipt)
+    let confirmed = false
+    try {
+      if (!previous) {
+        if (options.checkCatalog) {
+          const known = await listsModel(run, requested, receipt.cwd)
+          if (!current()) return changed()
+          if (known === null) return held(`Waiting for ${rule.label}'s model catalog before changing the session. No model change was sent.`)
+          if (!known) return { ok: false, code: rule.errors.unknownModel, detail: `${rule.label} has no ${requested.providerID}/${requested.modelID} — \`${rule.label} models\` lists the ones it has` }
+        }
+        const param = `${rule.api.sessionParam}=${sessionId}`
+        const { id, variant } = splitVariant(requested.modelID)
+        const fields = rule.api.fields
+        const body = JSON.stringify({ [fields.model]: { [fields.id]: id, [fields.provider]: requested.providerID, ...(variant ? { [fields.variant]: variant } : {}) } })
+        receipt.dispatched = true
+        try {
+          await run([...rule.api.switch, rule.api.paramFlag, param, rule.api.bodyFlag, body], { cwd: receipt.cwd })
+        } catch (err) {
+          if (err instanceof NativeDispatchCancelled) { receipt.dispatched = false; return changed() }
+          const failure = apiFailure(err)
+          if (failure.missing || rule.api.missingSession.test(failure.text)) {
+            receipt.dispatched = false
+            return { ok: false, code: failure.missing ? rule.errors.binaryMissing : rule.errors.sessionMissing, detail: failure.text }
+          }
+          // Transport failure does not prove that the write failed. Only read next.
+        }
       }
+      if (!current()) return changed(receipt.dispatched)
+      let result = await confirmModel(run, sessionId, receipt.model, receipt.cwd)
+      if (!current()) return changed(receipt.dispatched)
+      if (!result.ok) {
+        await new Promise((resolve) => setTimeout(resolve, options.retryDelayMs ?? rule.api.retryDelayMs))
+        if (!current()) return changed(receipt.dispatched)
+        result = await confirmModel(run, sessionId, receipt.model, receipt.cwd)
+      }
+      if (!current()) return changed(receipt.dispatched)
+      confirmed = result.ok
+      if (confirmed && (requested.modelID !== receipt.model.modelID || requested.providerID !== receipt.model.providerID)) {
+        return held('The earlier native model change is now confirmed. Retry the new choice to start a separate change; no additional change was sent.')
+      }
+      return result.ok ? result : { ...result, effect: 'uncertain' }
+    } finally {
+      receipt.busy = false
+      if (!receipt.dispatched || confirmed) pending.delete(sessionId)
     }
-    let result = await switchOnce(run, sessionId, model, options.cwd)
-    if (!result.ok && result.code === rule.errors.switchFailed) {
-      console.warn(`[${rule.label}] switch to ${model.providerID}/${model.modelID} did not land (${result.detail}) · trying once more`)
-      await new Promise((resolve) => setTimeout(resolve, options.retryDelayMs ?? rule.api.retryDelayMs))
-      result = await switchOnce(run, sessionId, model, options.cwd)
-    }
-    return result
   }
 
   /**
@@ -173,6 +242,8 @@ export function createSessionModelControl(rule: NativeModelRule, binary: () => s
       const fields = rule.api.fields
       const rows = (Array.isArray(parsed) ? parsed : parsed[fields.data]) as Array<Record<string, unknown>> | undefined
       if (!Array.isArray(rows)) return null
+      if (rows.some(row => !row || typeof row !== 'object' || typeof row[fields.provider] !== 'string'
+        || typeof (row[fields.id] ?? row[fields.alternativeId]) !== 'string')) return null
       const { id } = splitVariant(model.modelID)
       return rows.some((m) => m[fields.provider] === model.providerID && (m[fields.id] === id || m[fields.alternativeId] === id))
     } catch {
@@ -180,32 +251,28 @@ export function createSessionModelControl(rule: NativeModelRule, binary: () => s
     }
   }
 
-  /** One switch through the service, read back. */
-  async function switchOnce(run: NativeApiRun, sessionId: string, model: NativeSessionModel, cwd?: string): Promise<NativeModelResult> {
+  /** Confirmation never repeats a mutation, including after an uncertain reply. */
+  async function confirmModel(run: NativeApiRun, sessionId: string, model: NativeSessionModel, cwd?: string): Promise<NativeModelResult> {
     const options = { cwd }
     const param = `${rule.api.sessionParam}=${sessionId}`
     const { id, variant } = splitVariant(model.modelID)
     const fields = rule.api.fields
-    const body = JSON.stringify({ [fields.model]: { [fields.id]: id, [fields.provider]: model.providerID, ...(variant ? { [fields.variant]: variant } : {}) } })
-    try {
-      await run([...rule.api.switch, rule.api.paramFlag, param, rule.api.bodyFlag, body], { cwd: options.cwd })
-    } catch (err) {
-      const failure = apiFailure(err)
-      if (failure.missing) return { ok: false, code: rule.errors.binaryMissing, detail: `${rule.label} not found: ${failure.text}` }
-      const code = rule.api.missingSession.test(failure.text) ? rule.errors.sessionMissing : rule.errors.switchFailed
-      return { ok: false, code, detail: failure.text }
-    }
     // Read back: the service answers 204 for any model, known or not, so only the session itself can
     // say the switch landed.
     let stdout: string
     try {
       ({ stdout } = await run([...rule.api.get, rule.api.paramFlag, param], { cwd: options.cwd }))
     } catch (err) {
-      return { ok: false, code: rule.errors.switchFailed, detail: `could not read the session back · ${apiFailure(err).text}` }
+      return { ok: false, code: rule.errors.switchFailed, detail: `Waiting to confirm the native model change; it may already have applied. ${apiFailure(err).text}` }
     }
     let now: Record<string, unknown> | undefined
     try {
-      now = (JSON.parse(stdout) as Record<string, Record<string, Record<string, unknown>>>)[fields.data]?.[fields.model]
+      const data = (JSON.parse(stdout) as Record<string, Record<string, unknown>>)[fields.data]
+      if (!data || typeof data !== 'object' || Array.isArray(data) || data[fields.id] !== sessionId) {
+        return { ok: false, code: rule.errors.switchFailed, detail: `Waiting for confirmation of session ${sessionId}; the native response did not identify that conversation.` }
+      }
+      const model = data[fields.model]
+      now = model && typeof model === 'object' && !Array.isArray(model) ? model as Record<string, unknown> : undefined
     } catch {
       now = undefined
     }
@@ -229,12 +296,13 @@ export function createSessionModelControl(rule: NativeModelRule, binary: () => s
    */
   async function applySessionModel(
     input: { major: number | null | undefined; dbPath: string; sessionId: string; model: NativeSessionModel; cwd?: string; checkCatalog?: boolean },
-    deps: { run?: NativeApiRun; retryDelayMs?: number } = {},
+    deps: { run?: NativeApiRun; retryDelayMs?: number } & NativeModelAuthority = {},
   ): Promise<NativeModelResult> {
+    if (deps.current?.() === false) return changed()
     if ((input.major ?? 0) >= rule.serviceMajor) {
-      return switchSessionModel(input.sessionId, input.model, { cwd: input.cwd, run: deps.run, checkCatalog: input.checkCatalog, retryDelayMs: deps.retryDelayMs })
+      return switchSessionModel(input.sessionId, input.model, { cwd: input.cwd, store: input.dbPath, run: deps.run, checkCatalog: input.checkCatalog, retryDelayMs: deps.retryDelayMs, current: deps.current })
     }
-    const written = await setSessionModel(input.dbPath, input.sessionId, input.model)
+    const written = await setSessionModel(input.dbPath, input.sessionId, input.model, deps)
     return !written.ok && written.code === rule.errors.sessionMissing ? { ok: true } : written
   }
 

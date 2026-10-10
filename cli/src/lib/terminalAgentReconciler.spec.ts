@@ -404,7 +404,7 @@ describe('restart route hold', () => {
     expect(onObserved).not.toHaveBeenCalled()
   })
 
-  it('resumes normal reconciliation once the route is released', async () => {
+  it.each([30_000, null])('resumes normal reconciliation only when the current %s hold is released', async timeout => {
     const current = session([tmux])
     const onDormant = vi.fn()
     const validate = vi.fn(async () => ({ state: 'alive' as const }))
@@ -415,8 +415,8 @@ describe('restart route hold', () => {
       probe: async () => probe([{ instanceId: 'tmux:default', result: { state: 'available', roots: [] } }]),
     })
     const routeKey = terminalRouteKey(tmux)
-    const releaseOld = reconciler.holdRoute(routeKey)
-    const releaseCurrent = reconciler.holdRoute(routeKey)
+    const releaseOld = reconciler.holdRoute(routeKey, timeout)
+    const releaseCurrent = reconciler.holdRoute(routeKey, timeout)
     releaseOld()
     await reconciler.trigger()
     expect(onDormant).not.toHaveBeenCalled()

@@ -19,6 +19,7 @@ const dirs: string[] = []
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   delete process.env.GROK_HOME
+  vi.unstubAllEnvs()
   vi.unstubAllGlobals()
   vi.resetModules()
 })
@@ -46,8 +47,21 @@ async function load(claudeProjectsDir: string) {
 
 const STARTED_AT = Date.parse('2026-08-03T09:00:00Z')
 const CWD = '/Users/demo/work/project'
+const hasSqlite = (() => {
+  try { execFileSync('sqlite3', ['-version'], { stdio: 'ignore' }); return true } catch { return false }
+})()
 
 describe('session repair', () => {
+  it('excludes a known fork parent before deciding whether a recent-file pool is unique', async () => {
+    const root = tempRoot()
+    writeTranscript(root, 'proj', 'parent', CWD, STARTED_AT + 5_000)
+    const { findLiveSession } = await load(root)
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true, excludedSessionId: 'parent' })).resolves.toBeNull()
+    writeTranscript(root, 'proj', 'child', CWD, STARTED_AT + 6_000)
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true, excludedSessionId: 'parent' }))
+      .resolves.toMatchObject({ sessionId: 'child' })
+  })
+
   it('finds the session the running engine started in this directory', async () => {
     const root = tempRoot()
     writeTranscript(root, 'proj', 'sess-live', CWD, STARTED_AT + 5_000)
@@ -596,6 +610,10 @@ describe('session repair — a Codex process names its own rollout', () => {
       await vi.waitFor(async () => expect(await openFiles(holder.pid!)).toContain(realpathSync(forkFile)), { timeout: 10_000, interval: 100 })
       await expect(findLiveSession('codex', CWD, STARTED_AT, { codexHome: profile, bornOnly: true, pid: holder.pid! }))
         .resolves.toEqual({ sessionId: fork, transcriptPath: realpathSync(forkFile) })
+      // A fork can read the source while copying it. The descriptor alone cannot
+      // turn that known parent into the new process's current conversation.
+      await expect(findLiveSession('codex', CWD, STARTED_AT,
+        { codexHome: profile, bornOnly: true, pid: holder.pid!, excludedSessionId: fork })).resolves.toBeNull()
       expect(await openFiles(-1)).toEqual([])
       vi.unstubAllGlobals()
     } finally {
@@ -634,6 +652,9 @@ describe('session repair — homes the person moved', () => {
     const { processSessionOf, findLiveSession } = await moved(claudeHome, tempRoot())
     const transcriptPath = join(claudeHome, 'projects', 'project', `${id}.jsonl`)
     await expect(processSessionOf('claude', 77, CWD, STARTED_AT)).resolves.toEqual({ sessionId: id, transcriptPath })
+    // An exact native process claim can resume that parent despite a fallback exclusion.
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true, pid: 77, excludedSessionId: id }))
+      .resolves.toEqual({ sessionId: id, transcriptPath })
     // And by the folder scan, when there is no process record to read.
     await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true })).resolves.toEqual({ sessionId: id, transcriptPath })
   })
@@ -867,10 +888,35 @@ it.each(['bad pid', 'bad start', 'missing file', 'bad json', 'different pid', 'd
  * `<HERMES_HOME>/state.db` could never rebind a profile agent after a restart — its row is in a
  * database that store has never heard of (openharness#191).
  */
+describe('database session repair', () => {
+  const t = hasSqlite ? it : it.skip
+  t.each(['opencode', 'kilo', 'devin'] as const)('never gives an unbound %s fork its known parent from a limited pool', async engine => {
+    const data = tempRoot()
+    vi.stubEnv('XDG_DATA_HOME', data)
+    const home = join(data, engine, ...(engine === 'devin' ? ['cli'] : []))
+    mkdirSync(home, { recursive: true })
+    const db = join(home, engine === 'devin' ? 'sessions.db' : `${engine}.db`)
+    const table = engine === 'devin' ? 'sessions' : 'session'
+    const directory = engine === 'devin' ? 'working_directory' : 'directory'
+    const created = engine === 'devin' ? 'created_at' : 'time_created'
+    const updated = engine === 'devin' ? 'last_activity_at' : 'time_updated'
+    const time = Math.trunc(STARTED_AT / (engine === 'devin' ? 1000 : 1)) + 5
+    execFileSync('sqlite3', [db,
+      `CREATE TABLE ${table} (id TEXT, ${directory} TEXT, parent_id TEXT, ${created} INTEGER, ${updated} INTEGER);`
+      + `INSERT INTO ${table} VALUES ('parent','${CWD}',NULL,${time},${time});`])
+    const { findLiveSession } = await load(tempRoot())
+    const find = () => findLiveSession(engine, CWD, STARTED_AT, { bornOnly: true, excludedSessionId: 'parent' })
+    await expect(find()).resolves.toBeNull()
+    // LIMIT 2 can hide a third candidate. Filtering its two returned rows must
+    // never make the remaining child look unique.
+    execFileSync('sqlite3', [db,
+      `INSERT INTO ${table} VALUES ('child','${CWD}',NULL,${time},${time - 1});`
+      + `INSERT INTO ${table} VALUES ('sibling','${CWD}',NULL,${time},${time - 2});`])
+    await expect(find()).resolves.toBeNull()
+  })
+})
+
 describe('hermes repair across profile homes', () => {
-  const hasSqlite = (() => {
-    try { execFileSync('sqlite3', ['-version'], { stdio: 'ignore' }); return true } catch { return false }
-  })()
   const t = hasSqlite ? it : it.skip
   const SID_DEFAULT = '20260727_162325_e25264'
   const SID_PROFILE = '20260921_152236_a1b2c3'
@@ -922,6 +968,16 @@ describe('hermes repair across profile homes', () => {
     const { findLiveSession } = await loadWithHome(home)
 
     expect(await findLiveSession('hermes', CWD, STARTED_AT, { bornOnly: true })).toBeNull()
+  })
+  t('excludes a known parent from the complete Hermes pool while retaining its evidence', async () => {
+    const home = hermesHome(tempRoot(), SID_DEFAULT)
+    const { findLiveSession } = await loadWithHome(home)
+    const find = () => findLiveSession('hermes', CWD, STARTED_AT, { bornOnly: true, excludedSessionId: SID_DEFAULT })
+    await expect(find()).resolves.toBeNull()
+    const childHome = hermesHome(join(home, 'profiles', 'demo'), SID_PROFILE)
+    expect(await find()).toMatchObject({ sessionId: SID_PROFILE, hermesHome: childHome })
+    execFileSync('sqlite3', [join(home, 'state.db'), "UPDATE sessions SET started_at = 'invalid';"])
+    await expect(find()).rejects.toThrow('invalid discovery evidence')
   })
 })
 

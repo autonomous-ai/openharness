@@ -24,7 +24,7 @@ function rollout(n = 1, folder = cwd, base = home): string {
   const file = join(base, 'day', `rollout-${id(n)}.jsonl`)
   mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, header(id(n), folder)); return file
 }
-const find = (options: Pick<NativeConversationOptions, 'expected' | 'budget'> = {}) =>
+const find = (options: Pick<NativeConversationOptions, 'expected' | 'budget' | 'excludedSessionId'> = {}) =>
   nativeOpenFileSession('codex', 42, [home], cwd, { sources, ...options })
 beforeEach(async () => {
   Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
@@ -49,6 +49,25 @@ it('deduplicates multiple descriptors, aliases and hard links for the same open 
 it('holds two eligible files rather than letting Stop accept an empty identity', async () => {
   held = [rollout(1), rollout(2)]
   await expect(find()).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+})
+it('excludes a fork source opened for copying before choosing the child rollout', async () => {
+  const parent = rollout(1), child = rollout(2)
+  held = [parent]
+  await expect(find({ excludedSessionId: id(1) })).resolves.toBeNull()
+  held = [parent, child]
+  await expect(find({ excludedSessionId: id(1) })).resolves.toEqual({ sessionId: id(2), transcriptPath: child })
+})
+it.each(['invalid', 'changed'] as const)('retains %s evidence for an excluded fork source', async mode => {
+  const parent = rollout(1), child = rollout(2); held = [parent, child]
+  if (mode === 'invalid') writeFileSync(parent, JSON.stringify({ type: 'session_meta', payload: { id: id(1), cwd, source: false } }) + '\n')
+  else {
+    const read = sources.descriptors
+    sources.descriptors = async (...args) => {
+      const proof = await read(...args)
+      return { ...proof, verify: async () => { await proof.verify(); writeFileSync(parent, header(id(3))) } }
+    }
+  }
+  await expect(find({ excludedSessionId: id(1) })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
 })
 it.each(['missing', 'invalid', 'empty', 'wrong-id', 'unknown-folder'] as const)('cannot exclude a %s competitor to make a healthy file unique', async mode => {
   const own = rollout(1), other = rollout(2)
