@@ -139,6 +139,30 @@ describe('forgetting a session', () => {
     expect(String(log.mock.calls[0][0])).toContain('forgotten')
   })
 
+  // Its last record may hold a conversation another harness took meanwhile (conversationOwners.ts).
+  it('settles who owns the conversation its last record holds, once it is no longer running; never on a release', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { deps } = setup()
+    const order: string[] = []
+    vi.mocked(deps.registry.removeAgent).mockImplementation(() => { order.push('removed'); return true })
+    const owners = { settleSaved: vi.fn(() => { order.push('settled'); return [] }) }
+    const forget = createForgetSession({ ...deps, owners })
+    forget('s1')
+    expect(owners.settleSaved).toHaveBeenCalledWith('a1')
+    expect(order).toEqual(['removed', 'settled'])
+    forget('s1', { keepAgent: true })
+    forget('unknown-session')
+    expect(owners.settleSaved).toHaveBeenCalledTimes(1)
+    owners.settleSaved.mockImplementationOnce(() => { throw new Error('stopped store unreadable') })
+    forget('s1')
+    owners.settleSaved.mockImplementationOnce(() => { throw 'plain' })
+    forget('s1')
+    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns its conversation: stopped store unreadable')
+    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns its conversation: plain')
+    expect(deps.clients.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1', retained: true } })
+  })
+
   it('removes a session the registry no longer knows, announced by the agent id the caller names', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const named = setup()
