@@ -1,5 +1,71 @@
 # Daemon core takeover — October 10
 
+## Final handoff status — 13:29 UTC
+
+**Stop here and hand off.** The owner explicitly ended implementation because the
+session had about one percent credit left. #1145 is **draft, open and unmerged**.
+No release occurred. The refactor is not finished. No runtime edits were made
+after `196012ec112da477cec9172dc8c7726f0041e482`; this final update is documentation
+only. The previously described independent approval was conditional on green
+remote gates, and those gates did not pass. Do not use it to merge this head.
+
+The successor's first task is finishing #1145, not starting another extraction:
+
+1. [Automatic CI 38055181285](https://github.com/autonomous-ai/openharness/actions/runs/38055181285)
+   finished red. Typecheck, process checks, TUI, all four Desktop shards and CLI
+   shards 1, 2 and 4 passed. CLI shard 3 failed two `lib/agentHandoff.spec.ts`
+   publication cases: “does not leave the raw transcript path in the transcript
+   file either” and “keeps the rest of the document when a git value carries a
+   PEM header”. Both received `IDENTITY_UNAVAILABLE`; their durations were 458 ms
+   and 321 ms. The full log is `.harness/native-handoff-ci-cli3-failed.log`.
+2. Independent read-only review confirmed a concrete lifetime bug in
+   `lib/handoffPublication.ts`: `sync()` and `createFile()` retain a 250 ms
+   `NativeFiles` budget across successful `fsyncSync`/write work. An otherwise
+   valid slow flush can expire that inspection budget while the original request
+   still has time. The flattened CI error does **not prove** this caused both
+   failures. **The fix has not been written or tested.** Retain original immutable
+   route facts with `paths.snapshot()` before durability work and verify those
+   same facts with a fresh bounded read budget afterward. Preserve descriptor and
+   pathname keys, the original request deadline and every pre-publication fence.
+   Do not increase global budgets or reset the request deadline. Add deterministic
+   slow-fsync success, changed-route refusal and original-deadline expiry tests;
+   the existing publication expiry tests should continue to hold safely.
+3. [E2E 38054858895](https://github.com/autonomous-ai/openharness/actions/runs/38054858895)
+   is red in several completed jobs. At handoff, Linux shards 4 and 5 were still
+   running; shard 3 passed. Do not start a duplicate run. Read its final result
+   and retained artifacts. Known failures include:
+   - `handoff.e2e.ts`: the stopped Claude fork case fails at line 117 while
+     deleting the unbound fork (`INTERNAL`), **before handoff preparation**.
+   - `serviceProcesses.e2e.ts:441`: models/grid expected a `/v1` suffix that the
+     actual returned base URL omitted.
+   - `engineReaders.e2e.ts`: Codex shortened-history replay timed out.
+   - `startupAttachExit.e2e.ts`: Claude resume returned `IDENTITY_UNAVAILABLE`.
+   - `eagerHooks.e2e.ts` and four `enginehomes.e2e.ts` cases: native binding/hold
+     assertions and recovery timed out or disagreed.
+   - macOS full-disk: two failures, including first-start hook credential ENOSPC
+     and an agent created while full failing to bind. Linux shard 8 also failed;
+     its log had not yet been inspected.
+   These have **not** been proven baseline failures or fixed. Do not dismiss or
+   silently waive them. Downloaded logs are `.harness/e2e-<job-id>.log`; shard 1's
+   complete daemon artifacts are in `.harness/e2e-logs-1/`.
+4. Local broad validation remains blocked by the unchanged two-GiB disk guard
+   (about 1.37 GiB available at final inspection). Do not lower it or clean other
+   sessions' data. Earlier local receipts below remain evidence only for their
+   recorded source/toolchain; they do not turn the failing Linux run green.
+5. After corrections, obtain review of the new exact head/base, pass required
+   checks and affected e2e, then use the reviewed merge command. Check fresh main
+   first. No merge was attempted here.
+
+No local test, mutation or implementation process is running. The read-only
+reviewer finished. The manual e2e run above may continue remotely; converting
+#1145 back to draft can also leave a process-only automatic CI run. The final
+documentation push preserves this handoff on `codex/native-handoff-authority`.
+Implementation ended before this note; 13:12–13:29 UTC was remote validation,
+failure diagnosis and handoff work, with overlapping review/waiting. Merge and
+publication time for #1145 are zero.
+
+## Earlier implementation and validation record
+
 Prepared at 13:10 UTC. The owner asked to finish the current handoff PR, document
 everything, then stop for another agent. **Do not interpret this as permission to
 release.** The daemon refactor is not completely finished. The remaining scope is
@@ -274,7 +340,8 @@ Pi has process-global registration booleans; Amp's first global thread selection
 needs examination. Each needs a focused reproducer before expanding scope.
 
 No hook journal, launch-probe migration or new lifecycle change was started here.
-The owner's last instruction is to finish #1145, hand off and stop.
+The owner's final instruction is to finish the handoff and stop now. The next
+agent owns completion of #1145 and the remaining checklist.
 
 ## Timing
 
