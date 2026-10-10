@@ -222,3 +222,18 @@ bracing advisories in the larger state file remain. The invalid initial analyzer
 option exited before analysis and was rerun with supported arguments. The worktree
 was narrowed to relevant tracked components to recover space; branches, edits and
 private evidence remain intact, and the two-GiB validation guard is unchanged.
+
+At 13:02–13:08 UTC the final CLI receipt passed typecheck, all 2,310 core
+cases at 100% coverage, all 265 harnessd cases (one existing skip) at 100%,
+and all 470 affected cases across sixteen files. The affected set includes
+architecture, lean-entry, real Git/wire responsiveness, both unchanged native
+goldens, descriptor evidence and transcript readers. The source was frozen at
+`4eea2be7dcceac7e978123170f54676cd2c56209` throughout. The offered prior receipt
+was not reused because its declared CLI scope included the corrected test files.
+
+The following private e2e plan did not start: free space fell to 1.59 GiB and then
+continued falling. Its two-GiB guard rejected the run before tests. The existing
+GitHub e2e workflow will supply the remaining acceptance evidence; no local guard
+is weakened and no unrelated data is removed. See the
+[takeover note](2026-10-10-daemon-core-takeover.md) and #1145 for final check/merge
+state. The owner requested finishing this PR and handing off, with no new item started.
