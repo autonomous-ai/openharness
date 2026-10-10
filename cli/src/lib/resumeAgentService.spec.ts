@@ -4,7 +4,9 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from './resumeAgentService.js'
 import { RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
-import { registry, validTranscriptPath, type RegisteredSession } from './registry.js'
+import { registry, type RegisteredSession } from './registry.js'
+import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { env } from '../config/env.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
@@ -33,7 +35,7 @@ vi.mock('./engineLaunch.js', async importOriginal => ({
 vi.mock('./engineBin.js', () => ({ enginePathOverride: vi.fn(() => undefined) }))
 vi.mock('./engineInstall.js', async original => ({ ...await original<object>(), engineInstallRecipe: () => ({ command: 'fixture-install' }) }))
 vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn() }))
-vi.mock('./registry.js', async original => ({ ...await original<object>(), validTranscriptPath: vi.fn(() => true) }))
+vi.mock('../engines/transcriptBindings.js', async original => ({ ...await original<object>(), controlTranscriptEvidence: vi.fn() }))
 
 let dir: string
 let saved: RegisteredSession
@@ -61,7 +63,7 @@ beforeEach(() => {
   store.save(saved)
   create.mockReset().mockResolvedValue({ state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } })
   kill.mockReset().mockResolvedValue({ state: 'succeeded' })
-  vi.mocked(validTranscriptPath).mockReturnValue(true)
+  vi.mocked(controlTranscriptEvidence).mockImplementation((_engine, _id, path) => ({ path, verify: vi.fn() }))
   vi.mocked(enginePathOverride).mockReturnValue(undefined)
   vi.mocked(refusePermissionFlagIfUnsupported).mockReset().mockResolvedValue(null)
   vi.mocked(installedDsh).mockReturnValue(undefined)
@@ -279,7 +281,7 @@ describe('production resume handler', () => {
     ['removed cwd', () => rewrite({ cwd: join(dir, 'gone') }), 'CWD_NOT_FOUND'],
     ['file cwd', () => { const file = join(dir, 'file'); writeFileSync(file, 'file'); rewrite({ cwd: file }) }, 'CWD_NOT_FOUND'],
     ['missing transcript', () => rewrite({ transcriptPath: '' }), 'RESUME_UNAVAILABLE'],
-    ['invalid transcript', () => vi.mocked(validTranscriptPath).mockReturnValue(false), 'RESUME_UNAVAILABLE'],
+    ['invalid transcript', () => vi.mocked(controlTranscriptEvidence).mockImplementation(() => { throw new IdentityReadUnavailable('fixture source unavailable') }), 'IDENTITY_UNAVAILABLE'],
     ['old process alive', () => vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' }), 'AGENT_BUSY'],
     ['old process unknown', () => vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'unknown', reason: 'fixture' }), 'AGENT_BUSY'],
   ] as const)('refuses %s without allocating or losing history', async (_label, setup, error) => {

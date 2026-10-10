@@ -2,6 +2,7 @@
 import { externalResumePending } from './externalResume.js'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { isTerminalEngine } from '../engines/types.js'
+import { controlTranscriptEvidence, engineKeepsTranscriptFile } from '../engines/transcriptBindings.js'
 import type { registry as liveRegistry, RegisteredSession } from './registry.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import type { AgentRestartCoordinator } from './restartAgent.js'
@@ -51,11 +52,14 @@ export interface StopAgentOptions {
 // Hooks rebuild registry objects. Compare stable values, never JavaScript object
 // identity or property ordering, while retaining the exact PID-reuse guard.
 const runtimeIdentity = (entry: RegisteredSession | undefined, withProcess = true) => entry ? JSON.stringify([
-  entry.engine, entry.registeredAt,
+  entry.engine, entry.registeredAt, entry.cwd,
   entry.codexHome ?? null, entry.hermesHome ?? null,
   ...(withProcess ? [entry.processIdentity?.pid, entry.processIdentity?.executable, entry.processIdentity?.startMarker] : []),
   entry.runtimes.map(terminalRouteKey).sort(),
 ]) : null
+const bindingIdentity = (entry: RegisteredSession) => JSON.stringify([
+  entry.sessionId, entry.transcriptPath, entry.boundAt, entry.evidenceRevision,
+])
 
 export function createStopAgentService(deps: StopAgentServiceDeps) {
   const { registry, stoppedAgents, restartJobs, stopJobs, tmuxBackend, agentReconciler,
@@ -82,9 +86,11 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       const starting = !live.processIdentity
       const identity = runtimeIdentity(live, !starting)
       const conversation = live.sessionId
+      let binding = conversation ? bindingIdentity(live) : undefined
       const sameTarget = () => {
         const current = registry.resolve(sessionId)
         return runtimeIdentity(current, !starting) === identity && (!conversation || current!.sessionId === conversation)
+          && (binding === undefined || bindingIdentity(current!) === binding)
       }
       const captured = await captureResumeIdentity({ ...live })
       // Discovery or a hook may have updated this row while reading the native store.
@@ -95,10 +101,15 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       const current = registry.resolve(sessionId)!
       const s = current.sessionId && current.sessionId !== captured.sessionId ? { ...current } : { ...current, sessionId: captured.sessionId,
         transcriptPath: captured.transcriptPath, hermesHome: captured.hermesHome, boundAt: captured.boundAt, source: captured.source }
+      binding = bindingIdentity(current)
+      const transcript = s.sessionId && s.transcriptPath && engineKeepsTranscriptFile(s.engine)
+        ? controlTranscriptEvidence(s.engine, s.sessionId, s.transcriptPath, s.codexHome ?? undefined) : undefined
       // Saving precedes every mutation. A storage failure leaves the live agent alone.
       stoppedAgents.save(s)
       await options.checkpoint?.(s, 'before')
+      transcript?.verify()
       await options.beforeStop?.(s)
+      transcript?.verify()
       if (!sameTarget() || options.current?.() === false) {
         throw new AgentStopError('Harness changed while saving its conversation. Try stopping again.')
       }
@@ -107,13 +118,18 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       try {
         markDeleted(sessionId)
         if (s.sessionId) markDeleted(s.sessionId)
-        await stopNative(s, () => sameTarget() && options.current?.() !== false, options.confirmUnusedConversation)
+        await stopNative(s, () => {
+          transcript?.verify()
+          return sameTarget() && options.current?.() !== false
+        }, options.confirmUnusedConversation)
+        transcript?.verify()
         // Keep the terminal alive while the engine handles SIGTERM and flushes
         // its native store. Killing tmux in parallel can deliver SIGHUP first.
         const termination = await (isTerminalEngine(s.engine) ? Promise.resolve('gone' as const)
           : terminateDeletedAgent(s, {
             checkRuntime: checkPidRuntime,
             kill: (pid, signal) => {
+              transcript?.verify()
               if (!sameTarget() || options.current?.() === false) throw new AgentStopError('The close request was cancelled or changed.')
               process.kill(pid, signal)
             },
@@ -127,7 +143,9 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         if (!sameTarget() || options.current?.() === false) {
           throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')
         }
+        transcript?.verify()
         await options.checkpoint?.(s, 'after')
+        transcript?.verify()
         if (!sameTarget() || options.current?.() === false) {
           throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')
         }
@@ -141,6 +159,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         if (!sameTarget()) {
           throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')
         }
+        transcript?.verify()
         stoppedAgents.finishResume(sessionId)
         if (s.processIdentity) agentReconciler.suppress(s)
         // This publishes agent_deleted. It must follow confirmed termination, or a

@@ -125,5 +125,24 @@ export function savedTranscriptEvidence(engine: AgentEngine, sessionId: string, 
       return nativeUnavailable('the saved transcript names a different conversation')
     }
   }
-  return { path: selected, verify: () => proof.verify(selected ?? path) }
+  const fileKey = selected ? nativeFileKey(proof.files.file(selected)!.info) : null
+  return { path: selected, fileKey, verify: () => proof.verify(selected ?? path) }
+}
+
+/** Keep immutable identity across awaits, not a lookup's expiring work budget.
+ * Each control boundary earns fresh header, root and catalog evidence before acting. */
+export function controlTranscriptEvidence(engine: AgentEngine, sessionId: string, path: string, profile?: string) {
+  const read = () => {
+    const proof = savedTranscriptEvidence(engine, sessionId, path, profile)
+    proof.verify()
+    if (!proof.path) return nativeUnavailable('the saved conversation file is unavailable')
+    return { path: proof.path, fileKey: proof.fileKey }
+  }
+  const before = read()
+  return { path: before.path, verify(): void {
+    const after = read()
+    if (after.path !== before.path || after.fileKey !== before.fileKey) {
+      nativeUnavailable('the saved conversation file was replaced during the operation')
+    }
+  } }
 }

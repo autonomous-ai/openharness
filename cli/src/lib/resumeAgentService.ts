@@ -2,7 +2,9 @@
 import { transcriptSize, type RelaunchMarks } from '../core/transcripts/relaunch.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
-import { engineKeepsTranscriptFile, registry as liveRegistry, validTranscriptPath, type RegisteredSession } from './registry.js'
+import { engineKeepsTranscriptFile, registry as liveRegistry, type RegisteredSession } from './registry.js'
+import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
@@ -190,15 +192,17 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       if (saved.grid && !saved.gridLaunch) return { ok: false, error: 'GRID_CREDENTIAL_REQUIRED', detail: 'The saved provider configuration is unavailable.' }
       if (saved.dsh && !installedDsh(saved.dsh)) return { ok: false, error: 'INVALID_DSH', detail: 'Install this harness from the Harness Store before resuming it.' }
       if (!saved.cwd) return { ok: false, error: 'CWD_NOT_FOUND', detail: 'The saved project folder is no longer available.' }
-      const missing = workspaceMissing(saved.cwd)
+      const cwd = saved.cwd
+      const missing = workspaceMissing(cwd)
       if (missing) return missing
       // Only for an engine whose conversation IS a file. opencode, kilo, hermes and devin keep
       // theirs in a database, so they have no transcript to point at and demanding one here refused
       // a resume that works — after the harness had already been paused.
-      if (resumeSessionId && engineKeepsTranscriptFile(saved.engine)
-        && (!saved.transcriptPath || !validTranscriptPath(saved.engine, saved.transcriptPath, saved.codexHome ?? undefined))) {
+      if (resumeSessionId && engineKeepsTranscriptFile(saved.engine) && !saved.transcriptPath) {
         return { ok: false, error: 'RESUME_UNAVAILABLE', detail: 'The saved conversation file is unavailable. Start a new conversation separately.' }
       }
+      const sourceEvidence = () => resumeSessionId && engineKeepsTranscriptFile(saved.engine)
+        ? controlTranscriptEvidence(saved.engine, resumeSessionId, saved.transcriptPath!, saved.codexHome ?? undefined) : undefined
       // Match the registry's globally unique conversation index, including aliases/profiles.
       const key = saved.sessionId || saved.agentId
       if (resumeConversations.has(key)) return { ok: false, error: 'AGENT_BUSY' }
@@ -206,18 +210,32 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       let token: string | null = null
       let allocationAttempted = false
       try {
+        let transcript = sourceEvidence()
+        if (transcript) saved = { ...saved, transcriptPath: transcript.path }
+        let sourceError: unknown
+        const sourceCurrent = () => {
+          if (!current() || sourceError) return false
+          try { transcript?.verify(); return true }
+          catch (error) { sourceError = error; return false }
+        }
         // Reserve before preparing history or rewriting launch configuration: an unknown previous
         // allocation may still have a writer using those files.
         token = stoppedAgents.beginResume(agentId)
         if (!token) token = retakeStaleReservation(agentId)
         if (!token) return resumeUnconfirmed
-        const built = await relaunchOverrides(saved, saved, current)
+        const built = await relaunchOverrides(saved, saved, sourceCurrent)
+        if (sourceError) throw sourceError
+        transcript?.verify()
         if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
         if (!current()) return resumeChanged
         if (resumeSessionId) {
-          try { prepareSessionResume(saved) } catch {
+          try { prepareSessionResume(saved) } catch (error) {
+            if (error instanceof IdentityReadUnavailable) throw error
             return { ok: false, error: 'RESUME_PREPARATION_FAILED', detail: 'Could not prepare the saved conversation. Its history has been retained.' }
           }
+          // The confirmed synchronous repair may atomically replace this file.
+          // Earn a new proof of the same conversation before the next await.
+          transcript = sourceEvidence()
         }
         if (saved.sessionId && registry.bySession(saved.sessionId)) return { ok: false, error: 'AGENT_BUSY' }
         // Everything the engine writes from here on is its own, and live: the attach after it folds the
@@ -240,6 +258,8 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         const { choice: permission, droppedFlag } = permissionMode === undefined
           ? await dropPermissionFlagIfUnsupported(saved.engine, savedPermission)
           : { choice: savedPermission, droppedFlag: null }
+        transcript?.verify()
+        if (!current()) return resumeChanged
         if (droppedFlag) {
           console.warn(`[resume] ${sid(saved.agentId)} · ${saved.engine} does not take ${droppedFlag}`
             + ` · resuming in Ask · update ${saved.engine} to get ${saved.permissionMode ?? 'Auto'} back`)
@@ -248,24 +268,28 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           resumeSessionId,
           bypassPermission: permission.bypassPermission === true,
           ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
-          cwd: saved.cwd,
+          cwd,
           ...(extraArgs.length ? { extraArgs } : {}),
           ...(clearEnv.length ? { clearEnv } : {}),
           ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
           installIfMissing: enginePathOverride(saved.engine) ? undefined : engineInstallRecipe(saved.engine),
         }
+        const argv = buildEngineLaunchArgv(saved.engine, options)
+        transcript?.verify()
+        if (!current()) return resumeChanged
         clearDeleted(agentId)
         if (saved.sessionId) clearDeleted(saved.sessionId)
         allocationAttempted = true
         const result = await createAndRegisterPane({
           tmuxBackend,
-          registry: { openPendingAgent: input => current() ? registry.resumePendingAgent(saved, input.runtimes) : null },
+          registry: { openPendingAgent: input => sourceCurrent() ? registry.resumePendingAgent(saved, input.runtimes) : null },
           maxAttempts: 1,
           engine: saved.engine,
           sessionLabel: buildHarnessSessionLabel(saved.engine),
-          argv: buildEngineLaunchArgv(saved.engine, options),
+          argv,
           ...(Object.keys(launchEnv).length ? { env: launchEnv } : {}),
         })
+        if (sourceError) throw sourceError
         if (!result.ok) {
           if (result.error === 'TMUX_UNAVAILABLE') {
             stoppedAgents.finishResume(agentId, token)
@@ -296,6 +320,10 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         }
         if (pending.dsh) attachDsh(pending)
         return await waitForResume(pending, current)
+      } catch (error) {
+        if (error instanceof IdentityReadUnavailable) return { ok: false,
+          error: allocationAttempted ? 'RESUME_UNCONFIRMED' : error.code, detail: error.message }
+        throw error
       } finally {
         if (token && !allocationAttempted) stoppedAgents.finishResume(agentId, token)
         resumeConversations.delete(key)

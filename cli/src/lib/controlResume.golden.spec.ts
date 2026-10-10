@@ -72,7 +72,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
       const events: unknown[] = []
       const resume = createResumeAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(),
         stopJobs: new Map(), pinnedControls: new Set(), tmuxBackend: {
-          create: async request => { events.push(['create', request.command]); return { state: 'succeeded',
+          create: async request => { events.push(['create', request.command]); return { state: 'succeeded', dispatch: 'executed',
             runtime: { backend: 'tmux', paneId: `%${++pane}` } } },
           kill: async () => { throw Error('A healthy resume must not kill a pane') },
         }, retainExitedSession: () => { throw Error('No live session exists in this fixture') },

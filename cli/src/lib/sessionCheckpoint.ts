@@ -4,7 +4,8 @@ import { chmod, copyFile, lstat, open, rename, rm, stat } from 'node:fs/promises
 import { createHash, randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
-import { atomicWriteJson, engineKeepsTranscriptFile, validTranscriptPath, type RegisteredSession } from './registry.js'
+import { atomicWriteJson, engineKeepsTranscriptFile, type RegisteredSession } from './registry.js'
+import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
 import { sqliteReadAll } from './sqliteRead.js'
 import { hermesDbPath } from '../engines/hermes/contract.js'
@@ -98,14 +99,17 @@ export class SessionCheckpointStore {
       try { previous = JSON.parse(readPrivateStateFile(manifest, 16384)) as Checkpoint } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
       }
-      const source = s.transcriptPath ?? (s.engine === 'pi' && s.sessionId
+      let source = s.transcriptPath ?? (s.engine === 'pi' && s.sessionId
         ? await findResumedTranscript('pi', s.sessionId, { cwd: s.cwd ?? undefined }) : null)
-      if (options.screen != null && s.sessionId) {
+      const authority = s.sessionId && source && engineKeepsTranscriptFile(s.engine)
+        ? controlTranscriptEvidence(s.engine, s.sessionId, source, s.codexHome ?? undefined) : undefined
+      if (authority) source = authority.path
+      const saveScreen = () => { if (options.screen != null && s.sessionId) {
         // Save even when the native transcript is unchanged: a newly typed draft
         // belongs to the terminal, not to that transcript. Never submit it.
         atomicWriteJson(join(this.directory, `${key}.screen.json`), { version: 1, agentId: s.agentId,
           sessionId: s.sessionId, savedAt: Date.now(), screen: options.screen })
-      }
+      } }
       const checkpoint: Checkpoint = { version: 1, agentId: s.agentId, sessionId: s.sessionId,
         engine: s.engine, codexHome: s.codexHome ?? null, savedAt: Date.now(), source: null, file, bytes: 0 }
       // Pi announces a session ID before it writes any history. In particular,
@@ -125,7 +129,7 @@ export class SessionCheckpointStore {
         atomicWriteJson(temporary, { version: 1, agentId: s.agentId, sessionId: s.sessionId, engine: s.engine, cwd: s.cwd,
           savedAt: checkpoint.savedAt, screen: options.screen })
       } else if (engineKeepsTranscriptFile(s.engine)) {
-        if (!source || !validTranscriptPath(s.engine, source, s.codexHome ?? undefined)) {
+        if (!source) {
           throw new SessionCheckpointError('The conversation file is unavailable. The session has not been closed.')
         }
         const before = await stat(source)
@@ -136,7 +140,11 @@ export class SessionCheckpointStore {
         if (previous?.version === 1 && previous.source === source && previous.sourceInode === before.ino
           && previous.sourceSize === before.size && previous.sourceMtime === before.mtimeMs
           && previousFile?.isFile() && previousFile.nlink === 1 && (previousFile.mode & 0o777) === 0o600
-          && previousFile.size === before.size) return
+          && previousFile.size === before.size) {
+          authority!.verify()
+          saveScreen()
+          return
+        }
         // APFS/reflink when available, ordinary file copy otherwise. No transcript-sized JS buffer.
         await copyFile(source, temporary, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE)
         await chmod(temporary, 0o600)
@@ -159,6 +167,8 @@ export class SessionCheckpointStore {
         await handle.sync()
       } finally { await handle.close() }
       await rename(temporary, destination)
+      authority?.verify()
+      saveScreen()
       // Publish only after data is durable. A failed save keeps the preceding checkpoint intact.
       atomicWriteJson(manifest, checkpoint)
       committed = true

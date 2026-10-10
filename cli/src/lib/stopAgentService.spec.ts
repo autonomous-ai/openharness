@@ -8,6 +8,9 @@ import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js
 import { createForgetSession } from '../core/agents/forget.js'
 import { env } from '../config/env.js'
 vi.mock('./captureResumeIdentity.js', () => ({ captureResumeIdentity: vi.fn(async session => session) }))
+vi.mock('../engines/transcriptBindings.js', async original => ({ ...await original<object>(),
+  controlTranscriptEvidence: (_engine: string, _id: string, path: string) => ({ path, verify: vi.fn() }),
+}))
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn(), terminateDeletedAgent: vi.fn() }))
 vi.mock('../core/engines/cursorTasks.js', () => ({ removePendingCursorTasks: vi.fn(async () => {}) }))
 let row: RegisteredSession

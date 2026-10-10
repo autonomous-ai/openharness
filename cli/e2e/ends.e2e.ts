@@ -5,7 +5,7 @@
  * that finds a conversation until it is purged. A close never takes a turn that is still working unless
  * it was asked to; a purge leaves nothing of the conversation behind.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -88,6 +88,43 @@ describe('how an agent\'s life ends', () => {
       return now?.status === 'active' && now.sessionId === agent.sessionId ? now : null
     }, 60_000, 500)
     await turn(client, agent.id, 'after opening it again')
+    client.close()
+  })
+
+  it.each(engines)('%s: unavailable transcript identity holds Close and Resume until the same conversation is restored', async engine => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `identity-hold-${engine}`)
+    await turn(client, agent.id, 'History that must survive')
+    const paths = transcriptsOf(d, agent.sessionId)
+    expect(paths).toHaveLength(1)
+    const file = paths[0], original = readFileSync(file, 'utf8')
+    const lines = original.split('\n'), first = JSON.parse(lines[0])
+    if (engine === 'codex') first.payload.id = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
+    else first.sessionId = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
+    lines[0] = JSON.stringify(first)
+    const foreign = lines.join('\n')
+    writeFileSync(file, foreign)
+    expect(await close(client, agent, 'now')).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', detail: expect.any(String) })
+    expect(await row(client, agent.id)).toMatchObject({ status: 'active', sessionId: agent.sessionId })
+    expect(client.frames.filter(frame => frame.type === 'agent_deleted' && frame.payload?.agentId === agent.id)).toHaveLength(0)
+    expect((await d.tmux.run('list-panes', '-a', '-F', '#{pane_id}')).trim().split('\n')).toContain(agent.tmuxPane)
+    writeFileSync(file, original)
+    expect(await close(client, agent, 'now')).toMatchObject({ closed: true })
+    await stopped(client, agent.id)
+    const saved = readFileSync(file, 'utf8')
+    writeFileSync(file, foreign)
+    const refused = await client.request('agent_resume', { agentId: agent.id }, 90_000)
+    expect(refused).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', detail: expect.any(String) })
+    expect(await row(client, agent.id)).toMatchObject({ status: 'stopped', sessionId: agent.sessionId })
+    expect(readFileSync(file, 'utf8')).toBe(foreign)
+    writeFileSync(file, saved)
+    expect((await client.request('agent_resume', { agentId: agent.id }, 90_000)).error).toBeUndefined()
+    await until('the held conversation to resume', async () => {
+      const latest = await row(client, agent.id)
+      return latest?.status === 'active' && latest.sessionId === agent.sessionId ? latest : null
+    }, 60_000, 500)
+    await turn(client, agent.id, 'History survives the hold')
     client.close()
   })
 

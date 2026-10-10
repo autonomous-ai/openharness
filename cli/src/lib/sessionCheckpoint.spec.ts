@@ -17,12 +17,13 @@ let history: string
 let directory: string
 let row: RegisteredSession
 let store: SessionCheckpointStore
+const transcript = (body: string) => JSON.stringify({ type: 'session_meta', payload: { id: 'conversation', cwd: '/tmp', source: 'cli' } }) + '\n' + body
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'harness-close-checkpoint-'))
   const home = join(root, 'profile')
   await mkdir(join(home, 'sessions'), { recursive: true, mode: 0o700 })
   history = join(home, 'sessions', 'conversation.jsonl')
-  await writeFile(history, '{"history":"retained conversation"}\n', { mode: 0o600 })
+  await writeFile(history, transcript('{"history":"retained conversation"}\n'), { mode: 0o600 })
   row = registry.openPendingAgent({ engine: 'codex', cwd: '/tmp', codexHome: home, runtimes: [{ backend: 'tmux', paneId: '%777' }] })!
   Object.assign(row, { sessionId: 'conversation', transcriptPath: history })
   directory = join(root, 'checkpoints')
@@ -189,7 +190,7 @@ it('reuses an unchanged checkpoint and replaces it only after a complete new sav
   const first = await manifest()
   await store.save(row)
   expect(await manifest()).toEqual(first)
-  await writeFile(history, '{"history":"last flushed response"}\n')
+  await writeFile(history, transcript('{"history":"last flushed response"}\n'))
   await store.save(row)
   const last = await manifest()
   expect(last.file).not.toBe(first.file)
@@ -251,11 +252,11 @@ it('refuses an unset conversation path instead of inventing an empty checkpoint'
 it('rejects a transcript changed during copy and retains the last committed backup', async () => {
   await store.save(row)
   const previous = await manifest()
-  await writeFile(history, 'new turn\n')
+  await writeFile(history, transcript('new turn\n'))
   const real = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
   vi.mocked(copyFile).mockImplementationOnce(async (source, target, flags) => {
     await real.copyFile(source, target, flags)
-    await writeFile(history, 'a response arrived while copying\n')
+    await writeFile(history, transcript('a response arrived while copying\n'))
   })
   await expect(store.save(row)).rejects.toThrow('changed while saving')
   expect(await manifest()).toEqual(previous)
@@ -273,7 +274,7 @@ it('rejects a checkpoint that gained an unexpected hard link before commit', asy
 it('keeps a successful new checkpoint when cleanup of the older copy fails', async () => {
   await store.save(row)
   const before = await manifest()
-  await writeFile(history, 'new conversation state\n')
+  await writeFile(history, transcript('new conversation state\n'))
   vi.mocked(rm).mockRejectedValueOnce(new Error('file busy'))
   await store.save(row)
   const after = await manifest()
