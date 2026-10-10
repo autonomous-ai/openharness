@@ -196,13 +196,23 @@ it.each(['inline', 'worker'] as const)('%s refuses a different replay descriptor
   const other = t.file + '.other'; writeFileSync(other, prompt('T2'))
   const { open } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
   const verifyFile = vi.spyOn(await import('../../lib/transcriptBoundary.js'), 'verifyTranscriptHandle')
-  vi.spyOn(nativeReads, 'open').mockImplementation((path, flags, access) => open(path === t.file ? other : path, flags, access))
+  const redirected = new Set<Awaited<ReturnType<typeof open>>>()
+  vi.spyOn(nativeReads, 'open').mockImplementation(async (path, flags, access) => {
+    const handle = await open(path === t.file ? other : path, flags, access)
+    if (path === t.file) redirected.add(handle)
+    return handle
+  })
   await t.attach.attachSession(t.row)
   expect(t.row.interpretationHold).toBeTruthy()
   expect(t.emit).not.toHaveBeenCalled()
   expect(t.settled).not.toHaveBeenCalled()
   expect(verifyFile).toHaveBeenCalled()
-  await expect(verifyFile.mock.results[0]?.value).rejects.toThrow('ENGINE_CONTROL_BOUNDARY_CHANGED')
+  // A watcher read already in flight can verify its original descriptor first.
+  // Check the handles redirected by this test, independent of that scheduling.
+  const redirectedChecks = verifyFile.mock.calls.flatMap(([handle], index) =>
+    redirected.has(handle) ? [verifyFile.mock.results[index]?.value] : [])
+  expect(redirectedChecks.length).toBeGreaterThan(0)
+  for (const check of redirectedChecks) await expect(check).rejects.toThrow('ENGINE_CONTROL_BOUNDARY_CHANGED')
 })
 
 it.each(['inline', 'worker'] as const)('%s retains a later ordinary Cancel without replacing its live parser', async mode => {

@@ -626,6 +626,7 @@ class NewHarnessController extends ChangeNotifier {
       ? [for (final engine in allEngines) engine.id, kTerminalEngine]
       : selectedHarness?.supportedEngines ??
             [knownHarnessBase[canonicalHarnessId(_harnessId!)] ?? 'claude'];
+
   /// The agent this person chose before, as stored, for the current harness;
   /// null when nothing is remembered.
   String? get _rememberedChoice => _desktopChoices
@@ -3370,6 +3371,24 @@ class NewHarnessController extends ChangeNotifier {
 
   /// A reply was lost; Return now checks on it instead of creating again.
   bool get checking => _attempt?.awaitingConfirmation == true;
+  bool get canCancelPending => _attempt?.canCancelPending == true;
+
+  Future<void> cancelPending() async {
+    if (busy || !canCancelPending) return;
+    busy = true;
+    notifyListeners();
+    final problem = await app.cancelAgentCreation(_attempt!);
+    if (_disposed) return;
+    busy = false;
+    if (problem == null) {
+      _attempt = null;
+      error = null;
+      status = 'Creation cancelled.';
+    } else {
+      error = problem;
+    }
+    notifyListeners();
+  }
 
   bool _warnedAboutClosing = false;
 
@@ -3387,7 +3406,9 @@ class NewHarnessController extends ChangeNotifier {
     if (checking && !_warnedAboutClosing) {
       _warnedAboutClosing = true;
       warn(
-        _desktopChoices
+        canCancelPending
+            ? 'Your request is saved and will continue when the model is available. Cancel request to prevent that, or close again to leave it waiting.'
+            : _desktopChoices
             ? 'The harness may already exist. Check status to find it, or click Close again to leave this form.'
             : 'The harness may already exist. Return checks on it; Escape again '
                   'closes without knowing.',

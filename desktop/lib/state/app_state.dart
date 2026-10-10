@@ -266,6 +266,8 @@ class AgentCreationAttempt {
   HarnessPlacement? _placement;
   Future<String?>? _inFlight;
   bool _awaitingConfirmation = false, _finished = false;
+  String? _holdReason;
+  bool _cancelling = false;
 
   /// Prepare a session without adding a pane or changing the selected tab.
   final bool background;
@@ -283,6 +285,7 @@ class AgentCreationAttempt {
   bool _codexHomeTrusted = false;
 
   bool get awaitingConfirmation => _awaitingConfirmation;
+  bool get canCancelPending => _awaitingConfirmation && _holdReason != null;
 
   /// The machine's code for a request it refused before launching anything,
   /// such as `SESSION_BUSY_IN_TERMINAL`: what a caller can offer next.
@@ -296,6 +299,7 @@ class AgentCreationAttempt {
   String? _complete(String? error) {
     _finished = true;
     _awaitingConfirmation = false;
+    _holdReason = null;
     return _outcome = error;
   }
 }
@@ -11708,6 +11712,39 @@ class AppNotifier extends ChangeNotifier {
     return _createAgentWithReceipt(creation);
   }
 
+  /// Cancellation is confirmed by the machine's durable receipt. Losing this
+  /// reply cannot turn the original request into a fresh creation attempt.
+  Future<String?> cancelAgentCreation(AgentCreationAttempt creation) async {
+    if (!creation.canCancelPending ||
+        creation._cancelling ||
+        creation._inFlight != null) {
+      return 'Check the request status before cancelling.';
+    }
+    final machineId = creation._machineId;
+    if (machineId == null || !machineStates.containsKey(machineId)) {
+      return 'The original machine is unavailable. The request is still saved.';
+    }
+    creation._cancelling = true;
+    try {
+      final result = await _conn(machineId).request(
+        'agent_create_cancel',
+        payload: {'creationId': creation._id},
+        timeout: const Duration(seconds: 10),
+      );
+      if (result['creationId'] == creation._id &&
+          result['state'] == 'cancelled') {
+        creation._complete('Creation cancelled.');
+        _activeAgentCreations.remove(creation);
+        return null;
+      }
+      return 'The request may already be starting. Check status before starting another.';
+    } catch (_) {
+      return 'Cancellation is not confirmed. Check status before starting another.';
+    } finally {
+      creation._cancelling = false;
+    }
+  }
+
   Future<String?> _createAgentWithReceipt(AgentCreationAttempt creation) async {
     final machineId = creation._machineId!;
     var targetId = creation._targetId!;
@@ -11955,7 +11992,18 @@ class AppNotifier extends ChangeNotifier {
         return '$machineName has no record of this request. '
             'Use Open Harness to look for it before starting another.';
       case 'pending':
+        final held = result['held'];
+        if (held is Map) {
+          final detail = held['detail'];
+          if (detail is String && detail.isNotEmpty) {
+            creation._holdReason = detail;
+            return detail;
+          }
+        }
+        creation._holdReason = null;
         return '$machineName is still starting your harness. Check again in a moment.';
+      case 'cancelled':
+        return creation._complete('Creation cancelled.');
       case 'unconfirmed':
         return '$machineName could not confirm whether this harness started. '
             'Use New Pane to look for it before starting another.';

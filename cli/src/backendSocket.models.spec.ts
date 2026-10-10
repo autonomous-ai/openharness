@@ -49,10 +49,10 @@ it.each([null, new Error('private error')])('refuses resolution failure before a
   expect(await ask({})).toMatchObject({ error: 'GRID_UNAVAILABLE' })
   expect(socket.onCreateAgent).not.toHaveBeenCalled()
 })
-it('refuses the create while models is off, as GRID_UNAVAILABLE', async () => {
+it('holds an identified create while models is off and preserves the legacy refusal', async () => {
   bindLaunchRequests(socket, { modelTarget: null })
   expect(await ask({})).toMatchObject({ error: 'GRID_UNAVAILABLE' })
-  expect(await ask({ creationId: 'model-launch-00000003' })).toMatchObject({ state: 'failed', failure: { code: 'GRID_UNAVAILABLE' } })
+  expect(await ask({ creationId: 'model-launch-00000003' })).toMatchObject({ state: 'pending', held: { service: 'models' } })
   expect(socket.onCreateAgent).not.toHaveBeenCalled()
 })
 it('refuses malformed model selections before creating a receipt', async () => {
@@ -71,10 +71,10 @@ it('receipts retain semantic model identity across retries, never credentials', 
   const receipts = readdirSync(join(root, 'agent-creations')).map(name => readFileSync(join(root, 'agent-creations', name), 'utf8')).join('')
   expect(receipts).not.toMatch(/fixture-secret|rotated-secret|apiKey/)
 })
-it.each([null, new Error('private error')])('records a safe model failure before folder creation: %j', async value => {
+it.each([null, new Error('private error')])('holds the semantic request before folder creation: %j', async value => {
   if (value instanceof Error) vi.mocked(resolveNewAgentModel).mockRejectedValue(value)
   else vi.mocked(resolveNewAgentModel).mockResolvedValue(value)
   const answer = await ask({ creationId: 'model-launch-00000002', cwd: undefined, projectSource: 'new', projectName: 'unused' })
-  expect(answer).toMatchObject({ state: 'failed', failure: { code: 'GRID_UNAVAILABLE' } })
+  expect(answer).toMatchObject({ state: 'pending', held: { service: 'models' } })
   expect(socket.onCreateAgent).not.toHaveBeenCalled()
 })

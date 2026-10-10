@@ -48,7 +48,7 @@ export class RemoteViewerProxy {
       else stream?.wire.handle(type, payload)
       return true
     }
-    const metadata = ['agents_list_result', 'agent_synced', 'agent_created', 'agent_create_result', 'agent_create_status_result', 'agent_restart_result', 'agent_deleted'].includes(type)
+    const metadata = ['agents_list_result', 'agent_synced', 'agent_created', 'agent_create_result', 'agent_create_status_result', 'agent_create_cancel_result', 'agent_restart_result', 'agent_deleted'].includes(type)
     if (!metadata) return false
     const generation = this.generation
     this.metadata = this.metadata.then(async () => {

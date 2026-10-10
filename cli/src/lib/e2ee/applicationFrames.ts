@@ -24,6 +24,8 @@ const FLEET_REQUESTS = new Set(['grid_fleet_capabilities', 'grid_fleet_run', 'gr
 const FLEET_RESULTS = new Set([...FLEET_REQUESTS].map(type => `${type}_result`))
 // `group_sync`: the trust-group roster exchange (groupSyncer.ts) — keys, so always sealed.
 const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_worktree_delete', 'agents_cleanup_preview', 'agent_close', 'git_project_info', 'scm_project_info', 'git_pull_request', 'machine_resources', 'api_connections', 'connectors', 'group_sync', 'phone_pair', 'viewer_surface', 'orchestrator', 'agent_handoff_prepare',
+  // A held launch's cancellation and its receipt contain the client's private request identity.
+  'agent_create_cancel',
   // Memories (services/memory.ts): what this machine's agents remember, and About You and its on/off choice.
   'memory_snapshot', 'memory_about_put', 'memory_deliver', ...ROUTE_COMMAND_TYPES])
 const MACHINE_RESULTS = new Set([...MACHINE_REQUESTS].map(type => `${type}_result`))

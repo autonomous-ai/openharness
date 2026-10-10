@@ -2232,6 +2232,18 @@ describe('BackendSocket outbound queue', () => {
         type: 'agent_create_status_result', payload: { requestId: 'missing', creationId, state: 'missing' },
       }))
       socket.handleLocalFrame('local:missing-receipt', {
+        type: 'agent_create_cancel', payload: { requestId: 'cancel', creationId },
+      })
+      await vi.waitFor(() => expect(frames).toContainEqual({
+        type: 'agent_create_cancel_result', payload: { requestId: 'cancel', creationId, state: 'cancelled' },
+      }))
+      socket.handleLocalFrame('local:missing-receipt', {
+        type: 'agent_create', payload: { requestId: 'late', creationId, engine: 'claude', cwd: '/tmp/work' },
+      })
+      await vi.waitFor(() => expect(frames).toContainEqual({
+        type: 'agent_create_result', payload: { requestId: 'late', creationId, state: 'cancelled' },
+      }))
+      socket.handleLocalFrame('local:missing-receipt', {
         type: 'agent_create', payload: { requestId: 'invalid', creationId: '../bad', engine: 'claude', cwd: '/tmp/work' },
       })
       await vi.waitFor(() => expect(frames).toContainEqual(expect.objectContaining({

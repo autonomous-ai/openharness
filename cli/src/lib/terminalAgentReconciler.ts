@@ -263,6 +263,7 @@ export class TerminalAgentReconciler {
     // (e2e/soak.e2e.ts, 2026-10-04).
     const probedAs = new Map(this.deps.current().map((agent) => [agent.agentId, {
       processKey: currentProcessKey(agent),
+      starting: agent.launch?.state === 'starting',
       placements: new Set(agent.runtimes.map(terminalPlacementKey)),
     }]))
     // Routes that change hands from here on are this probe's blind spot. Reconciliation is serial, so
@@ -398,7 +399,10 @@ export class TerminalAgentReconciler {
 
         if (terminalVerified) await this.deps.onTerminalAvailability?.(current, true)
         const probed = probedAs.get(current.agentId)
-        if (observed) {
+        if (observed || (processKey === null && (current.launch?.state === 'starting' || probed?.starting))) {
+          // Before the first engine exists, two quick scans prove no exit. The
+          // startup watcher owns that decision; discovery still checks the pane.
+          // A pre-start snapshot cannot count after readiness changes mid-probe.
           this.engineMisses.delete(current.agentId)
         } else if (probed && probed.processKey === processKey
           && current.active && terminalVerified && !isTerminalEngine(current.engine) && !current.runtimes.some((runtime) =>

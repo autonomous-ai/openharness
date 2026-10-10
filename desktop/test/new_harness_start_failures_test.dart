@@ -20,6 +20,8 @@ class _Connection extends WsConn {
       );
 
   bool catalogUnavailable = false, installed = false;
+  bool held = false, cancelLost = false;
+  final cancels = <String>[];
   final install = Completer<Map<String, dynamic>>();
   int installs = 0;
   final starts = <Map<String, dynamic>>[];
@@ -61,6 +63,16 @@ class _Connection extends WsConn {
         return reply;
       case 'agent_create':
         starts.add(Map.of(payload));
+        if (held) {
+          return {
+            'creationId': payload['creationId'],
+            'state': 'pending',
+            'held': {
+              'service': 'models',
+              'detail': 'Waiting for the selected model.',
+            },
+          };
+        }
         return {
           'creationId': payload['creationId'],
           'state': 'created',
@@ -70,6 +82,10 @@ class _Connection extends WsConn {
             'engine': payload['engine'],
           },
         };
+      case 'agent_create_cancel':
+        cancels.add(payload['creationId'] as String);
+        if (cancelLost) throw StateError('fixture disconnected');
+        return {'creationId': payload['creationId'], 'state': 'cancelled'};
       default:
         return {};
     }
@@ -77,6 +93,47 @@ class _Connection extends WsConn {
 }
 
 void main() {
+  test(
+    'held creation retains its choices until cancellation is confirmed',
+    () async {
+      final connection = _Connection()
+        ..held = true
+        ..cancelLost = true;
+      final app = createApp(
+        connectionForTest: (_) => connection,
+        connected: true,
+      );
+      final box = NewHarnessController(
+        app,
+        machineId: 'm',
+        engine: 'claude',
+        folder: '/work',
+      );
+      addTearDown(app.dispose);
+      addTearDown(box.dispose);
+      await box.create();
+      expect(box.checking, isTrue);
+      expect(box.canCancelPending, isTrue);
+      expect(box.error, 'Waiting for the selected model.');
+      expect(box.requestDismiss(), isFalse);
+      expect(box.error, contains('will continue when the model is available'));
+      await box.cancelPending();
+      expect(box.checking, isTrue);
+      expect(box.error, contains('Cancellation is not confirmed'));
+      connection.cancelLost = false;
+      await box.cancelPending();
+      expect(box.checking, isFalse);
+      expect(box.canCancelPending, isFalse);
+      expect(box.status, 'Creation cancelled.');
+      expect(box.requestDismiss(), isTrue);
+      expect(connection.starts, hasLength(1));
+      expect(connection.cancels, [
+        connection.starts.single['creationId'],
+        connection.starts.single['creationId'],
+      ]);
+    },
+  );
+
   for (final failure in [false, true]) {
     test('a missing Store harness waits for installation (failure=$failure)', () async {
       final connection = _Connection();

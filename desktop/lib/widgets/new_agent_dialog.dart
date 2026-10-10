@@ -225,6 +225,19 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
   bool _checkingCreation = false;
   bool get _confirmationPending => _creation?.awaitingConfirmation == true;
   bool get _choicesLocked => _submitting || _confirmationPending;
+
+  Future<void> _cancelPending() async {
+    if (_submitting || _creation?.canCancelPending != true) return;
+    setState(() => _submitting = true);
+    final problem = await widget.notifier.cancelAgentCreation(_creation!);
+    if (!mounted) return;
+    setState(() {
+      _submitting = false;
+      _error = problem ?? 'Creation cancelled.';
+      if (problem == null) _creation = null;
+    });
+  }
+
   late String _engine = allEngines.first.id;
   String? _harnessId;
   final _harnessSearchFocus = FocusNode(debugLabel: 'Harness search');
@@ -1066,6 +1079,12 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
                                       .pop(NewAgentDialogResult.findExisting),
                         icon: const Icon(AppIcons.search, size: 16),
                         label: const Text('Find a harness'),
+                      ),
+                    if (_creation?.canCancelPending == true)
+                      TextButton(
+                        key: const ValueKey('cancel-pending-creation'),
+                        onPressed: _submitting ? null : _cancelPending,
+                        child: const Text('Cancel request'),
                       ),
                     FilledButton(
                       key: const ValueKey('create-agent-submit'),
