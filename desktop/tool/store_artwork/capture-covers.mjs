@@ -127,23 +127,43 @@ try {
       // An invented person's home: what five agents remember and four months of messages, all made up here.
       const home = await mkdtemp(join(tmpdir(), 'memories-cover-'));
       const put = async (path, text) => { await mkdir(dirname(join(home, path)), { recursive: true }); await writeFile(join(home, path), text); };
+      // Projects, and what Claude Code saved in each: [file, type, description, body].
       const notes = {
         payments: [
           ['short-answers', 'feedback', 'Wants replies under five lines', 'Keep replies short; lead with the answer.'],
-          ['retries', 'project', 'Webhooks retry with backoff', 'Webhook retries back off to one hour, then page.'],
-          ['ledger', 'reference', 'Where the ledger docs live', 'The ledger design is in docs/ledger.md.'],
+          ['merge-when-green', 'feedback', 'Lands pull requests once CI passes', 'Merge green pull requests without asking.'],
+          ['webhook-retries', 'project', 'Retries back off to one hour', 'Webhook retries back off to one hour, then page.'],
         ],
         widgets: [
           ['tests-first', 'feedback', 'Run the tests before saying done', 'Run `make test` before calling anything done.'],
-          ['renderer', 'project', 'The legacy renderer is going away', 'New work targets the grid renderer only.'],
+          ['screenshots-for-ui', 'feedback', 'Reviews UI from screenshots', 'Send a screenshot with every UI change.'],
+          ['legacy-renderer', 'project', 'The legacy renderer is going away', 'New work targets the grid renderer only.'],
         ],
         'docs-site': [
-          ['plain-words', 'user', 'Writes docs in plain words', 'Prefers short sentences and no jargon.'],
-          ['deploys', 'project', 'Docs deploy from main', 'Every merge to main publishes the site.'],
+          ['plain-words', 'user', 'Writes docs in plain words', 'Short sentences and no jargon in anything a reader sees.'],
+          ['deploys-from-main', 'project', 'Every merge to main publishes the site', 'The docs site deploys on every merge to main.'],
         ],
         'mobile-app': [
-          ['screenshots', 'feedback', 'Reviews UI from screenshots', 'Send a screenshot with every UI change.'],
+          ['mockup-first', 'feedback', 'Agree on a mockup before UI code', 'Show a mockup and agree on it before writing UI code.'],
           ['release-train', 'project', 'Releases go out on Tuesdays', 'Never release on a Friday.'],
+        ],
+        infra: [
+          ['no-weekend-deploys', 'feedback', 'Merge on weekends, deploy on Monday', 'Merges may land over the weekend; deploys wait for Monday.'],
+        ],
+        'ml-pipeline': [
+          ['measure-first', 'feedback', 'Wants numbers before a change', 'Measure before and after any performance change.'],
+          ['ranker-evals', 'project', 'The eval set is frozen per quarter', 'The ranker eval set is frozen each quarter.'],
+        ],
+        'design-system': [
+          ['keyboard-first', 'feedback', 'Every action needs a key', 'Every action must be reachable from the keyboard.'],
+          ['terminal-taste', 'user', 'Likes the feel of vim, tmux and fzf', 'Tools should feel quiet, fast and typed.'],
+        ],
+        cli: [
+          ['small-core', 'feedback', 'Keep the core small and stable', 'Features go in services the core can run without.'],
+          ['why-comments', 'feedback', 'Comments say why, not what', 'Comments name the incident or the measurement behind the code.'],
+        ],
+        website: [
+          ['speed-matters', 'feedback', 'Pages should feel instant', 'Every page should feel instant; measure the first paint.'],
         ],
       };
       for (const [project, list] of Object.entries(notes)) {
@@ -157,8 +177,8 @@ try {
       await put('.codex/memories/memory_summary.md', 'Prefers small pull requests with one change each.\n');
       await put('.codex/memories/MEMORY.md', '# Handbook\n\n## Testing\nRun `make test` first.\n\n## Reviews\nOne change per pull request.\n');
       await put('.grok/config.toml', '[memory]\nenabled = true\n');
-      await put('.grok/memory-v2/global/topics/style.md', '# Code style\n\nTwo-space indentation everywhere.\n');
-      await put('.hermes/memories/USER.md', 'Prefers terse answers.\n§\nWorks late in the evening.\n');
+      await put('.grok/memory-v2/global/topics/code-style.md', '# Code style\n\nTwo-space indentation everywhere.\n');
+      await put('.hermes/memories/USER.md', 'Prefers terse answers.\n§\nHands work off overnight and reads a summary in the morning.\n');
       await put('.gemini/GEMINI.md', '## Gemini Added Memories\n- Prefers tabs in Go files\n- Lives in UTC+1\n');
       const asks = ['keep it short, tldr only', 'run the tests before you say done', 'one change per pull request',
         'why does the retry back off that far?', 'walk me through the ledger migration', 'ship it once CI is green',
@@ -179,14 +199,34 @@ try {
       }
       sessionIndex(join(home, '.harness', 'cli', 'data'), { now, turns });
       const env = { MEMORIES_HOME: join(home, '.harness', 'memory') };
-      writeAbout(env.MEMORIES_HOME, ['# About you', '', '## How you work',
-        '- Works across Claude Code and Codex, most days of the week. [asks:480]',
-        '- Asks "why" before agreeing to a design. [asks:41]', '',
-        '## What you want from agents',
-        '- Short answers that lead with the result. [claude:short-answers.md, hermes:USER.md]',
-        '- Tests run before anything is called done. [claude:tests-first.md, codex:MEMORY.md]',
-        '- One change per pull request. [codex:memory_summary.md]', '',
-        '## Taste', '- Plain words in docs; no jargon. [claude:plain-words.md]', ''].join('\n'), { gen: now, now });
+      const line = (text, ...sources) => `- ${text} [${sources.map((s) => s.includes(':') ? s : `claude:${s}.md`).join(', ')}]`;
+      writeAbout(env.MEMORIES_HOME, ['# About you', '', 'Built from 509 of your messages over the last 120 days.', '',
+        '## How you work',
+        line('Works in Claude Code and Codex side by side, most days of the week.', 'asks:480'),
+        line('Gives UI feedback with screenshots.', 'screenshots-for-ui', 'asks:41'),
+        line('Hands work off overnight and reads a summary in the morning.', 'hermes:USER.md', 'asks:22'),
+        line('Measures before and after any performance change.', 'measure-first'),
+        '', '## What you want from agents',
+        line('Short answers that lead with the result.', 'short-answers', 'hermes:USER.md', 'asks:98'),
+        line('Tests run before anything is called done.', 'tests-first', 'codex:MEMORY.md'),
+        line('Green pull requests merged without asking.', 'merge-when-green', 'asks:36'),
+        line('A mockup agreed before UI code.', 'mockup-first'),
+        line('One change per pull request.', 'codex:memory_summary.md', 'codex:MEMORY.md'),
+        '', '## Taste',
+        line('Tools that feel like vim, tmux and fzf: quiet, fast, typed.', 'terminal-taste', 'asks:26'),
+        line('Every action reachable from the keyboard.', 'keyboard-first'),
+        line('Pages that feel instant.', 'speed-matters'),
+        line('Plain words; no jargon.', 'plain-words'),
+        line('Two-space indentation, tabs in Go.', 'grok:code-style.md', 'gemini:GEMINI.md'),
+        '', '## Engineering principles',
+        line('A small, stable core; features as services.', 'small-core'),
+        line('Comments say why, naming the incident.', 'why-comments'),
+        line('Merge on weekends, deploy on Monday.', 'no-weekend-deploys', 'release-train'),
+        '', '## Right now',
+        line('Freezing the ranker eval set for the quarter.', 'ranker-evals'),
+        line('Retiring the legacy renderer.', 'legacy-renderer'),
+        line('Webhook retries that back off to an hour.', 'webhook-retries', 'deploys-from-main'),
+        ''].join('\n'), { gen: now, now });
       const viewer = createViewer({ workspace: home, intervalMs: 60_000, env, home });
       const page = await browser.newPage({ viewport: { width: 1080, height: 720 }, deviceScaleFactor: 1, colorScheme: 'dark' });
       try {
@@ -194,6 +234,8 @@ try {
         // The pane is Sense of Self: wait for the scene, skip its arrival, and let the light settle.
         await page.waitForFunction(() => document.getElementById('stage')?.inspectSelf?.().ready);
         await page.keyboard.press('Escape');
+        // "Short answers that lead with the result": a belief whose roots reach memories, lit.
+        await page.keyboard.press('ArrowRight');
         await page.waitForTimeout(2500);
         await page.screenshot({ path: join(output, `${id}.png`) });
         if (process.env.COVER_DUMP_TEXT) console.log(await page.innerText('body'));
