@@ -50,10 +50,12 @@ export type RegisteredMeta = {
   rebound: string | null
   orphaned?: { agentId: string; sessionId: string } | null
   hookEvent?: string
+  /** A saved binding's evidence recovered; rebuild even an inline parser of the old file. */
+  recovered?: boolean
 }
 
 export interface BindDeps {
-  registry: Pick<typeof registry, 'inheritName' | 'unbindSession' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession'>
+  registry: Pick<typeof registry, 'inheritName' | 'unbindSession' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession' | 'setIdentityHold' | 'revalidateBinding'>
   mirror: Pick<TurnRecaps, 'inheritSummary'>
   forgetSession: (id: string, opts?: { force?: boolean; keepAgent?: boolean; agentId?: string }) => void
   /** The app. */
@@ -86,7 +88,7 @@ export function createBinding({
   const handleRegistered = async (entry: RegisteredSession, meta: RegisteredMeta): Promise<void> => {
     const authority = paneReadIdentity(entry)
     const current = () => paneReadIdentity(registry.byAgent(entry.agentId)) === authority
-    if (!current()) return
+    if (!current() || entry.identityHold) return
     const forkSource = pendingForkInherit.get(entry.agentId)
     if (forkSource && entry.sessionId) {
       pendingForkInherit.delete(entry.agentId)
@@ -151,7 +153,7 @@ export function createBinding({
     // `userPromptSubmitted` and `sessionStart` hooks both register (measured 2.5s apart, and in that
     // order — sessionStart fires AFTER the first prompt), so treating the second as a reset re-folded
     // the transcript and emitted a second `turn_started` for one exchange.
-    const reset = meta.isNew
+    const reset = meta.isNew || !!meta.recovered
       || (entry.engine !== 'cursor' && entry.engine !== 'agy' && entry.engine !== 'copilot'
         && meta.hookEvent === 'SessionStart')
     // Deliberately NOT gated on `meta.isNew`. `isNew` is false in exactly the case this is meant to catch:
@@ -180,16 +182,16 @@ export function createBinding({
     // announced as running with nothing left to end it (found end to end: stop in the middle of a first
     // turn, resume, and the agent read as working for good). A new session started in the agent after
     // the resume is not this conversation, and is judged like any other.
-    const bornAfterAgent = !resumedConversation && transcriptIsFirstTurn(
+    const bornAfterAgent = !meta.recovered && !resumedConversation && transcriptIsFirstTurn(
       entry,
       entry.transcriptPath ? await statBirthMs(entry.transcriptPath) : 0,
       { rebound: !!meta.rebound, now: Date.now() },
     )
-    if (!current()) return
+    if (!current() || entry.identityHold) return
     const attached = await attachSession(entry, reset, entry.engine === 'cursor', bornAfterAgent)
     // The registry mutates rows in place. This completion cannot unbind or re-announce a later
     // conversation, nor an agent that Stop has already retired.
-    if (!current()) return
+    if (!current() || entry.identityHold) return
     if (!attached) {
       // A terminal reads as gone while a stop or a restart ends its engine. A registration that comes in
       // then, such as the old engine's own SessionStart arriving late on a loaded machine, is still the
@@ -218,17 +220,43 @@ export function createBinding({
   const ownTranscript = (engine: 'cursor' | 'grok' | 'agy' | 'copilot', sessionId: string, cwd: string): Promise<string | null> =>
     transcriptOf(engine, engine === 'cursor' ? cursorDataDir() : homes[engine], sessionId, cwd)
   const bindObservedAgent = async (observed: DiscoveredTerminalAgent): Promise<void> => {
-    const agent = registry.byProcess(observed.engine, observed.processIdentity)
-    if (!agent) return
+    const found = registry.byProcess(observed.engine, observed.processIdentity)
+    if (!found || changing(found.agentId) || isRecentlyDeleted(found.agentId)) return
+    let agent: RegisteredSession = found
+    if (agent.identityHold && agent.sessionId && agent.transcriptPath) {
+      try {
+        const previous = agent.sessionId
+        const retried = registry.revalidateBinding(agent.agentId)
+        if (!retried) return
+        agent = retried
+        if (!agent.sessionId) forgetSession(previous, { force: true, keepAgent: true, agentId: agent.agentId })
+        else followRegistered(agent, { isNew: false, evicted: null, rebound: null, recovered: true })
+        announceSession(agent)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        if (registry.setIdentityHold(agent.agentId, reason)) announceSession(agent)
+        return
+      }
+    }
     const authority = paneReadIdentity(agent)
     const current = () => !changing(agent.agentId) && !isRecentlyDeleted(agent.agentId)
       && paneReadIdentity(registry.byProcess(observed.engine, observed.processIdentity)) === authority
+    const hold = (error: unknown) => {
+      if (!current()) return
+      const reason = error instanceof Error ? error.message : String(error)
+      if (registry.setIdentityHold(agent.agentId, reason)) announceSession(agent)
+      console.log(`[discovery] ${sid(agent.agentId)} binding held · ${reason}`)
+    }
+    const commit = (input: Parameters<typeof registry.register>[0]) => {
+      try { return registry.register(input) }
+      catch (error) { hold(error); return null }
+    }
     // Only native reads are contained here. A rejected lookup cannot end the serial
     // discovery/readiness pass or bind an unwritten session as if evidence were absent.
     const read = async <T>(work: () => Promise<T>): Promise<{ value: T } | null> => {
       try { return { value: await work() } }
       catch (error) {
-        if (current()) console.log(`[discovery] ${sid(agent.agentId)} binding held · ${error instanceof Error ? error.message : error}`)
+        hold(error)
         return null
       }
     }
@@ -265,7 +293,7 @@ export function createBinding({
         const transcript = located.value
         if (!current() || !mayClaim(next)) return
         console.log(`[discovery] ${sid(agent.agentId)} switched copilot session ${sid(agent.sessionId)} → ${sid(next)} (/resume)`)
-        const rotated = registry.register({
+        const rotated = commit({
           engine: 'copilot',
           sessionId: next,
           transcriptPath: transcript ?? undefined,
@@ -295,7 +323,7 @@ export function createBinding({
           || registry.has(continuation.sessionId) || isRecentlyDeleted(continuation.sessionId)) return
         if (!current()) return
         console.log(`[discovery] ${sid(agent.agentId)} ${observed.engine} session continued ${sid(agent.sessionId)} → ${sid(continuation.sessionId)}`)
-        const rotated = registry.register({
+        const rotated = commit({
           engine: observed.engine,
           sessionId: continuation.sessionId,
           transcriptPath: continuation.transcriptPath,
@@ -359,7 +387,7 @@ export function createBinding({
 
     if (!current() || !mayClaim(sessionId)) return
     const previousOwner = registry.bySession(sessionId)
-    const result = registry.register({
+    const result = commit({
       engine: observed.engine,
       sessionId,
       transcriptPath,

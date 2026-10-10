@@ -118,11 +118,25 @@ describe('forgetting a session', () => {
     expect(named.deps.stoppedAgents.save).not.toHaveBeenCalled()
     expect(named.deps.detachDsh).toHaveBeenCalledWith('a9')
     expect(named.deps.clients.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a9', retained: false } })
-    expect(named.deps.input.forget).toHaveBeenCalledWith('s9')
+    expect(named.deps.input.forget).toHaveBeenCalledWith('a9')
     // With no agent id at all, the session id is all there is to announce.
     const bare = setup()
     bare.forgetSession('s9')
     expect(bare.deps.clients.sendCommander).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 's9' } })
+  })
+
+  it('clears agent-keyed input after binding revalidation has already released the session index', () => {
+    const { deps } = setup()
+    vi.mocked(deps.registry.resolve).mockReturnValue(undefined)
+    const pending = ['teams', 'input', 'deviceInput'].map(() => new Map([['a1', 'queued'], ['other', 'keep']]))
+    for (const [index, key] of (['teams', 'input', 'deviceInput'] as const).entries()) {
+      deps[key].forget = id => { pending[index]!.delete(id) }
+    }
+    createForgetSession(deps)('s1', { force: true, keepAgent: true, agentId: 'a1' })
+    for (const queue of pending) expect([...queue]).toEqual([['other', 'keep']])
+    expect(deps.stoppedAgents.save).not.toHaveBeenCalled()
+    expect(deps.registry.removeAgent).not.toHaveBeenCalled()
+    expect(deps.normalizers.forget).toHaveBeenCalledWith('s1')
   })
 
   it('forgets an agent that has no session yet under the id it was asked by', () => {

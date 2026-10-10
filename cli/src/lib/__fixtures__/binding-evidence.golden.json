@@ -1,0 +1,314 @@
+{
+  "linux:loaded": [
+    {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "eeeeeeee-5555-4555-8555-eeeeeeeeeeee",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/project/eeeeeeee-5555-4555-8555-eeeeeeeeeeee.jsonl",
+      "profile": null,
+      "source": "fixture"
+    },
+    {
+      "agent": "moved",
+      "engine": "codex",
+      "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "transcript": "<root>/moved-codex/sessions/day/rollout-bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+      "profile": null,
+      "source": "fixture"
+    },
+    {
+      "agent": "outside",
+      "engine": "codex",
+      "session": "",
+      "transcript": null,
+      "profile": null,
+      "source": null
+    },
+    {
+      "agent": "parent",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/day/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "profile": null,
+      "source": "fixture"
+    },
+    {
+      "agent": "profile",
+      "engine": "codex",
+      "session": "cccccccc-3333-4333-8333-cccccccccccc",
+      "transcript": "<root>/profile/sessions/rollout-cccccccc-3333-4333-8333-cccccccccccc.jsonl",
+      "profile": "<root>/profile",
+      "source": "fixture"
+    },
+    {
+      "agent": "terminal",
+      "engine": "terminal",
+      "session": "",
+      "transcript": null,
+      "profile": null,
+      "source": null
+    }
+  ],
+  "linux:paths": [
+    true,
+    true,
+    true,
+    true,
+    false,
+    true
+  ],
+  "linux:admission": [
+    {
+      "accepted": true
+    },
+    {
+      "accepted": false,
+      "reason": "codex_subagent"
+    },
+    {
+      "accepted": true
+    }
+  ],
+  "linux:homes": [
+    "<root>/CODEX_HOME",
+    "<root>/moved-codex",
+    "<root>/profile"
+  ],
+  "linux:stop": [
+    {
+      "agent": "parent",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/day/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "profile": null,
+      "source": "fixture"
+    },
+    {
+      "agent": "moved",
+      "engine": "codex",
+      "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "transcript": "<root>/moved-codex/sessions/day/rollout-bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+      "profile": null,
+      "source": "fixture"
+    }
+  ],
+  "linux:registered-terminal": {
+    "row": {
+      "agent": "terminal",
+      "engine": "codex",
+      "session": "dddddddd-4444-4444-8444-dddddddddddd",
+      "transcript": "<root>/CODEX_HOME/sessions/day/rollout-dddddddd-4444-4444-8444-dddddddddddd.jsonl",
+      "profile": null,
+      "source": "fixture-register"
+    },
+    "isNew": true,
+    "evicted": null,
+    "rebound": null
+  },
+  "linux:saved": [
+    {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "eeeeeeee-5555-4555-8555-eeeeeeeeeeee",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/project/eeeeeeee-5555-4555-8555-eeeeeeeeeeee.jsonl",
+      "profile": null,
+      "source": "fixture"
+    },
+    {
+      "agent": "moved",
+      "engine": "codex",
+      "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "transcript": "<root>/moved-codex/sessions/day/rollout-bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+      "profile": null,
+      "source": "fixture"
+    },
+    {
+      "agent": "outside",
+      "engine": "codex",
+      "session": "",
+      "transcript": null,
+      "profile": null,
+      "source": null
+    },
+    {
+      "agent": "parent",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/day/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "profile": null,
+      "source": "fixture"
+    },
+    {
+      "agent": "profile",
+      "engine": "codex",
+      "session": "cccccccc-3333-4333-8333-cccccccccccc",
+      "transcript": "<root>/profile/sessions/rollout-cccccccc-3333-4333-8333-cccccccccccc.jsonl",
+      "profile": "<root>/profile",
+      "source": "fixture"
+    },
+    {
+      "agent": "terminal",
+      "engine": "codex",
+      "session": "dddddddd-4444-4444-8444-dddddddddddd",
+      "transcript": "<root>/CODEX_HOME/sessions/day/rollout-dddddddd-4444-4444-8444-dddddddddddd.jsonl",
+      "profile": null,
+      "source": "fixture-register"
+    }
+  ],
+  "darwin:loaded": [
+    {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "eeeeeeee-5555-4555-8555-eeeeeeeeeeee",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/project/eeeeeeee-5555-4555-8555-eeeeeeeeeeee.jsonl",
+      "profile": null,
+      "source": "fixture"
+    },
+    {
+      "agent": "moved",
+      "engine": "codex",
+      "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "transcript": "<root>/moved-codex/sessions/day/rollout-bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+      "profile": null,
+      "source": "fixture"
+    },
+    {
+      "agent": "outside",
+      "engine": "codex",
+      "session": "",
+      "transcript": null,
+      "profile": null,
+      "source": null
+    },
+    {
+      "agent": "parent",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/day/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "profile": null,
+      "source": "fixture"
+    },
+    {
+      "agent": "profile",
+      "engine": "codex",
+      "session": "cccccccc-3333-4333-8333-cccccccccccc",
+      "transcript": "<root>/profile/sessions/rollout-cccccccc-3333-4333-8333-cccccccccccc.jsonl",
+      "profile": "<root>/profile",
+      "source": "fixture"
+    },
+    {
+      "agent": "terminal",
+      "engine": "terminal",
+      "session": "",
+      "transcript": null,
+      "profile": null,
+      "source": null
+    }
+  ],
+  "darwin:paths": [
+    true,
+    true,
+    true,
+    true,
+    false,
+    true
+  ],
+  "darwin:admission": [
+    {
+      "accepted": true
+    },
+    {
+      "accepted": false,
+      "reason": "codex_subagent"
+    },
+    {
+      "accepted": true
+    }
+  ],
+  "darwin:homes": [
+    "<root>/CODEX_HOME",
+    "<root>/moved-codex",
+    "<root>/profile"
+  ],
+  "darwin:stop": [
+    {
+      "agent": "parent",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/day/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "profile": null,
+      "source": "fixture"
+    },
+    {
+      "agent": "moved",
+      "engine": "codex",
+      "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "transcript": "<root>/moved-codex/sessions/day/rollout-bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+      "profile": null,
+      "source": "fixture"
+    }
+  ],
+  "darwin:registered-terminal": {
+    "row": {
+      "agent": "terminal",
+      "engine": "codex",
+      "session": "dddddddd-4444-4444-8444-dddddddddddd",
+      "transcript": "<root>/CODEX_HOME/sessions/day/rollout-dddddddd-4444-4444-8444-dddddddddddd.jsonl",
+      "profile": null,
+      "source": "fixture-register"
+    },
+    "isNew": true,
+    "evicted": null,
+    "rebound": null
+  },
+  "darwin:saved": [
+    {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "eeeeeeee-5555-4555-8555-eeeeeeeeeeee",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/project/eeeeeeee-5555-4555-8555-eeeeeeeeeeee.jsonl",
+      "profile": null,
+      "source": "fixture"
+    },
+    {
+      "agent": "moved",
+      "engine": "codex",
+      "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "transcript": "<root>/moved-codex/sessions/day/rollout-bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+      "profile": null,
+      "source": "fixture"
+    },
+    {
+      "agent": "outside",
+      "engine": "codex",
+      "session": "",
+      "transcript": null,
+      "profile": null,
+      "source": null
+    },
+    {
+      "agent": "parent",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/day/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "profile": null,
+      "source": "fixture"
+    },
+    {
+      "agent": "profile",
+      "engine": "codex",
+      "session": "cccccccc-3333-4333-8333-cccccccccccc",
+      "transcript": "<root>/profile/sessions/rollout-cccccccc-3333-4333-8333-cccccccccccc.jsonl",
+      "profile": "<root>/profile",
+      "source": "fixture"
+    },
+    {
+      "agent": "terminal",
+      "engine": "codex",
+      "session": "dddddddd-4444-4444-8444-dddddddddddd",
+      "transcript": "<root>/CODEX_HOME/sessions/day/rollout-dddddddd-4444-4444-8444-dddddddddddd.jsonl",
+      "profile": null,
+      "source": "fixture-register"
+    }
+  ]
+}

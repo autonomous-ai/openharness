@@ -5,6 +5,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { HOLD_TIMEOUT_MS, type TailHold } from '../../watcher/watcher.js'
 import { transcriptReadIdentity } from '../transcripts/readIdentity.js'
 import { EngineLiveError, type LiveTransport } from './liveTransport.js'
+import type { TranscriptClose } from '../../lib/transcriptControls.js'
 
 interface SessionState {
   ask: LivePull
@@ -41,6 +42,7 @@ export interface LiveSessionDeps {
   /** Reduce side evidence before acknowledging the page; the returned commit must be synchronous. */
   prepareFrames?(session: RegisteredSession, frames: readonly LiveFrame[]): Promise<() => boolean>
   reattach(session: RegisteredSession): Promise<unknown>
+  hold?(session: RegisteredSession, reason: string): void
   watch(path: string): void
   unwatch(path: string): void
   log?(message: string): void
@@ -85,12 +87,12 @@ export function createLiveSessions(deps: LiveSessionDeps) {
   const forget = (engine: string, token: string): void => {
     void slot(engine, () => deps.transport.forget(engine, token)).catch(() => {})
   }
-  const makeState = (session: RegisteredSession, live: boolean, end?: number): SessionState => {
+  const makeState = (session: RegisteredSession, live: boolean, end?: number, closes?: readonly TranscriptClose[]): SessionState => {
     const state: SessionState = { identity: transcriptReadIdentity(session), epoch: 0,
       ask: { token: randomUUID(), session: { agentId: session.agentId, sessionId: session.sessionId,
         engine: session.engine, transcriptPath: session.transcriptPath, cwd: session.cwd, model: session.model,
         cliVersion: session.cliVersion, codexHome: session.codexHome }, cursor: null, fromStart: live,
-        replay: false, liveStart: live, ...(end === undefined ? {} : { end }),
+        replay: false, liveStart: live, ...(end === undefined ? {} : { end }), ...(closes?.length ? { closes } : {}),
         // The stream still installed is the one whose read found the rewrite: its worker knows where.
         ...(tails.get(session.sessionId)?.rewritten ? { rewritten: true, rewrittenFrom: states.get(session.sessionId)?.ask.token } : {}) },
       handle: {
@@ -131,7 +133,7 @@ export function createLiveSessions(deps: LiveSessionDeps) {
   }
   async function pollSession(id: string): Promise<void> {
     const tail = tails.get(id)
-    if (!tail || stopped) return
+    if (!tail || stopped || deps.bySession(id)?.interpretationHold) return
     if (tail.unheld) await tail.unheld
     if (tail.running) return tail.running
     if (tail.offset !== null || tails.get(id) !== tail) return
@@ -145,6 +147,10 @@ export function createLiveSessions(deps: LiveSessionDeps) {
         let page: LivePage
         try { page = await pull({ ...state.ask }) }
         catch (error) {
+          if (error instanceof EngineLiveError && error.code === 'ENGINE_CONTROL_BOUNDARY_CHANGED'
+            && valid(state) && states.get(id) === state && state.epoch === epoch) {
+            deps.hold?.(deps.bySession(id)!, 'The transcript no longer matches its cancellation boundary; interpretation is held.')
+          }
           if (error instanceof EngineLiveError && error.code === 'ENGINE_TRANSCRIPT_CHANGED') {
             // No cursor from the changed file is accepted. Re-attach under a hold and a new identity.
             // Said once per rewrite, as the legacy tailer says it (core/transcripts/ingest.ts).
@@ -193,12 +199,12 @@ export function createLiveSessions(deps: LiveSessionDeps) {
   return {
     handles: deps.handles,
     current(session: RegisteredSession): boolean { return states.get(session.sessionId)?.identity === transcriptReadIdentity(session) },
-    async prepare(session: RegisteredSession, options: { live: boolean; end?: number }, observe: (frame: LiveFrame) => void,
+    async prepare(session: RegisteredSession, options: { live: boolean; end?: number; closes?: readonly TranscriptClose[] }, observe: (frame: LiveFrame) => void,
       observePage?: (frames: readonly LiveFrame[]) => Promise<void>): Promise<PreparedLive> {
       // A retry has no original attach flags. Keep first-turn delivery intent until activation;
       // otherwise a failed first prepare turns the user's completed first response into silent history.
       if (options.live) firstLive.set(session.sessionId, transcriptReadIdentity(session))
-      const state = makeState(session, firstLive.get(session.sessionId) === transcriptReadIdentity(session), options.end)
+      const state = makeState(session, firstLive.get(session.sessionId) === transcriptReadIdentity(session), options.end, options.closes)
       const parent = states.get(session.sessionId), parentEpoch = parent?.epoch
       const moves = tails.get(session.sessionId)?.moves ?? 0
       let records = 0, content = false

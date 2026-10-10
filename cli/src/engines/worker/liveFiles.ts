@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto'
 import { open } from 'node:fs/promises'
 import type { LiveStamp } from './liveProtocol.js'
+import { verifyTranscriptHandle, type TranscriptFileIdentity } from '../../lib/transcriptBoundary.js'
 
 /** Fingerprint a delivered prefix without rereading the conversation. At byte zero no content exists
  *  to preserve: an empty or missing transcript becoming a file is ordinary first-turn delivery. */
-export async function stampAt(file: string, offset: number): Promise<LiveStamp | null> {
+export async function stampAt(file: string, offset: number, expectedFile?: TranscriptFileIdentity): Promise<LiveStamp | null> {
   if (offset === 0) return null
   const handle = await open(file, 'r')
   try {
+    if (expectedFile) await verifyTranscriptHandle(handle, expectedFile)
     const stat = await handle.stat()
     if (stat.size < offset) throw new Error('ENGINE_TRANSCRIPT_CHANGED')
     const bytes = Math.min(offset, 512)

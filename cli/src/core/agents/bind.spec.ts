@@ -54,6 +54,18 @@ function setup(over: Partial<BindDeps> = {}) {
       byAgent: vi.fn((agentId: string) => byAgent.get(agentId) ?? vi.mocked(deps.registry.register).mock.results.at(-1)?.value?.entry),
       byProcess: vi.fn(() => undefined),
       register: vi.fn(() => null),
+      setIdentityHold: vi.fn((id: string, reason?: string) => {
+        const row = byAgent.get(id) ?? vi.mocked(deps.registry.byProcess).mock.results.at(-1)?.value
+        if (!row || row.identityHold === reason) return false
+        if (reason) row.identityHold = reason
+        else delete row.identityHold
+        return true
+      }),
+      revalidateBinding: vi.fn((id: string) => {
+        const row = byAgent.get(id) ?? vi.mocked(deps.registry.byProcess).mock.results.at(-1)?.value
+        if (row) delete row.identityHold
+        return row ?? null
+      }),
       has: vi.fn(() => false),
       bySession: vi.fn((sessionId: string) => bySession.get(sessionId)),
     } as unknown as BindDeps['registry'],
@@ -319,6 +331,77 @@ describe('binding a running process to its session', () => {
     expect(run.deps.attachSession).toHaveBeenCalledOnce()
   })
 
+  it.each([new Error('saved header is incomplete'), 'saved header is incomplete'])(
+    'keeps a saved binding visibly held until its own evidence recovers: %s', async error => {
+      const run = setup(), row = agent({ transcriptPath: '/t/s1.jsonl', identityHold: 'previous hold' })
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+      vi.mocked(run.deps.registry.revalidateBinding).mockImplementationOnce(() => { throw error })
+        .mockImplementationOnce(() => { throw error })
+      await run.binding.bindObservedAgent(observed())
+      await run.binding.bindObservedAgent(observed())
+      expect(row).toMatchObject({ sessionId: 's1', transcriptPath: '/t/s1.jsonl', identityHold: 'saved header is incomplete' })
+      expect(run.deps.announceSession).toHaveBeenCalledOnce()
+      expect(continuationOf).not.toHaveBeenCalled()
+      expect(run.deps.registry.unbindSession).not.toHaveBeenCalled()
+      expect(run.deps.stoppedAgents.save).not.toHaveBeenCalled()
+      await run.binding.bindObservedAgent(observed())
+      expect(row).not.toHaveProperty('identityHold')
+      expect(run.deps.announceSession).toHaveBeenCalledTimes(2)
+      expect(continuationOf).toHaveBeenCalledOnce()
+    })
+
+  it('does not follow a saved binding removed while its retry commits', async () => {
+    const run = setup(), row = agent({ transcriptPath: '/t/s1.jsonl', identityHold: 'unavailable' })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    vi.mocked(run.deps.registry.revalidateBinding).mockReturnValue(null)
+    await run.binding.bindObservedAgent(observed())
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+    expect(continuationOf).not.toHaveBeenCalled()
+  })
+
+  it.each(['repaired', 'same', 'absent'] as const)('updates transcript attachment after a held binding is conclusively %s', async outcome => {
+    const run = setup(), row = agent({ transcriptPath: '/t/child.jsonl', identityHold: 'unavailable' })
+    run.byAgent.set(row.agentId, row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    vi.mocked(run.deps.registry.revalidateBinding).mockImplementation(() => {
+      Object.assign(row, { sessionId: outcome === 'absent' ? '' : 's1', transcriptPath: outcome === 'absent' ? null : outcome === 'same' ? row.transcriptPath : '/t/parent.jsonl' })
+      delete row.identityHold
+      return row
+    })
+    await run.binding.bindObservedAgent(observed())
+    if (outcome === 'absent') {
+      expect(run.deps.forgetSession).toHaveBeenCalledWith('s1', { force: true, keepAgent: true, agentId: 'a1' })
+      expect(run.deps.stoppedAgents.save).not.toHaveBeenCalled()
+    } else {
+      await vi.waitFor(() => expect(run.deps.attachSession).toHaveBeenCalledWith(row, true, false, false))
+      expect(run.deps.forgetSession).not.toHaveBeenCalled()
+    }
+    expect(run.deps.announceSession).toHaveBeenCalledWith(row)
+  })
+
+  it.each(['changing', 'deleted'] as const)('does not retry a binding whose process is %s', async state => {
+    const run = setup(), row = agent({ transcriptPath: '/t/s1.jsonl', identityHold: 'unavailable' })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    if (state === 'changing') run.binding.whileChanging(() => true)
+    else vi.mocked(isRecentlyDeleted).mockReturnValue(true)
+    await run.binding.bindObservedAgent(observed())
+    expect(run.deps.registry.revalidateBinding).not.toHaveBeenCalled()
+    expect(continuationOf).not.toHaveBeenCalled()
+  })
+
+  it('contains a registration failure, keeps the reason, and retries an unbound process', async () => {
+    const run = setup(), row = agent({ sessionId: '', identityHold: 'waiting for first transcript' })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    vi.mocked(run.deps.registry.register).mockImplementationOnce(() => { throw new Error('binding evidence changed') })
+    await run.binding.bindObservedAgent(observed({ resumeSessionId: 'resumed' }))
+    expect(row).toMatchObject({ sessionId: '', identityHold: 'binding evidence changed' })
+    expect(run.deps.registry.revalidateBinding).not.toHaveBeenCalled()
+    expect(run.deps.stoppedAgents.save).not.toHaveBeenCalled()
+    vi.mocked(run.deps.registry.register).mockReturnValue({ entry: agent(), ...meta({ isNew: true }) } as never)
+    await run.binding.bindObservedAgent(observed({ resumeSessionId: 'resumed' }))
+    expect(run.deps.attachSession).toHaveBeenCalledOnce()
+  })
+
   it.each([new Error('identity read limit'), 'identity read limit'])('holds only the unreadable native identity and finishes the discovery/readiness pass: %s', async error => {
     const run = setup()
     const rows = [agent({ engine: 'muse', agentId: 'held', sessionId: '', runtimes: [], active: true,
@@ -496,7 +579,7 @@ describe('binding a running process to its session', () => {
       vi.mocked(processSessionOf).mockResolvedValueOnce('s1')
       await run.binding.bindObservedAgent(observed({ engine: 'copilot' }))
       vi.mocked(processSessionOf).mockResolvedValueOnce('deleted')
-      vi.mocked(isRecentlyDeleted).mockReturnValueOnce(true)
+      vi.mocked(isRecentlyDeleted).mockImplementation(id => id === 'deleted')
       await run.binding.bindObservedAgent(observed({ engine: 'copilot' }))
       expect(run.deps.registry.register).not.toHaveBeenCalled()
       vi.mocked(processSessionOf).mockResolvedValue('s2')

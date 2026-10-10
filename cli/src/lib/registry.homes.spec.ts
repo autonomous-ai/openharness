@@ -31,7 +31,7 @@ it('repairs a child-overwritten parent from an adopted Codex home before the log
   const parentId = '019f7f1b-195d-70f2-861b-de5d54a3e141'
   const childId = '019f8dae-e5f4-7c11-90d1-600854063b2c'
   const parent = join(sessions, `rollout-${parentId}.jsonl`), child = join(sessions, `rollout-${childId}.jsonl`)
-  writeFileSync(parent, JSON.stringify({ type: 'session_meta', payload: { id: parentId, source: 'cli' } }) + '\n')
+  writeFileSync(parent, JSON.stringify({ type: 'session_meta', payload: { id: parentId, cwd: root, source: 'cli' } }) + '\n')
   writeFileSync(child, JSON.stringify({ type: 'session_meta', payload: { id: childId,
     source: { subagent: { thread_spawn: { parent_thread_id: parentId, depth: 1 } } },
   } }) + '\n')
@@ -89,7 +89,7 @@ it.each(['healthy', 'unreadable', 'changed-at-commit'] as const)('stages a regis
   const rows = Array.from({ length: 200 }, (_, index) => {
     const id = `aaaaaaaa-1111-4222-8333-${String(index).padStart(12, '0')}`
     const transcriptPath = join(sessions, `rollout-${id}.jsonl`)
-    writeFileSync(transcriptPath, JSON.stringify({ type: 'session_meta', payload: { id, source: 'cli' } }) + '\n')
+    writeFileSync(transcriptPath, JSON.stringify({ type: 'session_meta', payload: { id, cwd: root, source: 'cli' } }) + '\n')
     return { launcherId: `fixture-${index}`, engine: 'codex', sessionId: id, transcriptPath, tmuxPane: `%${index + 1}`,
       projectDir: 'fixture', cwd: root, processIdentity: null, registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1 }
   })

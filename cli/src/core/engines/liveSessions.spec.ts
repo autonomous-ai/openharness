@@ -278,3 +278,32 @@ describe('core engine stream authority', () => {
     expect(t.frames.at(-1)).toMatchObject({ replay: false, events: [{ type: 'turn_started', payload: { userMessage: 'fresh' } }] })
   })
 })
+
+it('does not accept a worker page from before a same-path evidence hold/recovery', async () => {
+  const t = await setup(''), prepared = await t.attach()
+  const cursor = prepared.state.ask.cursor
+  const entered = deferred<void>(), release = deferred<void>()
+  t.intercept(async (method, reply) => { if (method === LIVE_READ) { entered.resolve(); await release.promise }; return reply })
+  await appendFile(t.file, prompt('unconfirmed'))
+  const pending = t.live.pollSession(t.session.sessionId)
+  await entered.promise
+  t.session.identityHold = 'incomplete'; t.session.evidenceRevision = 1
+  delete t.session.identityHold; t.session.evidenceRevision = 2
+  release.resolve(); await pending
+  expect(t.events()).toEqual([])
+  expect(prepared.state.ask.cursor).toBe(cursor)
+})
+
+it('leaves newly followed worker bytes unread until interpretation recovery commits', async () => {
+  const t = await setup('')
+  t.session.evidenceRevision = 2; t.session.interpretationHold = 'replacement pending'
+  const prepared = await t.prepare()
+  expect(t.live.install(prepared)).toBe(true)
+  await appendFile(t.file, prompt('arrived during installation'))
+  await t.live.follow(t.session)
+  expect(t.events()).toEqual([])
+  expect(prepared.state.ask.cursor?.offset).toBe(0)
+  delete t.session.interpretationHold
+  await t.live.pollSession(t.session.sessionId)
+  expect(t.events().filter(event => event.type === 'turn_started')).toHaveLength(1)
+})

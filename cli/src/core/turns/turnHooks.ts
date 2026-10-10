@@ -28,6 +28,8 @@ export const STOP_HOOK_GRACE_MS = 1_500
 const PROMPT_HOOKS_KEPT = 512
 
 export interface TurnHookDeps {
+  holdStop?: (session: RegisteredSession, force?: boolean) => boolean
+  afterStop?: (session: RegisteredSession) => void
   resolve: (id: string) => RegisteredSession | undefined
   normalizers: SessionNormalizers
   emit: (sessionId: string, events: LiveEvent[]) => void
@@ -45,7 +47,7 @@ export interface TurnHookDeps {
 
 export function createTurnHooks({
   resolve, normalizers, emit, drain, onCursorTaskStart, cursorTaskHooks, cursorSubagents, announceTurnAborted,
-  armAgyIdleWatch, clearAgyIdleWatch, mirror, dataDir,
+  armAgyIdleWatch, clearAgyIdleWatch, mirror, dataDir, holdStop, afterStop,
 }: TurnHookDeps) {
   const { liveParsers, commandcodeNormalizers, cursorNormalizers, devinReaders, copilotNormalizers, agyNormalizers, grokNormalizers } = normalizers
   // Command Code's PreToolUse — the one live "a turn is running" signal this engine has. Without it the
@@ -76,6 +78,7 @@ export function createTurnHooks({
       const parser = liveParsers.get(sessionId)
       if (!parser || parser.engine !== resolve(sessionId)?.engine || parser.snapshot().identity !== identity) return false
       parser.closeTurn('hook')
+      afterStop?.(resolve(sessionId)!)
       return true
     },
     latestPromptAt: (sessionId) => promptFiredAt.get(sessionId),
@@ -90,23 +93,54 @@ export function createTurnHooks({
   const onTurnStop = ({ sessionId, status, firedAt }: { sessionId: string; status?: string; firedAt?: number }): void => {
     const session = resolve(sessionId)
     if (!session) return
+    const authority = JSON.stringify([session.agentId, session.sessionId, session.engine, session.transcriptPath,
+      session.evidenceRevision, session.identityHold])
+    const binding = JSON.stringify([session.agentId, session.sessionId, session.engine])
+    let retained = false
+    const current = (): boolean => {
+      const latest = resolve(sessionId)
+      if (!latest || JSON.stringify([latest.agentId, latest.sessionId, latest.engine]) !== binding) return false
+      const changed = authority !== JSON.stringify([latest.agentId, latest.sessionId, latest.engine, latest.transcriptPath,
+        latest.evidenceRevision, latest.identityHold])
+      if ((latest.identityHold || latest.interpretationHold || changed) && holdStop) {
+        // Claude already supplies positive stale-event evidence. A hold does not turn a proven old
+        // Stop into an unknown completion that would require cancelling the newer turn.
+        if (session.engine === 'claude' && firedAt !== undefined && (promptFiredAt.get(sessionId) ?? 0) > firedAt) return false
+        if (!retained) retained = holdStop(latest, changed)
+        if (retained) return false
+      }
+      return !changed
+    }
+    // Waiting is explicitly not a completion: preserve agy's eager backstop signal.
+    if (session.engine === 'agy' && status === 'waiting') { armAgyIdleWatch(sessionId); return }
     const hooks = hooksFor(session.engine)
     if (hooks) {
+      if (!hooks.onStop || !current()) return
       // Invoke synchronously: the engine snapshots which turn the hook arrived about before draining.
       const failed = (error: unknown): void => {
         console.error(`[hooks] ${session.engine} stop hook failed:`, error instanceof Error ? error.message : error)
       }
-      try { void Promise.resolve(hooks.onStop?.(hookTurns, { sessionId, status, firedAt })).catch(failed) } catch (error) { failed(error) }
+      const context: HookTurnContext = { ...hookTurns,
+        turnState: id => current() ? hookTurns.turnState(id) : undefined,
+        closeTurn: (id, identity) => current() && hookTurns.closeTurn(id, identity),
+        noteEngineStopped: id => { if (current()) hookTurns.noteEngineStopped(id) },
+        emit: (id, events) => { if (current()) emit(id, events) },
+      }
+      try { void Promise.resolve(hooks.onStop(context, { sessionId, status, firedAt })).catch(failed) } catch (error) { failed(error) }
       return
     }
+    if (!current()) return
     if (session.engine === 'cursor') {
       void (async () => {
         await cursorTaskHooks.wait(sessionId)
+        if (!current()) return
         await drain(sessionId)
+        if (!current()) return
         const normalizer = cursorNormalizers.get(sessionId)
         if (!normalizer) return
         cursorSubagents.closeParent(sessionId, status === 'error')
         const closing = normalizer.closeTurn()
+        afterStop?.(session)
         emit(sessionId, closing)
         // Cursor can fail a turn BEFORE it writes anything to the transcript — observed as a Stop hook
         // with status=error 2.4s after beforeSubmitPrompt, with no transcript file discovered and no
@@ -130,12 +164,16 @@ export function createTurnHooks({
     if (session.engine === 'commandcode') {
       void (async () => {
         await drain(sessionId)
+        if (!current()) return
         const normalizer = commandcodeNormalizers.get(sessionId)
         if (!normalizer?.turnOpen) return
         await new Promise((r) => setTimeout(r, STOP_HOOK_GRACE_MS))
+        if (!current()) return
         await drain(sessionId)
+        if (!current()) return
         if (!normalizer.turnOpen) return
         normalizer.closeTurn()
+        afterStop?.(session)
         console.log(`[turn] ${sid(sessionId)} force-closed by Stop hook (after grace)`)
         emit(sessionId, [{ type: 'turn_ended', payload: {} }])
       })().catch((err) => {
@@ -150,8 +188,10 @@ export function createTurnHooks({
         const reader = devinReaders.get(sessionId)
         if (!reader?.turnOpen) return
         await new Promise((r) => setTimeout(r, STOP_HOOK_GRACE_MS))
+        if (!current()) return
         if (!reader.turnOpen) return
         reader.closeTurn()
+        afterStop?.(session)
         console.log(`[turn] ${sid(sessionId)} force-closed by Stop hook (after grace)`)
         emit(sessionId, [{ type: 'turn_ended', payload: {} }])
       })().catch((err) => {
@@ -164,18 +204,25 @@ export function createTurnHooks({
     if (session.engine === 'copilot') {
       void (async () => {
         await drain(sessionId)
+        if (!current()) return
         const normalizer = copilotNormalizers.get(sessionId)
         if (!normalizer?.turnOpen) return
         await new Promise((r) => setTimeout(r, STOP_HOOK_GRACE_MS))
+        if (!current()) return
         await drain(sessionId)
+        if (!current()) return
         if (!normalizer.turnOpen) return
         if (status === 'error') {
           announceTurnAborted(sessionId, 'copilot', 'Copilot ended the turn early')
-          emit(sessionId, normalizer.abortTurn())
+          const closing = normalizer.abortTurn()
+          afterStop?.(session)
+          emit(sessionId, closing)
           return
         }
         console.log(`[turn] ${sid(sessionId)} closed by copilot agentStop hook (after grace)`)
-        emit(sessionId, normalizer.closeTurn())
+        const closing = normalizer.closeTurn()
+        afterStop?.(session)
+        emit(sessionId, closing)
       })().catch((err) => {
         console.error('[hooks] copilot stop hook failed:', err instanceof Error ? err.message : err)
       })
@@ -188,25 +235,28 @@ export function createTurnHooks({
       // `waiting` = agy's loop stopped only because it is standing by for its sub-agents. The turn is
       // NOT over, so nothing closes here — but the run that proved this necessary also finished its
       // sub-agents and then never sent another Stop, so a backstop watches the pane instead.
-      if (status === 'waiting') {
-        armAgyIdleWatch(sessionId)
-        return
-      }
       clearAgyIdleWatch(sessionId)
       void (async () => {
         await drain(sessionId)
+        if (!current()) return
         const normalizer = agyNormalizers.get(sessionId)
         if (!normalizer?.turnOpen) return
         await new Promise((r) => setTimeout(r, STOP_HOOK_GRACE_MS))
+        if (!current()) return
         await drain(sessionId)
+        if (!current()) return
         if (!normalizer.turnOpen) return
         if (status === 'error') {
           announceTurnAborted(sessionId, 'agy', 'agy ended the turn early')
-          emit(sessionId, normalizer.abortTurn())
+          const closing = normalizer.abortTurn()
+          afterStop?.(session)
+          emit(sessionId, closing)
           return
         }
         console.log(`[turn] ${sid(sessionId)} closed by agy Stop hook (after grace)`)
-        emit(sessionId, normalizer.closeTurn())
+        const closing = normalizer.closeTurn()
+        afterStop?.(session)
+        emit(sessionId, closing)
       })().catch((err) => {
         console.error('[hooks] agy stop hook failed:', err instanceof Error ? err.message : err)
       })
@@ -215,10 +265,13 @@ export function createTurnHooks({
     if (session.engine === 'grok') {
       void (async () => {
         await drain(sessionId)
+        if (!current()) return
         const normalizer = grokNormalizers.get(sessionId)
         if (status === 'error') {
           announceTurnAborted(sessionId, 'grok', 'Grok ended the turn with an error')
-          emit(sessionId, normalizer?.abortTurn() ?? [])
+          const closing = normalizer?.abortTurn() ?? []
+          afterStop?.(session)
+          emit(sessionId, closing)
         }
       })().catch((err) => {
         console.error('[hooks] grok StopFailure hook failed:', err instanceof Error ? err.message : err)

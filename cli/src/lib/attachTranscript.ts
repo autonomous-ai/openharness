@@ -30,6 +30,7 @@
 import { stat } from 'node:fs/promises'
 import { scanRecordsBackward, streamRecords } from './transcriptTail.js'
 import type { RuntimeField } from './runtimeProfile.js'
+import { closeFileIdentity, replayCloses, type TranscriptClose } from './transcriptControls.js'
 
 export interface AttachRules {
   /** The record the engine's fold opens a turn on, judged from the record alone. */
@@ -75,6 +76,7 @@ export interface AttachConsumers {
   profile(line: string): void
   /** The turn fold — the seeds, then every record from `turnFrom`. */
   fold(line: string): void
+  close?(reason: TranscriptClose['reason']): void
   /** The device's transcript observer — every record from `turnFrom`. */
   observe?(line: string): void
 }
@@ -120,12 +122,13 @@ export interface LocateOptions {
   end?: number
   /** See `ATTACH_REACH_BYTES`. */
   reach?: number
+  closes?: readonly TranscriptClose[]
 }
 
 /** Walk back from the end to everything an attach needs. Null when the file shrank under the walk. */
 export async function locateAttachSpan(filePath: string, rules: AttachRules, options: LocateOptions = {}): Promise<AttachSpan | null> {
   const { size } = await stat(filePath)
-  const end = options.end === undefined ? size : Math.min(options.end, size)
+  const end = Math.min(options.end ?? size, options.closes?.[0]?.offset ?? size, size)
   const reach = options.reach ?? ATTACH_REACH_BYTES
   if (options.fromStart || end === 0) return wholeFile(end)
   let opener: number | null = null
@@ -189,7 +192,7 @@ export async function locateAttachSpan(filePath: string, rules: AttachRules, opt
       }
     }
     return opener !== null && !seekingBegin && !missing.size && !seedTest && !unresolved.size && !seekingCalls
-  })
+  }, undefined, undefined, closeFileIdentity(options.closes))
   if (!whole) return null
   // No opener anywhere: the whole file is the turn, as the whole-history fold would have it.
   const turnFrom = begin ?? opener ?? 0
@@ -199,7 +202,7 @@ export async function locateAttachSpan(filePath: string, rules: AttachRules, opt
     await streamRecords(filePath, 0, Math.min(end, HEAD_RECORD_LIMIT), (record) => {
       head = record
       return true
-    }, isWholeRecord)
+    }, isWholeRecord, undefined, closeFileIdentity(options.closes))
   }
   return {
     end,
@@ -221,6 +224,7 @@ export async function replayAttachSpan(
   filePath: string,
   span: AttachSpan,
   consumers: AttachConsumers,
+  closes: readonly TranscriptClose[] = [],
 ): Promise<AttachRead> {
   let failures = 0
   let firstFailure: unknown = null
@@ -228,17 +232,21 @@ export async function replayAttachSpan(
     try { consume(line) } catch (error) { if (failures++ === 0) firstFailure = error }
   }
   const { profile, fold, observe } = consumers
+  const closeThrough = replayCloses(closes, reason => consumers.close!(reason))
   consumers.start?.(span)
   if (span.head !== null) feed(profile, span.head)
   for (const seed of span.seeds) feed(fold, seed)
   let records = 0
   const read = await streamRecords(filePath, span.profileFrom, span.end, (line, offset) => {
+    closeThrough(offset)
     feed(profile, line)
     if (offset < span.turnFrom) return
     records++
     if (observe) feed(observe, line)
     feed(fold, line)
-  }, isWholeRecord)
+  }, isWholeRecord, undefined, closeFileIdentity(closes))
+  if (!read && closes.length) throw new Error('ENGINE_CONTROL_BOUNDARY_CHANGED')
+  if (read) closeThrough(read.next)
   if (failures) console.warn(`[attach] ${filePath}: ${failures} record(s) could not be taken in: ${String(firstFailure)}`)
   return { next: read?.next ?? span.end, records, content: records > 0 || !!read?.partial }
 }
@@ -270,7 +278,8 @@ export async function attachTranscript(
     span = await locateAttachSpan(filePath, rules, options)
       ?? await locateAttachSpan(filePath, rules, options)
       ?? wholeFile(Math.min(options.end ?? Infinity, (await stat(filePath)).size))
-    return { ...span, ...await replayAttachSpan(filePath, span, consumers), failed: false }
+    if (options.closes?.length) span.end = Math.min(options.end ?? Infinity, (await stat(filePath)).size)
+    return { ...span, ...await replayAttachSpan(filePath, span, consumers, options.closes), failed: false }
   } catch (error) {
     console.warn(`[attach] ${filePath} could not be read: ${String(error)}`)
     const end = span ? span.end : await reach(filePath, options.end)

@@ -220,11 +220,13 @@ function livePath(core: Core, session: RegisteredSession, pane: string | null) {
   }
   const announceTurnAborted = (...args: unknown[]): void => { out.push(['aborted', ...args]) }
   const attach = core.createAttach({
+    setInterpretationHold: () => false, announceSession: () => {},
     liveFor: () => undefined,
     resolve: () => session,
     terminalGone: async () => false,
     normalizers,
     watcher: {
+      removeSession: async () => {}, pollSession: async () => {},
       addSession: async (s, options) => { out.push(['tail', s.sessionId, options ?? null]) },
       hold: async () => null,
       tails: () => false,
