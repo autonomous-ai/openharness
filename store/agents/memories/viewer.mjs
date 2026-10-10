@@ -45,8 +45,9 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
     }
   }
 
+  // Every caller gets the snapshot, including one that arrives while a look is already running.
   async function look() {
-    if (looking) return looking
+    if (looking) return looking.then(() => current)
     looking = (async () => {
       try {
         const next = await snapshot({ env, home, now: now() })
@@ -54,7 +55,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
         const changed = print !== printed
         current = next
         printed = print
-        if (workspace) { try { writeVerdict(workspace, next) } catch { /* the header is a courtesy; the pane still works */ } }
+        if (workspace && changed) { try { writeVerdict(workspace, next) } catch { /* the header is a courtesy; the pane still works */ } }
         if (changed) publish()
       } catch (error) {
         current = { ...(current ?? { spec: 1, memories: [], agents: [], projects: [] }), problems: [{ agent: 'viewer', error: error instanceof Error ? error.message : String(error) }] }
@@ -84,10 +85,19 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
       if (!hosts.has(req.headers.host)) { json(res, 403, { error: 'Loopback requests only.' }); return }
       const url = new URL(req.url, `http://${req.headers.host}`)
       if (req.headers.origin && req.headers.origin !== url.origin) { json(res, 403, { error: 'Cross-origin requests are not allowed.' }); return }
+      // A page elsewhere cannot read these answers, but an <img> pointed at /events could hold the
+      // connection slots open. Browsers say where a request comes from; only this page's own count.
+      const site = req.headers['sec-fetch-site']
+      if (site && site !== 'same-origin' && site !== 'none') { json(res, 403, { error: 'Only this pane may ask.' }); return }
       if (!['GET', 'HEAD'].includes(req.method)) { res.setHeader('allow', 'GET, HEAD'); json(res, 405, { error: 'This pane only reads.' }); return }
 
       if (url.pathname === '/health') { json(res, 200, { ok: true }); return }
-      if (url.pathname === '/api/state') { json(res, 200, current ?? await look()); return }
+      if (url.pathname === '/api/state') {
+        // With no pane connected nothing refreshes in the background, so a stale snapshot is re-read.
+        if (!current || clients.size === 0 && now() - (current.observedAt ?? 0) > intervalMs) await look()
+        json(res, 200, current)
+        return
+      }
       if (url.pathname === '/api/search') {
         const q = (url.searchParams.get('q') ?? '').slice(0, 200)
         json(res, 200, { q, ...(await sessionSearch(q, { limit: 12 })) })
@@ -95,7 +105,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
       }
       if (url.pathname === '/api/related') {
         // Conversations that talk about the same thing as a memory: its title and description, any word.
-        const row = (current ?? await look()).memories.find((memory) => memory.id === url.searchParams.get('id'))
+        const row = (current ?? await look())?.memories.find((memory) => memory.id === url.searchParams.get('id'))
         if (!row) { json(res, 404, { error: 'No such memory.' }); return }
         const words = `${row.title} ${row.description}`.toLowerCase().match(/[\p{L}\p{N}_]{3,}/gu) ?? []
         const query = [...new Set(words.filter((word) => !STOP.has(word)))].slice(0, 6).join(' ')

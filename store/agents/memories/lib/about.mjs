@@ -15,7 +15,7 @@
  * `session:<id>` for a conversation, `asks:<n>` for how many of your messages say it.
  */
 
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync, copyFileSync } from 'node:fs'
+import { constants, copyFileSync, lstatSync, mkdirSync, openSync, readSync, closeSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export const ABOUT_FILE = 'about-you.md'
@@ -28,17 +28,21 @@ export function parseAbout(text) {
   const lines = []
   let section = null
   let intro = []
+  // Plain string work per line: no pattern here can backtrack on a long run of spaces.
   for (const raw of source.split(/\r?\n/)) {
-    const heading = /^##\s+(.+?)\s*$/.exec(raw)
-    if (heading) { section = heading[1]; continue }
-    if (/^#\s+/.test(raw)) continue
-    const item = /^\s*[-*]\s+(.+?)\s*$/.exec(raw)
-    if (item) {
-      const sources = /\s*\[([^\]]*)\]\s*$/.exec(item[1])
-      const refs = sources ? sources[1].split(',').map((ref) => ref.trim()).filter(Boolean) : []
-      const text = sources ? item[1].slice(0, sources.index).trim() : item[1]
-      if (text) lines.push({ section: section ?? 'About you', text, refs })
-    } else if (!section && raw.trim()) intro.push(raw.trim())
+    const line = raw.trim()
+    if (line.startsWith('## ')) { section = line.slice(3).trim() || section; continue }
+    if (line.startsWith('# ')) continue
+    if ((line.startsWith('- ') || line.startsWith('* ')) && line.length > 2) {
+      let body = line.slice(2).trim()
+      let refs = []
+      const open = body.endsWith(']') ? body.lastIndexOf('[') : -1
+      if (open >= 0) {
+        refs = body.slice(open + 1, -1).split(',').map((ref) => ref.trim()).filter(Boolean)
+        body = body.slice(0, open).trim()
+      }
+      if (body) lines.push({ section: section ?? 'About you', text: body, refs })
+    } else if (!section && line) intro.push(line)
   }
   return { intro: intro.join(' '), lines }
 }
@@ -47,8 +51,14 @@ export function parseAbout(text) {
 export function readAbout(dir) {
   const path = join(dir, ABOUT_FILE)
   try {
-    const text = readFileSync(path, 'utf8')
-    const modified = statSync(path).mtimeMs
+    const info = statSync(path)
+    if (!info.isFile()) return null
+    // Written only through writeAbout (≤ 32 KB); a larger file someone put there is read in part.
+    const buffer = Buffer.alloc(Math.min(info.size, 2 * MAX_ABOUT))
+    const fd = openSync(path, 'r')
+    try { readSync(fd, buffer, 0, buffer.length, 0) } finally { closeSync(fd) }
+    const text = buffer.toString('utf8')
+    const modified = info.mtimeMs
     return { text, modified: Math.round(modified), ...parseAbout(text) }
   } catch {
     return null
@@ -63,9 +73,15 @@ export function writeAbout(dir, text) {
   if (!parseAbout(value).lines.length) throw new Error('About You needs at least one "- line" under a "## Section".')
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   const path = join(dir, ABOUT_FILE)
-  try { copyFileSync(path, join(dir, PREVIOUS_FILE)) } catch { /* the first profile has nothing to keep */ }
+  const previous = join(dir, PREVIOUS_FILE)
   const temporary = join(dir, `.${ABOUT_FILE}.${process.pid}.tmp`)
-  writeFileSync(temporary, value.endsWith('\n') ? value : value + '\n', { mode: 0o600 })
+  // Never write through a link someone left at one of these names: remove whatever is there, then
+  // create the file fresh (`wx` fails rather than follow a link planted in between).
+  rmSync(temporary, { force: true })
+  try {
+    if (lstatSync(path).isFile()) { rmSync(previous, { force: true }); copyFileSync(path, previous, constants.COPYFILE_EXCL) }
+  } catch { /* the first profile has nothing to keep */ }
+  writeFileSync(temporary, value.endsWith('\n') ? value : value + '\n', { mode: 0o600, flag: 'wx' })
   renameSync(temporary, path)
   return path
 }

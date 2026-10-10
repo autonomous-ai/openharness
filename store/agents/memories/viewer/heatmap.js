@@ -56,9 +56,12 @@ export function buildGrid(activity, { now = Date.now(), weeks = 53 } = {}) {
 
 /** Consecutive days with at least one message, ending today or yesterday. */
 export function streak(byDay, now = Date.now()) {
+  // Step by calendar day from noon, not by 24 hours: across a daylight-saving change a 24-hour step
+  // from just after midnight skips a day, and one from late evening lands on the same day twice.
+  const day = new Date(now)
+  day.setHours(12, 0, 0, 0)
   let count = 0
-  let at = now
-  if (!(byDay.get(dayKey(at))?.total > 0)) at -= DAY
-  while (byDay.get(dayKey(at))?.total > 0) { count++; at -= DAY }
+  if (!(byDay.get(dayKey(day.getTime()))?.total > 0)) day.setDate(day.getDate() - 1)
+  while (byDay.get(dayKey(day.getTime()))?.total > 0) { count++; day.setDate(day.getDate() - 1) }
   return count
 }

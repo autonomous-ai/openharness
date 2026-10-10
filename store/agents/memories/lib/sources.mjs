@@ -29,6 +29,14 @@ const MAX_FILE = 512 * 1024
 const MAX_FILES = 4000
 const MAX_DEPTH = 6
 
+/**
+ * Files read in one pass, across every agent. The viewer reads again every few seconds while open; a
+ * home with thousands of memory files must cost a bounded amount of work, and the cache below means an
+ * unchanged file costs a stat, not a read.
+ */
+const pass = { files: 0, truncated: false }
+const cache = new Map()
+
 function list(dir) {
   try { return readdirSync(dir, { withFileTypes: true }) } catch { return [] }
 }
@@ -39,10 +47,21 @@ function stat(path) {
 
 /** A file's text and dates, or null when it is missing, a directory, or too large to be a note. */
 function read(path) {
+  if (pass.files >= MAX_FILES) { pass.truncated = true; return null }
+  pass.files++
   const info = stat(path)
   if (!info?.isFile() || info.size > MAX_FILE) return null
-  try { return { text: readFileSync(path, 'utf8'), size: info.size, modified: info.mtimeMs } } catch { return null }
+  const known = cache.get(path)
+  if (known && known.size === info.size && known.modified === info.mtimeMs) return known
+  try {
+    const entry = { text: readFileSync(path, 'utf8'), size: info.size, modified: info.mtimeMs }
+    cache.set(path, entry)
+    return entry
+  } catch { return null }
 }
+
+/** A front-matter value as text: a missing key, or a nested map where a string was expected, is ''. */
+const text = (value) => (typeof value === 'string' ? value : '')
 
 /** Markdown files under `dir`, depth-first, at most `MAX_DEPTH` folders down. */
 function walk(dir, depth = 0, out = []) {
@@ -78,10 +97,15 @@ export function resolveProject(encoded, { home, folders = new Map(), now = Date.
   return answer
 }
 
+// Folders the probe never lists: on macOS, reading these asks the person for permission (a privacy
+// prompt in their face because a viewer was resolving a name), and network volumes can hang.
+const PRIVATE = new Set(['Desktop', 'Documents', 'Downloads', 'Library', 'Pictures', 'Movies', 'Music', 'Public', 'Applications', 'Volumes', 'Network', 'System', 'cores', 'dev', 'proc'])
+
 function probeProject(encoded, home) {
   const probe = (dir, rest, depth) => {
     if (!rest) return dir
     if (depth > 14) return null
+    if (depth > 0 && PRIVATE.has(basename(dir))) return null
     // A symlinked folder counts: on macOS /var and /tmp are links to /private/….
     const names = list(dir).filter((entry) => entry.isDirectory() || entry.isSymbolicLink()).map((entry) => entry.name)
       .sort((a, b) => b.length - a.length)
@@ -115,8 +139,8 @@ function makeRow(h, fields) {
     type: fields.type ?? null,
     scope: fields.scope ?? (fields.project ? 'project' : 'global'),
     project: fields.project ?? null,
-    title: String(fields.title || firstHeading(body) || humanize(file)).slice(0, 200),
-    description: String(fields.description || firstLine(body) || '').slice(0, 400),
+    title: (text(fields.title) || firstHeading(body) || humanize(file)).slice(0, 200),
+    description: (text(fields.description) || firstLine(body) || '').slice(0, 400),
     body,
     path: tilde(file, h.home),
     modified: Number.isFinite(fields.modified) ? Math.round(fields.modified) : null,
@@ -159,14 +183,14 @@ function readClaude(h, folders) {
       const content = read(path)
       if (!content) continue
       const { data, body } = frontmatter(content.text)
-      const type = String(data.type || data.metadata?.type || '').toLowerCase() || null
+      const type = (text(data.type) || text(data.metadata?.type)).toLowerCase() || null
       const listed = index.get(file.name)
       rows.push(makeRow(h, {
         agent: 'claude', file: path, body, project, scope: 'project',
         kind: CLAUDE_KIND[type] ?? 'note', type: type ?? 'note',
-        title: listed?.title || firstHeading(body) || (data.name && !/^[a-z0-9_-]+$/.test(data.name) ? data.name : humanize(data.name || file.name)),
-        description: data.description || listed?.hook,
-        modified: isoTime(data.modified || data.metadata?.modified) ?? content.modified,
+        title: listed?.title || firstHeading(body) || (text(data.name) && !/^[a-z0-9_-]+$/.test(data.name) ? data.name : humanize(text(data.name) || file.name)),
+        description: text(data.description) || listed?.hook,
+        modified: isoTime(text(data.modified) || text(data.metadata?.modified)) ?? content.modified,
         size: content.size,
       }))
     }
@@ -213,7 +237,7 @@ function readCodex(h) {
       const { data, body } = frontmatter(content.text)
       rows.push(makeRow(h, {
         agent: 'codex', file: path, body, kind: 'note', type: 'skill',
-        title: data.name ? humanize(data.name) : humanize(basename(dirname(path))), description: data.description,
+        title: text(data.name) ? humanize(data.name) : humanize(basename(dirname(path))), description: text(data.description),
         modified: content.modified, size: content.size,
       }))
     }
@@ -247,9 +271,9 @@ function readGrok(h) {
       kind: observation ? 'note' : global ? 'you' : 'project',
       type: observation ? 'observation' : 'topic',
       scope: global ? 'global' : 'project',
-      project: global ? null : { name: data.workspace ? basename(String(data.workspace)) : 'a workspace', path: data.workspace || null },
-      title: data.title || firstHeading(body) || humanize(path), description: data.description,
-      modified: isoTime(data.updated || data.modified) ?? content.modified, size: content.size,
+      project: global ? null : { name: text(data.workspace) ? basename(data.workspace) : 'a workspace', path: text(data.workspace) || null },
+      title: text(data.title) || firstHeading(body) || humanize(path), description: text(data.description),
+      modified: isoTime(text(data.updated) || text(data.modified)) ?? content.modified, size: content.size,
     }))
   }
   const legacy = join(h.grok, 'memory')
@@ -382,12 +406,17 @@ export function collect({ env = process.env, home, folders = new Map(), sessions
   const h = resolveHomes(env, home)
   const switches = memorySwitches(h, env)
   const problems = []
+  pass.files = 0
+  pass.truncated = false
   const memories = []
   for (const [agent, reader] of Object.entries(READERS)) {
     try { memories.push(...reader(h, folders)) } catch (error) { problems.push({ agent, error: error instanceof Error ? error.message : String(error) }) }
   }
   try { memories.push(...readInstructions(h)) } catch (error) { problems.push({ agent: 'instructions', error: String(error?.message ?? error) }) }
   memories.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0) || a.id.localeCompare(b.id))
+  if (pass.truncated) problems.push({ agent: 'all', error: `More than ${MAX_FILES} memory files; the rest are not shown.` })
+  // Forget cached files that are gone, so the cache cannot grow without bound.
+  if (cache.size > MAX_FILES * 2) cache.clear()
 
   const opaque = windsurfOpaque(h)
   const agents = AGENTS.map((agent) => {

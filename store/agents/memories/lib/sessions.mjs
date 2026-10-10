@@ -113,9 +113,11 @@ export function search(db, text, { limit = 12, any = false } = {}) {
   if (!query) return []
   let found
   try {
+    // Rank first without snippets — snippet() re-tokenizes each row and is the slow part (the CLI's own
+    // search avoids it for the same reason) — then build snippets only for the rows shown.
     found = rows(db, `
-      SELECT t.session_id AS sessionId, t.turn AS turn, t.at AS at, s.engine AS engine, s.title AS title, s.cwd AS cwd,
-             snippet(turns_fts, -1, '${MARK_OPEN}', '${MARK_CLOSE}', '…', 14) AS snippet, bm25(turns_fts, 4, 2, 1, 1) AS rank
+      SELECT turns_fts.rowid AS id, t.session_id AS sessionId, t.turn AS turn, t.at AS at, s.engine AS engine, s.title AS title, s.cwd AS cwd,
+             bm25(turns_fts, 4, 2, 1, 1) AS rank
       FROM turns_fts JOIN turns t ON t.id = turns_fts.rowid JOIN sessions s ON s.session_id = t.session_id
       WHERE turns_fts MATCH ? ORDER BY rank LIMIT 200`, query)
   } catch {
@@ -123,10 +125,14 @@ export function search(db, text, { limit = 12, any = false } = {}) {
   }
   const seen = new Set()
   const hits = []
+  const snippetOf = db.prepare(`SELECT snippet(turns_fts, -1, '${MARK_OPEN}', '${MARK_CLOSE}', '…', 14) AS snippet FROM turns_fts WHERE turns_fts MATCH ? AND rowid = ?`)
   for (const row of found) {
     if (seen.has(row.sessionId)) continue
     seen.add(row.sessionId)
-    hits.push({ ...row, snippet: String(row.snippet ?? '').replace(/\s+/g, ' ').slice(0, 400) })
+    let snippet = ''
+    try { snippet = String(snippetOf.get(query, row.id)?.snippet ?? '') } catch { /* a row without a snippet still counts */ }
+    const { id, ...hit } = row
+    hits.push({ ...hit, snippet: snippet.replace(/\s+/g, ' ').slice(0, 400) })
     if (hits.length >= limit) break
   }
   return hits

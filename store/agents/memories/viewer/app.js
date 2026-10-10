@@ -260,7 +260,13 @@ function drawRow(row, now) {
   if (row.type === 'group') {
     const node = el('div', 'group')
     node.append(el('span', 'fold', row.open ? '▾' : '▸'), el('span', null, row.label), el('span', 'n', row.count ? String(row.count) : ''))
-    node.addEventListener('click', () => { state.closed.has(row.id) ? state.closed.delete(row.id) : state.closed.add(row.id); drawList() })
+    node.addEventListener('click', () => {
+      const opening = state.closed.has(row.id)
+      if (opening) state.closed.delete(row.id); else state.closed.add(row.id)
+      drawList()
+      // Opening a group puts the cursor on its first row, so the preview shows something at once.
+      if (opening) { const index = state.rows.findIndex((r) => r.key === row.key); const first = state.rows.slice(index + 1).find(selectable); if (first) select(first.key) }
+    })
     return node
   }
   if (row.type === 'section') return el('div', 'section', row.label)
@@ -416,7 +422,7 @@ function drawPreview() {
   const row = current()
   preview.replaceChildren()
   if (!state.snap) { preview.append(el('div', 'pv-meta', 'Reading what your agents remember…')); return }
-  if (!row) { drawWelcome(preview); return }
+  if (!row) { (state.snap.memories.length || state.snap.about ? drawOverview : drawWelcome)(preview); return }
 
   if (row.type === 'memory') {
     const memory = row.memory
@@ -440,7 +446,7 @@ function drawPreview() {
       for (const ref of line.refs) {
         const chip = el('button', 'chip', refLabel(ref))
         const target = refMemory(ref)
-        if (target) chip.addEventListener('click', () => { state.query = ''; $('q').value = ''; drawList(); select(`m:${target.id}`) })
+        if (target) chip.addEventListener('click', () => reveal(target))
         else chip.disabled = !ref.startsWith('session:')
         chips.append(chip)
       }
@@ -476,6 +482,21 @@ function drawPreview() {
     preview.append(head(hit.title || 'A conversation', metaLine([who(hit.engine), hit.cwd, longAge(hit.at)]), `session ${hit.sessionId}`))
     preview.append(el('hr', 'pv-rule'), snippet(hit.snippet))
   }
+}
+
+/** Show one memory in the list wherever it lives: clear the search, open its group, select its row. */
+function reveal(memory) {
+  state.query = ''; $('q').value = ''; state.hits = { q: '', items: [], error: null }
+  let key = `m:${memory.id}`
+  if (memory.kind === 'you') state.closed.delete('about')
+  else if (memory.kind === 'instructions') state.closed.delete('told')
+  else if (memory.project) {
+    const project = state.snap.projects.find((entry) => entry.memories.includes(memory.id))
+    if (project) { state.closed.delete('projects'); state.expanded.add(`p:${project.key}`); key = `m:${memory.id}@p:${project.key}` }
+  } else state.closed.delete('notes')
+  drawList()
+  if (!state.rows.some((row) => row.key === key)) { state.closed.delete('agents'); state.expanded.add(`ag:${memory.agent}`); drawList(); key = `m:${memory.id}@ag:${memory.agent}` }
+  select(key)
 }
 
 function refMemory(ref) {
@@ -533,6 +554,21 @@ function drawAgent(preview, info) {
     preview.append(el('div', 'pv-h', 'turn it on'), el('p', null, turnOn[0]))
     if (turnOn[1]) preview.append(el('div', 'code', turnOn[1]))
   }
+}
+
+/** Nothing selected — every group folded, or a search with no match: say what is here, not "nothing". */
+function drawOverview(preview) {
+  const snap = state.snap
+  const memories = snap.memories.filter((row) => row.kind !== 'instructions')
+  const agents = snap.agents.filter((row) => row.memories > 0)
+  preview.append(head(`${number(memories.length)} ${memories.length === 1 ? 'memory' : 'memories'}`, metaLine([`from ${agents.map((row) => row.name).join(', ') || 'no agent yet'}`, 'on this computer'])))
+  const facts = el('dl', 'kv')
+  const add = (k, v) => { if (v) facts.append(el('dt', null, k), el('dd', null, v)) }
+  add('about you', `${snap.about?.lines.length ?? 0} lines built · ${memories.filter((row) => row.kind === 'you').length} saved by agents`)
+  add('projects', `${snap.projects.length}`)
+  add('sessions', snap.sessions ? `${number(snap.sessions.sessions)} with ${number(snap.sessions.asks)} of your messages` : null)
+  preview.append(facts)
+  preview.append(el('p', 'pv-meta', state.query.trim() ? 'Nothing matches that yet. Esc clears the search.' : 'Open a group on the left, or type to search.'))
 }
 
 function drawWelcome(preview) {

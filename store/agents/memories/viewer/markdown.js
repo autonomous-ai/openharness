@@ -7,9 +7,28 @@
  * what agents remembered, not a browser, and a click must never navigate it away.
  */
 
+const MAX_INLINE = 20_000
+const MAX_QUOTE_DEPTH = 8
+
+/** `## Title ##` → { level, text }, without a backtracking pattern (see lib/text.mjs headingText). */
+function heading(line) {
+  if (line.length > 2000 || line[0] !== '#') return null
+  let level = 0
+  while (line[level] === '#') level++
+  if (level > 6 || (line[level] !== ' ' && line[level] !== '\t')) return null
+  let text = line.slice(level).trim()
+  let end = text.length
+  while (end > 0 && text[end - 1] === '#') end--
+  if (end < text.length && (end === 0 || text[end - 1] === ' ' || text[end - 1] === '\t')) text = text.slice(0, end).trim()
+  return text ? { level, text } : null
+}
+
 /** Inline spans: code, bold, italic, links (as their text), plain text. */
 export function inline(text) {
   const spans = []
+  // Past this length a paragraph is shown as plain text: the span pattern is fast on prose but a
+  // model can write anything, and the preview must never stall.
+  if (String(text ?? '').length > MAX_INLINE) return [{ type: 'text', text: String(text) }]
   const source = String(text ?? '')
   const pattern = /(`+)([^`]+?)\1|\*\*([^*]+?)\*\*|__([^_]+?)__|(?<![\w*])\*([^*\s][^*]*?)\*(?!\w)|(?<![\w_])_([^_\s][^_]*?)_(?!\w)|\[([^\]]+)\]\(([^)\s]+)\)/g
   let last = 0
@@ -26,11 +45,11 @@ export function inline(text) {
 }
 
 /** Blocks: headings, paragraphs, lists, quotes, code, rules, tables (kept as monospace text). */
-export function parse(text) {
+export function parse(text, depth = 0) {
   const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n')
   const blocks = []
   let i = 0
-  const isBreak = (line) => /^\s*$/.test(line) || /^#{1,6}\s/.test(line) || /^\s*```/.test(line) || /^\s*([-*+]|\d+[.)])\s+/.test(line) || /^\s*>/.test(line) || /^\s*([-*_])(\s*\1){2,}\s*$/.test(line) || /^\s*\|/.test(line)
+  const isBreak = (line) => /^\s*$/.test(line) || /^#{1,6}[ \t]/.test(line) || /^\s*```/.test(line) || /^\s*([-*+]|\d+[.)])\s+/.test(line) || /^\s*>/.test(line) || /^\s*([-*_])(\s*\1){2,}\s*$/.test(line) || /^\s*\|/.test(line)
   while (i < lines.length) {
     const line = lines[i]
     if (/^\s*$/.test(line)) { i++; continue }
@@ -43,8 +62,8 @@ export function parse(text) {
       blocks.push({ type: 'code', text: body.join('\n'), lang: fence[1].trim() })
       continue
     }
-    const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line)
-    if (heading) { blocks.push({ type: 'heading', level: heading[1].length, spans: inline(heading[2]) }); i++; continue }
+    const title = heading(line)
+    if (title) { blocks.push({ type: 'heading', level: title.level, spans: inline(title.text) }); i++; continue }
     if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { blocks.push({ type: 'rule' }); i++; continue }
     if (/^\s*\|/.test(line)) {
       const rows = []
@@ -55,7 +74,8 @@ export function parse(text) {
     if (/^\s*>/.test(line)) {
       const body = []
       while (i < lines.length && /^\s*>/.test(lines[i])) body.push(lines[i++].replace(/^\s*>\s?/, ''))
-      blocks.push({ type: 'quote', blocks: parse(body.join('\n')) })
+      // Quotes nest by recursion; a file of thousands of `>` must not exhaust the stack.
+      blocks.push({ type: 'quote', blocks: depth < MAX_QUOTE_DEPTH ? parse(body.join('\n'), depth + 1) : [{ type: 'paragraph', spans: inline(body.join(' ')) }] })
       continue
     }
     const item = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line)

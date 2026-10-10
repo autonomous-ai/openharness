@@ -27,24 +27,57 @@ export function frontmatter(text) {
   const after = source.slice(end).replace(/^\r?\n---\s*/, '')
   const data = {}
   let parent = null
+  let block = []
+  // `key:` followed by indented lines is either a nested map (`metadata:\n  type: user`) or a block of
+  // text (`description: |` or plain continuation lines); text becomes the key's string value.
+  const close = () => {
+    if (parent && block.length && !Object.keys(data[parent]).length) data[parent] = block.join(' ').trim()
+    else if (parent && typeof data[parent] === 'object' && !Object.keys(data[parent]).length) data[parent] = ''
+    parent = null; block = []
+  }
   for (const line of head.split(/\r?\n/)) {
     if (!line.trim() || line.trimStart().startsWith('#')) continue
-    const match = /^(\s*)([A-Za-z0-9_.-]+):\s*(.*)$/.exec(line)
-    if (!match) continue
+    const match = /^([ \t]*)([A-Za-z0-9_.-]+):[ \t]*(.*)$/.exec(line.slice(0, 4000))
+    const indented = /^[ \t]/.test(line)
+    if (!match) { if (parent && indented) block.push(line.trim()); continue }
     const [, indent, key, value] = match
     if (indent.length === 0) {
-      if (value === '') { data[key] = {}; parent = key } else { data[key] = unquote(value); parent = null }
-    } else if (parent && typeof data[parent] === 'object') {
+      close()
+      if (value === '' || value === '|' || value === '>' || value === '|-' || value === '>-') { data[key] = {}; parent = key } else data[key] = unquote(value)
+    } else if (parent && typeof data[parent] === 'object' && !block.length) {
       data[parent][key] = unquote(value)
-    }
+    } else if (parent) block.push(line.trim())
   }
+  close()
   return { data, body: after.replace(/^\r?\n/, '') }
 }
 
-/** The first Markdown heading's text, or null. */
+/**
+ * A heading line's text, or null: `## Title ##` → `Title`. Plain string work, no backtracking regex —
+ * a model-written line of thousands of spaces once made a `(.+?)\s*#*\s*$` pattern take seconds, and the
+ * viewer re-reads every few seconds. Lines over 2,000 characters are not headings.
+ */
+export function headingText(line, maxLevel = 6, exactLevel = null) {
+  const value = String(line ?? '')
+  if (value.length > 2000 || value[0] !== '#') return null
+  let level = 0
+  while (value[level] === '#') level++
+  if (level > maxLevel || (exactLevel !== null && level !== exactLevel)) return null
+  if (value[level] !== ' ' && value[level] !== '\t') return null
+  let text = value.slice(level).trim()
+  let end = text.length
+  while (end > 0 && text[end - 1] === '#') end--
+  if (end < text.length && (end === 0 || text[end - 1] === ' ' || text[end - 1] === '\t')) text = text.slice(0, end).trim()
+  return text || null
+}
+
+/** The first Markdown heading's text (levels 1–3), or null. */
 export function firstHeading(text) {
-  const match = /^#{1,3}\s+(.+?)\s*#*\s*$/m.exec(String(text ?? ''))
-  return match ? match[1].trim() : null
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    const heading = headingText(line, 3)
+    if (heading) return heading
+  }
+  return null
 }
 
 /** A file name or slug as words: `feedback_merge-without-asking.md` → `Feedback merge without asking`. */
@@ -68,14 +101,13 @@ export function firstLine(text, max = 160) {
  * is one part.
  */
 export function sections(text, level = 2) {
-  const marker = new RegExp(`^#{${level}}\\s+(.+?)\\s*#*\\s*$`)
   const parts = []
   let current = { title: null, lines: [] }
   for (const line of String(text ?? '').split(/\r?\n/)) {
-    const heading = marker.exec(line)
+    const heading = headingText(line, level, level)
     if (heading) {
       if (current.title || current.lines.join('').trim().length > 40) parts.push(current)
-      current = { title: heading[1].trim(), lines: [] }
+      current = { title: heading, lines: [] }
     } else current.lines.push(line)
   }
   if (current.title || current.lines.join('').trim()) parts.push(current)
@@ -84,7 +116,7 @@ export function sections(text, level = 2) {
 
 /** Entries separated by `§` lines (Hermes keeps its memory this way); plain text is one entry. */
 export function entries(text) {
-  const parts = String(text ?? '').split(/^\s*§\s*$/m).map((part) => part.trim()).filter(Boolean)
+  const parts = String(text ?? '').split(/^[ \t]*§[ \t]*$/m).map((part) => part.trim()).filter(Boolean)
   return parts.length ? parts : []
 }
 
