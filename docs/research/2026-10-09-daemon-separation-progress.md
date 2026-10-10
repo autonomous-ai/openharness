@@ -221,3 +221,19 @@ and the final unavailable-service/readiness audit. Line counts do not establish 
 The owner resumed the paused task on October 9 at 22:25:51 UTC. [Durable home adoption](2026-10-10-durable-home-adoption.md) landed in [#1132](https://github.com/autonomous-ai/openharness/pull/1132) as `c7d460b1d8018ed56126c662702fd44db886d07d` at October 10 01:43:24 UTC. Independent review approved exact head `7ae6c83921b76733e96db70a0948c73ff1b55e70` against base `9eafacf3b512a0b1ffd23e0d446115896b01f7ed`. Automatic run `38013783062` passed every applicable check including `ci/required`. Final local validation ran 01:35:58–01:38:38; composed resume and large-transcript checks ran alone 01:40:42–01:41:56. Merge verification ran 01:43:11–01:43:24. Publication remains zero.
 
 Work continues on [saved-binding evidence and recovery](2026-10-10-saved-binding-evidence.md). This is not a claim that the native-identity group or complete refactor is finished.
+
+## Saved binding and atomic hook admission
+
+[PR #1133](https://github.com/autonomous-ai/openharness/pull/1133) landed saved-binding
+evidence and visible recovery as `a2a7874f3` at October 10 05:16:31 UTC.
+[PR #1137](https://github.com/autonomous-ai/openharness/pull/1137) then landed atomic
+native hook admission and live Stop ownership as `9618c2e2c` at 08:36:54 UTC. The
+[hook admission report](2026-10-10-native-hook-admission.md) records exact-head review,
+unchanged goldens, mutation proofs, costs, acceptance and automatic CI. The guarded
+merge occupied 08:36:40–08:36:54; publication remains zero.
+
+The next [Stop/Resume/Close authority change](2026-10-10-control-transcript-authority.md)
+has independent source approval and passing unit, core, harnessd and Resume gates;
+private lifecycle acceptance, mutation checks, costs and final CI remain under way.
+The [completion checklist](2026-10-09-daemon-core-completion.md) still tracks durable
+delivery/lifecycle intent and the other concrete architecture gaps.

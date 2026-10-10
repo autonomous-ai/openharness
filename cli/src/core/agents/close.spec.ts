@@ -75,12 +75,35 @@ describe('closing agents no window shows', () => {
       expect(pollSession).toHaveBeenCalledTimes(2)
     })
 
+    it('holds changed transcript evidence before reading a screen or closing', async () => {
+      const pollSession = vi.fn().mockRejectedValue(Object.assign(new Error('changed'), { code: 'ENGINE_TRANSCRIPT_CHANGED' }))
+      const { deps, close } = setup({ watcher: { pollSession } as never })
+      await expect(close.activity(row())).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+      expect(pollSession).toHaveBeenCalledOnce()
+      expect(deps.captureTerminal).not.toHaveBeenCalled()
+      expect(deps.stopAgent).not.toHaveBeenCalled()
+    })
+
+    it.each(['ENGINE_UNAVAILABLE', 'ENGINE_TRANSCRIPT_CHANGED', 'DISK_UNREADABLE', undefined])(
+      'retains a failed second activity read with its correct reason: %s', async code => {
+        vi.spyOn(console, 'log').mockImplementation(() => {})
+        const failure = code ? Object.assign(new Error(code), { code }) : null
+        const pollSession = vi.fn().mockRejectedValueOnce(Object.assign(new Error('reconnect'), { code: 'ENGINE_UNAVAILABLE' }))
+          .mockRejectedValueOnce(failure)
+        const { close } = setup({ watcher: { pollSession } as never })
+        const result = expect(close.activity(row()))
+        if (code === 'ENGINE_UNAVAILABLE' || code === 'ENGINE_TRANSCRIPT_CHANGED') {
+          await result.rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+        } else await result.rejects.toBe(failure)
+        expect(pollSession).toHaveBeenCalledTimes(2)
+      })
+
     it('reads only once more, and never retries a failure that is not a worker\'s restart', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const stale = Object.assign(new Error('stale'), { code: 'ENGINE_STALE_REPLY' })
       const twice = vi.fn().mockRejectedValue(stale)
       const again = setup({ watcher: { pollSession: twice } as unknown as ClosingDeps['watcher'] })
-      await expect(again.close.activity(row())).rejects.toBe(stale)
+      await expect(again.close.activity(row())).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
       expect(twice).toHaveBeenCalledTimes(2)
       for (const error of [new Error('disk gone'), null]) {
         const other = vi.fn().mockRejectedValue(error)

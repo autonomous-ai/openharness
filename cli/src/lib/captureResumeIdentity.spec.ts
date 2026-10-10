@@ -1,9 +1,11 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
-import { engineKeepsTranscriptFile, validTranscriptPath, type RegisteredSession } from './registry.js'
+import { engineKeepsTranscriptFile, type RegisteredSession } from './registry.js'
+import { controlTranscriptEvidence, savedTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { findLiveSession, findResumedTranscript, processSessionEvidence } from './sessionRepair.js'
 import { processRows, resumeSessionId } from './tmux.js'
-vi.mock('./registry.js', () => ({ validTranscriptPath: vi.fn(() => true), engineKeepsTranscriptFile: vi.fn(() => true) }))
+vi.mock('./registry.js', () => ({ engineKeepsTranscriptFile: vi.fn(() => true) }))
+vi.mock('../engines/transcriptBindings.js', () => ({ savedTranscriptEvidence: vi.fn(), controlTranscriptEvidence: vi.fn() }))
 vi.mock('./sessionRepair.js', () => ({ processSessionEvidence: vi.fn(), findLiveSession: vi.fn(), findResumedTranscript: vi.fn() }))
 vi.mock('./tmux.js', () => ({ processRows: vi.fn(), resumeSessionId: vi.fn() }))
 vi.mock('./processEvidence.js', async () => {
@@ -18,7 +20,8 @@ beforeEach(() => {
   row = { engine: 'claude', sessionId: '', cwd: '/work', codexHome: null,
     processIdentity: { pid: 77, executable: '/bin/claude', startMarker: 'Mon Sep 21 01:00:00 2026' } } as RegisteredSession
   vi.mocked(processRows).mockResolvedValue([{ ...row.processIdentity!, args: 'claude', parentPid: 1 }])
-  vi.mocked(validTranscriptPath).mockReturnValue(true)
+  vi.mocked(savedTranscriptEvidence).mockImplementation((_engine, _id, path) => ({ path, fileKey: 'fixture', verify: vi.fn() }))
+  vi.mocked(controlTranscriptEvidence).mockImplementation((_engine, _id, path) => ({ path, verify: vi.fn() }))
   vi.mocked(engineKeepsTranscriptFile).mockReturnValue(true)
   vi.mocked(resumeSessionId).mockReturnValue(null)
   vi.mocked(processSessionEvidence).mockResolvedValue({ session: null, verify: vi.fn() })
@@ -29,6 +32,14 @@ it('leaves a shell and a complete binding unchanged', async () => {
   row.engine = 'terminal'; expect(await captureResumeIdentity(row)).toBe(row)
   row.engine = 'codex'; row.sessionId = 'known'; row.transcriptPath = '/history'
   expect(await captureResumeIdentity(row)).toBe(row); expect(processRows).not.toHaveBeenCalled()
+})
+
+it('uses a completely proven parent transcript without changing the saved conversation', async () => {
+  Object.assign(row, { sessionId: 'parent', transcriptPath: '/child' })
+  vi.mocked(savedTranscriptEvidence).mockReturnValue({ path: '/parent', fileKey: 'parent-file', verify: vi.fn() })
+  expect(await captureResumeIdentity(row)).toMatchObject({ sessionId: 'parent', transcriptPath: '/parent' })
+  expect(row.transcriptPath).toBe('/child')
+  expect(findResumedTranscript).not.toHaveBeenCalled()
 })
 
 it('takes a database-backed engine on its recorded id, with no transcript to check', async () => {
@@ -55,14 +66,16 @@ it('captures and preserves the exact Hermes home before stopping its process', a
 })
 it.each([null, '/stale'])('repairs a known id with missing or invalid path %s', async transcriptPath => {
   Object.assign(row, { sessionId: 'known', transcriptPath, codexHome: '/profile' })
-  vi.mocked(validTranscriptPath).mockImplementation((_, path) => path === '/found')
+  vi.mocked(savedTranscriptEvidence).mockImplementation((_engine, _id, path) => ({ path: path === '/found' ? path : null, fileKey: 'fixture', verify: vi.fn() }))
   vi.mocked(findResumedTranscript).mockResolvedValue('/found')
   expect(await captureResumeIdentity(row)).toMatchObject({ sessionId: 'known', transcriptPath: '/found' })
   expect(findResumedTranscript).toHaveBeenCalledWith('claude', 'known', { codexHome: '/profile' })
 })
-it.each([null, '/unsafe'])('retains the known id when its file is unavailable: %s', async path => {
+it.each([null, '/unsafe'])('holds the known id when its file is unavailable: %s', async path => {
   row.sessionId = 'known'; vi.mocked(findResumedTranscript).mockResolvedValue(path)
-  vi.mocked(validTranscriptPath).mockReturnValue(false); expect(await captureResumeIdentity(row)).toBe(row)
+  vi.mocked(savedTranscriptEvidence).mockReturnValue({ path: null, fileKey: null, verify: vi.fn() })
+  await expect(captureResumeIdentity(row)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  expect(row.sessionId).toBe('known')
 })
 it('looks up a preallocated Pi session ID in its own project before stopping', async () => {
   Object.assign(row, { engine: 'pi', sessionId: 'preallocated', transcriptPath: null })
@@ -99,10 +112,10 @@ it.each(['claude', 'codex'] as const)('captures an explicit %s resume without gu
   expect(await captureResumeIdentity(row)).toMatchObject({ sessionId: 'exact', transcriptPath: '/exact', source: 'stop-repair' })
   expect(findLiveSession).not.toHaveBeenCalled()
 })
-it('keeps an explicit file-backed resume unbound while its transcript is still unwritten', async () => {
+it('holds an explicit file-backed resume whose announced conversation is unavailable', async () => {
   vi.mocked(resumeSessionId).mockReturnValue('exact')
   vi.mocked(findResumedTranscript).mockResolvedValue(null)
-  expect(await captureResumeIdentity(row)).toBe(row)
+  await expect(captureResumeIdentity(row)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   expect(findLiveSession).not.toHaveBeenCalled()
 })
 it('prefers current Claude native metadata to old resume argv', async () => {
@@ -118,6 +131,8 @@ it('captures a unique fresh session before its first hook arrives', async () => 
   expect(findLiveSession).toHaveBeenCalledWith('claude', '/work', Date.parse(row.processIdentity!.startMarker), expect.objectContaining({ pid: 77, bornOnly: true, codexHome: undefined, expectedProcess: row.processIdentity }))
 })
 it.each([null, { sessionId: 'missing' }, { sessionId: 'unsafe', transcriptPath: '/unsafe' }])('does not bind ambiguous or unsafe history: %s', async found => {
-  vi.mocked(findLiveSession).mockResolvedValue(found); vi.mocked(validTranscriptPath).mockReturnValue(false)
-  expect(await captureResumeIdentity(row)).toBe(row)
+  vi.mocked(findLiveSession).mockResolvedValue(found)
+  vi.mocked(savedTranscriptEvidence).mockReturnValue({ path: null, fileKey: null, verify: vi.fn() })
+  if (found) await expect(captureResumeIdentity(row)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  else expect(await captureResumeIdentity(row)).toBe(row)
 })

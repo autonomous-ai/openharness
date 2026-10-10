@@ -77,6 +77,9 @@ export interface CreateAgentPaneDeps {
   /** The agent this pane is a fork of (`agent_fork`), recorded on the row; null otherwise. */
   forkedFrom?: ForkOrigin | null
   externalResume?: ExternalResumeIntent
+  /** Rechecked by the backend after its gates and immediately before process dispatch. */
+  current?: () => boolean
+  onDispatch?: () => void
   maxAttempts?: number
 }
 
@@ -95,6 +98,8 @@ export async function createAndRegisterPane(deps: CreateAgentPaneDeps): Promise<
       cwd: deps.spawnCwd ?? homedir(),
       label,
       command: deps.argv,
+      ...(deps.current ? { current: deps.current } : {}),
+      ...(deps.onDispatch ? { onDispatch: deps.onDispatch } : {}),
       ...(deps.env ? { env: deps.env } : {}),
     })
     if (spawned.state !== 'succeeded') {

@@ -569,8 +569,17 @@ async function captureCases(): Promise<Record<string, unknown>> {
     'claude, unbound, no process': { sessionId: '' },
   }
   for (const [name, over] of Object.entries(shapes)) {
-    const out = await m.capture.captureResumeIdentity(session(over))
-    cases[`capture · ${name}`] = norm({ sessionId: out.sessionId, transcriptPath: out.transcriptPath, source: out.source ?? null })
+    const input = session(over), before = structuredClone(input)
+    try {
+      const out = await m.capture.captureResumeIdentity(input)
+      cases[`capture · ${name}`] = norm({ sessionId: out.sessionId, transcriptPath: out.transcriptPath, source: out.source ?? null })
+    } catch (error) {
+      if (name !== 'claude, unknown' && name !== 'codex, a sub-agent id') throw error
+      expect(error).toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+      expect(input).toEqual(before)
+      cases[`capture · ${name}`] = norm({ held: (error as Error).message,
+        retained: { sessionId: input.sessionId, transcriptPath: input.transcriptPath, source: input.source ?? null } })
+    }
   }
   forgetMoved()
   // Which finder the handoff asks, per engine, and with what.
@@ -623,6 +632,24 @@ describe('core finds sessions where it did before Claude Code and Codex declared
       for (const [section, cases] of Object.entries(golden)) {
         expect(Object.keys(actual[section]!).sort(), `${platform} · ${section}`).toEqual(Object.keys(cases).sort())
         for (const [key, value] of Object.entries(cases)) {
+          // These former successful answers are unsafe for Stop: no usable native
+          // file, or a delegated rollout. Keep the historical artifact unchanged,
+          // assert its exact former answer, and require the typed hold plus unchanged
+          // input now. In particular, do not synthesize the child's former path.
+          const captureCorrections = new Map<string, { before: unknown; retained: unknown }>([
+            ['capture · claude, unknown', { before: { sessionId: OTHER, transcriptPath: null, source: null },
+              retained: { sessionId: OTHER, transcriptPath: null, source: null } }],
+            ['capture · codex, a sub-agent id', { before: { sessionId: CHILD, transcriptPath: norm(paths.codexChild), source: null },
+              retained: { sessionId: CHILD, transcriptPath: null, source: null } }],
+          ])
+          const captureCorrection = section === 'capture' ? captureCorrections.get(key) : undefined
+          if (captureCorrection) {
+            expect(value, `${platform} · ${key} · former unsafe success`).toEqual(captureCorrection.before)
+            expect(actual[section]![key], `${platform} · ${key} · retained hold`).toEqual({
+              held: 'Conversation identity is held: the saved conversation file is unavailable.', retained: captureCorrection.retained,
+            })
+            continue
+          }
           // Safety correction: an existing unusable process record is not proof of absence. Keep
           // the former artifact intact, assert its exact old answer, and name every changed case.
           const held = new Map<string, string>(['default homes', 'moved homes'].flatMap(home => [

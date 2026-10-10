@@ -64,6 +64,35 @@ function expectLetGo(deps: ForgetDeps, sessionId: string, agentId: string) {
 describe('forgetting a session', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.mocked(removePendingCursorTasks).mockClear() })
 
+  it.each(['bound', 'unbound', 'process'] as const)('archives the proven capture of an unchanged %s agent', mode => {
+    const { deps, forgetSession } = setup()
+    const live = deps.registry.resolve(mode === 'unbound' ? 'fresh' : 'a1')!
+    if (mode === 'process') live.processIdentity = { pid: 41, startMarker: 'birth', executable: '<engine>' }
+    const captured = { ...live, sessionId: 's1', transcriptPath: '/fixture/parent.jsonl', boundAt: 23, source: 'stop-repair' }
+    forgetSession(live.agentId, { captured })
+    expect(deps.stoppedAgents.save).toHaveBeenCalledWith(expect.objectContaining(captured))
+    expect(deps.registry.removeAgent).toHaveBeenCalledWith(live.agentId)
+  })
+
+  it.each(['agent', 'engine', 'registered', 'conversation', 'process', 'executable', 'missing process'] as const)(
+    'refuses a captured conversation after the %s identity changes', changed => {
+      const { deps, forgetSession } = setup()
+      const live = deps.registry.resolve('a1')!
+      live.processIdentity = { pid: 41, startMarker: 'birth', executable: '<engine>' }
+      const captured = { ...live, processIdentity: { ...live.processIdentity }, transcriptPath: '/fixture/parent.jsonl' }
+      if (changed === 'agent') captured.agentId = 'other'
+      if (changed === 'engine') captured.engine = 'codex'
+      if (changed === 'registered') captured.registeredAt = 2
+      if (changed === 'conversation') captured.sessionId = 'other'
+      if (changed === 'process') captured.processIdentity.pid++
+      if (changed === 'executable') live.processIdentity.executable = '<replacement>'
+      if (changed === 'missing process') live.processIdentity = null
+      expect(() => forgetSession('a1', { captured })).toThrow('changed before')
+      expect(deps.stoppedAgents.save).not.toHaveBeenCalled()
+      expect(deps.registry.removeAgent).not.toHaveBeenCalled()
+      expect(deps.clients.send).not.toHaveBeenCalled()
+    })
+
   it('drops a crash-resume boundary when the conversation is stopped or unbound', () => {
     const { deps } = setup()
     const marks = createRelaunchMarks()

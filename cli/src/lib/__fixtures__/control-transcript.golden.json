@@ -1,0 +1,380 @@
+{
+  "linux:claude:capture": {
+    "engine": "claude",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "transcriptPath": "<root>/CLAUDE_CONFIG_DIR/projects/project/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "cwd": "<root>",
+    "profile": null,
+    "source": "fixture"
+  },
+  "linux:claude:checkpoint": {
+    "engine": "claude",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "source": "<root>/CLAUDE_CONFIG_DIR/projects/project/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "profile": null,
+    "savedAt": 1791619200000,
+    "contents": "{\"type\":\"user\",\"cwd\":\"<root>\",\"sessionId\":\"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\",\"isSidechain\":false}\n",
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest",
+      "screen"
+    ]
+  },
+  "linux:codex:capture": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "transcriptPath": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "cwd": "<root>",
+    "profile": null,
+    "source": "fixture"
+  },
+  "linux:codex:checkpoint": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "source": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "profile": null,
+    "savedAt": 1791619200000,
+    "contents": "{\"type\":\"session_meta\",\"payload\":{\"id\":\"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\",\"cwd\":\"<root>\",\"source\":\"cli\"}}\n",
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest",
+      "screen"
+    ]
+  },
+  "linux:moved-codex:capture": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "transcriptPath": "<root>/moved-codex/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "cwd": "<root>",
+    "profile": null,
+    "source": "fixture"
+  },
+  "linux:moved-codex:checkpoint": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "source": "<root>/moved-codex/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "profile": null,
+    "savedAt": 1791619200000,
+    "contents": "{\"type\":\"session_meta\",\"payload\":{\"id\":\"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\",\"cwd\":\"<root>\",\"source\":\"cli\"}}\n",
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest",
+      "screen"
+    ]
+  },
+  "linux:profile-codex:capture": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "transcriptPath": "<root>/profile/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "cwd": "<root>",
+    "profile": "<root>/profile",
+    "source": "fixture"
+  },
+  "linux:profile-codex:checkpoint": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "source": "<root>/profile/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "profile": "<root>/profile",
+    "savedAt": 1791619200000,
+    "contents": "{\"type\":\"session_meta\",\"payload\":{\"id\":\"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\",\"cwd\":\"<root>\",\"source\":\"cli\"}}\n",
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest",
+      "screen"
+    ]
+  },
+  "linux:alias-codex:capture": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "transcriptPath": "<root>/alias.jsonl",
+    "cwd": "<root>",
+    "profile": null,
+    "source": "fixture"
+  },
+  "linux:alias-codex:checkpoint": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "source": "<root>/alias.jsonl",
+    "profile": null,
+    "savedAt": 1791619200000,
+    "contents": "{\"type\":\"session_meta\",\"payload\":{\"id\":\"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\",\"cwd\":\"<root>\",\"source\":\"cli\"}}\n",
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest",
+      "screen"
+    ]
+  },
+  "linux:pi:capture": {
+    "engine": "pi",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "transcriptPath": "<root>/PI_HOME/agent/sessions/workspace/2026-10-10T08-00-00-000Z_aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "cwd": "<root>",
+    "profile": null,
+    "source": "fixture"
+  },
+  "linux:pi:checkpoint": {
+    "engine": "pi",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "source": "<root>/PI_HOME/agent/sessions/workspace/2026-10-10T08-00-00-000Z_aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "profile": null,
+    "savedAt": 1791619200000,
+    "contents": "{\"type\":\"session\",\"version\":3,\"id\":\"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\",\"cwd\":\"<root>\"}\n",
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest",
+      "screen"
+    ]
+  },
+  "linux:unwritten-pi:capture": {
+    "engine": "pi",
+    "sessionId": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+    "transcriptPath": null,
+    "cwd": "<root>",
+    "profile": null,
+    "source": "fixture"
+  },
+  "linux:unwritten-pi:checkpoint": {
+    "engine": "pi",
+    "sessionId": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+    "source": null,
+    "profile": null,
+    "savedAt": 1791619200000,
+    "contents": {
+      "version": 1,
+      "sessionId": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "engine": "pi",
+      "cwd": "<root>",
+      "savedAt": 1791619200000,
+      "screen": "Unsent fixture draft"
+    },
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest",
+      "screen"
+    ]
+  },
+  "linux:terminal:capture": {
+    "engine": "terminal",
+    "sessionId": "",
+    "transcriptPath": null,
+    "cwd": "<root>",
+    "profile": null,
+    "source": "fixture"
+  },
+  "linux:terminal:checkpoint": {
+    "engine": "terminal",
+    "sessionId": "",
+    "source": null,
+    "profile": null,
+    "savedAt": 1791619200000,
+    "contents": {
+      "version": 1,
+      "sessionId": "",
+      "engine": "terminal",
+      "cwd": "<root>",
+      "savedAt": 1791619200000,
+      "screen": "Unsent fixture draft"
+    },
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest"
+    ]
+  },
+  "darwin:claude:capture": {
+    "engine": "claude",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "transcriptPath": "<root>/CLAUDE_CONFIG_DIR/projects/project/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "cwd": "<root>",
+    "profile": null,
+    "source": "fixture"
+  },
+  "darwin:claude:checkpoint": {
+    "engine": "claude",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "source": "<root>/CLAUDE_CONFIG_DIR/projects/project/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "profile": null,
+    "savedAt": 1791619200000,
+    "contents": "{\"type\":\"user\",\"cwd\":\"<root>\",\"sessionId\":\"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\",\"isSidechain\":false}\n",
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest",
+      "screen"
+    ]
+  },
+  "darwin:codex:capture": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "transcriptPath": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "cwd": "<root>",
+    "profile": null,
+    "source": "fixture"
+  },
+  "darwin:codex:checkpoint": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "source": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "profile": null,
+    "savedAt": 1791619200000,
+    "contents": "{\"type\":\"session_meta\",\"payload\":{\"id\":\"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\",\"cwd\":\"<root>\",\"source\":\"cli\"}}\n",
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest",
+      "screen"
+    ]
+  },
+  "darwin:moved-codex:capture": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "transcriptPath": "<root>/moved-codex/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "cwd": "<root>",
+    "profile": null,
+    "source": "fixture"
+  },
+  "darwin:moved-codex:checkpoint": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "source": "<root>/moved-codex/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "profile": null,
+    "savedAt": 1791619200000,
+    "contents": "{\"type\":\"session_meta\",\"payload\":{\"id\":\"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\",\"cwd\":\"<root>\",\"source\":\"cli\"}}\n",
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest",
+      "screen"
+    ]
+  },
+  "darwin:profile-codex:capture": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "transcriptPath": "<root>/profile/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "cwd": "<root>",
+    "profile": "<root>/profile",
+    "source": "fixture"
+  },
+  "darwin:profile-codex:checkpoint": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "source": "<root>/profile/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "profile": "<root>/profile",
+    "savedAt": 1791619200000,
+    "contents": "{\"type\":\"session_meta\",\"payload\":{\"id\":\"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\",\"cwd\":\"<root>\",\"source\":\"cli\"}}\n",
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest",
+      "screen"
+    ]
+  },
+  "darwin:alias-codex:capture": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "transcriptPath": "<root>/alias.jsonl",
+    "cwd": "<root>",
+    "profile": null,
+    "source": "fixture"
+  },
+  "darwin:alias-codex:checkpoint": {
+    "engine": "codex",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "source": "<root>/alias.jsonl",
+    "profile": null,
+    "savedAt": 1791619200000,
+    "contents": "{\"type\":\"session_meta\",\"payload\":{\"id\":\"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\",\"cwd\":\"<root>\",\"source\":\"cli\"}}\n",
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest",
+      "screen"
+    ]
+  },
+  "darwin:pi:capture": {
+    "engine": "pi",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "transcriptPath": "<root>/PI_HOME/agent/sessions/workspace/2026-10-10T08-00-00-000Z_aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "cwd": "<root>",
+    "profile": null,
+    "source": "fixture"
+  },
+  "darwin:pi:checkpoint": {
+    "engine": "pi",
+    "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+    "source": "<root>/PI_HOME/agent/sessions/workspace/2026-10-10T08-00-00-000Z_aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+    "profile": null,
+    "savedAt": 1791619200000,
+    "contents": "{\"type\":\"session\",\"version\":3,\"id\":\"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\",\"cwd\":\"<root>\"}\n",
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest",
+      "screen"
+    ]
+  },
+  "darwin:unwritten-pi:capture": {
+    "engine": "pi",
+    "sessionId": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+    "transcriptPath": null,
+    "cwd": "<root>",
+    "profile": null,
+    "source": "fixture"
+  },
+  "darwin:unwritten-pi:checkpoint": {
+    "engine": "pi",
+    "sessionId": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+    "source": null,
+    "profile": null,
+    "savedAt": 1791619200000,
+    "contents": {
+      "version": 1,
+      "sessionId": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "engine": "pi",
+      "cwd": "<root>",
+      "savedAt": 1791619200000,
+      "screen": "Unsent fixture draft"
+    },
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest",
+      "screen"
+    ]
+  },
+  "darwin:terminal:capture": {
+    "engine": "terminal",
+    "sessionId": "",
+    "transcriptPath": null,
+    "cwd": "<root>",
+    "profile": null,
+    "source": "fixture"
+  },
+  "darwin:terminal:checkpoint": {
+    "engine": "terminal",
+    "sessionId": "",
+    "source": null,
+    "profile": null,
+    "savedAt": 1791619200000,
+    "contents": {
+      "version": 1,
+      "sessionId": "",
+      "engine": "terminal",
+      "cwd": "<root>",
+      "savedAt": 1791619200000,
+      "screen": "Unsent fixture draft"
+    },
+    "unchanged": true,
+    "files": [
+      "history",
+      "manifest"
+    ]
+  }
+}

@@ -11,7 +11,8 @@ import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import { sid } from '../../lib/log.js'
-import type { registry } from '../../lib/registry.js'
+import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
+import type { RegisteredSession, registry } from '../../lib/registry.js'
 import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
@@ -58,7 +59,7 @@ export function createForgetSession({
   /** Release a mutable session binding, or remove the process-owned agent everywhere. */
   const forgetSession = (
     id: string,
-    opts: { force?: boolean; keepAgent?: boolean; agentId?: string } = {},
+    opts: { force?: boolean; keepAgent?: boolean; agentId?: string; captured?: RegisteredSession } = {},
   ): void => {
     const doomed = registry.resolve(id)
     const sessionId = doomed?.sessionId || id
@@ -73,7 +74,19 @@ export function createForgetSession({
       ? `[agent] ${sid(announceId)} released session ${sid(sessionId)}`
       : `[agent] ${sid(announceId)} forgotten`)
 
-    if (!opts.keepAgent && doomed) stoppedAgents.save(doomed)
+    if (!opts.keepAgent && doomed) {
+      const captured = opts.captured
+      if (captured && (captured.agentId !== doomed.agentId || captured.engine !== doomed.engine
+        || captured.registeredAt !== doomed.registeredAt || doomed.sessionId && captured.sessionId !== doomed.sessionId
+        || captured.processIdentity && (!sameProcessIdentity(captured.processIdentity, doomed.processIdentity)
+          || captured.processIdentity.executable !== doomed.processIdentity?.executable))) {
+        throw new Error('The harness changed before its captured conversation could be retained.')
+      }
+      // Stop may prove a parent path while the live row still names an overwritten child.
+      // Preserve that capture through this last archive, including intervening hook saves.
+      stoppedAgents.save(captured ? { ...doomed, sessionId: captured.sessionId, transcriptPath: captured.transcriptPath,
+        hermesHome: captured.hermesHome, boundAt: captured.boundAt, source: captured.source } : doomed)
+    }
     if (opts.keepAgent) registry.unbindSession(sessionId)
     else if (doomed) registry.removeAgent(doomed.agentId)
     else registry.remove(sessionId)
