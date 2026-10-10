@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { applyOpencodeSessionModel, parseOpencodeModelId } from '../../engines/launchControl.js'
+import { applyOpencodeSessionModel, parseOpencodeModelId, opencodeMajorVersion } from '../../engines/launchControl.js'
 import { isOpencodeV2 } from '../../engines/launchControl.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { validateLaunchOverrides } from '../../lib/launchOverrides.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
+import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
+import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import { inspectRuntimePane } from '../../lib/runtimeProfileController.js'
 import { clearPaneRemainOnExit } from '../../lib/tmux.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
+import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
+import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { createAgentRetargeter, type RetargetDeps } from './retarget.js'
 
 vi.mock('../../engines/launchControl.js', async (real) => ({
@@ -39,14 +42,14 @@ vi.mock('../../lib/tmux.js', async (real) => ({
 }))
 vi.mock('../../lib/workspaceCheck.js', () => ({ workspaceMissing: vi.fn(() => null) }))
 
-const pane = { backend: 'tmux', paneId: '%4' }
+const pane = { backend: 'tmux' as const, paneId: '%4' }
 const grid = { networkId: 'g1', networkName: 'Home', baseUrl: 'http://g', model: 'big', apiKey: 'k' }
 const agent = (over: Partial<RegisteredSession> = {}): RegisteredSession => ({
   agentId: 'a1', sessionId: 's1', engine: 'claude', cwd: '/work', runtimes: [pane], processIdentity: { pid: 1, startMarker: 'old' }, ...over,
 }) as unknown as RegisteredSession
 
 function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDeps> = {}) {
-  const release = vi.fn()
+  const release = vi.fn(), releaseRoute = vi.fn()
   const deps: RetargetDeps = {
     readScreen: async (session, capture) => ({ pane: inspectRuntimePane(session.engine, capture ?? ''), question: null, messageHold: null, teamHold: null, activity: null, busy: false, stoppedGoal: false }),
     purgeBusy: vi.fn(() => false),
@@ -65,8 +68,8 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
     acquireTerminalControl: vi.fn(() => release),
     relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { gridLaunchRecord: { override: grid, webSearch: 'off' } } })) as never,
     downgradedPermission: vi.fn(async (_s, bypass: boolean) => ({ bypassPermission: bypass, permissionMode: null })) as never,
-    agentReconciler: { holdRoute: vi.fn(), releaseRoute: vi.fn() },
-    restartJobs: { busy: vi.fn(() => false), cancel: vi.fn() } as never,
+    agentReconciler: { holdRoute: vi.fn(() => releaseRoute) },
+    restartJobs: { busy: vi.fn(() => false), cancel: vi.fn(), revision: () => 0 } as never,
     paneSwapDeps: vi.fn(() => ({})) as never,
     liveBypassPermission: vi.fn(async () => true),
     announceSession: vi.fn(),
@@ -74,7 +77,7 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
     opencodeDb: '/db/opencode.db',
     ...over,
   }
-  return { deps, release, retarget: createAgentRetargeter(deps) }
+  return { deps, release, releaseRoute, retarget: createAgentRetargeter(deps) }
 }
 
 describe('retargeting an agent', () => {
@@ -100,6 +103,63 @@ describe('retargeting an agent', () => {
   })
 
   describe('refusals before anything is touched', () => {
+    it('cannot follow a mutable row to a replacement conversation while capture waits', async () => {
+      const row = agent()
+      let finish!: (value: string) => void
+      const run = setup(row, { captureTerminal: () => new Promise(done => { finish = done }) })
+      const pending = run.retarget({ agentId: 'a1', grid })
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+      row.sessionId = 'replacement'
+      row.processIdentity = { pid: 77, startMarker: 'replacement', executable: 'claude' }
+      finish('idle pane')
+      expect(await pending).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
+    it.each(['validation', 'version', 'screen', 'preparation', 'native-write', 'environment', 'bypass', 'permission', 'replacement', 'gateway', 'pane-option'] as const)(
+      'cannot publish or continue a retarget whose owner changes during %s', async phase => {
+        const row = agent({ engine: 'opencode', subscriptionModel: 'fixture/model' })
+        const run = setup(row, { relaunchOverrides: vi.fn(async () => ({ ok: true as const,
+          overrides: { sessionModel: 'fixture/model', env: {}, extraArgs: [], clearEnv: [] } })) })
+        const replace = () => { row.sessionId = 'replacement' }
+        switch (phase) {
+          case 'validation': vi.mocked(validateLaunchOverrides).mockImplementationOnce(async () => { replace(); return { ok: true } }); break
+          case 'version': vi.mocked(opencodeMajorVersion).mockImplementationOnce(async () => { replace(); return 2 }); break
+          case 'screen': run.deps.readScreen = vi.fn(async () => { replace(); return { pane: { idle: true } } as never }); break
+          case 'preparation': vi.mocked(run.deps.relaunchOverrides).mockImplementationOnce(async () => { replace(); return { ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } } }); break
+          case 'native-write': vi.mocked(applyOpencodeSessionModel).mockImplementationOnce(async () => { replace(); return { ok: true } }); break
+          case 'environment': vi.mocked(run.deps.tmuxBackend!.clearEnv).mockImplementationOnce(async () => { replace(); return { state: 'succeeded', dispatch: 'executed' } }); break
+          case 'bypass': vi.mocked(bypassPermissionFor).mockImplementationOnce(async () => { replace(); return true }); break
+          case 'permission': vi.mocked(run.deps.downgradedPermission).mockImplementationOnce(async () => { replace(); return {} }); break
+          case 'replacement': vi.mocked(restartAgent).mockImplementationOnce(async () => { replace(); return { ok: true, resumed: true, processIdentity: { pid: 2, executable: 'opencode', startMarker: 'new' } } }); break
+          case 'gateway': vi.mocked(probeGatewayRuntime).mockImplementationOnce(async () => { replace(); return { kind: 'none' } as never }); break
+          case 'pane-option': vi.mocked(clearPaneRemainOnExit).mockImplementationOnce(async () => { replace() }); break
+        }
+        const result = await createAgentRetargeter(run.deps)({ agentId: 'a1', grid: phase === 'environment' ? null : grid })
+        expect(result).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+        expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+        expect(run.deps.registry.setGridLaunch).not.toHaveBeenCalled()
+        expect(run.deps.announceSession).not.toHaveBeenCalled()
+      })
+
+    it('honors Stop cancellation while service preparation waits, even if the row is unchanged', async () => {
+      const restartJobs = new AgentRestartCoordinator()
+      const run = setup(agent(), { restartJobs })
+      vi.mocked(run.deps.relaunchOverrides).mockImplementationOnce(async () => {
+        restartJobs.cancel('a1')
+        return { ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }
+      })
+      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+      expect(restartAgent).not.toHaveBeenCalled()
+      expect(run.release).toHaveBeenCalledOnce()
+    })
+
+    it('releases terminal control if preparation throws', async () => {
+      const run = setup(agent(), { relaunchOverrides: vi.fn(async () => { throw Error('preparation failed') }) })
+      await expect(run.retarget({ agentId: 'a1', grid })).rejects.toThrow('preparation failed')
+      expect(run.release).toHaveBeenCalledOnce()
+      expect(run.releaseRoute).not.toHaveBeenCalled()
+    })
     it('invalidates an older restore as soon as retarget takes control', async () => {
       const { deps, retarget, release } = setup()
       await retarget({ agentId: 'a1', grid })
@@ -135,7 +195,7 @@ describe('retargeting an agent', () => {
       expect(await setup(agent(), { captureTerminal: vi.fn(async () => null) }).retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'TMUX_FAILED' })
       vi.mocked(inspectRuntimePane).mockReturnValueOnce({ idle: false } as never)
       expect(await setup().retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'AGENT_BUSY' })
-      expect(await setup(agent(), { restartJobs: { busy: () => true } as never }).retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'AGENT_BUSY' })
+      expect(await setup(agent(), { restartJobs: { busy: () => true, revision: () => 0 } as never }).retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'AGENT_BUSY' })
       expect(await setup(agent(), { acquireTerminalControl: () => null }).retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'AGENT_BUSY' })
     })
 
@@ -148,22 +208,121 @@ describe('retargeting an agent', () => {
   })
 
   describe('a move that goes ahead', () => {
+    it('keeps its route until a slow replacement is confirmed, even past the default hold timer', async () => {
+      vi.useFakeTimers()
+      const onDiscovered = vi.fn()
+      const reconciler = new TerminalAgentReconciler({ current: () => [], backends: [], backendOrder: ['tmux'],
+        onDiscovered, onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(),
+        probe: async () => ({ processTableAvailable: true, ambiguousPlacements: new Set(),
+          targets: [{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime: pane, rootPid: 1, cwd: '/work' }] } }],
+          agents: [{ engine: 'claude', cwd: '/work', processIdentity: { pid: 4, executable: 'claude', startMarker: 'replacement' },
+            args: 'claude', resumeSessionId: null, runtimes: [pane], primaryRuntimeKey: terminalRouteKey(pane) }],
+        }),
+      })
+      let finish!: () => void
+      vi.mocked(restartAgent).mockImplementationOnce(() => new Promise(done => { finish = () => done({ ok: false, detail: 'fixture complete' }) }))
+      const run = setup(agent(), { agentReconciler: reconciler })
+      const pending = run.retarget({ agentId: 'a1', grid })
+      try {
+        await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+        await vi.advanceTimersByTimeAsync(30_001)
+        await reconciler.trigger()
+        expect(onDiscovered).not.toHaveBeenCalled()
+        finish()
+        await pending
+        await reconciler.trigger()
+        expect(onDiscovered).toHaveBeenCalledOnce()
+      } finally { finish?.(); await pending; vi.useRealTimers() }
+    })
+
+    it('cannot release a newer Stop route hold when an older retarget completes', async () => {
+      const onDiscovered = vi.fn()
+      const reconciler = new TerminalAgentReconciler({ current: () => [], backends: [], backendOrder: ['tmux'],
+        onDiscovered, onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(),
+        probe: async () => ({ processTableAvailable: true, ambiguousPlacements: new Set(),
+          targets: [{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime: pane, rootPid: 1, cwd: '/work' }] } }],
+          agents: [{ engine: 'claude', cwd: '/work', processIdentity: { pid: 4, executable: 'claude', startMarker: 'replacement' },
+            args: 'claude', resumeSessionId: null, runtimes: [pane], primaryRuntimeKey: terminalRouteKey(pane) }],
+        }),
+      })
+      const restartJobs = new AgentRestartCoordinator()
+      const run = setup(agent(), { agentReconciler: reconciler, restartJobs })
+      let releaseStop!: () => void
+      vi.mocked(restartAgent).mockImplementationOnce(async () => {
+        restartJobs.cancel('a1')
+        releaseStop = reconciler.holdRoute(terminalRouteKey(pane))
+        return { ok: false, detail: 'cancelled' }
+      })
+      try {
+        expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+        await reconciler.trigger()
+        expect(onDiscovered).not.toHaveBeenCalled()
+        releaseStop()
+        await reconciler.trigger()
+        expect(onDiscovered).toHaveBeenCalledOnce()
+      } finally { releaseStop?.() }
+    })
+
+    it.each(['environment', 'permission', 'cancelled'] as const)('discloses an applied model change when later %s preparation fails', async phase => {
+      const row = agent({ engine: 'opencode', subscriptionModel: 'fixture/model' })
+      const run = setup(row, { relaunchOverrides: vi.fn(async () => ({ ok: true as const,
+        overrides: { env: {}, extraArgs: [], clearEnv: [], sessionModel: 'fixture/model' } })) })
+      if (phase === 'environment') vi.mocked(run.deps.tmuxBackend!.clearEnv).mockResolvedValueOnce({ state: 'failed', dispatch: 'rejected', reason: 'fixture failure' })
+      if (phase === 'permission') vi.mocked(run.deps.downgradedPermission).mockRejectedValueOnce(Error('fixture failure'))
+      if (phase === 'cancelled') vi.mocked(applyOpencodeSessionModel).mockImplementationOnce(async () => {
+        row.sessionId = 'replacement'
+        return { ok: true }
+      })
+      await expect(run.retarget({ agentId: 'a1', grid: null })).resolves.toMatchObject({ ok: false,
+        detail: expect.stringContaining('native model change was applied') })
+      expect(restartAgent).not.toHaveBeenCalled()
+      expect(run.release).toHaveBeenCalledOnce()
+    })
+
+    it('retains uncertainty when Stop revokes a write whose reply was lost', async () => {
+      const row = agent({ engine: 'opencode' })
+      const run = setup(row, { relaunchOverrides: vi.fn(async () => ({ ok: true as const,
+        overrides: { env: {}, extraArgs: [], clearEnv: [], sessionModel: 'fixture/model' } })) })
+      vi.mocked(applyOpencodeSessionModel).mockImplementationOnce(async () => {
+        row.sessionId = 'replacement'
+        return { ok: false, code: 'AGENT_CHANGED', effect: 'uncertain', detail: 'reply lost' }
+      })
+      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'AGENT_CHANGED',
+        detail: expect.stringContaining('may already have applied') })
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
+
+    it('reports a replacement that started before a later non-Error exception', async () => {
+      const run = setup()
+      vi.mocked(probeGatewayRuntime).mockRejectedValueOnce('fixture probe unavailable')
+      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'RETARGET_FAILED',
+        detail: 'The replacement process started, but retarget did not complete. fixture probe unavailable' })
+      expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+    })
+
+    it('does not announce a row removed by a publication observer', async () => {
+      const run = setup()
+      vi.mocked(run.deps.registry.setActive).mockImplementationOnce(() => { vi.mocked(run.deps.registry.byAgent).mockReturnValue(undefined) })
+      expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+    })
+
     it('onto a grid: the pane respawned, the new process adopted, the launch and the model it left kept', async () => {
       const log = vi.mocked(console.log)
       const run = setup()
       expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalled()
-      expect(restartAgent).toHaveBeenCalledWith({ engine: 'claude', sessionId: 's1' }, true, {})
+      expect(restartAgent).toHaveBeenCalledWith({ engine: 'claude', sessionId: 's1' }, true, { isCurrent: expect.any(Function) })
       // The grid is read off the new process's command line, never its executable alone.
       expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', expect.objectContaining({ pid: 2 }), 'none')
       expect(run.deps.registry.setGridLaunch).toHaveBeenCalledWith('a1', { override: grid, webSearch: 'off' })
       expect(run.deps.registry.setSubscriptionModel).toHaveBeenCalledWith('a1', 'opus')
       expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
       expect(run.deps.refreshGridAssignment).toHaveBeenCalledWith(agent())
-      expect(clearPaneRemainOnExit).toHaveBeenCalledWith('%4')
+      expect(clearPaneRemainOnExit).toHaveBeenCalledWith('%4', expect.any(Function))
       expect(run.deps.announceSession).toHaveBeenCalled()
       expect(run.release).toHaveBeenCalled()
-      expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalled()
+      expect(run.releaseRoute).toHaveBeenCalled()
       expect(log.mock.calls.map(([line]) => String(line))).toContain('claude on Home · retargeted a1 · resumed')
     })
 
@@ -193,7 +352,7 @@ describe('retargeting an agent', () => {
       vi.mocked(restartAgent).mockResolvedValueOnce({ ok: true, resumed: false, processIdentity: { pid: 2, startMarker: 'n' } } as never)
       expect(await run.retarget({ agentId: 'a1', grid: null })).toEqual({ ok: true })
       expect(vi.mocked(validateLaunchOverrides).mock.lastCall?.[2]).toEqual({ gridLaunch: null, codexHome: undefined, subscriptionModel: 'opus' })
-      expect(run.deps.tmuxBackend!.clearEnv).toHaveBeenCalledWith(pane, ['ANTHROPIC_BASE_URL'])
+      expect(run.deps.tmuxBackend!.clearEnv).toHaveBeenCalledWith(pane, ['ANTHROPIC_BASE_URL'], expect.any(Function))
       expect(run.deps.registry.setGridLaunch).toHaveBeenCalledWith('a1', null)
       expect(run.deps.registry.setSubscriptionModel).not.toHaveBeenCalled()
       expect(log.mock.calls.map(([line]) => String(line))).toContain('claude on its own login · retargeted a1 · fresh session')
@@ -211,7 +370,7 @@ describe('retargeting an agent', () => {
       vi.mocked(restartAgent).mockResolvedValueOnce({ ok: false, detail: 'no process' } as never)
       expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'RESPAWN_FAILED', detail: 'no process' })
       expect(run.release).toHaveBeenCalledTimes(3)
-      expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledTimes(3)
+      expect(run.releaseRoute).toHaveBeenCalledTimes(3)
     })
 
     it('rewrites a resumed OpenCode session\'s model before the respawn, and refuses if it cannot', async () => {
@@ -219,7 +378,7 @@ describe('retargeting an agent', () => {
       const withModel = { relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { sessionModel: 'grid/big', gridLaunchRecord: null } })) as never }
       const run = setup(opencode, withModel)
       await run.retarget({ agentId: 'a1', grid })
-      expect(applyOpencodeSessionModel).toHaveBeenCalledWith({ opencodeMajor: 1, dbPath: '/db/opencode.db', sessionId: 's1', model: { providerID: 'grid', modelID: 'big' }, cwd: '/work', checkCatalog: false })
+      expect(applyOpencodeSessionModel).toHaveBeenCalledWith({ opencodeMajor: 1, dbPath: '/db/opencode.db', sessionId: 's1', model: { providerID: 'grid', modelID: 'big' }, cwd: '/work', checkCatalog: false }, { current: expect.any(Function) })
       vi.mocked(applyOpencodeSessionModel).mockResolvedValueOnce({ ok: false, code: 'SESSION_NOT_FOUND', detail: 'no rows' } as never)
       expect(await setup(agent({ engine: 'opencode', cwd: undefined } as Partial<RegisteredSession>), withModel).retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'SESSION_NOT_FOUND', detail: 'no rows' })
       // v2 needs no sqlite3; a model the overrides do not name, or one that does not parse, writes nothing.
@@ -257,13 +416,22 @@ describe('retargeting an agent', () => {
       } finally { clearTimeout(timer) }
     })
 
-    it('reads the live bypass flag only when the row recorded none, and announces nothing for a row gone meanwhile', async () => {
+    it('does not act on a row removed before retarget can establish ownership', async () => {
       const run = setup()
       vi.mocked(run.deps.registry.byAgent).mockReturnValue(undefined)
-      await run.retarget({ agentId: 'a1', grid })
-      expect(bypassPermissionFor).toHaveBeenCalled()
-      expect(run.deps.liveBypassPermission).toHaveBeenCalled()
+      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+      expect(bypassPermissionFor).not.toHaveBeenCalled()
+      expect(run.deps.liveBypassPermission).not.toHaveBeenCalled()
       expect(run.deps.announceSession).not.toHaveBeenCalled()
+    })
+
+    it('reports a confirmed native model change if the subsequent respawn fails', async () => {
+      const run = setup(agent({ engine: 'opencode' }), { relaunchOverrides: vi.fn(async () => ({ ok: true as const,
+        overrides: { env: {}, extraArgs: [], clearEnv: [], sessionModel: 'fixture/model' } })) })
+      vi.mocked(restartAgent).mockResolvedValueOnce({ ok: false, detail: 'spawn failed' })
+      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'RESPAWN_FAILED',
+        detail: expect.stringContaining('native model change was applied') })
+      expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
     })
   })
 })

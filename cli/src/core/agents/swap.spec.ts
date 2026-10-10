@@ -38,6 +38,7 @@ function setup(row: RegisteredSession | null = session()) {
 
 describe('the pane-process swap', () => {
   beforeEach(() => {
+    vi.mocked(terminateDeletedAgent).mockClear()
     vi.mocked(resolvePaneEngineProcess).mockReset().mockResolvedValue(null)
     vi.mocked(buildEngineLaunchArgv).mockClear()
   })
@@ -49,6 +50,19 @@ describe('the pane-process swap', () => {
     const swap = createPaneSwap({ ...setup().deps, restartJobs })
     expect(swap.restartJobs).toBe(restartJobs)
     expect(swap.restartJobs.revision('a1')).toBe(boot)
+  })
+
+  it('passes revocable ownership into the final signal and tmux dispatch boundaries', async () => {
+    const { swap, tmuxBackend } = setup()
+    const current = () => false
+    const prepared = swap.paneSwapDeps(session(), runtime, {}, null, current)
+    expect(prepared.isCurrent?.()).toBe(false)
+    await prepared.holdOpen()
+    expect(tmuxBackend.holdOpen).toHaveBeenCalledWith(runtime, current)
+    await prepared.terminate()
+    expect(vi.mocked(terminateDeletedAgent).mock.lastCall?.[1].current).toBe(current)
+    await prepared.respawn(['fixture-engine'])
+    expect(tmuxBackend.respawn).toHaveBeenCalledWith(runtime, expect.objectContaining({ current }))
   })
 
   it('restarts only the agent it was asked about: same registration, same pane, same engine', () => {

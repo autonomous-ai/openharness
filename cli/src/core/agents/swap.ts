@@ -52,13 +52,15 @@ export function createPaneSwap({ byAgent, tmuxBackend, prepareSessionResume, kee
     /** The mode this swap may actually ask for — the row's own, unless the engine on disk has since
      *  stopped taking its flag and the caller dropped it (`dropPermissionFlagIfUnsupported`). */
     permissionMode: string | null = session.permissionMode ?? null,
+    current?: () => boolean,
   ): RestartAgentDeps => ({
+    ...(current ? { isCurrent: current } : {}),
     prepareResume: () => prepareSessionResume(session),
     // The row as the swap found it: the conversation a fallback to a fresh start leaves behind.
     keepAbandoned: () => keepAbandonedConversation(session),
     respawnRefusal: () => tmuxBackend!.respawnRefusal(launch.env ? { env: launch.env } : {}),
     holdOpen: async () => {
-      const result = await tmuxBackend!.holdOpen(runtime)
+      const result = await tmuxBackend!.holdOpen(runtime, current)
       return result.state === 'succeeded'
         ? { ok: true }
         : { ok: false, reason: 'reason' in result ? result.reason : 'could not re-arm remain-on-exit' }
@@ -68,10 +70,12 @@ export function createPaneSwap({ byAgent, tmuxBackend, prepareSessionResume, kee
       kill: (pid, signal) => process.kill(pid, signal),
       sleep: (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.() }),
       log: (message) => console.log(message),
+      ...(current ? { current } : {}),
     }, checkAfterMs),
     respawn: async (argv) => {
       const result = await tmuxBackend!.respawn(runtime, {
         command: argv,
+        ...(current ? { current } : {}),
         cwd: homedir(),
         ...(launch.env ? { env: launch.env } : {}),
       })

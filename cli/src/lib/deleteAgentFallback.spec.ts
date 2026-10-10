@@ -42,6 +42,21 @@ function deps(over: Partial<TerminateDeps> = {}): TerminateDeps & { kills: Array
 }
 
 describe('delete-agent process termination', () => {
+  it.each(['initial wait', 'identity read', 'grace read', 'escalation read'] as const)('does not signal after ownership is revoked during %s', async phase => {
+    let current = true, reads = 0
+    const d = deps({ current: () => current,
+      sleep: async () => { if (phase === 'initial wait') current = false },
+      checkRuntime: async () => {
+        reads++
+        if ((phase === 'identity read' && reads === 1) || (phase === 'grace read' && reads === 2)
+          || (phase === 'escalation read' && reads === 3)) current = false
+        return runtime(true)
+      },
+    })
+    expect(await terminateDeletedAgent(SESSION, d, 0, 250)).toBe('not-ours')
+    expect(d.kills).toEqual(phase === 'initial wait' || phase === 'identity read' ? [] : [[4242, 'SIGTERM']])
+  })
+
   it('does nothing when the engine already left', async () => {
     const d = deps({ checkRuntime: async () => runtime(false) })
     await expect(terminateDeletedAgent(SESSION, d)).resolves.toBe('gone')
