@@ -50,6 +50,14 @@ function searchPids(d: IsolatedDaemon): number[] {
 }
 const finds = async (client: LocalClient, word: string, sessionId: string): Promise<boolean> =>
   JSON.stringify(await client.request('session_search', { query: word }, 30_000)).includes(sessionId)
+/** A session's row in the index file, read as the Memories package reads it: directly and read-only. */
+function indexRow(d: IsolatedDaemon, sessionId: string): Record<string, unknown> | undefined {
+  const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as {
+    DatabaseSync: new (path: string, options: { readOnly: boolean }) => { prepare(sql: string): { get(...args: string[]): Record<string, unknown> | undefined }; close(): void }
+  }
+  const db = new DatabaseSync(join(d.dataDir, 'session-search.db'), { readOnly: true })
+  try { return db.prepare('SELECT agent_id, title, cwd, origin FROM sessions WHERE session_id = ?').get(sessionId) } finally { db.close() }
+}
 
 describe('services in their own processes', () => {
   let daemon: IsolatedDaemon | undefined
@@ -78,6 +86,15 @@ describe('services in their own processes', () => {
       const word = `axolotl${engine}`
       await turn(client, agent.id, `about the ${word}`)
       await until(`search to find the ${engine} conversation`, () => finds(client, word, agent.sessionId) || null, 60_000, 1_000)
+      // Its row holds the harness's folder and title, the ones the catalog joins from the harness
+      // records, for what reads the file itself (the Memories package); and it is still Harness's.
+      await until(`the ${engine} row to carry its folder and title`, async () => {
+        const catalog = await client.request('session_search', { query: '', catalogAfter: '', limit: 100 }, 30_000)
+        const entry = (catalog.hits as Array<Record<string, any>> | undefined)?.find((hit) => hit.sessionId === agent.sessionId)?.catalogEntry
+        const indexed = indexRow(d, agent.sessionId)
+        return entry && indexed && String(indexed.cwd).endsWith(`search-out-${engine}`) && indexed.cwd === entry.cwd
+          && indexed.title && indexed.title === entry.title && indexed.agent_id === agent.id && indexed.origin === '' ? indexed : null
+      }, 30_000, 1_000)
     }
     expect(d.coresStarted()).toBe(1)
     client.close()

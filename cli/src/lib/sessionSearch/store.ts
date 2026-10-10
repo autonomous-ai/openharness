@@ -55,7 +55,8 @@ export interface IndexedSession {
   /**
    * A conversation Harness did not start (lib/sessionSearch/external.ts), whose `agentId` is empty:
    * its title (Codex's thread name, Claude's own title, else the first ask), the folder it resumes in,
-   * and where it ran. Empty for a Harness session.
+   * and where it ran. A Harness session has its harness's title (else the name the apps show for it)
+   * and folder, as they were when it was last indexed, and no origin.
    */
   title?: string
   cwd?: string

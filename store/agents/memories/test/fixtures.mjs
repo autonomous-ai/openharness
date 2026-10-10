@@ -15,7 +15,11 @@ function put(root, path, text) {
   return file
 }
 
-/** The index schema the readers rely on (a subset of cli/src/lib/sessionSearch/store.ts). */
+/**
+ * The index schema the readers rely on (a subset of cli/src/lib/sessionSearch/store.ts). A session's
+ * first turn says whose it is, as the CLI writes it: one Harness started has an `agent` id, its header
+ * and no `origin`; one it did not start has no agent and says where it ran (`origin: 'terminal'`).
+ */
 export function sessionIndex(dir, { now = Date.now(), turns = [] } = {}) {
   mkdirSync(dir, { recursive: true })
   const db = new DatabaseSync(join(dir, 'session-search.db'))
@@ -34,14 +38,15 @@ export function sessionIndex(dir, { now = Date.now(), turns = [] } = {}) {
   const sessions = new Map()
   const insertTurn = db.prepare('INSERT INTO turns (session_id, turn, at, name, ask, answer) VALUES (?, ?, ?, ?, ?, ?)')
   for (const turn of turns) {
-    const session = sessions.get(turn.session) ?? { engine: turn.engine, cwd: turn.cwd ?? '', title: turn.title ?? '', count: 0, last: 0 }
+    const session = sessions.get(turn.session) ?? { engine: turn.engine, cwd: turn.cwd ?? '', title: turn.title ?? '',
+      agent: turn.agent ?? `agent-${turn.session}`, header: turn.header ?? '{}', origin: turn.origin ?? '', count: 0, last: 0 }
     insertTurn.run(turn.session, session.count, now - (turn.daysAgo ?? 0) * DAY, session.title, turn.ask ?? '', turn.answer ?? '')
     session.count++
     session.last = Math.max(session.last, now - (turn.daysAgo ?? 0) * DAY)
     sessions.set(turn.session, session)
   }
-  const insertSession = db.prepare("INSERT INTO sessions VALUES (?, ?, ?, '', '{}', 0, 0, 0, 0, ?, ?, ?, ?, '')")
-  for (const [id, session] of sessions) insertSession.run(id, `agent-${id}`, session.engine, session.last, session.count, session.title, session.cwd)
+  const insertSession = db.prepare("INSERT INTO sessions VALUES (?, ?, ?, '', ?, 0, 0, 0, 0, ?, ?, ?, ?, ?)")
+  for (const [id, session] of sessions) insertSession.run(id, session.agent, session.engine, session.header, session.last, session.count, session.title, session.cwd, session.origin)
   db.close()
 }
 

@@ -44,6 +44,13 @@ export interface SearchSource {
    * read from its transcript as it is indexed), else what was first asked in it.
    */
   external?: { cwd: string; origin: string; title: string }
+  /**
+   * A session Harness started: its harness's folder and title (else the name the apps show for it),
+   * kept on its row beside the header for what reads the index itself. The Memories package does: on
+   * one Mac (2026-10-10) all 165 Harness rows had neither, so half of that person's messages had no
+   * folder or title there. Cmd-P, resume and `hn` join the harness records at read time instead.
+   */
+  harness?: { cwd: string; title: string }
 }
 
 /** Claude Code's titles in a transcript: its own, and one the person gave (which wins). */
@@ -69,14 +76,30 @@ function titleLine(text: string): string {
   return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line
 }
 
-function headerFor(source: SearchSource, title: string): string {
-  return source.external ? [title, folderWords(source.external.cwd)].filter(Boolean).join(' · ') : source.header
+/** What a session's row says of it beside its turns. */
+type Heading = Required<Pick<IndexedSession, 'header' | 'title' | 'cwd' | 'origin'>>
+
+/**
+ * A row's heading. A conversation Harness did not start is headed by its own title and folder. A
+ * Harness session keeps the header it is given and carries its harness's title and folder, never an
+ * origin: an empty origin with an agent id is what marks a row as Harness's (store.ts).
+ */
+function headingFor(source: SearchSource, title: string): Heading {
+  if (source.external) {
+    const { cwd, origin } = source.external
+    return { header: [title, folderWords(cwd)].filter(Boolean).join(' · '), title, cwd, origin }
+  }
+  return { header: source.header, title: source.harness?.title ?? '', cwd: source.harness?.cwd ?? '', origin: '' }
 }
 
-function externalFields(source: SearchSource, title: string): Pick<IndexedSession, 'title' | 'cwd' | 'origin'> {
-  return source.external
-    ? { title, cwd: source.external.cwd, origin: source.external.origin }
-    : { title: '', cwd: '', origin: '' }
+/**
+ * Whether a row already holds the heading and owner a pass would give it. A title or folder that moved
+ * alone rewrites it as a header does, without reading the transcript again: a rename, a folder put
+ * right (lib/cwdRepair.ts), and the rows indexed before Harness rows carried either.
+ */
+function headed(existing: IndexedSession, heading: Heading, agentId: string): boolean {
+  return existing.agentId === agentId && existing.header === heading.header && (existing.title ?? '') === heading.title
+    && (existing.cwd ?? '') === heading.cwd && (existing.origin ?? '') === heading.origin
 }
 
 export interface SessionSearchResult {
@@ -388,18 +411,17 @@ export class SessionSearchIndex {
     const normalize = source.transcriptPath ? lineNormalizer(source.engine, source.sessionId) : null
     const file = source.transcriptPath && normalize ? await stat(source.transcriptPath).catch(() => null) : null
     const knownTitle = source.external ? source.external.title || existing?.title || '' : ''
-    const header = headerFor(source, knownTitle)
+    const heading = headingFor(source, knownTitle)
     if (!file || !source.transcriptPath || !normalize) {
       // Nothing to read (a terminal, a database-backed engine, a missing file): its name is still findable.
-      if (existing?.header === header && existing.agentId === source.agentId) return
+      if (existing && headed(existing, heading, source.agentId)) return
       if (this.deletedSessions.has(source.sessionId)) return
       store.writeSession({
         sessionId: source.sessionId, agentId: source.agentId, engine: source.engine,
-        path: existing?.path ?? source.transcriptPath ?? '', header,
+        path: existing?.path ?? source.transcriptPath ?? '', ...heading,
         size: existing?.size ?? 0, mtime: existing?.mtime ?? 0,
         resumeOffset: existing?.resumeOffset ?? 0, resumeTurn: existing?.resumeTurn ?? 0,
         lastAt: existing?.lastAt ?? (source.changedAt || null), turns: 0,
-        ...externalFields(source, knownTitle),
       }, NO_TURN_DELETE, [])
       return
     }
@@ -407,9 +429,9 @@ export class SessionSearchIndex {
     const mtime = Math.floor(file.mtimeMs)
     const samePath = existing?.path === path
     if (samePath && existing.size === file.size && existing.mtime === mtime) {
-      if (existing.header !== header || existing.agentId !== source.agentId) {
+      if (!headed(existing, heading, source.agentId)) {
         if (this.deletedSessions.has(source.sessionId)) return
-        store.writeSession({ ...existing, header, agentId: source.agentId, ...externalFields(source, knownTitle) }, NO_TURN_DELETE, [])
+        store.writeSession({ ...existing, ...heading, agentId: source.agentId }, NO_TURN_DELETE, [])
       }
       return
     }
@@ -437,7 +459,7 @@ export class SessionSearchIndex {
       : ''
     const session: IndexedSession = {
       sessionId: source.sessionId, agentId: source.agentId, engine: source.engine, path,
-      header: headerFor(source, title),
+      ...headingFor(source, title),
       size: file.size, mtime,
       resumeOffset: open ? open.offset : end,
       resumeTurn: open ? open.turn : collector.next,
@@ -445,7 +467,6 @@ export class SessionSearchIndex {
       // moved, as its engine says, before the file's own time.
       lastAt: lastAt ?? (resume ? existing.lastAt : null) ?? (source.external && source.changedAt ? source.changedAt : mtime),
       turns: 0,
-      ...externalFields(source, title),
     }
     // A long session's first pass writes hundreds of rows. In one transaction that held the thread for
     // 130 ms, so rows go in batches, each but the last saved as a pass that stopped at the next batch:
@@ -477,11 +498,10 @@ export class SessionSearchIndex {
   private async historyPass(source: SearchSource, existing: IndexedSession | undefined, dirty: boolean): Promise<void> {
     const store = this.opts.store
     const stamp = source.changedAt
-    // A conversation Harness did not start is headed by its own title and folder, as a transcript's is.
-    const headed = (title: string) => ({ header: headerFor(source, title), ...externalFields(source, title) })
     if (existing && !dirty && existing.mtime === stamp) {
-      const again = source.external ? headed(existing.title ?? '') : { header: source.header }
-      if (existing.header !== again.header || existing.agentId !== source.agentId) {
+      // A conversation Harness did not start is headed by its own title and folder, as a transcript's is.
+      const again = headingFor(source, source.external ? existing.title ?? '' : '')
+      if (!headed(existing, again, source.agentId)) {
         if (this.deletedSessions.has(source.sessionId)) return
         store.writeSession({ ...existing, ...again, agentId: source.agentId }, NO_TURN_DELETE, [])
       }
@@ -497,11 +517,10 @@ export class SessionSearchIndex {
     const { closed, open } = collector.finish()
     const turns = open ? [...closed, open] : closed
     const title = source.external ? titleLine(source.external.title || turns.find((turn) => turn.ask)?.ask || '') : ''
-    const head = source.external ? headed(title) : { header: source.header }
+    const head = headingFor(source, title)
     // The size field holds the fingerprint: how much conversation there was when last read.
     const fingerprint = turns.reduce((sum, turn) => sum + turn.ask.length + turn.answer.length + turn.tools.length + 1, 0)
-    if (existing && existing.size === fingerprint && existing.mtime === stamp
-      && existing.header === head.header && existing.agentId === source.agentId) return
+    if (existing && existing.size === fingerprint && existing.mtime === stamp && headed(existing, head, source.agentId)) return
     const changed = !existing || existing.size !== fingerprint
     if (this.deletedSessions.has(source.sessionId)) return
     store.writeSession({

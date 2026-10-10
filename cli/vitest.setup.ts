@@ -58,3 +58,5 @@ process.env.HARNESS_HOOK_ROUTES_DIR = join(process.env.ADAPTER_DATA_DIR, 'hook-r
 // holds today (a published catalog turned a fixture registry of two into the live shelf of 23).
 // Loopback port 9 refuses at once, so the live catalog falls back to the registry each test stubs.
 process.env.HARNESS_STORE_CATALOG_URL ??= 'http://127.0.0.1:9/catalog.json'
+// Last: everything above is in place, so `config/testIsolation.ts` may let `env.ts` load.
+process.env.HARNESS_TEST_ISOLATED = '1'
