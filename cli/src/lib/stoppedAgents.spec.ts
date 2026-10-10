@@ -20,6 +20,15 @@ afterEach(() => {
 })
 
 describe('saved catalog reads', () => {
+  it('saves a held conversation without persisting its transient identity verdict', async () => {
+    const { saved, store } = await fixture()
+    store.save({ ...saved, identityHold: 'The session-home catalog is unavailable.' })
+    const raw = JSON.parse(readFileSync(join(directory, 'stopped-agents', `${saved.agentId}.json`), 'utf8'))
+    expect(raw.session.sessionId).toBe(saved.sessionId)
+    expect(raw.session).not.toHaveProperty('identityHold')
+    expect(store.get(saved.agentId)).not.toHaveProperty('identityHold')
+  })
+
   it('does not reread unchanged records for status snapshots, but resume still reads the file', async () => {
     const { saved, store } = await fixture()
     store.save(saved)

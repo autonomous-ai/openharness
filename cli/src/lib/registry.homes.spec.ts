@@ -49,6 +49,37 @@ it('repairs a child-overwritten parent from an adopted Codex home before the log
 })
 
 
+it.each(['unbind', 'release', 'separate-shell'] as const)('clears a hold with its binding while retaining a sibling hold: %s', async operation => {
+  root = mkdtempSync(join(tmpdir(), 'registry-home-release-'))
+  vi.stubEnv('ADAPTER_DATA_DIR', root)
+  vi.stubEnv('CODEX_HOME', join(root, 'own-codex'))
+  const rows = [0, 1].map(index => ({ launcherId: `fixture-${index}`, engine: 'codex', sessionId: `session-${index}`,
+    transcriptPath: join(root!, 'moved-codex', 'sessions', `rollout-${index}.jsonl`), tmuxPane: `%${index + 1}`,
+    projectDir: 'fixture', cwd: root, processIdentity: null, registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1 }))
+  writeFileSync(join(root, 'engine-homes.json'), '{', { mode: 0o600 })
+  writeFileSync(join(root, 'registry.json'), JSON.stringify(rows), { mode: 0o600 })
+  vi.resetModules()
+  const { registry } = await import('./registry.js')
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+  try {
+    registry.load()
+    expect(registry.byAgent('fixture-0')?.identityHold).toBeTruthy()
+    const released = operation === 'unbind'
+      ? (expect(registry.unbindSession('session-0')).toBe(true), registry.byAgent('fixture-0'))
+      : registry.releaseEngine('fixture-0', operation === 'separate-shell')
+    expect(released).toMatchObject({ sessionId: '', transcriptPath: null })
+    expect(released).not.toHaveProperty('identityHold')
+    expect(registry.byAgent(released!.agentId)).not.toHaveProperty('identityHold')
+    expect(registry.byAgent('fixture-1')?.identityHold).toBeTruthy()
+    if (operation === 'separate-shell') {
+      expect(released!.agentId).not.toBe('fixture-0')
+      expect(registry.byAgent('fixture-0')).toBeUndefined()
+    }
+    const saved = JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))
+    expect(saved.some((row: any) => Object.hasOwn(row, 'identityHold'))).toBe(false)
+  } finally { log.mockRestore() }
+})
+
 it.each(['healthy', 'unreadable', 'changed-at-commit'] as const)('stages a registry-sized home batch without losing bindings: %s', async condition => {
   root = mkdtempSync(join(tmpdir(), 'registry-home-batch-'))
   vi.stubEnv('ADAPTER_DATA_DIR', root)

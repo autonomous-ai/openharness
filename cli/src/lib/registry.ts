@@ -1094,6 +1094,7 @@ class Registry {
     if (entry.sessionId && this.sessionIndex.get(entry.sessionId) === entry.agentId) {
       this.sessionIndex.delete(entry.sessionId)
     }
+    delete entry.identityHold
     entry.sessionId = ''
     entry.boundAt = null
     entry.transcriptPath = null
