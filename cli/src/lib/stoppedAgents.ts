@@ -1,5 +1,5 @@
 /** Stopped work is durable history, separate from the registry of live terminal routes. */
-import { closeSync, constants, fsyncSync, lstatSync, openSync, readdirSync, statSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
+import { closeSync, constants, fsyncSync, lstatSync, openSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
@@ -234,6 +234,24 @@ export class StoppedAgentStore {
     unlinkSync(join(this.directory, `${agentId}.json`))
     this.forgetCatalogRecord(agentId)
     this.syncDirectory()
+  }
+
+  /**
+   * Sets a record aside because another harness owns its conversation now (core/agents/conversationOwners.ts).
+   * Moved into `superseded/`, never deleted, so a wrong owner can be put back by hand; a reservation it left
+   * goes with it, since nothing can resume a record that is not listed. Null when there is no such record.
+   */
+  supersede(agentId: string): RegisteredSession | null {
+    if (!SAFE_ID.test(agentId)) return null
+    const saved = this.get(agentId)
+    if (!saved) return null
+    const aside = join(this.directory, 'superseded')
+    secureStateDirectory(aside)
+    renameSync(join(this.directory, `${agentId}.json`), join(aside, `${agentId}.json`))
+    this.forgetCatalogRecord(agentId)
+    this.finishResume(agentId)
+    this.syncDirectory()
+    return saved
   }
 
   /** Suppress archives whose identity or conversation is already running. */

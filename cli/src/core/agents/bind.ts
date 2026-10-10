@@ -22,6 +22,7 @@ import { projectDisplayName, type registry, type RegisteredSession } from '../..
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import { findLiveSession, findResumedTranscript } from '../../lib/sessionRepair.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
+import { conversationKey, type ConversationOwners } from './conversationOwners.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import type { SwarmPromptScopes } from '../../teams/promptScope.js'
 
@@ -69,11 +70,13 @@ export interface BindDeps {
   deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   /** Where Copilot, Grok and agy keep their sessions. */
   homes: { copilot: string; grok: string; agy: string }
+  /** One owner per conversation, stopped harnesses included (conversationOwners.ts). */
+  owners?: Pick<ConversationOwners, 'settle'>
 }
 
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool, teams,
-  input, deviceInput, homes,
+  input, deviceInput, homes, owners,
 }: BindDeps) {
   /**
    * Forks whose engine session has not reported in yet, agentId → the SOURCE's sessionId. A fork's tile
@@ -128,6 +131,12 @@ export function createBinding({
       console.error(`[agent] ${sid(entry.agentId)} could not save the record it resumes from: ${error instanceof Error ? error.message : error}`)
     }
     if (entry.resumeOnly) stoppedAgents.finishResume(entry.agentId)
+    // A conversation new to this harness has one owner from now on: a stopped harness it came from (a
+    // `/resume`, `claude --resume` in a terminal, a compaction) lets it go, as a running one already has.
+    if (meta.isNew) {
+      try { owners?.settle([conversationKey(entry)]) }
+      catch (error) { console.warn(`[agent] ${sid(entry.agentId)} could not settle who owns ${sid(entry.sessionId)}: ${error instanceof Error ? error.message : error}`) }
+    }
     syncRecapPool()
     if (meta.isNew) {
       registry.inheritName(entry.agentId, entry.sessionId)

@@ -267,6 +267,27 @@ describe('stopped harness persistence', () => {
     expect(fresh().list().find(row => row.agentId === fork.agentId)).toBeTruthy()
   })
 
+  // Another harness took its conversation (core/agents/conversationOwners.ts): moved aside, never deleted.
+  it('sets a record aside, with its reservation, and lists it no more', async () => {
+    const { StoppedAgentStore, saved, store } = await fixture()
+    store.save(saved)
+    expect(store.beginResume(saved.agentId)).toBeTruthy()
+    const before = readFileSync(join(directory, 'stopped-agents', `${saved.agentId}.json`), 'utf8')
+    expect(store.list()).toHaveLength(1)
+    expect(store.supersede(saved.agentId)).toMatchObject({ agentId: saved.agentId, sessionId: 'conversation-123' })
+    expect(readFileSync(join(directory, 'stopped-agents', 'superseded', `${saved.agentId}.json`), 'utf8')).toBe(before)
+    expect(statSync(join(directory, 'stopped-agents', 'superseded')).mode & 0o777).toBe(0o700)
+    expect(store.resumeReservedAt(saved.agentId)).toBeNull()
+    expect(store.get(saved.agentId)).toBeNull()
+    expect(store.list()).toEqual([])
+    expect(store.ids()).toEqual([])
+    expect(new StoppedAgentStore(join(directory, 'stopped-agents')).list()).toEqual([])
+    // Nothing to set aside: an unsafe id, an absent record, one already set aside.
+    expect(store.supersede('../escape')).toBeNull()
+    expect(store.supersede('never-saved')).toBeNull()
+    expect(store.supersede(saved.agentId)).toBeNull()
+  })
+
   it('hides a running identity or conversation, without discarding its archive', async () => {
     const { saved, store } = await fixture()
     store.save(saved)

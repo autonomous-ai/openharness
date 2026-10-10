@@ -67,6 +67,8 @@ import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from
 import { restoreAgents, tmuxSurvey, type RestoreAgentsDeps, type RestoreSummary } from '../lib/restoreAgents.js'
 import { createRetainExitedSession } from '../lib/retainExitedSession.js'
 import { createKeepAbandonedConversation } from '../lib/keepAbandonedConversation.js'
+import { RESUME_READINESS_BUDGET_MS } from '../lib/resumeStoppedAgent.js'
+import { createConversationOwners } from './agents/conversationOwners.js'
 import { OpenTabProtection } from '../lib/openTabProtection.js'
 import { sessionCheckpoints } from '../lib/sessionCheckpoint.js'
 import { repairProjectCwds } from '../lib/cwdRepair.js'
@@ -1484,7 +1486,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const onCursorTaskStart = cursorTasks.onCursorTaskStart
 
   // Release a session's binding, or remove a process-owned agent everywhere (core/agents/forget.ts).
+  // One owner per conversation, stopped harnesses included; the conversations claimed twice so far settle now.
+  const conversationOwners = createConversationOwners({ stoppedAgents, live: () => registry.list(), clients: backend, reservationMs: RESUME_READINESS_BUDGET_MS })
+  conversationOwners.settle()
   const forgetSession = createForgetSession({
+    owners: conversationOwners,
     forgetAttach: attach.forget,
     onRemoved: (agentId) => forgetRestartRevision(agentId),
     relaunchMarks,
@@ -1530,6 +1536,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Binding a session to its agent, and a running process to its session (core/agents/bind.ts).
   const binding = createBinding({
+    owners: conversationOwners,
     registry,
     mirror,
     forgetSession,

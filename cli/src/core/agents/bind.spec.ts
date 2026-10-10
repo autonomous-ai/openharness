@@ -113,6 +113,26 @@ describe('binding a registered session to its agent', () => {
     })
   })
 
+  // A conversation new to this harness takes it from any stopped harness it came from (conversationOwners.ts).
+  it('settles who owns a newly bound conversation, and only a newly bound one; a failure never stops the bind', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const owners = { settle: vi.fn(() => []) }
+    const run = setup({ owners })
+    const entry = agent({ boundAt: Date.parse('2026-10-04T10:00:00Z') })
+    await registered(run, entry, meta({ isNew: true }))
+    expect(owners.settle).toHaveBeenCalledWith(['claude\u0000\u0000\u0000s1'])
+    await registered(run, entry, meta({ isNew: false }))
+    expect(owners.settle).toHaveBeenCalledTimes(1)
+    owners.settle.mockImplementationOnce(() => { throw new Error('stopped store unreadable') })
+    await registered(run, entry, meta({ isNew: true }))
+    owners.settle.mockImplementationOnce(() => { throw 'plain' })
+    await registered(run, entry, meta({ isNew: true }))
+    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns s1: stopped store unreadable')
+    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns s1: plain')
+    // Each new binding is still announced after a failed settle (the one that was not new announces nothing).
+    expect(run.deps.announceSession).toHaveBeenCalledTimes(3)
+  })
+
   it('still tells the app of a binding when the record it resumes from cannot be saved, as on a full disk', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const run = setup()
