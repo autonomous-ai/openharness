@@ -1987,7 +1987,7 @@ class Registry {
     entry.tmuxPane = tmuxProjection(entry.runtimes)
     entry.primaryRuntimeKey = selectedRuntimeKey(entry.runtimes, input.primaryRuntimeKey || existing?.primaryRuntimeKey)
     const previousLaunch = existing?.launch, promoted = !!existing && isTerminalEngine(existing.engine)
-    this.save(true, false, undefined, { agentId, candidate: entry, displaced, verify: () => proof?.verify() })
+    this.save(true, false, undefined, { agentId, candidate: entry, displaced, replaceLive: true, verify: () => proof?.verify() })
     const committed = this.agents.get(agentId)!
     // Fileless sources cannot use transcript revalidation. A fresh native hook
     // source/process check can recover this precise peer-write hold only after
@@ -2601,7 +2601,7 @@ class Registry {
   }
 
   private save(strict = false, exiting = false, externalAgentId?: string,
-    bindingCommit?: { agentId: string; candidate: RegisteredSession; verify: () => void;
+    bindingCommit?: { agentId: string; candidate: RegisteredSession; verify: () => void; replaceLive?: boolean;
       displaced?: { agentId: string; candidate: RegisteredSession | null } },
     mutationAgentId = externalAgentId ?? bindingCommit?.agentId): void {
     // Discovery batches observations, but a recovered binding must be durable before interpretation
@@ -2810,15 +2810,16 @@ class Registry {
         this.persistedContents = JSON.stringify(serialized, null, 2)
         this.intended.clear()
 
-        // Refresh external daemon-down writes into the in-memory revision without replacing object
-        // identities already held by controllers.
+        // External refresh keeps controller references. Registration replaces its target only now:
+        // deferred readers must keep the former home/binding, never inherit the newly admitted one.
         const previous = new Map(this.agents)
         this.agents.clear()
         this.sessionIndex.clear()
         this.runtimeIndex.clear()
         this.processIndex.clear()
         for (const row of rows) {
-          const entry = previous.get(row.agentId) ?? row
+          const prior = previous.get(row.agentId)
+          const entry = prior && bindingCommit?.replaceLive && bindingCommit.agentId === row.agentId ? { ...prior } : prior ?? row
           if (entry !== row) {
             const sameBinding = entry.engine === row.engine && entry.sessionId === row.sessionId
               && entry.transcriptPath === row.transcriptPath && entry.codexHome === row.codexHome

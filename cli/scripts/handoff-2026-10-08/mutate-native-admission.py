@@ -10,15 +10,17 @@ http = 'src/hookServer.ts'
 queue = 'src/core/engines/pendingAdmission.ts'
 spec = 'src/lib/registry.admission.spec.ts'
 mutations = [
+    ('registration grants stale readers the new binding', registry,
+     'replaceLive: true', 'replaceLive: false', 'src/lib/runtimeProfileRegistry.spec.ts', ''),
     ('registration publishes before durability', registry,
-     'this.save(true, false, undefined, { agentId, candidate: entry, displaced, verify: () => proof?.verify() })',
-     'this.agents.set(agentId, entry); this.save(true, false, undefined, { agentId, candidate: entry, displaced, verify: () => proof?.verify() })', spec, 'failure|fails|failed'),
+     'this.save(true, false, undefined, { agentId, candidate: entry, displaced, replaceLive: true, verify: () => proof?.verify() })',
+     'this.agents.set(agentId, entry); this.save(true, false, undefined, { agentId, candidate: entry, displaced, replaceLive: true, verify: () => proof?.verify() })', spec, 'failure|fails|failed'),
     ('displaced owner changes before commit', registry,
      'displaced = { agentId: stolenFrom.agentId, candidate: stolenFrom.active ? released : null }',
      'this.agents.set(stolenFrom.agentId, released); displaced = { agentId: stolenFrom.agentId, candidate: stolenFrom.active ? released : null }', spec, 'failure|fails|failed'),
     ('registration native recheck omitted', registry,
-     'this.save(true, false, undefined, { agentId, candidate: entry, displaced, verify: () => proof?.verify() })',
-     'this.save(true, false, undefined, { agentId, candidate: entry, displaced, verify: () => {} })', spec, 'under|proof'),
+     'this.save(true, false, undefined, { agentId, candidate: entry, displaced, replaceLive: true, verify: () => proof?.verify() })',
+     'this.save(true, false, undefined, { agentId, candidate: entry, displaced, replaceLive: true, verify: () => {} })', spec, 'under|proof'),
     ('reported path borrows unwritten locator authority', registry,
      "!transcriptPath && derived === effectiveTranscriptPath ? 'derived' : false", "'derived'", spec, 'unwritten derived locator'),
     ('unwritten locator accepts a dangling directory', 'src/engines/transcriptBindings.ts',

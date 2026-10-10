@@ -121,6 +121,7 @@ it('never overwrites a different durable admission that arrived during inspectio
   expect(peer.bySession(B)?.agentId).toBe(target)
 })
 it('returns the committed live row and publishes only after the registry write', () => {
+  const former = registry.byAgent(target)!, before = structuredClone(former)
   const entered: string[] = []
   registry.onEnter = engine => {
     const saved = JSON.parse(readFileSync(file, 'utf8')) as Array<{ agentId: string; sessionId: string }>
@@ -128,6 +129,8 @@ it('returns the committed live row and publishes only after the registry write',
     entered.push(engine)
   }
   const result = registry.register(input())!
+  expect(result.entry).not.toBe(former)
+  expect(former).toEqual(before)
   expect(result.entry).toBe(registry.byAgent(target))
   expect(result.entry.sessionId).toBe(A)
   expect(registry.bySession(A)).toBe(result.entry)
