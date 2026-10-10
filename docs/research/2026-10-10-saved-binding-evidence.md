@@ -263,3 +263,15 @@ explicitly drains that read and proves the cancelled state before replacing the
 file and restarting the worker. Its exact boundary-error, visible hold and later
 explicit-Cancel assertions remain unchanged. Only tests and this report change;
 affected composed tests and their mutation variants run again.
+
+
+Receipt `20261010T045933.778026Z-20994` passed types, 70 composed control/worker
+checks and all 17 large-transcript resume cases on clean `7691335b4`. Its serial
+resume check is **failed** (508 passed, two failed): fixture home adoption exhausted
+its real 250 ms journal deadline during fsync, before the intended count/authority
+assertions. The ownership/count fixture now pins the monotonic clock; production
+limits are unchanged. The separate journal deadline regressions still advance that
+clock and passed alongside all four affected ownership/count cases (seven selected
+cases total). Serial resume runs again. Automatic Linux run `38025771424` passed
+all head checks, including `ci/required`, for `7691335b4`; the final test-only clock
+correction receives its own review and automatic CI.
