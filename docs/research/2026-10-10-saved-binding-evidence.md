@@ -251,3 +251,15 @@ registry test changed need another baseline/mutation pass. The independent revie
 approved the production, assertion correction and cost documentation at exact heads;
 the final test-only delta also requires review. Composed resume runs alone. Final
 receipts, exact-head review, CI and merge accounting are recorded in PR #1133.
+
+
+The corrected single-worker focused command passed all 969 tests in 26 files
+(one skipped file) on `d3c607e68`, receipt `20261010T045306.949449Z-89491`, in
+75.1 seconds. The prior delta command accidentally dropped its worker-limit flag;
+its failed concurrent run is not counted as passing. Types were reused from the
+same-source receipt. Linux run `38025366227` then found a composed test racing a
+file replacement against the detached tail read started by recovery. The test now
+explicitly drains that read and proves the cancelled state before replacing the
+file and restarting the worker. Its exact boundary-error, visible hold and later
+explicit-Cancel assertions remain unchanged. Only tests and this report change;
+affected composed tests and their mutation variants run again.
