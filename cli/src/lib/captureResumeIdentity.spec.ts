@@ -130,6 +130,24 @@ it('captures a unique fresh session before its first hook arrives', async () => 
   expect(row.sessionId).toBe('')
   expect(findLiveSession).toHaveBeenCalledWith('claude', '/work', Date.parse(row.processIdentity!.startMarker), expect.objectContaining({ pid: 77, bornOnly: true, codexHome: undefined, expectedProcess: row.processIdentity }))
 })
+it.each(['claude', 'codex'] as const)('does not give an unbound %s fork its parent from the recent-file pool', async engine => {
+  Object.assign(row, { engine, forkedFrom: { agentId: 'parent-agent', name: 'Parent', sessionId: 'parent', transcriptPath: '/parent' } })
+  // A parent created in the same process-clock interval is a unique "born" candidate,
+  // even though its newer turns and conversation still belong to the parent.
+  vi.mocked(findLiveSession).mockResolvedValue({ sessionId: 'parent', transcriptPath: '/parent' })
+  expect(await captureResumeIdentity(row)).toBe(row)
+  expect(savedTranscriptEvidence).not.toHaveBeenCalled()
+})
+it.each(['native record', 'explicit resume', 'new conversation'] as const)('preserves an unbound fork\'s %s evidence', async mode => {
+  row.forkedFrom = { agentId: 'parent-agent', name: 'Parent', sessionId: 'parent', transcriptPath: '/parent' }
+  if (mode === 'native record') vi.mocked(processSessionEvidence).mockResolvedValue({ session: { sessionId: 'parent', transcriptPath: '/parent' }, verify: vi.fn() })
+  if (mode === 'explicit resume') {
+    vi.mocked(resumeSessionId).mockReturnValue('parent')
+    vi.mocked(findResumedTranscript).mockResolvedValue('/parent')
+  }
+  if (mode === 'new conversation') vi.mocked(findLiveSession).mockResolvedValue({ sessionId: 'child', transcriptPath: '/child' })
+  expect(await captureResumeIdentity(row)).toMatchObject({ sessionId: mode === 'new conversation' ? 'child' : 'parent', source: 'stop-repair' })
+})
 it.each([null, { sessionId: 'missing' }, { sessionId: 'unsafe', transcriptPath: '/unsafe' }])('does not bind ambiguous or unsafe history: %s', async found => {
   vi.mocked(findLiveSession).mockResolvedValue(found)
   vi.mocked(savedTranscriptEvidence).mockReturnValue({ path: null, fileKey: null, verify: vi.fn() })
