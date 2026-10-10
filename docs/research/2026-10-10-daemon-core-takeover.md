@@ -1,8 +1,16 @@
 # Daemon core takeover — October 10
 
-## Final handoff status — 13:29 UTC
+## Work resumed — 14:13 UTC
 
-**Stop here and hand off.** The owner explicitly ended implementation because the
+The owner revoked the handoff and requested continued implementation and completion.
+The stop instruction below is historical and superseded. Work continues on #1145;
+the [implementation report](2026-10-10-native-handoff-authority.md) records the
+subsequent corrections and validation. The remaining scope is unchanged in the
+[completion checklist](2026-10-09-daemon-core-completion.md). No release is authorized.
+
+## Historical handoff status — 13:29 UTC
+
+At that time, the owner explicitly ended implementation because the
 session had about one percent credit left. #1145 is **draft, open and unmerged**.
 No release occurred. The refactor is not finished. No runtime edits were made
 after `196012ec112da477cec9172dc8c7726f0041e482`; this final update is documentation

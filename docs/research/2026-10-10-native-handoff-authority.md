@@ -236,4 +236,61 @@ continued falling. Its two-GiB guard rejected the run before tests. The existing
 GitHub e2e workflow will supply the remaining acceptance evidence; no local guard
 is weakened and no unrelated data is removed. See the
 [takeover note](2026-10-10-daemon-core-takeover.md) and #1145 for final check/merge
-state. The owner requested finishing this PR and handing off, with no new item started.
+state. The owner initially requested a handoff, then revoked it and resumed this work.
+
+## Resumed failure diagnosis and correction
+
+The failed automatic run `38055181285` and manual e2e run `38054858895` were
+inspected rather than waived. A successful slow fsync could outlive a 250 ms native
+inspection budget while the original handoff request still had time. Publication
+now retains immutable route facts before the flush and verifies those facts with a
+fresh bounded inspection afterward. It preserves the original request deadline,
+descriptor keys and pre-publication fences. The new slow-flush regressions failed
+before the change and then passed: four successful flush locations, four replaced
+routes/files, and three original-deadline expiry cases.
+
+Linux native process evidence now normalizes only the display executable to match
+the existing ps representation; raw command bytes still contribute to process
+identity and verification. This resolves padded fake-engine comm mismatches without
+weakening ownership. Stop now returns typed identity holds instead of flattening
+them into `INTERNAL`. Both regressions failed before their corrections.
+
+Offline hooks retain precise Linux birth ticks, check complete live process records
+and retain parent/command facts through lock acquisition and durable staging. The
+registry writer rechecks immediately before rename. Equal ticks retain an existing
+agent across wall-clock adjustments; malformed saved ticks leave its bytes intact.
+The boot marker advances only after registry rename and directory fsync succeed,
+so a refused publication cannot relabel old-boot rows as current. Review found and
+closed the late-flush and prior-boot races with before/after regressions. This is
+still a two-file protocol: a crash or failed boot confirmation after registry commit
+can conservatively reject recovery and require rediscovery. It is not the separate
+durable hook acknowledgement/journal work in the completion checklist.
+
+The e2e corrections preserve their intended contracts: healthy Stop/exit/resume
+fixtures first produce actual native conversation history; shortened Codex history
+retains its opening record; the missing legacy hooks chunk cannot disable the
+already-eager installer; models fixtures use the canonical relay URL. Full-disk
+acceptance requires visible unacknowledged binding holds, working siblings, and
+recovery after space returns. Failed tests also remove only their own volume filler.
+
+Local resumed evidence, before the final boot-marker ordering delta:
+
+- 14:24–14:27: private handoff/lifecycle and edge-process outage lanes passed.
+- 14:35–14:40: all 23 selected previously failing control e2e cases in nine files
+  passed; all 70 then-current standalone hook cases passed.
+- 14:38–14:39: both macOS private full-disk tests passed.
+- 14:43–14:50: typecheck, 2,319 core tests at 100% coverage, 265 harnessd tests at
+  100% with one existing skip, and 586 affected tests in eighteen files passed.
+- All fifteen handoff wiring mutations failed behavioral assertions after an
+  unchanged baseline at publication runtime `2b2781b19`; both golden artifacts
+  remain unchanged.
+- In an owned secondary worktree, the prior-boot regression failed before the
+  ordering correction, then all fourteen focused birth/boot cases passed. Independent
+  read-only review approved the corrected hook delta. Combined-head review and final
+  automatic/Linux acceptance remain required before merge.
+
+The resumed implementation/diagnosis interval begins at 14:13 UTC. Validation and
+independent review overlap that work; their intervals above are not additive elapsed
+time. Additional clean completed worktrees were narrowed to their tracked CLI
+contents to recover disk space, preserving commits and private evidence. The two-GiB
+guard was unchanged. Merge and publication remain zero at this update.
