@@ -152,6 +152,7 @@ export function bindLaunchRequests(socket: BackendSocket, over: Partial<Launcher
     })
     socket.createProvider = launches.create
     socket.createStatusProvider = launches.createStatus
+    socket.cancelCreateProvider = launches.cancelCreate
     socket.restartProvider = launches.relaunch
     socket.forkProvider = launches.fork
   }

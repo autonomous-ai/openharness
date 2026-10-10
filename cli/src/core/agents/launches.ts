@@ -17,7 +17,7 @@ import { DSH_ID_RE, dshSupportedEngines } from '../../dsh/manifest.js'
 import { folderTrust } from '../../engines/launchPrep.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types.js'
-import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationReceipts, type AgentCreationStatus } from '../../lib/agentCreationReceipt.js'
+import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationOutcome, type AgentCreationReceipts, type AgentCreationStatus } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import { engineLabel } from '../../lib/agentNames.js'
 import {
@@ -26,9 +26,10 @@ import {
 } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
-import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError } from '../../lib/projectFolder.js'
+import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError, type ProjectFolder } from '../../lib/projectFolder.js'
 import type { ScmLaunchRecord } from '../../scm/types.js'
 import type { RegisteredSession } from '../../lib/registry.js'
+import { createPendingLaunches } from './pendingLaunches.js'
 
 /** Creates an agent (core/agents/create.ts). The orchestrator creates through the same one. */
 export type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
@@ -48,7 +49,7 @@ export type ResumeAgent = (agentId: string, permissionMode?: string) => ReturnTy
 
 export interface LaunchRequestDeps {
   /** The receipts of launches asked for with a `creationId`. */
-  receipts: Pick<AgentCreationReceipts, 'run' | 'status'>
+  receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
   /** Each launch, read when a request comes in: null on a machine that cannot launch agents. */
   createAgent: () => CreateAgent | null
   forkAgent: () => ForkAgent | null
@@ -58,14 +59,103 @@ export interface LaunchRequestDeps {
   /** An agent's frame, as the socket builds it for every reply. */
   toProject: (s: RegisteredSession) => Promise<AgentFrame>
   /** Where a new agent on a grid model sends its inference: the models service's to resolve, on this
-   *  machine (core/api.ts `ModelsPort.launchTarget`). Null, or a rejection while models is down, refuses
-   *  the create with GRID_UNAVAILABLE rather than start it anywhere else. */
+   *  machine (core/api.ts `ModelsPort.launchTarget`). Null or a rejection holds a durable model request;
+   *  resolving the semantic choice may renew service-owned credentials, but never dispatches a launch. */
   modelTarget: (selection: NewAgentModel) => Promise<GridLaunchOverride | null>
 }
 
 type Reply = (result: Record<string, unknown>) => void
 
 export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget }: LaunchRequestDeps) {
+  type CreateInput = Parameters<CreateAgent>[0]
+  const validateInstalled = async (input: CreateInput, known?: ReturnType<typeof installedDsh>): Promise<{ error: string; detail: string } | null> => {
+    if (input.dsh) {
+      const installed = known ?? installedDsh(input.dsh)
+      if (!installed) return { error: 'INVALID_DSH', detail: `${input.dsh} is not installed on this machine` }
+      if (installed.manifest.kind === 'viewer') return { error: 'INVALID_DSH', detail: `${input.dsh} is a viewer package, not an agent` }
+      if (!dshSupportedEngines(installed.manifest).includes(input.engine)) return { error: 'INVALID_DSH',
+        detail: `${input.dsh} supports ${dshSupportedEngines(installed.manifest).join(', ')}; ${input.engine} is not compatible` }
+    }
+    if (input.agent && !supportsNamedAgent(input.engine, input.engine === 'opencode' ? await opencodeLaunch.opencodeMajorVersion() : null)) {
+      return { error: 'AGENT_UNSUPPORTED', detail: new NamedAgentUnsupportedError(input.engine).message }
+    }
+    return null
+  }
+
+  const executeCreate = async (input: CreateInput, projectFolder: ProjectFolder | null, local: boolean, invoke: CreateAgent, validated = false): Promise<AgentCreationOutcome> => {
+    if (!validated) {
+      const refusal = await validateInstalled(input)
+      if (refusal) return { state: 'failed', ...refusal }
+    }
+    const { dsh, resumeSessionId } = input
+    let preparedFolder: string | undefined
+    let scmLaunchRecord: ScmLaunchRecord | null = null
+    if (projectFolder) {
+      try {
+        preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine),
+          onPrepared: prepared => { scmLaunchRecord = prepared.scmLaunchRecord } })
+      }
+      catch (error) {
+        return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
+          detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.' }
+      }
+      // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
+      // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
+      // the answer its source repo already has. `branch` IS the source folder: nothing to record.
+      try {
+        // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
+        const engineTrust = folderTrust(input.engine, input.codexHome)
+        if (engineTrust && (projectFolder.source === 'new'
+          || (projectFolder.source === 'worktree' && engineTrust.trusts(projectFolder.gitSource)))) {
+          engineTrust.record(preparedFolder)
+        }
+      } catch (error) { console.warn(`[agent] pre-trust ${preparedFolder} · ${error instanceof Error ? error.message : error}`) }
+    } else if (!dsh && !resumeSessionId && local && dirname(input.cwd) === projectsRoot()) {
+      // On the LOCAL machine the desktop makes a new workspace ITSELF and sends the path as a plain
+      // cwd, so `projectFolder` above never sees it. Such a folder is empty and is trusted the way a
+      // `new` project is — but only on evidence, and only where those workspaces live:
+      //
+      //   · directly inside the projects root, which is the one folder the app and this daemon
+      //     create workspaces in. Claude Code's trust INHERITS downward, so recording it for a
+      //     folder the person merely browsed to — an empty `~/code`, or a home with nothing in it —
+      //     would silently cover every repo cloned under it later: OH-14 again by another door.
+      //   · empty as read from disk, never on the client's word. A clone, a worktree or the
+      //     person's own repo has content, so it stays the engine's question (engines/kit/folderTrust.ts).
+      //   · from a LOCAL frame. agent_create is not backend-only, so a relayed peer would otherwise
+      //     name an empty path on this host and have it trusted.
+      //
+      // DSH trust is decided in cli.ts, where the template count is known; leave that to it.
+      try {
+        const empty = await readdir(input.cwd).then((names) => names.length === 0, () => false)
+        if (empty) folderTrust(input.engine, input.codexHome)?.record(input.cwd)
+      } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
+    }
+    const result = await invoke(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)
+    if (result.ok) return { state: 'created', agentId: result.session.agentId }
+    // tmux may have executed before a timeout; registration cleanup is best-effort.
+    // Neither can prove that no process started, so never encourage another launch.
+    if (result.error === 'SPAWN_FAILED' || result.error === 'REGISTRATION_FAILED') return { state: 'unconfirmed' }
+    return { state: 'failed', error: result.error, ...(preparedFolder ? { preparedFolder } : {}), ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
+  }
+
+  const modelHold = { service: 'models', detail: 'Waiting for the selected model. This request is saved and will continue when it is available.' }
+  const pending = createPendingLaunches({ receipts, prepare: async saved => {
+    // A future intent kind cannot be interpreted as this one. Keep unknown or
+    // damaged requests held instead of guessing at their launch choices.
+    if (saved.kind !== 'model-create-v1' || typeof saved.local !== 'boolean'
+      || !saved.input || typeof saved.input !== 'object' || !saved.selection || typeof saved.selection !== 'object') return null
+    const input = structuredClone(saved.input) as CreateInput
+    const selection = saved.selection as NewAgentModel
+    if (!ENGINES.includes(input.engine) || typeof input.cwd !== 'string' || input.resumeSessionId
+      || input.grid !== null || typeof selection.model !== 'string' || typeof selection.grid !== 'string') return null
+    const invoke = createAgent()
+    if (!invoke) return null
+    const target = await modelTarget(selection)
+    if (!target) return null
+    input.grid = target
+    return () => executeCreate(input, (saved.projectFolder ?? null) as ProjectFolder | null, saved.local as boolean, invoke)
+  } })
+
   /** Recover by stable runtime identity; a deleted agent must never become a fresh launch. */
   const creationStatusPayload = async (status: AgentCreationStatus): Promise<Record<string, unknown>> => {
     if (status.state === 'created') {
@@ -142,21 +232,16 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
     // A DSH is refused, never approximated: an agent created as its plain base engine would look
     // like it worked and have none of the skills the user picked the tile for.
     let dsh: string | null = null
+    let installed: ReturnType<typeof installedDsh>
     if (payload.dsh !== undefined && payload.dsh !== null) {
       if (typeof payload.dsh !== 'string' || !DSH_ID_RE.test(payload.dsh)) {
         reply({ error: 'INVALID_DSH', detail: 'dsh must be an owner/name id' }); return
       }
-      const installed = installedDsh(payload.dsh)
-      if (!installed) {
-        reply({ error: 'INVALID_DSH', detail: `${payload.dsh} is not installed on this machine` }); return
-      }
-      if (installed.manifest.kind === 'viewer') {
-        reply({ error: 'INVALID_DSH', detail: `${payload.dsh} is a viewer package, not an agent` }); return
-      }
-      if (!dshSupportedEngines(installed.manifest).includes(engine)) {
-        reply({ error: 'INVALID_DSH', detail: `${payload.dsh} supports ${dshSupportedEngines(installed.manifest).join(', ')}; ${engine} is not compatible` }); return
-      }
-      dsh = installed.id
+      installed = installedDsh(payload.dsh)
+      // Formerly-named packages used their canonical ID in both launch input
+      // and v1 fingerprints. Resolve aliases without refusing a known receipt
+      // merely because the package is no longer installed.
+      dsh = installed?.id ?? payload.dsh
     }
     // A first prompt is refused BEFORE any pane exists: an engine with no way to take one would
     // otherwise open on an empty input and look like the person's request had been heard. The
@@ -183,11 +268,6 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
     if (payload.agent !== undefined && payload.agent !== null) {
       if (typeof payload.agent !== 'string' || !AGENT_NAME_RE.test(payload.agent)) {
         reply({ error: 'INVALID_AGENT', detail: 'agent must be 1-64 letters, digits, `-` or `_`' }); return
-      }
-      // v2's TUI cannot open a named agent. Its native version control is eager.
-      const opencode = engine === 'opencode' ? opencodeLaunch : null
-      if (!supportsNamedAgent(engine, opencode ? await opencode.opencodeMajorVersion() : null)) {
-        reply({ error: 'AGENT_UNSUPPORTED', detail: new NamedAgentUnsupportedError(engine).message }); return
       }
       agent = payload.agent
     }
@@ -244,61 +324,15 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
       // on this connection, just as engines_probe is detached above.
       const create = onCreateAgent
       try {
-        void receipts.run(creationId, creationFingerprint(projectFolder ? { ...fingerprintInput, projectFolder } : fingerprintInput), async () => {
-          if (model.state === 'ok') {
-            const target = await modelTarget(model.selection).catch(() => null)
-            if (!target) return { state: 'failed', error: 'GRID_UNAVAILABLE', detail: 'The selected model is unavailable. Choose another model or refresh the list.' }
-            input.grid = target
-          }
-          let preparedFolder: string | undefined
-          let scmLaunchRecord: ScmLaunchRecord | null = null
-          if (projectFolder) {
-            try {
-              preparedFolder = await prepareProjectFolder(projectFolder, { label: (dsh ? installedDsh(dsh)?.manifest.name : null) ?? engineLabel(input.engine),
-                onPrepared: prepared => { scmLaunchRecord = prepared.scmLaunchRecord } })
-            }
-            catch (error) {
-              return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
-                detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.' }
-            }
-            // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
-            // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
-            // the answer its source repo already has. `branch` IS the source folder: nothing to record.
-            try {
-              // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
-              const engineTrust = folderTrust(input.engine, input.codexHome)
-              if (engineTrust && (projectFolder.source === 'new'
-                || (projectFolder.source === 'worktree' && engineTrust.trusts(projectFolder.gitSource)))) {
-                engineTrust.record(preparedFolder)
-              }
-            } catch (error) { console.warn(`[agent] pre-trust ${preparedFolder} · ${error instanceof Error ? error.message : error}`) }
-          } else if (!dsh && !resumeSessionId && asker.local && dirname(input.cwd) === projectsRoot()) {
-            // On the LOCAL machine the desktop makes a new workspace ITSELF and sends the path as a plain
-            // cwd, so `projectFolder` above never sees it. Such a folder is empty and is trusted the way a
-            // `new` project is — but only on evidence, and only where those workspaces live:
-            //
-            //   · directly inside the projects root, which is the one folder the app and this daemon
-            //     create workspaces in. Claude Code's trust INHERITS downward, so recording it for a
-            //     folder the person merely browsed to — an empty `~/code`, or a home with nothing in it —
-            //     would silently cover every repo cloned under it later: OH-14 again by another door.
-            //   · empty as read from disk, never on the client's word. A clone, a worktree or the
-            //     person's own repo has content, so it stays the engine's question (engines/kit/folderTrust.ts).
-            //   · from a LOCAL frame. agent_create is not backend-only, so a relayed peer would otherwise
-            //     name an empty path on this host and have it trusted.
-            //
-            // DSH trust is decided in cli.ts, where the template count is known; leave that to it.
-            try {
-              const empty = await readdir(input.cwd).then((names) => names.length === 0, () => false)
-              if (empty) folderTrust(input.engine, input.codexHome)?.record(input.cwd)
-            } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
-          }
-          const result = await create(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)
-          if (result.ok) return { state: 'created', agentId: result.session.agentId }
-          // tmux may have executed before a timeout; registration cleanup is best-effort.
-          // Neither can prove that no process started, so never encourage another launch.
-          if (result.error === 'SPAWN_FAILED' || result.error === 'REGISTRATION_FAILED') return { state: 'unconfirmed' }
-          return { state: 'failed', error: result.error, ...(preparedFolder ? { preparedFolder } : {}), ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
-        }).then(async (status) => {
+        const fingerprint = creationFingerprint(projectFolder ? { ...fingerprintInput, projectFolder } : fingerprintInput)
+        if (model.state !== 'ok' && !receipts.has(creationId, fingerprint)) {
+          const refusal = await validateInstalled(input, installed)
+          if (refusal) { reply(refusal); return }
+        }
+        const operation = model.state === 'ok'
+          ? pending.start(creationId, fingerprint, { kind: 'model-create-v1', input, selection: model.selection, projectFolder, local: asker.local }, modelHold)
+          : receipts.run(creationId, fingerprint, () => executeCreate(input, projectFolder, asker.local, create, true))
+        void operation.then(async (status) => {
           reply({ creationId, ...await creationStatusPayload(status) })
         }).catch(() => reply({ error: 'INTERNAL' }))
       } catch (error) {
@@ -307,6 +341,8 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
       return
     }
     // Clients predating receipts retain their existing response shape.
+    const refusal = await validateInstalled(input, installed)
+    if (refusal) { reply(refusal); return }
     if (model.state === 'ok') {
       const target = await modelTarget(model.selection).catch(() => null)
       if (!target) { reply({ error: 'GRID_UNAVAILABLE', detail: 'The selected model is unavailable. Choose another model or refresh the list.' }); return }
@@ -404,5 +440,11 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
     reply({ agent: await toProject(result.session), level: result.level })
   }
 
-  return { createStatus, create, relaunch, fork }
+  const cancelCreate = async (payload: Record<string, unknown>, reply: Reply): Promise<void> => {
+    if (!validCreationId(payload.creationId)) { reply({ error: 'INVALID_CREATION_ID' }); return }
+    try { reply({ creationId: payload.creationId, ...await creationStatusPayload(receipts.cancelIntent(payload.creationId)) }) }
+    catch (error) { reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' }) }
+  }
+
+  return { createStatus, cancelCreate, create, relaunch, fork, open: pending.open, stop: pending.stop, recover: pending.recover }
 }

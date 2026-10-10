@@ -210,6 +210,7 @@ export class BackendSocket {
    *  core/agents/launches.ts). Null answers UNSUPPORTED_ON_REMOTE, or UNSUPPORTED for a status. */
   createProvider: ((payload: Record<string, unknown>, asker: { local: boolean; owner: boolean }, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
   createStatusProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
+  cancelCreateProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
   restartProvider: ((type: string, payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
   forkProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
   /** Opens a NEW agent that starts with `agentId`'s whole history (lib/forkAgent.ts), exactly as
@@ -981,6 +982,11 @@ export class BackendSocket {
         // What became of a launch a creationId names (core/agents/launches.ts, bound by cli.ts).
         case 'agent_create_status':
           if (this.createStatusProvider) await this.createStatusProvider(payload, answer)
+          else answer({ error: 'UNSUPPORTED' })
+          return
+
+        case 'agent_create_cancel':
+          if (this.cancelCreateProvider) await this.cancelCreateProvider(payload, answer)
           else answer({ error: 'UNSUPPORTED' })
           return
 

@@ -50,7 +50,7 @@ const Set<String> encryptedDownTypes = {
   'session_get',
   'models_list',
   'agent_create',
-  'agent_create_status',
+  'agent_create_status', 'agent_create_cancel',
   'agent_delete',
   'agent_restart',
   // Reopens stopped work and forks a harness: the CLI has required both sealed since they were

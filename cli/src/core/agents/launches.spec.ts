@@ -6,7 +6,7 @@ import { installedDsh } from '../../dsh/installed.js'
 import { dshSupportedEngines } from '../../dsh/manifest.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { opencodeMajorVersion } from '../../engines/launchControl.js'
-import { AgentCreationReceiptError, AgentCreationReceipts, type AgentCreationOutcome } from '../../lib/agentCreationReceipt.js'
+import { AgentCreationReceiptError, AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride } from '../../lib/gridLaunchWire.js'
@@ -62,12 +62,14 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 let dir: string
 let stores = 0
+const stopRequests: Array<() => void> = []
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'launches-'))
   root.projects = join(dir, 'harnesses')
   mkdirSync(root.projects)
 })
 afterEach(() => {
+  stopRequests.splice(0).forEach(stop => stop())
   rmSync(dir, { recursive: true, force: true })
   vi.restoreAllMocks()
   vi.resetAllMocks()
@@ -87,6 +89,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
     ...over,
   }
   const requests = createLaunchRequests(deps)
+  stopRequests.push(requests.stop)
   const replies: Array<Record<string, unknown>> = []
   const reply = (result: Record<string, unknown>) => { replies.push(result) }
   return {
@@ -195,7 +198,7 @@ describe('agent_create, refused before any pane exists', () => {
     expect(await ask({ engine: 'claude', projectSource: 'new', creationId: CREATION, resumeSessionId: 'ses_abc' })).toStrictEqual(fresh)
     vi.mocked(parseGridLaunchOverride).mockReturnValueOnce({ state: 'ok', override: { networkId: 'g' } } as never)
     expect(await ask({ engine: 'claude', cwd: '/w', resumeSessionId: 'ses_abc' })).toStrictEqual(fresh)
-    vi.mocked(parseNewAgentModel).mockReturnValueOnce({ state: 'ok', selection: { model: 'm' } } as never)
+    vi.mocked(parseNewAgentModel).mockReturnValueOnce({ state: 'ok', selection: { model: 'm', grid: 'fixture-grid' } } as never)
     expect(await ask({ engine: 'claude', cwd: '/w', resumeSessionId: 'ses_abc' })).toStrictEqual(fresh)
     vi.mocked(installedDsh).mockReturnValueOnce({ id: 'acme/notes', manifest: { kind: 'agent' } } as never)
     expect(await ask({ engine: 'claude', cwd: '/w', dsh: 'acme/notes', resumeSessionId: 'ses_abc' })).toStrictEqual(fresh)
@@ -235,7 +238,7 @@ describe('agent_create, launched', () => {
 
   it('points a model picked by name at its grid as read now, or says the model is unavailable', async () => {
     const { ask, create } = setup()
-    vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'm' } } as never)
+    vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'm', grid: 'fixture-grid' } } as never)
     resolveNewAgentModel.mockResolvedValueOnce({ networkId: 'resolved' } as never).mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('offline'))
     await ask({ engine: 'claude', cwd: '/w' })
     expect(vi.mocked(create!).mock.calls[0][0].grid).toEqual({ networkId: 'resolved' })
@@ -254,6 +257,74 @@ describe('agent_create, launched', () => {
 })
 
 describe('agent_create with a receipt', () => {
+  it('keeps a temporary model outage pending across receipt readers instead of completing it as failed', async () => {
+    const { ask, create, replies, status } = setup()
+    vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'fixture-model', grid: 'fixture-grid' } })
+    resolveNewAgentModel.mockRejectedValueOnce(new Error('fixture models disconnected'))
+    await ask({ engine: 'claude', cwd: '/fixture/work', creationId: CREATION })
+    await vi.waitFor(() => expect(replies).toHaveLength(1))
+    expect(create).not.toHaveBeenCalled()
+    expect(replies[0]).toMatchObject({ creationId: CREATION, state: 'pending', held: { service: 'models', detail: expect.any(String) } })
+    expect(await status({ creationId: CREATION })).toMatchObject({ state: 'pending', held: { service: 'models' } })
+    const recovered = new AgentCreationReceipts(join(dir, `receipts-${stores}`))
+    expect(recovered.status(CREATION)).toMatchObject({ state: 'pending', held: { service: 'models' } })
+  })
+
+  it('recovers the original request and authorization after restart, then returns the same created agent', async () => {
+    const { ask, replies, deps, create } = setup()
+    const cwd = join(root.projects, 'remote-request'); mkdirSync(cwd)
+    vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'fixture-model', grid: 'fixture-grid' } })
+    resolveNewAgentModel.mockRejectedValueOnce(new Error('disconnected'))
+    await ask({ engine: 'claude', cwd, prompt: 'Keep this task', creationId: CREATION }, false)
+    await vi.waitFor(() => expect(replies).toHaveLength(1))
+    const recovered = createLaunchRequests({ ...deps, receipts: new AgentCreationReceipts(join(dir, `receipts-${stores}`)) })
+    stopRequests.push(recovered.stop)
+    const target = { networkId: 'fixture-grid', networkName: 'Fixture', baseUrl: 'http://fixture.invalid/v1', apiKey: 'rotated-key' }
+    resolveNewAgentModel.mockResolvedValue(target)
+    await recovered.recover()
+    expect(create).not.toHaveBeenCalled()
+    recovered.open()
+    await recovered.recover()
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce())
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ cwd, prompt: 'Keep this task', grid: target }))
+    expect(preTrustClaudeProject).not.toHaveBeenCalled()
+    const answer = vi.fn()
+    await recovered.createStatus({ creationId: CREATION }, answer)
+    expect(answer).toHaveBeenCalledWith({ creationId: CREATION, state: 'created', agent: { id: 'new-agent' } })
+    await recovered.recover()
+    expect(create).toHaveBeenCalledOnce()
+  })
+
+  it('cancels an undispatched model request durably and refuses a late create with the same ID', async () => {
+    const { ask, requests, create, replies } = setup()
+    vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'fixture-model', grid: 'fixture-grid' } })
+    resolveNewAgentModel.mockResolvedValue(null)
+    await ask({ engine: 'claude', cwd: '/fixture/work', creationId: CREATION })
+    await vi.waitFor(() => expect(replies).toHaveLength(1))
+    const answer = vi.fn()
+    await requests.cancelCreate({ creationId: CREATION }, answer)
+    expect(answer).toHaveBeenLastCalledWith({ creationId: CREATION, state: 'cancelled' })
+    resolveNewAgentModel.mockResolvedValue({ networkId: 'fixture-grid' } as never)
+    requests.open(); await requests.recover()
+    await ask({ engine: 'claude', cwd: '/fixture/work', creationId: CREATION })
+    await vi.waitFor(() => expect(replies).toHaveLength(2))
+    expect(replies[1]).toEqual({ creationId: CREATION, state: 'cancelled' })
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('reads a completed receipt before checking mutable package or native version state', async () => {
+    const { ask, replies, create } = setup()
+    vi.mocked(installedDsh).mockReturnValue({ id: 'fixture/package', manifest: { kind: 'agent', name: 'Fixture' } } as never)
+    await ask({ engine: 'claude', cwd: '/fixture/work', dsh: 'fixture/package', agent: 'named', creationId: CREATION })
+    await vi.waitFor(() => expect(replies).toHaveLength(1))
+    vi.mocked(installedDsh).mockReturnValue(undefined)
+    vi.mocked(supportsNamedAgent).mockReturnValue(false)
+    await ask({ engine: 'claude', cwd: '/fixture/work', dsh: 'fixture/package', agent: 'named', creationId: CREATION })
+    await vi.waitFor(() => expect(replies).toHaveLength(2))
+    expect(replies[1]).toEqual(replies[0])
+    expect(create).toHaveBeenCalledOnce()
+  })
+
   it('answers outside the connection\'s line, with the creation id and the new agent, and a retry is the same launch', async () => {
     let finish!: (value: { ok: true; session: RegisteredSession }) => void
     const create = vi.fn(() => new Promise<{ ok: true; session: RegisteredSession }>((resolve) => { finish = resolve }))
@@ -396,26 +467,102 @@ describe('agent_create with a receipt', () => {
     expect(warn).toHaveBeenCalledWith(`[agent] pre-trust ${empty} · busy`)
   })
 
-  it('resolves a model picked by name inside the receipt, and records it unavailable when it cannot be read', async () => {
+  it('resolves a model picked by name inside the receipt, and holds it when it cannot be read', async () => {
     const { ask, create, replies } = setup()
-    vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'm' } } as never)
+    vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'm', grid: 'fixture-grid' } } as never)
     resolveNewAgentModel.mockResolvedValueOnce({ networkId: 'resolved' } as never).mockRejectedValueOnce(new Error('offline'))
     await ask({ engine: 'claude', cwd: '/w', creationId: CREATION })
     await ask({ engine: 'claude', cwd: '/w', creationId: `${CREATION}-2` })
     await vi.waitFor(() => expect(replies).toHaveLength(2))
     expect(vi.mocked(create!).mock.calls[0][0].grid).toEqual({ networkId: 'resolved' })
-    expect(replies[1]).toStrictEqual({ creationId: `${CREATION}-2`, state: 'failed',
-      failure: { code: 'GRID_UNAVAILABLE', detail: 'The selected model is unavailable. Choose another model or refresh the list.' } })
+    expect(replies.find(reply => reply.creationId === `${CREATION}-2`)).toMatchObject({ creationId: `${CREATION}-2`, state: 'pending', held: { service: 'models' } })
   })
 
   it('says why a receipt could not be kept, and answers INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })
     await vi.waitFor(() => expect(frameless.replies).toStrictEqual([{ error: 'INTERNAL' }]))
+  })
+})
+
+describe('durable model request validation', () => {
+  it('retains canonical DSH identity for old-name requests and existing v1 fingerprints', async () => {
+    const { ask, deps, create, replies } = setup()
+    vi.mocked(installedDsh).mockReturnValue({ id: 'acme/current', manifest: { kind: 'agent', formerly: ['acme/former'] } } as never)
+    const input = { engine: 'claude', cwd: '/w', bypassPermission: false, permissionMode: null,
+      grid: null, codexHome: null, dsh: 'acme/current', prompt: null, name: null, agent: null, resumeSessionId: null, takeOver: null }
+    await deps.receipts.run(CREATION, creationFingerprint(input), async () => ({ state: 'created', agentId: 'new-agent' }))
+    const payload = { engine: 'claude', cwd: '/w', dsh: 'acme/former', creationId: CREATION, bypassPermission: false }
+    await ask(payload)
+    await vi.waitFor(() => expect(replies.at(-1)).toMatchObject({ state: 'created' }))
+    expect(create).not.toHaveBeenCalled()
+    await ask({ ...payload, creationId: `${CREATION}-new` })
+    await vi.waitFor(() => expect(replies).toHaveLength(2))
+    expect(create).toHaveBeenCalledWith(input)
+  })
+  it('keeps fresh legacy installation refusals correctable with the same ID', async () => {
+    const { ask, replies, deps } = setup()
+    const payload = { engine: 'claude', cwd: '/w', dsh: 'acme/notes', creationId: CREATION }
+    expect(await ask(payload)).toMatchObject({ error: 'INVALID_DSH' })
+    expect(deps.receipts.status(CREATION)).toEqual({ state: 'missing' })
+    vi.mocked(installedDsh).mockReturnValue({ id: 'acme/notes', manifest: { kind: 'agent' } } as never)
+    await ask(payload)
+    await vi.waitFor(() => expect(replies.at(-1)).toMatchObject({ state: 'created' }))
+  })
+
+  it('reports a current installation refusal after the model becomes available', async () => {
+    const { ask, replies, create } = setup()
+    vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'm', grid: 'fixture-grid' } })
+    resolveNewAgentModel.mockResolvedValue({ networkId: 'resolved' } as never)
+    await ask({ engine: 'claude', cwd: '/w', dsh: 'acme/notes', creationId: CREATION })
+    await vi.waitFor(() => expect(replies.at(-1)).toMatchObject({ state: 'failed', failure: { code: 'INVALID_DSH' } }))
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('holds unfamiliar or incomplete saved intent without preparing a project or dispatching', async () => {
+    const { deps, requests, create } = setup()
+    const records = [{ kind: 'future-kind' }, { kind: 'model-create-v1', local: true, input: {}, selection: {} }]
+    const held = { service: 'models', detail: 'Waiting for the model.' }
+    for (const [n, request] of records.entries()) {
+      await deps.receipts.runIntent(`${CREATION}-${n}`, creationFingerprint(request), request, held, async () => null)
+    }
+    const retry = vi.spyOn(deps.receipts, 'runIntent')
+    requests.open(); await requests.recover()
+    await vi.waitFor(() => expect(retry).toHaveBeenCalledTimes(records.length))
+    for (let n = 0; n < records.length; n++) expect(deps.receipts.status(`${CREATION}-${n}`)).toEqual({ state: 'pending', held })
+    expect(resolveNewAgentModel).not.toHaveBeenCalled()
+    expect(prepareProjectFolder).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('holds recovery while no local creator is available', async () => {
+    const { deps, requests } = setup({}, { create: null })
+    const request = { kind: 'model-create-v1', local: true, input: { engine: 'claude', cwd: '/w', grid: null }, selection: { grid: 'fixture-grid', model: 'm' } }
+    const held = { service: 'models', detail: 'Waiting for the model.' }
+    await deps.receipts.runIntent(CREATION, creationFingerprint(request), request, held, async () => null)
+    const retry = vi.spyOn(deps.receipts, 'runIntent')
+    requests.open(); await requests.recover()
+    await vi.waitFor(() => expect(retry).toHaveBeenCalledOnce())
+    expect(deps.receipts.status(CREATION)).toEqual({ state: 'pending', held })
+    expect(resolveNewAgentModel).not.toHaveBeenCalled()
+  })
+
+  it('rejects invalid cancellation IDs and reports storage uncertainty without acknowledging cancellation', async () => {
+    const { deps, requests } = setup()
+    const answer = vi.fn()
+    await requests.cancelCreate({ creationId: '../invalid' }, answer)
+    expect(answer).toHaveBeenLastCalledWith({ error: 'INVALID_CREATION_ID' })
+    const cancel = vi.spyOn(deps.receipts, 'cancelIntent')
+    cancel.mockImplementationOnce(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') })
+    await requests.cancelCreate({ creationId: CREATION }, answer)
+    expect(answer).toHaveBeenLastCalledWith({ error: 'CREATION_STORAGE_FAILED' })
+    cancel.mockImplementationOnce(() => { throw new Error('unknown') })
+    await requests.cancelCreate({ creationId: CREATION }, answer)
+    expect(answer).toHaveBeenLastCalledWith({ error: 'INTERNAL' })
   })
 })
 
@@ -438,9 +585,9 @@ describe('agent_create_status', () => {
   })
 
   it('says why a receipt could not be read', async () => {
-    const storage = setup({ receipts: { run: vi.fn(), status: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.status({ creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { run: vi.fn(), status: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.status({ creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
   })
 })
@@ -495,9 +642,9 @@ describe('agent_resume and agent_restart', () => {
   })
 
   it('say why a receipt could not be kept, and INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })
@@ -553,9 +700,9 @@ describe('agent_fork', () => {
   })
 
   it('says why a receipt could not be kept, and INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_CONFLICT') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_CONFLICT') }) } })
     expect(await storage.forkAsk({ agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'CREATION_CONFLICT' })
-    const broken = setup({ receipts: { status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.forkAsk({ agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.forkAsk({ agentId: 'a1', creationId: CREATION })

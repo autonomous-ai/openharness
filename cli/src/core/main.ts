@@ -2432,6 +2432,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   backend.createProvider = launches.create
   backend.createStatusProvider = launches.createStatus
+  backend.cancelCreateProvider = launches.cancelCreate
   backend.restartProvider = launches.relaunch
   backend.forkProvider = launches.fork
 
@@ -2465,7 +2466,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // stops being `bootHandoff` HERE, and not a line earlier: everything the teardown releases exists by now.
   // A straight-line assignment, never a wait: if the body never reaches this line the handler stays
   // `bootHandoff`, and the fix still lands.
-  const updateTeardown = (): TeardownStep[] => { installedHooks?.close(); externalResumes?.stop(); return [
+  const updateTeardown = (): TeardownStep[] => { installedHooks?.close(); externalResumes?.stop(); launches.stop(); return [
     ['the registry', () => registry.flush({ exiting: true })], ['the updater', () => daemonBoot.updaterBeside?.()],
     ['the reconciler', () => agentReconciler.stop()],
     ['the timers', () => { clearInterval(logTrimTimer); clearInterval(runtimeReconcileTimer); clearInterval(paneTitleSyncTimer) }],
@@ -2504,6 +2505,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     installedHooks?.close()
     externalResumes?.stop()
+    launches.stop()
     console.log(`\n[cli] ${signal} — shutting down`)
     // A slow teardown may exhaust the master's grace. Persist already acknowledged bindings first.
     registry.flush({ exiting: true })
@@ -2632,6 +2634,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Ready first, never after a service: the agents the boot held for one are launched now, in the background.
   void heldLaunches.restoreHeld()
   externalResumes.open()
+  launches.open()
 }
 
 /**

@@ -43,6 +43,14 @@ class _Request {
     'created',
     agent: {'id': id, 'name': 'Recovered agent', 'engine': 'claude'},
   );
+  void held() => reply.complete({
+    'creationId': creationId,
+    'state': 'pending',
+    'held': {
+      'service': 'models',
+      'detail': 'Waiting for the selected model. This request is saved.',
+    },
+  });
 }
 
 class _Connection extends WsConn {
@@ -91,12 +99,7 @@ Future<void> _timeOut(
 }
 
 void main() {
-  for (final entry in [
-    'new pane',
-    'shortcut',
-    'search shortcut',
-    'new tab',
-  ]) {
+  for (final entry in ['new pane', 'shortcut', 'search shortcut', 'new tab']) {
     for (final dismissal in ['outside', 'escape']) {
       testWidgets('$entry creation dismisses once on $dismissal', (
         tester,
@@ -484,6 +487,182 @@ void main() {
     connection.calls.last.created('new-intent');
     expect(await fresh, isNull);
   });
+
+  test(
+    'held requests show their reason and cancel the original durable id',
+    () async {
+      final connection = _Connection();
+      final app = createApp(connectionForTest: (_) => connection);
+      addTearDown(app.dispose);
+      final attempt = AgentCreationAttempt();
+      final create = app.createAgent(
+        'm',
+        engine: 'claude',
+        folder: '/work',
+        attempt: attempt,
+      );
+      connection.calls.single.held();
+      expect(
+        await create,
+        'Waiting for the selected model. This request is saved.',
+      );
+      expect(attempt.canCancelPending, isTrue);
+      final cancel = app.cancelAgentCreation(attempt);
+      expect(connection.calls.last.type, 'agent_create_cancel');
+      expect(
+        connection.calls.last.creationId,
+        connection.calls.first.creationId,
+      );
+      expect(
+        await app.cancelAgentCreation(attempt),
+        contains('Check the request status'),
+      );
+      connection.calls.last.status('cancelled');
+      expect(await cancel, isNull);
+      expect(attempt.awaitingConfirmation, isFalse);
+      expect(attempt.canCancelPending, isFalse);
+      expect(
+        await app.createAgent(
+          'm',
+          engine: 'claude',
+          folder: '/work',
+          attempt: attempt,
+        ),
+        'Creation cancelled.',
+      );
+      expect(connection.calls, hasLength(2));
+      expect(app.panes, isEmpty);
+    },
+  );
+
+  test('confirmed cancellation releases the original draft tab', () async {
+    final connection = _Connection();
+    final app = createApp(connectionForTest: (_) => connection);
+    addTearDown(app.dispose);
+    final origin = app.activeSwarmId;
+    app.newSwarm(draft: true, newTabPage: true);
+    final target = app.activeSwarmId;
+    expect(app.isDraftSwarm(target), isTrue);
+    final attempt = AgentCreationAttempt();
+    final creating = app.createAgent(
+      'm',
+      engine: 'claude',
+      folder: '/work',
+      attempt: attempt,
+    );
+    connection.calls.single.held();
+    await creating;
+    expect(app.isDraftSwarm(target), isFalse);
+    final cancelling = app.cancelAgentCreation(attempt);
+    connection.calls.last.status('cancelled');
+    expect(await cancelling, isNull);
+    expect(app.isDraftSwarm(target), isTrue);
+    expect(app.cancelSwarmDraft(target), isTrue);
+    expect(app.activeSwarmId, origin);
+  });
+
+  for (final result in [
+    'disconnect',
+    'wrong receipt',
+    'unconfirmed',
+    'created',
+  ]) {
+    test(
+      'a $result cancellation keeps the original request recoverable',
+      () async {
+        final connection = _Connection();
+        final app = createApp(connectionForTest: (_) => connection);
+        addTearDown(app.dispose);
+        final attempt = AgentCreationAttempt();
+        final create = app.createAgent(
+          'm',
+          engine: 'claude',
+          folder: '/work',
+          attempt: attempt,
+        );
+        connection.calls.single.held();
+        await create;
+        final cancel = app.cancelAgentCreation(attempt);
+        switch (result) {
+          case 'disconnect':
+            connection.calls.last.reply.completeError(
+              StateError('fixture disconnected'),
+            );
+          case 'wrong receipt':
+            connection.calls.last.reply.complete({
+              'creationId': 'different-request',
+              'state': 'cancelled',
+            });
+          default:
+            connection.calls.last.status(result);
+        }
+        expect(await cancel, contains('Check status'));
+        expect(attempt.awaitingConfirmation, isTrue);
+        final recover = app.createAgent(
+          'm',
+          engine: 'claude',
+          folder: '/work',
+          attempt: attempt,
+        );
+        expect(connection.calls.last.type, 'agent_create_status');
+        expect(
+          connection.calls.last.creationId,
+          connection.calls.first.creationId,
+        );
+        connection.calls.last.status('cancelled');
+        expect(await recover, 'Creation cancelled.');
+        expect(attempt.awaitingConfirmation, isFalse);
+        expect(app.panes, isEmpty);
+      },
+    );
+  }
+
+  testWidgets(
+    'held creation offers cancellation without creating or sending terminal input',
+    (tester) async {
+      final files = FileSelectorPlatform.instance;
+      FileSelectorPlatform.instance = _FolderPicker();
+      addTearDown(() => FileSelectorPlatform.instance = files);
+      final connection = _Connection();
+      final app = createApp(connectionForTest: (_) => connection);
+      app.stateOf('m')!.localOnly = true;
+      final input = <TerminalBinaryFrame>[];
+      final pane = app.adoptSessionForTest(terminal('a0', input));
+      await mount(tester, app);
+      await openHarnessPicker(tester);
+      await chord(tester, LogicalKeyboardKey.keyN);
+      await tester.pumpAndSettle();
+      await browseNewAgentProject(tester);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('create-agent-submit')));
+      await tester.pump();
+      connection.calls.single.held();
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Waiting for the selected model. This request is saved.'),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('cancel-pending-creation')));
+      await tester.pump();
+      expect(connection.calls.last.type, 'agent_create_cancel');
+      connection.calls.last.status('cancelled');
+      await tester.pumpAndSettle();
+      expect(find.text('Creation cancelled.'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('cancel-pending-creation')),
+        findsNothing,
+      );
+      expect(connection.calls.map((call) => call.type), [
+        'agent_create',
+        'agent_create_cancel',
+      ]);
+      expect(app.panes, [pane]);
+      expect(input, isEmpty);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
 
   for (final result in [
     'unsupported',

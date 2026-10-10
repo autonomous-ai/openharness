@@ -134,6 +134,8 @@ describe('e2ee core — codes + fingerprint + classification', () => {
     expect(C.isEncryptedDownType('agents_list')).toBe(true)
     expect(C.isEncryptedDownType('agent_update')).toBe(true)
     expect(C.isEncryptedDownType('agent_create_status')).toBe(true)
+    expect(C.isEncryptedDownType('agent_create_cancel')).toBe(true)
+    expect(C.isEncryptedRpcResultType('agent_create_cancel_result')).toBe(true)
     expect(C.isEncryptedRpcResultType('agent_create_status_result')).toBe(true)
     // A machine's account usage names what the person spends and on whose subscription. Missing from
     // either list the request would not fail — it would time out, which is harder to find.
