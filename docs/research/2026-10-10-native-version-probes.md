@@ -59,7 +59,8 @@ latency remains dominated by the child, and cached reads add identity checks. CP
 includes the one-millisecond measurement timer, which can now run while a child is
 pending; these small samples do not establish production CPU or full-startup cost.
 Cold-start maxima are noisy and retained in the artifact. No numerical performance
-gate is inferred from this run.
+gate is inferred from this run. The reported median uses the upper-middle observation
+for an even sample count.
 
 ## Remaining completion scope
 

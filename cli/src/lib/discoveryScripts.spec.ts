@@ -39,6 +39,7 @@ describe('generated discovery scripts', () => {
     const file = join(pluginDir, 'launcher-register.js'), confirmed = readFileSync(file, 'utf8')
     finish(null)
     await obsolete
+    expect(existsSync(file)).toBe(true)
     expect(readFileSync(file, 'utf8')).toBe(confirmed)
   })
 
