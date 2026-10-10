@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 
 const shell = vi.hoisted(() => ({ environment: {} as NodeJS.ProcessEnv }))
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 vi.mock('./loginShellEnv.js', () => ({ loginShellEnvironment: () => shell.environment }))
 vi.mock('node:child_process', () => {
   const forbidden = () => { throw new Error('Host binaries are forbidden in this golden') }
