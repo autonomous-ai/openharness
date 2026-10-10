@@ -35,6 +35,32 @@ ownership after cancellation. Each has an executable regression. Final review
 attestation and exact-head CI/local receipts belong in the PR body; this record
 does not substitute for those gates.
 
+The full Linux e2e run also exposed a pre-existing initial-launch race in
+`stall.e2e.ts`: two process scans marked a new Codex row dormant 163 ms before its
+ready marker, clearing its control and input state. This happened before the
+fixture's first injected stall. Discovery now leaves initial engine absence to
+the startup watcher while the row is starting without a process identity. It
+still detects a missing pane, and two later absences of an observed engine still
+count. A scan begun before readiness cannot count after readiness changes.
+
+Commit `4cb11bec4` recorded the healthy discovery golden from the unchanged main
+implementation before this correction. Linux/Darwin are pinned and host binaries
+are forbidden. Three fault regressions failed before the correction and pass
+afterward; the healthy golden and original e2e assertion remain unchanged.
+
+Three paired runs of 10,000 in-memory initial-launch reconciliation passes on
+Node 22.23.2 measured 77.4–81.3 ms before and 74.3–78.2 ms after; parent CPU was
+140.7–147.8 ms and 135.2–141.2 ms, with noisy RSS deltas of 14.2–17.8 MiB and
+12.2–16.0 MiB. This narrow workload supplies private synthetic process/pane
+snapshots and no-op lifecycle callbacks; it measures the recurring decision,
+not tmux/process probing or a user-visible speedup. The
+[six results](2026-10-10-initial-launch-cost.json) and
+[`initial-launch-cost.mjs`](../../cli/scripts/handoff-2026-10-08/initial-launch-cost.mjs)
+retain the measurement. Bundle main `71f42b852` and the candidate reconciler with
+the same CLI esbuild, using `cli/src/lib` as the baseline's import directory and
+Node ESM with a `createRequire` banner; pass each bundle path to that script,
+alternating before/after three times under `TZ=UTC TMPDIR=/tmp` on a quiet host.
+
 ## Matched cost
 
 On the same macOS host and Node 22.23.2, three alternating runs measured 60 healthy

@@ -31,6 +31,70 @@ function probe(targets: TerminalAgentProbe['targets'], agents: DiscoveredTermina
 }
 
 describe('composite terminal reconciliation', () => {
+  function initialLaunch() {
+    const current: RegisteredSession = { ...session(), processIdentity: null, launch: { state: 'starting' } }
+    const snapshot = probe([{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime: tmux, rootPid: 1, cwd: '/work' }] } }])
+    const read = vi.fn(async () => snapshot)
+    const onDormant = vi.fn(() => { current.active = false })
+    const onRemoved = vi.fn()
+    const reconciler = new TerminalAgentReconciler({ current: () => [current], backends: [], backendOrder: ['tmux'],
+      probe: read, onDiscovered: vi.fn(), onObserved: observed => { current.processIdentity = observed.processIdentity },
+      onDormant, onRemoved })
+    return { current, snapshot, read, onDormant, onRemoved, reconciler }
+  }
+
+  it('keeps an initial launch active until an engine is observed, then detects its later exit', async () => {
+    const run = initialLaunch()
+    for (let n = 0; n < 3; n++) await run.reconciler.trigger()
+    expect(run.current.active).toBe(true)
+    expect(run.onDormant).not.toHaveBeenCalled()
+    expect(run.onRemoved).not.toHaveBeenCalled()
+    run.snapshot.agents = [observed([tmux])]
+    await run.reconciler.trigger()
+    expect(run.current.processIdentity).toEqual(identity)
+    // Even if startup's ready marker has not arrived, a known engine can exit.
+    run.snapshot.agents = []
+    await run.reconciler.trigger()
+    expect(run.onDormant).not.toHaveBeenCalled()
+    await run.reconciler.trigger()
+    expect(run.onDormant).toHaveBeenCalledOnce()
+    expect(run.current.active).toBe(false)
+  })
+
+  it('does not apply initial-start absence after readiness changes during the probe', async () => {
+    const run = initialLaunch()
+    run.read.mockImplementationOnce(async () => { run.current.launch = { state: 'ready' }; return run.snapshot })
+    await run.reconciler.trigger()
+    await run.reconciler.trigger()
+    expect(run.current.active).toBe(true)
+    expect(run.onDormant).not.toHaveBeenCalled()
+    await run.reconciler.trigger()
+    expect(run.onDormant).toHaveBeenCalledOnce()
+  })
+
+  it('discards earlier engine misses when a new initial start owns the pane', async () => {
+    const run = initialLaunch()
+    run.current.launch = { state: 'ready' }
+    await run.reconciler.trigger()
+    run.current.launch = { state: 'starting' }
+    await run.reconciler.trigger()
+    expect(run.onDormant).not.toHaveBeenCalled()
+    run.current.launch = { state: 'ready' }
+    await run.reconciler.trigger()
+    expect(run.onDormant).not.toHaveBeenCalled()
+    await run.reconciler.trigger()
+    expect(run.onDormant).toHaveBeenCalledOnce()
+  })
+
+  it('still detects a genuinely missing pane during an initial start', async () => {
+    const run = initialLaunch()
+    run.read.mockResolvedValue(probe([{ instanceId: 'tmux:default', result: { state: 'available', roots: [] } }]))
+    await run.reconciler.trigger()
+    await run.reconciler.trigger()
+    expect(run.onRemoved).toHaveBeenCalledOnce()
+    expect(run.onDormant).not.toHaveBeenCalled()
+  })
+
   it('defers early startup hooks until restored panes have their original owners', async () => {
     const current = { ...session([tmux]), sessionId: 'saved-conversation', processIdentity: null }
     const onRemoved = vi.fn()
