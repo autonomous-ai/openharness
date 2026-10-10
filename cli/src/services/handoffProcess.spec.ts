@@ -32,6 +32,11 @@ vi.mock('../lib/sqliteBuiltin.js', () => {
 afterEach(() => vi.clearAllMocks())
 
 describe('the handoff in the edge host', () => {
+  it.each(['UNKNOWN_AGENT', 'NO_PROJECT', 'BAD_CHANGE_ID', 'BUSY', 'TIMEOUT',
+    'IDENTITY_UNAVAILABLE', 'HANDOFF_UNAVAILABLE', 'CHANGE_CONFLICT'])('preserves a typed %s reply across the service boundary', async error => {
+    const core = handoffCoreApi('/data', async () => ({ error }))
+    await expect(core.conversations.resolve('selected')).rejects.toMatchObject({ code: error })
+  })
   it('queries current retained records, recaps, and verified paths with their exact arguments', async () => {
     let value: unknown = { agentId: 'stopped', engine: 'claude' }
     const ask = vi.fn(async () => ({ value }))
@@ -119,11 +124,11 @@ describe('the handoff in the edge host', () => {
       const commit = createHandoffPublisher({ directory: join(ws, 'daemon-data'),
         resolve: id => Object.values(agents).find(agent => agent.agentId === id) as never,
         ownedByOther: () => false, isRecentlyDeleted: () => false })
-      const publish = (prepared: PreparedHandoff) => {
-        try { return commit(prepared, { current: () => true }) } catch (error) { publicationErrors.push(error); throw error }
+      const publish = async (prepared: PreparedHandoff) => {
+        try { return await commit(prepared, { current: () => true }) } catch (error) { publicationErrors.push(error); throw error }
       }
       const core = handoffCoreApi(join(ws, 'daemon-data'), async (query, payload) => ({
-        value: query === 'publish' ? publish(payload.prepared as PreparedHandoff) : query === 'resolve' ? Object.values(agents).find((agent) => agent.agentId === payload.id) ?? null
+        value: query === 'publish' ? await publish(payload.prepared as PreparedHandoff) : query === 'resolve' ? Object.values(agents).find((agent) => agent.agentId === payload.id) ?? null
           : query === 'recentAsks' || query === 'recaps' ? [] : null,
       }))
       // The eager SQLite module does not open a database for a file-backed conversation.

@@ -6,9 +6,16 @@ import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 
+const fixtureGit = vi.hoisted(() => ({ enabled: false }))
 vi.mock('node:child_process', () => {
   const forbidden = () => { throw Error('Host binaries are forbidden in native handoff fixtures') }
-  return { execFile: forbidden, execFileSync: forbidden, exec: forbidden, execSync: forbidden,
+  const execFile = Object.assign(() => forbidden(), { [Symbol.for('nodejs.util.promisify.custom')]: async (command: string, args: string[]) => {
+    if (!fixtureGit.enabled || command !== 'git') return forbidden()
+    const stdout = args.includes('--is-inside-work-tree') ? 'true\n' : args.includes('--git-path') ? '.git/info/exclude\n'
+      : args.includes('--abbrev-ref') ? 'fixture\n' : args.includes('--short') ? 'a1b2c3\n' : ''
+    return { stdout, stderr: '' }
+  } })
+  return { execFile, execFileSync: forbidden, exec: forbidden, execSync: forbidden,
     spawn: forbidden, spawnSync: forbidden, fork: forbidden }
 })
 vi.mock('node:fs/promises', async original => ({ ...await original<object>() }))
@@ -25,6 +32,7 @@ const transcript = (id = ID, text = 'Keep the reviewed conversation', source: un
 ].map(line => JSON.stringify(line)).join('\n') + '\n'
 
 beforeEach(() => {
+  fixtureGit.enabled = false
   root = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), 'native-handoff-authority-'))); cwd = join(root, 'project')
   for (const name of ['HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR',
     'PI_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME']) {
@@ -40,19 +48,31 @@ beforeEach(() => {
 })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules(); fs.rmSync(root, { recursive: true, force: true }) })
 
-async function setup(rows = [row]) {
+async function setup(rows = [row], found = true) {
   const { prepareAgentHandoff } = await import('../lib/agentHandoff.js')
   const { createHandoffDependencies } = await import('./handoffDependencies.js')
   const { validTranscriptPath } = await import('../lib/registry.js')
   const current = new Map(rows.map(entry => [entry.agentId, entry]))
+  const saved = new Map<string, RegisteredSession>()
+  // Real registry/store methods use their receiver. Composition must preserve it.
+  class Registry {
+    constructor(readonly rows: Map<string, RegisteredSession>) {}
+    resolve(id: string) { return structuredClone(this.rows.get(id)) }
+    byAgent(id: string) { return this.rows.get(id) }
+    bySession(id: string) { return [...this.rows.values()].find(row => row.sessionId === id) }
+  }
+  class Stopped {
+    constructor(readonly rows: Map<string, RegisteredSession>) {}
+    get(id: string) { return this.rows.get(id) ?? null }
+    ids() { return [...this.rows.keys()] }
+  }
   const deps = createHandoffDependencies({
-    registry: { resolve: id => structuredClone(current.get(id)), byAgent: id => current.get(id), bySession: () => undefined },
-    stopped: { get: () => null, ids: () => [] },
+    registry: new Registry(current), stopped: new Stopped(saved),
     mirror: { recentAsks: () => ['A mirror must not bypass unknown native identity'], lastFullText: () => undefined, recent: () => [] },
-    databaseHistory: () => undefined, findLiveSession: async () => ({ sessionId: ID, transcriptPath: path }),
+    databaseHistory: () => undefined, findLiveSession: async () => found ? ({ sessionId: ID, transcriptPath: path }) : null,
     processSession: async () => null, isRecentlyDeleted: () => false, findResumedTranscript: async () => path, validTranscriptPath,
   }, join(root, 'ADAPTER_DATA_DIR'))
-  return { current, deps, prepare: () => prepareAgentHandoff(deps, { agentId: row.agentId, targetEngine: 'claude', changeId: CHANGE }) }
+  return { current, saved, deps, prepare: () => prepareAgentHandoff(deps, { agentId: row.agentId, targetEngine: 'claude', changeId: CHANGE }) }
 }
 
 const noPublication = () => expect(fs.existsSync(join(cwd, '.harness', 'handoff'))).toBe(false)
@@ -161,6 +181,33 @@ it.each(['full then empty', 'empty then full'])('keeps the first durable result 
     .rejects.toMatchObject({ code: 'CHANGE_CONFLICT' })
 })
 
+it.each(['full then empty', 'empty then full'])('recovers an interrupted Git snapshot with %s native history', async direction => {
+  fixtureGit.enabled = true
+  const exclude = join(cwd, '.git', 'info', 'exclude'), empty = transcript().split('\n')[0] + '\n'
+  write(exclude, '# Existing project exclusion\n')
+  if (direction === 'empty then full') write(path, empty)
+  const ctx = await setup(), link = fs.linkSync
+  let fired = false
+  vi.spyOn(fs, 'linkSync').mockImplementation((from, to) => {
+    link(from, to)
+    if (!fired && String(to).includes('handoff-receipts') && String(to).endsWith('.json')) {
+      fired = true; throw Error('Interrupted after durable reservation')
+    }
+  })
+  await expect(ctx.prepare()).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
+  expect(fired).toBe(true); noPublication()
+  write(path, direction === 'full then empty' ? empty : transcript())
+  fs.appendFileSync(exclude, '# Added while the request was held\n')
+  const result = await processPrepare(await setup())
+  expect(result).toMatchObject({ gitRepo: true })
+  if (direction === 'full then empty') {
+    expect(result.file).toBeTypeOf('string')
+    expect(fs.readFileSync(join(cwd, result.file as string), 'utf8')).toContain('Keep the reviewed conversation')
+    expect(fs.readFileSync(exclude, 'utf8')).toContain('.harness/handoff/')
+  } else { expect(result.file).toBeNull(); noPublication() }
+  expect(fs.readFileSync(exclude, 'utf8')).toContain('# Added while the request was held\n')
+})
+
 it('does not accept another valid ancestor file with the same session ID', async () => {
   const parent = { ...row, agentId: 'parent' }
   row = { ...row, sessionId: '', transcriptPath: null, forkedFrom: { agentId: parent.agentId, name: 'Parent', sessionId: ID, transcriptPath: path } }
@@ -182,6 +229,95 @@ it('does not inherit a fork link whose exact file now names another native conve
   write(path, transcript(OTHER))
   await expect(ctx.prepare()).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   noPublication()
+})
+
+it.each(['recorded', 'parent path', 'legacy', 'stopped', 'by ID'])('publishes exactly the selected %s ancestor through the core', async kind => {
+  const parent = { ...row, agentId: 'parent' }
+  row = { ...row, sessionId: '', transcriptPath: null, forkedFrom: { agentId: parent.agentId, name: 'Parent',
+    ...(kind === 'legacy' ? {} : { sessionId: ID, transcriptPath: kind === 'parent path' ? join(root, 'unrelated.jsonl') : path }) } }
+  const ctx = await setup([row, parent])
+  if (kind === 'stopped') { ctx.current.delete(parent.agentId); ctx.saved.set(parent.agentId, parent) }
+  if (kind === 'by ID') {
+    const next = join(dirname(path), 'moved', `${ID}.jsonl`)
+    fs.mkdirSync(dirname(next)); fs.renameSync(path, next); path = next
+    ctx.current.set(parent.agentId, { ...parent, sessionId: OTHER, transcriptPath: null })
+  }
+  const result = await processPrepare(ctx)
+  expect(result.file).toBeTypeOf('string')
+  expect(fs.readFileSync(join(cwd, result.file as string), 'utf8')).toContain('Keep the reviewed conversation')
+})
+
+it.each(['missing link', 'wrong parent', 'other project', 'invalid cutoff', 'late legacy binding'])
+('rejects %s ancestry even when the service supplies matching current row fingerprints', async fault => {
+  const parent = { ...row, agentId: 'parent' }
+  row = { ...row, sessionId: '', transcriptPath: null,
+    forkedFrom: { agentId: parent.agentId, name: 'Parent', sessionId: ID, transcriptPath: path } }
+  const ctx = await setup([row, parent])
+  const result = await processPrepare(ctx, async prepared => {
+    const child = ctx.current.get(row.agentId)!, ancestor = ctx.current.get(parent.agentId)!
+    if (fault === 'missing link') child.forkedFrom = undefined
+    if (fault === 'wrong parent') child.forkedFrom = { agentId: 'unselected', name: 'Another parent' }
+    if (fault === 'other project') { ancestor.cwd = join(root, 'other-project'); fs.mkdirSync(ancestor.cwd) }
+    if (fault === 'invalid cutoff') child.registeredAt = NaN
+    if (fault === 'late legacy binding') {
+      child.forkedFrom = { agentId: parent.agentId, name: 'Parent' }; ancestor.boundAt = AT + 1
+    }
+    const { handoffSessionFact } = await import('../lib/handoffAuthority.js')
+    prepared.sessions = [handoffSessionFact(child), handoffSessionFact(ancestor)]
+  })
+  expect(result).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', held: true }); noPublication()
+})
+
+it('refuses a by-ID file without the current core selection witness', async () => {
+  const parent = { ...row, agentId: 'parent' }
+  row = { ...row, sessionId: '', transcriptPath: null,
+    forkedFrom: { agentId: parent.agentId, name: 'Parent', sessionId: ID, transcriptPath: path } }
+  const ctx = await setup([row, parent]), next = join(dirname(path), 'moved', `${ID}.jsonl`)
+  fs.mkdirSync(dirname(next)); fs.renameSync(path, next); path = next
+  ctx.current.set(parent.agentId, { ...parent, sessionId: OTHER, transcriptPath: null })
+  const { createHandoffPublisher } = await import('./handoffPublication.js')
+  // This core instance did not observe the lookup supplied by the earlier service preparation.
+  ctx.deps.publish = createHandoffPublisher({ directory: join(root, 'ADAPTER_DATA_DIR'),
+    resolve: id => ctx.current.get(id), ownedByOther: () => false, isRecentlyDeleted: () => false })
+  expect(await processPrepare(ctx)).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', held: true }); noPublication()
+})
+
+it.each(['engine', 'path'])('refuses a discovery read whose %s differs from the core observation', async fault => {
+  row = { ...row, sessionId: '', transcriptPath: null,
+    processIdentity: { pid: 4242, executable: 'codex', startMarker: '2026-10-10T07:00:00Z' } }
+  const ctx = await setup()
+  const result = await processPrepare(ctx, prepared => {
+    if (fault === 'engine') prepared.reads[0].engine = 'claude'
+    else prepared.reads[0].path = join(root, 'other-transcript')
+  })
+  expect(result).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', held: true }); noPublication()
+})
+
+it.each([true, false])('requires a real core discovery observation, including confirmed empty (found: %s)', async found => {
+  row = { ...row, sessionId: '', transcriptPath: null,
+    processIdentity: { pid: 4242, executable: 'codex', startMarker: '2026-10-10T07:00:00Z' } }
+  const ctx = await setup([row], found), result = await processPrepare(ctx)
+  if (found) expect(result.file).toBeTypeOf('string')
+  else { expect(result).toMatchObject({ file: null, degraded: [] }); noPublication() }
+})
+
+it('checks unrelated stopped ownership through the store receiver', async () => {
+  const ctx = await setup()
+  ctx.saved.set('other', { ...row, agentId: 'other', sessionId: OTHER })
+  expect((await ctx.prepare()).file).toBeTypeOf('string')
+})
+
+it('uses a bound fork own history without consulting an absent parent', async () => {
+  row.forkedFrom = { agentId: 'absent', name: 'Parent' }
+  const ctx = await setup()
+  expect((await ctx.prepare()).file).toBeTypeOf('string')
+})
+
+it('walks a complete intermediate fork chain with no bound session', async () => {
+  const parent = { ...row, agentId: 'parent' }, middle = { ...row, agentId: 'middle', sessionId: '', transcriptPath: null,
+    forkedFrom: { agentId: parent.agentId, name: 'Parent', sessionId: ID, transcriptPath: path } }
+  row = { ...row, sessionId: '', transcriptPath: null, forkedFrom: { agentId: middle.agentId, name: 'Middle' } }
+  expect((await processPrepare(await setup([row, middle, parent]))).file).toBeTypeOf('string')
 })
 
 it('holds discovery whose process owner changes while the lookup is pending', async () => {
@@ -241,8 +377,24 @@ async function processPrepare(ctx: Awaited<ReturnType<typeof setup>>,
   }
 }
 
-it.each(['project', 'conversation', 'profile', 'engine', 'omitted read', 'foreign owner', 'target engine'])('the core refuses a JSON preparation with altered %s authority', async fault => {
+it.each(['project', 'conversation', 'profile', 'engine', 'omitted read', 'foreign owner', 'target engine', 'unknown read field',
+  'extra foreign read', 'duplicate read', 'native path', 'native key', 'native version', 'missing native route', 'missing fork chain'])('the core refuses a JSON preparation with altered %s authority', async fault => {
+  if (fault === 'missing fork chain') row = { ...row, sessionId: '', transcriptPath: null, forkedFrom: { agentId: 'parent', name: 'Parent' } }
   const ctx = await setup(), other = join(root, 'other-project'); fs.mkdirSync(other)
+  if (fault === 'missing fork chain') {
+    // Capture a valid own preparation, then supply an unbound fork fact with no ancestral witness.
+    const { handoffSessionFact } = await import('../lib/handoffAuthority.js')
+    const { prepareAgentHandoff } = await import('../lib/agentHandoff.js')
+    ctx.current.set(row.agentId, { ...row, sessionId: ID, transcriptPath: path, forkedFrom: undefined })
+    const publish = ctx.deps.publish!
+    ctx.deps.publish = (prepared, permit) => {
+      ctx.current.set(row.agentId, row)
+      prepared.sessions = [handoffSessionFact(row)]; prepared.reads = []; prepared.documents = null; prepared.result.file = null
+      return publish(prepared, permit)
+    }
+    await expect(prepareAgentHandoff(ctx.deps, { agentId: row.agentId, changeId: CHANGE, targetEngine: 'claude' })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+    noPublication(); return
+  }
   const result = await processPrepare(ctx, async prepared => {
     if (fault === 'project') {
       const { NativeFiles } = await import('../engines/kit/nativeFiles.js')
@@ -263,6 +415,13 @@ it.each(['project', 'conversation', 'profile', 'engine', 'omitted read', 'foreig
     if (fault === 'omitted read') prepared.reads = []
     if (fault === 'foreign owner') prepared.reads[0].ownerAgentId = 'unrecorded-owner'
     if (fault === 'target engine') prepared.request.targetEngine = 'codex'
+    if (fault === 'unknown read field') Object.assign(prepared.reads[0], { extra: 'x'.repeat(1024 * 1024) })
+    if (fault === 'extra foreign read') prepared.reads.push({ ...prepared.reads[0], ownerAgentId: 'foreign' })
+    if (fault === 'duplicate read') prepared.reads.push({ ...prepared.reads[0] })
+    if (fault === 'native path') prepared.reads[0].readPath = other
+    if (fault === 'native key') prepared.reads[0].fileKey = '1:2'
+    if (fault === 'native version') prepared.reads[0].version = 'changed'
+    if (fault === 'missing native route') prepared.reads[0].route = prepared.reads[0].route.slice(1)
   })
   expect(result).toMatchObject({ held: true, retryable: true })
   expect(result.file).toBeUndefined(); noPublication(); expect(fs.existsSync(join(other, '.harness'))).toBe(false)

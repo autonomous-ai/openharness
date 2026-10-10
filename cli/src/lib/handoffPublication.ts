@@ -1,15 +1,17 @@
 /** Recoverable publication of a bounded preparation. Receipts never authorize guessed completion. */
 import { randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
+import { setImmediate as yieldLoop } from 'node:timers/promises'
 import { NativeFiles } from '../engines/kit/nativeFiles.js'
 import { nativeFileKey, verifyNativePathFacts, type NativePathFact } from '../engines/kit/nativePaths.js'
-import { HandoffError, handoffBaseName, handoffHash, handoffIntentHash,
+import { HandoffError, handoffBaseName, handoffExcludeText, handoffHash, handoffIntentHash,
   type HandoffOutcome, type PreparedHandoff } from './handoffAuthority.js'
 import { readHandoffFile } from './handoffFiles.js'
 import { handoffRoute, handoffShape, validateHandoff } from './handoffValidation.js'
 
 const MAX_RECEIPT_BYTES = 20 * 1024 * 1024
+const publications = new Map<string, symbol>()
 const held = (): never => { throw new HandoffError('HANDOFF_UNAVAILABLE') }
 type Stage = { path: string; key: string }
 type Receipt = { version: 1; fingerprint: string; prepared: PreparedHandoff;
@@ -53,16 +55,25 @@ function directory(path: string): void {
 /** A durable reservation stores the complete redacted preparation before any project write.
  * Stages are recorded only after their exact bytes are durable. An incomplete unrecorded stage is
  * left untouched, and retry creates a fresh one. No existing public file is adopted without proof. */
-export function publishHandoff(directoryPath: string, candidate: PreparedHandoff,
+export async function publishHandoff(directoryPath: string, candidate: PreparedHandoff,
   verify: (prepared: PreparedHandoff, reserved: boolean) => void,
-): HandoffOutcome {
+  checkRequest: () => void,
+): Promise<HandoffOutcome> {
+  const token = Symbol(), locks: string[] = []
   try {
     verify(candidate, false)
+    const id = handoffHash(JSON.stringify([candidate.request.agentId, candidate.request.changeId]))
+    const keys = [`project:${candidate.project.fileKey}`, `receipt:${directoryPath}/${id}`]
+    if (candidate.git.exclude) {
+      const parent = new NativeFiles().locate(dirname(candidate.git.exclude))!
+      keys.push(`exclude:${nativeFileKey(parent.info)}:${basename(candidate.git.exclude)}`)
+    }
+    if (keys.some(key => publications.has(key))) throw new HandoffError('BUSY')
+    for (const key of keys) { publications.set(key, token); locks.push(key) }
     const fingerprint = handoffIntentHash(candidate)
     directory(dirname(directoryPath)); directory(directoryPath)
     const receiptFolders = new NativeFiles(); directoryPath = receiptFolders.locate(directoryPath)!.path
     const receiptRoute = receiptFolders.paths.snapshot()
-    const id = handoffHash(JSON.stringify([candidate.request.agentId, candidate.request.changeId]))
     const receiptPath = join(directoryPath, `${id}.json`)
     let previous = readHandoffFile(receiptPath, MAX_RECEIPT_BYTES, true)
     let receipt: Receipt
@@ -108,14 +119,41 @@ export function publishHandoff(directoryPath: string, candidate: PreparedHandoff
       if (Buffer.byteLength(text) > MAX_RECEIPT_BYTES) return held()
       const temporary = createFile(`${receiptPath}.${randomUUID()}.tmp`, text)
       receiptFence()
+      checkRequest()
       if (previous.text === null) linkSync(temporary.path, receiptPath)
       else renameSync(temporary.path, receiptPath)
       sync(directoryPath, true)
       previous = readHandoffFile(receiptPath, MAX_RECEIPT_BYTES, true)
       if (previous.key !== temporary.key || previous.text !== text) return held()
     }
+    const exclusionBaseline = (): void => {
+      if (!prepared.exclude) return
+      const exclusion = prepared.exclude, current = readHandoffFile(exclusion.path, 129 * 1024)
+      verifyNativePathFacts(exclusion.route.filter(fact => fact.path !== exclusion.path))
+      const completed = receipt.exclude && current.key === receipt.exclude.key && current.text === exclusion.after
+      if (!completed && (current.text !== exclusion.before || current.version !== exclusion.version)) return held()
+    }
+    // Before any output is staged, a fresh preparation can preserve the current exclusion as its
+    // new effect baseline. A peer may have completed the shared line after our stage was reserved
+    // or renamed. Retire only the old receipt pointer; never delete or adopt an old private stage.
+    if (previous.text !== null && !receipt.committed && receipt.outputs.every(stage => stage === null)) {
+      let baseline = candidate.exclude
+      if (prepared.documents && prepared.git.exclude && !baseline) {
+        // The current conversation may be empty; its candidate has no writes. The reserved
+        // nonempty snapshot still needs the freshly checked exclusion before it can finish.
+        const current = readHandoffFile(prepared.git.exclude, 128 * 1024)
+        baseline = { path: current.path, before: current.text, after: handoffExcludeText(current.text),
+          version: current.version, route: current.route }
+      }
+      if (JSON.stringify(prepared.exclude) !== JSON.stringify(baseline)) {
+        prepared.exclude = baseline
+        receipt.exclude = null
+        verify(candidate, false); verify(prepared, true); exclusionBaseline(); save()
+      }
+    }
     if (previous.text === null) {
       if (outputs.some(output => exists(output.path))) return held()
+      exclusionBaseline()
       verify(prepared, false)
       if (!prepared.documents) receipt.committed = true
       save()
@@ -124,18 +162,24 @@ export function publishHandoff(directoryPath: string, candidate: PreparedHandoff
       verify(prepared, true); receiptFence()
       if (receipt.destination) verifyNativePathFacts(receipt.destination)
     }
+    const checkpoint = async (): Promise<void> => { await yieldLoop(); fence() }
+    await checkpoint()
     if (!prepared.documents) {
       if (!receipt.committed) return held()
       fence(); sync(receiptPath); sync(directoryPath, true); sync(dirname(directoryPath), true); fence()
+      checkRequest()
       return prepared.result
     }
     const ignore = join(folder, '.gitignore')
-    const guards = (): void => {
+    const confirmIgnore = (): void => {
       if (!receipt.ignore) return held()
       verifyNativePathFacts(receipt.ignore.route)
       const currentIgnore = readHandoffFile(ignore, 64 * 1024, true)
       if (currentIgnore.key !== receipt.ignore.key || currentIgnore.text !== '*\n') return held()
       sync(ignore)
+    }
+    const guards = (): void => {
+      confirmIgnore()
       if (prepared.exclude) {
         const exclusion = prepared.exclude, current = readHandoffFile(exclusion.path, 129 * 1024)
         verifyNativePathFacts(exclusion.route.filter(fact => fact.path !== exclusion.path))
@@ -154,31 +198,28 @@ export function publishHandoff(directoryPath: string, candidate: PreparedHandoff
       if (!receipt.outputs[index] || current.key !== receipt.outputs[index]!.key || current.text !== output.text) return held()
       sync(output.path); sync(folder, true)
     })
-    const durable = (): void => {
+    const durable = async (): Promise<void> => {
       fence(); confirmed(); guards()
+      await checkpoint()
       sync(join(cwd, '.harness'), true); sync(cwd, true)
       // A rename-visible committed receipt may still have an unconfirmed directory fsync.
       sync(receiptPath); sync(directoryPath, true); sync(dirname(directoryPath), true)
       fence(); guards(); confirmed()
+      checkRequest()
     }
-    if (receipt.committed) { durable(); return prepared.result }
+    if (receipt.committed) { await durable(); return prepared.result }
     fence()
-    if (prepared.exclude) {
-      const exclusion = prepared.exclude, current = readHandoffFile(exclusion.path, 129 * 1024)
-      verifyNativePathFacts(exclusion.route.filter(fact => fact.path !== exclusion.path))
-      const completed = receipt.exclude && current.key === receipt.exclude.key && current.text === exclusion.after
-      if (!completed && (current.text !== exclusion.before || current.version !== exclusion.version)) return held()
-    }
+    exclusionBaseline()
     directory(join(cwd, '.harness')); directory(folder)
     if (!receipt.destination) {
       const folders = new NativeFiles(); folders.locate(folder)
       receipt.destination = folders.paths.snapshot(); save()
     }
-    fence()
+    await checkpoint()
     if (!receipt.ignore) {
       if (!exists(ignore)) {
         const staged = createFile(join(folder, `.${id}.${randomUUID()}.stage`), '*\n')
-        fence(); linkSync(staged.path, ignore)
+        fence(); checkRequest(); linkSync(staged.path, ignore)
       }
       const observed = readHandoffFile(ignore, 64 * 1024, true)
       if (!observed.key || observed.text !== '*\n') return held()
@@ -188,6 +229,7 @@ export function publishHandoff(directoryPath: string, candidate: PreparedHandoff
     const observedIgnore = readHandoffFile(ignore, 64 * 1024, true)
     if (observedIgnore.key !== receipt.ignore.key || observedIgnore.text !== '*\n') return held()
     sync(ignore); sync(folder, true)
+    await checkpoint()
     if (prepared.exclude) {
       const exclusion = prepared.exclude, parent = dirname(exclusion.path)
       const excludeFence = (): void => { fence(); verifyNativePathFacts(exclusion.route.filter(fact => fact.path !== exclusion.path)) }
@@ -206,15 +248,16 @@ export function publishHandoff(directoryPath: string, candidate: PreparedHandoff
           }
           const staged = readHandoffFile(receipt.exclude.path, 129 * 1024, true)
           if (staged.key !== receipt.exclude.key || staged.text !== exclusion.after) return held()
-          excludeFence(); verifyNativePathFacts(exclusion.route)
+          excludeFence(); confirmIgnore(); verifyNativePathFacts(exclusion.route)
           const latest = readHandoffFile(exclusion.path, 129 * 1024)
           if (latest.version !== current.version || latest.text !== current.text) return held()
-          renameSync(receipt.exclude.path, exclusion.path); sync(parent, true)
+          checkRequest(); renameSync(receipt.exclude.path, exclusion.path); sync(parent, true)
         }
       }
     }
     for (const [index, output] of outputs.entries()) {
-      fence()
+      await checkpoint()
+      guards()
       if (exists(output.path)) {
         const current = readHandoffFile(output.path, 8 * 1024 * 1024, true)
         if (!receipt.outputs[index] || current.key !== receipt.outputs[index]!.key || current.text !== output.text) return held()
@@ -225,14 +268,17 @@ export function publishHandoff(directoryPath: string, candidate: PreparedHandoff
         }
         const stage = receipt.outputs[index]!, current = readHandoffFile(stage.path, 8 * 1024 * 1024, true)
         if (current.key !== stage.key || current.text !== output.text) return held()
-        fence(); linkSync(stage.path, output.path); sync(folder, true)
+        fence(); guards(); checkRequest(); linkSync(stage.path, output.path); sync(folder, true)
       }
     }
-    confirmed(); guards(); fence(); receipt.committed = true; save(); durable()
+    await checkpoint()
+    confirmed(); guards(); fence(); receipt.committed = true; save(); await durable()
     return prepared.result
   } catch (error) {
     if (error instanceof HandoffError) throw error
     if ((error as { code?: string })?.code === 'IDENTITY_UNAVAILABLE') throw new HandoffError('IDENTITY_UNAVAILABLE')
     return held()
+  } finally {
+    for (const key of locks) if (publications.get(key) === token) publications.delete(key)
   }
 }

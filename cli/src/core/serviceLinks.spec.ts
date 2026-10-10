@@ -374,6 +374,19 @@ describe('service links', () => {
     expect(search.sent).toEqual([{ type: 'service_event', payload: { kind: 'touch' } }])
   })
 
+  it('revokes a queued query and binary frames when that service connection is replaced', async () => {
+    const answer = vi.fn(() => ({})), binary = vi.fn(), links = make({ answer, binary }), old = sink()
+    const retired = links.accept('search', TOKEN, old, vi.fn())!
+    retired.receive({ type: 'service_query', payload: { requestId: 'queued', query: 'agents' } })
+    const current = links.accept('search', TOKEN, sink(), vi.fn())!
+    retired.receiveBinary(Buffer.from('old')); current.receiveBinary(Buffer.from('current'))
+    await vi.waitFor(() => expect(old.sent).toHaveLength(1))
+    expect(answer).not.toHaveBeenCalled()
+    expect(old.sent[0].payload).toMatchObject({ requestId: 'queued', error: 'SERVICE_UNAVAILABLE' })
+    expect(binary).toHaveBeenCalledExactlyOnceWith('search', Buffer.from('current'))
+    current.closed()
+  })
+
   it('holds what a service must hear while it is down, and says it, in order, when it connects', () => {
     const links = make()
     const forget = (sessionId: string) => ({ type: 'service_event', payload: { kind: 'deleteHistory', sessionId } })

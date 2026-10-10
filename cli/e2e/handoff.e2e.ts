@@ -1,7 +1,7 @@
 /** Change agent prepares its file in the edge host. A failure there costs no agent its turn. */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
@@ -67,6 +67,31 @@ describe('change agent in the edge host', () => {
     const stopped = await client.request('agent_handoff_prepare', { agentId, changeId: 'fedcba9876543210fedcba9876543210', targetEngine: 'codex' })
     expect(stopped).toMatchObject({ agentId, gitRepo: true, cwd, degraded: [] })
     expect(readFileSync(join(cwd, stopped.file), 'utf8')).toContain('remember the handoff request')
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
+  it.each(['claude', 'codex'])('holds an unavailable %s native identity before publication and recovers the same request', async engine => {
+    const { d, client, cwd, agentId } = await start({}, engine)
+    await turn(client, agentId, 'keep this conversation while identity is unavailable')
+    const row = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8'))
+      .find((entry: Record<string, unknown>) => entry.agentId === agentId)
+    expect(row.transcriptPath.startsWith(d.root + sep)).toBe(true)
+    const original = readFileSync(row.transcriptPath)
+    writeFileSync(row.transcriptPath, '{"incompleteNativeHeader":')
+    const request = { agentId, changeId: CHANGE, targetEngine: 'codex' }
+    try {
+      expect(await client.request('agent_handoff_prepare', request)).toMatchObject({
+        error: 'IDENTITY_UNAVAILABLE', held: true, retryable: true,
+      })
+      expect(existsSync(join(cwd, '.harness', 'handoff'))).toBe(false)
+      const { agents } = await client.request('agents_list')
+      expect(agents.find((entry: Record<string, unknown>) => entry.id === agentId)).toBeDefined()
+    } finally { writeFileSync(row.transcriptPath, original) }
+    const prepared = await client.request('agent_handoff_prepare', request)
+    expect(prepared).toMatchObject({ agentId, gitRepo: true, cwd, degraded: [] })
+    expect(readFileSync(join(cwd, prepared.file), 'utf8')).toContain('keep this conversation while identity is unavailable')
+    await turn(client, agentId, 'continue after the held handoff recovered')
     expect(d.coresStarted()).toBe(1)
     client.close()
   })

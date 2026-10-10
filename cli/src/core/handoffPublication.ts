@@ -1,4 +1,4 @@
-/** Core owns current selection authority and the last synchronous commit, never history interpretation. */
+/** Core owns current selection authority at every publication step; history interpretation stays in edge. */
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { controlTranscriptEvidence, transcriptEvidence } from '../engines/transcriptBindings.js'
@@ -41,9 +41,10 @@ export function createHandoffPublisher(deps: HandoffPublicationDeps) {
     discoveries.set(handoffSessionFact(session).fingerprint, { found: source && {
       engine: source.engine, sessionId: source.sessionId, transcriptPath: source.transcriptPath }, until: now() + 5_000 })
   }
-  const publish = (prepared: PreparedHandoff, permit: HandoffPermit) => {
+  const publish = async (prepared: PreparedHandoff, permit: HandoffPermit) => {
     try {
       validateHandoff(prepared)
+      prepared = structuredClone(prepared)
       const request = prepared.request
       const verify = (facts: PreparedHandoff, reserved: boolean): void => {
         validateHandoff(facts)
@@ -120,7 +121,10 @@ export function createHandoffPublisher(deps: HandoffPublicationDeps) {
         if (facts.reads.some(read => !records.some(owner => owner.agentId === read.ownerAgentId))) return hold()
         if (!permit.current(request)) throw new HandoffError('HANDOFF_UNAVAILABLE')
       }
-      return publishHandoff(join(deps.directory, 'handoff-receipts'), prepared, verify)
+      return await publishHandoff(join(deps.directory, 'handoff-receipts'), prepared, verify, () => {
+        // Native verification and guard fsyncs can consume the remaining deadline without yielding.
+        if (!permit.current(request)) throw new HandoffError('HANDOFF_UNAVAILABLE')
+      })
     } catch (error) {
       if (error instanceof HandoffError) throw error
       return hold()

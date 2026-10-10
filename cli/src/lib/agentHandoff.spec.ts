@@ -97,6 +97,8 @@ function depsFor(sessions: RegisteredSession[], over: Partial<HandoffDeps> = {})
     gitTimeoutMs: 30_000,
     publish: (prepared, permit) => publishHandoff(join(root, 'daemon-data', 'handoff-receipts'), prepared, facts => {
       if (!permit.current(facts.request)) throw new PublicationError('TIMEOUT')
+    }, () => {
+      if (!permit.current(prepared.request)) throw new PublicationError('TIMEOUT')
     }),
     resolve: (id) => sessions.find((s) => s.agentId === id) ?? null,
     readHistory: () => undefined,

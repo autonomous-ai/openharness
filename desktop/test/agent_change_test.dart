@@ -14,7 +14,6 @@ import 'package:harness/state/desk_sync.dart';
 import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/devices/devices_harness_controller.dart';
-import 'package:harness/settings/experimental_features.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/terminal/terminal_binary.dart';
@@ -30,6 +29,7 @@ class SwitchConnection extends MonitorConnection {
   final events = <String>[];
   String? closeError;
   Completer<void>? holdClose;
+  Completer<void>? holdHandoff;
   Map<String, dynamic> recent = {'asks': <String>[], 'events': <Object>[]};
   int recentReads = 0;
   Map<String, dynamic>? launch;
@@ -54,6 +54,7 @@ class SwitchConnection extends MonitorConnection {
       handoffCalls.add(Map.of(payload));
       handoffTimeouts.add(timeout);
       eventsAtHandoff.add([...events]);
+      await holdHandoff?.future;
       if (handoffThrows case final error?) throw error;
       return handoff(payload);
     }
@@ -438,6 +439,54 @@ void main() {
       expect(prompt, isNot(contains('rm -rf')));
       expect(prompt, startsWith('Context handoff: you are taking over'));
     });
+
+    for (final changed in [
+      'createdAt',
+      'session',
+      'engine',
+      'project',
+      'removed',
+    ]) {
+      test(
+        'a delayed handoff cannot close a source whose $changed changed',
+        () async {
+          final (connection, app) = await open();
+          connection.handoff = handoffOk;
+          connection.holdHandoff = Completer<void>();
+          final switching = app.changeAgent('m', 'a0', 'claude');
+          while (connection.handoffCalls.isEmpty) {
+            await Future<void>.delayed(Duration.zero);
+          }
+          final machine = app.stateOf('m')!;
+          final source = machine.agents.first;
+          machine.agents = [
+            if (changed != 'removed')
+              Agent(
+                id: source.id,
+                name: source.name,
+                engine: changed == 'engine' ? 'opencode' : source.engine,
+                sessionId: changed == 'session'
+                    ? 'replacement-session'
+                    : source.sessionId,
+                createdAt: changed == 'createdAt'
+                    ? DateTime.utc(2026, 10, 2)
+                    : source.createdAt,
+                closeSupported: true,
+                terminalAvailable: true,
+                project: changed == 'project'
+                    ? const AgentProject(name: 'other', cwd: '/projects/other')
+                    : source.project,
+              ),
+            ...machine.agents.skip(1),
+          ];
+          connection.holdHandoff!.complete();
+          expect(await switching, contains('conversation changed'));
+          expect(connection.events, isEmpty);
+          expect(connection.creations, isEmpty);
+          expect(connection.recentReads, 0);
+        },
+      );
+    }
 
     test('nothing said yet: no prompt and no fallback read', () async {
       final (connection, app) = await open();

@@ -23,9 +23,10 @@
  *    first request is still to come) inherits the conversation it was forked from, cut at the moment of the fork
  *    and said so in both files — see `pickHistory`. An agent not bound to a session yet may have one found by
  *    `deps.discoverSession` (never a fork, never a database engine). Nothing else is guessed: an unreadable
- *    history is "none", not another agent's.
+ *    history holds the change until its identity and contents can be checked.
  *  - At most two preparations run at once, one per agent; a slow one gives up at its deadline (5 s, under the
- *    desktop's 6 s wait) before it writes, yielding to the event loop every 12 ms while it redacts.
+ *    desktop's 6 s wait), yielding to the event loop every 12 ms while it redacts. Core checks the same
+ *    request authority between durable publication steps and retains interrupted work for retry.
  */
 
 import { HandoffError, handoffBaseName, handoffExcludeText, handoffSessionFact, type HandoffPermit, type PreparedHandoff, type NativeHandoffRead } from './handoffAuthority.js'
@@ -477,13 +478,13 @@ export function renderTranscript(turns: readonly IndexedTurn[], maxChars = TRANS
 export type HandoffDegraded = 'transcript' | 'git' | 'file'
 export interface HandoffRequest { agentId: string; changeId: string; targetEngine: string }
 export interface HandoffResult {
-  /** The handoff document, relative to the project; null when nothing was written (nothing to hand off, or `file` degraded). */
+  /** The handoff document, relative to the project; null when the confirmed conversation is empty. */
   file: string | null
   /** The project is a git repository (the document has a Git state section, and the exclude line is in place). */
   gitRepo: boolean
   /** The project folder the file is in: the registry's `cwd`. */
   cwd: string
-  /** What fell short: `transcript` (the mirror's floor was used, or no history could be found), `git` (no git state), `file` (nothing written). */
+  /** Optional context omitted from the document. Unavailable identity or publication rejects with a held error. */
   degraded: HandoffDegraded[]
 }
 
@@ -491,7 +492,7 @@ export interface HandoffResult {
 type Read<T> = T | Promise<T>
 
 export interface HandoffDeps {
-  /** Only core may publish: this call verifies retained facts and the originating request in line. */
+  /** Only core may publish: it verifies retained facts and request authority at every durable step. */
   publish?(prepared: PreparedHandoff, permit: HandoffPermit): Read<HandoffResult>
   permit?: HandoffPermit
   /** The agent's record, running or stopped; also how a fork's parents are found. */
@@ -517,7 +518,7 @@ export interface HandoffDeps {
   /** Limit for each git command, ms. Default 2 s. */
   gitTimeoutMs?: number
   now?: () => number
-  /** How long a preparation may take before it gives up without writing. 5 s: under the desktop's 6 s wait. */
+  /** The complete request's deadline. Core stops publication when it expires and retains durable retry state. */
   deadlineMs?: number
 }
 
@@ -527,10 +528,10 @@ const inFlight = new Map<string, { changeId: string; targetEngine: string; finge
 /**
  * The handoff for one "Change agent": writes `<agent>-<change>.md` and `<agent>-<change>.transcript.md` under
  * `.harness/handoff/` and resolves with where. Coalesced per agent and per change (a retry shares the work, and
- * a change whose file is already there gets it back unwritten). Rejects with a `HandoffError`: `BAD_CHANGE_ID`,
+ * a durably completed change gets the same verified result back). Rejects with a `HandoffError`: `BAD_CHANGE_ID`,
  * `UNKNOWN_AGENT`, `NO_PROJECT`, `BUSY` (another change of that agent, or two agents, are being prepared), or
- * `TIMEOUT` (past the deadline; nothing written). An unclear repository state, or an exclude line that cannot
- * be added, resolves with `file: null` and `file` in `degraded`.
+ * `TIMEOUT` (past the deadline). Unavailable identity, repository or publication evidence holds the change;
+ * the client keeps the original session and retries the same intent.
  */
 export function prepareAgentHandoff(deps: HandoffDeps, req: HandoffRequest): Promise<HandoffResult> {
   // Found by QA on a quiet machine: a service boundary adds waits before the first file read. They
@@ -633,8 +634,8 @@ async function prepare(deps: HandoffDeps, session: RegisteredSession, cwd: strin
   const transcript = await secureBlocks(renderTranscript(floorAnswer(turns, lastAnswer, pick.floor), TRANSCRIPT_MAX, pick.inherited), tick)
   tick()
 
-  // The document is made and redacted first, then the deadline is checked: from the check on, it is all
-  // synchronous, so nothing is written after the deadline and nothing can interleave with the writes.
+  // Render and redact before asking core to publish. Its durable steps recheck the original request
+  // and current session authority after each yield and immediately before making a file visible.
   let md: string
   try {
     md = secureText(renderHandoff({

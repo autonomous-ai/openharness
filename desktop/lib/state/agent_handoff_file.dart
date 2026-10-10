@@ -60,8 +60,9 @@ String agentHandoffFilePrompt(
       reply['agentId'] != agentId ||
       !reply.containsKey('file') ||
       reply['cwd'] != folder ||
-      reply['gitRepo'] is! bool)
+      reply['gitRepo'] is! bool) {
     return refused;
+  }
   final degraded = reply['degraded'];
   if (degraded is! List || degraded.any((d) => d is! String)) return refused;
   // An unconfirmed publication cannot authorize closing the source.

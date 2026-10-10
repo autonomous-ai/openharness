@@ -2,7 +2,7 @@
 
 This change addresses the handoff consumer in the daemon-core completion checklist.
 History reading, normalization, redaction, rendering and git commands remain in the
-edge service. The core owns the final bounded publication, including current session
+edge service. The core owns bounded publication steps, including current session
 and native identity, request lifetime, the project destination and git exclusion.
 Unavailable evidence holds the original Change agent request before Close.
 
@@ -121,3 +121,68 @@ private homes; the reconnect fixture targets port zero. No installed daemon is u
 Two inactive evidence worktrees were narrowed to their tracked CLI files to reclaim
 space, preserving their branches, untracked golden files and private evidence. The
 validation runner's two-GiB free-space guard remains unchanged.
+
+## Async publication review and validation
+
+Publication now yields between durable steps and keeps token-owned locks over the
+physical project, receipt and shared Git exclusion until completion. Every resumed
+step obtains fresh session, native, request, receipt and destination evidence. Stop
+and readiness never join these locks. A separate cheap request check immediately
+before each link/rename and successful completion catches deadlines crossed during
+synchronous reads or fsyncs.
+
+The third independent implementation review found three concrete recovery gaps,
+now covered by regressions: a peer replacing a staged exclusion, expiry during guard
+fsyncs, and an interrupted nonempty Git snapshot retried after history becomes empty.
+Before any output is staged, a fresh preparation can update only its exclusion
+baseline, preserving the current user contents and the original redacted snapshot.
+Old private stages are retained. Completed or output-staged transactions continue
+to reject changed public files. A retained nonempty snapshot derives its exclusion
+even when the fresh candidate itself has no documents.
+
+At 12:35–12:36 UTC, 158 focused cases passed; both new core modules reached 100%
+statements, branches, functions and lines. These are exploratory results, not the
+full component gate. Five additional Desktop cases passed: a delayed handoff never
+closes a source whose creation, session, engine, project or existence changed.
+The earlier client failures were resolved: sixteen TUI switch and two TUI handoff
+cases passed, including a genuine connection-generation change at fixture port zero;
+the forty Desktop reply cases passed separately after the documented pre-test VM
+loader failure. The original seventy Desktop switch cases had passed. Analysis
+identified an existing unused test import and one new bracing advisory; both are
+removed, while unrelated existing advisories remain outside this change.
+
+The two responsiveness regressions passed with their original 2-second/5-second
+request limits and 1-second maximum callback delay. The cost workload additionally
+waits for a timer after completion so the final synchronous stage cannot escape
+measurement. The golden artifact remains unchanged. Private handoff e2e now checks
+both engines holding an unreadable native header without publication and recovering
+the same request before continuing their conversation.
+
+The draft automatic run's process checks passed. Its `ci/required` rejection is the
+planner's deliberate draft-PR guard: component validation starts at ready-for-review.
+No manual run or rerun was requested. Final full gates, mutations, matched cost,
+exact-head review and ready-PR checks remain required before merging #1145.
+
+## Matched runtime cost
+
+The [raw samples](2026-10-10-native-handoff-cost.json) compare the former runtime
+`a61cba5bc967cbfd8e888995987cc42cbf6556ee` with the candidate runtime based on
+`90b5049c6e68705bee8d1fe7a5d7bd103f08b11d`; the file records the exact runtime-diff
+SHA-256. At 12:43:24–12:43:41 UTC, eighteen fresh processes ran three interleaved
+samples per revision/workload, three measured operations per sample. Each used the
+same 45,151-byte, twenty-turn native transcript, private homes, pinned Linux evidence
+semantics and Node 22.23.2 on the same macOS x64 host. Host binaries were replaced
+with fixture responses. All 54 measured operations confirmed the selected history.
+
+| Workload | Former mean latency | Candidate mean latency | Candidate maximum callback delay | Former/candidate CPU per operation | Former/candidate peak RSS |
+|---|---:|---:|---:|---:|---:|
+| Own conversation | 10.54 ms | 502.45 ms | 275.08 ms | 16.07 / 115.43 ms | 96.68 / 116.64 MiB |
+| Fork ancestor | 11.54 ms | 495.80 ms | 189.67 ms | 17.06 / 136.19 ms | 100.21 / 118.16 MiB |
+| Same-intent retry | 1.44 ms | 44.22 ms | 110.73 ms | 2.11 / 34.68 ms | 99.09 / 118.61 MiB |
+
+Current identity checks and durable reservations add about half a second to a new
+handoff in this workload; a verified retry adds about 43 ms. This is a measured cost,
+not a speed improvement. The request remains within its existing five-second
+budget, and the longest measured callback remains below the existing one-second
+responsiveness assertion. These samples cover explicit handoffs, not startup,
+turn throughput or all possible filesystems. No numerical gate was relaxed.
