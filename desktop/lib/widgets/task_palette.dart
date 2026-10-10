@@ -1,8 +1,8 @@
 import 'dart:async';
 
-import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 
 import '../core/models.dart';
 import '../shared/theme/app_theme.dart' as grid;
@@ -151,17 +151,7 @@ class _TaskPalette extends StatefulWidget {
   State<_TaskPalette> createState() => _TaskPaletteState();
 }
 
-/// [sent] is a BEAT, not a screen. See [_confirmBeat].
-enum _Stage { typing, routing, choosing, empty, sent }
-
-/// How long the receipt stays up before the palette closes itself.
-///
-/// A confident route used to close the instant the daemon answered, on the rule that the text landing in
-/// the terminal is the receipt. It is — but only if you are looking at that pane, and ⌘B is most useful
-/// exactly when you are not: the agent it picks is often on another machine and behind another tile. So
-/// the window says who took the work, briefly, and then gets out of the way. Long enough to read four
-/// words, short enough that nobody waits on it.
-const Duration _confirmBeat = Duration(milliseconds: 750);
+enum _Stage { typing, routing, choosing, empty }
 
 class _TaskPaletteState extends State<_TaskPalette> {
   final TextEditingController _text = TextEditingController();
@@ -181,10 +171,6 @@ class _TaskPaletteState extends State<_TaskPalette> {
   /// The answer itself, kept because the picker explains ITSELF with it: how many agents were weighed,
   /// across how many computers, and whether a classifier or the name matcher produced this.
   RouteAnswer? _answer;
-
-  /// Which agent took the work — held for the receipt beat, where the design lights that row rather
-  /// than printing a sentence about it.
-  String _committed = '';
 
   /// Seconds on the clock while the router thinks.
   ///
@@ -222,13 +208,24 @@ class _TaskPaletteState extends State<_TaskPalette> {
   void initState() {
     super.initState();
     _context = warmTaskRoute(widget.notifier);
+    // The recent prompts are read from the state file the first time; the box draws them once they are.
+    unawaited(
+      widget.notifier.taskHistory.load().then((_) {
+        if (mounted) setState(() {});
+      }),
+    );
     final spoken = widget.spoken;
-    if (spoken == null) return;
     // The transcript goes in the field rather than into a variable the person cannot see: this is the
     // same palette, and what it is about to route has to be readable — and editable, if the STT heard
     // "web hook" and meant "webhook".
-    _text.text = spoken.text;
-    _text.selection = TextSelection.collapsed(offset: _text.text.length);
+    if (spoken != null) {
+      _text.text = spoken.text;
+      _text.selection = TextSelection.collapsed(offset: _text.text.length);
+    }
+    // Typing narrows the recent prompts, and lets go of one picked with the arrows. Listened to only
+    // now: a transcript set above, before the first frame, has nothing to redraw.
+    _text.addListener(_typed);
+    if (spoken == null) return;
     // Acked BEFORE the first frame, not after the route: the daemon is deciding, on a two-second clock,
     // whether any window is listening at all, and it must not fall back to routing on its own while this
     // one is up. See cable/windowRoute.ts.
@@ -243,6 +240,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
 
   @override
   void dispose() {
+    _text.removeListener(_typed);
     _generation++; // anything still in flight now answers to nobody
     _ticker?.cancel();
     _text.dispose();
@@ -260,11 +258,10 @@ class _TaskPaletteState extends State<_TaskPalette> {
   /// router, and a question when it is unsure.
   Future<void> _decide() async {
     final task = _text.text.trim();
-    // Not while one is in flight, and not during the receipt: Return held down, or pressed again as the
-    // card says who took it, would send the same task twice.
-    if (task.isEmpty || _stage == _Stage.routing || _stage == _Stage.sent) {
-      return;
-    }
+    // Not while one is in flight: Return held down would send the same task twice.
+    if (task.isEmpty || _stage == _Stage.routing) return;
+    // Remembered as it is said, sent or not: one that could not be sent is there to say again.
+    unawaited(widget.notifier.taskHistory.add(task));
     final mine = ++_generation;
     setState(() {
       _stage = _Stage.routing;
@@ -312,23 +309,6 @@ class _TaskPaletteState extends State<_TaskPalette> {
       );
       return;
     }
-    // The receipt lights the row of the session that took it.
-    final taker = RouteCandidate(
-      agentId: session.agentId,
-      machineId: session.machineId,
-      name: session.name,
-      machine: session.machine,
-      recent: session.asks.firstOrNull ?? '',
-      engine: session.engine,
-    );
-    _answer = RouteAnswer(
-      agentId: session.agentId,
-      machineId: session.machineId,
-      name: session.name,
-      confidence: 1,
-      reason: '',
-      candidates: [taker],
-    );
     final failure = await widget.notifier.sendTaskToSession(
       session.machineId,
       session.agentId,
@@ -348,13 +328,14 @@ class _TaskPaletteState extends State<_TaskPalette> {
       id: decision.sessionId!,
       at: DateTime.now(),
     );
-    widget.spoken?.sent(session.agentId);
-    setState(() {
-      _stage = _Stage.sent;
-      _committed = session.agentId;
-    });
-    await Future<void>.delayed(_confirmBeat);
-    if (!mounted || mine != _generation) return;
+    _landed(session.machineId, session.agentId);
+  }
+
+  /// The words are in. The box goes at once and the pane they landed in lights (`markLanding`): the
+  /// receipt is where the work went, not a line about it in a box that is in the way of seeing it.
+  void _landed(String machineId, String agentId) {
+    widget.spoken?.sent(agentId);
+    widget.notifier.markLanding(machineId, agentId);
     Navigator.of(context).pop();
   }
 
@@ -490,27 +471,100 @@ class _TaskPaletteState extends State<_TaskPalette> {
       id: taskRouteSessionId(machineId, agentId),
       at: DateTime.now(),
     );
-    // Landed. Tell the daemon before the beat, not after: it is holding the dial's overlay open on this
-    // answer, and three quarters of a second is long enough to be seen as a stall on a device whose only
-    // feedback is that overlay.
-    widget.spoken?.sent(agentId);
-    // Light the row that took it, then close — see [_confirmBeat].
-    setState(() {
-      _stage = _Stage.sent;
-      _committed = agentId;
-    });
-    await Future<void>.delayed(_confirmBeat);
-    if (!mounted || mine != _generation) return;
-    Navigator.of(context).pop();
+    _landed(machineId, agentId);
   }
 
-  /// The candidate row for an id, when the answer carried one. The winner is always among them, so a
-  /// confident route can name its taker without a second lookup.
-  RouteCandidate? _named(String agentId) {
-    for (final candidate in _answer?.candidates ?? const <RouteCandidate>[]) {
-      if (candidate.agentId == agentId) return candidate;
-    }
-    return null;
+  /// How many recent prompts the box offers: as many as a search box shows, and the same six the
+  /// welcome page's recent harnesses stop at.
+  static const _recentShown = 6;
+
+  /// The recent prompt picked with the arrows, if one is: Return says it instead of what is typed.
+  int? _recentCursor;
+
+  /// The recent prompts that fit what is typed, newest first: all of them in an empty box, then those
+  /// that contain the words so far. None while it decides, and none for a prompt of several lines.
+  List<String> get _suggestions {
+    if (_stage != _Stage.typing) return const [];
+    final typed = _text.text.trim().toLowerCase();
+    if (typed.contains('\n')) return const [];
+    return widget.notifier.taskHistory.recent
+        .where((said) {
+          final lower = said.toLowerCase();
+          return typed.isEmpty || (lower.contains(typed) && lower != typed);
+        })
+        .take(_recentShown)
+        .toList();
+  }
+
+  String? get _picked {
+    final at = _recentCursor;
+    final suggestions = _suggestions;
+    return at == null || at >= suggestions.length ? null : suggestions[at];
+  }
+
+  void _typed() {
+    if (!mounted) return;
+    setState(() => _recentCursor = null);
+  }
+
+  /// A recent prompt picked: said again, as a search box runs a recent search — decided on the desk as it
+  /// is now, so it may go somewhere other than it went before.
+  KeyEventResult _sayAgain(String prompt) {
+    _text.removeListener(_typed);
+    _text.value = TextEditingValue(
+      text: prompt,
+      selection: TextSelection.collapsed(offset: prompt.length),
+    );
+    _text.addListener(_typed);
+    _recentCursor = null;
+    unawaited(_decide());
+    return KeyEventResult.handled;
+  }
+
+  /// A recent prompt's row: the clock of a past search, and the words.
+  Widget _recentRow(String prompt, {required bool active}) {
+    final ink = active ? grid.AppDesktop.onSelection : DesktopChrome.foreground;
+    return Semantics(
+      selected: active,
+      button: true,
+      label: 'Say again: $prompt',
+      child: InkWell(
+        mouseCursor: SystemMouseCursors.click,
+        onTap: () => _sayAgain(prompt),
+        borderRadius: BorderRadius.circular(grid.AppDesktop.rowRadius),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: active ? grid.AppDesktop.selection : null,
+            borderRadius: BorderRadius.circular(grid.AppDesktop.rowRadius),
+          ),
+          child: Row(
+            children: [
+              ExcludeSemantics(
+                child: Icon(
+                  AppIcons.history,
+                  size: 16,
+                  color: active
+                      ? grid.AppDesktop.selectionDetail
+                      : DesktopChrome.muted,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ExcludeSemantics(
+                  child: Text(
+                    prompt.replaceAll(RegExp(r'\s+'), ' '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.control(color: ink),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   KeyEventResult _onFieldKey(FocusNode node, KeyEvent event) {
@@ -534,8 +588,24 @@ class _TaskPaletteState extends State<_TaskPalette> {
     // ⇧Enter is the newline — ignored here so the field does what it always does with it.
     final shift = HardwareKeyboard.instance.isShiftPressed;
     if (isEnter && !shift && _stage != _Stage.choosing) {
+      final picked = _picked;
+      if (picked != null) return _sayAgain(picked);
       unawaited(_decide());
       return KeyEventResult.handled; // …and NOT a newline
+    }
+    final suggestions = _suggestions;
+    final down = event.logicalKey == LogicalKeyboardKey.arrowDown;
+    if (_stage != _Stage.choosing &&
+        suggestions.isNotEmpty &&
+        (down || event.logicalKey == LogicalKeyboardKey.arrowUp)) {
+      // Down from the field onto the first, up past the first back to the field.
+      final at = _recentCursor;
+      setState(
+        () => _recentCursor = down
+            ? (at == null ? 0 : (at + 1).clamp(0, suggestions.length - 1))
+            : (at == null || at == 0 ? null : at - 1),
+      );
+      return KeyEventResult.handled;
     }
     if (_stage != _Stage.choosing) return KeyEventResult.ignored;
 
@@ -616,7 +686,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
             // and the common case must not cost a reach for the mouse.
             // Read-only rather than disabled while the router thinks: a disabled field drops the focus,
             // and the focus is what Esc is listening on.
-            readOnly: working || _stage == _Stage.sent,
+            readOnly: working,
             style: DesktopChrome.text(size: 17, height: 1.35),
             cursorColor: DesktopChrome.accent,
             cursorWidth: 2,
@@ -631,7 +701,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
               enabledBorder: InputBorder.none,
               focusedBorder: InputBorder.none,
               disabledBorder: InputBorder.none,
-              hintText: 'Describe the work…',
+              hintText: "What's up?",
               hintStyle: DesktopChrome.text(
                 size: 17,
                 color: DesktopChrome.muted,
@@ -681,6 +751,13 @@ class _TaskPaletteState extends State<_TaskPalette> {
   Widget _results() {
     switch (_stage) {
       case _Stage.typing:
+        final suggestions = _suggestions;
+        if (suggestions.isEmpty) return const SizedBox.shrink();
+        return _panel([
+          for (var i = 0; i < suggestions.length; i++)
+            _recentRow(suggestions[i], active: i == _recentCursor),
+        ]);
+
       case _Stage.routing:
         return const SizedBox.shrink();
 
@@ -697,27 +774,6 @@ class _TaskPaletteState extends State<_TaskPalette> {
               ),
             ),
           ),
-        ]);
-
-      case _Stage.sent:
-        // The receipt is the ROW, lit. The design drew this state and it is better than the line of text
-        // it replaces: the eye is already on the row, and a lit row answers "who" as well as "done".
-        final taker = _named(_committed);
-        return _panel([
-          Padding(
-            padding: EdgeInsets.fromLTRB(16, 8, 16, 6),
-            child: Row(
-              children: [
-                Icon(AppIcons.check, size: 14, color: DesktopChrome.accent),
-                SizedBox(width: 8),
-                Text(
-                  'Task sent',
-                  style: grid.AppType.body(color: DesktopChrome.accent),
-                ),
-              ],
-            ),
-          ),
-          if (taker != null) _row(taker, active: false, taken: true),
         ]);
 
       case _Stage.choosing:
@@ -738,11 +794,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
                     for (var i = 0; i < _choices.length; i++)
                       KeyedSubtree(
                         key: i < _rowKeys.length ? _rowKeys[i] : null,
-                        child: _row(
-                          _choices[i],
-                          active: i == _cursor,
-                          taken: false,
-                        ),
+                        child: _row(_choices[i], active: i == _cursor),
                       ),
                   ],
                 ),
@@ -833,13 +885,9 @@ class _TaskPaletteState extends State<_TaskPalette> {
   }
 
   /// Shared picker anatomy keeps machine context legible in narrow windows.
-  Widget _row(
-    RouteCandidate candidate, {
-    required bool active,
-    required bool taken,
-  }) {
+  Widget _row(RouteCandidate candidate, {required bool active}) {
     final fit = candidate.confidence;
-    final selected = active || taken;
+    final selected = active;
     final ink = selected
         ? grid.AppDesktop.onSelection
         : DesktopChrome.foreground;
@@ -853,18 +901,10 @@ class _TaskPaletteState extends State<_TaskPalette> {
     return Semantics(
       selected: active,
       child: InkWell(
-        mouseCursor: taken
-            ? SystemMouseCursors.basic
-            : SystemMouseCursors.click,
-        onTap: taken
-            ? null
-            : () => unawaited(
-                _commit(
-                  candidate.agentId,
-                  candidate.machineId,
-                  _text.text.trim(),
-                ),
-              ),
+        mouseCursor: SystemMouseCursors.click,
+        onTap: () => unawaited(
+          _commit(candidate.agentId, candidate.machineId, _text.text.trim()),
+        ),
         borderRadius: BorderRadius.circular(grid.AppDesktop.rowRadius),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -901,15 +941,12 @@ class _TaskPaletteState extends State<_TaskPalette> {
                   ],
                 ),
               ),
-              if (fit > 0 || taken) ...[
+              if (fit > 0) ...[
                 const SizedBox(width: 12),
-                if (taken)
-                  Icon(AppIcons.check, size: 16, color: ink)
-                else
-                  Text(
-                    fit.toStringAsFixed(2),
-                    style: DesktopChrome.metadata(color: detail),
-                  ),
+                Text(
+                  fit.toStringAsFixed(2),
+                  style: DesktopChrome.metadata(color: detail),
+                ),
               ],
             ],
           ),

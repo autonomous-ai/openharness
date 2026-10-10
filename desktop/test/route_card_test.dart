@@ -57,12 +57,16 @@ class _App extends AppNotifier {
 
   TaskRouteDecision? Function(String text)? decision;
 
+  /// Holds the decision until it completes, when set.
+  Future<void>? later;
+
   @override
   Future<TaskRouteDecision?> routeDecide(
     String text,
     TaskRouteChoices choices,
   ) async {
     payloads.add(choices.toPayload());
+    await later;
     if (decision case final decide?) return decide(text);
     final answer = reply(text);
     return answer == null ? null : TaskRouteDecision.fromJson(answer, choices);
@@ -428,10 +432,11 @@ void main() {
     expect(app.sent, [('m', 'a0', "what's the D3 retention rate")]);
     expect(app.routed, isEmpty);
     expect(app.lastRoutedTask?.id, _session);
-    // The receipt names who took it, then the card goes.
-    expect(find.text('Analyze Harness usage data'), findsOneWidget);
-    await tester.pumpAndSettle(const Duration(seconds: 1));
+    // No receipt in the box: it goes at once, and the pane the words landed in lights.
+    await tester.pump();
     expect(find.byType(TextField), findsNothing);
+    expect(app.paneLanding.value?.agentId, 'a0');
+    expect(app.paneLanding.value?.machineId, 'm');
     expect(await result(), isNull);
   });
 
@@ -541,18 +546,28 @@ void main() {
     expect(app.routed, isEmpty);
   });
 
-  testWidgets('Return during the receipt does not send the task again', (
-    tester,
-  ) async {
-    final (app, _) = await _open(tester);
-    app.reply = (_) => {'decided': 'session', 'id': _session, 'via': 'jev'};
-    await _say(tester, "what's the D3 retention rate");
-    expect(app.sent, hasLength(1));
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pump();
-    await tester.pumpAndSettle(const Duration(seconds: 1));
-    expect(app.sent, hasLength(1));
-  });
+  testWidgets(
+    'Return pressed again while it decides does not send the task twice',
+    (tester) async {
+      final (app, _) = await _open(tester);
+      final answer = Completer<Map<String, dynamic>?>();
+      app.decision = null;
+      app.later = answer.future;
+      app.reply = (_) => {'decided': 'session', 'id': _session, 'via': 'jev'};
+      await tester.enterText(
+        find.byType(TextField),
+        "what's the D3 retention rate",
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      answer.complete(null);
+      await tester.pumpAndSettle();
+      expect(app.sent, hasLength(1));
+      expect(app.payloads, hasLength(1));
+    },
+  );
 
   testWidgets('Esc while the pane comes forward stops the send', (
     tester,
@@ -644,6 +659,91 @@ void main() {
     final plan = await result!;
     expect(plan?.prompt, '/loop plot signups by week');
     expect(reports, ['taken']);
+  });
+
+  group('recent prompts', () {
+    Future<_App> withHistory(WidgetTester tester, List<String> said) async {
+      final (app, _) = await _open(tester);
+      for (final prompt in said.reversed) {
+        await app.taskHistory.add(prompt);
+      }
+      // The box draws them once read.
+      await tester.pump();
+      return app;
+    }
+
+    testWidgets('an empty box offers the latest six, newest first', (
+      tester,
+    ) async {
+      final app = await withHistory(tester, [
+        for (var i = 0; i < 8; i++) 'task $i',
+      ]);
+      // Reopened, so the box reads the history it now has.
+      Navigator.of(tester.element(find.byType(TextField))).pop();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      for (var i = 0; i < 6; i++) {
+        expect(find.text('task $i'), findsOneWidget);
+      }
+      expect(find.text('task 6'), findsNothing);
+      expect(app.payloads, isEmpty);
+    });
+
+    testWidgets('typing narrows them to the ones that fit', (tester) async {
+      await withHistory(tester, [
+        'what is the d3 retention rate',
+        'also add tests for the parser',
+      ]);
+      await tester.enterText(find.byType(TextField), 'retention');
+      await tester.pump();
+      expect(find.text('what is the d3 retention rate'), findsOneWidget);
+      expect(find.text('also add tests for the parser'), findsNothing);
+    });
+
+    testWidgets(
+      'a recent prompt clicked is said again, decided on the desk now',
+      (tester) async {
+        final app = await withHistory(tester, ['ship the retention chart']);
+        app.reply = (_) => {'decided': 'session', 'id': _session, 'via': 'jev'};
+        await tester.enterText(find.byType(TextField), 'ship');
+        await tester.pump();
+        await tester.tap(find.text('ship the retention chart'));
+        await tester.pump();
+        await tester.pump();
+        expect(app.sent, [('m', 'a0', 'ship the retention chart')]);
+      },
+    );
+
+    testWidgets(
+      'down and Return say the one picked; Return alone says what is typed',
+      (tester) async {
+        final app = await withHistory(tester, [
+          'plot signups by week',
+          'ship the chart',
+        ]);
+        app.reply = (_) => {'decided': 'session', 'id': _session, 'via': 'jev'};
+        await tester.enterText(find.byType(TextField), 'by week');
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump();
+        await tester.pump();
+        expect(app.sent.single.$3, 'plot signups by week');
+      },
+    );
+
+    testWidgets(
+      'Return with nothing picked sends what is typed, and remembers it',
+      (tester) async {
+        final app = await withHistory(tester, ['plot signups by week']);
+        app.reply = (_) => {'decided': 'session', 'id': _session, 'via': 'jev'};
+        await _say(tester, 'plot');
+        expect(app.sent.single.$3, 'plot');
+        expect(app.taskHistory.recent, ['plot', 'plot signups by week']);
+      },
+    );
   });
 
   testWidgets('a daemon without the router leaves the card as it was', (
