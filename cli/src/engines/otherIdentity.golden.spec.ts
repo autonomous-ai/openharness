@@ -20,6 +20,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { performance } from 'node:perf_hooks'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { AgentEngine } from './types.js'
@@ -92,12 +93,17 @@ type Modules = {
   cursorDiscovery: typeof import('../core/engines/cursorDiscovery.js')
 }
 let m: Modules
+let restoreClock = () => {}
 
 beforeAll(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'other-identity-golden-')))
   for (const cwd of ['r', 'other']) mkdirSync(join(root, 'workspaces', cwd), { recursive: true })
   Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
   vi.useFakeTimers({ toFake: ['Date'], now: NOW })
+  // This records healthy identity wiring. Registry fsync under runner load must
+  // not spend its proof deadline; nativeEvidence.spec.ts tests elapsed budgets.
+  const monotonic = vi.spyOn(performance, 'now').mockReturnValue(0)
+  restoreClock = () => monotonic.mockRestore()
   const home = join(root, 'home')
   const env: Record<string, string | undefined> = {
     HOME: home, XDG_CONFIG_HOME: undefined, XDG_DATA_HOME: undefined, ADAPTER_DATA_DIR: join(root, 'data'), ADAPTER_RUNTIME_DIR: join(root, 'runtime'),
@@ -128,6 +134,7 @@ beforeAll(async () => {
 })
 
 afterAll(() => {
+  restoreClock()
   vi.useRealTimers()
   Object.defineProperty(process, 'platform', platform)
   for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value
