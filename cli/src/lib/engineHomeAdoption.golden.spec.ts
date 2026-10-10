@@ -18,6 +18,8 @@ let root = '', homes: typeof import('./engineHomes.js'), expected: Record<string
 const captured: Record<string, unknown> = {}
 const path = (...parts: string[]) => join(root, ...parts)
 const catalog = () => path('ADAPTER_DATA_DIR', 'engine-homes.json')
+// Replay through a fresh reader: the physical persistence format is not a public catalog answer.
+const durableCatalog = () => { homes.resetEngineHomes(); return homes.movedEngineHomes() }
 function check(key: string, value: unknown): void {
   captured[key] = JSON.parse(JSON.stringify(value ?? null).split(root).join('<root>'))
   if (!RECORD) expect({ key, value: captured[key] }).toEqual({ key, value: expected[key] })
@@ -49,7 +51,7 @@ it('preserves adoption results, idempotence, merges and restart discovery', () =
   check('new:empty-environment', homes.adoptHomes({}))
   const claude = path('claude-first'), codex = path('codex-first')
   check('adopt:first', homes.adoptHomes({ CLAUDE_CONFIG_DIR: ` ${claude}/ `, CODEX_HOME: codex }))
-  check('adopt:catalog', JSON.parse(readFileSync(catalog(), 'utf8')))
+  check('adopt:catalog', durableCatalog())
   check('adopt:repeat', homes.adoptHomes({ CLAUDE_CONFIG_DIR: claude, CODEX_HOME: `${codex}/` }))
   check('adopt:roots', [homes.nativeSessionRoots('claude'), homes.nativeSessionRoots('codex')])
   const second = path('codex-second')
@@ -58,13 +60,13 @@ it('preserves adoption results, idempotence, merges and restart discovery', () =
   check('restart:known', homes.movedEngineHomes())
   check('restart:repeat', homes.adoptHomes({ CODEX_HOME: second }))
   const external = path('external-claude')
-  const saved = JSON.parse(readFileSync(catalog(), 'utf8'))
+  const saved = durableCatalog()
   saved.claude.push(external)
   writeFileSync(`${catalog()}.external`, JSON.stringify(saved), { mode: 0o600 })
   renameSync(`${catalog()}.external`, catalog())
   check('merge:external', homes.movedEngineHomes())
   check('merge:adopt', homes.adoptHomes({ CLAUDE_CONFIG_DIR: path('claude-second') }))
-  check('merge:catalog', JSON.parse(readFileSync(catalog(), 'utf8')))
+  check('merge:catalog', durableCatalog())
   check('own:explicit-default', homes.adoptHomes({ CODEX_HOME: path('explicit-default') }, { codex: path('explicit-default') }))
   check('invalid:relative', homes.adoptHomes({ CODEX_HOME: 'relative', CLAUDE_CONFIG_DIR: '~/relative' }))
   homes.resetEngineHomes()

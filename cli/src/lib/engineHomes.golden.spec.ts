@@ -60,7 +60,8 @@ it('records declared roots, durable adoption, profiles and bound-home selection'
   }
   const claude = path('moved-claude'), codex = path('moved-codex'), profile = path('profile')
   check('adopt:both', homes.adoptHomes({ CLAUDE_CONFIG_DIR: ` ${claude}/ `, CODEX_HOME: `${codex}/` }))
-  check('adopt:saved', JSON.parse(readFileSync(saved(), 'utf8')))
+  homes.resetEngineHomes()
+  check('adopt:saved', homes.movedEngineHomes())
   check('adopt:duplicate', homes.adoptHomes({ CLAUDE_CONFIG_DIR: claude, CODEX_HOME: codex }))
   check('adopt:roots', [homes.nativeSessionRoots('claude'), homes.nativeSessionRoots('codex')])
   check('adopt:home-roots', [homes.homeRoots('CODEX_HOME'), homes.homeRoots('CLAUDE_PROJECTS_DIR')])
