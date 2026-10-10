@@ -16,7 +16,7 @@ import { homes } from './lib/agents.mjs'
 import { noteSeen, writeAbout } from './lib/about.mjs'
 import { DEFAULT_CHOICE_AT, deliver } from './lib/deliver.mjs'
 import { askMachines, merge, newestChoice, syncAbout, syncChoice } from './lib/fleet.mjs'
-import { search } from './lib/sessions.mjs'
+import { around, headings, search } from './lib/sessions.mjs'
 import { closeIndex, fingerprint, sessionIndex, snapshot as takeSnapshot, writeVerdict } from './lib/state.mjs'
 
 const PACKAGE = dirname(fileURLToPath(import.meta.url))
@@ -189,10 +189,60 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
     timer = setTimeout(async () => { await look(); schedule() }, intervalMs)
   }
 
+  // This machine's id as the bridge names it: asked once, and again after a failure.
+  let hereId = null
+  async function thisMachine() {
+    if (hereId) return hereId
+    const report = await fleet.machinesReport()
+    hereId = report?.machines?.find((machine) => machine.current)?.machineId ?? null
+    return hereId
+  }
+
+  /**
+   * Conversations, found by the same search as Cmd-P: the daemon's session index service (`session_search`),
+   * so the same words find the same sessions in both. Measured on one Mac's 9,928 messages (2026-10-10), this
+   * package's own search wanted every word in one turn, ranked tool output like what the person said, and
+   * found nothing for a question ("what did i decide about pricing": one unrelated session); the daemon's
+   * found twelve, from what the person asked. Its hits are labeled from the index here. The package's own
+   * search stays for a daemon that cannot answer (none running, or too old) and for related conversations,
+   * which want any of the words rather than all.
+   */
   async function sessionSearch(text, options) {
+    if (fleet && !options.any) {
+      try {
+        const here = await thisMachine()
+        const answer = here ? await fleet.request(here, 'session_search', { query: text, limit: options.limit }, { timeoutMs: 5000 }) : null
+        if (Array.isArray(answer?.hits)) return { hits: await labeled(answer.hits) }
+      } catch { hereId = null }
+    }
     const index = await sessionIndex(homes(env, home))
     if (!index.db) return { hits: [], error: index.error }
     try { return { hits: search(index.db, text, options) } } catch (error) { return { hits: [], error: String(error?.message ?? error) } }
+  }
+
+  /** The daemon's hits in this viewer's shape, titled and placed from the index. */
+  async function labeled(hits) {
+    const index = await sessionIndex(homes(env, home))
+    let known = new Map()
+    try { if (index.db) known = headings(index.db, hits.map((hit) => hit?.sessionId)) } catch { /* unlabeled is still found */ }
+    return hits.filter((hit) => typeof hit?.sessionId === 'string').map((hit) => {
+      const heading = known.get(hit.sessionId)
+      return {
+        sessionId: hit.sessionId, turn: Number.isInteger(hit.turn) ? hit.turn : -1, at: hit.at ?? hit.lastAt ?? null, engine: String(hit.engine ?? ''),
+        title: String(hit.external?.title || heading?.title || heading?.header || ''), cwd: String(hit.external?.cwd || heading?.cwd || ''),
+        snippet: String(hit.snippet ?? '').replace(/\s+/g, ' ').slice(0, 400),
+      }
+    })
+  }
+
+  /** What was said around where a search found a conversation: read from the index, never a transcript. */
+  async function conversation(sessionId, turn) {
+    const index = await sessionIndex(homes(env, home))
+    if (!index.db) return { turns: [], error: index.error }
+    try {
+      const [heading] = headings(index.db, [sessionId]).values()
+      return { sessionId, title: heading?.title || heading?.header || '', cwd: heading?.cwd ?? '', turns: around(index.db, sessionId, turn) }
+    } catch (error) { return { turns: [], error: String(error?.message ?? error) } }
   }
 
   const server = createServer(async (req, res) => {
@@ -228,7 +278,13 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
       }
       if (url.pathname === '/api/search') {
         const q = (url.searchParams.get('q') ?? '').slice(0, 200)
-        json(res, 200, { q, ...(await sessionSearch(q, { limit: 12 })) })
+        json(res, 200, { q, ...(await sessionSearch(q, { limit: 20 })) })
+        return
+      }
+      if (url.pathname === '/api/conversation') {
+        const sessionId = (url.searchParams.get('sessionId') ?? '').slice(0, 200)
+        const turn = Number.parseInt(url.searchParams.get('turn') ?? '', 10)
+        json(res, 200, sessionId ? await conversation(sessionId, Number.isInteger(turn) ? turn : null) : { turns: [] })
         return
       }
       if (url.pathname === '/api/related') {

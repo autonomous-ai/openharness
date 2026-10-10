@@ -150,3 +150,24 @@ export function overview(db, { now = Date.now() } = {}) {
     folders: folders(db),
   }
 }
+
+/** What the index calls each of these sessions: its title, folder and header (a Harness session's name). */
+export function headings(db, sessionIds) {
+  const ids = [...new Set(sessionIds.filter((id) => typeof id === 'string' && id))].slice(0, 200)
+  if (!ids.length) return new Map()
+  const found = rows(db, `SELECT session_id AS sessionId, title, cwd, header FROM sessions WHERE session_id IN (${ids.map(() => '?').join(', ')})`, ...ids)
+  return new Map(found.map((row) => [row.sessionId, { title: row.title ?? '', cwd: row.cwd ?? '', header: row.header ?? '' }]))
+}
+
+/**
+ * The turns around one turn of a session, oldest first: what was said where a search found it. Without a
+ * turn (a hit on the session's name), its last few.
+ */
+export function around(db, sessionId, turn, { before = 3, after = 1, maxChars = 2000 } = {}) {
+  const chars = Math.max(40, Math.min(8000, maxChars))
+  const columns = `turn, at, substr(ask, 1, ${chars}) AS ask, substr(answer, 1, ${chars}) AS answer`
+  if (!Number.isInteger(turn) || turn < 0) {
+    return rows(db, `SELECT ${columns} FROM turns WHERE session_id = ? AND turn >= 0 ORDER BY turn DESC LIMIT ?`, sessionId, before + after + 1).reverse()
+  }
+  return rows(db, `SELECT ${columns} FROM turns WHERE session_id = ? AND turn BETWEEN ? AND ? ORDER BY turn`, sessionId, Math.max(0, turn - before), turn + after)
+}
