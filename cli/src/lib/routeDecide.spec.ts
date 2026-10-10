@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { JevChoice, JevChoiceAnswer } from './jev/jevClient.js'
 import { JevUnavailable } from './jev/jevClient.js'
-import { decideRoute, JEV_LEAD_OPTIONS, JEV_LEAD_P, JEV_LEAD_RATIO, JEV_SURE_P, jevPick, type RouteDeps, type RouteInput, type RouteOption, type RouteSession } from './routeDecide.js'
+import { decideRoute, JEV_LEAD_OPTIONS, JEV_LEAD_P, JEV_LEAD_RATIO, JEV_LIVE_RATIO, JEV_OVER_STOPPED, JEV_SURE_P, jevPick, offered, type RouteDeps, type RouteInput, type RouteOption, type RouteSession } from './routeDecide.js'
 
 /** A choice of [choice] at [p] over [options], the rest shared evenly among the others. */
 function said(choice: string, p: number, options: string[]): JevChoiceAnswer {
@@ -30,6 +30,23 @@ const AGENTS: RouteOption[] = [{ id: 'claude', name: 'Claude Code' }, { id: 'cod
 
 const input = (over: Partial<RouteInput> = {}): RouteInput => ({ text: 'the prometheus alert fired again', sessions: DESK, projects: [], agents: [], ...over })
 const steps = (trace: string) => trace.split(' · ')
+
+const TARGET_QUESTION = 'A person typed this message into a box that either sends it to one of their ongoing sessions or starts a new one. ' +
+  "Choose a session only when the message is clearly about that session's own work: it continues that work, or it is the same " +
+  'kind of work on the same subject. Sharing a few words with a session is not enough. If the message names nothing to go on ' +
+  '(like "merge it" or "continue"), asks for a new session, or is about another subject, choose none. Prefer a session that is ' +
+  'still running over a stopped one, unless the message clearly continues the stopped one.'
+const FOLLOW_UP = ' Their previous message went to the session given as previous_message_went_to: a follow-up that names nothing new goes there too; a message about something else does not.'
+const TOPIC_QUESTION = {
+  type: 'choice',
+  instructions: 'Does this message name anything of its own to work on or ask about? A single word is enough: "retention", "the daemon", "the round unit", "the tui".',
+  criteria: {
+    yes: 'Yes: it names a subject or task, even briefly and even when it starts with "also" or "and"',
+    no: 'No: it is only words like "merge it", "do it", "ok merge", "what does that do", "post it as is", "continue", "take care of them all"',
+  },
+}
+/** Jev says the message names nothing of its own, at [p]. */
+const topicless = (p = 0.8): JevChoiceAnswer => ({ choice: 'no', probabilities: { yes: 1 - p, no: p } })
 
 describe('Jev\'s pick', () => {
   it('is its choice when it gives it 0.6 or more over exactly the options asked', () => {
@@ -89,13 +106,14 @@ describe('where a task goes', () => {
     expect(questions).toEqual({
       target: {
         type: 'choice',
-        instructions: 'A person typed this message to continue their work. Which of their ongoing sessions is it for?',
+        instructions: TARGET_QUESTION,
         criteria: {
           s0: 'billing retries — asked: why was the card charged twice',
           s1: 'Prometheus alerts — lately: raised the alert threshold to 90%',
-          new: 'None of them: it starts new, unrelated work',
+          new: 'None of them: no session does this kind of work',
         },
       },
+      topic: TOPIC_QUESTION,
       project: {
         type: 'choice',
         instructions: 'If this becomes new work, which project folder does it belong in?',
@@ -111,7 +129,7 @@ describe('where a task goes', () => {
 
   it('describes a session to Jev by its name, its last ask and its last turns, in one line cut short', async () => {
     const remote = jev()
-    const long = session('a1', `  ${'n'.repeat(250)}\n`, [`${'y'.repeat(200)}`, 'older'], 'z'.repeat(500))
+    const long = session('a1', `  ${'n'.repeat(250)}\n`, [`deploy the ${'y'.repeat(200)}`, 'older'], 'z'.repeat(500))
     const tidy = session('a2', 'auth\n\n  api', ['rotate   the\ttokens'])
     await decideRoute(input({
       sessions: [long, tidy, session('a3', 'bare'), session('a4', 'quiet', [], 'only   turns')],
@@ -121,7 +139,7 @@ describe('where a task goes', () => {
     const [, questions] = remote.mock.calls[0]!
     const criteria = questions.target!.criteria
     // The name, then the first 120 of its last ask and the first 420 of its last turns: cut at 600 with an ellipsis.
-    expect(criteria.s0).toBe(`${`${'n'.repeat(250)} — asked: ${'y'.repeat(120)} — lately: ${'z'.repeat(420)}`.slice(0, 599)}…`)
+    expect(criteria.s0).toBe(`${`${'n'.repeat(250)} — asked: deploy the ${'y'.repeat(109)} — lately: ${'z'.repeat(420)}`.slice(0, 599)}…`)
     expect(criteria.s0).toHaveLength(600)
     expect(criteria.s1).toBe('auth api — asked: rotate the tokens')
     expect(criteria.s2).toBe('bare')
@@ -134,18 +152,18 @@ describe('where a task goes', () => {
   it('asks no project or agent question when there is one or none to choose from', async () => {
     const remote = jev()
     await decideRoute(input({ projects: [PROJECTS[0]!], agents: [AGENTS[0]!] }), { jev: remote })
-    expect(Object.keys(remote.mock.calls[0]![1])).toEqual(['target'])
+    expect(Object.keys(remote.mock.calls[0]![1])).toEqual(['target', 'topic'])
     await decideRoute(input(), { jev: remote })
-    expect(Object.keys(remote.mock.calls[1]![1])).toEqual(['target'])
+    expect(Object.keys(remote.mock.calls[1]![1])).toEqual(['target', 'topic'])
     // Two projects and one agent: the project is asked, the agent is not.
     await decideRoute(input({ projects: PROJECTS, agents: [AGENTS[0]!] }), { jev: remote })
-    expect(Object.keys(remote.mock.calls[2]![1])).toEqual(['target', 'project'])
+    expect(Object.keys(remote.mock.calls[2]![1])).toEqual(['target', 'topic', 'project'])
   })
 
   it('asks Jev about the sessions with "new" alone when the desk is empty', async () => {
     const remote = jev({ target: said('new', 1, ['new']) })
     const verdict = await decideRoute(input({ sessions: [] }), { jev: remote })
-    expect(remote.mock.calls[0]![1].target!.criteria).toEqual({ new: 'None of them: it starts new, unrelated work' })
+    expect(remote.mock.calls[0]![1].target!.criteria).toEqual({ new: 'None of them: no session does this kind of work' })
     expect(verdict).toEqual({ kind: 'new', via: 'jev', why: 'Jev: new work', trace: '0 sessions · jev: "new" 1.00' })
   })
 
@@ -233,12 +251,12 @@ describe('where a task goes', () => {
 
   it('tells Jev which sessions are stopped, and how long ago they were last active', async () => {
     const remote = jev({ target: said('new', 0.9, ['s0', 's1', 's2', 'new']) })
-    const stopped = (id: string, name: string, stoppedAgoMs: number): RouteSession => ({ ...session(id, name), stoppedAgoMs })
+    const stopped = (id: string, name: string, stoppedAgoMs: number): RouteSession => ({ ...session(id, name, [], 'built the rig'), stoppedAgoMs })
     await decideRoute(input({ sessions: [stopped('a1', 'lamp v1', 3 * 86_400_000), stopped('a2', 'lamp v2', 5 * 3_600_000), stopped('a3', 'notes', 60_000)] }), { jev: remote })
     expect(remote.mock.calls[0][1].target.criteria).toMatchObject({
-      s0: 'lamp v1 — stopped, last active 3 days ago',
-      s1: 'lamp v2 — stopped, last active 5 hours ago',
-      s2: 'notes — stopped, last active 1 minute ago',
+      s0: 'lamp v1 — stopped, last active 3 days ago — lately: built the rig',
+      s1: 'lamp v2 — stopped, last active 5 hours ago — lately: built the rig',
+      s2: 'notes — stopped, last active 1 minute ago — lately: built the rig',
     })
   })
 
@@ -287,3 +305,153 @@ describe('where a task goes', () => {
 // The deps a router hands decideRoute are the same shape: a check that this file's fakes stay assignable.
 const _deps: RouteDeps = { jev: jev(), log: () => {} }
 void _deps
+
+describe('the sessions Jev is shown', () => {
+  const live = (id: string, name: string, over: Partial<RouteSession> = {}): RouteSession => ({ ...session(id, name, ['look at the alerts']), ...over })
+  const stopped = (id: string, name: string, over: Partial<RouteSession> = {}): RouteSession => ({ ...live(id, name), stoppedAgoMs: 3_600_000, ...over })
+
+  it('are the live ones first, then stopped ones, each in the order the client sent them', () => {
+    const shown = offered([stopped('s1', 'old work'), live('l1', 'alerts'), stopped('s2', 'older work'), live('l2', 'billing')])
+    expect(shown.map((s) => s.id)).toEqual(['l1', 'l2', 's1', 's2'])
+  })
+
+  it('show a conversation listed twice once, the live one before a stopped one', () => {
+    const shown = offered([stopped('s1', 'User activation', { conversation: 'c1' }), live('l1', 'renamed', { conversation: 'c1' }), stopped('s2', 'shell path', { conversation: 'c1' })])
+    expect(shown.map((s) => s.id)).toEqual(['l1'])
+  })
+
+  it('drop a stopped session a live one has the name of, a stopped twin by name, and one with nothing to read', () => {
+    const shown = offered([
+      live('l1', 'X Posts'),
+      stopped('s1', 'x posts'),
+      stopped('s2', 'lamp GTM'),
+      stopped('s3', 'Lamp GTM'),
+      stopped('s4', 'hi', { asks: ['ok', 'continue'], about: '  ' }),
+      stopped('s5', 'agent note', { asks: ['Another Claude session sent a message: <agent-message from="x">'] }),
+    ])
+    expect(shown.map((s) => s.id)).toEqual(['l1', 's2'])
+  })
+
+  it('are forty at most', () => {
+    expect(offered(Array.from({ length: 50 }, (_, i) => live(`l${i}`, `s${i}`)))).toHaveLength(40)
+  })
+
+  it('are described with their machine, and the last prompt of the person\'s own that names something', async () => {
+    const remote = jev()
+    await decideRoute(input({ sessions: [
+      { ...session('a1', 'X Posts', ['ok merge it', 'Another Claude session sent a message: hi', '<pasted_content id="1">Spending my Saturday with   the kids</pasted_content>']), machine: 'M2' },
+      { ...session('a2', 'hub', ['cont', 'allow']), machine: 'office' },
+    ] }), { jev: remote })
+    expect(remote.mock.calls[0]![1].target!.criteria).toMatchObject({
+      s0: 'X Posts — on M2 — asked: Spending my Saturday with the kids',
+      s1: 'hub — on office',
+    })
+  })
+})
+
+describe('a message that names nothing of its own', () => {
+  it('goes where the last task went, minutes ago, whatever the sessions\' words', async () => {
+    const remote = jev({ target: said('s0', 0.5, TARGETS), topic: topicless() })
+    const verdict = await decideRoute(input({ text: 'merge it', last: { id: 'a2', agoMs: 60_000 } }), { jev: remote })
+    expect(verdict).toMatchObject({ kind: 'session', id: 'a2', p: 0.8 })
+    expect(steps(verdict.trace)).toContain('names nothing: to "Prometheus alerts", where the last went')
+    // The previous session is told to Jev, and how to read it.
+    expect(remote.mock.calls[0]![0]).toEqual({ message: 'merge it', previous_message_went_to: 'Prometheus alerts' })
+    expect(remote.mock.calls[0]![1].target!.instructions).toBe(TARGET_QUESTION + FOLLOW_UP)
+  })
+
+  it('is new work when nothing went anywhere just now, even with a session Jev is sure of', async () => {
+    const verdict = await decideRoute(input({ text: 'merge it' }), { jev: jev({ target: said('s0', 0.95, TARGETS), topic: topicless() }) })
+    expect(verdict).toMatchObject({ kind: 'new', via: 'jev', why: 'names nothing, and no task went anywhere just now' })
+    expect(steps(verdict.trace)).toContain('names nothing: nowhere to go')
+  })
+
+  it('is new work when Jev is sure of another session than the last: the two disagree', async () => {
+    const verdict = await decideRoute(input({ text: 'merge it', last: { id: 'a2', agoMs: 60_000 } }), { jev: jev({ target: said('s0', 0.9, TARGETS), topic: topicless() }) })
+    expect(verdict).toMatchObject({ kind: 'new', why: 'names nothing, and Jev pointed elsewhere' })
+    // Sure of the last itself: it goes there.
+    const agreed = await decideRoute(input({ text: 'merge it', last: { id: 'a2', agoMs: 60_000 } }), { jev: jev({ target: said('s1', 0.9, TARGETS), topic: topicless() }) })
+    expect(agreed).toMatchObject({ kind: 'session', id: 'a2' })
+  })
+
+  it('finds the last session by its conversation when it is shown as its live self', async () => {
+    const sessions: RouteSession[] = [
+      { ...session('a1', 'billing retries', ['why was the card charged twice']), conversation: 'c1' },
+      { ...session('old', 'billing (before the rename)', ['refund the order']), conversation: 'c1', stoppedAgoMs: 60_000 },
+    ]
+    const verdict = await decideRoute(input({ text: 'merge it', sessions, last: { id: 'old', agoMs: 60_000 } }), { jev: jev({ target: said('new', 0.5, ['s0', 'new']), topic: topicless() }) })
+    expect(verdict).toMatchObject({ kind: 'session', id: 'a1' })
+    // A last that is not there at all is nowhere to go.
+    const gone = await decideRoute(input({ text: 'merge it', last: { id: 'nowhere', agoMs: 60_000 } }), { jev: jev({ target: said('new', 0.5, TARGETS), topic: topicless() }) })
+    expect(gone).toMatchObject({ kind: 'new', why: 'names nothing, and no task went anywhere just now' })
+  })
+
+  it('is decided by the sessions when Jev is not sure it names nothing', async () => {
+    for (const topic of [topicless(0.55), topicless(0.5), { choice: 'no', probabilities: { yes: 0.2 } }, { choice: 'no', probabilities: { yes: 0.1, no: Number.NaN } }]) {
+      const verdict = await decideRoute(input({ text: 'also check retention' }), { jev: jev({ target: said('s0', 0.9, TARGETS), topic }) })
+      expect(verdict, JSON.stringify(topic)).toMatchObject({ kind: 'session', id: 'a1' })
+    }
+  })
+})
+
+describe('a message that asks for a new session', () => {
+  it('is new work, whatever Jev picks', async () => {
+    for (const text of ['start a new session and write an x post about lamp', 'in a fresh session, look at the usage data', 'Open a new harness for the parser', 'spin up another session to check retention']) {
+      const verdict = await decideRoute(input({ text }), { jev: jev({ target: said('s0', 0.95, TARGETS) }) })
+      expect(verdict, text).toMatchObject({ kind: 'new', why: 'asked for a new session' })
+    }
+  })
+
+  it('is not one that only talks about a new pane, a thread or a session', async () => {
+    for (const text of ['the new pane is broken', 'race on a different thread', 'rewrite the parser from scratch', 'new session restore drops the cwd']) {
+      const verdict = await decideRoute(input({ text }), { jev: jev({ target: said('s0', 0.95, TARGETS) }) })
+      expect(verdict, text).toMatchObject({ kind: 'session', id: 'a1' })
+    }
+  })
+})
+
+describe('a running session\'s lead', () => {
+  const desk: RouteSession[] = [
+    session('live', 'X Posts', ['write a post about the lamp']),
+    { ...session('copy', 'write an x post about the', ['write an x post about the device']), stoppedAgoMs: 3_600_000 },
+    session('twin', 'X Posts', ['draft another post']),
+    session('other', 'usage data', ['retention today']),
+    session('more', 'firmware', ['flash the round unit']),
+  ]
+  // Jev's answer over the desk as it is shown: live ones first, so the stopped copy is s4.
+  const answer = (p: Record<string, number>, choice = 's0') => ({ target: { choice, probabilities: p } })
+
+  it('is not held back by a stopped copy of its work, by 1.25 times it or more', async () => {
+    expect([JEV_LIVE_RATIO, JEV_OVER_STOPPED]).toEqual([1.75, 1.25])
+    const verdict = await decideRoute(input({ text: 'post this on x', sessions: desk }), { jev: jev(answer({ s0: 0.44, s1: 0.1, s2: 0.06, s3: 0.04, s4: 0.32, new: 0.04 })) })
+    expect(verdict).toMatchObject({ kind: 'session', id: 'live' })
+  })
+
+  it('is held back by another running session, a twin of its name too, or new work within 1.75 times it, or a stopped one within 1.25', async () => {
+    for (const p of [
+      { s0: 0.44, s1: 0.05, s2: 0.3, s3: 0.08, s4: 0.05, new: 0.08 },
+      { s0: 0.44, s1: 0.05, s2: 0.08, s3: 0.08, s4: 0.05, new: 0.3 },
+      // Two "X Posts" running: a coin flip, not a lead.
+      { s0: 0.42, s1: 0.4, s2: 0.05, s3: 0.05, s4: 0.04, new: 0.04 },
+      { s0: 0.41, s1: 0.05, s2: 0.05, s3: 0.05, s4: 0.4, new: 0.04 },
+    ]) {
+      const verdict = await decideRoute(input({ text: 'post this on x', sessions: desk }), { jev: jev(answer(p)) })
+      expect(verdict.kind, JSON.stringify(p)).toBe('new')
+    }
+  })
+
+  it('is no lead for a stopped pick, a pick below 0.4, one that is not the likeliest, a broken answer, or fewer than six options', async () => {
+    const cases: [string, Record<string, JevChoiceAnswer>, RouteSession[]][] = [
+      ['stopped', answer({ s0: 0.3, s1: 0.05, s2: 0.05, s3: 0.05, s4: 0.45, new: 0.1 }, 's4'), desk],
+      ['low', answer({ s0: 0.39, s1: 0.1, s2: 0.1, s3: 0.06, s4: 0.3, new: 0.05 }), desk],
+      ['not top', answer({ s0: 0.42, s1: 0.03, s2: 0.03, s3: 0.03, s4: 0.45, new: 0.04 }), desk],
+      ['broken', answer({ s0: 0.45, s4: 0.3 }), desk],
+      // Would lead (0.5 against 0.2) over six; over five there is no spread to excuse it.
+      ['five', answer({ s0: 0.5, s1: 0.05, s2: 0.2, s3: 0.2, new: 0.05 }), desk.filter((s) => s.id !== 'copy')],
+    ]
+    for (const [name, answers, sessions] of cases) {
+      const verdict = await decideRoute(input({ text: 'post this on x', sessions }), { jev: jev(answers) })
+      expect(verdict.kind, name).toBe('new')
+    }
+  })
+})

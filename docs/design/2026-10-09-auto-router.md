@@ -94,6 +94,53 @@ every answer.
   reported it; about 6,000 decisions per dollar.
 - **Time**: about 0.6 s per decision.
 
+## Hill-climbed on the owner's desk (2026-10-10)
+
+The first version was hit and miss on the owner's real desk, so it was measured there and climbed:
+- **The desk:** 80 sessions on three machines, half of them stopped, with duplicates, QA panes and
+  sessions left over from earlier wrong routes.
+- **390 labelled English messages:**
+  - 41 by hand, including every message the owner reported misrouted;
+  - 60 written blind;
+  - 116 from a red team whose job was to break it (typos, "merge it", pasted logs, "the one on tropic",
+    same-kind traps);
+  - 50 held out until the end.
+- **Runs:** each message 2 or 3 times; deciding only, nothing sent (`cli/scripts/route-eval/`).
+
+| Set | Before | After |
+|---|---|---|
+| By hand + blind (101) | 63% right, 25 wrong sends in 123 (by hand alone) | 90% right, 0 wrong sends in 202 |
+| Red team (116) | 51% right, 66 wrong sends in 232 | 72% right, 6 in 232 |
+| Held out (50) | 81% right, 7 wrong sends in 150 | 83% right, 4 in 100 |
+
+What moved it, in order:
+1. **What Jev is shown** (`offered`). Live sessions come first, then stopped ones:
+   - A conversation listed twice is shown once.
+   - A stopped session is dropped when a live one has its name, or when it has nothing to read.
+   - Pasted-text tags, other agents' messages, and prompts that name nothing ("ok merge it", "cont") are
+     left out of descriptions. Each session says its machine.
+
+   On the owner's desk, the live "X Posts" shared Jev's vote with three stopped copies of itself, and
+   stopped leftovers took live sessions' places among the forty.
+2. **The question** asks for "the same kind of work on the same subject", not continuity or shared
+   words. "Continue their work" let "merge it" follow the words "ok merge it"; "whose job is this kind of
+   work" sent the lamp's retention to Harness's usage session.
+3. **A message that names nothing of its own** ("merge it", "post it as is"; Jev is asked in the same
+   call) goes where the last task went, or is new work. "A single word is enough" keeps "also check
+   retention" from counting as one.
+4. **Smaller rules:**
+   - A message asking for a new session is new work.
+   - A running pick is not held back by a stopped copy or a same-named twin (1.75× the rest).
+   - No more stopped sessions than forty in all: at fifty, old leftovers took new work.
+
+Every wrong send left in these runs is a judgement call a person could make either way:
+- a job post about the lamp firmware went to the lamp firmware session;
+- "rotate the leaked OpenRouter key" went to the session that checked it;
+- "why is the dial showing the wrong pane" went to the ⌘B session.
+
+Most misses split two right answers (two sessions that both flashed the round unit) or are stopped
+sessions beyond the forty. They become new work, which costs a harness.
+
 ## Not done
 
 - The other clients: the phone, the web, the TUI and the dial still use their own
