@@ -52,7 +52,9 @@ function harnessInstalls() {
 }
 
 function askClaude(withDelivery) {
-  const args = ['-p', '--setting-sources', 'project', '--output-format', 'text']
+  // --no-session-persistence: the test's question must not land in the person's own history, where
+  // `mem asks` would later read it as something they said.
+  const args = ['-p', '--no-session-persistence', '--setting-sources', 'project', '--output-format', 'text']
   if (withDelivery) args.push('--settings', join(home, '.claude', 'settings.json'))
   args.push(question)
   return run('claude', args, { cwd: work })
@@ -81,6 +83,10 @@ function askCodex(codexHome) {
   }
   return { ...once(['--oss', '--local-provider', 'ollama', '-m', 'gpt-oss:20b']), model: 'gpt-oss:20b (local)' }
 }
+
+// The copied Codex sign-in never outlives the run: not on a failure, not on Ctrl-C, not with --keep.
+const forgetSignIn = () => { for (const dir of [join(home, '.codex'), join(root, 'codex-bare')]) rmSync(join(dir, 'auth.json'), { force: true }) }
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { forgetSignIn(); if (!keep) rmSync(root, { recursive: true, force: true }); process.exit(130) })
 
 try {
   for (const dir of [join(home, '.claude'), join(home, '.codex'), work]) mkdirSync(dir, { recursive: true })
@@ -130,7 +136,8 @@ try {
 } catch (error) {
   step('the run itself', false, error instanceof Error ? error.stack : String(error))
 } finally {
-  if (keep) console.log(`kept ${root}`)
+  forgetSignIn()
+  if (keep) console.log(`kept ${root} (without the copied Codex sign-in)`)
   else rmSync(root, { recursive: true, force: true })
 }
 const failed = report.steps.filter((s) => !s.ok).length

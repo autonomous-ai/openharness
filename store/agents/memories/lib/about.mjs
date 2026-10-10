@@ -72,6 +72,9 @@ export function writeAbout(dir, text) {
   if (!value.trim()) throw new Error('Refusing to write an empty About You.')
   if (Buffer.byteLength(value) > MAX_ABOUT) throw new Error(`About You is limited to ${MAX_ABOUT / 1024} KB; keep it short.`)
   if (!parseAbout(value).lines.length) throw new Error('About You needs at least one "- line" under a "## Section".')
+  // Every agent's copy is wrapped in <about-you> and, in shared files, between marker comments; text
+  // that matches either would end the copy early, leaving the rest outside it or behind after `off`.
+  if (/harness-memories:about-you|<\/?about-you/i.test(value)) throw new Error('About You cannot contain "<about-you" or the harness-memories marker.')
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   const path = join(dir, ABOUT_FILE)
   const previous = join(dir, PREVIOUS_FILE)

@@ -23,6 +23,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import { AGENTS, WHERE, homes as resolveHomes, memorySwitches } from './agents.mjs'
+import { GROK_FILE, withoutOurBlock } from './deliver.mjs'
 import { clip, encodePath, entries, firstHeading, firstLine, frontmatter, humanize, sections, tilde } from './text.mjs'
 
 const MAX_FILE = 512 * 1024
@@ -379,14 +380,17 @@ function readInstructions(h) {
     ['windsurf', join(h.windsurf, 'memories', 'global_rules.md')],
   ]
   for (const [agent, dir] of [['claude', join(h.claude, 'rules')], ['grok', join(h.grok, 'rules')]]) {
-    for (const file of list(dir)) if (file.isFile() && file.name.endsWith('.md')) files.push([agent, join(dir, file.name)])
+    for (const file of list(dir)) if (file.isFile() && file.name.endsWith('.md') && file.name !== GROK_FILE) files.push([agent, join(dir, file.name)])
   }
   const rows = []
   for (const [agent, path] of files) {
     const content = read(path)
-    if (!content?.text.trim()) continue
+    // Delivery's copy of About You in these files is not something the person wrote: About You must
+    // never cite itself as evidence.
+    const text = withoutOurBlock(content?.text ?? '')
+    if (!text.trim()) continue
     rows.push(makeRow(h, {
-      agent, file: path, body: content.text, kind: 'instructions', type: basename(path),
+      agent, file: path, body: text, kind: 'instructions', type: basename(path),
       title: `${basename(path)} for every project`, modified: content.modified, size: content.size,
     }))
   }
