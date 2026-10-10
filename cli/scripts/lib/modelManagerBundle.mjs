@@ -11,6 +11,11 @@ export function readHarnessMonitorBundle(root) {
   return readBuiltinBundle(root, ['harness.json', 'AGENTS.md', 'LICENSE', 'package.json', 'viewer.sh', 'viewer.mjs', 'viewer', 'lib', 'toolchain', 'template', 'skills'])
 }
 
+/** Memories: everything the harness and its `mem` command run on; its tests and Store page stay behind. */
+export function readMemoriesBundle(root) {
+  return readBuiltinBundle(root, ['harness.json', 'AGENTS.md', 'LICENSE', 'README.md', 'package.json', 'viewer.sh', 'viewer.mjs', 'viewer', 'lib', 'toolchain', 'template', 'skills'])
+}
+
 export function readBuiltinBundle(root, paths) {
   const files = {}
   const visit = relative => {

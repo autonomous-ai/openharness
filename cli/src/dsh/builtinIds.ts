@@ -10,6 +10,8 @@ export const DEVICES_HARNESS_ID = 'autonomous/devices'
 export const DEVICES_BUILTIN_SOURCE = 'builtin:devices'
 export const HARNESS_MONITOR_ID = 'autonomous/harness-monitor'
 export const HARNESS_MONITOR_BUILTIN_SOURCE = 'builtin:harness-monitor'
+export const MEMORIES_ID = 'autonomous/memories'
+export const MEMORIES_BUILTIN_SOURCE = 'builtin:memories'
 
 /** Built-ins opened through their own product entry points, absent from the public picker. */
 export function isHiddenBuiltin(record: { source?: string | null }): boolean {

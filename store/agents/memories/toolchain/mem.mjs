@@ -157,6 +157,12 @@ export async function run(argv, { out = (line) => process.stdout.write(line + '\
         const gen = flags.gen !== undefined ? Number(flags.gen) : undefined
         if (gen !== undefined && !Number.isInteger(gen)) { err('--gen takes a whole number'); return 2 }
         const path = writeAbout(h.memory, stdin(), gen !== undefined ? { gen } : {})
+        if (flags.json) {
+          const refreshed = path ? deliver('refresh', { env, home }) : { results: [] }
+          print({ written: Boolean(path), refreshed: refreshed.results.filter((r) => r.ok && r.changed).map((r) => r.agent) })
+          return 0
+        }
+        if (!path) { out('A newer About You is already here; left as it is.'); return 0 }
         out(`wrote ${tilde(path, h.home)}`)
         // Agents that hold a copy get the new one now; Claude Code's hook reads the file itself.
         const refreshed = deliver('refresh', { env, home })

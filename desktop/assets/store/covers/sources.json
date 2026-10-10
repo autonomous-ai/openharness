@@ -333,6 +333,14 @@
     "harness": "autonomous/harness-monitor"
   },
   {
+    "asset": "memories.jpg",
+    "source": "desktop/tool/store_artwork/capture-covers.mjs memories",
+    "credit": "OpenHarness example",
+    "sha256": "def5e19216c090cde07a51a6236ed326920d12b4763053012263446733bffb39",
+    "capture": "Synthetic memories and sessions in an empty home directory. No user account, machines, or activity were read.",
+    "harness": "autonomous/memories"
+  },
+  {
     "asset": "machine-monitor.jpg",
     "source": "desktop/tool/store_artwork/capture-covers.mjs machine-monitor",
     "credit": "OpenHarness example",

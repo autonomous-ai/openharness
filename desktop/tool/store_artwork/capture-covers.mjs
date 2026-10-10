@@ -1,20 +1,20 @@
 /** Capture original Harness viewers with isolated demo data, never the user's fleet/models.
- * node capture-covers.mjs <all|machine-monitor|harness-monitor|mlx-lm|ollama|vllm|home-assistant>
+ * node capture-covers.mjs <all|machine-monitor|harness-monitor|memories|mlx-lm|ollama|vllm|home-assistant>
  *   --playwright /path/to/playwright/index.mjs --output /tmp/store-covers
- * COVER_DUMP_TEXT=1 prints Harness Monitor's visible text, to check it holds nothing personal.
+ * COVER_DUMP_TEXT=1 prints Harness Monitor's and Memories' visible text, to check it holds nothing personal.
  * Home Assistant is the upstream public demo; all other pages run on loopback.
  */
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const args = process.argv.slice(2);
 const option = (name, fallback) => args.includes(name) ? args[args.indexOf(name) + 1] : fallback;
 const mode = args[0] || 'all';
-const ids = ['machine-monitor', 'harness-monitor', 'mlx-lm', 'ollama', 'vllm', 'home-assistant'];
+const ids = ['machine-monitor', 'harness-monitor', 'memories', 'mlx-lm', 'ollama', 'vllm', 'home-assistant'];
 if (mode !== 'all' && !ids.includes(mode)) throw new Error(`Choose all or ${ids.join(', ')}.`);
 const output = resolve(option('--output', join(tmpdir(), 'harness-cover-captures')));
 const playwright = option('--playwright', 'playwright');
@@ -120,6 +120,82 @@ try {
         await page.close(); await viewer.close(); await rm(workspace, { recursive: true, force: true });
         for (const [key, value] of Object.entries(env)) value === undefined ? delete process.env[key] : process.env[key] = value;
       }
+    } else if (id === 'memories') {
+      const { createViewer } = await source('store/agents/memories/viewer.mjs');
+      const { sessionIndex, DAY } = await source('store/agents/memories/test/fixtures.mjs');
+      const { writeAbout } = await source('store/agents/memories/lib/about.mjs');
+      // An invented person's home: what five agents remember and four months of messages, all made up here.
+      const home = await mkdtemp(join(tmpdir(), 'memories-cover-'));
+      const put = async (path, text) => { await mkdir(dirname(join(home, path)), { recursive: true }); await writeFile(join(home, path), text); };
+      const notes = {
+        payments: [
+          ['short-answers', 'feedback', 'Wants replies under five lines', 'Keep replies short; lead with the answer.'],
+          ['retries', 'project', 'Webhooks retry with backoff', 'Webhook retries back off to one hour, then page.'],
+          ['ledger', 'reference', 'Where the ledger docs live', 'The ledger design is in docs/ledger.md.'],
+        ],
+        widgets: [
+          ['tests-first', 'feedback', 'Run the tests before saying done', 'Run `make test` before calling anything done.'],
+          ['renderer', 'project', 'The legacy renderer is going away', 'New work targets the grid renderer only.'],
+        ],
+        'docs-site': [
+          ['plain-words', 'user', 'Writes docs in plain words', 'Prefers short sentences and no jargon.'],
+          ['deploys', 'project', 'Docs deploy from main', 'Every merge to main publishes the site.'],
+        ],
+        'mobile-app': [
+          ['screenshots', 'feedback', 'Reviews UI from screenshots', 'Send a screenshot with every UI change.'],
+          ['release-train', 'project', 'Releases go out on Tuesdays', 'Never release on a Friday.'],
+        ],
+      };
+      for (const [project, list] of Object.entries(notes)) {
+        await mkdir(join(home, 'code', project), { recursive: true });
+        const key = join(home, 'code', project).replace(/[^A-Za-z0-9]/g, '-');
+        for (const [name, type, description, body] of list) {
+          await put(`.claude/projects/${key}/memory/${name}.md`, `---\nname: ${name}\ndescription: ${description}\ntype: ${type}\n---\n\n${body}\n`);
+        }
+      }
+      await put('.codex/config.toml', '[features]\nmemories = true\n');
+      await put('.codex/memories/memory_summary.md', 'Prefers small pull requests with one change each.\n');
+      await put('.codex/memories/MEMORY.md', '# Handbook\n\n## Testing\nRun `make test` first.\n\n## Reviews\nOne change per pull request.\n');
+      await put('.grok/config.toml', '[memory]\nenabled = true\n');
+      await put('.grok/memory-v2/global/topics/style.md', '# Code style\n\nTwo-space indentation everywhere.\n');
+      await put('.hermes/memories/USER.md', 'Prefers terse answers.\n§\nWorks late in the evening.\n');
+      await put('.gemini/GEMINI.md', '## Gemini Added Memories\n- Prefers tabs in Go files\n- Lives in UTC+1\n');
+      const asks = ['keep it short, tldr only', 'run the tests before you say done', 'one change per pull request',
+        'why does the retry back off that far?', 'walk me through the ledger migration', 'ship it once CI is green',
+        'make the empty state clearer', 'never release on a Friday', 'write the docs in plain words', 'add a test that fails first'];
+      const engines = ['claude', 'codex', 'codex', 'claude', 'grok', 'hermes'];
+      const projects = Object.keys(notes);
+      const now = Date.now();
+      const turns = [];
+      for (let day = 0; day < 120; day++) {
+        // Busy weekdays, quiet weekends, and a holiday week: a believable four months.
+        const weekday = new Date(now - day * DAY).getDay();
+        const count = day >= 50 && day < 57 ? 0 : weekday === 0 || weekday === 6 ? day % 3 : 2 + ((day * 7) % 9);
+        for (let n = 0; n < count; n++) {
+          const project = projects[(day + n) % projects.length];
+          turns.push({ session: `s${day}-${n % 3}`, engine: engines[(day * 5 + n) % engines.length], cwd: join(home, 'code', project),
+            title: `${project} work`, ask: asks[(day * 3 + n) % asks.length], answer: 'done', daysAgo: day + n / 24 });
+        }
+      }
+      sessionIndex(join(home, '.harness', 'cli', 'data'), { now, turns });
+      const env = { MEMORIES_HOME: join(home, '.harness', 'memory') };
+      writeAbout(env.MEMORIES_HOME, ['# About you', '', '## How you work',
+        '- Works across Claude Code and Codex, most days of the week. [asks:480]',
+        '- Asks "why" before agreeing to a design. [asks:41]', '',
+        '## What you want from agents',
+        '- Short answers that lead with the result. [claude:short-answers.md, hermes:USER.md]',
+        '- Tests run before anything is called done. [claude:tests-first.md, codex:MEMORY.md]',
+        '- One change per pull request. [codex:memory_summary.md]', '',
+        '## Taste', '- Plain words in docs; no jargon. [claude:plain-words.md]', ''].join('\n'), { gen: now, now });
+      const viewer = createViewer({ workspace: home, intervalMs: 60_000, env, home });
+      const page = await browser.newPage({ viewport: { width: 1080, height: 720 }, deviceScaleFactor: 1, colorScheme: 'dark' });
+      try {
+        await page.goto(`http://127.0.0.1:${await viewer.start()}/`);
+        await page.waitForSelector('#list > *');
+        await page.waitForTimeout(1500); // Let the layout settle before recording.
+        await page.screenshot({ path: join(output, `${id}.png`) });
+        if (process.env.COVER_DUMP_TEXT) console.log(await page.innerText('body'));
+      } finally { await page.close(); await viewer.close(); await rm(home, { recursive: true, force: true }); }
     } else {
       const { createServer } = await source('store/agents/mlx-lm/src/server.mjs');
       const { MLX_CATALOG } = await source('store/agents/mlx-lm/src/mlx.mjs');

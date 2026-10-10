@@ -131,6 +131,11 @@ autonomous/harness-builder
 License: MIT
 Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/harness-builder.svg
 
+autonomous/memories
+© 2026 OpenHarness contributors
+License: MIT
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/memories.svg
+
 licenses/original.txt
 
 MIT License
