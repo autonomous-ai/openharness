@@ -76,11 +76,6 @@ autonomous/roundtable
 License: MIT
 Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/roundtable.svg
 
-autonomous/jev-browser
-© 2026 OpenHarness contributors
-License: MIT
-Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/jev-browser.svg
-
 autonomous/godogen
 © 2026 OpenHarness contributors
 License: MIT

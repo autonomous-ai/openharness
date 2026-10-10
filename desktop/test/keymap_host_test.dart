@@ -96,7 +96,6 @@ void main() {
       ('cmd+left', 'pane.focus_left'),
       ('cmd+enter', 'pane.zoom'),
       ('cmd+shift+p', 'navigation.commands'),
-      ('cmd+shift+j', 'navigation.command_bar'),
       ('cmd+s', 'app.store'),
       ('cmd+m', 'machines.list'),
       ('cmd+i', 'models.list'),

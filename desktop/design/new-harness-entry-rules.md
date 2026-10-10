@@ -59,8 +59,7 @@ Opening, searching, and cancelling never send input to an existing harness.
 | First empty workspace / New Tab | Same successful setup and working project; a suggested local folder on first launch | That tab when the user submits New Harness |
 
 The Store and orchestration tabs cannot host a terminal pane. Generic creation
-from either uses a new tab. Command-bar requests keep the workspace context and
-apply any agent or machine explicitly named by the request.
+from either uses a new tab.
 
 The unified picker has search and results on the left, with details and inline
 management controls on the right. Enter opens a harness, uses or gets a model,

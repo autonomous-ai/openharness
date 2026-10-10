@@ -211,12 +211,6 @@ tools of a craft. You steer in a live viewer. Every clip below is a real session
 
 <p align="center"><img src=".github/assets/readme/beyond/typst.gif" width="800" alt="A Typst PDF under review: notes are pinned to an area and a sentence, then carried to the next draft."></p>
 
-### Beyond code: Data
-
-**[Jev Sheets](store/agents/jev-sheets/).** Test a question on a few frozen rows before you ask the whole sheet. Compare two wordings side by side.
-
-<p align="center"><img src=".github/assets/readme/beyond/jev-sheets.gif" width="800" alt="Question Lab in Jev Sheets: two wordings of a question are compared on frozen rows, recorded with practice data."></p>
-
 ## Domain-specific harnesses (DSH)
 
 Code is the common medium. Geometry scripts make parts. Netlists make boards. Animation code makes film.
@@ -229,20 +223,20 @@ The agent does the reasoning. The harness supplies the tools and the view. It's 
 `harness.json`, so adding a craft never touches the app.
 
 <!-- store-catalog:start -->
-### 50 harnesses in the Store
+### 49 harnesses in the Store
 
 | Category | Agents and harnesses |
 |---|---|
-| **Coding** | [Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build, Kilo Code](docs/engines.md), [Harness Monitor](store/agents/harness-monitor/), [Machine Monitor](store/agents/machine-monitor/), [Trail of Bits Skills](store/agents/trailofbits-skills/) |
+| **Coding** | [Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build, Kilo Code](docs/engines.md), [Harness Monitor](store/agents/harness-monitor/), [Machine Monitor](store/agents/machine-monitor/), [Memories](store/agents/memories/), [Trail of Bits Skills](store/agents/trailofbits-skills/) |
 | Design | [Autonomous Workshop](store/agents/autonomous-workshop/), [Blender](store/agents/blender/), [Bonsai MCP](store/agents/bonsai-mcp/), [Creative Direction](store/agents/creative-direction/), [Excalidraw](store/agents/excalidraw/), [FreeCAD](store/agents/freecad/), [Generative Art](store/agents/generative-art/), [OpenSCAD](store/agents/openscad/), [text-to-cad](store/agents/text-to-cad/) |
 | Engineering | [Autonomous Circuit](store/agents/autonomous-circuit/), [CircuitJS](store/agents/circuitjs/), [Home Assistant](store/agents/home-assistant/), [KiCad](store/agents/kicad/), [Orca Slicer](store/agents/orca-slicer/), [Yosys](store/agents/yosys/) |
 | Media | [Comfy MCP](store/agents/comfy-mcp/), [Manim](store/agents/manim/), [OpenMontage](store/agents/openmontage/), [Remotion](store/agents/remotion/) |
 | Music | [Ableton AI](store/agents/ableton-ai/), [JUCE Agent Toolkit](store/agents/juce-agent-toolkit/), [Music Studio](store/agents/music-studio/), [Score](store/agents/score/), [Strudel](store/agents/strudel/) |
-| Productivity | [Jev Sheets](store/agents/jev-sheets/), [Marp](store/agents/marp/), [Typst](store/agents/typst/) |
+| Productivity | [Marp](store/agents/marp/), [Typst](store/agents/typst/) |
 | Science & Data | [autoresearch-mlx](store/agents/autoresearch-mlx/), [Data Studio](store/agents/data-studio/), [Lab Bench](store/agents/lab-bench/), [marimo](store/agents/marimo/), [RDKit](store/agents/rdkit/) |
 | Simulation | [DimOS](store/agents/dimos/), [Drone Pilot](store/agents/drone-pilot/), [Foam-Agent](store/agents/foam-agent/), [MuJoCo](store/agents/mujoco/), [SimSkill](store/agents/simskill/) |
 | Games | [Game Master](store/agents/game-master/), [Godogen](store/agents/godogen/), [Phaser](store/agents/phaser/), [Voxel Worlds](store/agents/voxel-worlds/) |
-| Research | [Jev Browser](store/agents/jev-browser/), [Roundtable](store/agents/roundtable/) |
+| Research | [Roundtable](store/agents/roundtable/) |
 | Local AI | [MLX-LM](store/agents/mlx-lm/), [Model Manager](store/agents/autonomous-grid/), [Ollama](store/agents/ollama/), [vLLM](store/agents/vllm/) |
 
 Upstream open-source tools and original workflows. 10 [shared viewers](store/viewers/) install alongside

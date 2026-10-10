@@ -5,7 +5,7 @@ The agent brings the tools of a craft. You bring the idea, the taste and the nex
 
 [Interactive guide](hands-on.html) — open this HTML file from the checkout in a browser for the craft picker, copyable prompts and local video players. [Start a Harness project](../README.md#run-it).
 
-These eight experiences are included in this source checkout. The recorded demos show separately authored projects; the prompts below are starting ideas for your own work. Jev's demo uses offline practice answers.
+These seven experiences are included in this source checkout. The recorded demos show separately authored projects; the prompts below are starting ideas for your own work.
 
 [Run a native starter](try-hands-on.md) to try the physics, music or circuit panes directly from this checkout with installed harness assets.
 
@@ -164,32 +164,6 @@ A real Typst PDF rendered by pdf.js, with review notes carried into a later revi
 Keep the result in this project, or give the agent the path to your downloaded copy.
 
 Changed or repeated quotations need human inspection. Area and page notes stay with the reviewed PDF. The packet includes the PDF and feedback; editable source stays in the workspace.
-
-## Jev Sheets: Ask a better question.
-
-Before asking a whole spreadsheet, compare two versions of a question on frozen rows. Read the answers side by side and use your judgment to decide what the wording missed.
-
-[Watch the real session](images/question-lab-demo.mp4) · [See the pane](images/question-lab.png) · [Harness guide](../store/agents/jev-sheets/README.md)
-
-Offline practice with fictional rows. The demo shows the workflow, not Jev's live judgment quality.
-
-**Start a Jev Sheets project and give the agent a direction:**
-
-> Help me turn our support tickets into a sheet. Start with an urgency question, then suggest clearer wording to compare in Question Lab. I want to review a small sample and the unsure rows before asking the entire file.
-
-1. **Freeze a sample.** Open Question Lab, choose an existing question and write a candidate. Preview 10, 20 or 40 rows and inspect the exact text and context.
-2. **Compare the wording.** Compare asks both versions together. Inspect changed answers and full probabilities, then mark Original, New wording or Unsure and add your notes.
-3. **Keep your reasoning.** Keep this trial saves the evidence. Try on whole sheet adds the candidate as a separate column; ask the agent to retain the chosen header in sheet.json.
-
-**Yours to keep:** Frozen rows, exact questions, answers, probabilities, provider details, your notes and CSV/ZIP exports.
-
-**Continue from your kept work:**
-
-> Read my kept trial in .harness/question-trials, including the rows and review.md. Help me choose clearer wording and retain that header in sheet.json before running the whole file.
-
-Keep the result in this project, or give the agent the path to your downloaded copy.
-
-Real answers send sampled rows to your connected Jev provider and require a key. Offline mode is practice only. Confidence and reviewer preferences are not measures of accuracy.
 
 ## CircuitJS: See what changed in the signal.
 

@@ -158,7 +158,7 @@ impl Keymap {
         b(ch('T'), "new-terminal", false, "New terminal (a shell) beside this pane");
         b(ch('a'), "next-harness", false, "Go to the next harness that needs you");
         b(ch('A'), "choose-tree -a", false, "Harnesses waiting on you — answer from the list");
-        b(ch('I'), "choose-tree -i", false, "Models: subscriptions, APIs, your models, downloads, shared, Jev");
+        b(ch('I'), "choose-tree -i", false, "Models: subscriptions, APIs, your models, downloads, shared");
         b(ch('S'), "choose-tree -S", false, "The Harness Store");
         b(ch('g'), "command-prompt -p (send) { send-task \"%%\" }", false, "Send a task — Harness picks the harness");
         b(ch('B'), "command-prompt -p (broadcast) { broadcast \"%%\" }", false, "Send one message to every harness in this window");

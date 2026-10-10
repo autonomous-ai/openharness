@@ -25,7 +25,6 @@ import { hookCredentialMatches, loadOrCreateHookCredential } from './lib/hookAut
 import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
-import { handleCommandBarHttp, type CommandBarDoor } from './lib/commandBarHttp.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
 
@@ -59,7 +58,6 @@ export interface PairOutcome {
 }
 
 export interface HookServerHandlers {
-  onCommandBar?: CommandBarDoor
   onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
 
   onRegistered: (
@@ -446,8 +444,6 @@ export function startHookServer(
       if (req.method === 'GET' && url === '/api/health') {
         json(200, { ok: true, version: VERSION }); return
       }
-
-      if (await handleCommandBarHttp(req, res, handlers.onCommandBar)) return
 
       // The local web dashboard that `GET /` served, with its log tail (`/api/logs`) and stop button
       // (`/api/stop`), is gone: no app, website, script or the backend opened it, and the web client

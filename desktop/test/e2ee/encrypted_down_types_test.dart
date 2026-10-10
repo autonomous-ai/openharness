@@ -56,11 +56,10 @@ void main() {
     core = namesIn(cli('lib/e2ee/core.ts'), 'ENCRYPTED_DOWN_TYPES');
     final frames = cli('lib/e2ee/applicationFrames.ts');
     final relay = cli('lib/relayFrames.ts');
-    // `MACHINE_REQUESTS` also spreads the owner commands in; those are read where they are declared.
+    // `MACHINE_REQUESTS` also spreads ⌘K's route commands in; those are read where they are declared.
     machineRequests = {
       ...namesIn(frames, 'MACHINE_REQUESTS'),
       ...namesIn(cli('lib/shellProtocol.ts'), 'SHELL_REQUESTS'),
-      ...namesIn(relay, 'OWNER_COMMAND_TYPES'),
       ...namesIn(relay, 'ROUTE_COMMAND_TYPES'),
     };
     unwrapped = {

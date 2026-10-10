@@ -143,9 +143,9 @@ class FirstArrival {
   /// to the New Harness box, as on any later launch. Runs once, whatever happens: a first workspace
   /// that turned up later, on some unrelated empty tab, would surprise more than none at all.
   ///
-  /// [stillCurrent] says the person has not taken over meanwhile (opened the New Harness box,
-  /// search, the command bar); it is asked before each pane, and so is whether they are still on a
-  /// tab this is filling.
+  /// [stillCurrent] says the person has not taken over meanwhile (opened the New Harness box or
+  /// search); it is asked before each pane, and so is whether they are still on a tab this is
+  /// filling.
   ///
   /// A second call while one is under way joins it: the app starts it behind the welcome tour, and
   /// the workspace waits for that one when it appears.

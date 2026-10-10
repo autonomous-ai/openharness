@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert the eight hands-on recordings into README GIFs, one per harness.
+"""Convert the seven hands-on recordings into README GIFs, one per harness.
 
 Run from the repository root:  python3 .github/assets/readme/build.py
 Needs FFmpeg. Sources are the unedited recordings in docs/images/*-demo.mp4;
@@ -19,7 +19,6 @@ GIFS = [  # harness, recording, frames per second
     ('strudel', 'strudel-live-take-demo.mp4', 6),   # busiest screen; fewer frames keep it light
     ('rdkit', 'rdkit-bond-scan-demo.mp4', 8),
     ('typst', 'doc-review-demo.mp4', 8),
-    ('jev-sheets', 'question-lab-demo.mp4', 8),
 ]
 
 os.makedirs(OUT, exist_ok=True)

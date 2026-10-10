@@ -8,7 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -474,39 +474,23 @@ describe('the grid list', () => {
   })
 })
 
-describe('Jev (System One) decision models', () => {
-  const kinds = (s: GridSection) => Object.fromEntries(s.models.map((m) => [m.id, m.kind ?? 'chat']))
-
-  it('are the rows the overview lists in a node\'s systemone_models; every other row is chat', async () => {
-    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['qwen', 'laya-english'], { systemone_models: ['laya-english'] })]))
-
-    expect(kinds(section(await look(), TEAM))).toEqual({ qwen: 'chat', 'laya-english': 'decision' })
-  })
-
-  it('keep the mark while a missed read retains them, lose it once listed as chat, and never gain it unlisted', async () => {
-    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['laya'], { systemone_models: ['laya', 'ghost'] })]))
+describe('a picture an older build saved', () => {
+  // Builds that listed some models apart kept their ids in the saved picture, as `decisions`. Such a picture is
+  // still read after a restart; the field is ignored, and its rows are listed like every other.
+  it('is still read after a restart, its old marks ignored', async () => {
+    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['qwen', 'laya-english'])]))
     await look()
-    later(20)
-    answer(TEAM_ID, OVERVIEW, awake([]))
-    expect(kinds(section(await look(), TEAM))).toEqual({ laya: 'decision' })
-
-    later(20)
-    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['laya'])]))
-    expect(kinds(section(await look(), TEAM))).toEqual({ laya: 'chat' })
-  })
-
-  it('keep the mark through the CLI fallback, which cannot tell, and through a daemon restart', async () => {
-    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['Laya'], { systemone_models: ['laya'] })]))
-    await look()
-    grid.replan(plan({ teamUrl: 'ftp://nowhere.example', models: { stdout: JSON.stringify([
-      { model: 'Laya', engine: 'llama.cpp', node: 'rig' },
-    ]) } }))
-    forgetGridModels()
-    later()
-    expect(kinds(section(await look(), TEAM))).toEqual({ Laya: 'decision' })
-
+    const folder = join(root, 'data', 'grid-pictures')
+    for (const name of readdirSync(folder).filter((n) => n.endsWith('.json'))) {
+      const saved = JSON.parse(readFileSync(join(folder, name), 'utf8'))
+      writeFileSync(join(folder, name), JSON.stringify({ ...saved, picture: { ...saved.picture, decisions: ['laya-english'] } }))
+    }
     service = resetGridModels({ now: () => clock, dataDir: () => join(root, 'data'), gridHome: () => gridHome, email: () => EMAIL })
-    expect(kinds(section(await listAllGridModels(OWN), TEAM))).toEqual({ Laya: 'decision' })
+    answer(TEAM_ID, OVERVIEW, asleep())
+    later()
+
+    // The first answer is the saved picture.
+    expect(section(await listAllGridModels(OWN), TEAM).models).toEqual([{ id: 'qwen', node: 'rig' }, { id: 'laya-english', node: 'rig' }])
   })
 })
 

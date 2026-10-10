@@ -177,7 +177,6 @@ The core keeps sessions, and reaches each service only through its link. Measure
         ├── orchestrator           experiment
         ├── teams                  experiment: Tab collaboration
         ├── sharing                experiment: Share
-        ├── commandBar             experiment: the command bar
         └── memory                 experiment: Memories across machines
 ```
 

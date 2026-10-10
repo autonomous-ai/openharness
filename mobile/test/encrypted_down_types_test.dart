@@ -56,7 +56,6 @@ void main() {
     machineRequests = {
       ...namesIn(frames, 'MACHINE_REQUESTS'),
       ...namesIn(cli('lib/shellProtocol.ts'), 'SHELL_REQUESTS'),
-      ...namesIn(relay, 'OWNER_COMMAND_TYPES'),
       ...namesIn(relay, 'ROUTE_COMMAND_TYPES'),
     };
     pairRequests = namesIn(relay, 'PAIR_REQUESTS');

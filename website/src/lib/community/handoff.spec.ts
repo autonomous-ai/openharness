@@ -19,7 +19,7 @@ describe('desktop fork handoff', () => {
       expect(snapshot?.files.find(f => f.path === output)).toBeTruthy();
       expect(snapshot?.harnessId).toMatch(/^autonomous\//);
     }
-    expect(starterHarnesses).toHaveLength(18);
+    expect(starterHarnesses).toHaveLength(17);
     expect(starterHarnesses.filter(h => !h.harnessId).every(h => h.engine === 'Codex')).toBe(true);
   });
   it('writes actual binary ZIP content, not base64 text', () => {

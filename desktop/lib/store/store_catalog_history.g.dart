@@ -86,14 +86,6 @@ const storeCatalogHistory = <String, ({String addedAt, String updatedAt})>{
     addedAt: '2026-09-19T19:26:36.000Z',
     updatedAt: '2026-09-20T16:15:08.000Z',
   ),
-  'autonomous/jev-browser': (
-    addedAt: '2026-09-19T17:24:55.000Z',
-    updatedAt: '2026-09-20T14:36:44.000Z',
-  ),
-  'autonomous/jev-sheets': (
-    addedAt: '2026-09-19T17:24:55.000Z',
-    updatedAt: '2026-09-22T08:16:32.000Z',
-  ),
   'autonomous/juce-agent-toolkit': (
     addedAt: '2026-09-18T02:52:29.000Z',
     updatedAt: '2026-09-18T04:18:33.000Z',

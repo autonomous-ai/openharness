@@ -530,34 +530,6 @@ void main() {
       );
     }
   });
-  test('decision models are never offered to run a harness on', () async {
-    final box = controller();
-    final decisions = [
-      {'id': 'tev1', 'node': 'Mac Studio', 'kind': 'decision'},
-      {'id': 'kev-0.8b', 'node': 'Mac Studio', 'kind': 'decision'},
-    ];
-    final mixed = catalog();
-    final own = (mixed['grids'] as List).first as Map<String, dynamic>;
-    own['models'] = [...own['models'] as List, ...decisions];
-    connections.putIfAbsent('m', _Connection.new).answer = mixed;
-    await load(box);
-    expect(
-      box.options.where((o) => o.model != null).map((o) => o.title).toList(),
-      ['Qwen-35B', 'Qwen-35B'],
-    );
-    expect(box.modelNotice, isNull);
-
-    // A grid serving only decision models runs nothing a harness can use.
-    connections['m']!.answer = {
-      ...catalog(),
-      'grids': [
-        {'name': 'my-grid', 'own': true, 'models': decisions},
-      ],
-    };
-    await load(box);
-    expect(box.options.where((o) => o.model != null), isEmpty);
-    expect(box.modelNotice, contains('No models are running'));
-  });
   test('disposed controllers ignore outstanding model reads', () async {
     final box = NewHarnessController(
       app,

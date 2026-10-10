@@ -11,7 +11,6 @@ export const communityHarnesses: Record<string, { name: string; marker: string }
   'autonomous/typst': { name: 'Typst', marker: 'main.typ' },
   'autonomous/circuitjs': { name: 'CircuitJS', marker: 'circuit.txt' },
   'autonomous/godogen': { name: 'Godogen', marker: 'studio.json' },
-  'autonomous/jev-sheets': { name: 'Jev Sheets', marker: 'sheet.json' },
   'autonomous/mujoco': { name: 'MuJoCo', marker: 'sim/hello.py' },
   'autonomous/rdkit': { name: 'RDKit', marker: 'molecules/hello.py' },
   'autonomous/strudel': { name: 'Strudel', marker: 'track.strudel' },

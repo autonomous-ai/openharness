@@ -11,8 +11,8 @@ README catalog, and desktop category mapping. `--check` detects stale output.
 
 Marks come unchanged from `.github/assets/engines/`, `desktop/assets/engine-icons/`, and
 `store/branding/`; their source notices remain in those directories. Cursor, OpenCode, and KiCad
-sit on dark tiles so their pale artwork remains visible. Roundtable, Jev Browser, and Godogen
-use the original SVG package icons documented in `store/branding/README.md`. Featured entries
+sit on dark tiles so their pale artwork remains visible. Roundtable and Godogen use the
+original SVG package icons documented in `store/branding/README.md`. Featured entries
 must have actual artwork; the generator fails rather than showing a letter placeholder.
 
 `showcase.gif` shows six real outputs, one screenshot per slide, at 1600 × 1260. The original

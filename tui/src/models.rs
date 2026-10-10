@@ -75,9 +75,6 @@ pub struct LocalModel {
     /// The app it runs in: `Ollama`, `LM Studio` or `llama.cpp` for one that app downloaded, `Grid`
     /// for Grid's own engine (absent from an older daemon).
     pub app: Option<String>,
-    /// A Jev (System One) model (`kind: decision`): Get downloads it, updates Grid's engine when too old
-    /// to serve one, and runs it on the grid. Listed under [DECISION]; never a harness's model.
-    pub decision: bool,
 }
 
 impl LocalModel {
@@ -88,7 +85,7 @@ impl LocalModel {
             size: num(&v["sizeBytes"]), quant: text(&v["quant"]), recommended: v["recommended"] == true, can_start: v["canStart"] == true, can_stop: v["canStop"] == true,
             tok_s: num(&v["tokensPerSecond"]), requests: num(&v["requests"]), window_secs: num(&v["windowSeconds"]),
             context: num(&v["contextWindow"]), est_tok_s: num(&v["estTokS"]), params_b: num(&v["paramsB"]),
-            operation: Operation::parse(&v["operation"]), asleep: v["gridAsleep"] == true, app: text(&v["app"]), decision: v["kind"] == "decision", id,
+            operation: Operation::parse(&v["operation"]), asleep: v["gridAsleep"] == true, app: text(&v["app"]), id,
         })
     }
     pub fn running(&self) -> bool { self.state == "running" }
@@ -126,10 +123,8 @@ pub fn parse_local(reply: &Value) -> Option<Snapshot> {
 }
 
 /// A model a grid serves; `offline` names the computer when every one serving it seems offline.
-/// `decision`: a Jev (System One) model (`kind: decision`) — called at `/v1/systemone`, never a
-/// harness's model, so it is listed under [DECISION] and Enter copies how to call it.
 #[derive(Clone, Debug, PartialEq)]
-pub struct GridModel { pub id: String, pub node: String, pub offline: Option<String>, pub decision: bool }
+pub struct GridModel { pub id: String, pub node: String, pub offline: Option<String> }
 
 /// One grid this computer is signed into: the account's own, or a shared one, and how it answered
 /// the daemon's last look (`awake`, `asleep`, `waking`, `unknown`; empty from an older daemon).
@@ -156,7 +151,7 @@ pub fn parse_grids(reply: &Value) -> Grids {
             Value::Bool(true) => Some(node.clone()),
             _ => None,
         };
-        Some(GridModel { id, node, offline, decision: m["kind"] == "decision" })
+        Some(GridModel { id, node, offline })
     }).collect::<Vec<_>>();
     let mut sections: Vec<Section> = reply["grids"].as_array().into_iter().flatten().filter_map(|g| Some(Section {
         name: text(&g["name"])?, own: g["own"] == true, models: models(&g["models"]), state: g["state"].as_str().unwrap_or("").to_string(),
@@ -508,11 +503,8 @@ fn served_in(grids: Option<&Grids>, m: &LocalModel) -> Option<(String, String)> 
 }
 
 /// The model running on this computer besides [m]: the one a Use of [m] stops first.
-/// Another chat model running here — the one to stop before [m] can run. Never a Jev model: it runs
-/// beside chat models (the desktop's `otherRunningModel`).
 fn other_running(app: &App, m: &LocalModel) -> Option<LocalModel> {
-    if m.decision { return None }
-    app.models_view.local.get(&app.fleet.local_id)?.models.iter().find(|o| o.can_stop && o.id != m.id && !o.decision).cloned()
+    app.models_view.local.get(&app.fleet.local_id)?.models.iter().find(|o| o.can_stop && o.id != m.id).cloned()
 }
 
 /// The harnesses answering with [m] besides [t], by name: what stopping it leaves without a model
@@ -708,75 +700,6 @@ fn grid_row(app: &App, s: &Section, x: &GridModel, t: Option<&Target>, group: &s
         .right(word)
 }
 
-/// A Jev model a grid serves from another machine: its machine and grid, and Serving — as on the
-/// desktop, where the row says what it is doing and Enter (copy how to call it) is the panel's to say.
-fn jev_row(s: &Section, x: &GridModel, group: &str) -> Row {
-    let word = if x.offline.is_some() { "Offline" } else { "Serving" };
-    let (dot, color) = if x.offline.is_some() { ("· ", theme::MUTED) } else { ("▶ ", theme::ONLINE) };
-    Row::new(format!("mv:jev:{}\t{}\t{}", s.name, x.node, x.id), x.id.clone()).group(group.to_string())
-        .extra(format!("{} {} {word} jev decision", s.name, x.node))
-        .lead(vec![span(dot, fg(color))])
-        .detail(vec![span([x.node.as_str(), s.name.as_str()].into_iter().filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" · "), fg(theme::MUTED))])
-        .right(word)
-}
-
-/// A Jev model of this computer's, as the desktop's row: its size and the app it runs in, in the
-/// chat rows' columns, then one of two words — Serving, or what Enter does (Start, Get) — or what is
-/// happening to it. "Copy" and "Running" beside Serving read as more states to work out.
-fn jev_local_row(app: &App, m: &LocalModel, group: &str) -> Row {
-    let op = app.models_view.op_for(&app.fleet.local_id, m).filter(|o| o.active() || o.failed());
-    let word = match op {
-        Some(o) if o.active() => o.word(),
-        Some(_) => "Failed".to_string(),
-        None if m.running() => "Serving".into(),
-        None if m.downloaded() => "Start".into(),
-        None => "Get".into(),
-    };
-    let (dot, color) = match op {
-        Some(o) if o.active() => ("↻ ", theme::WARN),
-        Some(_) => ("✗ ", theme::DANGER),
-        None if m.running() => ("▶ ", theme::ONLINE),
-        None if m.downloaded() => ("· ", theme::SOFT),
-        None => ("↓ ", theme::MUTED),
-    };
-    let app_name = m.app.clone().unwrap_or_default();
-    Row::new(format!("mv:jevlocal:{}", m.id), m.name.clone()).group(group.to_string())
-        .extra(format!("{} {app_name} {word} local jev decision", m.id))
-        .lead(vec![span(dot, fg(color))])
-        .right(columns(&m.size.map(gb).unwrap_or_default(), &app_name, &word))
-        .right_narrow(word)
-}
-
-/// The own grid a running Jev model of this computer's is listed on, by name — where it can be called.
-fn jev_local_grid(app: &App, m: &LocalModel) -> Option<String> {
-    if !m.running() { return None }
-    let g = app.models_view.grids.get(&app.fleet.local_id)?;
-    g.sections.iter().find(|s| s.own && s.models.iter().any(|x| x.decision && x.id.eq_ignore_ascii_case(&m.name)))
-        // (A resting own grid lists nothing: the engine here is parked on it, and the first request wakes it.)
-        .or_else(|| g.sections.iter().find(|s| s.own && resting(s))).map(|s| s.name.clone())
-}
-
-/// A grid asleep or waking: it lists nothing until a request wakes it.
-fn resting(s: &Section) -> bool { matches!(s.state.as_str(), "asleep" | "waking") }
-
-/// How to call the Jev model [model] on [grid] from a terminal: load the grid's address and key with
-/// `harness grid env` (the harness's own `grid`, so none of one's own is needed, nor one new enough to
-/// call a resting grid), then ask one decision. The key is never in it; the shell reads the variable.
-pub fn jev_request(grid: &str, model: &str) -> String {
-    // (Written in the order a person reads it — model, state, questions — as the desktop's is.)
-    let body = format!(r#"{{"model":{},"state":{},"questions":{}}}"#, json!(model),
-        json!("I was charged twice. Please refund the duplicate."),
-        r#"{"refund":{"type":"noul","instructions":"Is a refund requested?"}}"#);
-    format!("eval \"$(harness grid env {})\"\ncurl \"$OPENAI_BASE_URL/systemone\" \\\n  -H \"Authorization: Bearer $OPENAI_API_KEY\" \\\n  -H \"Content-Type: application/json\" \\\n  -d {}",
-        shell_word(grid), shell_word(&body))
-}
-
-/// [value] as one shell word: bare when plainly safe, single-quoted otherwise.
-fn shell_word(value: &str) -> String {
-    if !value.is_empty() && value.chars().all(|c| c.is_ascii_alphanumeric() || "._:@/+-".contains(c)) { value.to_string() }
-    else { format!("'{}'", value.replace('\'', "'\\''")) }
-}
-
 fn sub_word(app: &App, sub: &Sub, t: Option<&Target>) -> String {
     if t.is_some_and(|t| t.engine == sub.engine) && switching_for(app, t) == Some("") { return SWITCHING.into() }
     match sub_payload(app, sub, t) { Ok(_) => "Use".into(), Err(why) if why == IN_USE => "✓ In use".into(), Err(_) => String::new() }
@@ -808,16 +731,9 @@ const SUBSCRIPTIONS: &str = "Subscriptions";
 const APIS: &str = "APIs";
 const YOUR_MODELS: &str = "Your models";
 const SHARED: &str = "Shared with you";
-/// The desktop picker's two kinds of model (`ModelSearchGroup`) over its sections: what a harness runs
-/// on, and the Jev (System One) models that answer decisions at `/v1/systemone` and never run one —
-/// each with its own Your models, Get for this Mac and Shared with you. Headed only once there is a
-/// decision model to tell the chat models from, as on the desktop.
-const CHAT: &str = "Chat models";
-const DECISION: &str = "Decision models";
 
 /// The rows of the Models view: the desktop picker's sections in its order (`model_search_catalog.dart`)
-/// — under Chat models: Subscriptions, APIs, Your models, the downloads for this computer, Shared with
-/// you; under Decision models: Your models, the downloads, Shared with you — drawn from
+/// — Subscriptions, APIs, Your models, the downloads for this computer, Shared with you — drawn from
 /// the top as the desktop's are (`settings::top_down`). [query]: what is typed (a search lists what
 /// "More models" and a folded API hide).
 pub fn rows(app: &App, query: &str) -> Vec<Row> {
@@ -876,7 +792,7 @@ pub fn rows(app: &App, query: &str) -> Vec<Row> {
         out.push(note("engine", &format!("{} can only run on its own login.", engine_label(&t.engine)), YOUR_MODELS));
     }
     let own = |g: &Grids| -> Vec<(Section, GridModel)> {
-        g.sections.iter().filter(|s| s.own).flat_map(|s| s.models.iter().filter(|x| !x.decision).map(move |x| (s.clone(), x.clone()))).collect()
+        g.sections.iter().filter(|s| s.own).flat_map(|s| s.models.iter().map(move |x| (s.clone(), x.clone()))).collect()
     };
     match snap {
         None => {
@@ -887,12 +803,7 @@ pub fn rows(app: &App, query: &str) -> Vec<Row> {
         Some(s) => {
             if let Some(n) = &s.notice { out.push(note("notice", n, YOUR_MODELS)) }
             let rank = |m: &LocalModel| if v.op_for(&machine, m).is_some_and(Operation::active) || v.pending.as_ref().is_some_and(|p| p.1 == m.id) { 0 } else if m.running() { 1 } else { 2 };
-            // (A Jev model this computer serves is listed once, under Jev models: as a local row it
-            // would be offered to a harness, which cannot run on it.)
-            let deciders: Vec<String> = v.grids.get(&machine).into_iter().flat_map(|g| g.sections.iter().filter(|s| s.own))
-                .flat_map(|s| s.models.iter().filter(|x| x.decision).map(|x| x.id.to_lowercase())).collect();
-            let decides = |m: &LocalModel| deciders.iter().any(|d| d.eq_ignore_ascii_case(&m.id) || d.eq_ignore_ascii_case(&m.name));
-            let mut mine: Vec<(u8, usize, Row)> = s.models.iter().enumerate().filter(|(_, m)| (m.downloaded() || m.can_stop) && !m.decision && !decides(m))
+            let mut mine: Vec<(u8, usize, Row)> = s.models.iter().enumerate().filter(|(_, m)| m.downloaded() || m.can_stop)
                 .map(|(i, m)| (rank(m), i, local_row(app, m, t, YOUR_MODELS))).collect();
             mine.sort_by_key(|(r, i, _)| (*r, *i));
             // (This computer's running ones are listed by their local names, above.)
@@ -901,7 +812,7 @@ pub fn rows(app: &App, query: &str) -> Vec<Row> {
                 .filter(|(_, x)| !here.iter().any(|m| x.id.eq_ignore_ascii_case(&m.id) || x.id.eq_ignore_ascii_case(&m.name)))
                 .map(|(s, x)| grid_row(app, &s, &x, t, YOUR_MODELS)).collect();
             // (Only with something below to get: Enter goes to it.)
-            let to_get = s.models.iter().any(|m| !m.downloaded() && !m.can_stop && !m.decision);
+            let to_get = s.models.iter().any(|m| !m.downloaded() && !m.can_stop);
             if mine.is_empty() && theirs.is_empty() && !searching && to_get { out.push(note("none", "No models here yet — get one below", YOUR_MODELS)) }
             out.extend(mine.into_iter().map(|(_, _, r)| r));
             out.extend(theirs);
@@ -913,7 +824,7 @@ pub fn rows(app: &App, query: &str) -> Vec<Row> {
     if let Some(s) = snap {
         let head = catalog_heading(snap);
         let busy = |m: &LocalModel| v.op_for(&machine, m).is_some_and(Operation::active) || v.pending.as_ref().is_some_and(|p| p.1 == m.id);
-        let (now, rest): (Vec<&LocalModel>, Vec<&LocalModel>) = s.models.iter().filter(|m| !m.downloaded() && !m.can_stop && !m.decision).partition(|m| busy(m));
+        let (now, rest): (Vec<&LocalModel>, Vec<&LocalModel>) = s.models.iter().filter(|m| !m.downloaded() && !m.can_stop).partition(|m| busy(m));
         let shown = if v.more || searching { rest.len() } else { rest.len().min(SHOWN_DOWNLOADS) };
         out.extend(now.iter().chain(rest.iter().take(shown)).map(|m| local_row(app, m, t, &head)));
         if !searching && rest.len() > SHOWN_DOWNLOADS {
@@ -930,8 +841,7 @@ pub fn rows(app: &App, query: &str) -> Vec<Row> {
             // (A grid with no model to show is not shown — "Nobody was serving here…" says nothing
             // you can use; one that is resting with models to wake keeps its "Show models".)
             let asleep_empty = s.state == "asleep" && !words.offer_wake && !v.asking.contains(&s.name);
-            let chat: Vec<&GridModel> = s.models.iter().filter(|x| !x.decision).collect();
-            if chat.is_empty() && (searching || asleep_empty || (words.subtitle.is_none() && words.sentence.is_none() && !words.offer_wake)) { continue }
+            if s.models.is_empty() && (searching || asleep_empty || (words.subtitle.is_none() && words.sentence.is_none() && !words.offer_wake)) { continue }
             if !searching {
                 if let Some(sentence) = &words.sentence { out.push(note(&format!("grid:{}", s.name), &format!("{} · {sentence}", s.name), SHARED)) }
                 if words.offer_wake {
@@ -939,35 +849,13 @@ pub fn rows(app: &App, query: &str) -> Vec<Row> {
                         .lead(vec![span("↻ ", fg(theme::accent()))]).right("usually 15–40 s"));
                 }
             }
-            for x in chat {
+            for x in &s.models {
                 let detail = [x.node.as_str(), s.name.as_str(), words.subtitle.as_deref().unwrap_or("")].into_iter().filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" · ");
                 out.push(grid_row(app, s, x, t, SHARED).detail(vec![span(detail, fg(theme::MUTED))]));
             }
         }
         if !g.reachable && !searching { out.push(note("shared", "Shared models are unavailable.", SHARED)) }
 
-    }
-
-    // Decision models, last, in the desktop's sections: this computer's (serving first) and the own
-    // grid's from your other machines under Your models, the ones to get under `Get for this Mac`, and
-    // every shared grid's under Shared with you. A Jev model of this computer's that its own grid lists
-    // is one row, this computer's.
-    let mine: Vec<&LocalModel> = snap.map(|s| s.models.iter().filter(|m| m.decision).collect()).unwrap_or_default();
-    let (mut have, get): (Vec<&LocalModel>, Vec<&LocalModel>) = mine.iter().copied().partition(|m| m.downloaded() || m.can_stop);
-    have.sort_by_key(|m| !m.running());
-    let mut decision: Vec<Row> = have.iter().map(|m| jev_local_row(app, m, YOUR_MODELS)).collect();
-    let served = |own: bool| -> Vec<(Section, GridModel)> {
-        v.grids.get(&machine).map(|g| g.sections.iter().filter(|s| s.own == own)
-            .flat_map(|s| s.models.iter().filter(|x| x.decision && !(own && mine.iter().any(|m| m.name.eq_ignore_ascii_case(&x.id)))).map(move |x| (s.clone(), x.clone())))
-            .collect()).unwrap_or_default()
-    };
-    decision.extend(served(true).iter().map(|(s, x)| jev_row(s, x, YOUR_MODELS)));
-    let head = catalog_heading(snap);
-    decision.extend(get.iter().map(|m| jev_local_row(app, m, &head)));
-    decision.extend(served(false).iter().map(|(s, x)| jev_row(s, x, SHARED)));
-    if !decision.is_empty() {
-        for r in &mut out { r.category = Some(CHAT.into()) }
-        out.extend(decision.into_iter().map(|r| r.category(DECISION)));
     }
 
     out
@@ -985,10 +873,6 @@ const IN_USE: &str = "This harness is on it";
 /// The word on a row, and on the pane, while the harness moves onto it.
 pub const SWITCHING: &str = "Switching…";
 const NO_HARNESS: &str = "Focus a harness to move it onto a model";
-/// What Enter on a Jev model says once its request is copied.
-const JEV_COPIED: &str = "Copied — paste it into a terminal.";
-/// What a Jev model is, in the desktop panel's one sentence.
-const JEV_SAYS: &str = "Answers yes-or-no, choice and score questions with probabilities. It does not chat.";
 
 /// What a key on a row comes to — decided here, done by [run]; the tests read the plan.
 #[derive(Clone, Debug, PartialEq)]
@@ -1007,8 +891,6 @@ pub enum Plan {
     Wake(String),
     More,
     Api(String),
-    /// Put [text] on the clipboard (and in a paste buffer): how to call a Jev model.
-    Copy(String),
     /// Set grid up here, signing in first when signed out ([set_up]).
     SetUp,
     /// The cursor to row [0] (from the empty Your models' note to the first model to get).
@@ -1054,23 +936,6 @@ pub fn plan_enter(app: &App, id: &str) -> Plan {
     }
     if let Some(name) = id.strip_prefix("mv:wake:") { return if v.asking.contains(name) { say(STARTING_UP_WAIT) } else { Plan::Wake(name.to_string()) } }
     if let Some(key) = id.strip_prefix("mv:api:") { return Plan::Api(key.to_string()) }
-    if let Some(rest) = id.strip_prefix("mv:jev:") {
-        let mut parts = rest.splitn(3, '\t');
-        let (Some(grid), Some(_node), Some(model)) = (parts.next(), parts.next(), parts.next()) else { return Plan::Nothing };
-        return Plan::Copy(jev_request(grid, model));
-    }
-    if let Some(model) = id.strip_prefix("mv:jevlocal:") {
-        let Some(m) = local_model(app, model) else { return say("This model is gone. Try again in a moment.") };
-        if let Some(o) = v.op_for(&app.fleet.local_id, &m).filter(|o| o.active()) { return Plan::Say(o.word()) }
-        if let Some(grid) = jev_local_grid(app, &m) { return Plan::Copy(jev_request(&grid, &m.name)) }
-        if m.running() { return say("It is starting on your grid — Enter copies how to call it once the grid lists it.") }
-        // Get is the whole of it: the download, an engine new enough to serve it, and the model on the grid.
-        // A download asks first, as a chat model's Get does: a click is Enter here, and it is gigabytes.
-        if !m.can_start { return say("Wait for the current model operation to finish.") }
-        let go = Plan::Act { model: m.id.clone(), action: "start" };
-        let size = m.size.map(gb).map(|s| format!(" ({s})")).unwrap_or_default();
-        return if m.downloaded() { go } else { Plan::Arm(format!("Get {}{size}? Enter · Esc", m.name), Box::new(go)) };
-    }
     if let Some(rest) = id.strip_prefix("mv:apimodel:") {
         let Some((api, model)) = rest.split_once('\t') else { return Plan::Nothing };
         let Some(api) = v.apis.as_ref().and_then(|a| a.as_ref().ok()).and_then(|l| l.iter().find(|x| x.id == api)) else { return Plan::Nothing };
@@ -1136,7 +1001,7 @@ pub fn plan_enter(app: &App, id: &str) -> Plan {
 
 /// What ^S does on row [id]: stop a local model (asked first).
 pub fn plan_stop(app: &App, id: &str) -> Plan {
-    let Some(m) = id.strip_prefix("mv:local:").or_else(|| id.strip_prefix("mv:jevlocal:")).and_then(|model| local_model(app, model)) else { return Plan::Nothing };
+    let Some(m) = id.strip_prefix("mv:local:").and_then(|model| local_model(app, model)) else { return Plan::Nothing };
     let f = facts(app, &m, None);
     if f.busy { return Plan::Say("Wait for the current model operation to finish.".into()) }
     if !m.can_stop { return Plan::Say(if m.running() { "Other models share its engine — stop it from the desktop's Model Manager".into() } else { "It is not running".into() }) }
@@ -1175,7 +1040,7 @@ fn run(app: &mut App, picker: &mut Picker, plan: Plan, key: &str) {
             app.models_view.confirm = None;
             if picker.armed.as_deref() == Some(key) { picker.armed = None; run(app, picker, *then, key) }
             // Enter on a local model asks in its preview, where it stays until answered.
-            else if let Some(row) = key.strip_suffix("\u{1f}enter").filter(|id| id.starts_with("mv:local:") || id.starts_with("mv:jevlocal:")) { picker.armed = Some(key.to_string()); app.models_view.confirm = Some((row.to_string(), words)) }
+            else if let Some(row) = key.strip_suffix("\u{1f}enter").filter(|id| id.starts_with("mv:local:")) { picker.armed = Some(key.to_string()); app.models_view.confirm = Some((row.to_string(), words)) }
             else { picker.armed = Some(key.to_string()); picker.say(words) }
         }
         Plan::Retarget { machine, payload, name } => {
@@ -1197,12 +1062,6 @@ fn run(app: &mut App, picker: &mut Picker, plan: Plan, key: &str) {
         Plan::Api(key) => {
             let v = &mut app.models_view;
             if !v.api_open.remove(&key) { v.api_open.insert(key.clone()); if !v.api_models.contains_key(&key) { read_api_models(app, &key) } }
-        }
-        Plan::Copy(text) => {
-            if !app.headless { crate::clipboard::store(&text) }
-            let limit = app.buffer_limit();
-            app.paste.add(text, limit);
-            picker.say(JEV_COPIED);
         }
         Plan::SetUp => set_up(app),
         Plan::Select(id) => picker.select(&id),
@@ -1934,7 +1793,7 @@ pub fn preview(app: &App, id: &str) -> Vec<Line<'static>> {
         let x = section.and_then(|s| s.models.iter().find(|x| x.id == model));
         let own = section.is_some_and(|s| s.own);
         let status = match x.and_then(|x| x.offline.clone()) { Some(who) => format!("{who} seems offline — its models come back when it does"), None => "Available".into() };
-        let status = match grid_word(app, x.cloned().as_ref().unwrap_or(&GridModel { id: model.to_string(), node: node.to_string(), offline: None, decision: false }), t).as_str() {
+        let status = match grid_word(app, x.cloned().as_ref().unwrap_or(&GridModel { id: model.to_string(), node: node.to_string(), offline: None }), t).as_str() {
             SWITCHING => format!("{SWITCHING} this harness is moving onto it"),
             "✓ In use" => format!("{status} · this harness is on it"),
             _ => status,
@@ -1946,69 +1805,6 @@ pub fn preview(app: &App, id: &str) -> Vec<Line<'static>> {
         out.push(kv("Source", if own { "On your machines".to_string() } else { format!("Shared · {grid}") }));
         let said = match plan_enter(app, id) { Plan::Retarget { .. } => "Enter moves this harness onto it.".to_string(), Plan::Arm(..) => "Enter twice moves this harness onto it anyway.".into(), Plan::Say(w) if w == NO_HARNESS => no_target_why(app), Plan::Say(w) => w, _ => String::new() };
         if !said.is_empty() { out.push(Line::raw("")); out.push(Line::from(span(said, fg(theme::accent())))) }
-        return out;
-    }
-    // A Jev model's panel, as the desktop's: what it is in one sentence, a line only when there is
-    // something to do or under way (one that serves says so in its row), its size and what it runs
-    // in, and once a grid serves it, the command that calls it. No Model or Grid line (the title and
-    // the line under it say them) and no "Endpoint: POST $OPENAI_BASE_URL/systemone", which read as a
-    // value to fill in: the request is the endpoint, its first line loading the grid's address.
-    if let Some(model) = id.strip_prefix("mv:jevlocal:") {
-        let Some(m) = local_model(app, model) else { return vec![dim("(gone)")] };
-        let here = this_computer();
-        let grid = jev_local_grid(app, &m);
-        let op = v.op_for(&machine, &m);
-        let mut out = vec![bold(m.name.clone()), Line::raw(["Jev model", &capital(here), grid.as_deref().unwrap_or("")].into_iter().filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" · "))];
-        out.push(Line::raw(""));
-        out.push(Line::raw(JEV_SAYS));
-        let status = match op {
-            Some(o) if o.active() => Some(Line::raw(o.word())),
-            Some(o) if o.failed() => Some(warn(o.error.clone().unwrap_or_else(|| "It could not start. Try again.".into()))),
-            _ if m.running() => None,
-            _ if m.downloaded() => Some(Line::raw("Start runs it on your grid.")),
-            _ => Some(Line::raw("Get downloads it and runs it on your grid.")),
-        };
-        if let Some(status) = status { out.push(Line::raw("")); out.push(status) }
-        // (The first Enter's question, until Enter, Esc or the cursor leaves the row.)
-        if let Some((_, words)) = v.confirm.as_ref().filter(|(row, _)| row == id) { out.push(Line::raw("")); out.push(Line::from(span(words.clone(), theme::bold(theme::accent())))) }
-        out.push(Line::raw(""));
-        if let Some(size) = m.size { out.push(kv("Size", gb(size))) }
-        // A decision model another app downloaded (Ollama's tev1) runs in that app.
-        out.push(kv("Runs in", match m.app.as_deref() { None | Some("Grid") => "Grid's llama.cpp".to_string(), Some(a) => a.to_string() }));
-        if let Some(grid) = &grid {
-            if v.grids.get(&machine).and_then(|g| g.sections.iter().find(|s| &s.name == grid)).is_some_and(resting) {
-                out.push(Line::raw(""));
-                out.push(Line::raw("Its grid is resting. Your first request wakes it, which takes a few seconds."));
-            }
-            out.push(Line::raw(""));
-            out.push(Line::raw("Call it from a terminal:"));
-            out.extend(jev_request(grid, &m.name).lines().map(|l| Line::from(span(l.to_string(), fg(theme::SOFT)))));
-        }
-        let said = match (grid.is_some(), m.running(), m.downloaded()) {
-            (true, _, _) => "Enter copies how to call it. ^S stops it and frees its memory. The download is kept.",
-            (false, true, _) => "^S stops it and frees its memory. The download is kept.",
-            (false, false, true) => "Enter starts it.",
-            _ => "Enter gets it.",
-        };
-        if op.is_none_or(|o| !o.active()) { out.push(Line::raw("")); out.push(Line::from(span(said, fg(theme::accent())))) }
-        return out;
-    }
-    if let Some(rest) = id.strip_prefix("mv:jev:") {
-        let mut parts = rest.splitn(3, '\t');
-        let (grid, node, model) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
-        let section = v.grids.get(&machine).and_then(|g| g.sections.iter().find(|s| s.name == grid));
-        let offline = section.and_then(|s| s.models.iter().find(|x| x.id == model)).and_then(|x| x.offline.clone());
-        let resting = section.is_some_and(|s| s.state == "asleep" || s.state == "waking");
-        let mut out = vec![bold(model.to_string()), Line::raw(["Jev model", node, grid].into_iter().filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" · "))];
-        out.push(Line::raw(""));
-        out.push(Line::raw(JEV_SAYS));
-        if let Some(who) = offline { out.push(Line::raw("")); out.push(warn(format!("{who} seems offline — it answers again when that computer is back"))) }
-        else if resting { out.push(Line::raw("")); out.push(dim("Its grid is resting. Your first request wakes it, which takes a few seconds.")) }
-        out.push(Line::raw(""));
-        out.push(Line::raw("Call it from a terminal:"));
-        out.extend(jev_request(grid, model).lines().map(|l| Line::from(span(l.to_string(), fg(theme::SOFT)))));
-        out.push(Line::raw(""));
-        out.push(Line::from(span("Enter copies it.", fg(theme::accent()))));
         return out;
     }
     if let Some(name) = id.strip_prefix("mv:wake:") {
@@ -2065,8 +1861,8 @@ pub fn preview(app: &App, id: &str) -> Vec<Line<'static>> {
         return out;
     }
     if id == "mv:more" {
-        // (The models the row folds: not the decision models, listed apart, nor one running here.)
-        let n = v.local.get(&machine).map(|s| s.models.iter().filter(|m| !m.downloaded() && !m.can_stop && !m.decision).count()).unwrap_or(0);
+        // (The models the row folds: not one running here.)
+        let n = v.local.get(&machine).map(|s| s.models.iter().filter(|m| !m.downloaded() && !m.can_stop).count()).unwrap_or(0);
         return vec![bold(format!("{n} models that fit {}", this_computer())), Line::raw(""), Line::from(span(if v.more { "Enter shows the first five." } else { "Enter lists them all." }, fg(theme::accent())))];
     }
     if id == SET_UP {
@@ -2843,7 +2639,7 @@ mod tests {
     #[test]
     fn a_resting_section_says_what_the_desktop_says() {
         let s = |state: &str, models: usize, age: Option<u64>, outcome: &str| Section { name: "team".into(), state: state.into(), age, outcome: outcome.into(),
-            models: (0..models).map(|i| GridModel { id: format!("m{i}"), node: "n".into(), offline: None, decision: false }).collect(), ..Default::default() };
+            models: (0..models).map(|i| GridModel { id: format!("m{i}"), node: "n".into(), offline: None }).collect(), ..Default::default() };
         assert_eq!(section_words(&s("asleep", 1, Some(180), ""), false).subtitle.as_deref(), Some("Asleep 3min ago"));
         assert!(section_words(&s("asleep", 0, None, ""), false).offer_wake);
         assert_eq!(section_words(&s("asleep", 0, None, ""), true), Words { subtitle: None, sentence: Some(STARTING_UP_WAIT.into()), offer_wake: false });
@@ -2971,138 +2767,6 @@ mod tests {
         assert!(s.contains("Shared with you") || s.contains("llama-70b"), "{s}");
         // It is in the Commands panel, in the Harness group.
         assert!(crate::modal::command_rows(&app).iter().any(|r| r.id == "cmd:models" && r.group.as_deref() == Some("Harness")));
-    }
-
-    /// With a decision model to tell them from, the view is the desktop's two lists: Chat models over
-    /// Subscriptions…Shared with you, then Decision models over its own Your models and Get for this
-    /// Mac — each a heading ruled to the edge — and no "Jev models". Without one, no such heading.
-    #[test]
-    fn chat_and_decision_models_are_headed_as_on_the_desktop() {
-        let mut app = app();
-        on_grids(&mut app, "local", Ok(grids_reply(&[])));
-        crate::input::run(&mut app, "models");
-        let mut reply = local_reply(qwen("available", Value::Null), false);
-        on_local(&mut app, "local", Ok(reply.clone()));
-        let s = screen(&mut app, 150, 60);
-        assert!(!s.contains(CHAT) && !s.contains(DECISION), "no decision model, no headings:\n{s}");
-        reply["models"].as_array_mut().unwrap().push(json!({ "id": "jev:ggml-org/Kev-4B-GGUF", "name": "kev-4b", "kind": "decision", "state": "available",
-            "sizeBytes": 4483801504u64, "canStart": true, "app": "Grid" }));
-        reply["models"].as_array_mut().unwrap().push(json!({ "id": "jev:ollama:tev1:latest", "name": "tev1", "kind": "decision", "state": "running",
-            "sizeBytes": 4480000000u64, "canStop": true, "app": "Ollama" }));
-        on_local(&mut app, "local", Ok(reply));
-        let s = screen(&mut app, 150, 60);
-        let at = |w: &str| s.find(w).unwrap_or_else(|| panic!("{w:?} missing:\n{s}"));
-        assert!(at(CHAT) < at("Subscriptions") && at("Shared with you") < at(DECISION) && at(DECISION) < at("tev1") && at("tev1") < at("kev-4b"), "{s}");
-        assert!(!s.contains("Jev models"), "{s}");
-        let line = |w: &str| s.lines().find(|l| l.contains(w)).unwrap_or_default().to_string();
-        assert!(line(DECISION).contains("────"), "ruled to the edge: {:?}", line(DECISION));
-        assert!(line("tev1").contains("Ollama") && line("tev1").contains("Serving"), "{:?}", line("tev1"));
-        assert!(line("kev-4b").contains("Grid") && line("kev-4b").contains("Get"), "{:?}", line("kev-4b"));
-    }
-
-    /// Jev (System One) models: listed last under Decision models, as on the desktop — the own grid's
-    /// under its Your models, a shared one's under its Shared with you, never among the chat models nor
-    /// a harness's — each saying Serving, and Enter puts how to call one on the clipboard, which the
-    /// panel shows too.
-    #[test]
-    fn jev_models_are_listed_apart_and_enter_copies_how_to_call_one() {
-        let mut app = app();
-        app.headless = true;
-        on_local(&mut app, "local", Ok(local_reply(qwen("running", Value::Null), false)));
-        let mut g = grids_reply(&["box-model"]);
-        g["grids"][0]["models"].as_array_mut().unwrap().push(json!({ "id": "laya-english", "node": "studio", "kind": "decision" }));
-        g["grids"][1]["models"].as_array_mut().unwrap().push(json!({ "id": "nimble", "node": "gpu-box", "kind": "decision" }));
-        on_grids(&mut app, "local", Ok(g));
-        let rows = rows_of(&app);
-        let jev: Vec<(&str, &str)> = rows.iter().filter(|r| r.category.as_deref() == Some(DECISION)).map(|r| (r.id.as_str(), r.group.as_deref().unwrap_or(""))).collect();
-        assert_eq!(jev, vec![("mv:jev:own-grid\tstudio\tlaya-english", YOUR_MODELS), ("mv:jev:team\tgpu-box\tnimble", SHARED)]);
-        assert_eq!(rows.last().and_then(|r| r.category.as_deref()), Some(DECISION), "the last section");
-        assert!(rows.iter().filter(|r| r.category.as_deref() != Some(DECISION)).all(|r| r.category.as_deref() == Some(CHAT) && r.label != "laya-english" && r.label != "nimble"));
-        let laya = row(&rows, "mv:jev:own-grid\tstudio\tlaya-english");
-        assert_eq!(laya.right.trim(), "Serving");
-        assert_eq!(laya.detail.iter().map(|s| s.content.as_ref()).collect::<String>(), "studio · own-grid");
-
-        let request = jev_request("own-grid", "laya-english");
-        assert!(request.starts_with("eval \"$(harness grid env own-grid)\"\n"), "{request}");
-        assert!(request.contains("curl \"$OPENAI_BASE_URL/systemone\"") && request.contains("Bearer $OPENAI_API_KEY"), "{request}");
-        assert!(request.contains("\"model\":\"laya-english\""), "{request}");
-        // Byte for byte the desktop's (`jevRequest` in model_search_catalog.dart).
-        assert!(request.ends_with(r#"-d '{"model":"laya-english","state":"I was charged twice. Please refund the duplicate.","questions":{"refund":{"type":"noul","instructions":"Is a refund requested?"}}}'"#), "{request}");
-        assert_eq!(shell_word("my grid"), "'my grid'");
-        assert_eq!(shell_word("o'brien"), "'o'\\''brien'");
-
-        let panel = text(&preview(&app, "mv:jev:own-grid\tstudio\tlaya-english"));
-        assert!(panel.contains("Jev model · studio · own-grid") && panel.contains(JEV_SAYS) && panel.contains("Call it from a terminal:"), "{panel}");
-        assert!(panel.contains(&request), "{panel}");
-        // Lean, as the desktop's: no Endpoint read as a value to fill in, nor lines saying the title again.
-        assert!(!panel.contains("Endpoint") && !panel.contains("Model ") && !panel.contains("the key is never shown"), "{panel}");
-        assert_eq!(plan_enter(&app, "mv:jev:own-grid\tstudio\tlaya-english"), Plan::Copy(request.clone()));
-
-        let mut picker = Picker::new("models", "");
-        choose(&mut app, &mut picker, "mv:jev:own-grid\tstudio\tlaya-english", false);
-        assert_eq!(picker.flash.as_ref().map(|(t, _)| t.as_str()), Some(JEV_COPIED));
-        assert_eq!(app.paste.top().map(|b| b.data.clone()), Some(request), "in a paste buffer too");
-        assert!(app.models_view.switching.is_none(), "no harness was moved");
-
-        // This computer serving the own grid's Jev model (`grid join --serve`): listed once, under Decision models.
-        let mut served = local_reply(qwen("running", Value::Null), false);
-        served["models"].as_array_mut().unwrap().push(json!({ "id": "local:Laya-English-Q8_0.gguf", "name": "laya-english", "state": "running", "canStop": true, "sizeBytes": 449397600u64 }));
-        on_local(&mut app, "local", Ok(served));
-        assert_eq!(rows_of(&app).iter().filter(|r| r.label.starts_with("laya-english")).map(|r| (r.category.clone().unwrap_or_default(), r.group.clone().unwrap_or_default())).collect::<Vec<_>>(),
-            vec![(DECISION.to_string(), YOUR_MODELS.to_string())]);
-
-        // A resting grid wakes on the request: the panel says so, and the row still offers the copy.
-        assert!(!text(&preview(&app, "mv:jev:team\tgpu-box\tnimble")).contains("resting"));
-        app.models_view.grids.get_mut("local").unwrap().sections.iter_mut().find(|s| s.name == "team").unwrap().state = "asleep".into();
-        assert!(text(&preview(&app, "mv:jev:team\tgpu-box\tnimble")).contains("Its grid is resting. Your first request wakes it"));
-        assert_eq!(row(&rows_of(&app), "mv:jev:team\tgpu-box\tnimble").right.trim(), "Serving");
-    }
-
-    /// A Jev model this computer can get: under Decision models' own `Get for this Mac` (never the chat
-    /// downloads), Get starts it — the daemon downloads it, updates Grid's engine and runs it — and once
-    /// the own grid lists it, it is one row under Your models, Serving, whose Enter copies how to call it
-    /// and whose ^S asks before it stops.
-    #[test]
-    fn a_jev_model_of_this_computer_is_got_started_called_and_stopped_from_its_one_row() {
-        let mut app = app();
-        let laya = |state: &str, op: Value| json!({ "id": "jev:ggml-org/Laya-GGUF", "name": "laya-english", "kind": "decision", "state": state,
-            "sizeBytes": 449397600u64, "quant": "Q8_0", "canStart": state != "running", "canStop": state == "running", "app": "Grid", "operation": op });
-        let mut reply = local_reply(qwen("running", Value::Null), false);
-        reply["models"].as_array_mut().unwrap().push(laya("available", Value::Null));
-        on_local(&mut app, "local", Ok(reply.clone()));
-        on_grids(&mut app, "local", Ok(grids_reply(&["box-model"])));
-        let id = "mv:jevlocal:jev:ggml-org/Laya-GGUF";
-        let rows = rows_of(&app);
-        assert_eq!((row(&rows, id).category.as_deref(), row(&rows, id).group.clone()), (Some(DECISION), Some(catalog_heading(app.models_view.local.get("local")))));
-        assert_eq!(row(&rows, id).right.trim(), "0.4 GB       Grid        Get");
-        assert_eq!(row(&rows, id).right_narrow.as_deref(), Some("Get"));
-        assert!(rows.iter().filter(|r| r.label == "laya-english").count() == 1, "never also offered among the downloads");
-        assert!(text(&preview(&app, id)).contains("Get downloads it and runs it on your grid."));
-        assert_eq!(plan_enter(&app, id), Plan::Arm("Get laya-english (0.4 GB)? Enter · Esc".into(), Box::new(Plan::Act { model: "jev:ggml-org/Laya-GGUF".into(), action: "start" })));
-
-        // Its engine being updated says so, on the row and in the panel.
-        let mut updating = reply.clone();
-        updating["models"].as_array_mut().unwrap().pop();
-        updating["models"].as_array_mut().unwrap().push(laya("available", json!({ "id": "op-jev", "modelId": "jev:ggml-org/Laya-GGUF", "action": "start",
-            "stage": "updating", "phase": "running", "updatedAt": "2026-09-30T00:00:00.000Z" })));
-        on_local(&mut app, "local", Ok(updating));
-        assert_eq!(row(&rows_of(&app), id).right_narrow.as_deref(), Some("Updating engine"));
-        assert!(text(&preview(&app, id)).contains("Updating engine"));
-
-        // Running, and the own grid lists it as a Jev model: one row — this computer's — to call or stop.
-        let mut running = reply.clone();
-        running["models"].as_array_mut().unwrap().pop();
-        running["models"].as_array_mut().unwrap().push(laya("running", Value::Null));
-        on_local(&mut app, "local", Ok(running));
-        let mut g = grids_reply(&["box-model"]);
-        g["grids"][0]["models"].as_array_mut().unwrap().push(json!({ "id": "laya-english", "node": "studio", "kind": "decision" }));
-        on_grids(&mut app, "local", Ok(g));
-        let rows = rows_of(&app);
-        assert_eq!(rows.iter().filter(|r| r.label.starts_with("laya-english")).map(|r| r.id.as_str()).collect::<Vec<_>>(), vec![id]);
-        assert_eq!((row(&rows, id).group.as_deref(), row(&rows, id).right_narrow.as_deref()), (Some(YOUR_MODELS), Some("Serving")));
-        assert_eq!(plan_enter(&app, id), Plan::Copy(jev_request("own-grid", "laya-english")));
-        assert!(text(&preview(&app, id)).contains(&jev_request("own-grid", "laya-english")));
-        assert!(matches!(plan_stop(&app, id), Plan::Arm(_, ref then) if **then == Plan::Act { model: "jev:ggml-org/Laya-GGUF".into(), action: "stop" }));
     }
 
     /// Grid not set up here (`gridSetupNeeded`): Your models is the desktop's one Set up row — no
@@ -3273,65 +2937,12 @@ mod tests {
         assert!(apis_due(&app, true), "a new owner's are read again");
     }
 
-    /// The own grid asleep lists nothing, but a Jev model running here is parked on it: Enter still
-    /// copies how to call it on that grid, and its panel says the first request wakes it.
-    #[test]
-    fn a_jev_model_on_a_resting_own_grid_still_copies_its_request() {
-        let mut app = app();
-        on_local(&mut app, "local", Ok(json!({ "models": [{ "id": "tev1", "name": "tev1", "state": "running", "kind": "decision", "app": "Ollama", "canStop": true, "sizeBytes": 4.1 * GIB }] })));
-        on_grids(&mut app, "local", Ok(json!({ "gridName": "own-grid", "grids": [{ "name": "own-grid", "own": true, "state": "asleep", "models": [] }] })));
-        let id = "mv:jevlocal:tev1";
-        assert_eq!(row(&super::rows(&app, ""), id).right_narrow.as_deref(), Some("Serving"));
-        assert_eq!(plan_enter(&app, id), Plan::Copy(jev_request("own-grid", "tev1")));
-        let panel = text(&preview(&app, id));
-        assert!(panel.contains("Its grid is resting. Your first request wakes it"), "{panel}");
-        assert!(panel.contains("Call it from a terminal:") && panel.contains("harness grid env own-grid"), "{panel}");
-
-        // Awake and not listing it yet: it is still starting there, and nothing is copied.
-        on_grids(&mut app, "local", Ok(json!({ "gridName": "own-grid", "grids": [{ "name": "own-grid", "own": true, "state": "awake", "models": [] }] })));
-        assert!(matches!(plan_enter(&app, id), Plan::Say(ref s) if s.starts_with("It is starting on your grid")));
-    }
-
-    /// A click is Enter in hn, and a Jev model's Get is gigabytes: the first asks in its panel, as a
-    /// chat model's Get does, and only the second gets it.
-    #[test]
-    fn a_jev_model_s_get_asks_first() {
-        let mut app = app();
-        let mut reply = local_reply(qwen("running", Value::Null), false);
-        reply["models"].as_array_mut().unwrap().push(json!({ "id": "jev:kev-4b", "name": "kev-4b", "kind": "decision", "state": "available", "sizeBytes": 4.2 * GIB, "canStart": true, "app": "Grid" }));
-        on_local(&mut app, "local", Ok(reply));
-        let id = "mv:jevlocal:jev:kev-4b";
-        let mut picker = Picker::new("models", "");
-        choose(&mut app, &mut picker, id, false);
-        assert!(text(&preview(&app, id)).contains("Get kev-4b (4.2 GB)? Enter · Esc"), "{}", text(&preview(&app, id)));
-        assert!(!app.models_view.sent.iter().any(|s| s.1 == "grid_fleet_model_start"), "nothing is got on the first");
-        choose(&mut app, &mut picker, id, false);
-        assert_eq!(last_sent(&app), ("local".into(), "grid_fleet_model_start".into(), json!({ "modelId": "jev:kev-4b" })));
-    }
-
-    /// A Jev model runs beside chat models: one running here is never the model a chat model's Get
-    /// or Start says to stop first (the desktop's `otherRunningModel`).
-    #[test]
-    fn a_running_jev_model_is_not_the_one_to_stop() {
-        let mut app = app();
-        let mut reply = local_reply(qwen("available", Value::Null), false);
-        reply["models"].as_array_mut().unwrap().push(json!({ "id": "jev:kev-0.8b", "name": "kev-0.8b", "kind": "decision", "state": "running", "sizeBytes": 0.8 * GIB, "canStop": true, "app": "Grid" }));
-        on_local(&mut app, "local", Ok(reply));
-        app.tabs[0].focus = None;
-        app.panes.clear();
-        let panel = text(&preview(&app, "mv:local:qwen-35b"));
-        assert!(!panel.contains("kev-0.8b"), "{panel}");
-        assert!(matches!(plan_enter(&app, "mv:local:qwen-35b"), Plan::Arm(ref words, _) if !words.contains("kev")));
-    }
-
-    /// More models says how many it folds — not the decision models, listed apart — and, opened,
-    /// puts the cursor on the first model it shows, not on Show fewer at the end of the list.
+    /// More models says how many it folds and, opened, puts the cursor on the first model it shows,
+    /// not on Show fewer at the end of the list.
     #[test]
     fn more_models_counts_what_it_folds_and_opens_at_the_first_it_shows() {
         let mut app = app();
-        let mut reply = local_reply(qwen("available", Value::Null), false);
-        reply["models"].as_array_mut().unwrap().push(json!({ "id": "jev:kev-4b", "name": "kev-4b", "kind": "decision", "state": "available", "sizeBytes": 4.2 * GIB, "canStart": true }));
-        on_local(&mut app, "local", Ok(reply));
+        on_local(&mut app, "local", Ok(local_reply(qwen("available", Value::Null), false)));
         assert_eq!(row(&super::rows(&app, ""), "mv:more").label, "More models (2)");
         assert!(text(&preview(&app, "mv:more")).starts_with("7 models that fit"), "{}", text(&preview(&app, "mv:more")));
         let mut picker = Picker::new("models", "");
