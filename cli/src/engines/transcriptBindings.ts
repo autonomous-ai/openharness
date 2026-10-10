@@ -2,8 +2,11 @@
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { env } from '../config/env.js'
 import { engineHomeSnapshot, sessionRoots, type EngineHomeSnapshot } from '../lib/engineHomes.js'
+import { controlIdentity as claudeIdentity } from './claude/sessionStore.js'
+import { PI_CONTROL_IDENTITY } from './pi/contract.js'
 import { cursorDataDir } from './cursor/contract.js'
 import { NativeFiles } from './kit/nativeFiles.js'
+import type { ControlIdentityRule } from './kit/controlIdentity.js'
 import { nativeFileKey } from './kit/nativePaths.js'
 import { nativeUnavailable } from './kit/nativeEvidence.js'
 import { sessionStoreOf } from './sessionStoreContracts.js'
@@ -167,17 +170,31 @@ export function savedTranscriptEvidence(engine: AgentEngine, sessionId: string, 
 
 /** Keep immutable identity across awaits, not a lookup's expiring work budget.
  * Each control boundary earns fresh header, root and catalog evidence before acting. */
-export function controlTranscriptEvidence(engine: AgentEngine, sessionId: string, path: string, profile?: string) {
+export function controlTranscriptEvidence(engine: AgentEngine, sessionId: string, path: string, profile?: string, cwd?: string | null) {
   const read = () => {
     const proof = savedTranscriptEvidence(engine, sessionId, path, profile)
-    proof.verify()
     if (!proof.path) return nativeUnavailable('the saved conversation file is unavailable')
+    const rule: ControlIdentityRule | undefined = engine === 'claude' ? claudeIdentity : engine === 'pi' ? PI_CONTROL_IDENTITY : undefined
+    if (rule) {
+      const files = new NativeFiles()
+      const head = files.opening(proof.path, rule)
+      if (head.id !== sessionId || head.delegated) return nativeUnavailable('the saved transcript names a different or delegated conversation')
+      if (rule.canonicalWorkspace) {
+        if (!cwd) return nativeUnavailable('the saved conversation workspace is unavailable')
+        const expected = files.locate(cwd), actual = files.locate(head.cwd)
+        if (!expected?.info.isDirectory() || !actual?.info.isDirectory()
+          || nativeFileKey(expected.info) !== nativeFileKey(actual.info)) return nativeUnavailable('the saved conversation workspace does not match')
+      }
+      files.verify(proof.path)
+    }
+    proof.verify()
     return { path: proof.path, fileKey: proof.fileKey }
   }
   const before = read()
-  return { path: before.path, verify(): void {
+  return { path: before.path, verify(openedFileKey?: string): void {
     const after = read()
-    if (after.path !== before.path || after.fileKey !== before.fileKey) {
+    if (after.path !== before.path || after.fileKey !== before.fileKey
+      || openedFileKey !== undefined && openedFileKey !== before.fileKey) {
       nativeUnavailable('the saved conversation file was replaced during the operation')
     }
   } }

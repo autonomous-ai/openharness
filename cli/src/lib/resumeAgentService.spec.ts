@@ -52,6 +52,14 @@ function rewrite(extra: Partial<RegisteredSession>) { saved = { ...saved, ...ext
 function start() { return createResumeAgentService(deps)(saved.agentId) }
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { promise, resolve } }
 
+it('retains the reservation if terminal dispatch starts but loses its reply', async () => {
+  create.mockImplementationOnce(async request => { request.onDispatch(); throw Error('Terminal transport disconnected') })
+  await expect(start()).rejects.toThrow('Terminal transport disconnected')
+  expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
+  expect(registry.byAgent(saved.agentId)).toBeUndefined()
+  expect(deps.announceSession).not.toHaveBeenCalled()
+})
+
 beforeEach(() => {
   vi.clearAllMocks()
   for (const row of registry.list()) registry.removeAgent(row.agentId)
@@ -319,6 +327,34 @@ describe('production resume handler', () => {
     expect(deps.stoppedAgents.beginResume(saved.agentId) === null).toBe(reason !== 'tmux is unavailable')
     expect(registry.byAgent(saved.agentId)).toBeUndefined()
   })
+  it('retains a typed native hold from synchronous history repair and releases its reservation', async () => {
+    vi.mocked(deps.prepareSessionResume).mockImplementationOnce(() => { throw new IdentityReadUnavailable('the native store is incomplete') })
+    expect(await start()).toMatchObject({ ok: false, error: 'IDENTITY_UNAVAILABLE' })
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
+    expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
+  })
+
+  it.each(['permission', 'argv'] as const)('checks cancellation after %s preparation before allocating a pane', async phase => {
+    if (phase === 'permission') vi.mocked(dropPermissionFlagIfUnsupported).mockImplementationOnce(async (_engine, choice) => {
+      deps.restartJobs.cancel(saved.agentId)
+      return { choice, droppedFlag: null }
+    })
+    else vi.mocked(buildEngineLaunchArgv).mockImplementationOnce(() => { deps.restartJobs.cancel(saved.agentId); return ['fixture-engine'] })
+    expect(await start()).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
+  })
+
+  it('releases the reservation and preserves an unexpected launch preparation failure', async () => {
+    const failure = new Error('private configuration write refused')
+    vi.mocked(deps.relaunchOverrides).mockRejectedValueOnce(failure)
+    await expect(start()).rejects.toBe(failure)
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
+    expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
+  })
+
   it('cancels a tmux allocation without registering or reusing its pane', async () => {
     create.mockImplementation(async () => { deps.restartJobs.cancel(saved.agentId); return { state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } } })
     expect(await start()).toMatchObject({ error: 'AGENT_CHANGED' }); expect(kill).toHaveBeenCalledTimes(1)

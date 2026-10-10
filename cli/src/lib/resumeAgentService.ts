@@ -202,7 +202,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         return { ok: false, error: 'RESUME_UNAVAILABLE', detail: 'The saved conversation file is unavailable. Start a new conversation separately.' }
       }
       const sourceEvidence = () => resumeSessionId && engineKeepsTranscriptFile(saved.engine)
-        ? controlTranscriptEvidence(saved.engine, resumeSessionId, saved.transcriptPath!, saved.codexHome ?? undefined) : undefined
+        ? controlTranscriptEvidence(saved.engine, resumeSessionId, saved.transcriptPath!, saved.codexHome ?? undefined, saved.cwd) : undefined
       // Match the registry's globally unique conversation index, including aliases/profiles.
       const key = saved.sessionId || saved.agentId
       if (resumeConversations.has(key)) return { ok: false, error: 'AGENT_BUSY' }
@@ -279,9 +279,16 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         if (!current()) return resumeChanged
         clearDeleted(agentId)
         if (saved.sessionId) clearDeleted(saved.sessionId)
-        allocationAttempted = true
+        // Only actual dispatch can leave an unknown allocation. A held backend
+        // gate releases the reservation so recovery may retry without spawning twice.
         const result = await createAndRegisterPane({
-          tmuxBackend,
+          current: sourceCurrent,
+          onDispatch: () => { allocationAttempted = true },
+          tmuxBackend: { ...tmuxBackend, create: async request => {
+            const result = await tmuxBackend.create(request)
+            if (result.dispatch !== 'not_started') allocationAttempted = true
+            return result
+          }, kill: runtime => tmuxBackend.kill(runtime) },
           registry: { openPendingAgent: input => sourceCurrent() ? registry.resumePendingAgent(saved, input.runtimes) : null },
           maxAttempts: 1,
           engine: saved.engine,

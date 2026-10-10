@@ -2,6 +2,7 @@
 import { externalResumePending } from './externalResume.js'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { isTerminalEngine } from '../engines/types.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { controlTranscriptEvidence, engineKeepsTranscriptFile } from '../engines/transcriptBindings.js'
 import type { registry as liveRegistry, RegisteredSession } from './registry.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
@@ -25,7 +26,7 @@ export interface StopAgentServiceDeps {
     releaseRoute(route: string): void
     trigger(): Promise<unknown>
   }
-  forgetSession(agentId: string, options: { force: true }): void
+  forgetSession(agentId: string, options: { force: true; captured?: RegisteredSession }): void
   markDeleted(agentId: string): void
   clearDeleted(agentId: string): void
   /**
@@ -54,7 +55,7 @@ export interface StopAgentOptions {
 const runtimeIdentity = (entry: RegisteredSession | undefined, withProcess = true) => entry ? JSON.stringify([
   entry.engine, entry.registeredAt, entry.cwd,
   entry.codexHome ?? null, entry.hermesHome ?? null,
-  ...(withProcess ? [entry.processIdentity?.pid, entry.processIdentity?.executable, entry.processIdentity?.startMarker] : []),
+  ...(withProcess ? [entry.processIdentity?.pid, entry.processIdentity?.executable, entry.processIdentity?.startMarker, entry.processIdentity?.startTicks] : []),
   entry.runtimes.map(terminalRouteKey).sort(),
 ]) : null
 const bindingIdentity = (entry: RegisteredSession) => JSON.stringify([
@@ -103,13 +104,20 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         transcriptPath: captured.transcriptPath, hermesHome: captured.hermesHome, boundAt: captured.boundAt, source: captured.source }
       binding = bindingIdentity(current)
       const transcript = s.sessionId && s.transcriptPath && engineKeepsTranscriptFile(s.engine)
-        ? controlTranscriptEvidence(s.engine, s.sessionId, s.transcriptPath, s.codexHome ?? undefined) : undefined
+        ? controlTranscriptEvidence(s.engine, s.sessionId, s.transcriptPath, s.codexHome ?? undefined, s.cwd) : undefined
+      let nativeIdentityError: IdentityReadUnavailable | undefined
+      const verifyTranscript = () => {
+        try { transcript?.verify() } catch (error) {
+          if (error instanceof IdentityReadUnavailable) nativeIdentityError = error
+          throw error
+        }
+      }
       // Saving precedes every mutation. A storage failure leaves the live agent alone.
       stoppedAgents.save(s)
       await options.checkpoint?.(s, 'before')
-      transcript?.verify()
+      verifyTranscript()
       await options.beforeStop?.(s)
-      transcript?.verify()
+      verifyTranscript()
       if (!sameTarget() || options.current?.() === false) {
         throw new AgentStopError('Harness changed while saving its conversation. Try stopping again.')
       }
@@ -119,23 +127,27 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         markDeleted(sessionId)
         if (s.sessionId) markDeleted(s.sessionId)
         await stopNative(s, () => {
-          transcript?.verify()
+          verifyTranscript()
           return sameTarget() && options.current?.() !== false
-        }, options.confirmUnusedConversation)
-        transcript?.verify()
+        }, options.confirmUnusedConversation).catch(error => { throw nativeIdentityError ?? error })
+        if (nativeIdentityError) throw nativeIdentityError
+        verifyTranscript()
         // Keep the terminal alive while the engine handles SIGTERM and flushes
         // its native store. Killing tmux in parallel can deliver SIGHUP first.
         const termination = await (isTerminalEngine(s.engine) ? Promise.resolve('gone' as const)
           : terminateDeletedAgent(s, {
             checkRuntime: checkPidRuntime,
             kill: (pid, signal) => {
-              transcript?.verify()
+              verifyTranscript()
               if (!sameTarget() || options.current?.() === false) throw new AgentStopError('The close request was cancelled or changed.')
               process.kill(pid, signal)
             },
             sleep: ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }),
             log: message => console.log(message),
           }, 0)).catch(() => 'failed' as const)
+        // The process helper catches signal failures. Preserve native evidence holds
+        // so a queued Close retries instead of becoming a permanently failed plan.
+        if (nativeIdentityError) throw nativeIdentityError
         if (termination === 'failed' || termination === 'not-ours') {
           throw new AgentStopError('Could not confirm that the harness stopped. Its saved conversation is safe. Try stopping again.')
         }
@@ -143,9 +155,9 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         if (!sameTarget() || options.current?.() === false) {
           throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')
         }
-        transcript?.verify()
+        verifyTranscript()
         await options.checkpoint?.(s, 'after')
-        transcript?.verify()
+        verifyTranscript()
         if (!sameTarget() || options.current?.() === false) {
           throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')
         }
@@ -159,12 +171,12 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         if (!sameTarget()) {
           throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')
         }
-        transcript?.verify()
+        verifyTranscript()
         stoppedAgents.finishResume(sessionId)
         if (s.processIdentity) agentReconciler.suppress(s)
         // This publishes agent_deleted. It must follow confirmed termination, or a
         // desktop can display Paused and allow Resume while the old process runs.
-        forgetSession(sessionId, { force: true })
+        forgetSession(sessionId, { force: true, captured: s })
       } finally {
         clearDeleted(sessionId)
         if (s.sessionId) clearDeleted(s.sessionId)

@@ -45,3 +45,8 @@ export const sessionStore: SessionStoreContract = {
     ],
   },
 }
+
+/** Control reads the first identity-bearing opening, after Claude's bookkeeping. */
+export const controlIdentity = {
+  maxBytes: 1024 * 1024, maxRecords: 20, id: ['sessionId'], cwd: ['cwd'], sidechain: 'isSidechain',
+} as const satisfies import('../kit/controlIdentity.js').ControlIdentityRule

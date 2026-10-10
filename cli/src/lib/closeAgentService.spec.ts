@@ -379,6 +379,27 @@ it('automatically stops only after two timer observations of sustained idle', as
   service.dispose()
   await service.tick()
 })
+it.each(['unavailable', 'untyped', 'cancelled', 'disposed'] as const)('keeps a queued Close visible through an activity read that is %s', async phase => {
+  await service.request(request('after_task'))
+  const plan = row.closePlan!
+  vi.mocked(deps.activity).mockImplementationOnce(async () => {
+    if (phase === 'cancelled') service.cancel(row.agentId)
+    if (phase === 'disposed') service.dispose()
+    throw phase === 'untyped' ? null : new Error('The conversation reader is unavailable.')
+  })
+  await service.tick()
+  expect(deps.stop).not.toHaveBeenCalled()
+  if (phase === 'cancelled') expect(row.closePlan).toBeUndefined()
+  else if (phase === 'disposed') expect(row.closePlan).toEqual(plan)
+  else {
+    expect(row.closePlan).toMatchObject({ id: plan.id, state: 'waiting', detail: expect.any(String) })
+    expect(deps.changed).toHaveBeenLastCalledWith(row)
+    await service.tick()
+    time += 5_000
+    await service.tick()
+    expect(deps.stop).toHaveBeenCalledOnce()
+  }
+})
 it('resets a deferred idle observation after a failed read instead of stopping on stale evidence', async () => {
   await service.request(request('after_task'))
   await service.tick()
@@ -391,6 +412,20 @@ it('resets a deferred idle observation after a failed read instead of stopping o
   await service.tick()
   expect(deps.stop).not.toHaveBeenCalled()
   time += 1
+  await service.tick()
+  expect(deps.stop).toHaveBeenCalledOnce()
+})
+it.each(['persist', 'notify'] as const)('contains a failed Close reason %s and retries the existing intent', async stage => {
+  await service.request(request('after_task'))
+  const id = row.closePlan!.id
+  vi.mocked(deps.activity).mockRejectedValueOnce(new Error('Reader unavailable'))
+  if (stage === 'persist') vi.spyOn(registry, 'setClosePlan').mockImplementationOnce(() => { throw Error('Disk full') })
+  else vi.mocked(deps.changed).mockImplementationOnce(() => { throw Error('Client disconnected') })
+  await expect(service.tick()).resolves.toBeUndefined()
+  expect(row.closePlan).toMatchObject({ id, state: 'waiting' })
+  expect(deps.stop).not.toHaveBeenCalled()
+  await service.tick()
+  time += 5_000
   await service.tick()
   expect(deps.stop).toHaveBeenCalledOnce()
 })

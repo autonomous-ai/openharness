@@ -1,4 +1,5 @@
 import type { ScreenReader } from '../../lib/screenReader.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 /**
  * Closing agents that no window shows: the close service (now, once idle, after the task) and the
  * cleanup preview that lists what a close would take, each with what it is doing right now.
@@ -46,10 +47,17 @@ export function createAgentClosing({
     try { await watcher.pollSession(s.sessionId) }
     catch (error) {
       const code = (error as { code?: unknown } | null)?.code
+      if (code === 'ENGINE_TRANSCRIPT_CHANGED') throw new IdentityReadUnavailable('the transcript changed while checking activity')
       if (code !== 'ENGINE_STALE_REPLY' && code !== 'ENGINE_UNAVAILABLE') throw error
       console.log(`[close] ${sid(s.sessionId)} its ${s.engine} worker was replaced under the read (${code}); reading again once it is back`)
       await engineReady(s.engine, CLOSE_READ_RECONNECT_MS)
-      await watcher.pollSession(s.sessionId)
+      try { await watcher.pollSession(s.sessionId) } catch (error) {
+        const code = (error as { code?: unknown } | null)?.code
+        if (code === 'ENGINE_STALE_REPLY' || code === 'ENGINE_UNAVAILABLE' || code === 'ENGINE_TRANSCRIPT_CHANGED') {
+          throw new IdentityReadUnavailable('the current conversation could not be read completely')
+        }
+        throw error
+      }
     }
   }
   const closeAgentService = new CloseAgentService({

@@ -1,11 +1,13 @@
 /** Disk checkpoints made only when closing a session, never by a resource sampler. */
 import { constants, existsSync } from 'node:fs'
-import { chmod, copyFile, lstat, open, rename, rm, stat } from 'node:fs/promises'
+import { lstat, open, rename, rm, type FileHandle } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { atomicWriteJson, engineKeepsTranscriptFile, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
+import { nativeFileKey } from '../engines/kit/nativePaths.js'
 import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
 import { sqliteReadAll } from './sqliteRead.js'
 import { hermesDbPath } from '../engines/hermes/contract.js'
@@ -58,6 +60,8 @@ type Checkpoint = {
   sourceSize?: number
   sourceMtime?: number
   sourceInode?: number
+  sourceKey?: string
+  sourceCtime?: string
   file: string
   bytes: number
 }
@@ -102,7 +106,7 @@ export class SessionCheckpointStore {
       let source = s.transcriptPath ?? (s.engine === 'pi' && s.sessionId
         ? await findResumedTranscript('pi', s.sessionId, { cwd: s.cwd ?? undefined }) : null)
       const authority = s.sessionId && source && engineKeepsTranscriptFile(s.engine)
-        ? controlTranscriptEvidence(s.engine, s.sessionId, source, s.codexHome ?? undefined) : undefined
+        ? controlTranscriptEvidence(s.engine, s.sessionId, source, s.codexHome ?? undefined, s.cwd) : undefined
       if (authority) source = authority.path
       const saveScreen = () => { if (options.screen != null && s.sessionId) {
         // Save even when the native transcript is unchanged: a newly typed draft
@@ -132,27 +136,43 @@ export class SessionCheckpointStore {
         if (!source) {
           throw new SessionCheckpointError('The conversation file is unavailable. The session has not been closed.')
         }
-        const before = await stat(source)
-        if (before.size === 0) throw new SessionCheckpointError('This conversation is still being saved. Keep it open and try again shortly.')
-        const previousFile = previous?.file && previousFileSafe(previous.file)
-          ? await lstat(join(this.directory, previous.file)).catch(() => null) : null
-        // A second checkpoint after a quiet exit need not copy the same history twice.
-        if (previous?.version === 1 && previous.source === source && previous.sourceInode === before.ino
-          && previous.sourceSize === before.size && previous.sourceMtime === before.mtimeMs
-          && previousFile?.isFile() && previousFile.nlink === 1 && (previousFile.mode & 0o777) === 0o600
-          && previousFile.size === before.size) {
-          authority!.verify()
-          saveScreen()
-          return
-        }
-        // APFS/reflink when available, ordinary file copy otherwise. No transcript-sized JS buffer.
-        await copyFile(source, temporary, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE)
-        await chmod(temporary, 0o600)
-        const after = await stat(source)
-        if (before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
-          throw new SessionCheckpointError('The conversation changed while saving. Please try closing it again.')
-        }
-        Object.assign(checkpoint, { source, sourceSize: after.size, sourceMtime: after.mtimeMs, sourceInode: after.ino })
+        // copyFile reopens a pathname in another thread. An ancestor could briefly
+        // point elsewhere, copying B while both surrounding path checks still see A.
+        // Read from the exact descriptor our native evidence confirms, with bounded memory.
+        // A saved path may be a legitimate alias. The opened descriptor must match
+        // the proven physical file before we copy a byte, including after ancestor swaps.
+        const input = await open(source, constants.O_RDONLY | constants.O_NONBLOCK)
+          .catch(() => { throw new IdentityReadUnavailable('the source transcript could not be opened') })
+        let reuseCheckpoint = false
+        try {
+          let before = await input.stat({ bigint: true }).catch(() => { throw new IdentityReadUnavailable('the source transcript could not be inspected') })
+          authority!.verify(nativeFileKey(before))
+          if (!before.isFile() || !Number.isSafeInteger(Number(before.size))) throw new IdentityReadUnavailable('the source transcript has an unconfirmed type or size')
+          if (before.size === 0n) throw new SessionCheckpointError('This conversation is still being saved. Keep it open and try again shortly.')
+          const previousFile = previous?.file && previousFileSafe(previous.file)
+            ? await lstat(join(this.directory, previous.file)).catch(() => null) : null
+          before = await input.stat({ bigint: true }).catch(() => { throw new IdentityReadUnavailable('the source transcript became unreadable') })
+          authority!.verify(nativeFileKey(before))
+          // Older manifests did not bind a copied descriptor. Rebuild those once;
+          // subsequent quiet exits can reuse this exact, completely saved incarnation.
+          if (previous?.version === 1 && previous.source === source && previous.sourceKey === nativeFileKey(before)
+            && previous.sourceSize === Number(before.size) && previous.sourceCtime === String(before.ctimeNs)
+            && previousFile?.isFile() && previousFile.nlink === 1 && (previousFile.mode & 0o777) === 0o600
+            && previousFile.size === Number(before.size)) {
+            authority!.verify(nativeFileKey(before))
+            reuseCheckpoint = true
+          } else {
+            await copyCheckpointDescriptor(input, temporary, Number(before.size))
+            const after = await input.stat({ bigint: true }).catch(() => { throw new IdentityReadUnavailable('the source transcript became unreadable') })
+            authority!.verify(nativeFileKey(after))
+            if (before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) {
+              throw new IdentityReadUnavailable('the conversation changed while saving; waiting for a stable copy')
+            }
+            Object.assign(checkpoint, { source, sourceSize: Number(after.size), sourceMtime: Number(after.mtimeMs),
+              sourceInode: Number(after.ino), sourceKey: nativeFileKey(after), sourceCtime: String(after.ctimeNs) })
+          }
+        } finally { await input.close().catch(() => { throw new IdentityReadUnavailable('the source transcript could not be closed') }) }
+        if (reuseCheckpoint) { authority!.verify(); saveScreen(); return }
       } else {
         const history = await databaseHistory(s)
         const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
@@ -183,6 +203,27 @@ export class SessionCheckpointStore {
       if (!committed) await rm(destination, { force: true }).catch(() => {})
     }
   }
+}
+
+/** A finite snapshot length and one reusable chunk; no transcript-sized JS buffer. */
+async function copyCheckpointDescriptor(input: FileHandle, path: string, size: number): Promise<void> {
+  const output = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+  try {
+    const buffer = Buffer.alloc(Math.min(size, 128 * 1024))
+    let position = 0
+    while (position < size) {
+      const { bytesRead } = await input.read(buffer, 0, Math.min(buffer.length, size - position), position)
+        .catch(() => { throw new IdentityReadUnavailable('the source transcript became unreadable') })
+      if (!bytesRead) throw new IdentityReadUnavailable('the conversation changed while saving; waiting for a stable copy')
+      let written = 0
+      while (written < bytesRead) {
+        const { bytesWritten } = await output.write(buffer, written, bytesRead - written, position + written)
+        if (!bytesWritten) throw new Error('checkpoint write made no progress')
+        written += bytesWritten
+      }
+      position += bytesRead
+    }
+  } finally { await output.close() }
 }
 
 const previousFileSafe = (file: string): boolean => /^[a-f0-9]{64}-[a-f0-9-]{36}\.history$/.test(file)

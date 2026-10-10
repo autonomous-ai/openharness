@@ -5,10 +5,11 @@ import { IdentityReadUnavailable } from './identityScan.js'
 import { NativeEvidenceBudget, nativeUnavailable } from './nativeEvidence.js'
 import { nativeFileKey, NativePaths } from './nativePaths.js'
 import { firstLine, nativeSessionMeta, type NativeFirstRecord } from './nativeHeader.js'
+import { controlIdentity, type ControlIdentityRule } from './controlIdentity.js'
 
 const stamp = (info: BigIntStats) => `${nativeFileKey(info)}:${info.mode}:${info.uid}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 type Location = { path: string; info: BigIntStats }
-type Read = { location: Location; limit: number; line?: string }
+type Read = { location: Location; limit: number; line?: string; prefix?: Buffer }
 
 export class NativeFiles {
   readonly paths: NativePaths
@@ -43,6 +44,15 @@ export class NativeFiles {
       if (error instanceof IdentityReadUnavailable) throw error
       return nativeUnavailable('the binding header could not be read completely')
     }
+  }
+
+  opening(path: string, rule: ControlIdentityRule) {
+    const location = this.locate(path)!
+    const bytes = this.read(location, rule.maxBytes + 1)
+    const meta = controlIdentity(bytes, rule)
+    const prefix = Buffer.from(bytes.subarray(0, meta.bytes))
+    this.reads.set(location.path, { location, limit: prefix.length, prefix })
+    return meta
   }
 
   private read(location: Location, limit: number): Buffer {
@@ -142,6 +152,7 @@ export class NativeFiles {
     const records = [...this.reads.values()]
     for (const record of [...records.filter(read => read.location.path !== last), ...records.filter(read => read.location.path === last)]) {
       const bytes = this.read(record.location, record.limit)
+      if (record.prefix && !bytes.equals(record.prefix)) return nativeUnavailable('the conversation opening changed during inspection')
       if (record.line !== undefined && firstLine(bytes, record.limit - 1) !== record.line) {
         return nativeUnavailable('the binding header changed during inspection')
       }

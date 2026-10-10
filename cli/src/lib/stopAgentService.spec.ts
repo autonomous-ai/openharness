@@ -7,9 +7,10 @@ import { AgentRestartCoordinator } from './restartAgent.js'
 import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js'
 import { createForgetSession } from '../core/agents/forget.js'
 import { env } from '../config/env.js'
+import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 vi.mock('./captureResumeIdentity.js', () => ({ captureResumeIdentity: vi.fn(async session => session) }))
 vi.mock('../engines/transcriptBindings.js', async original => ({ ...await original<object>(),
-  controlTranscriptEvidence: (_engine: string, _id: string, path: string) => ({ path, verify: vi.fn() }),
+  controlTranscriptEvidence: vi.fn(),
 }))
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn(), terminateDeletedAgent: vi.fn() }))
 vi.mock('../core/engines/cursorTasks.js', () => ({ removePendingCursorTasks: vi.fn(async () => {}) }))
@@ -17,6 +18,7 @@ let row: RegisteredSession
 let deps: StopAgentServiceDeps
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(controlTranscriptEvidence).mockReset().mockImplementation((_engine, _id, path) => ({ path, verify: vi.fn() }))
   vi.mocked(captureResumeIdentity).mockReset().mockImplementation(async session => session)
   row = registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%44' }], cwd: '/tmp' })!
   Object.assign(row, { sessionId: 'saved', processIdentity: { pid: 77, executable: 'codex', startMarker: 'fixture' } })
@@ -84,6 +86,14 @@ it('storage failure leaves the live process and registry untouched', async () =>
   vi.spyOn(stoppedAgents, 'save').mockImplementation(() => { throw new Error('disk full') })
   await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('disk full')
   expect(registry.byAgent(row.agentId)).toBe(row); expect(deps.tmuxBackend!.kill).not.toHaveBeenCalled(); expect(deps.markDeleted).not.toHaveBeenCalled()
+})
+it('preserves an unexpected evidence failure without signalling or hiding its cause', async () => {
+  row.transcriptPath = '/fixture/history.jsonl'
+  vi.mocked(controlTranscriptEvidence).mockReturnValue({ path: row.transcriptPath,
+    verify: () => { throw new Error('Evidence implementation unavailable') } })
+  await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('Evidence implementation unavailable')
+  expect(terminateDeletedAgent).not.toHaveBeenCalled()
+  expect(deps.forgetSession).not.toHaveBeenCalled()
 })
 it.each(['before', 'after'] as const)('honors cancellation at the %s checkpoint before retiring the terminal', async phase => {
   let current = true
@@ -201,7 +211,7 @@ it.each(['capture', 'termination'] as const)('accepts a hook rebuilding the same
   if (stage === 'capture') vi.mocked(captureResumeIdentity).mockImplementation(async session => { rebuild(); return session })
   else vi.mocked(terminateDeletedAgent).mockImplementation(async () => { rebuild(); return 'terminated' })
   await createStopAgentService(deps)(row.agentId)
-  expect(deps.forgetSession).toHaveBeenCalledExactlyOnceWith(row.agentId, { force: true })
+  expect(deps.forgetSession).toHaveBeenCalledExactlyOnceWith(row.agentId, { force: true, captured: expect.objectContaining({ sessionId: 'saved' }) })
   expect(registry.byAgent(row.agentId)).toBeUndefined()
   expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
 })

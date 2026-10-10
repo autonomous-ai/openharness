@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { copyFile, link, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { link, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
@@ -7,9 +7,22 @@ import { registry, type RegisteredSession } from './registry.js'
 import { sqliteReadAll } from './sqliteRead.js'
 import { env } from '../config/env.js'
 import { piSessionFolder } from './sessionSearch/externals/pi.js'
+const faults = vi.hoisted(() => ({ wrote: undefined as ((path: string) => Promise<void>) | undefined }))
 vi.mock('node:fs/promises', async importOriginal => {
   const real = await importOriginal<typeof import('node:fs/promises')>()
-  return { ...real, copyFile: vi.fn(real.copyFile), rm: vi.fn(real.rm) }
+  return { ...real, rm: vi.fn(real.rm), open: async (...args: Parameters<typeof real.open>) => {
+    const handle = await real.open(...args)
+    if (String(args[0]).endsWith('.history.tmp')) {
+      const write = handle.write.bind(handle)
+      handle.write = (async (...values: Parameters<typeof write>) => {
+        const result = await write(...values)
+        const fault = faults.wrote; faults.wrote = undefined
+        await fault?.(String(args[0]))
+        return result
+      }) as typeof handle.write
+    }
+    return handle
+  } }
 })
 vi.mock('./sqliteRead.js', () => ({ sqliteReadAll: vi.fn() }))
 let root: string
@@ -19,6 +32,7 @@ let row: RegisteredSession
 let store: SessionCheckpointStore
 const transcript = (body: string) => JSON.stringify({ type: 'session_meta', payload: { id: 'conversation', cwd: '/tmp', source: 'cli' } }) + '\n' + body
 beforeEach(async () => {
+  faults.wrote = undefined
   root = await mkdtemp(join(tmpdir(), 'harness-close-checkpoint-'))
   const home = join(root, 'profile')
   await mkdir(join(home, 'sessions'), { recursive: true, mode: 0o700 })
@@ -185,6 +199,14 @@ it('retains the full native transcript with private permissions, independently o
   await rm(history)
   expect(await readFile(backup, 'utf8')).toContain('retained conversation')
 })
+it('retains a conversation larger than a copy chunk with exact bytes', async () => {
+  const contents = transcript('long conversation\n'.repeat(25000))
+  await writeFile(history, contents)
+  await store.save(row)
+  const saved = await manifest()
+  expect(await readFile(join(directory, saved.file), 'utf8')).toBe(contents)
+  expect(saved.bytes).toBe(Buffer.byteLength(contents))
+})
 it('reuses an unchanged checkpoint and replaces it only after a complete new save', async () => {
   await store.save(row)
   const first = await manifest()
@@ -253,21 +275,17 @@ it('rejects a transcript changed during copy and retains the last committed back
   await store.save(row)
   const previous = await manifest()
   await writeFile(history, transcript('new turn\n'))
-  const real = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
-  vi.mocked(copyFile).mockImplementationOnce(async (source, target, flags) => {
-    await real.copyFile(source, target, flags)
+  faults.wrote = async () => {
     await writeFile(history, transcript('a response arrived while copying\n'))
-  })
+  }
   await expect(store.save(row)).rejects.toThrow('changed while saving')
   expect(await manifest()).toEqual(previous)
   expect(await readFile(join(directory, previous.file), 'utf8')).toContain('retained conversation')
 })
 it('rejects a checkpoint that gained an unexpected hard link before commit', async () => {
-  const real = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
-  vi.mocked(copyFile).mockImplementationOnce(async (source, target, flags) => {
-    await real.copyFile(source, target, flags)
+  faults.wrote = async target => {
     await link(target, join(root, 'unexpected-link'))
-  })
+  }
   await expect(store.save(row)).rejects.toThrow('Could not back up')
   expect((await readdir(directory)).some(file => file.endsWith('.json'))).toBe(false)
 })

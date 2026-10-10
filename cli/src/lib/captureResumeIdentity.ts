@@ -8,7 +8,7 @@
  * including the four that keep theirs in a database rather than a file.
  */
 import { engineKeepsTranscriptFile, type RegisteredSession } from './registry.js'
-import { savedTranscriptEvidence } from '../engines/transcriptBindings.js'
+import { controlTranscriptEvidence, savedTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { findLiveSession, findResumedTranscript, processSessionEvidence, type RepairedSession } from './sessionRepair.js'
 import { resumeSessionId } from './tmux.js'
 import { readProcessEvidence } from './processEvidence.js'
@@ -24,6 +24,7 @@ export async function captureResumeIdentity(session: RegisteredSession): Promise
   const verifiedPath = (id: string, path: string) => {
     const proof = savedTranscriptEvidence(session.engine, id, path, options.codexHome)
     proof.verify()
+    if (proof.path) controlTranscriptEvidence(session.engine, id, proof.path, options.codexHome, session.cwd).verify()
     return proof.path
   }
   if (session.sessionId) {
@@ -63,7 +64,7 @@ export async function captureResumeIdentity(session: RegisteredSession): Promise
   // A file-backed engine still has to produce a transcript this daemon can point a resume at; a
   // database-backed one has nothing to check and is taken on its id alone.
   const transcriptPath = found.transcriptPath && keepsFile ? verifiedPath(found.sessionId, found.transcriptPath) : found.transcriptPath
-  if (keepsFile && !transcriptPath) return session
+  if (keepsFile && !transcriptPath) return nativeUnavailable('the observed conversation file is unavailable')
   return {
     ...session,
     sessionId: found.sessionId,
