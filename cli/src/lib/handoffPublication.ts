@@ -28,7 +28,10 @@ function sync(path: string, directory = false): void {
     const info = fstatSync(fd, { bigint: true })
     if (nativeFileKey(info) !== nativeFileKey(location.info)
       || (directory ? !info.isDirectory() : !info.isFile())) return held()
-    fsyncSync(fd); files.verify()
+    // A successful disk flush may outlive one inspection budget. Retain the original
+    // identity and bound its fresh verification; the request's deadline is never renewed.
+    const route = files.paths.snapshot()
+    fsyncSync(fd); verifyNativePathFacts(route)
   } finally { closeSync(fd) }
 }
 function createFile(path: string, text: string): Stage {
@@ -36,9 +39,9 @@ function createFile(path: string, text: string): Stage {
   const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
   try {
     const opened = fstatSync(fd, { bigint: true })
-    route.verify()
+    const facts = route.paths.snapshot()
     if (!opened.isFile() || opened.nlink !== 1n || nativeFileKey(lstatSync(path, { bigint: true })) !== nativeFileKey(opened)) return held()
-    writeFileSync(fd, text); fsyncSync(fd); route.verify()
+    writeFileSync(fd, text); fsyncSync(fd); verifyNativePathFacts(facts)
     if (nativeFileKey(lstatSync(path, { bigint: true })) !== nativeFileKey(opened)) return held()
     return { path, key: nativeFileKey(opened) }
   }
