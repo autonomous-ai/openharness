@@ -224,9 +224,18 @@ export class CloseAgentService {
             if (changed) this.deps.changed(changed)
           }
         }
-      } catch {
-        // A read failure is unknown activity, never proof that the task finished.
+      } catch (error) {
+        // A missing reader is unknown activity. Keep the durable intent and expose
+        // its reason while retrying, without changing a cancelled or replaced plan.
         this.idleSince.delete(s.agentId)
+        const latest = this.deps.registry.byAgent(s.agentId)
+        if (!this.disposed && latest?.closePlan?.id === plan.id) {
+          try {
+            const changed = this.deps.registry.setClosePlan(s.agentId, { ...plan, state: 'waiting',
+              detail: error instanceof Error ? error.message : 'The conversation activity could not be confirmed.' })
+            if (changed) this.deps.changed(changed)
+          } catch { /* The preceding durable intent survives a failed reason update. Retry next tick. */ }
+        }
       }
     }
   }
