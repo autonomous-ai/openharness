@@ -53,6 +53,18 @@ export class NativePaths {
    * still an existing leaf and must not borrow the authority of its original parent. */
   absentLeaf(path: string): boolean { return this.parts.get(path)?.info === null }
 
+  /** A reviewed deletion may remove this subtree, never its observed ancestors or aliases.
+   * Retain only immutable route facts; every later check receives a fresh bounded budget. */
+  retainOutside(removedPath: string): () => void {
+    this.budget.step()
+    const retained = [...this.parts].filter(([path]) => path !== removedPath && !path.startsWith(removedPath + '/'))
+    return () => {
+      const fresh = new NativePaths(new NativeEvidenceBudget(250))
+      for (const [path, part] of retained) fresh.parts.set(path, part)
+      fresh.verify()
+    }
+  }
+
   private *walk(path: string, missingOkay: boolean): Generator<string, Location, Part> {
     if (!isAbsolute(path) || path.includes('\0') || Buffer.byteLength(path) > 4096) return nativeUnavailable('a native location is invalid or exceeds its limit')
     // Follow links in component order. Normalizing bridge/../home first would skip bridge.

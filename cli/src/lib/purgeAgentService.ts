@@ -7,10 +7,11 @@ import { basename, dirname, join, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
 import { hermesDbPath } from '../engines/hermes/contract.js'
 import type { RegisteredSession } from './registry.js'
-import { controlTranscriptEvidence, engineKeepsTranscriptFile, transcriptEvidence } from '../engines/transcriptBindings.js'
+import { engineKeepsTranscriptFile, transcriptEvidence } from '../engines/transcriptBindings.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
 import { nativeUnavailable } from '../engines/kit/nativeEvidence.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
+import { nativeHistoryEvidence, nativeHistoryFile, type NativeHistoryProof } from './nativeHistoryEvidence.js'
 import { sqliteReadAll } from './sqliteRead.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import type { SessionCheckpointStore } from './sessionCheckpoint.js'
@@ -24,7 +25,8 @@ const conversation = (s: RegisteredSession) => JSON.stringify([s.engine, s.codex
 const fail = (message: string): never => { throw new Error(message) }
 type File = { path: string; dev: bigint; ino: bigint; bytes: number }
 type History = { file?: File; missingFile?: string; database?: string; databaseFile?: File; statements?: string[];
-  bytes: number | null; verify?: (openedFileKey?: string) => void }
+  bytes: number | null; verify?: (openedFileKey?: string) => void;
+  prepareWorkspaceRemoval?: NativeHistoryProof['prepareWorkspaceRemoval'] }
 const lit = (value: string) => "'" + value.replace(/'/g, "''") + "'"
 
 function file(path: string): File {
@@ -64,10 +66,10 @@ export async function inspectNativeHistory(s: RegisteredSession): Promise<Histor
         if (after.path !== before.path || after.key !== before.key) nativeUnavailable('the missing conversation parent changed since review')
       } }
     }
-    const proof = controlTranscriptEvidence(engine, id, path, profile, cwd)
-    const target = file(proof.path)
+    const proof = nativeHistoryEvidence(engine, id, path, profile, cwd)
+    const target = nativeHistoryFile(proof.path)
     proof.verify(nativeFileKey(target))
-    return { file: target, bytes: target.bytes, verify: proof.verify }
+    return { file: target, bytes: target.bytes, verify: proof.verify, prepareWorkspaceRemoval: proof.prepareWorkspaceRemoval }
   }
   let database: string, sessionTable: string, children: [string, string][]
   const id = lit(s.sessionId)
@@ -145,10 +147,12 @@ export async function eraseNativeHistory(history: History): Promise<number> {
   history.verify?.()
   if (history.missingFile && existsSync(history.missingFile)) fail('The conversation file was recreated. Review deletion again.')
   if (history.file) {
-    const current = file(history.file.path)
-    if (current.dev !== history.file.dev || current.ino !== history.file.ino) fail('The conversation file changed. Refresh and review deletion again.')
+    const current = nativeHistoryFile(history.file.path)
+    if (current.path !== history.file.path || current.dev !== history.file.dev || current.ino !== history.file.ino) {
+      return nativeUnavailable('the reviewed conversation file changed before deletion')
+    }
     history.verify?.(nativeFileKey(current))
-    unlinkSync(current.path)
+    unlinkSync(history.file.path)
     return current.bytes
   }
   if (history.database) {
@@ -195,7 +199,7 @@ export interface PurgeDeps {
 
 export class PurgeAgentService {
   private readonly reviews = new Map<string, { session: RegisteredSession; signature: string; expires: number;
-    history: History | null; worktree?: WorktreeReview; includesWorktree: boolean }>()
+    history: History | null; worktree?: WorktreeReview; includesWorktree: boolean; worktreeDeleted?: boolean }>()
   private readonly jobs = new Set<string>()
   private readonly worktreeJobs = new Map<string, string>()
   private readonly worktreeReviews = new Map<string, { session: RegisteredSession; signature: string; expires: number; worktree: WorktreeReview }>()
@@ -277,6 +281,7 @@ export class PurgeAgentService {
       for (const [id, review] of this.reviews) if (review.expires <= now) this.reviews.delete(id)
       const current = this.current(request, request.mode === 'inspect' ? !request.includeWorktree : sessionData)
       if (request.mode === 'inspect') {
+        if (this.reviews.size >= 64) return fail('There are too many unexpired deletion reviews. Wait for one to finish or expire before reviewing another.')
         const signature = identity(current)
         let history: History | null = null, checkpointFiles: File[] = [], historyReason = ''
         try {
@@ -297,7 +302,7 @@ export class PurgeAgentService {
         const sessionBytes = history?.bytes == null ? null : history.bytes + checkpointFiles.reduce((n, f) => n + f.bytes, 0)
         const paths = history ? [history.file?.path ?? history.missingFile ?? history.database, ...checkpointFiles.map(f => f.path)].filter(Boolean) : []
         const reviewId = randomUUID()
-        if (this.reviews.size >= 64) this.reviews.delete(this.reviews.keys().next().value!)
+        if (this.reviews.size >= 64) return fail('There are too many unexpired deletion reviews. Wait for one to finish or expire before reviewing another.')
         this.reviews.set(reviewId, { session: { ...current }, signature, history, worktree, includesWorktree: request.includeWorktree === true, expires: now + 120_000 })
         return { reviewId, sessionBytes, sessionPaths: paths,
           sharedStore: !!history?.database, workspaceKept: true, workspacePath: current.cwd,
@@ -310,6 +315,7 @@ export class PurgeAgentService {
       const review = this.reviews.get(request.reviewId ?? '')
       if (!review || review.signature !== identity(current)) return fail('The deletion review expired or changed. Review this harness again.')
       reviewedId = request.reviewId
+      worktreeDeleted = review.worktreeDeleted === true
       if (!sessionData && !worktreeData) return fail('Select session data, worktree data, or both.')
       if (sessionData && !review.history) return fail('Session data was not verified. Review this harness again.')
       if (worktreeData && (!review.includesWorktree || !review.worktree || request.path !== review.worktree.path)) {
@@ -331,6 +337,7 @@ export class PurgeAgentService {
         if (this.deps.live(request.agentId)) return fail('The harness did not stop. No session data was deleted.')
         stopped = true
         const saved = this.current(request, sessionData)
+        const savedIdentity = identity(saved)
         if (sessionData && (conversation(saved) !== conversation(review.session) || saved.transcriptPath !== review.session.transcriptPath)) {
           return fail('The saved conversation changed while stopping. Review it before deleting.')
         }
@@ -340,12 +347,16 @@ export class PurgeAgentService {
         try {
           const files = sessionData ? this.deps.checkpoints.deletionFiles(saved).map(file) : []
           if (sessionData) review.history!.verify?.()
-          if (worktreeData) {
+          if (worktreeData && !worktreeDeleted) {
+            const removedWorkspace = sessionData ? review.history!.prepareWorkspaceRemoval?.(review.worktree!) : undefined
             await removeReviewedWorktree(review.worktree!, saved, this.deps.sessions(), request.discardChanges === true)
             worktreeDeleted = true
+            review.worktreeDeleted = true
+            removedWorkspace?.()
           }
           let freedBytes = 0
           if (sessionData) {
+            if (identity(this.current(request, true)) !== savedIdentity) return fail('The saved harness changed while deleting its worktree. Its native history was kept.')
             freedBytes = await (this.deps.erase ?? eraseNativeHistory)(review.history!)
             historyErased = true
             for (const target of files) {
@@ -362,9 +373,10 @@ export class PurgeAgentService {
         } finally { this.deps.stopped.finishResume(request.agentId, reservation) }
       } finally { this.jobs.delete(request.agentId); this.worktreeJobs.delete(request.agentId) }
     } catch (error) {
-      if (error instanceof IdentityReadUnavailable && !worktreeDeleted && !historyErased) {
+      if (error instanceof IdentityReadUnavailable && !historyErased) {
         retainReview = true
-        return { error: 'IDENTITY_UNAVAILABLE', retryable: true, stopped, worktreeDeleted, sessionDeleted, detail: error.message }
+        return { error: 'IDENTITY_UNAVAILABLE', retryable: true, stopped, worktreeDeleted, sessionDeleted,
+          detail: error.message + (worktreeDeleted ? ' The reviewed worktree was deleted; its history is still held.' : '') }
       }
       return { error: 'DELETE_REFUSED', stopped, worktreeDeleted, sessionDeleted,
         detail: (error instanceof Error ? error.message : 'Could not delete this harness.')

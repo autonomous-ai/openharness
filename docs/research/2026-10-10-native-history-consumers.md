@@ -32,11 +32,24 @@ cleanup proves absence in the same owned physical parent on every boundary; it c
 silently switch to a recreated parent or an unavailable catalog. File identities use
 exact bigint device/inode values.
 
-Unavailable evidence preserves an unexpired confirmation while no data has been
-deleted, including after Stop. The reply carries its reason and is retryable; recovery
-permits the same confirmation. A completed worktree or native-history deletion is not
-silently replayed. A changed binding or runtime cannot reuse the old review. Appended
-turns of the exact conversation remain eligible for the person's confirmed deletion.
+Unavailable evidence preserves an unexpired confirmation until native history has
+been deleted, including after Stop or a completed worktree removal. The reply carries
+its reason, reports completed work and is retryable; recovery permits the same
+confirmation for the remaining stage. Completed worktree removal is never replayed.
+A changed binding or runtime cannot reuse the old review. Appended turns of the exact
+conversation remain eligible for the person's confirmed deletion. The bounded review
+map refuses excess previews rather than evicting an unexpired or in-flight confirmation.
+
+Independent review of the first implementation found a pathname/inode race, missing
+ownership revalidation after the worktree await, healthy Pi combined-deletion failure
+and confirmation eviction under capacity pressure. The corrections bind canonical
+path and inode through one verified route, retain typed final-read holds, recheck saved
+and shared ownership before erase and preserve pending confirmations. Pi gets a narrow
+operation-owned workspace-removal proof: completion permits only the removed physical
+subtree to disappear; observed external ancestors, aliases, transcript identity and
+header workspace remain fixed. A recreated root is held. A new explicit review of an
+already absent Pi workspace requires a proven absent leaf under its present, owned
+parent. It cannot infer absence from a dangling alias or missing ancestor.
 
 The former implementation failed behavioral assertions for wrong/incomplete/delegated
 headers, changed same-inode headers, unavailable home catalogs, missing-file cleanup
@@ -49,13 +62,13 @@ Stop. All healthy golden artifacts remain unchanged.
 ### Validation selected before the final run
 
 Typecheck, architecture, full core/services coverage and harnessd coverage; the native
-consumer golden, native-history authority, purge, checkpoint, worktree deletion and
-transcript-binding specs. The full private `ends` and `serviceProcesses` lanes cover
+consumer golden, native-history authority/deletion, purge, checkpoint, worktree deletion,
+transcript-binding and native path/descriptor consumers. The full private `ends` and `serviceProcesses` lanes cover
 both native engines, held deletion and same-confirmation recovery, plus search outage
 and recovery. Tests use disposable homes/ports and explicitly private tmux sockets;
 `TMUX` and `TMUX_PANE` are unset. No owner data is read or deleted.
 
-Eight deliberate wiring faults must fail behavioral assertions after their passing
+Sixteen deliberate wiring faults must fail behavioral assertions after their passing
 baseline, including a broken healthy golden result. Matched inspection/deletion costs
 use two revisions, the same host/toolchain and four private workloads, each sample in
 its own process. CPU, memory and latency are reported without inventing a performance
