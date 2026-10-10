@@ -8,6 +8,7 @@ import { controlDescriptors, nativeProcessControl, parseNativeProcessControl } f
 import { env } from '../config/env.js'
 
 const host = vi.hoisted(() => ({ root: '', exec: vi.fn(), helper: vi.fn(), before: undefined as undefined | ((operation: string, path: string) => void) }))
+vi.mock('node:os', async original => ({ ...await original<object>(), platform: () => process.platform }))
 vi.mock('node:child_process', async original => ({ ...await original<object>(), execFile: host.exec }))
 vi.mock('./nativeProcessImages.js', async original => ({ ...await original<object>(), bundledProcessImageHelper: host.helper }))
 vi.mock('node:fs', async original => {
@@ -110,6 +111,33 @@ describe('strict Darwin control protocol', () => {
     unlinkSync(path)
     await expect(nativeProcessControl([42], 0, budget())).rejects.toThrow('probe did not complete')
     await expect(nativeProcessControl([42], 0, budget())).resolves.toMatchObject({ parent: 0 })
+    expect(existsSync(path)).toBe(true)
+  })
+  it.each(['query timeout', 'missing executable', 'preparation failure'])('does not let optional discovery %s delay a healthy control request', async failure => {
+    const bytes = Buffer.alloc(64, 7), sha256 = createHash('sha256').update(bytes).digest('hex')
+    env.ADAPTER_RUNTIME_DIR = host.root
+    vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', JSON.stringify({ schema: 1, size: bytes.length, base64: bytes.toString('base64'), sha256 }))
+    const actual = await vi.importActual<typeof import('./nativeProcessImages.js')>('./nativeProcessImages.js')
+    host.helper.mockImplementation(actual.bundledProcessImageHelper)
+    const path = join(host.root, 'process-images', sha256)
+    if (failure === 'preparation failure') {
+      mkdirSync(dirname(path), { mode: 0o700 })
+      writeFileSync(path, 'fixture unavailable bytes', { mode: 0o500 })
+    }
+    host.exec.mockImplementation((_path, args, _options, callback) => args[0] === '--paths'
+      ? callback(Object.assign(Error('fixture discovery failure'), { code: failure === 'query timeout' ? 'ETIMEDOUT' : 'ENOENT' }), '')
+      : callback(null, Buffer.from(output()), Buffer.alloc(0)))
+    expect((await actual.nativeProcessImages([42], 500)).images.size).toBe(0)
+    const discoveryCalls = host.exec.mock.calls.length
+    expect((await actual.nativeProcessImages([42], 500)).images.size).toBe(0)
+    expect(host.exec).toHaveBeenCalledTimes(discoveryCalls) // Optional discovery still backs off.
+    if (failure === 'preparation failure') {
+      await expect(nativeProcessControl([42], 0, budget())).rejects.toThrow('helper is unavailable')
+      expect(host.exec).not.toHaveBeenCalled()
+      unlinkSync(path) // Recovery affects only this test's private file.
+    }
+    await expect(nativeProcessControl([42], 0, budget())).resolves.toMatchObject({ parent: 0 })
+    expect(host.exec.mock.calls.at(-1)?.[1][0]).toBe('--control')
     expect(existsSync(path)).toBe(true)
   })
   it.each([[], [0], [42, 42], Array(34).fill(42)].map(pids => ({ pids })))('rejects invalid request pools before a probe', async ({ pids }) => {

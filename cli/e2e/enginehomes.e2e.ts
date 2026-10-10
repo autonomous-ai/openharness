@@ -7,7 +7,7 @@
  * without the profile. An agent must still bind, take turns and come back after a restart.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -396,6 +396,31 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     }, 60_000, 250)
     client.close()
   }, 240_000)
+
+  it.runIf(process.platform === 'darwin')('Codex binding does not wait for the optional native discovery cooldown', async () => {
+    const d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: 'claude' } }); daemon = d
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    const fault = join(d.root, 'optional-native-discovery-unavailable')
+    writeFileSync(fault, 'hold', { mode: 0o600 })
+    d.env.HARNESS_NATIVE_DISCOVERY_FAULT_FILE = fault
+    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/nativeDescriptorFault.mjs')).href}`
+    await d.start()
+    const client = await LocalClient.connect(d)
+    const opened = await client.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
+    expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+    const tile = await until('the private terminal tile', async () => {
+      const now = await row(client, opened.agent.id); return now?.tmuxPane ? now : null
+    })
+    await until('the optional native discovery failure', () => existsSync(fault + '.observed'), 20_000)
+    await type(d, tile.tmuxPane, 'codex')
+    const sessionId = await until('the private Codex rollout', () => conversationIn('codex', d.env.CODEX_HOME!), 10_000)
+    await until('binding under the optional discovery cooldown', async () => {
+      const now = await row(client, tile.id)
+      return now?.status === 'active' && now.sessionId === sessionId
+    }, 20_000, 250)
+    expect(Date.now() - Number(readFileSync(fault + '.observed', 'utf8'))).toBeLessThan(60_000)
+    client.close()
+  }, 120_000)
 
   it('unavailable Codex descriptor evidence holds binding, Stop and Close, then recovers the same conversation', async () => {
     const d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: 'claude' } }); daemon = d

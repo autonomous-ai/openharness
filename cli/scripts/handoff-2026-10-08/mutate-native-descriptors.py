@@ -14,6 +14,7 @@ control_spec = 'src/lib/nativeProcessControl.spec.ts'
 bounds = 'src/lib/sessionRepair.bounds.spec.ts'
 golden = 'src/engines/nativeDescriptors.golden.spec.ts'
 mutations = [
+    ('optional discovery cooldown blocks control', control, 'bundledProcessImageHelper({ retryUnavailable: true })', 'bundledProcessImageHelper()', control_spec),
     ('inconclusive Darwin state rejected globally', 'src/lib/processEvidence.ts', '([?A-Za-z+<>NsLsl-]{1,8})', '([A-Za-z+<>NsLsl-]{1,8})', 'src/lib/processEvidence.spec.ts'),
     ('native finder disconnected', 'src/lib/sessionRepair.ts', 'return nativeOpenFileSession(engine, pid, typeof roots === \'string\' ? [roots] : roots, cwd, options)', 'return Promise.resolve(null)', golden),
     ('binding owner disconnected', 'src/core/agents/bind.ts', 'expectedProcess: observed.processIdentity,', '', 'src/core/agents/bind.spec.ts'),

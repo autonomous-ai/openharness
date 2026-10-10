@@ -135,7 +135,7 @@ export function parseNativeProcessImages(
   return { images, unavailable }
 }
 
-export async function bundledProcessImageHelper(): Promise<{ path: string; key: string } | null> {
+export async function bundledProcessImageHelper(options: { retryUnavailable?: boolean } = {}): Promise<{ path: string; key: string } | null> {
   const source = typeof __DARWIN_PROCESS_IMAGES__ === 'undefined' ? undefined : __DARWIN_PROCESS_IMAGES__
   if (typeof source !== 'string') return null
   if (source !== artifactSource) {
@@ -146,7 +146,9 @@ export async function bundledProcessImageHelper(): Promise<{ path: string; key: 
   const artifact = artifactValue
   if (!artifact || typeof artifact.sha256 !== 'string') return null
   const key = `${env.ADAPTER_RUNTIME_DIR}\0${artifact.sha256}`
-  if ((retryAfter.get(key) ?? 0) > performance.now()) return null
+  // Optional discovery backs off failed probes. Control must confirm recovery on its own
+  // deadline: its healthy owner may be unrelated to the failed discovery request.
+  if (!options.retryUnavailable && (retryAfter.get(key) ?? 0) > performance.now()) return null
   let helper = prepared.get(key)
   if (!helper) {
     helper = prepareProcessImageHelper(artifact, env.ADAPTER_RUNTIME_DIR)
@@ -154,7 +156,7 @@ export async function bundledProcessImageHelper(): Promise<{ path: string; key: 
         if (!path) {
           prepared.delete(key)
           retryAfter.set(key, performance.now() + 60_000)
-        }
+        } else retryAfter.delete(key)
         return path
       })
     prepared.set(key, helper)

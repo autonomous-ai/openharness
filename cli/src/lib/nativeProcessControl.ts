@@ -214,7 +214,7 @@ export async function nativeProcessControl(pids: readonly number[], parent: numb
   if (process.platform !== 'darwin') return nativeUnavailable('native control evidence is unavailable on this platform')
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    const helper = await Promise.race([bundledProcessImageHelper(), new Promise<null>(resolve => {
+    const helper = await Promise.race([bundledProcessImageHelper({ retryUnavailable: true }), new Promise<null>(resolve => {
       timer = setTimeout(() => resolve(null), budget.remaining())
     })])
     if (!helper) return nativeUnavailable('the native control helper is unavailable')
