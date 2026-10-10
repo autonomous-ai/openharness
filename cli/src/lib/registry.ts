@@ -93,6 +93,10 @@ export interface RegisteredSession {
   launch?: AgentLaunch
   /** Fresh evidence is unavailable; retain the binding and expose its reason without persisting an authority verdict. */
   identityHold?: string
+  /** Monotonic process-local authority: a hold/recovery cycle must never revive an older read. */
+  evidenceRevision?: number
+  /** Native identity recovered; interpretation stays paused until its replacement tail is installed. */
+  interpretationHold?: string
   /** Enter on stopped work must never become a fresh conversation, including after a daemon restart. */
   resumeOnly?: true
   /** External admission survives a crash independently of any conversation Harness already owns. */
@@ -553,7 +557,7 @@ function tmuxProjection(runtimes: readonly TerminalRuntimeRef[]): string {
 }
 
 function persistedRow(entry: RegisteredSession): RegisteredSession | Omit<RegisteredSession, 'tmuxPane'> {
-  const { identityHold: _hold, ...saved } = entry
+  const { identityHold: _hold, evidenceRevision: _revision, interpretationHold: _interpretation, ...saved } = entry
   if (saved.tmuxPane) return { ...saved, runtimes: saved.runtimes.map((runtime) => ({ ...runtime })) }
   const { tmuxPane: _legacy, ...row } = saved
   return { ...row, runtimes: row.runtimes.map((runtime) => ({ ...runtime })) }
@@ -591,7 +595,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
@@ -987,6 +991,7 @@ function writeBoot(bootId: string): void {
 class Registry {
   /** agentId → record. The store. */
   private agents = new Map<string, RegisteredSession>()
+  private evidenceRevision = 0
   /** engine sessionId → agentId. Needed because web and device address turn control with a bare
    *  `sessionId` (`cancel`, `question_response`, `compact`, `session_get`) while everything else
    *  addresses the agent. `resolve()` is the one lookup that accepts either. */
@@ -1060,6 +1065,8 @@ class Registry {
       this.sessionIndex.delete(entry.sessionId)
     }
     delete entry.identityHold
+    delete entry.interpretationHold
+    entry.evidenceRevision = ++this.evidenceRevision
     entry.sessionId = ''
     entry.boundAt = null
     entry.transcriptPath = null
@@ -1168,6 +1175,7 @@ class Registry {
         row.source = row.sessionId && typeof original.source === 'string' ? original.source : null
         row.projectDir = typeof original.projectDir === 'string' ? original.projectDir : row.transcriptPath ? basename(dirname(row.transcriptPath)) : row.sessionId || row.agentId
         row.identityHold = error instanceof Error ? error.message : String(error)
+        row.evidenceRevision = ++this.evidenceRevision
       }
       for (const raw of Array.isArray(arr) ? arr : []) {
         const engine = normalizedAgentEngine(raw?.engine)
@@ -1673,8 +1681,19 @@ class Registry {
     const entry = this.agents.get(agentId)
     const detail = reason === undefined ? undefined : reason.slice(0, 1024) || 'Waiting for conversation identity.'
     if (!entry || entry.identityHold === detail) return false
+    entry.evidenceRevision = ++this.evidenceRevision
     if (detail) entry.identityHold = detail
     else delete entry.identityHold
+    return true
+  }
+
+  /** Only the attachment that read this revision can complete or explain its recovery. */
+  setInterpretationHold(agentId: string, revision: number | undefined, reason?: string, create = false): boolean {
+    const entry = this.agents.get(agentId)
+    if (!entry || entry.identityHold || entry.evidenceRevision !== revision || (!entry.interpretationHold && !(create && reason))) return false
+    if (!entry.interpretationHold) entry.evidenceRevision = ++this.evidenceRevision
+    if (reason) entry.interpretationHold = reason.slice(0, 1024)
+    else delete entry.interpretationHold
     return true
   }
 
@@ -1698,6 +1717,9 @@ class Registry {
     // against another writer and rechecks the native evidence after obtaining the lock.
     const saved = this.agents.get(agentId)!
     delete saved.identityHold
+    saved.evidenceRevision = ++this.evidenceRevision
+    if (saved.sessionId) saved.interpretationHold = 'Waiting for transcript interpretation to recover.'
+    else delete saved.interpretationHold
     return saved
   }
 
@@ -1859,9 +1881,13 @@ class Registry {
       ? (existing?.cwd && project.belongs(existing.cwd, effectiveTranscriptPath) ? existing.cwd
         : project.cwdOf(effectiveTranscriptPath) ?? input.cwd)
       : baseCwd
+    const retainEvidence = sameSession && existing.engine === engine && existing.transcriptPath === effectiveTranscriptPath
     const entry: RegisteredSession = {
       schemaVersion: 2,
       active: existing?.active ?? true,
+      ...(existing?.evidenceRevision === undefined ? {} : { evidenceRevision: existing.evidenceRevision }),
+      ...(retainEvidence && existing.identityHold ? { identityHold: existing.identityHold } : {}),
+      ...(retainEvidence && existing.interpretationHold ? { interpretationHold: existing.interpretationHold } : {}),
       // No `launch`: a hook is the engine reporting for duty, so whatever the launch was — starting,
       // or failed by a watcher that gave up too early — it is over, and the frame reads `ready`.
       agentId,
@@ -2599,8 +2625,11 @@ class Registry {
         for (const row of rows) {
           const entry = previous.get(row.agentId) ?? row
           if (entry !== row) {
-            const identityHold = entry.engine === row.engine && entry.sessionId === row.sessionId
-              && entry.transcriptPath === row.transcriptPath && entry.codexHome === row.codexHome ? entry.identityHold : undefined
+            const sameBinding = entry.engine === row.engine && entry.sessionId === row.sessionId
+              && entry.transcriptPath === row.transcriptPath && entry.codexHome === row.codexHome
+            const identityHold = sameBinding ? entry.identityHold : undefined
+            const interpretationHold = sameBinding ? entry.interpretationHold : undefined
+            const evidenceRevision = sameBinding ? entry.evidenceRevision : ++this.evidenceRevision
             // External deletions count too: retaining a cancelled closePlan here would make the
             // next observation write it back and turn a cancelled close into pending work again.
             for (const key of Object.keys(entry)) {
@@ -2608,6 +2637,8 @@ class Registry {
             }
             Object.assign(entry, row)
             if (identityHold) entry.identityHold = identityHold
+            if (interpretationHold) entry.interpretationHold = interpretationHold
+            if (evidenceRevision !== undefined) entry.evidenceRevision = evidenceRevision
           }
           this.index(entry)
         }

@@ -27,3 +27,12 @@ it('keeps a Linux process bound across a wall-clock correction, but rejects pid 
   session.processIdentity!.startTicks = 43
   expect(transcriptReadIdentity(session)).not.toBe(before)
 })
+
+it('revokes old reads across a complete same-path hold and recovery', () => {
+  const session = { agentId: 'a', sessionId: 's', engine: 'claude', transcriptPath: '/t' } as RegisteredSession
+  const before = transcriptReadIdentity(session)
+  session.identityHold = 'header incomplete'; session.evidenceRevision = 1
+  expect(transcriptReadIdentity(session)).not.toBe(before)
+  delete session.identityHold; session.evidenceRevision = 2
+  expect(transcriptReadIdentity(session)).not.toBe(before)
+})

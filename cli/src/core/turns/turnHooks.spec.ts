@@ -450,3 +450,59 @@ describe('turn hooks', () => {
     expect(error.mock.calls).toEqual([['[hooks] claude stop hook failed:', 'tail gone'], ['[hooks] claude stop hook failed:', 'worse']])
   })
 })
+
+it.each([
+  ['cursor', 'tasks'], ['cursor', 'drain1'], ['commandcode', 'drain1'], ['commandcode', 'grace'], ['commandcode', 'drain2'],
+  ['copilot', 'drain1'], ['copilot', 'grace'], ['copilot', 'drain2'], ['agy', 'drain1'], ['agy', 'grace'], ['agy', 'drain2'],
+  ['devin', 'grace'], ['grok', 'drain1'], ['claude', 'drain1'], ['claude', 'grace'], ['claude', 'drain2'],
+])('retains %s Stop intent when evidence changes during %s', async (engine, phase) => {
+  vi.useFakeTimers()
+  const row = { agentId: 'a1', sessionId: 's1', engine, evidenceRevision: 0 } as RegisteredSession
+  const holdStop = vi.fn(() => true), run = setup(engine, { resolve: () => row, holdStop })
+  const state = engineState()
+  const maps = { cursor: run.normalizers.cursorNormalizers, commandcode: run.normalizers.commandcodeNormalizers,
+    copilot: run.normalizers.copilotNormalizers, agy: run.normalizers.agyNormalizers,
+    devin: run.normalizers.devinReaders, grok: run.normalizers.grokNormalizers }
+  if (engine === 'claude') setState(run, { turnOpen: true, pendingTools: new Set(), toolIdToName: new Map(), thinkingCounter: 0 })
+  else (maps[engine as keyof typeof maps] as Map<string, unknown>).set('s1', state)
+  let release!: () => void
+  const pending = () => new Promise<void>(resolve => { release = resolve })
+  if (phase === 'tasks') vi.mocked(run.deps.cursorTaskHooks.wait).mockImplementationOnce(pending)
+  else if (phase === 'drain1') vi.mocked(run.deps.drain).mockImplementationOnce(pending)
+  else if (phase === 'drain2') vi.mocked(run.deps.drain).mockResolvedValueOnce(undefined).mockImplementationOnce(pending)
+  run.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
+  await vi.advanceTimersByTimeAsync(phase === 'drain2' ? STOP_HOOK_GRACE_MS : 0)
+  row.evidenceRevision = 2 // A full hold and recovery can finish before the old callback resumes.
+  if (phase === 'grace') await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+  else { release(); await vi.advanceTimersByTimeAsync(0) }
+  expect(holdStop).toHaveBeenCalledWith(row, true)
+  expect(state.closeTurn).not.toHaveBeenCalled()
+  expect(state.abortTurn).not.toHaveBeenCalled()
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  expect(run.deps.announceTurnAborted).not.toHaveBeenCalled()
+  expect(run.deps.cursorSubagents.closeParent).not.toHaveBeenCalled()
+  vi.useRealTimers()
+})
+
+it.each(['cursor', 'commandcode', 'copilot', 'agy', 'devin', 'grok'])('holds %s completion eagerly before any optional drain', engine => {
+  const row = { agentId: 'a1', sessionId: 's1', engine, interpretationHold: 'pending' } as RegisteredSession
+  const holdStop = vi.fn(() => true), run = setup(engine, { resolve: () => row, holdStop })
+  run.hooks.onTurnStop({ sessionId: 's1' })
+  expect(holdStop).toHaveBeenCalledOnce()
+  expect(run.deps.drain).not.toHaveBeenCalled()
+  expect(run.deps.emit).not.toHaveBeenCalled()
+})
+
+it('rejects delayed engine emissions after its binding changes, even if the hold port rejects stale work', () => {
+  let context!: HookTurnContext
+  const spy = vi.spyOn(engineHooks.claude, 'onStop').mockImplementationOnce(value => { context = value })
+  try {
+    const row = { agentId: 'a1', sessionId: 's1', engine: 'claude', evidenceRevision: 0 } as RegisteredSession
+    const holdStop = vi.fn(() => false), run = setup('claude', { resolve: () => row, holdStop })
+    run.hooks.onTurnStop({ sessionId: 's1' })
+    row.evidenceRevision = 2
+    context.emit('s1', [{ type: 'turn_ended', payload: {} }])
+    expect(holdStop).toHaveBeenCalledWith(row, true)
+    expect(run.deps.emit).not.toHaveBeenCalled()
+  } finally { spy.mockRestore() }
+})

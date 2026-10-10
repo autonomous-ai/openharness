@@ -94,7 +94,8 @@ it('keeps holds transient and only retries bindings that still exist', () => {
   expect(registry.revalidateBinding('fixture-0')).toMatchObject({ sessionId: '', transcriptPath: null })
 })
 
-it.each(['same', 'absent', 'repaired'] as const)('never overwrites a peer binding while retrying %s evidence', outcome => {
+it.each(['same', 'absent', 'repaired'] as const)('never overwrites a peer binding while retrying %s evidence', async outcome => {
+  const binding = await import('../engines/transcriptBindings.js')
   const peer = new (registry.constructor as new () => typeof registry)()
   peer.load()
   const original = registry.byAgent('fixture-0')!
@@ -105,7 +106,9 @@ it.each(['same', 'absent', 'repaired'] as const)('never overwrites a peer bindin
       id: 'cccccccc-3333-4333-8333-cccccccccccc', cwd: root,
       source: { subagent: { thread_spawn: { parent_thread_id: ids[0] } } },
     } }) + '\n')
-    writeFileSync(join(home, 'sessions', 'parent.jsonl'), header(ids[0]!))
+    const parent = join(home, 'sessions', `rollout-${ids[0]}-parent.jsonl`)
+    writeFileSync(parent, header(ids[0]!))
+    expect(binding.savedTranscriptEvidence('codex', ids[0]!, transcript(0), home).path).toBe(parent)
   }
   const nextId = 'dddddddd-4444-4444-8444-dddddddddddd'
   const nextPath = join(home, 'sessions', `rollout-${nextId}.jsonl`)
@@ -159,4 +162,51 @@ it('rechecks native evidence while holding the registry write lock and publishes
   expect(checked).toBe(true)
   expect(readFileSync(file, 'utf8')).toBe(before)
   expect(registry.bySession(ids[0]!)).toMatchObject({ identityHold: 'waiting', transcriptPath: transcript(0) })
+})
+
+it('retains monotonic recovery authority through register and save, and never persists interpretation state', async () => {
+  const { transcriptReadIdentity } = await import('../core/transcripts/readIdentity.js')
+  const original = registry.byAgent('fixture-0')!, before = transcriptReadIdentity(original)
+  registry.setIdentityHold(original.agentId, 'waiting')
+  const held = original.evidenceRevision!
+  registry.register({ engine: 'codex', sessionId: ids[0]!, transcriptPath: transcript(0), tmuxPane: '%1', cwd: root })
+  expect(registry.byAgent(original.agentId)).toMatchObject({ evidenceRevision: held, identityHold: 'waiting' })
+  const recovered = registry.revalidateBinding(original.agentId)!
+  expect(recovered.evidenceRevision).toBeGreaterThan(held)
+  expect(recovered.interpretationHold).toBeTruthy()
+  expect(transcriptReadIdentity(recovered)).not.toBe(before)
+  registry.flush()
+  expect(registry.byAgent(original.agentId)).toBe(recovered)
+  expect(recovered.interpretationHold).toBeTruthy()
+  const persisted = JSON.parse(readFileSync(file, 'utf8'))[0]
+  for (const field of ['identityHold', 'interpretationHold', 'evidenceRevision']) expect(persisted).not.toHaveProperty(field)
+  expect(registry.setInterpretationHold('missing', held)).toBe(false)
+  expect(registry.setInterpretationHold(original.agentId, held)).toBe(false)
+  expect(registry.setInterpretationHold(original.agentId, recovered.evidenceRevision, 'retry reader')).toBe(true)
+  expect(recovered.interpretationHold).toBe('retry reader')
+  expect(registry.setInterpretationHold(original.agentId, recovered.evidenceRevision)).toBe(true)
+  expect(registry.setInterpretationHold(original.agentId, recovered.evidenceRevision)).toBe(false)
+  expect(recovered.interpretationHold).toBeUndefined()
+})
+
+it.each(['identity', 'interpretation', 'unbound'] as const)('does not transfer the old conversation’s %s obligation to a newly bound session', async hold => {
+  const old = registry.byAgent('fixture-0')!
+  if (hold === 'unbound') registry.unbindSession(old.sessionId)
+  registry.setIdentityHold(old.agentId, 'old header incomplete')
+  if (hold === 'interpretation') registry.revalidateBinding(old.agentId)
+  const revision = registry.byAgent(old.agentId)!.evidenceRevision
+  const id = 'eeeeeeee-5555-4555-8555-eeeeeeeeeeee', path = join(home, 'sessions', `rollout-${id}.jsonl`)
+  writeFileSync(path, header(id))
+  const result = registry.register({ engine: 'codex', sessionId: id, transcriptPath: path, tmuxPane: '%1', cwd: root })!
+  expect(result.isNew).toBe(true)
+  expect(result.entry).toMatchObject({ sessionId: id, evidenceRevision: revision })
+  expect(result.entry.identityHold).toBeUndefined(); expect(result.entry.interpretationHold).toBeUndefined()
+  const { createBinding } = await import('../core/agents/bind.js')
+  const attachSession = vi.fn(async () => true)
+  const binding = createBinding({ registry, attachSession, stoppedAgents: { save: vi.fn() },
+    mirror: { inheritSummary: vi.fn() }, forgetSession: vi.fn(), clients: { send: vi.fn() },
+    announceSession: vi.fn(), syncRecapPool: vi.fn(),
+  } as unknown as import('../core/agents/bind.js').BindDeps)
+  await binding.handleRegistered(result.entry, { ...result, hookEvent: 'UserPromptSubmit' })
+  expect(attachSession).toHaveBeenCalledWith(result.entry, true, false, hold === 'unbound')
 })

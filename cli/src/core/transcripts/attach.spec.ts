@@ -1,10 +1,12 @@
 import { liveFor } from '../../engines/live.js'
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
-import type { TailHold } from '../../watcher/watcher.js'
+import { Watcher, type TailHold } from '../../watcher/watcher.js'
+import { createIngest } from './ingest.js'
+import { createCancel } from '../turns/cancel.js'
 import { createAttach, type AttachDeps } from './attach.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { createSessionNormalizers } from './normalizers.js'
@@ -97,10 +99,19 @@ function setup(over: Partial<AttachDeps> = {}) {
   const profile = { ingest: vi.fn(), commit: vi.fn() }
   const deps: AttachDeps = {
     liveFor,
+    announceSession: vi.fn(),
+    setInterpretationHold: (id, revision, reason, create) => {
+      const row = bindings.get(id)
+      if (!row || row.evidenceRevision !== revision || row.identityHold || (!row.interpretationHold && !(create && reason))) return false
+      if (!row.interpretationHold) row.evidenceRevision = (row.evidenceRevision ?? 0) + 1
+      if (reason) row.interpretationHold = reason
+      else delete row.interpretationHold
+      return true
+    },
     resolve: id => bindings.get(id),
     terminalGone: vi.fn(async () => false),
     normalizers,
-    watcher: { addSession: vi.fn(async () => {}), hold: vi.fn(async () => null), tails: vi.fn(() => false) },
+    watcher: { addSession: vi.fn(async () => {}), removeSession: vi.fn(async () => {}), pollSession: vi.fn(async () => {}), hold: vi.fn(async () => null), tails: vi.fn(() => false) },
     cursorDiscovery: { add: vi.fn(async () => {}) },
     device: () => service,
     runtimeProfiles: {
@@ -1095,4 +1106,315 @@ describe('attaching a session', () => {
     expect(String(warn.mock.calls[0][0])).toMatch(/attach still running · engine=pi · session=.* · 15s/)
     expect(run.attach.attaches.attaching()).toHaveLength(1)
   })
+})
+
+
+it.each(['terminal', 'config', 'worker'] as const)('discards a deferred %s result across a full same-path native hold/recovery', async phase => {
+  const run = phase === 'worker' ? remoteSetup(true) : setup()
+  const row = session('claude', transcript([CLAUDE_PROMPT]))
+  let finish!: () => void
+  const wait = new Promise<void>(resolve => { finish = resolve })
+  const entered = vi.fn()
+  if (phase === 'terminal') vi.mocked(run.deps.terminalGone).mockImplementationOnce(async () => { entered(); await wait; return false })
+  else if (phase === 'config') vi.mocked(run.deps.runtimeProfiles.ingestConfig).mockImplementationOnce(async () => { entered(); await wait; return false })
+  else {
+    const remote = (run as ReturnType<typeof remoteSetup>).remote
+    const prepare = vi.mocked(remote.prepare).getMockImplementation()!
+    vi.mocked(remote.prepare).mockImplementationOnce(async (...args) => { const value = await prepare(...args); entered(); await wait; return value })
+  }
+  const pending = run.attach.attachSession(row)
+  await vi.waitFor(() => expect(entered).toHaveBeenCalled())
+  row.identityHold = 'incomplete'; row.evidenceRevision = 1
+  delete row.identityHold; row.evidenceRevision = 2; row.interpretationHold = 'replacement pending'
+  finish(); expect(await pending).toBe(true)
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  expect(run.profile.commit).not.toHaveBeenCalled()
+  expect(run.normalizers.hasState(row.sessionId)).toBe(false)
+  run.attach.forget(row.sessionId)
+})
+
+it.each(['config', 'watcher'] as const)('holds real watcher ingestion through deferred and failed replacement %s, then retries without another event', async phase => {
+  const watcher = new Watcher()
+  const run = setup({ watcher })
+  const file = transcript([]), row = session('claude', file)
+  const emit = vi.fn(), ingestProfile = vi.fn(), token = vi.fn()
+  const ingest = createIngest({ liveFor, has: () => true, bySession: () => row, device: () => undefined,
+    runtimeProfiles: { ingest: ingestProfile }, tokenUsage: { changed: token }, normalizers: run.normalizers,
+    announceTurnAborted: vi.fn(), emit, attachSession: run.attach.attachSession })
+  ingest.wireWatcher(watcher)
+  try {
+    await run.attach.attachSession(row)
+    const old = run.normalizers.liveParsers.get(row.sessionId)
+    row.identityHold = 'header incomplete'; row.evidenceRevision = 1
+    appendFileSync(file, JSON.stringify(CLAUDE_PROMPT) + '\n')
+    await watcher.pollSession(row.sessionId)
+    expect(emit).not.toHaveBeenCalled(); expect(ingestProfile).not.toHaveBeenCalled()
+    delete row.identityHold; row.evidenceRevision = 2; row.interpretationHold = 'replacement pending'
+    const entered = vi.fn()
+    let fail!: (error: Error) => void
+    const pending = new Promise<void>((_resolve, reject) => { fail = reject })
+    run.profile.commit.mockClear()
+    if (phase === 'config') {
+      vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValue({ ...run.profile, config: async () => { entered(); await pending } })
+    } else {
+      const add = watcher.addSession.bind(watcher)
+      vi.spyOn(watcher, 'addSession').mockImplementationOnce(async (...args) => { await add(...args); entered(); await pending })
+    }
+    const attached = run.attach.attachSession(row) // ordinary caller must see the recovery obligation
+    await vi.waitFor(() => expect(entered).toHaveBeenCalled())
+    appendFileSync(file, JSON.stringify({ ...CLAUDE_PROMPT, uuid: 'u2', message: { role: 'user', content: 'while installation waits' } }) + '\n')
+    await watcher.pollSession(row.sessionId)
+    expect(emit).not.toHaveBeenCalled(); expect(ingestProfile).not.toHaveBeenCalled(); expect(token).not.toHaveBeenCalled()
+    expect(run.profile.commit).not.toHaveBeenCalled()
+    expect(run.normalizers.liveParsers.get(row.sessionId)).not.toBe(old)
+    fail(new Error('replacement unavailable')); expect(await attached).toBe(true)
+    expect(row.interpretationHold).toContain(phase === 'config' ? 'runtime profile' : 'replacement unavailable')
+    expect(run.profile.commit).not.toHaveBeenCalled()
+    // On the next timer attempt the actual file is read again; stale held lines are history.
+    vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValue(run.profile)
+    await vi.waitFor(() => expect(row.interpretationHold).toBeUndefined(), { timeout: 3_000 })
+    expect(run.normalizers.liveParsers.get(row.sessionId)).not.toBe(old)
+    expect(emit).not.toHaveBeenCalled()
+    appendFileSync(file, JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' } }) + '\n')
+    await watcher.pollSession(row.sessionId)
+    expect(ingestProfile).toHaveBeenCalledTimes(1)
+    expect(emit).toHaveBeenCalledTimes(1)
+    // A completed installation gate is temporary. A later legitimate same-path restart must
+    // hand the existing tail to its next parser without retaining the recovery's pane identity.
+    row.tmuxPane = '%new'; row.boundAt = 99
+    await run.attach.attachSession(row, true)
+    appendFileSync(file, JSON.stringify({ ...CLAUDE_PROMPT, uuid: 'after-reset' }) + '\n')
+    await watcher.pollSession(row.sessionId)
+    expect(ingestProfile).toHaveBeenCalledTimes(2)
+    expect(emit).toHaveBeenCalledTimes(2)
+  } finally { run.attach.forget(row.sessionId); await watcher.stop() }
+})
+
+
+it.each(['inline', 'worker'] as const)('retains the crash boundary across failed recovery installation and closes the staged %s turn', async mode => {
+  const marks = createRelaunchMarks()
+  const run = mode === 'worker' ? remoteSetup(true, { relaunchMarks: marks }) : setup({ relaunchMarks: marks })
+  const file = transcript([CLAUDE_PROMPT]), row = session('claude', file, { evidenceRevision: 2, interpretationHold: 'replacement pending' })
+  marks.note(row.sessionId, statSync(file).size, true)
+  const mark = marks.read(row.sessionId)
+  const commitWith = vi.fn((install: () => boolean) => install())
+  vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValue({ ...run.profile, commitWith })
+  vi.mocked(run.deps.watcher.addSession).mockRejectedValueOnce(new Error('tail unavailable'))
+  await run.attach.attachSession(row)
+  expect(marks.read(row.sessionId)).toBe(mark)
+  expect(row.interpretationHold).toContain('tail unavailable')
+  expect(commitWith).not.toHaveBeenCalled()
+  expect(run.normalizers.liveParsers.get(row.sessionId)?.snapshot().identity).toMatch(/^held:/)
+  await run.attach.attachSession(row)
+  expect(row.interpretationHold).toBeUndefined()
+  expect(marks.read(row.sessionId)).toBeUndefined()
+  if (mode === 'inline') expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(false)
+  else expect((run as ReturnType<typeof remoteSetup>).handle.closeTurn).toHaveBeenCalledWith('abandoned')
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
+
+it('keeps a replacement obligation when the profile commit loses authority during watcher installation', async () => {
+  const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]), { evidenceRevision: 2, interpretationHold: 'pending' })
+  const commitWith = vi.fn(() => false)
+  vi.mocked(run.deps.runtimeProfiles.beginHydrate).mockReturnValue({ ...run.profile, commitWith })
+  expect(await run.attach.attachSession(row)).toBe(true)
+  expect(row.interpretationHold).toContain('superseded during watcher installation')
+  expect(run.normalizers.liveParsers.get(row.sessionId)?.snapshot().identity).toMatch(/^held:/)
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
+
+it.each([new Error('tail read failed'), 'tail read failed'])('contains a failed post-recovery drain: %s', async error => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const run = setup(), row = session('claude', transcript([]), { evidenceRevision: 2, interpretationHold: 'pending' })
+  vi.mocked(run.deps.watcher.pollSession).mockRejectedValueOnce(error)
+  await run.attach.attachSession(row)
+  expect(row.interpretationHold).toBeUndefined()
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('recovered tail read failed'))
+  run.attach.forget(row.sessionId)
+})
+
+it.each(['queued', 'detaching', 'rejected', 'non-error', 'retry-stale'] as const)('fences recovery while %s and does not retire its binding', async phase => {
+  const run = setup(), row = session('claude', transcript([]), { evidenceRevision: 2, interpretationHold: 'pending' })
+  let finish!: () => void
+  const waiting = new Promise<void>(resolve => { finish = resolve })
+  let first: Promise<boolean> | undefined
+  if (phase === 'queued') {
+    const other = session('claude', row.transcriptPath!, { agentId: row.agentId, sessionId: row.sessionId, evidenceRevision: 2 })
+    bindings.set(row.agentId, row)
+    delete row.interpretationHold
+    vi.mocked(run.deps.terminalGone).mockImplementationOnce(async () => { await waiting; return false })
+    first = run.attach.attachSession(other)
+    row.interpretationHold = 'pending'
+  } else if (phase === 'detaching') vi.mocked(run.deps.watcher.removeSession).mockImplementationOnce(async () => { await waiting })
+  else vi.mocked(run.deps.watcher.removeSession).mockImplementationOnce(async () => {
+    if (phase === 'rejected') row.evidenceRevision = row.evidenceRevision! + 1
+    throw phase === 'non-error' ? 'detachment failed' : new Error('detachment failed')
+  })
+  const pending = run.attach.attachSession(row)
+  if (phase === 'queued' || phase === 'detaching') { row.evidenceRevision = row.evidenceRevision! + 1; finish() }
+  await first; await pending
+  expect(run.profile.commit).not.toHaveBeenCalled()
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  if (phase === 'retry-stale') {
+    row.evidenceRevision = row.evidenceRevision! + 1
+    await new Promise(resolve => setTimeout(resolve, 1_100))
+    expect(run.deps.watcher.removeSession).toHaveBeenCalledOnce()
+  }
+  run.attach.forget(row.sessionId)
+})
+
+
+it.each(['inline', 'worker'] as const)('preserves eager cancel while the %s recovery parser is staged', async mode => {
+  const run = mode === 'worker' ? remoteSetup(true) : setup()
+  const row = session('claude', transcript([CLAUDE_PROMPT]), { evidenceRevision: 2, interpretationHold: 'pending' })
+  if (mode === 'worker') (run as ReturnType<typeof remoteSetup>).candidate.page.cursor.offset = statSync(row.transcriptPath!).size
+  let finish!: () => void
+  const waiting = new Promise<void>(resolve => { finish = resolve })
+  vi.mocked(run.deps.watcher.addSession).mockImplementationOnce(async () => { await waiting })
+  const pending = run.attach.attachSession(row)
+  await vi.waitFor(() => expect(run.deps.watcher.addSession).toHaveBeenCalledOnce())
+  const cancel = createCancel({ resolve: () => row, normalizers: run.normalizers,
+    cursorSubagents: { forget: vi.fn() }, input: { cancel: vi.fn(), cancelConfirmed: vi.fn(async () => true) },
+    device: () => undefined, stopHeartbeat: vi.fn(), questionWatcher: { stop: vi.fn() }, mirror: { cancel: vi.fn() },
+    turnActivity: { observe: vi.fn(), snapshot: vi.fn() }, turnStartedAt: new Map(), agentIdFor: () => row.agentId, clients: { send: vi.fn() },
+  })
+  await cancel(row.agentId)
+  finish(); await pending
+  expect(row.interpretationHold).toContain('turn control changed')
+  await run.attach.attachSession(row)
+  expect(row.interpretationHold).toBeUndefined()
+  if (mode === 'inline') expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(false)
+  else expect((run as ReturnType<typeof remoteSetup>).remote.prepare).toHaveBeenLastCalledWith(
+    expect.anything(), expect.objectContaining({ closes: [expect.objectContaining({ reason: 'cancel' })] }), expect.anything(), undefined)
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
+
+it('coalesces a queued recovery after the first replacement completes', async () => {
+  const run = setup(), row = session('claude', transcript([]), { evidenceRevision: 2, interpretationHold: 'pending' })
+  let finish!: () => void
+  const waiting = new Promise<void>(resolve => { finish = resolve })
+  vi.mocked(run.deps.terminalGone).mockImplementationOnce(async () => { await waiting; return false }).mockRejectedValueOnce(new Error('must not run a second read'))
+  const first = run.attach.attachSession(row), second = run.attach.attachSession(row)
+  finish(); expect(await first).toBe(true); expect(await second).toBe(true)
+  expect(run.deps.terminalGone).toHaveBeenCalledOnce()
+  expect(run.deps.watcher.removeSession).toHaveBeenCalledOnce()
+  expect(row.interpretationHold).toBeUndefined()
+  expect(run.normalizers.hasState(row.sessionId)).toBe(true)
+  run.attach.forget(row.sessionId)
+})
+
+it('retries a still-current recovery after its pane route moves without another hook', async () => {
+  const run = setup(), row = session('claude', transcript([]), { evidenceRevision: 2, interpretationHold: 'pending' })
+  vi.mocked(run.deps.watcher.addSession).mockImplementationOnce(async () => { row.tmuxPane = '%moved' })
+  await run.attach.attachSession(row)
+  expect(row.interpretationHold).toBeTruthy()
+  await vi.waitFor(() => expect(row.interpretationHold).toBeUndefined(), { timeout: 3_000 })
+  expect(run.deps.watcher.addSession).toHaveBeenCalledTimes(2)
+  run.attach.forget(row.sessionId)
+})
+
+it('revokes a recovery still detaching when its session is forgotten', async () => {
+  const run = setup(), row = session('claude', transcript([]), { evidenceRevision: 2, interpretationHold: 'pending' })
+  let finish!: () => void
+  vi.mocked(run.deps.watcher.removeSession).mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve }))
+  const pending = run.attach.attachSession(row)
+  run.attach.forget(row.sessionId); finish(); await pending
+  expect(run.deps.terminalGone).not.toHaveBeenCalled()
+  expect(run.profile.commit).not.toHaveBeenCalled()
+  expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
+})
+
+it('keeps a recovered tail paused if clearing its obligation loses registry authority', async () => {
+  const setInterpretationHold = vi.fn(() => false), run = setup({ setInterpretationHold })
+  const row = session('claude', transcript([CLAUDE_PROMPT]), { evidenceRevision: 2, interpretationHold: 'pending' })
+  await run.attach.attachSession(row)
+  expect(row.interpretationHold).toBe('pending')
+  expect(vi.mocked(run.deps.watcher.addSession).mock.calls[0][1]?.deliveryAllowed?.()).toBe(false)
+  expect(run.deps.watcher.pollSession).not.toHaveBeenCalled()
+  expect(run.deps.announceSession).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
+it('does not reconstruct a retained cancellation when the new recovery obligation cannot be claimed', async () => {
+  let claim = true
+  const run = setup({ setInterpretationHold: (_id, _revision, reason) => {
+    if (!claim) return false
+    row.interpretationHold = reason
+    return true
+  } })
+  const row = session('claude', transcript([CLAUDE_PROMPT]), { evidenceRevision: 2, interpretationHold: 'pending' })
+  run.attach.beforeCancel(row); run.normalizers.closeTurns(row.sessionId)
+  await run.attach.attachSession(row)
+  expect(row.interpretationHold).toBeUndefined()
+  claim = false
+  vi.mocked(run.deps.watcher.addSession).mockClear()
+  await run.attach.attachSession(row, true)
+  expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
+  expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(false)
+  run.attach.forget(row.sessionId)
+})
+it('keeps normal Stop on its existing path and contains a rejected recovery scheduler', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const run = setup(), row = session('claude', transcript([]))
+  run.attach.beforeCancel(row)
+  expect(run.attach.holdStop(row)).toBe(false)
+  vi.spyOn(run.attach.attaches, 'attach').mockRejectedValueOnce(new Error('scheduler unavailable'))
+  run.attach.holdInterpretation(row, 'waiting for evidence')
+  await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('scheduler unavailable')))
+  expect(row.interpretationHold).toBe('waiting for evidence')
+  run.attach.forget(row.sessionId)
+})
+it('recovers a legacy reader without control cuts and holds one that cannot replay them', async () => {
+  const run = setup(), row = session('muse', transcript([]), { evidenceRevision: 2, interpretationHold: 'pending' })
+  await run.attach.attachSession(row)
+  expect(row.interpretationHold).toBeUndefined()
+  expect(run.normalizers.museNormalizers.has(row.sessionId)).toBe(true)
+  row.interpretationHold = 'pending'
+  run.attach.beforeCancel(row); run.normalizers.closeTurns(row.sessionId)
+  await run.attach.attachSession(row)
+  expect(row.interpretationHold).toContain('cannot yet replay ordered cancellation')
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
+it('abandons a legacy open turn at the relaunch boundary', async () => {
+  const marks = createRelaunchMarks(), run = setup({ relaunchMarks: marks })
+  const file = transcript([{ open: true, events: [started()] }]), row = session('muse', file)
+  marks.note(row.sessionId, statSync(file).size, true)
+  await run.attach.attachSession(row)
+  expect(run.normalizers.museNormalizers.get(row.sessionId)?.turnOpen).toBe(false)
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  expect(marks.read(row.sessionId)).toBeUndefined()
+})
+it('holds a worker candidate that stops before its cancellation cutoff', async () => {
+  const run = remoteSetup(), row = session('claude', transcript([CLAUDE_PROMPT]), { evidenceRevision: 2, interpretationHold: 'pending' })
+  run.attach.beforeCancel(row); run.normalizers.closeTurns(row.sessionId)
+  await run.attach.attachSession(row)
+  expect(row.interpretationHold).toContain('did not reach its cancellation boundary')
+  expect(run.deps.watcher.pollSession).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
+it('holds a recovery whose control proxy was replaced during watcher installation', async () => {
+  const run = setup(), row = session('claude', transcript([CLAUDE_PROMPT]), { evidenceRevision: 2, interpretationHold: 'pending' })
+  vi.mocked(run.deps.watcher.addSession).mockImplementationOnce(async () => { run.normalizers.liveParsers.delete(row.sessionId) })
+  await run.attach.attachSession(row)
+  expect(row.interpretationHold).toContain('superseded during watcher installation')
+  expect(run.profile.commit).not.toHaveBeenCalled()
+  expect(run.deps.watcher.pollSession).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
+it('replays a crash boundary in order with a retained cancellation', async () => {
+  const marks = createRelaunchMarks(), run = setup({ relaunchMarks: marks })
+  const file = transcript([CLAUDE_PROMPT]), row = session('claude', file, { evidenceRevision: 2, interpretationHold: 'pending' })
+  run.attach.beforeCancel(row); run.normalizers.closeTurns(row.sessionId)
+  appendFileSync(file, JSON.stringify({ ...CLAUDE_PROMPT, uuid: 'second' }) + '\n')
+  marks.note(row.sessionId, statSync(file).size, true)
+  appendFileSync(file, JSON.stringify({ ...CLAUDE_PROMPT, uuid: 'third' }) + '\n')
+  await run.attach.attachSession(row)
+  expect(row.interpretationHold).toBeUndefined()
+  expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(true)
+  expect(marks.read(row.sessionId)).toBeUndefined()
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
 })

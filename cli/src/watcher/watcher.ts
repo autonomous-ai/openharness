@@ -68,6 +68,8 @@ export const HISTORY_MAX_BYTES = 32 * 1024 * 1024
 export const HOLD_TIMEOUT_MS = 30_000
 
 interface FileState extends WatchedSession {
+  /** A replacement tail cannot consume bytes before its attachment commits. */
+  deliveryAllowed?: () => boolean
   offset: number
   /** Bytes below this were on disk before the current read cursor was placed — history, not live. */
   historicalUntil: number
@@ -126,7 +128,7 @@ export class Watcher extends EventEmitter {
   /** Attach one trusted transcript. Runtime hydration is handled by cli.ts; the tail starts at EOF, or at
    *  `fromOffset` — where that hydration stopped reading — so a record written while it read is tailed
    *  rather than lost between the two. */
-  async addSession(session: WatchedSession, opts: { fromStart?: boolean; fromOffset?: number } = {}): Promise<void> {
+  async addSession(session: WatchedSession, opts: { fromStart?: boolean; fromOffset?: number; deliveryAllowed?: () => boolean } = {}): Promise<void> {
     const oldPath = this.bySession.get(session.sessionId)
     if (oldPath && oldPath !== session.transcriptPath) await this.removeSession(session.sessionId)
 
@@ -153,6 +155,7 @@ export class Watcher extends EventEmitter {
     console.log(`[watcher] tail ${session.engine} ${session.sessionId.slice(0, 8)} @${offset} · ${session.transcriptPath}`)
     this.files.set(session.transcriptPath, {
       ...session,
+      deliveryAllowed: opts.deliveryAllowed,
       offset,
       // A `fromStart` tail of a file that already has content reads that content as history.
       historicalUntil: opts.fromStart ? size : 0,
@@ -323,7 +326,7 @@ export class Watcher extends EventEmitter {
 
   private async readNew(filePath: string): Promise<void> {
     const state = this.files.get(filePath)
-    if (!state) return
+    if (!state || state.deliveryAllowed?.() === false) return
     if (state.reading || state.holds.size) { state.pending = true; return }
     state.reading = true
     try {
@@ -344,6 +347,7 @@ export class Watcher extends EventEmitter {
     }
     let size: number
     try { size = (await stat(filePath)).size } catch { return }
+    if (this.files.get(filePath) !== state || state.deliveryAllowed?.() === false) return
     if (size < state.offset) {
       state.partial = []
       state.partialBytes = 0
@@ -370,7 +374,7 @@ export class Watcher extends EventEmitter {
           const start = state.offset
           const chunk = Buffer.alloc(Math.min(this.readChunkBytes, size - start))
           const { bytesRead } = await fh.read(chunk, 0, chunk.length, start)
-          if (!bytesRead) break
+          if (!bytesRead || this.files.get(filePath) !== state || state.deliveryAllowed?.() === false) break
           state.offset = start + bytesRead
           this.takeChunk(filePath, state, chunk.subarray(0, bytesRead), start, history)
           // A hold taken meanwhile stops the read here; `release` reads what is left.
@@ -382,7 +386,7 @@ export class Watcher extends EventEmitter {
     } catch (err) {
       console.error(`[watcher] read failed (${basename(filePath)}):`, err)
     }
-    if (history.length) this.flushHistory(state, history)
+    if (history.length && this.files.get(filePath) === state && state.deliveryAllowed?.() !== false) this.flushHistory(state, history)
   }
 
   /**
@@ -428,6 +432,7 @@ export class Watcher extends EventEmitter {
   private async readCursor(filePath: string, state: FileState): Promise<void> {
     let next: string[]
     try { next = completeLines(await readFile(filePath, 'utf8')) } catch { return }
+    if (this.files.get(filePath) !== state || state.deliveryAllowed?.() === false) return
     let common = 0
     while (common < state.cursorLines.length && common < next.length && state.cursorLines[common] === next[common]) common++
     state.cursorLines = next

@@ -22,10 +22,12 @@ afterEach(() => {
 describe('saved catalog reads', () => {
   it('saves a held conversation without persisting its transient identity verdict', async () => {
     const { saved, store } = await fixture()
-    store.save({ ...saved, identityHold: 'The session-home catalog is unavailable.' })
+    store.save({ ...saved, identityHold: 'The session-home catalog is unavailable.', evidenceRevision: 3, interpretationHold: 'pending' })
     const raw = JSON.parse(readFileSync(join(directory, 'stopped-agents', `${saved.agentId}.json`), 'utf8'))
     expect(raw.session.sessionId).toBe(saved.sessionId)
     expect(raw.session).not.toHaveProperty('identityHold')
+    expect(raw.session).not.toHaveProperty('interpretationHold')
+    expect(raw.session).not.toHaveProperty('evidenceRevision')
     expect(store.get(saved.agentId)).not.toHaveProperty('identityHold')
   })
 

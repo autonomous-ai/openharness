@@ -17,6 +17,7 @@ import type { SessionNormalizers } from '../transcripts/normalizers.js'
 
 export interface CancelDeps {
   resolve: (id: string) => RegisteredSession | undefined
+  beforeCancel?: (session: RegisteredSession) => void
   normalizers: Pick<SessionNormalizers, 'closeTurns'>
   cursorSubagents: Pick<CursorSubagentManager, 'forget'>
   input: Pick<SessionInputController, 'cancel' | 'cancelConfirmed'>
@@ -35,7 +36,7 @@ export interface CancelDeps {
 
 export function createCancel({
   resolve, normalizers, cursorSubagents, input, device, stopHeartbeat, questionWatcher, mirror, turnActivity, turnStartedAt,
-  agentIdFor, clients,
+  agentIdFor, clients, beforeCancel,
 }: CancelDeps) {
   // Web cancel (C-c) interrupts the turn — claude writes no end_turn line to close it, so stop the
   // heartbeat and mark the turn closed here (mirrors the hosted runtime stopping its heartbeat on cancel). We do
@@ -44,6 +45,7 @@ export function createCancel({
   const cancelAgent = (id: string, confirmed = false): Promise<boolean> => {
     const record = resolve(id)
     const sessionId = record?.sessionId ?? id
+    if (record) beforeCancel?.(record)
     normalizers.closeTurns(sessionId)
     cursorSubagents.forget(sessionId)
     const cancelled = confirmed ? input.cancelConfirmed(record?.agentId ?? sessionId) : (input.cancel(record?.agentId ?? sessionId), Promise.resolve(true))

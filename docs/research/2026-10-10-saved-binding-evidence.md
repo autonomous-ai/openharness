@@ -130,6 +130,41 @@ error or lost hook. Remaining Stop/resume/checkpoint consumers, saved-home selec
 Hermes optional home promotion, Cursor pending discovery visibility, launch facts,
 durable lifecycle intent and the other named completion groups remain open.
 
+## Recovery control review corrections
+
+The independent composed review found that replacing interpretation could lose a
+Cancel or apply it to a later turn. Core now retains ordered cancellation boundaries
+for the conversation, including successful replacement, another reset, repaired path,
+and worker reconstruction. A new explicit Cancel can supersede a rewritten file;
+an automatic retry cannot move the old decision to a later file position. Each
+boundary records the regular file's device/inode and a digest of at most 1 KiB at
+the beginning and boundary. This samples those bytes; it is not a digest of the
+entire preceding transcript. Replay also checks its actual opened descriptor.
+Incomplete or changed evidence keeps interpretation held with a reason.
+
+The replacement is staged behind a core control handle. Parser, runtime profile and
+watcher installation complete before the registry clears its interpretation hold.
+Every await is fenced by a copied binding/evidence revision and the session lifetime.
+Clearing a hold without authority cannot release the watcher's pending bytes.
+Cancellation remains eager, never waits on a worker, and cancelled history does not
+produce a completion recap. New prompts after the recorded boundary remain open.
+
+Uncorrelated Stop is deliberately retained as an explicit hold. An empty parser or
+an older completed turn does not establish which turn a delayed Stop belongs to.
+Existing positive stale Claude timestamps remain usable; otherwise a subsequent
+explicit Cancel resolves the hold. Exact per-engine Stop correlation remains in
+completion group 4. Legacy readers that cannot replay ordered file boundaries hold
+that interpretation rather than apply the cancellation to a guessed turn. Durable
+control intent across daemon restart remains part of the lifecycle completion work.
+
+The former core HTTP hook-admission golden was recorded separately from main
+`c7d460b1d` in `d331c49a4`; its twenty Linux/macOS observations and artifact are
+unchanged. Additional actual-composition regressions cover both inline parsing and
+the real worker request/transport/reconstruction path. At 04:00 UTC, 209 affected
+core tests passed at 100% coverage for the changed attachment, replacement-control
+and turn-hook modules. Full gates, private lanes, mutations and review are still
+required on the final source before this PR can land.
+
 The task resumed October 9 at 22:25:51 UTC. This step's golden was committed October
 10 at 01:39:46 UTC, while the preceding independent adoption validation finished.
 Implementation and preliminary review corrections followed the #1132 merge at

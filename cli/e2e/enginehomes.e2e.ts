@@ -276,14 +276,22 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     // Only this fixture's file is written; no synthetic input goes to the held pane.
     appendFileSync(file, '\n' + JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'unconfirmed held record' } }) + '\n')
     await turn(client, sibling!.id, 'a sibling works during the hold')
-    await until('discovery to retry the still-invalid header', async () => {
-      const value = await row(client, bound!.id)
-      return value?.identityHold && value.identityHold !== held.identityHold
-    }, 30_000)
     expect(client.frames.filter(frame => frame.agentId === bound!.id && ['turn_started', 'turn_ended'].includes(frame.type))).toEqual([])
+    const cancelled = client.next(isTurn('agent_activity', bound!.id), 15_000, 'held cancellation acknowledged by core')
+    client.send('cancel', { agentId: bound!.id })
+    await cancelled
     const saved = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as Row[]
     expect(saved.find(value => value.agentId === bound!.id)).toMatchObject({ sessionId: bound!.sessionId, transcriptPath: file })
     writeFileSync(file, complete)
+    const recovery = await until('the original cancellation to hold across the rewritten file', async () => {
+      const value = await row(client, bound!.id)
+      expect(value?.identityHold).toMatch(/^Waiting for transcript interpretation:/)
+      return value
+    }, 45_000)
+    expect(recovery.identityHold, recovery.identityHold).toMatch(/control boundary|replaced or truncated|boundary is an incomplete record/)
+    const confirmed = client.next(isTurn('agent_activity', bound!.id), 15_000, 'current cancellation acknowledged by core')
+    client.send('cancel', { agentId: bound!.id })
+    await confirmed
     await until('the same live binding to recover without another restart', async () => {
       const value = await row(client, bound!.id)
       return value?.sessionId === bound!.sessionId && !value.identityHold ? value : null

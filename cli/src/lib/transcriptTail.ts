@@ -1,6 +1,7 @@
 import { open, stat, type FileHandle } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
+import { verifyTranscriptHandle, type TranscriptFileIdentity } from './transcriptBoundary.js'
 
 const CHUNK_BYTES = 64 * 1024
 
@@ -41,9 +42,11 @@ export async function scanRecordsBackward(
   visit: (record: Buffer, offset: number) => boolean | void,
   maxRecordBytes = MAX_RECORD_BYTES,
   passed?: (offset: number) => boolean | void,
+  expectedFile?: TranscriptFileIdentity,
 ): Promise<boolean> {
   const handle = await open(filePath, 'r')
   try {
+    if (expectedFile) await verifyTranscriptHandle(handle, expectedFile)
     let position = end
     // Pieces of the record being assembled, newest first; only ever one record's worth.
     let fragments: Buffer[] = []
@@ -103,9 +106,11 @@ export async function streamRecords(
   onRecord: (line: string, offset: number) => boolean | void,
   complete: (line: string) => boolean,
   maxRecordBytes = MAX_RECORD_BYTES,
+  expectedFile?: TranscriptFileIdentity,
 ): Promise<{ next: number; records: number; partial: boolean } | null> {
   const handle = await open(filePath, 'r')
   try {
+    if (expectedFile) await verifyTranscriptHandle(handle, expectedFile)
     let position = start
     let next = start
     let records = 0

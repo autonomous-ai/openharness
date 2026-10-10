@@ -6,7 +6,8 @@ export function transcriptReadIdentity(session: RegisteredSession | undefined): 
   return session ? JSON.stringify([session.agentId, session.sessionId, session.engine, session.transcriptPath,
     session.codexHome, session.boundAt,
     session.processIdentity ? processIdentityKey(session.engine, session.processIdentity) : undefined,
-    ...(session.identityHold ? ['identity-held'] : [])]) : ''
+    ...(session.identityHold ? ['identity-held'] : []),
+    ...(session.evidenceRevision === undefined ? [] : [session.evidenceRevision])]) : ''
 }
 
 /** A pane belongs to its process, conversation and current terminal routes. Copy before capture. */

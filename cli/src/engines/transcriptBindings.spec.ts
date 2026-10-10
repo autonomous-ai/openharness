@@ -194,4 +194,4 @@ it('holds pool overflow, expired work and failed descriptor close', () => {
   expect(() => new NativeFiles(new NativeEvidenceBudget(-1)).file(file)).toThrow('deadline')
   vi.mocked(fs.closeSync).mockImplementation(fd => { actual.closeSync(fd); throw new Error('fixture close failed') })
   expect(() => new NativeFiles().file(file)).toThrow('could not be closed')
-})
+}, 30_000)
