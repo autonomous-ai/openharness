@@ -21,6 +21,7 @@ struct Change {
     handoff: Option<String>,
     context_loaded: bool,
     handoff_failed: bool,
+    handoff_conflict: bool,
     preserving: bool,
     closed: bool,
     creation_sent: bool,
@@ -391,12 +392,14 @@ pub fn choose(app: &mut App, mut picker: Picker, selected: &str) {
         app.modal = Some(Modal::Picker { kind: PickerKind::AgentSwitch, picker }); return;
     }
     if let Some(c) = &pending { app.agent_switch.changes.remove(&c.id); }
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = pending.as_ref().filter(|c| c.engine == engine && c.belongs(app)
+        && !c.closed && !c.context_loaded && !c.creation_sent && !c.handoff_conflict)
+        .map(|c| c.id.clone()).unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
     let retained = pending.as_ref().filter(|c| c.closed && c.context_loaded);
     let context_loaded = retained.is_some();
     let handoff = retained.filter(|_| crate::agent_handoff::supported(engine)).and_then(|c| c.handoff.clone());
     app.agent_switch.changes.insert(id.clone(), Change { id: id.clone(), source, identity: selection.identity, engine: engine.into(), stage: Stage::Handoff,
-        handoff, context_loaded, handoff_failed: retained.is_some_and(|c| c.handoff_failed), preserving: closed, closed, creation_sent: false, creation_finished: false, next: None, next_row: None, error: String::new(), since: Instant::now() });
+        handoff, context_loaded, handoff_failed: retained.is_some_and(|c| c.handoff_failed), handoff_conflict: false, preserving: closed, closed, creation_sent: false, creation_finished: false, next: None, next_row: None, error: String::new(), since: Instant::now() });
     app.modal = Some(Modal::Picker { kind: PickerKind::AgentSwitch, picker });
     if closed && context_loaded { create(app, &id); } else { prepare(app, &id); }
 }
@@ -444,16 +447,65 @@ fn prepare(app: &mut App, id: &str) {
 }
 
 fn prepared(app: &mut App, id: &str, reply: Reply) {
-    if !valid(app, id) { return }
+    if !valid(app, id) {
+        return;
+    }
     let c = &app.agent_switch.changes[id];
-    let accepted = reply.as_ref().ok().and_then(|r| crate::agent_handoff::accept(r, &c.source.id, id, &c.source.cwd, theme::engine_label(&c.source.engine)));
+    let accepted = reply.as_ref().ok().and_then(|r| {
+        crate::agent_handoff::accept(
+            r,
+            &c.source.id,
+            id,
+            &c.source.cwd,
+            theme::engine_label(&c.source.engine),
+        )
+    });
     if let Some(prompt) = accepted {
-        let c = app.agent_switch.changes.get_mut(id).unwrap(); c.handoff = prompt; c.context_loaded = true;
+        let c = app.agent_switch.changes.get_mut(id).unwrap();
+        c.handoff = prompt;
+        c.context_loaded = true;
         stop(app, id);
-    } else {
-        let c = app.agent_switch.changes.get_mut(id).unwrap(); c.stage = Stage::Recent;
+    } else if reply
+        .as_ref()
+        .is_err_and(|error| error.code == "UNSUPPORTED")
+        || reply
+            .as_ref()
+            .is_ok_and(|value| value["error"] == "UNSUPPORTED")
+    {
+        let c = app.agent_switch.changes.get_mut(id).unwrap();
+        c.stage = Stage::Recent;
         let agent = c.source.id.clone();
-        request(app, id, "agent_recent", json!({"agentId":agent, "n":5}), 4, recent);
+        request(
+            app,
+            id,
+            "agent_recent",
+            json!({"agentId":agent, "n":5}),
+            4,
+            recent,
+        );
+    } else if reply
+        .as_ref()
+        .is_err_and(|error| error.code == "CHANGE_CONFLICT")
+        || reply
+            .as_ref()
+            .is_ok_and(|value| value["error"] == "CHANGE_CONFLICT")
+    {
+        app.agent_switch
+            .changes
+            .get_mut(id)
+            .unwrap()
+            .handoff_conflict = true;
+        fail(
+            app,
+            id,
+            "The conversation changed. Choose the agent again to start a new switch.",
+        );
+    } else {
+        fail(
+            app,
+            id,
+            "Waiting for the conversation handoff. Try switching again.",
+        );
     }
 }
 
@@ -746,6 +798,99 @@ mod tests {
         assert_eq!(app.panes[&1].agent_id, "a1");
         assert_eq!(app.fleet.agent("local", "a1").unwrap().status, "active");
         assert!(app.agent_switch.changes[&id].error.contains("No acknowledgement"));
+    }
+
+    #[tokio::test]
+    async fn unavailable_or_untrusted_handoff_holds_the_source_until_the_same_intent_recovers() {
+        for reply in [
+            Err(RpcError::new("TIMEOUT", "")),
+            Err(RpcError::new("DISCONNECTED", "")),
+            Ok(json!({"error":"IDENTITY_UNAVAILABLE", "held":true, "retryable":true})),
+            Ok(json!({"error":"SERVICE_UNAVAILABLE"})),
+            Ok(json!({"error":"BUSY"})),
+            Ok(json!({})),
+            Ok(json!({"agentId":"a1", "degraded":[], "file":null})),
+        ] {
+            let mut app = app();
+            let id = start(&mut app, "claude");
+            assert_eq!(id.len(), 32);
+            assert!(
+                id.bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            );
+            prepared(&mut app, &id, reply);
+            assert!(sent(&app, "agent_recent").is_empty());
+            assert!(sent(&app, "agent_close").is_empty());
+            assert!(sent(&app, "agent_create").is_empty());
+            assert_eq!(app.panes[&1].agent_id, "a1");
+            assert!(app.agent_switch.changes[&id].error.contains("Waiting"));
+            select(&mut app, "claude");
+            assert!(app.agent_switch.changes.contains_key(&id));
+            handoff(&mut app, &id);
+            assert_eq!(sent(&app, "agent_close").len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn reconnect_rebinds_the_same_handoff_intent_but_fences_old_callbacks() {
+        let mut app = app();
+        app.port = 0; // No test request can reach any installed daemon.
+        app.fleet.local_id = "fixture-owner".into();
+        app.fleet.machines[0].local = false;
+        app.connect("local");
+        app.fleet.machine_mut("local").unwrap().reach = Reach::Ready;
+        let old_generation = app.connection_generation("local").unwrap();
+        let id = start(&mut app, "claude");
+        let old_identity = app.agent_switch.changes[&id].identity.clone();
+        prepared(&mut app, &id, Err(RpcError::new("DISCONNECTED", "")));
+        app.on_machine(
+            "local".into(),
+            old_generation,
+            crate::event::MachineEvent::Closed(RpcError::new("DISCONNECTED", "")),
+        );
+        app.connect("local");
+        app.fleet.machine_mut("local").unwrap().reach = Reach::Ready;
+        assert_ne!(app.connection_generation("local"), Some(old_generation));
+        open(&mut app, 1);
+        select(&mut app, "claude");
+        assert!(app.agent_switch.changes.contains_key(&id));
+        assert!(!old_identity.connection_matches(&app));
+        assert!(
+            app.agent_switch.changes[&id]
+                .identity
+                .connection_matches(&app)
+        );
+        assert_eq!(
+            sent(&app, "agent_handoff_prepare").last().unwrap()["changeId"],
+            id
+        );
+        assert!(sent(&app, "agent_close").is_empty());
+        handoff(&mut app, &id);
+        assert_eq!(sent(&app, "agent_close").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_proven_handoff_conflict_revokes_the_intent_until_explicit_reselection() {
+        for reply in [
+            Err(RpcError::new("CHANGE_CONFLICT", "")),
+            Ok(json!({"error":"CHANGE_CONFLICT"})),
+        ] {
+            let mut app = app();
+            let id = start(&mut app, "claude");
+            prepared(&mut app, &id, reply);
+            assert!(
+                app.agent_switch.changes[&id]
+                    .error
+                    .contains("Choose the agent again")
+            );
+            assert!(sent(&app, "agent_close").is_empty());
+            assert!(sent(&app, "agent_recent").is_empty());
+            select(&mut app, "claude");
+            let fresh = app.agent_switch.changes.keys().next().unwrap().clone();
+            assert_ne!(fresh, id);
+            handoff(&mut app, &fresh);
+            assert_eq!(sent(&app, "agent_close").len(), 1);
+        }
     }
 
     #[tokio::test]

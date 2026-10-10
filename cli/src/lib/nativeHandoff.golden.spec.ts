@@ -32,14 +32,17 @@ it.each(['linux', 'darwin'])('keeps the former handoff service outcomes on %s', 
       mkdirSync(join(root, name), { recursive: true, mode: 0o700 }); vi.stubEnv(name, join(root, name))
     }
     vi.stubEnv('TZ', 'UTC'); vi.resetModules()
+    for (const transport of ['inline', 'process']) for (const mode of ['own', 'fork', 'discovery']) {
+      // Each observation starts a separate daemon state with its own explicit Change agent intent.
+      const dataDir = join(root, `data-${transport}-${mode}`); mkdirSync(dataDir, { mode: 0o700 })
+      vi.stubEnv('ADAPTER_DATA_DIR', dataDir); vi.resetModules()
     const { fakeCore } = await import('../testing/fakeCore.js')
     const { conversationReads, answerConversationQuery } = await import('../core/conversationQueries.js')
     const { createServiceLinks } = await import('../core/serviceLinks.js')
     const { handoffCoreApi } = await import('../services/handoffProcess.js')
     const { startHandoff } = await import('../services/handoff.js')
-    const { handoffProviderDeps } = await import('./handoffDiscovery.js')
+    const { createHandoffDependencies } = await import('../core/handoffDependencies.js')
     const { validTranscriptPath } = await import('./registry.js')
-    for (const transport of ['inline', 'process']) for (const mode of ['own', 'fork', 'discovery']) {
       const cwd = join(root, `${transport}-${mode}`); mkdirSync(cwd)
       const path = join(root, 'CODEX_HOME', 'sessions', `${mode}-${ID}.jsonl`)
       write(path, [
@@ -48,21 +51,21 @@ it.each(['linux', 'darwin'])('keeps the former handoff service outcomes on %s', 
         { timestamp: '2026-10-10T08:00:01Z', type: 'event_msg', payload: { type: 'agent_message', message: 'The native conversation is retained.' } },
         { timestamp: '2026-10-10T08:00:02Z', type: 'event_msg', payload: { type: 'task_complete' } },
       ].map(value => JSON.stringify(value)).join('\n') + '\n')
-      write(join(root, 'ADAPTER_DATA_DIR', 'engine-homes.json'), '{}')
+      write(join(dataDir, 'engine-homes.json'), '{}')
       const parent = { agentId: 'parent', sessionId: ID, engine: 'codex', cwd, transcriptPath: path,
         registeredAt: AT, boundAt: AT - 60_000, codexHome: null, hermesHome: null,
         processIdentity: null, runtimes: [{ backend: 'tmux', paneId: '%1' }] } as RegisteredSession
       const source = mode === 'own' ? { ...parent, agentId: 'selected' } : { ...parent, agentId: 'selected', sessionId: '', transcriptPath: null,
         ...(mode === 'fork' ? { forkedFrom: { agentId: 'parent', name: 'Parent', sessionId: ID, transcriptPath: path } }
           : { processIdentity: { pid: 4242, executable: 'codex', startMarker: '2026-10-10T08:00:00Z' } }) }
-      const deps = handoffProviderDeps({
+      const deps = createHandoffDependencies({
         registry: { resolve: id => id === 'selected' ? source : id === 'parent' ? parent : undefined,
           byAgent: () => source, bySession: () => undefined },
         stopped: { get: () => null, ids: () => [] }, mirror: { recentAsks: () => [], lastFullText: () => undefined, recent: () => [] },
         databaseHistory: () => undefined, findLiveSession: async () => ({ sessionId: ID, transcriptPath: path }),
         processSession: async () => null, isRecentlyDeleted: () => false, findResumedTranscript: async () => path, validTranscriptPath,
-      })
-      const core = fakeCore({ dataDir: join(root, 'ADAPTER_DATA_DIR'), conversations: conversationReads(deps), daemon: { port: 0 } })
+      }, dataDir)
+      const core = fakeCore({ dataDir, conversations: conversationReads(deps), daemon: { port: 0 } })
       const request = { agentId: 'selected', changeId: CHANGE, targetEngine: 'claude' }
       const owner = { owner: true, local: true, connection: 'fixture-owner', requestId: 'fixture-request' }
       let result: unknown
@@ -70,7 +73,7 @@ it.each(['linux', 'darwin'])('keeps the former handoff service outcomes on %s', 
       else {
         const queries = new Map<string, (reply: Record<string, unknown>) => void>(); let next = 0
         const links = createServiceLinks({ token: 'fixture-token', owned: { handoff: ['agent_handoff_prepare'] }, log: () => {},
-          answer: (_service, query, payload) => answerConversationQuery(core, query, json(payload)) })
+          answer: (_service, query, payload, authority) => answerConversationQuery(core, query, json(payload), authority) })
         const processCore = handoffCoreApi(core.dataDir, (query, payload) => new Promise(resolve => {
           const requestId = `query-${++next}`; queries.set(requestId, resolve)
           link.receive(json({ type: 'service_query', payload: { ...payload, query, requestId } }))
@@ -97,5 +100,5 @@ it.each(['linux', 'darwin'])('keeps the former handoff service outcomes on %s', 
     vi.useRealTimers(); vi.unstubAllEnvs(); vi.resetModules(); Object.defineProperty(process, 'platform', original)
     rmSync(root, { recursive: true, force: true })
   }
-})
+}, 20_000) // Six durable filesystem transactions per platform; each request retains its own 5 s deadline.
 afterAll(() => { if (RECORD) writeFileSync(GOLDEN, JSON.stringify(captured, null, 2) + '\n') })

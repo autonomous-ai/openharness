@@ -11,6 +11,7 @@
  * needs to know with `notify`, and answers the few questions a service may ask it (`service_query`),
  * nothing more.
  */
+import { performance } from 'node:perf_hooks'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import type { Asker } from './api.js'
 
@@ -38,13 +39,17 @@ export interface ServiceLink {
   closed(): void
 }
 
+export interface ServiceQueryAuthority {
+  /** Checked inside a commit, after all asynchronous query dispatch: the exact routed owner request is still live. */
+  ownsRequest(id: string, type: string, expected: Record<string, unknown>): boolean
+}
 export interface ServiceLinksOptions {
   /** The token the master started this core with; without one, no service may connect. */
   token: string | undefined
   /** The request types each out-of-process service answers. Only these services may connect. */
   owned: Readonly<Record<string, readonly string[]>>
   /** The core's answer to a service's question (`service_query`): `query` names it. */
-  answer(service: string, query: string, payload: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
+  answer(service: string, query: string, payload: Record<string, unknown>, authority: ServiceQueryAuthority): Record<string, unknown> | Promise<Record<string, unknown>>
   /** What a service tells the core without asking (`service_notice`), and its binary frames: the gateway's
    *  remote clients and what they sent. Only the services that send them are given these. */
   notice?(service: string, payload: Record<string, unknown>): void
@@ -68,6 +73,7 @@ export interface ServiceLinksOptions {
   /** Ask the master for a process on demand (harnessd/coreLink.ts `want`). */
   want?(service: string): void
   log?: (line: string) => void
+  now?: () => number
   newId?: () => string
   setTimer?: (run: () => void, ms: number) => unknown
   clearTimer?: (timer: unknown) => void
@@ -79,6 +85,9 @@ interface Connected {
 }
 
 interface Waiting {
+  request: ServiceFrame
+  connection?: Connected
+  expiresAt: number
   service: string
   type: string
   reply: (result: Record<string, unknown>) => void
@@ -102,6 +111,7 @@ export const ON_DEMAND_START_MS = 20_000
 const THE_CORE: Asker = { local: true, owner: true }
 
 export function createServiceLinks(options: ServiceLinksOptions) {
+  const now = options.now ?? (() => performance.now())
   const timeoutMs = options.timeoutMs ?? 30_000
   const startWaitMs = options.startWaitMs ?? ON_DEMAND_START_MS
   const log = options.log ?? ((line: string) => console.warn(line))
@@ -139,7 +149,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   /** How long an answer from `service` to `type` is waited for: its own wait when it has one. */
   const waitFor = (service: string, type: string): number => {
     const waits = options.waits?.[service]
-    return waits && Object.hasOwn(waits, type) ? waits[type] : timeoutMs
+    return waits && Object.hasOwn(waits, type) ? waits[type] : type === 'agent_handoff_prepare' ? Math.min(timeoutMs, 5_000) : timeoutMs
   }
 
   /** Send `type` to `service`, its answer to `reply`, whatever becomes of the service. An experiment that is
@@ -151,7 +161,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     const id = newId()
     const frame: ServiceFrame = { type, payload: { ...payload, requestId: id }, asker }
     const wait = waitMs ?? waitFor(service, type)
-    const entry: Waiting = { service, type, reply, timer: null, wait, ...(starting ? { frame } : {}) }
+    const entry: Waiting = { service, type, reply, timer: null, wait, request: frame, connection: link, expiresAt: now() + wait, ...(starting ? { frame } : {}) }
     // Cleared whenever the entry is settled, so it only ever fires for one still waiting.
     entry.timer = setTimer(() => {
       if (entry.frame) unstarted.add(service)
@@ -171,7 +181,9 @@ export function createServiceLinks(options: ServiceLinksOptions) {
         return null
       }
       // A service reconnecting (the core restarted, its socket dropped) replaces its old connection.
-      links.get(service)?.close(4409, 'replaced by a newer connection')
+      const replaced = links.get(service)
+      replaced?.close(4409, 'replaced by a newer connection')
+      for (const [id, entry] of waiting) if (replaced && entry.connection === replaced) settle(id, entry, unavailable(service))
       const connected: Connected = { sink, close }
       links.set(service, connected)
       seen.add(service)
@@ -190,20 +202,29 @@ export function createServiceLinks(options: ServiceLinksOptions) {
         if (entry.service !== service || !entry.frame) continue
         const frame = entry.frame
         delete entry.frame
+        entry.connection = connected; entry.expiresAt = now() + entry.wait
         if (!sink.sendFrame(frame)) { settle(id, entry, unavailable(service)); continue }
         // Sent: it waits for its answer for its own wait now, as a request to a service that was up does.
         clearTimer(entry.timer)
         entry.timer = setTimer(() => settle(id, entry, unavailable(service)), entry.wait)
       }
+      const authority: ServiceQueryAuthority = { ownsRequest(id, type, expected) {
+        const entry = waiting.get(id)
+        return !!entry && entry.service === service && entry.type === type && entry.connection === connected
+          && links.get(service) === connected && now() <= entry.expiresAt
+          && (entry.request.asker as Asker).owner
+          && Object.entries(expected).every(([key, value]) => entry.request.payload?.[key] === value)
+      } }
       return {
         receive: (frame) => {
+          if (links.get(service) !== connected) return
           const payload = frame.payload ?? {}
           if (frame.type === 'service_notice') { options.notice?.(service, payload); return }
           if (frame.type === 'service_query') {
             const requestId = payload.requestId
             const query = typeof payload.query === 'string' ? payload.query : ''
             void Promise.resolve()
-              .then(() => options.answer(service, query, payload))
+              .then(() => links.get(service) === connected ? options.answer(service, query, payload, authority) : unavailable(service))
               .catch(() => ({ error: 'QUERY_FAILED' }))
               .then((result) => { sink.sendFrame({ type: 'service_query_result', payload: { ...result, requestId } }) })
             return
@@ -211,11 +232,11 @@ export function createServiceLinks(options: ServiceLinksOptions) {
           const id = typeof payload.requestId === 'string' ? payload.requestId : ''
           const entry = waiting.get(id)
           // Only the answer to a request routed to THIS service, under the type it was asked as.
-          if (!entry || entry.service !== service || frame.type !== `${entry.type}_result`) return
+          if (!entry || entry.service !== service || entry.connection !== connected || frame.type !== `${entry.type}_result`) return
           const { requestId: _routed, ...result } = payload
           settle(id, entry, result)
         },
-        receiveBinary: (bytes) => { options.binary?.(service, bytes) },
+        receiveBinary: (bytes) => { if (links.get(service) === connected) options.binary?.(service, bytes) },
         closed: () => {
           if (links.get(service) !== connected) return
           links.delete(service)
@@ -248,7 +269,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
      *  never sent: nobody is left to read the answer, and the work would run for no one. */
     closeConnection(connection: string): void {
       for (const [id, entry] of waiting) {
-        if (entry.frame && (entry.frame.asker as Asker | undefined)?.connection === connection) settle(id, entry, unavailable(entry.service))
+        if ((entry.request.asker as Asker | undefined)?.connection === connection) settle(id, entry, unavailable(entry.service))
       }
       for (const link of links.values()) link.sink.sendFrame({ type: 'service_connection_closed', payload: { connection } })
     },

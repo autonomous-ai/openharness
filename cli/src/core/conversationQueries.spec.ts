@@ -80,3 +80,27 @@ describe('the conversation reads the handoff asks of the core', () => {
     expect(await ask('transcriptOk', { engine: 'claude', path: '' })).toEqual({ error: 'BAD_QUERY' })
   })
 })
+
+it('publishes only with a live core-owned originating request and preserves held failures', async () => {
+  const { HandoffError } = await import('../lib/handoffAuthority.js')
+  await expect(CONVERSATIONS_OFF.publish({} as never, { current: () => true })).rejects.toThrow()
+  const empty = conversationReads({ resolve: () => null, readHistory: () => undefined, recentAsks: () => [], lastFullText: () => undefined })
+  await expect(empty.publish({} as never, { current: () => true })).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
+  const request = { agentId: 'a', changeId: '1'.repeat(32), targetEngine: 'claude' }
+  const prepared = { request }, ownsRequest = vi.fn(() => true)
+  const publish = vi.fn(async (_prepared, permit) => {
+    if (!permit.current(request)) throw new HandoffError('HANDOFF_UNAVAILABLE')
+    return { cwd: '/work', file: null, gitRepo: false, degraded: [] }
+  })
+  const core = fakeCore({ conversations: { publish } })
+  const payload = { prepared, originRequestId: 'routed-request' }, authority = { ownsRequest }
+  expect(await answerConversationQuery(core, 'publish', payload, authority)).toEqual({ value: { cwd: '/work', file: null, gitRepo: false, degraded: [] } })
+  expect(ownsRequest).toHaveBeenCalledWith('routed-request', 'agent_handoff_prepare', request)
+  for (const [body, witness] of [[{}, authority], [payload, undefined], [{ prepared, originRequestId: '' }, authority]] as const) {
+    expect(await answerConversationQuery(core, 'publish', body, witness)).toMatchObject({ error: 'HANDOFF_UNAVAILABLE', held: true })
+  }
+  ownsRequest.mockReturnValue(false)
+  expect(await answerConversationQuery(core, 'publish', payload, authority)).toMatchObject({ error: 'HANDOFF_UNAVAILABLE', held: true })
+  publish.mockRejectedValueOnce(new Error('private failure detail'))
+  expect(await answerConversationQuery(core, 'publish', payload, authority)).toEqual({ error: 'HANDOFF_UNAVAILABLE', held: true, retryable: true })
+})

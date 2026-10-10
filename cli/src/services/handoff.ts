@@ -1,5 +1,6 @@
 /** Change agent's history, redaction and git work live outside the core. Its facts come only through
  * CoreApi, including stopped parents and the core's verified session discovery. */
+import { performance } from 'node:perf_hooks'
 import { HANDOFF_REQUESTS, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
 import { prepareAgentHandoff, type HandoffDeps } from '../lib/agentHandoff.js'
 import { createHandoffRequest } from './handoffRequest.js'
@@ -18,6 +19,13 @@ export function startHandoff(core: CoreApi, _ports?: CorePorts, prepare = prepar
     findTranscript: (engine, id, options) => reads.findTranscript(engine, id, options),
     transcriptOk: (engine, path, home) => reads.transcriptOk(engine, path, home),
   }
-  const answer = createHandoffRequest({ prepare: (request) => prepare(deps, request) })
-  return { agent_handoff_prepare: (payload, asker) => new Promise((reply) => answer(payload, asker, reply)) }
+  return { agent_handoff_prepare: (payload, asker, closed) => {
+    const expires = performance.now() + 5_000
+    const permit = { requestId: typeof payload.requestId === 'string' ? payload.requestId : undefined,
+      current: (request: { agentId: string; changeId: string; targetEngine: string }) => asker.owner && !closed?.aborted
+        && performance.now() <= expires && request.agentId === payload.agentId && request.changeId === payload.changeId && request.targetEngine === payload.targetEngine }
+    const answer = createHandoffRequest({ prepare: (request) => prepare({ ...deps, permit,
+      publish: (prepared, _permit) => reads.publish(prepared, permit) }, request) })
+    return new Promise(reply => answer(payload, asker, reply))
+  } }
 }

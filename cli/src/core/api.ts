@@ -1,3 +1,4 @@
+import type { PreparedHandoff, HandoffPermit, HandoffOutcome } from '../lib/handoffAuthority.js'
 import type { AgentTokenUsage, AgentUsageTarget } from '../lib/agentUsageWire.js'
 import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAssignmentWire.js'
 /**
@@ -86,6 +87,7 @@ export const TERMINALS_OFF: TerminalsPort = {
 /** Read-only conversation facts for the handoff in the edge host. Each lookup asks the core now;
  * a stopped record is never replaced by a stale live-agent list in another process. */
 export interface ConversationReads {
+  publish(prepared: PreparedHandoff, permit: HandoffPermit): Promise<HandoffOutcome>
   /** A live agent by agent/session id, otherwise the stopped record by agent id. */
   resolve(id: string): Promise<RegisteredSession | null>
   recentAsks(sessionId: string, n: number): Promise<string[]>
@@ -99,6 +101,7 @@ export interface ConversationReads {
 
 /** No retained record or history, no discovered session and no permission to read a guessed path. */
 export const CONVERSATIONS_OFF: ConversationReads = {
+  publish: async () => { throw new Error('handoff publication is unavailable') },
   resolve: async () => null,
   recentAsks: async () => [],
   lastFullText: async () => null,

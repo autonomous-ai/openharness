@@ -478,8 +478,42 @@ void main() {
       );
     });
 
+    test(
+      'a proven handoff conflict needs a fresh explicit switch without closing',
+      () async {
+        final (connection, app) = await open();
+        connection.handoff = (_) => {'error': 'CHANGE_CONFLICT'};
+        expect(
+          await app.changeAgent('m', 'a0', 'claude'),
+          contains('Choose the agent again'),
+        );
+        final first = connection.handoffCalls.single['changeId'];
+        expect(connection.events, isNot(contains('save/stop')));
+        expect(connection.recentReads, 0);
+        expect(connection.creations, isEmpty);
+        connection.handoff = handoffOk;
+        expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
+        expect(connection.handoffCalls.last['changeId'], isNot(first));
+        expect(
+          connection.events.where((event) => event == 'save/stop'),
+          hasLength(1),
+        );
+      },
+    );
+
     final bad = <String, Map<String, dynamic> Function(Map<String, dynamic>)>{
-      'UNSUPPORTED': (_) => {'error': 'UNSUPPORTED'},
+      'IDENTITY_UNAVAILABLE': (_) => {
+        'error': 'IDENTITY_UNAVAILABLE',
+        'held': true,
+        'retryable': true,
+      },
+      'SERVICE_UNAVAILABLE': (_) => {'error': 'SERVICE_UNAVAILABLE'},
+      'a held reply without an error': (p) => {...handoffOk(p), 'held': true},
+      'an empty reply without project identity': (_) => {
+        'agentId': 'a0',
+        'file': null,
+        'degraded': <String>[],
+      },
       'BUSY': (_) => {'error': 'BUSY'},
       'TIMEOUT': (_) => {'error': 'TIMEOUT'},
       'a file-degraded reply': (p) => {
@@ -497,19 +531,34 @@ void main() {
       'an empty reply': (_) => <String, dynamic>{},
     };
     for (final MapEntry(key: name, value: reply) in bad.entries) {
-      test('falls back to the inline excerpt on $name', () async {
-        final (connection, app) = await open();
-        connection.handoff = reply;
-        expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
-        expect(connection.handoffCalls, hasLength(1));
-        expect(connection.recentReads, 1);
-        expect(connection.creations.single['prompt'], contains('maple-42'));
-        expect(notices, isEmpty);
-      });
+      test(
+        'holds before Close on $name and recovers the same intent',
+        () async {
+          final (connection, app) = await open();
+          connection.handoff = reply;
+          expect(
+            await app.changeAgent('m', 'a0', 'claude'),
+            contains('Waiting'),
+          );
+          expect(connection.handoffCalls, hasLength(1));
+          expect(connection.recentReads, 0);
+          expect(connection.creations, isEmpty);
+          expect(connection.events, isNot(contains('save/stop')));
+          expect(notices, isEmpty);
+          final originalId = connection.handoffCalls.single['changeId'];
+          connection.handoff = handoffOk;
+          expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
+          expect(connection.handoffCalls.last['changeId'], originalId);
+          expect(
+            connection.events.where((event) => event == 'save/stop'),
+            hasLength(1),
+          );
+        },
+      );
     }
 
     test(
-      'an empty fallback after an unreadable history says so, once',
+      'unreadable history holds even if the mirror has no saved text',
       () async {
         final (connection, app) = await open();
         connection
@@ -519,10 +568,11 @@ void main() {
             'file': null,
             'degraded': ['transcript'],
           };
-        expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
-        expect(connection.recentReads, 1);
-        expect(connection.creations.single['prompt'], isNull);
-        expect(notices, [failed]);
+        expect(await app.changeAgent('m', 'a0', 'claude'), contains('Waiting'));
+        expect(connection.recentReads, 0);
+        expect(connection.creations, isEmpty);
+        expect(connection.events, isNot(contains('save/stop')));
+        expect(notices, isEmpty);
       },
     );
 
@@ -535,18 +585,16 @@ void main() {
             c.handoffThrows = const WsRequestTimeout('agent_handoff_prepare'),
       ),
     ]) {
-      test(
-        'an empty fallback after $name is a failed read, not no history',
-        () async {
-          final (connection, app) = await open();
-          connection.recent = {'asks': <String>[], 'events': <Object>[]};
-          arrange(connection);
-          expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
-          expect(connection.recentReads, 1);
-          expect(connection.creations.single['prompt'], isNull);
-          expect(notices, [failed]);
-        },
-      );
+      test('$name holds without inferring empty history', () async {
+        final (connection, app) = await open();
+        connection.recent = {'asks': <String>[], 'events': <Object>[]};
+        arrange(connection);
+        expect(await app.changeAgent('m', 'a0', 'claude'), contains('Waiting'));
+        expect(connection.recentReads, 0);
+        expect(connection.creations, isEmpty);
+        expect(connection.events, isNot(contains('save/stop')));
+        expect(notices, isEmpty);
+      });
     }
 
     test('a file handoff says nothing', () async {
@@ -576,14 +624,15 @@ void main() {
       expect(notices, [failed]);
     });
 
-    test('falls back when the request times out', () async {
+    test('holds when the request times out', () async {
       final (connection, app) = await open();
       connection.handoffThrows = const WsRequestTimeout(
         'agent_handoff_prepare',
       );
-      expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
-      expect(connection.recentReads, 1);
-      expect(connection.creations.single['prompt'], contains('maple-42'));
+      expect(await app.changeAgent('m', 'a0', 'claude'), contains('Waiting'));
+      expect(connection.recentReads, 0);
+      expect(connection.creations, isEmpty);
+      expect(connection.events, isNot(contains('save/stop')));
     });
 
     test(
@@ -601,12 +650,13 @@ void main() {
       },
     );
 
-    test('any other failure of the request also falls back', () async {
+    test('holds when the request connection closes', () async {
       final (connection, app) = await open();
       connection.handoffThrows = StateError('socket closed');
-      expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
-      expect(connection.recentReads, 1);
-      expect(connection.creations.single['prompt'], contains('maple-42'));
+      expect(await app.changeAgent('m', 'a0', 'claude'), contains('Waiting'));
+      expect(connection.recentReads, 0);
+      expect(connection.creations, isEmpty);
+      expect(connection.events, isNot(contains('save/stop')));
     });
 
     test('a retry after a fallback reads nothing again', () async {

@@ -80,7 +80,7 @@ it.each(['linux', 'darwin'])('keeps native history consumer outcomes on %s', asy
     vi.resetModules()
     const { inspectNativeHistory, eraseNativeHistory } = await import('./purgeAgentService.js')
     const { prepareAgentHandoff } = await import('./agentHandoff.js')
-    const { handoffProviderDeps } = await import('./handoffDiscovery.js')
+    const { createHandoffDependencies } = await import('../core/handoffDependencies.js')
     const { validTranscriptPath } = await import('./registry.js')
     let change = 0
     for (const fixture of fixtures) {
@@ -94,13 +94,13 @@ it.each(['linux', 'darwin'])('keeps native history consumer outcomes on %s', asy
           const source = mode === 'own' ? entry : { ...entry, agentId: `fixture-${mode}`, sessionId: '', transcriptPath: null,
             ...(mode === 'fork' ? { forkedFrom: { agentId: entry.agentId, name: 'Parent', sessionId: A, transcriptPath: fixture.file } }
               : { processIdentity: { pid: 4242, executable: 'codex', startMarker: '2026-10-10T08:00:00Z' } }) }
-          const deps = handoffProviderDeps({
+          const deps = createHandoffDependencies({
             registry: { resolve: id => id === source.agentId ? source : id === entry.agentId ? entry : undefined,
               byAgent: () => source, bySession: () => undefined },
             stopped: { get: () => null, ids: () => [] }, mirror: { recentAsks: () => [], lastFullText: () => undefined, recent: () => [] },
             databaseHistory: () => undefined, findLiveSession: async () => ({ sessionId: A, transcriptPath: fixture.file }),
             processSession: async () => null, isRecentlyDeleted: () => false, findResumedTranscript: async () => fixture.file!, validTranscriptPath,
-          })
+          }, join(root, 'ADAPTER_DATA_DIR'))
           const result = await prepareAgentHandoff(deps, { agentId: source.agentId, targetEngine: 'claude', changeId: (++change).toString(16).padStart(32, '0') })
           check(`${fixture.name}:handoff:${mode}`, { result, files: result.file ? readdirSync(join(cwd, '.harness', 'handoff'))
             .filter(name => name.startsWith(source.agentId + '-')).sort().map(name => ({ name, text: readFileSync(join(cwd, '.harness', 'handoff', name), 'utf8') })) : [] })

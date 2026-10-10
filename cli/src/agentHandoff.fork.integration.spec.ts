@@ -8,7 +8,7 @@
 // The unit specs pin each side with fakes; this one pins that the pieces agree.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { RegisteredSession } from './lib/registry.js'
@@ -48,11 +48,12 @@ async function modules() {
   const registryModule = await import('./lib/registry.js')
   const repair = await import('./lib/sessionRepair.js')
   const discovery = await import('./lib/handoffDiscovery.js')
+  const publication = await import('./core/handoffDependencies.js')
   const handoff = await import('./lib/agentHandoff.js')
   const stopped = await import('./lib/stoppedAgents.js')
   const stores = await import('./engines/sessionStores.js')
   registryModule.registry.load()
-  return { ...registryModule, ...repair, ...discovery, ...handoff, ...stopped, processSession: stores.processSessionOf }
+  return { ...registryModule, ...repair, ...discovery, ...publication, ...handoff, ...stopped, processSession: stores.processSessionOf }
 }
 
 type Mods = Awaited<ReturnType<typeof modules>>
@@ -64,8 +65,8 @@ function claudeFile(path: string, turns: Array<[string, string, number]>, extra:
   mkdirSync(join(path, '..'), { recursive: true })
   const lines: string[] = []
   turns.forEach(([ask, answer, at], i) => {
-    lines.push(JSON.stringify({ type: 'user', uuid: `u${i}`, isSidechain: false, cwd: ws, timestamp: iso(at), ...extra, message: { role: 'user', content: ask } }))
-    lines.push(JSON.stringify({ type: 'assistant', uuid: `a${i}`, isSidechain: false, cwd: ws, timestamp: iso(at + 1_000), ...extra, message: { role: 'assistant', content: [{ type: 'text', text: answer }], stop_reason: 'end_turn' } }))
+    lines.push(JSON.stringify({ sessionId: basename(path, '.jsonl'), type: 'user', uuid: `u${i}`, isSidechain: false, cwd: ws, timestamp: iso(at), ...extra, message: { role: 'user', content: ask } }))
+    lines.push(JSON.stringify({ sessionId: basename(path, '.jsonl'), type: 'assistant', uuid: `a${i}`, isSidechain: false, cwd: ws, timestamp: iso(at + 1_000), ...extra, message: { role: 'assistant', content: [{ type: 'text', text: answer }], stop_reason: 'end_turn' } }))
   })
   writeFileSync(path, lines.join('\n') + '\n')
   return path
@@ -86,7 +87,7 @@ function forkOriginAsCliBuildsIt(source: RegisteredSession, sourceName: string) 
 function cliDeps(m: Mods, rows: RegisteredSession[], over: { findLiveSession?: Mods['findLiveSession']; processSession?: Mods['processSession'] } = {}) {
   const stoppedDir = join(data, 'stopped-agents')
   const store = new m.StoppedAgentStore(stoppedDir)
-  return m.handoffProviderDeps({
+  return m.createHandoffDependencies({
     registry: {
       resolve: (id) => rows.find((s) => s.agentId === id) ?? null,
       byAgent: (id) => rows.find((s) => s.agentId === id),
@@ -110,10 +111,10 @@ function cliDeps(m: Mods, rows: RegisteredSession[], over: { findLiveSession?: M
     isRecentlyDeleted: () => false,
     findResumedTranscript: m.findResumedTranscript,
     validTranscriptPath: m.validTranscriptPath,
-  })
+  }, data)
 }
 
-const handoffMd = (agentId: string): string => readFileSync(join(ws, '.harness', 'handoff', `${agentId}-${CHANGE}.md`), 'utf8')
+const handoffMd = (agentId: string, change = CHANGE): string => readFileSync(join(ws, '.harness', 'handoff', `${agentId}-${change}.md`), 'utf8')
 
 describe('fork record → registry → stopped copy → inheritance (real modules)', () => {
   /** A bound Claude parent with one ask before the fork and one far after it, and its fork as the daemon opens it. */
@@ -151,12 +152,12 @@ describe('fork record → registry → stopped copy → inheritance (real module
     expect(stoppedFork.forkedFrom).toEqual(fork.forkedFrom)
 
     for (const [label, row] of [['live', fork], ['restarted', restartedFork], ['stopped', stoppedFork]] as const) {
-      rmSync(join(ws, '.harness'), { recursive: true, force: true })
+      const changeId = { live: CHANGE, restarted: OTHER_CHANGE, stopped: 'a'.repeat(32) }[label]
       const findLiveSession = vi.fn(m.findLiveSession)
       const claudeProcessSession = vi.fn(m.processSession)
-      const result = await m.prepareAgentHandoff(cliDeps(m, [parent, row], { findLiveSession, processSession: claudeProcessSession }), { agentId: row.agentId, changeId: CHANGE, targetEngine: 'codex' })
-      expect(result, label).toEqual({ file: `.harness/handoff/${row.agentId}-${CHANGE}.md`, gitRepo: false, cwd: ws, degraded: ['git'] })
-      const md = handoffMd(row.agentId)
+      const result = await m.prepareAgentHandoff(cliDeps(m, [parent, row], { findLiveSession, processSession: claudeProcessSession }), { agentId: row.agentId, changeId, targetEngine: 'codex' })
+      expect(result, label).toEqual({ file: `.harness/handoff/${row.agentId}-${changeId}.md`, gitRepo: false, cwd: ws, degraded: ['git'] })
+      const md = handoffMd(row.agentId, changeId)
       expect(md, label).toContain('PRE-FORK ask: add a retry')
       expect(md, label).toContain('History: inherited from `harness Devops` (agent `parent-1`)')
       expect(md, label).not.toContain('POST-FORK ask')
@@ -188,8 +189,8 @@ describe('fork record → registry → stopped copy → inheritance (real module
     const m = await modules()
     // A path the registry normalizer accepts (absolute) but validTranscriptPath does not vouch for.
     const { parent, fork } = await forkOfParent(m, join(root, 'elsewhere', `${PARENT_SESSION}.jsonl`))
-    const result = await m.prepareAgentHandoff(cliDeps(m, [parent, fork]), { agentId: fork.agentId, changeId: CHANGE, targetEngine: 'codex' })
-    expect(result).toEqual({ file: null, gitRepo: false, cwd: ws, degraded: ['transcript'] })
+    await expect(m.prepareAgentHandoff(cliDeps(m, [parent, fork]), { agentId: fork.agentId, changeId: CHANGE, targetEngine: 'codex' }))
+      .rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     expect(existsSync(join(ws, '.harness'))).toBe(false)
   })
 })
@@ -240,7 +241,7 @@ describe('discovery through the real Claude process record (handoffDiscovery ↔
     const result = await ask(m, cliDeps(m, [unbound(marker)], { findLiveSession, processSession: claudeProcessSession }))
     expect(claudeProcessSession).toHaveBeenCalledTimes(1)
     expect(findLiveSession).not.toHaveBeenCalled()
-    expect(result).toEqual({ file: null, gitRepo: false, cwd: ws, degraded: ['transcript'] })
+    expect(result).toEqual({ file: null, gitRepo: false, cwd: ws, degraded: [] })
     expect(existsSync(join(ws, '.harness'))).toBe(false)
   })
 
@@ -252,7 +253,7 @@ describe('discovery through the real Claude process record (handoffDiscovery ↔
     for (const [label, row] of [['no marker', unbound(null)], ['no pid', unbound(marker, null)], ['no identity', unbound(null, null)]] as const) {
       const findLiveSession = vi.fn(m.findLiveSession)
       const claudeProcessSession = vi.fn(m.processSession)
-      expect(await ask(m, cliDeps(m, [row], { findLiveSession, processSession: claudeProcessSession })), label).toEqual({ file: null, gitRepo: false, cwd: ws, degraded: ['transcript'] })
+      await expect(ask(m, cliDeps(m, [row], { findLiveSession, processSession: claudeProcessSession })), label).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
       expect(claudeProcessSession, label).not.toHaveBeenCalled()
       expect(findLiveSession, label).not.toHaveBeenCalled()
     }
@@ -264,7 +265,7 @@ describe('discovery through the real Claude process record (handoffDiscovery ↔
     ownFile(Date.parse(marker) + 500)
     for (const [label, procStart, cwd] of [['older start', new Date(Date.parse(marker) - 60_000).toISOString(), ws], ['other folder', marker, root]] as const) {
       processRecord(FOUND_SESSION, procStart, cwd)
-      expect(await ask(m, cliDeps(m, [unbound(marker)])), label).toMatchObject({ file: null, degraded: ['transcript'] })
+      await expect(ask(m, cliDeps(m, [unbound(marker)])), label).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     }
   })
 
@@ -275,7 +276,7 @@ describe('discovery through the real Claude process record (handoffDiscovery ↔
     processRecord(FOUND_SESSION, marker)
     const holder = m.registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%9' }], cwd: ws })!
     new m.StoppedAgentStore(join(data, 'stopped-agents')).save({ ...holder, sessionId: FOUND_SESSION, active: false })
-    expect(await ask(m, cliDeps(m, [unbound(marker)]))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(ask(m, cliDeps(m, [unbound(marker)]))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
 
   it('fails closed on one unreadable stopped record, whoever it belonged to', async () => {
@@ -291,7 +292,7 @@ describe('discovery through the real Claude process record (handoffDiscovery ↔
     // One more record that cannot be read (the store's list() would skip it silently): nothing is handed over.
     rmSync(join(ws, '.harness'), { recursive: true, force: true })
     writeFileSync(join(data, 'stopped-agents', 'broken-1.json'), '{not json', { mode: 0o600 })
-    expect(await ask(m, cliDeps(m, [unbound(marker)]), OTHER_CHANGE)).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(ask(m, cliDeps(m, [unbound(marker)]), OTHER_CHANGE)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
 
   it('a fork in the same folder never searches, even with a matching process record', async () => {
@@ -302,9 +303,8 @@ describe('discovery through the real Claude process record (handoffDiscovery ↔
     const fork = { ...unbound(marker), forkedFrom: { agentId: 'gone-parent', name: 'Gone' } } as RegisteredSession
     const findLiveSession = vi.fn(m.findLiveSession)
     const claudeProcessSession = vi.fn(m.processSession)
-    const result = await ask(m, cliDeps(m, [fork], { findLiveSession, processSession: claudeProcessSession }))
+    await expect(ask(m, cliDeps(m, [fork], { findLiveSession, processSession: claudeProcessSession }))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     expect(findLiveSession).not.toHaveBeenCalled()
     expect(claudeProcessSession).not.toHaveBeenCalled()
-    expect(result).toEqual({ file: null, gitRepo: false, cwd: ws, degraded: ['transcript'] })
   })
 })

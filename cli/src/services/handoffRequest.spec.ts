@@ -62,3 +62,10 @@ describe('agent_handoff_prepare', () => {
     await vi.waitFor(() => expect(replies).toStrictEqual([{ error: 'INTERNAL' }]))
   })
 })
+
+it.each(['IDENTITY_UNAVAILABLE', 'HANDOFF_UNAVAILABLE', 'TIMEOUT', 'BUSY'])('reports %s as a retryable hold with no file', async code => {
+  const replies = ask(async () => { throw { name: 'HandoffError', code } }, good())
+  await vi.waitFor(() => expect(replies).toHaveLength(1))
+  expect(replies[0]).toMatchObject({ error: code, held: true, retryable: true, reason: expect.any(String) })
+  expect(replies[0].file).toBeUndefined()
+})

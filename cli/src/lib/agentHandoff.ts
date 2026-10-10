@@ -28,14 +28,20 @@
  *    desktop's 6 s wait) before it writes, yielding to the event loop every 12 ms while it redacts.
  */
 
+import { HandoffError, handoffBaseName, handoffExcludeText, handoffSessionFact, type HandoffPermit, type PreparedHandoff, type NativeHandoffRead } from './handoffAuthority.js'
+import { readNativeHandoff } from './nativeHandoffRead.js'
+import { NativeFiles } from '../engines/kit/nativeFiles.js'
+import { nativeFileKey } from '../engines/kit/nativePaths.js'
+import { handoffGitRoute } from './handoffGit.js'
+import { readHandoffFile } from './handoffFiles.js'
+export { HandoffError, handoffBaseName } from './handoffAuthority.js'
 import { execFile } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
-import { lstatSync, mkdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { lstatSync, realpathSync, statSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { promisify } from 'node:util'
 
-import { addExcludeEntry, isPlainDir, isPlainFile } from './projectFiles.js'
+import { isPlainFile } from './projectFiles.js'
 import { redactSecretsInText } from './logBundle.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { LiveEvent } from './normalize.js'
@@ -47,7 +53,6 @@ import { isSubagentTranscript } from './subagentTranscript.js'
 export { isSubagentTranscript } from './subagentTranscript.js'
 
 export const HANDOFF_DIR = '.harness/handoff'
-const HANDOFF_EXCLUDE = { pattern: '**/.harness/handoff/', comment: 'Harness agent handoffs (untracked)' }
 
 const REQUESTS_MAX = 12_000
 const ANSWER_MAX = 8_000
@@ -58,8 +63,6 @@ const GIT_LINE_CHARS = 500
 /** One git command's limit; `deps.gitTimeoutMs` raises it (a test on a loaded machine). */
 const GIT_TIMEOUT_MS = 2_000
 const TRANSCRIPT_MAX = 2_000_000
-const FLOOR_ASKS = 20
-const FLOOR_RECAPS = 5
 const MAX_IN_FLIGHT = 2
 /** How many fork links an inheritance walk follows. */
 export const MAX_FORK_HOPS = 5
@@ -76,9 +79,6 @@ const DEADLINE_MS = 5_000
  * `<agent id, made safe>-<change id>`. Twin of the desktop's `agentHandoffBaseName`
  * (desktop/lib/state/agent_handoff_file.dart): both suites pin the same vectors.
  */
-export function handoffBaseName(agentId: string, changeId: string): string {
-  return `${agentId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80) || 'agent'}-${changeId}`
-}
 
 // ── redaction ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -487,16 +487,13 @@ export interface HandoffResult {
   degraded: HandoffDegraded[]
 }
 
-export class HandoffError extends Error {
-  constructor(readonly code: 'UNKNOWN_AGENT' | 'NO_PROJECT' | 'BAD_CHANGE_ID' | 'BUSY' | 'TIMEOUT') {
-    super(`handoff: ${code}`)
-    this.name = 'HandoffError'
-  }
-}
 
 type Read<T> = T | Promise<T>
 
 export interface HandoffDeps {
+  /** Only core may publish: this call verifies retained facts and the originating request in line. */
+  publish?(prepared: PreparedHandoff, permit: HandoffPermit): Read<HandoffResult>
+  permit?: HandoffPermit
   /** The agent's record, running or stopped; also how a fork's parents are found. */
   resolve(agentId: string): Read<RegisteredSession | null | undefined>
   /** The whole history of a session a database engine keeps (OpenCode, Kilo, Hermes, Devin); undefined for a file engine. */
@@ -525,7 +522,7 @@ export interface HandoffDeps {
 }
 
 const CHANGE_ID = /^[0-9a-f]{32}$/
-const inFlight = new Map<string, { changeId: string; promise: Promise<HandoffResult> }>()
+const inFlight = new Map<string, { changeId: string; targetEngine: string; fingerprint: string; promise: Promise<HandoffResult> }>()
 
 /**
  * The handoff for one "Change agent": writes `<agent>-<change>.md` and `<agent>-<change>.transcript.md` under
@@ -541,16 +538,22 @@ export function prepareAgentHandoff(deps: HandoffDeps, req: HandoffRequest): Pro
   let key: string | null = null
   const promise = withDeadline(deps, async (expired) => {
     if (typeof req.changeId !== 'string' || !CHANGE_ID.test(req.changeId)) throw new HandoffError('BAD_CHANGE_ID')
-    const session = await deps.resolve(req.agentId)
+    const found = await deps.resolve(req.agentId)
+    const session = found && structuredClone(found)
     if (expired()) throw new HandoffError('TIMEOUT')
     if (!session) throw new HandoffError('UNKNOWN_AGENT')
+    if (session.identityHold) throw new HandoffError('IDENTITY_UNAVAILABLE')
     const cwd = session.cwd
     if (!cwd || !isAbsolute(cwd) || !isDirectory(cwd)) throw new HandoffError('NO_PROJECT')
     const running = inFlight.get(session.agentId)
-    if (running) return running.changeId === req.changeId ? running.promise : Promise.reject(new HandoffError('BUSY'))
+    if (running) {
+      if (running.changeId !== req.changeId) throw new HandoffError('BUSY')
+      if (running.targetEngine !== req.targetEngine || running.fingerprint !== handoffSessionFact(session).fingerprint) throw new HandoffError('CHANGE_CONFLICT')
+      return running.promise
+    }
     if (inFlight.size >= MAX_IN_FLIGHT) throw new HandoffError('BUSY')
     key = session.agentId
-    inFlight.set(key, { changeId: req.changeId, promise })
+    inFlight.set(key, { changeId: req.changeId, targetEngine: req.targetEngine, fingerprint: handoffSessionFact(session).fingerprint, promise })
     return prepare(deps, session, cwd, req, expired)
   }).finally(() => { if (key && inFlight.get(key)?.promise === promise) inFlight.delete(key) })
   return promise
@@ -579,15 +582,31 @@ async function prepare(deps: HandoffDeps, session: RegisteredSession, cwd: strin
   const degraded: HandoffDegraded[] = []
 
   // One clock for the whole preparation: once it is over, nothing more is spawned, read or written.
-  const tick = (): void => { if (expired() || now() > deadline) throw new HandoffError('TIMEOUT') }
+  const tick = (): void => { if (expired() || now() > deadline || deps.permit && !deps.permit.current(req)) throw new HandoffError('TIMEOUT') }
+  const projectFiles = new NativeFiles(), project = projectFiles.locate(cwd)!
+  const facts: PreparedHandoff = { git: handoffGitRoute(project.path), request: { ...req }, sessions: [handoffSessionFact(session)], reads: [],
+    project: { cwd, path: project.path, fileKey: nativeFileKey(project.info), route: projectFiles.paths.snapshot() },
+    result: { file: null, gitRepo: false, cwd, degraded: [] }, documents: null, exclude: null }
+  const originalDeps = deps
+  deps = { ...deps, resolve: async id => {
+    const record = await originalDeps.resolve(id)
+    if (!record) throw new HandoffError('IDENTITY_UNAVAILABLE')
+    const copy = structuredClone(record)
+    facts.sessions.push(handoffSessionFact(copy))
+    return copy
+  } }
+  const publish = async (result: HandoffResult): Promise<HandoffResult> => {
+    tick(); facts.result = result
+    if (!deps.publish) throw new HandoffError('HANDOFF_UNAVAILABLE')
+    return deps.publish(facts, deps.permit ?? { current: () => !expired() && now() <= deadline })
+  }
   const state = await repoState(cwd, git, deps.gitTimeoutMs)
   tick()
-  if (state === 'unknown') return { file: null, gitRepo: false, cwd, degraded: ['git', 'file'] }
+  if (state === 'unknown') throw new HandoffError('HANDOFF_UNAVAILABLE')
   const gitRepo = state === 'repo'
-  if (isPlainFile(join(cwd, file)) && handoffFolderIsSafe(cwd)) return { file, gitRepo, cwd, degraded }
 
   const stop = (): boolean => expired() || now() > deadline
-  const pick = await pickHistory(deps, session, cwd, tick, stop, () => deadline - now())
+  const pick = await pickHistory(deps, session, cwd, tick, stop, () => deadline - now(), facts.reads)
   if (pick.floor || pick.missing) degraded.push('transcript')
   // Redacted BEFORE any budget cuts it, as well as after as a whole: a cut can split a secret so the
   // whole-document pass no longer recognises it (a PEM body whose BEGIN line fell in an omitted middle).
@@ -597,7 +616,7 @@ async function prepare(deps: HandoffDeps, session: RegisteredSession, cwd: strin
   const mirrored = pick.mirrorSessionId ? (await deps.lastFullText(pick.mirrorSessionId))?.trim() : ''
   tick()
   const lastAnswer = (mirrored ? secureText(mirrored) : '') || [...turns].reverse().find((turn) => turn.answer)?.answer || null
-  if (!asks.length && !lastAnswer) return { file: null, gitRepo, cwd, degraded }
+  if (!asks.length && !lastAnswer) return publish({ file: null, gitRepo, cwd, degraded })
 
   let snapshot: GitSnapshot | null = null
   let excludePath: string | null = null
@@ -616,7 +635,6 @@ async function prepare(deps: HandoffDeps, session: RegisteredSession, cwd: strin
 
   // The document is made and redacted first, then the deadline is checked: from the check on, it is all
   // synchronous, so nothing is written after the deadline and nothing can interleave with the writes.
-  const notWritten = (...why: HandoffDegraded[]): HandoffResult => ({ file: null, gitRepo, cwd, degraded: [...degraded, ...why, 'file'] })
   let md: string
   try {
     md = secureText(renderHandoff({
@@ -624,16 +642,21 @@ async function prepare(deps: HandoffDeps, session: RegisteredSession, cwd: strin
       cwd, at: now(), asks, lastAnswer, turns, git: snapshot, transcriptFile: `${HANDOFF_DIR}/${base}.transcript.md`, inherited: pick.inherited,
     }))
   } catch {
-    return notWritten()
+    throw new HandoffError('HANDOFF_UNAVAILABLE')
   }
   tick()
-  if (gitRepo && (!excludePath || !excludeHandoffs(excludePath))) return notWritten('git')
-  try {
-    writeHandoff(cwd, base, md, transcript)
-  } catch {
-    return notWritten()
+  if (gitRepo) {
+    if (!excludePath) throw new HandoffError('HANDOFF_UNAVAILABLE')
+    const excludeFiles = new NativeFiles(), parent = excludeFiles.locate(dirname(excludePath))!
+    const canonicalExclude = join(parent.path, basename(excludePath))
+    if (canonicalExclude !== facts.git.exclude) throw new HandoffError('HANDOFF_UNAVAILABLE')
+    excludeFiles.verify()
+    const exclusion = readHandoffFile(canonicalExclude, 128 * 1024)
+    const after = handoffExcludeText(exclusion.text)
+    facts.exclude = { path: exclusion.path, before: exclusion.text, after, route: exclusion.route, version: exclusion.version }
   }
-  return { file, gitRepo, cwd, degraded }
+  facts.documents = { markdown: md, transcript }
+  return publish({ file, gitRepo, cwd, degraded })
 }
 
 // ── whose history ────────────────────────────────────────────────────────────────────────────────────
@@ -666,7 +689,7 @@ async function safeResolve(deps: HandoffDeps, agentId: string): Promise<Register
   try {
     const found = await deps.resolve(agentId)
     return found && typeof found === 'object' ? found : null
-  } catch { return null }
+  } catch { throw new HandoffError('IDENTITY_UNAVAILABLE') }
 }
 
 function sameFolder(a: unknown, b: unknown): boolean {
@@ -679,7 +702,7 @@ async function gate(deps: HandoffDeps, engine: string, path: string, codexHome: 
   if (typeof path !== 'string' || !path || isSubagentTranscript(path)) return false
   try {
     return deps.transcriptOk ? await deps.transcriptOk(engine as AgentEngine, path, codexHome) : isAbsolute(path) && isPlainFile(path)
-  } catch { return false }
+  } catch { throw new HandoffError('IDENTITY_UNAVAILABLE') }
 }
 
 const hasContent = (turns: readonly IndexedTurn[]): boolean => turns.some((turn) => turn.ask || turn.answer)
@@ -705,18 +728,22 @@ interface Picked {
  *  4. a fork's parent, exactly as of the fork (`inheritHistory`).
  * Else nothing: `missing` unless the own read worked and was empty on an agent that is not a fork.
  */
-async function pickHistory(deps: HandoffDeps, session: RegisteredSession, cwd: string, tick: () => void, stop: () => boolean, remainingMs: () => number): Promise<Picked> {
+async function pickHistory(deps: HandoffDeps, session: RegisteredSession, cwd: string, tick: () => void, stop: () => boolean, remainingMs: () => number, witnesses: NativeHandoffRead[]): Promise<Picked> {
   const none = (over: Partial<Picked> = {}): Picked => ({ turns: [], sessionId: session.sessionId, mirrorSessionId: '', inherited: null, floor: false, missing: true, ...over })
-  const read = async (source: TurnSource): Promise<IndexedTurn[] | null> => {
+  const read = async (source: TurnSource, owner = session): Promise<IndexedTurn[] | null> => {
     try {
-      const turns = await readSessionTurns(source, { shouldStop: stop })
+      let turns: IndexedTurn[]
+      if (source.transcriptPath) {
+        const read = await readNativeHandoff(source, owner.agentId, owner.codexHome ?? undefined, owner.cwd ?? null, { shouldStop: stop })
+        witnesses.push(read.witness); turns = read.turns
+      } else turns = await readSessionTurns(source, { shouldStop: stop })
       tick()
       return turns
     } catch (error) {
       if (error instanceof SessionTurnsError && error.code === 'DEADLINE') throw new HandoffError('TIMEOUT')
       if (error instanceof HandoffError) throw error
       tick()
-      return null
+      throw new HandoffError('IDENTITY_UNAVAILABLE')
     }
   }
 
@@ -725,35 +752,35 @@ async function pickHistory(deps: HandoffDeps, session: RegisteredSession, cwd: s
   // session, not this agent's: neither the file nor the mirror kept under that id is this agent's own history.
   const boundToSubagent = !!session.sessionId && !DATABASE_ENGINES.has(session.engine)
     && typeof session.transcriptPath === 'string' && isSubagentTranscript(session.transcriptPath)
+  if (boundToSubagent) throw new HandoffError('IDENTITY_UNAVAILABLE')
   if (session.sessionId && !boundToSubagent) {
     let history: ReturnType<HandoffDeps['readHistory']>
-    try { history = deps.readHistory(session) } catch { history = undefined }
+    try { history = deps.readHistory(session) } catch { throw new HandoffError('IDENTITY_UNAVAILABLE') }
     let own: IndexedTurn[] | null = null
-    const ownPath = session.transcriptPath && !isSubagentTranscript(session.transcriptPath) ? session.transcriptPath : null
+    const ownPath = !DATABASE_ENGINES.has(session.engine) && session.transcriptPath && !isSubagentTranscript(session.transcriptPath) ? session.transcriptPath : null
     if (ownPath || history) {
       own = await read({ engine: session.engine, sessionId: session.sessionId, transcriptPath: ownPath, readHistory: history })
       if (own && hasContent(own)) return { ...none(), turns: own, mirrorSessionId: session.sessionId, missing: false }
       ownEmpty = own !== null
     }
-    if (!ownEmpty) {
-      // The floor: what the mirror remembers (the newest asks, and the recaps of the last turns).
-      const floor = floorTurns(await deps.recentAsks(session.sessionId, FLOOR_ASKS), await safeRecaps(deps, session.sessionId))
-      if (hasContent(floor) || (await deps.lastFullText(session.sessionId))?.trim()) return { ...none(), turns: floor, mirrorSessionId: session.sessionId, floor: true, missing: false }
-    }
-  } else if (session.forkedFrom == null && deps.discoverSession) {
+    if (!ownEmpty) throw new HandoffError('IDENTITY_UNAVAILABLE')
+  } else if (session.forkedFrom == null) {
+    if (!deps.discoverSession) throw new HandoffError('HANDOFF_UNAVAILABLE')
     const found = await discover(deps, session, remainingMs())
     tick()
-    if (found?.transcriptPath && !DATABASE_ENGINES.has(found.engine) && await gate(deps, found.engine, found.transcriptPath, session.codexHome ?? null)) {
-      const turns = await read({ engine: found.engine, sessionId: found.sessionId, transcriptPath: found.transcriptPath })
-      if (turns && hasContent(turns)) return { ...none(), turns, sessionId: found.sessionId, missing: false }
-    }
+    if (!found) return none({ missing: false })
+    if (!found.transcriptPath || DATABASE_ENGINES.has(found.engine)
+      || !await gate(deps, found.engine, found.transcriptPath, session.codexHome ?? null)) throw new HandoffError('IDENTITY_UNAVAILABLE')
+    const turns = await read({ engine: found.engine, sessionId: found.sessionId, transcriptPath: found.transcriptPath })
+    if (turns && hasContent(turns)) return { ...none(), turns, sessionId: found.sessionId, missing: false }
+    return none({ missing: false })
   }
 
   // Only an agent that has not said anything of its own: no session yet, or one whose transcript read fine and was empty.
   // A session that could not be read may hold turns, so the header's "had not answered yet" would be a guess.
   if (session.forkedFrom != null && (!session.sessionId || boundToSubagent || ownEmpty)) {
     const inherited = await inheritHistory(deps, session, cwd, tick, read)
-    if (inherited) return { ...none(), turns: inherited.turns, inherited: inherited.note, missing: false }
+    return inherited ? { ...none(), turns: inherited.turns, inherited: inherited.note, missing: false } : none({ missing: false })
   }
   // A read that worked and found nothing, on an agent with no parent, is "nothing said yet", not a failure.
   return ownEmpty && session.forkedFrom == null ? none({ mirrorSessionId: session.sessionId, missing: false }) : none()
@@ -766,9 +793,9 @@ async function discover(deps: HandoffDeps, session: RegisteredSession, remaining
     const budget = Math.max(0, Math.min(deps.discoverMs ?? DISCOVER_MS, remainingMs))
     return await Promise.race([
       Promise.resolve().then(() => deps.discoverSession?.(session) ?? null),
-      new Promise<null>((resolveTimer) => { timer = setTimeout(() => resolveTimer(null), budget) }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new HandoffError('IDENTITY_UNAVAILABLE')), budget) }),
     ])
-  } catch { return null } finally { clearTimeout(timer) }
+  } catch { throw new HandoffError('IDENTITY_UNAVAILABLE') } finally { clearTimeout(timer) }
 }
 
 /**
@@ -782,22 +809,22 @@ async function discover(deps: HandoffDeps, session: RegisteredSession, remaining
  */
 async function inheritHistory(
   deps: HandoffDeps, source: RegisteredSession, cwd: string, tick: () => void,
-  read: (source: TurnSource) => Promise<IndexedTurn[] | null>,
+  read: (source: TurnSource, owner?: RegisteredSession) => Promise<IndexedTurn[] | null>,
 ): Promise<{ turns: IndexedTurn[]; note: InheritedHistory } | null> {
   let node = source
   let cut = Infinity
   const seen = new Set<string>([source.agentId])
   for (let hop = 0; hop < MAX_FORK_HOPS; hop += 1) {
     cut = Math.min(cut, node.registeredAt)
-    if (!Number.isFinite(cut) || !Number.isFinite(new Date(cut).getTime())) return null
+    if (!Number.isFinite(cut) || !Number.isFinite(new Date(cut).getTime())) throw new HandoffError('IDENTITY_UNAVAILABLE')
     const link = forkLink(node)
-    if (!link || seen.has(link.agentId)) return null
+    if (!link || seen.has(link.agentId)) throw new HandoffError('IDENTITY_UNAVAILABLE')
     seen.add(link.agentId)
     const parent = await safeResolve(deps, link.agentId)
     tick()
-    if (!parent || !sameFolder(parent.cwd, cwd)) return null
+    if (!parent || !sameFolder(parent.cwd, cwd)) throw new HandoffError('IDENTITY_UNAVAILABLE')
     if (!link.sessionId && !parent.sessionId) { node = parent; continue }
-    if (DATABASE_ENGINES.has(parent.engine)) return null
+    if (DATABASE_ENGINES.has(parent.engine)) throw new HandoffError('IDENTITY_UNAVAILABLE')
     const home = parent.codexHome ?? null
     let sessionId: string
     let path: string | null = null
@@ -808,7 +835,7 @@ async function inheritHistory(
       }
       if (!path && deps.findTranscript) {
         let found: string | null = null
-        try { found = await deps.findTranscript(parent.engine, sessionId, { codexHome: home ?? undefined }) } catch { found = null }
+        try { found = await deps.findTranscript(parent.engine, sessionId, { codexHome: home ?? undefined }) } catch { throw new HandoffError('IDENTITY_UNAVAILABLE') }
         tick()
         if (found && await gate(deps, parent.engine, found, home)) path = found
       }
@@ -817,28 +844,14 @@ async function inheritHistory(
       const boundAt = parent.boundAt
       if (typeof boundAt === 'number' && Number.isFinite(boundAt) && boundAt <= cut && parent.transcriptPath && await gate(deps, parent.engine, parent.transcriptPath, home)) path = parent.transcriptPath
     }
-    if (!path) return null
-    const all = await read({ engine: parent.engine, sessionId, transcriptPath: path })
+    if (!path) throw new HandoffError('IDENTITY_UNAVAILABLE')
+    const all = await read({ engine: parent.engine, sessionId, transcriptPath: path }, parent)
     const turns = all && cutTurnsAt(all, cut)
-    if (!turns || !hasContent(turns)) return null
+    if (!turns) throw new HandoffError('IDENTITY_UNAVAILABLE')
+    if (!hasContent(turns)) return null
     return { turns, note: { agentId: link.agentId, name: link.name, cutAt: cut } }
   }
-  return null
-}
-
-async function safeRecaps(deps: HandoffDeps, sessionId: string): Promise<string[]> {
-  try { return ((await deps.recaps?.(sessionId, FLOOR_RECAPS)) ?? []).filter((text) => typeof text === 'string' && text.trim()) } catch { return [] }
-}
-
-/**
- * The turns the floor can make: the asks (newest first in, oldest first out) and, before them, one answer-only
- * turn per stored recap. Recaps and asks are not paired — a turn can have one without the other — so they are
- * kept apart and the recaps are marked as such.
- */
-function floorTurns(asks: readonly string[], recaps: readonly string[]): IndexedTurn[] {
-  const answers = recaps.slice().reverse().map((text) => ({ ask: '', answer: `(recap) ${text}` }))
-  const questions = asks.slice().reverse().map((ask) => ({ ask, answer: '' }))
-  return [...answers, ...questions].map((turn, index) => ({ turn: index, offset: 0, at: null, ...turn, tools: '' }))
+  throw new HandoffError('IDENTITY_UNAVAILABLE')
 }
 
 /** Every string of a git snapshot redacted, yielding between them: a commit subject is as untrusted as a request. */
@@ -857,11 +870,6 @@ async function secureSnapshot(snapshot: GitSnapshot, tick: () => void): Promise<
     head: snapshot.head === null ? null : await one(snapshot.head),
     commits: await lines(snapshot.commits), status: await lines(snapshot.status), diffStat: await lines(snapshot.diffStat),
   }
-}
-
-/** The exclude line, or false when it could not be added (a link, an unreadable or unwritable file). */
-function excludeHandoffs(excludePath: string): boolean {
-  try { return addExcludeEntry(excludePath, HANDOFF_EXCLUDE) !== null } catch { return false }
 }
 
 /** Yields to the event loop once a slice (12 ms) has passed, then checks the deadline. */
@@ -909,44 +917,3 @@ function floorAnswer(turns: IndexedTurn[], answer: string | null, floor: boolean
   return [...turns.slice(0, -1), { ...last, answer: last.answer || answer }]
 }
 
-/** `.harness` and `.harness/handoff` are plain folders, and the second is where its path says. */
-function handoffFolderIsSafe(cwd: string): boolean {
-  const harness = join(cwd, '.harness')
-  const folder = join(harness, 'handoff')
-  try {
-    return isPlainDir(harness) && isPlainDir(folder) && realpathSync(folder) === join(realpathSync(cwd), '.harness', 'handoff')
-  } catch { return false }
-}
-
-function writeHandoff(cwd: string, base: string, md: string, transcript: string): void {
-  const harness = join(cwd, '.harness')
-  const folder = join(harness, 'handoff')
-  // One level at a time, each checked: a folder swapped for a link in between is never followed.
-  for (const path of [harness, folder]) {
-    try { mkdirSync(path, { mode: 0o700 }) } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
-    if (!isPlainDir(path)) throw new Error('not a plain folder')
-  }
-  if (!handoffFolderIsSafe(cwd)) throw new Error('folder moved')
-  const ignore = join(folder, '.gitignore')
-  try { writeFileSync(ignore, '*\n', { flag: 'wx', mode: 0o600 }) } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !isPlainFile(ignore)) throw error
-  }
-  const target = join(folder, `${base}.md`)
-  if (isPlainFile(target)) return
-  // The transcript first: the handoff existing means its transcript does.
-  writeAtomic(folder, join(folder, `${base}.transcript.md`), transcript)
-  writeAtomic(folder, target, md)
-}
-
-function writeAtomic(folder: string, target: string, text: string): void {
-  const tmp = join(folder, `.${randomBytes(6).toString('hex')}.tmp`)
-  try {
-    writeFileSync(tmp, text, { flag: 'wx', mode: 0o600 })
-    renameSync(tmp, target)
-  } catch (error) {
-    try { unlinkSync(tmp) } catch { /* never made */ }
-    throw error
-  }
-}

@@ -115,10 +115,10 @@ describe('service links', () => {
     ])
     expect(stays).not.toHaveBeenCalled()
     expect(core).not.toHaveBeenCalled()
-    // Sent, it is the process's to abort when its connection closes.
+    // A closed owner revokes even a request already sent to the process.
     links.closeConnection('stays')
     expect(orchestrator.sent.at(-1)).toEqual({ type: 'service_connection_closed', payload: { connection: 'stays' } })
-    expect(stays).not.toHaveBeenCalled()
+    expect(stays).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'orchestrator', retryable: true })
   })
 
   it('acknowledges an accepted service before held events and the requests that woke it', () => {
@@ -334,7 +334,7 @@ describe('service links', () => {
     // The old connection's end does not take the newer one with it.
     old.closed()
     expect(links.connected('search')).toBe(true)
-    expect(waiting).not.toHaveBeenCalled()
+    expect(waiting).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
     const pending = vi.fn()
     links.route('session_search', {}, ASKER, pending)
     newer.closed()
