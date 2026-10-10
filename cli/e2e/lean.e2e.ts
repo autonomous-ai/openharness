@@ -223,11 +223,9 @@ describe('harnessd\'s master and services lean', () => {
 
   it('runs Claude Code and Codex on with the other engines\' code gone from the bundle, and says so once', async () => {
     // A file of the core's that cannot load costs the engines whose code is in it, never the core: the loader
-    // catches it once (engines/inProcess.ts). Here the files the twelve engines' pane readers and the eleven
-    // installers load from are gone, and Amp's own code. The start installs Claude Code's and Codex's hooks
-    // alone (a daemon under test installs no other engine's) and so asks for no installer; an Amp agent's
-    // session asks for the readers and Amp's code as it enters the registry, and an OpenCode create asks for its
-    // plugin's installer.
+    // catches it once (engines/inProcess.ts). Remove the legacy pane readers and hook installers,
+    // and Amp's own code. Amp still needs its lazy reader; eager native launch and plugin installation
+    // must survive the missing legacy installers for OpenCode, Claude Code and Codex.
     const lean = readLeanBundle(readFileSync(bundle))!
     const files = Object.fromEntries([...lean.files].map(([name, code]) => [name, code.toString('utf8')]))
     for (const module of ['legacyScreen', 'hooks']) {
@@ -266,17 +264,18 @@ describe('harnessd\'s master and services lean', () => {
       expect(d.log()).toMatch(/\[engine screens\] unavailable · .*core-legacyScreen-/)
       await until('the loader to say Amp\'s code is unavailable', () => unavailable('amp') > 0 || null, 30_000, 200)
       expect(d.log()).toMatch(/\[engine amp\] unavailable · .*core-inProcess-/)
-      // An OpenCode with no plugin would never tell the daemon its session: refused before any pane opens.
-      // In Ask, which needs no flag the stand-in would be probed for.
-      const refused = await client.request('agent_create', { engine: 'opencode', cwd: cwd('lean-opencode'), permissionMode: 'ask', bypassPermission: false }, 90_000)
-      expect(refused).toMatchObject({ error: 'ENGINE_UNAVAILABLE' })
-      expect(d.log()).toMatch(/\[engine hooks\] unavailable · .*core-hooks-/)
+      // Native launch and plugin installation now belong to eager core. Losing the legacy
+      // lazy hooks module cannot prevent an OpenCode launch. Ask needs no probed flag here.
+      const launched = await client.request('agent_create', { engine: 'opencode', cwd: cwd('lean-opencode'), permissionMode: 'ask', bypassPermission: false }, 90_000)
+      expect(launched.error, JSON.stringify(launched)).toBeUndefined()
+      expect(launched.agent.engine).toBe('opencode')
+      expect(unavailable('hooks')).toBe(0)
     } finally { client.close() }
     await agentWorks(d, 'claude')
     await agentWorks(d, 'codex')
     // Each said once, for the life of the core, however often the Amp pane was looked at meanwhile.
     expect(unavailable('screens')).toBe(1)
-    expect(unavailable('hooks')).toBe(1)
+    expect(unavailable('hooks')).toBe(0)
     expect(unavailable('amp')).toBe(1)
     expect(d.coresStarted()).toBe(1)
   })

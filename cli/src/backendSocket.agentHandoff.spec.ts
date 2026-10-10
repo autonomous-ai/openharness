@@ -101,10 +101,17 @@ describe('agent_handoff_prepare on the local socket', () => {
     expect(await answered()).toEqual([{ requestId: 'r-1', error: 'UNSUPPORTED' }])
   })
 
-  it.each(['NO_PROJECT', 'BUSY', 'TIMEOUT', 'UNKNOWN_AGENT'])('passes a HandoffError %s through as its code', async (code) => {
+  it.each(['NO_PROJECT', 'UNKNOWN_AGENT'])('passes a HandoffError %s through as its code', async (code) => {
     provider.mockRejectedValue(handoffError(code))
     ask(good())
     expect(await answered()).toEqual([{ requestId: 'r-1', error: code }])
+  })
+
+  it.each(['BUSY', 'TIMEOUT'])('holds a HandoffError %s with its reason and retry authority', async (code) => {
+    provider.mockRejectedValue(handoffError(code))
+    ask(good())
+    expect(await answered()).toEqual([{ requestId: 'r-1', error: code, held: true, retryable: true,
+      reason: 'Waiting for the handoff to become available.' }])
   })
 
   it.each([

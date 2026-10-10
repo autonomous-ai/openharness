@@ -168,6 +168,17 @@ void main() {
       ('a cwd mismatch', reply(cwd: '/elsewhere')),
       ('a missing cwd', reply(cwd: null)),
       ('a non-bool gitRepo', reply(gitRepo: 'true')),
+      (
+        'a held reply with otherwise valid fields',
+        reply(extra: {'held': true}),
+      ),
+      ('a missing file field', {...reply()}..remove('file')),
+      ('empty history without cwd', reply(file: null, cwd: null)),
+      (
+        'empty history in another project',
+        reply(file: null, cwd: '/elsewhere'),
+      ),
+      ('empty history without Git state', reply(file: null, gitRepo: null)),
     ]) {
       test('rejects $name', () {
         final result = accept(r);

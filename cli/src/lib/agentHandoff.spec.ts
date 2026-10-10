@@ -5,6 +5,8 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { publishHandoff } from './handoffPublication.js'
+import { HandoffError as PublicationError } from './handoffAuthority.js'
 import { redactSecretsInText } from './logBundle.js'
 import type { LiveEvent } from './normalize.js'
 import type { RegisteredSession } from './registry.js'
@@ -13,6 +15,23 @@ import {
   HANDOFF_DIR, HandoffError, MAX_FORK_HOPS, cutTurnsAt, excludePathOf, handoffBaseName, isSubagentTranscript, prepareAgentHandoff, redactHandoffSecrets,
   renderHandoff, renderTranscript, repoState, secureText, type HandoffDeps, type HandoffRequest, type HandoffResult,
 } from './agentHandoff.js'
+
+// These fixtures exercise normalization, rendering, git and publication with small synthetic
+// reader records. Native identity is composed without this seam in core/handoffPublication.native,
+// nativeHandoff.golden and the real service/lifecycle fixtures.
+vi.mock('./nativeHandoffRead.js', async () => {
+  const { readSessionTurns } = await import('./sessionSearch/sessionTurns.js')
+  const { NativeFiles } = await import('../engines/kit/nativeFiles.js')
+  const { nativeFileKey } = await import('../engines/kit/nativePaths.js')
+  const { nativeContentVersion } = await import('./handoffAuthority.js')
+  return { readNativeHandoff: async (source: Parameters<typeof readSessionTurns>[0], ownerAgentId: string, profile: string | undefined, cwd: string | null, options: Parameters<typeof readSessionTurns>[1]) => {
+    const files = new NativeFiles(), file = files.file(source.transcriptPath!)!
+    const turns = await readSessionTurns(source, options)
+    return { turns, witness: { ownerAgentId, engine: source.engine, sessionId: source.sessionId,
+      path: source.transcriptPath!, readPath: file.path, profile, cwd,
+      fileKey: nativeFileKey(file.info), version: nativeContentVersion(file.info), route: files.paths.snapshot() } }
+  } }
+})
 
 const C = '0123456789abcdef0123456789abcdef'
 const cid = (n: number) => n.toString(16).padStart(32, '0')
@@ -66,7 +85,7 @@ function writeTranscript(): void {
 }
 
 const session = (over: Record<string, unknown> = {}): RegisteredSession => ({
-  agentId: 'agent-1', sessionId: 'sess-1', engine: 'claude', cwd: ws, transcriptPath: tx, registeredAt: Date.now() - 60_000, projectDir: 'ws', ...over,
+  agentId: 'agent-1', sessionId: 'sess-1', engine: 'claude', cwd: ws, transcriptPath: tx, registeredAt: Date.parse('2026-09-20T09:00:00Z'), projectDir: 'ws', ...over,
 }) as unknown as RegisteredSession
 
 function depsFor(sessions: RegisteredSession[], over: Partial<HandoffDeps> = {}): HandoffDeps {
@@ -76,6 +95,11 @@ function depsFor(sessions: RegisteredSession[], over: Partial<HandoffDeps> = {})
     // and "finds the exclude file" and "goes by one clock" answered `gitRepo: false`. The preparation's own
     // deadline (`deadlineMs`, or the injected clock) still bounds every case.
     gitTimeoutMs: 30_000,
+    publish: (prepared, permit) => publishHandoff(join(root, 'daemon-data', 'handoff-receipts'), prepared, facts => {
+      if (!permit.current(facts.request)) throw new PublicationError('TIMEOUT')
+    }, () => {
+      if (!permit.current(prepared.request)) throw new PublicationError('TIMEOUT')
+    }),
     resolve: (id) => sessions.find((s) => s.agentId === id) ?? null,
     readHistory: () => undefined,
     recentAsks: () => ['floor ask'],
@@ -371,13 +395,14 @@ describe('prepareAgentHandoff: a repository', () => {
     expect(md).not.toContain('ghp_AAAA')
   })
 
-  it('returns the same file for the same change without writing it again, and a new one for a new change', async () => {
-    const first = await prepareAgentHandoff(depsFor([session()]), request())
+  it('reuses verified committed files and holds externally changed content', async () => {
+    const d = depsFor([session()])
+    const first = await prepareAgentHandoff(d, request())
+    expect(await prepareAgentHandoff(d, request())).toEqual(first)
     writeFileSync(mdOf(), 'SENTINEL')
-    const again = await prepareAgentHandoff(depsFor([session()]), request())
-    expect(again.file).toBe(first.file)
+    await expect(prepareAgentHandoff(d, request())).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
     expect(readFileSync(mdOf(), 'utf8')).toBe('SENTINEL')
-    const other = await prepareAgentHandoff(depsFor([session()]), request(cid(9)))
+    const other = await prepareAgentHandoff(d, request(cid(9)))
     expect(other.file).not.toBe(first.file)
     expect(existsSync(mdOf(cid(9)))).toBe(true)
   })
@@ -391,17 +416,11 @@ describe('prepareAgentHandoff: a repository', () => {
     expect(files.filter((name) => name.endsWith('.tmp'))).toEqual([])
   })
 
-  it('falls back to what the mirror remembers when the transcript cannot be read', async () => {
-    const result = await prepareAgentHandoff(
-      depsFor([session({ transcriptPath: join(root, 'missing.jsonl') })], { lastFullText: () => 'token=supersecret1 done' }),
-      request(),
-    )
-    expect(result.degraded).toContain('transcript')
-    expect(result.file).not.toBeNull()
-    const md = readFileSync(mdOf(), 'utf8')
-    expect(md).toContain('floor ask')
-    expect(md).toContain('token=<redacted>')
-    expect(md).not.toContain('supersecret1')
+  it('holds unreadable history before consulting the mirror', async () => {
+    const mirror = vi.fn(() => 'token=supersecret1 done')
+    await expect(prepareAgentHandoff(depsFor([session({ transcriptPath: join(root, 'missing.jsonl') })], { lastFullText: mirror }), request())).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+    expect(mirror).not.toHaveBeenCalled()
+    expect(existsSync(mdOf())).toBe(false)
   })
 
   it('reads a database engine through its history', async () => {
@@ -426,8 +445,7 @@ describe('prepareAgentHandoff: a repository', () => {
   })
 
   it('writes nothing in a repository when git cannot be run', async () => {
-    const result = await prepareAgentHandoff(depsFor([session()], { git: join(root, 'no-such-git') }), request())
-    expect(result).toEqual({ file: null, gitRepo: false, cwd: ws, degraded: ['git', 'file'] })
+    await expect(prepareAgentHandoff(depsFor([session()], { git: join(root, 'no-such-git') }), request())).rejects.toBeInstanceOf(Error)
     expect(existsSync(join(ws, '.harness'))).toBe(false)
   })
 
@@ -451,8 +469,7 @@ describe('prepareAgentHandoff: a repository', () => {
   it('writes nothing, and answers rather than throws, when the exclude file cannot be read', async () => {
     rmSync(join(ws, '.git', 'info', 'exclude'), { force: true })
     mkdirSync(join(ws, '.git', 'info', 'exclude'))
-    const result = await prepareAgentHandoff(depsFor([session()]), request())
-    expect(result).toEqual({ file: null, gitRepo: true, cwd: ws, degraded: ['git', 'file'] })
+    await expect(prepareAgentHandoff(depsFor([session()]), request())).rejects.toBeInstanceOf(Error)
     expect(existsSync(join(ws, '.harness'))).toBe(false)
   })
 
@@ -546,19 +563,11 @@ describe('prepareAgentHandoff: a repository', () => {
     expect(readFileSync(join(ws, '.git', 'info', 'exclude'), 'utf8')).toContain('**/.harness/handoff/')
   })
 
-  it('also hands over the stored recaps when the transcript cannot be read', async () => {
-    const d = depsFor([session({ transcriptPath: join(root, 'missing.jsonl') })], {
-      recentAsks: () => [],
-      recaps: () => ['Newest recap: retry added, token=abcdefgh1 used', 'Older recap: README'],
-    })
-    const result = await prepareAgentHandoff(d, request())
-    expect(result.degraded).toContain('transcript')
-    expect(result.file).not.toBeNull()
-    const md = readFileSync(mdOf(), 'utf8')
-    expect(section(md, '## Last answer', '## Git state')).toContain('Newest recap')
-    expect(readFileSync(join(hdir(), `agent-1-${C}.transcript.md`), 'utf8')).toContain('Older recap')
-    expect(md).toContain('token=<redacted>')
-    expect(md).not.toContain('abcdefgh1')
+  it('holds unreadable history without using stored recaps', async () => {
+    const recaps = vi.fn(() => ['retained recap'])
+    await expect(prepareAgentHandoff(depsFor([session({ transcriptPath: null })], { recaps }), request())).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+    expect(recaps).not.toHaveBeenCalled()
+    expect(existsSync(mdOf())).toBe(false)
   })
 
   it('goes by one clock: past its deadline mid-read, or after the read and before git, it spawns and writes nothing more', async () => {
@@ -641,30 +650,26 @@ describe('prepareAgentHandoff: a repository', () => {
     expect(line.length).toBeLessThan(600)
   })
 
-  it('takes its last clock reading at the deadline check right before the writes', async () => {
-    const readings: number[] = []
-    const first = await prepareAgentHandoff(depsFor([session()], { now: () => { readings.push(1); return Date.now() } }), request(cid(1)))
-    expect(first.file).not.toBeNull()
-    const total = readings.length
-    let calls = 0
-    // The same run again, but the clock jumps past the deadline at its very last reading.
-    const late = depsFor([session()], { now: () => { calls += 1; return calls >= total ? Date.now() + 60_000 : Date.now() } })
-    await expect(prepareAgentHandoff(late, request(cid(2)))).rejects.toMatchObject({ code: 'TIMEOUT' })
-    expect(existsSync(mdOf(cid(2)))).toBe(false)
+  it('rechecks the deadline at the publication boundary', async () => {
+    let now = Date.now()
+    const d = depsFor([session()], { now: () => now })
+    const commit = d.publish!
+    d.publish = (prepared, permit) => { now += 60_000; return commit(prepared, permit) }
+    await expect(prepareAgentHandoff(d, request())).rejects.toMatchObject({ code: 'TIMEOUT' })
+    expect(existsSync(mdOf())).toBe(false)
   })
 
-  it('does not put the newest recap in the transcript twice when it is also the last answer', async () => {
-    const d = depsFor([session({ transcriptPath: join(root, 'missing.jsonl') })], { recentAsks: () => ['one ask'], recaps: () => ['Newest recap text', 'Older recap text'] })
+  it('does not duplicate the current full answer in the transcript', async () => {
+    const d = depsFor([session()], { lastFullText: () => 'README updated.' })
     await prepareAgentHandoff(d, request())
     const transcript = readFileSync(join(hdir(), `agent-1-${C}.transcript.md`), 'utf8')
-    expect(transcript.split('Newest recap text')).toHaveLength(2)
+    expect(transcript.split('README updated.')).toHaveLength(2)
   })
 
   it('writes nothing when the exclude cannot be written through a linked info folder', async () => {
     rmSync(join(ws, '.git', 'info'), { recursive: true, force: true })
     symlinkSync(outside, join(ws, '.git', 'info'))
-    const result = await prepareAgentHandoff(depsFor([session()]), request())
-    expect(result).toMatchObject({ file: null, gitRepo: true, degraded: ['git', 'file'] })
+    await expect(prepareAgentHandoff(depsFor([session()]), request())).rejects.toBeInstanceOf(Error)
     expect(existsSync(join(ws, '.harness'))).toBe(false)
     expect(readdirSync(outside)).toEqual([])
   })
@@ -685,16 +690,13 @@ describe('prepareAgentHandoff: no repository', () => {
     mkdirSync(join(parent, '.git'), { recursive: true })
     const child = join(parent, 'child')
     mkdirSync(child)
-    const result = await prepareAgentHandoff(depsFor([session({ cwd: child })]), request())
-    expect(result).toEqual({ file: null, gitRepo: false, cwd: child, degraded: ['git', 'file'] })
+    await expect(prepareAgentHandoff(depsFor([session({ cwd: child })]), request())).rejects.toBeInstanceOf(Error)
     expect(existsSync(join(child, '.harness'))).toBe(false)
   })
 
   it('never writes through a linked .harness', async () => {
     symlinkSync(outside, join(ws, '.harness'))
-    const result = await prepareAgentHandoff(depsFor([session()]), request())
-    expect(result.file).toBeNull()
-    expect(result.degraded).toContain('file')
+    await expect(prepareAgentHandoff(depsFor([session()]), request())).rejects.toBeInstanceOf(Error)
     expect(readdirSync(outside)).toEqual([])
   })
 
@@ -702,50 +704,38 @@ describe('prepareAgentHandoff: no repository', () => {
     mkdirSync(join(outside, 'handoff'))
     writeFileSync(join(outside, 'handoff', `agent-1-${C}.md`), 'THEIRS')
     symlinkSync(outside, join(ws, '.harness'))
-    const result = await prepareAgentHandoff(depsFor([session()]), request())
-    expect(result.file).toBeNull()
-    expect(result.degraded).toContain('file')
+    await expect(prepareAgentHandoff(depsFor([session()]), request())).rejects.toBeInstanceOf(Error)
     expect(readdirSync(join(outside, 'handoff'))).toEqual([`agent-1-${C}.md`])
   })
 
-  it('replaces a planted link where a handoff file goes, never writing through it', async () => {
+  it('preserves a planted link and its target while holding publication', async () => {
     mkdirSync(hdir(), { recursive: true })
     writeFileSync(join(outside, 'victim'), 'UNTOUCHED')
     symlinkSync(join(outside, 'victim'), mdOf())
-    symlinkSync(join(outside, 'victim'), join(hdir(), `agent-1-${C}.transcript.md`))
-    const result = await prepareAgentHandoff(depsFor([session()]), request())
-    expect(result.file).toBe(`${HANDOFF_DIR}/agent-1-${C}.md`)
+    await expect(prepareAgentHandoff(depsFor([session()]), request())).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
     expect(readFileSync(join(outside, 'victim'), 'utf8')).toBe('UNTOUCHED')
-    expect(lstatSync(mdOf()).isSymbolicLink()).toBe(false)
-    expect(readFileSync(mdOf(), 'utf8')).toContain('Now update the README')
+    expect(lstatSync(mdOf()).isSymbolicLink()).toBe(true)
   })
 
   it('refuses a .gitignore in the handoff folder that is a link', async () => {
     mkdirSync(hdir(), { recursive: true })
     writeFileSync(join(outside, 'ignore'), 'x')
     symlinkSync(join(outside, 'ignore'), join(hdir(), '.gitignore'))
-    const result = await prepareAgentHandoff(depsFor([session()]), request())
-    expect(result).toMatchObject({ file: null, degraded: ['git', 'file'] })
+    await expect(prepareAgentHandoff(depsFor([session()]), request())).rejects.toBeInstanceOf(Error)
     expect(existsSync(mdOf())).toBe(false)
   })
 
-  it('keeps the floor newest first when the transcript cannot be read', async () => {
-    const result = await prepareAgentHandoff(
-      depsFor([session({ transcriptPath: join(root, 'missing.jsonl') })], { recentAsks: () => ['NEWER ask', 'OLDER ask'] }),
-      request(),
-    )
-    expect(result.degraded).toEqual(['transcript', 'git'])
-    const md = readFileSync(mdOf(), 'utf8')
-    expect(md.indexOf('NEWER ask')).toBeGreaterThan(-1)
-    expect(md.indexOf('NEWER ask')).toBeLessThan(md.indexOf('OLDER ask'))
+  it('holds unreadable history without falling back to recent asks', async () => {
+    const recentAsks = vi.fn(() => ['NEWER ask', 'OLDER ask'])
+    await expect(prepareAgentHandoff(depsFor([session({ transcriptPath: join(root, 'missing.jsonl') })], { recentAsks }), request())).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+    expect(recentAsks).not.toHaveBeenCalled()
+    expect(existsSync(mdOf())).toBe(false)
   })
 
   it('never writes through a linked .harness/handoff', async () => {
     mkdirSync(join(ws, '.harness'))
     symlinkSync(outside, join(ws, '.harness', 'handoff'))
-    const result = await prepareAgentHandoff(depsFor([session()]), request())
-    expect(result.file).toBeNull()
-    expect(result.degraded).toContain('file')
+    await expect(prepareAgentHandoff(depsFor([session()]), request())).rejects.toBeInstanceOf(Error)
     expect(readdirSync(outside)).toEqual([])
   })
 })
@@ -753,19 +743,13 @@ describe('prepareAgentHandoff: no repository', () => {
 describe('prepareAgentHandoff: refusals and limits', () => {
   beforeEach(writeTranscript)
 
-  it('awaits the retained agent and recap reads across the service boundary', async () => {
-    const d = depsFor([], {
-      resolve: (async () => session({ transcriptPath: null })) as never,
-      recentAsks: (async () => ['the retained request']) as never,
-      lastFullText: (async () => 'the retained full answer') as never,
-      recaps: (async () => ['the retained recap']) as never,
-    })
+  it('awaits current agent and full-answer reads across the service boundary', async () => {
+    const d = depsFor([], { resolve: async () => session(), lastFullText: async () => 'the retained full answer' })
     const result = await prepareAgentHandoff(d, request())
-    expect(result.degraded).toEqual(['transcript', 'git'])
+    expect(result.degraded).toEqual(['git'])
     const text = readFileSync(mdOf(), 'utf8')
-    expect(text).toContain('the retained request')
+    expect(text).toContain('Now update the README')
     expect(text).toContain('the retained full answer')
-    expect(readFileSync(mdOf().replace(/\.md$/, '.transcript.md'), 'utf8')).toContain('the retained recap')
   })
 
   it('counts waiting for the core against the deadline and never writes after a late answer', async () => {
@@ -791,7 +775,11 @@ describe('prepareAgentHandoff: refusals and limits', () => {
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
     const events: LiveEvent[] = [{ type: 'turn_started', payload: { userMessage: 'hi' } }]
-    const sessions = ['a1', 'a2', 'a3'].map((agentId) => session({ agentId, sessionId: `s-${agentId}`, engine: 'opencode', transcriptPath: null }))
+    const sessions = ['a1', 'a2', 'a3'].map((agentId) => {
+      const cwd = join(root, agentId)
+      mkdirSync(cwd)
+      return session({ agentId, sessionId: `s-${agentId}`, engine: 'opencode', transcriptPath: null, cwd })
+    })
     const d = depsFor(sessions, { deadlineMs: 10_000, readHistory: () => async () => { await gate; return events } })
     const first = prepareAgentHandoff(d, request(cid(1), 'a1'))
     const second = prepareAgentHandoff(d, request(cid(2), 'a2'))
@@ -985,7 +973,7 @@ describe('prepareAgentHandoff: a fork that has no history of its own yet', () =>
 
   it.each([['after the fork', ts(15)], ['never', null]])('legacy record: nothing when the parent was bound %s', async (_name, boundAt) => {
     const d = forkDeps([parentOf(parentTranscript(), { boundAt }), forkOf()])
-    expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toEqual({ file: null, gitRepo: false, cwd: ws, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     expect(existsSync(join(ws, '.harness'))).toBe(false)
   })
 
@@ -1027,14 +1015,14 @@ describe('prepareAgentHandoff: a fork that has no history of its own yet', () =>
     it('never falls back to the parent\'s current session', async () => {
       const { ptx, d } = setup()
       rmSync(ptx)
-      expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+      await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
       expect(d.findTranscript).toHaveBeenCalled()
       expect(existsSync(join(ws, '.harness'))).toBe(false)
     })
 
     it('treats a path the daemon will not vouch for the same way', async () => {
       const { d, ptx } = setup({ transcriptOk: () => false })
-      expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+      await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
       expect(d.findTranscript).toHaveBeenCalledWith('claude', 'p-sess', { codexHome: undefined })
       expect(existsSync(ptx)).toBe(true)
     })
@@ -1043,7 +1031,7 @@ describe('prepareAgentHandoff: a fork that has no history of its own yet', () =>
       const sub = rec('proj/p-sess/subagents/agent-p-sess.jsonl', [claude.prompt('SUBAGENT ask', 1), claude.answer('x', 2)])
       const { d } = setup({}, sub)
       d.findTranscript.mockResolvedValue(sub)
-      expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+      await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
       expect(existsSync(join(ws, '.harness'))).toBe(false)
     })
 
@@ -1062,11 +1050,11 @@ describe('prepareAgentHandoff: a fork that has no history of its own yet', () =>
     const ptx = parentTranscript()
     const fork = forkOf()
     const gone = forkDeps([fork])
-    expect(await prepareAgentHandoff(gone, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(gone, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     const throwing = forkDeps([fork], { resolve: (id) => { if (id === 'parent-1') throw new Error('unreadable record'); return id === 'fork-1' ? fork : null } })
-    expect(await prepareAgentHandoff(throwing, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(throwing, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     const away = forkDeps([parentOf(ptx, { cwd: outside }), fork])
-    expect(await prepareAgentHandoff(away, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(away, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     expect(existsSync(join(ws, '.harness'))).toBe(false)
   })
 
@@ -1078,7 +1066,7 @@ describe('prepareAgentHandoff: a fork that has no history of its own yet', () =>
     const thunk = vi.fn(async () => events)
     const parent = parentOf('', { engine: 'opencode', transcriptPath: null, sessionId: 'ses_x', boundAt: ts(0) })
     const d = forkDeps([parent, forkOf({}, link)], { readHistory: () => thunk })
-    expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     expect(thunk).not.toHaveBeenCalled()
   })
 
@@ -1086,7 +1074,7 @@ describe('prepareAgentHandoff: a fork that has no history of its own yet', () =>
     const bare = (text: string, role: string) => JSON.stringify({ type: role, message: { role, content: text } })
     const ptx = rec('p-sess.jsonl', [bare('Add a retry', 'user'), JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' } })])
     const d = forkDeps([parentOf(ptx), forkOf()])
-    expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
 })
 
@@ -1118,14 +1106,10 @@ describe('prepareAgentHandoff: a fork that has history of its own', () => {
     expect(md).not.toContain('MIRROR-ANSWER')
   })
 
-  it('lets the mirror floor win over inheritance when its own read fails', async () => {
+  it('holds an unreadable own conversation without inheriting or using the mirror', async () => {
     const d = forkDeps([parentOf(parentTranscript()), forkOf({ sessionId: 'fsess', transcriptPath: join(root, 'missing.jsonl') })])
-    const result = await prepareAgentHandoff(d, request(C, 'fork-1'))
-    expect(result.degraded).toContain('transcript')
-    const md = forkMd()
-    expect(md).toContain('MIRROR-ASK')
-    expect(md).not.toContain('History: inherited')
-    expect(md).not.toContain('Now update the README')
+    await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+    expect(existsSync(join(ws, '.harness'))).toBe(false)
   })
 })
 
@@ -1168,20 +1152,21 @@ describe('prepareAgentHandoff: chains of forks', () => {
     const ptx = parentTranscript()
     expect((await prepareAgentHandoff(chain(MAX_FORK_HOPS, ptx), request(C, 'f0'))).file).not.toBeNull()
     rmSync(join(ws, '.harness'), { recursive: true, force: true })
-    expect(await prepareAgentHandoff(chain(MAX_FORK_HOPS + 1, ptx), request(C, 'f0'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    rmSync(join(root, 'daemon-data'), { recursive: true, force: true })
+    await expect(prepareAgentHandoff(chain(MAX_FORK_HOPS + 1, ptx), request(C, 'f0'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
 
   it('does not loop on a cycle', async () => {
     const a = forkOf({ agentId: 'A' }, { agentId: 'B', name: 'b' })
     const b = forkOf({ agentId: 'B' }, { agentId: 'A', name: 'a' })
     const started = performance.now()
-    expect(await prepareAgentHandoff(forkDeps([a, b]), request(C, 'A'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(forkDeps([a, b]), request(C, 'A'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     expect(performance.now() - started).toBeLessThan(1000)
   })
 
   it('does not look for a session of an agent whose fork record is malformed', async () => {
     const d = forkDeps([session({ agentId: 'fork-1', sessionId: '', transcriptPath: null, forkedFrom: { agentId: 7 } })])
-    expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     expect(d.discoverSession).not.toHaveBeenCalled()
   })
 })
@@ -1207,18 +1192,19 @@ describe('prepareAgentHandoff: an agent that is not bound to a session yet', () 
     const dtx = rec('disc-1.jsonl', [claude.prompt('Discovered ask', 0)])
     const d = forkDeps([unbound()], { transcriptOk: () => false })
     d.discoverSession.mockResolvedValue({ engine: 'claude', sessionId: 'disc-1', transcriptPath: dtx })
-    expect(await prepareAgentHandoff(d, request())).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(d, request())).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     const sub = rec('p/s/subagents/agent-a.jsonl', [claude.prompt('Sub ask', 0)])
     const d2 = forkDeps([unbound()])
     d2.discoverSession.mockResolvedValue({ engine: 'claude', sessionId: 'agent-a', transcriptPath: sub })
-    expect(await prepareAgentHandoff(d2, request(cid(2)))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(d2, request(cid(2)))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
 
-  it('carries on without it when it finds nothing, throws, or is slow', async () => {
+  it('distinguishes an explicit empty discovery from an unavailable one', async () => {
     for (const [index, discover] of [async () => null, async () => { throw new Error('boom') }, () => new Promise<never>(() => {})].entries()) {
       const d = forkDeps([unbound()], { discoverMs: 20 })
       d.discoverSession.mockImplementation(discover)
-      expect(await prepareAgentHandoff(d, request(cid(index + 1)))).toMatchObject({ file: null, degraded: ['transcript'] })
+      if (index === 0) expect(await prepareAgentHandoff(d, request(cid(index + 1)))).toMatchObject({ file: null, degraded: [] })
+      else await expect(prepareAgentHandoff(d, request(cid(index + 1)))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     }
   })
 
@@ -1231,7 +1217,7 @@ describe('prepareAgentHandoff: an agent that is not bound to a session yet', () 
 
   it('does not use the mirror for an agent with no session at all', async () => {
     const d = forkDeps([unbound()])
-    expect(await prepareAgentHandoff(d, request())).toMatchObject({ file: null, degraded: ['transcript'] })
+    expect(await prepareAgentHandoff(d, request())).toMatchObject({ file: null, degraded: [] })
   })
 })
 
@@ -1251,6 +1237,7 @@ describe('prepareAgentHandoff: deadline and rendering of inherited history', () 
     await prepareAgentHandoff(evil, request(C, 'fork-1'))
     for (const doc of [forkMd(), forkTranscript()]) expect(doc.split('\n').some((line) => line.startsWith('## Fake'))).toBe(false)
     rmSync(join(ws, '.harness'), { recursive: true, force: true })
+    rmSync(join(root, 'daemon-data'), { recursive: true, force: true })
     const ticks = forkDeps([parentOf(ptx), forkOf({}, { name: 'a`b`c' })])
     await prepareAgentHandoff(ticks, request(C, 'fork-1'))
     expect(forkMd()).toContain(header('abc', 'parent-1', 10))
@@ -1306,7 +1293,7 @@ describe('prepareAgentHandoff: inheritance edge cases (unit verifier)', () => {
     const thunk = vi.fn(async () => [] as LiveEvent[])
     const parent = parentOf(ptx, { engine: 'opencode', sessionId: 'p-sess' })
     const d = forkDeps([parent, forkOf({}, { sessionId: 'p-sess', transcriptPath: ptx })], { readHistory: () => thunk })
-    expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     expect(thunk).not.toHaveBeenCalled()
     expect(d.findTranscript).not.toHaveBeenCalled()
     expect(existsSync(join(ws, '.harness'))).toBe(false)
@@ -1320,14 +1307,14 @@ describe('prepareAgentHandoff: inheritance edge cases (unit verifier)', () => {
 
   it('legacy record: no lookup by id, and nothing when the parent\'s current file is not vouched for', async () => {
     const d = forkDeps([parentOf(parentTranscript()), forkOf()], { transcriptOk: () => false })
-    expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     expect(d.findTranscript).not.toHaveBeenCalled()
   })
 
   it('legacy record: nothing when the parent\'s current file is a subagent transcript', async () => {
     const sub = rec('proj/p-sess/subagents/agent-x.jsonl', [claude.prompt('SUBAGENT ask', 1), claude.answer('x', 2)])
     const d = forkDeps([parentOf(sub), forkOf()])
-    expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
 
   it('nothing, and no rejection, when the lookup by id throws', async () => {
@@ -1335,7 +1322,7 @@ describe('prepareAgentHandoff: inheritance edge cases (unit verifier)', () => {
     rmSync(ptx)
     const d = forkDeps([parentOf(ptx), forkOf({}, { sessionId: 'p-sess', transcriptPath: ptx })])
     d.findTranscript.mockRejectedValue(new Error('scan failed'))
-    expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
 
   it('looks a codex parent\'s session up in that parent\'s codex home, and vouches for paths with it', async () => {
@@ -1344,7 +1331,7 @@ describe('prepareAgentHandoff: inheritance edge cases (unit verifier)', () => {
     const d = forkDeps([parent, forkOf({}, { sessionId: 'p-sess', transcriptPath: join(root, 'p-sess-gone.jsonl') })], {
       transcriptOk: (engine, path, home) => { seen.push([engine, path, home]); return false },
     })
-    expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     expect(d.findTranscript).toHaveBeenCalledWith('codex', 'p-sess', { codexHome: '/h/codex' })
     expect(seen.length).toBeGreaterThan(0)
     for (const [engine, , home] of seen) { expect(engine).toBe('codex'); expect(home).toBe('/h/codex') }
@@ -1353,14 +1340,14 @@ describe('prepareAgentHandoff: inheritance edge cases (unit verifier)', () => {
   it('nothing for a fork whose own fork time is unknown', async () => {
     for (const registeredAt of [undefined, Number.NaN, Number.POSITIVE_INFINITY, 9e15]) {
       const d = forkDeps([parentOf(parentTranscript()), forkOf({ registeredAt })])
-      expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+      await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     }
   })
 
   it('nothing for a fork that names itself as its parent', async () => {
     const self = forkOf({}, { agentId: 'fork-1' })
     const resolve = vi.fn((id: string) => (id === 'fork-1' ? self : null))
-    expect(await prepareAgentHandoff(forkDeps([self], { resolve }), request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(forkDeps([self], { resolve }), request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
 
   it('inherits through a parent whose folder is the same one reached by a link', async () => {
@@ -1386,7 +1373,7 @@ describe('prepareAgentHandoff: inheritance edge cases (unit verifier)', () => {
     const f1 = forkOf({ cwd: outside, registeredAt: ts(8) })
     const f2 = forkOf({ agentId: 'fork-2', registeredAt: ts(12) }, { agentId: 'fork-1', name: 'f1' })
     const d = forkDeps([parentOf(parentTranscript()), f1, f2])
-    expect(await prepareAgentHandoff(d, request(C, 'fork-2'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(d, request(C, 'fork-2'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
 
   it('reads malformed sub-fields of a fork record as a legacy, nameless link', async () => {
@@ -1403,7 +1390,7 @@ describe('prepareAgentHandoff: inheritance edge cases (unit verifier)', () => {
     ['an empty agent id', { agentId: '' }],
   ])('never discovers, and inherits nothing, for a fork record that is %s', async (_name, forkedFrom) => {
     const d = forkDeps([parentOf(parentTranscript()), session({ agentId: 'fork-1', sessionId: '', transcriptPath: null, forkedFrom })])
-    expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     expect(d.discoverSession).not.toHaveBeenCalled()
   })
 
@@ -1411,7 +1398,7 @@ describe('prepareAgentHandoff: inheritance edge cases (unit verifier)', () => {
     const empty = { recentAsks: () => [], lastFullText: () => undefined, recaps: () => [] }
     for (const [index, own] of [{ transcriptPath: null }, { transcriptPath: join(root, 'missing.jsonl') }].entries()) {
       const d = forkDeps([parentOf(parentTranscript()), forkOf({ sessionId: 'fsess', ...own })], empty)
-      expect(await prepareAgentHandoff(d, request(cid(index + 1), 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+      await expect(prepareAgentHandoff(d, request(cid(index + 1), 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     }
     expect(existsSync(join(ws, '.harness'))).toBe(false)
   })
@@ -1420,28 +1407,17 @@ describe('prepareAgentHandoff: inheritance edge cases (unit verifier)', () => {
 describe('prepareAgentHandoff: a fix round on gates', () => {
   it.each([['an empty string', ''], ['zero', 0], ['false', false]])('never discovers for a fork record that is %s', async (_name, forkedFrom) => {
     const d = forkDeps([session({ agentId: 'fork-1', sessionId: '', transcriptPath: null, forkedFrom })])
-    expect(await prepareAgentHandoff(d, request(C, 'fork-1'))).toMatchObject({ file: null, degraded: ['transcript'] })
+    await expect(prepareAgentHandoff(d, request(C, 'fork-1'))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     expect(d.discoverSession).not.toHaveBeenCalled()
   })
 
-  it('treats a row bound to a subagent file as having no history of its own: not the file, not the mirror', async () => {
-    const sub = rec('proj/p-sess/subagents/agent-x.jsonl', [claude.prompt('SUBAGENT ask', 1), claude.answer('sub answer', 2)])
-    const d = forkDeps([session({ transcriptPath: sub })])
-    const result = await prepareAgentHandoff(d, request())
-    expect(result.file).toBeNull()
-    expect(result.degraded).toContain('transcript')
-  })
-
-  it('lets a fork bound to its parent\'s subagent file inherit the parent, up to the fork', async () => {
+  it.each([false, true])('holds a delegated binding before mirror or inheritance (fork=%s)', async fork => {
     const ptx = parentTranscript()
     const sub = rec('proj/p-sess/subagents/agent-x.jsonl', [claude.prompt('SUBAGENT ask', 15), claude.answer('sub answer', 16)])
-    const result = await prepareAgentHandoff(forkDeps([parentOf(ptx), forkOf({ sessionId: 'agent-x', transcriptPath: sub })]), request(C, 'fork-1'))
-    expect(result.file).not.toBeNull()
-    const md = forkMd()
-    expect(md).toContain('Add a retry')
-    expect(md).not.toContain('SUBAGENT ask')
-    expect(md).not.toContain('MIRROR-ASK')
-    expect(md).not.toContain('POST-FORK ask')
+    const source = fork ? forkOf({ sessionId: 'agent-x', transcriptPath: sub }) : session({ transcriptPath: sub })
+    const d = forkDeps([parentOf(ptx), source])
+    await expect(prepareAgentHandoff(d, request(C, source.agentId))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+    expect(existsSync(join(ws, '.harness'))).toBe(false)
   })
 
   it('recognises a subagent transcript by its own folder only', () => {
@@ -1479,6 +1455,7 @@ describe('prepareAgentHandoff: what an inherited handoff says (unit verifier)', 
     await prepareAgentHandoff(forkDeps([parentOf(ptx), forkOf({}, { name: 'n'.repeat(300) })]), request(C, 'fork-1'))
     expect(forkMd()).toContain(`inherited from \`${'n'.repeat(120)}\` (agent`)
     rmSync(join(ws, '.harness'), { recursive: true, force: true })
+    rmSync(join(root, 'daemon-data'), { recursive: true, force: true })
     const token = `ghp_${'B'.repeat(36)}`
     await prepareAgentHandoff(forkDeps([parentOf(ptx), forkOf({}, { name: `deploy ${token}` })]), request(C, 'fork-1'))
     for (const doc of [forkMd(), forkTranscript()]) {
@@ -1500,7 +1477,7 @@ describe('prepareAgentHandoff: discovery results it refuses (unit verifier)', ()
     ].entries()) {
       const d = forkDeps([unbound()])
       d.discoverSession.mockResolvedValue(found)
-      expect(await prepareAgentHandoff(d, request(cid(index + 1)))).toMatchObject({ file: null, degraded: ['transcript'] })
+      await expect(prepareAgentHandoff(d, request(cid(index + 1)))).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
     }
     expect(thunk).not.toHaveBeenCalled()
     expect(existsSync(join(ws, '.harness'))).toBe(false)

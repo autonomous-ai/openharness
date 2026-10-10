@@ -227,7 +227,9 @@ describe('Claude Code and Codex readers in their own processes', () => {
     }
     const first = c.frames.length
     const replayed = c.next(frame => frame.type === 'turn_ended' && frame.agentId === agent.id && frame.replay === true, 30_000, 'rewritten history')
-    writeFileSync(row.transcriptPath, lines.slice(start).join('\n'))
+    // A Codex rewrite retains its session_meta opening; dropping it makes the file's
+    // conversation identity unavailable, which must hold the reader rather than replay it.
+    writeFileSync(row.transcriptPath, [...(engine === 'codex' ? [lines[0]] : []), ...lines.slice(start)].join('\n'))
     await replayed
     expect(c.frames.slice(first).filter(frame => frame.type === 'turn_ended' && frame.agentId === agent.id && !frame.replay)).toEqual([])
     await turn(c, agent, 'after rewrite')

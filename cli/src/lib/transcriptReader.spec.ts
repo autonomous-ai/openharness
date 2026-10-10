@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { open } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -46,6 +47,37 @@ const codex = {
 }
 
 describe('forEachLine', () => {
+  it('keeps a borrowed descriptor and finite snapshot when its pathname is replaced and its file grows', async () => {
+    const long = 'x'.repeat(1024 * 1024 + 17)
+    const original = `first\n${long}\nsecond\n`, path = file(original), handle = await open(path, 'r+')
+    const seen: string[] = []
+    try {
+      const result = await forEachLine(path, 0, async ({ text }) => {
+        seen.push(text)
+        if (seen.length === 1) {
+          renameSync(path, path + '.retained')
+          writeFileSync(path, 'Foreign conversation\n')
+          await handle.write('Appended after selection\n', Buffer.byteLength(original))
+        }
+      }, { handle, end: Buffer.byteLength(original) })
+      expect(seen).toEqual(['first', long, 'second'])
+      expect(result.end).toBe(Buffer.byteLength(original))
+      expect((await handle.stat()).size).toBeGreaterThan(result.end)
+    } finally { await handle.close() }
+  })
+
+  it.each(['visitor throws', 'reader stops'])('leaves descriptor ownership with the caller when the %s', async fault => {
+    const path = file('first\nsecond\n'), handle = await open(path, 'r')
+    try {
+      const pending = forEachLine(path, 0, () => { throw Error('visitor failed') }, {
+        handle, end: 13, shouldStop: () => fault === 'reader stops',
+      })
+      if (fault === 'visitor throws') await expect(pending).rejects.toThrow('visitor failed')
+      else expect(await pending).toEqual({ end: 0 })
+      expect((await handle.stat()).isFile()).toBe(true)
+    } finally { await handle.close() }
+  })
+
   it('reports each complete line with its byte offset and leaves a partial last line for later', async () => {
     const path = file('first\nsécond\nthird-without-newline')
     const { seen, end } = await lines(path)

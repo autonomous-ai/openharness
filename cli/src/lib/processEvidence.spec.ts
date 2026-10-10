@@ -100,6 +100,16 @@ describe('native process incarnation and executable', () => {
     await expect(readProcessEvidence(42, budget(), undefined, { pid: 42, executable: 'codex', startMarker: marker, startTicks: 1 }))
       .rejects.toThrow('observed owner')
   })
+  it('matches the trimmed ps name while retaining the exact Linux command bytes', async () => {
+    rows[0].command = 'codex          '
+    const proof = await readProcessEvidence(42, budget(), undefined, { pid: 42, executable: 'codex', startMarker: marker, startTicks: 4200 })
+    expect(proof.parent?.executable).toBe('codex')
+    expect(engineProcessMatchScore(proof.parent!, 'codex')).toBeGreaterThan(0)
+    await expect(proof.verify()).resolves.toBeUndefined()
+    // Even a change hidden by display trimming changes the retained native command evidence.
+    rows[0].command = 'codex         '
+    await expect(proof.verify()).rejects.toThrow('owner changed')
+  })
   it('brackets argv and executable reads with kernel generation and image evidence', async () => {
     vi.mocked(readlink).mockResolvedValueOnce('/fixture/codex' as never).mockResolvedValueOnce('/fixture/other' as never)
     await expect(readProcessEvidence(42, budget())).rejects.toThrow('changed while')

@@ -1,7 +1,7 @@
 /**
  * A full disk, for Claude Code and Codex: the daemon's data folder runs out of space while agents are
  * at work, as a disk filled by logs did on 2026-10-04. The core must keep serving the agents it has,
- * must say a write failed rather than pretend it held, must not restart over it, and once space is
+ * must show why durable work is held, must not restart over it, and once space is
  * back must write again: what it is told after that survives a restart.
  *
  * The data folder lives on a small disk image of its own (macOS `hdiutil`, mounted where only this
@@ -68,7 +68,13 @@ describe.skipIf(!ON)('a full disk', () => {
     execFileSync('hdiutil', ['attach', image, '-mountpoint', volume, '-nobrowse', '-noverify', '-noautoopen'], { stdio: 'pipe' })
   }, 120_000)
 
-  afterEach(async () => { await daemon?.close(); daemon = undefined })
+  afterEach(async () => {
+    // A failed assertion must not leave this test's filler behind for the next case.
+    if (volume) {
+      rmSync(join(volume, 'filler'), { force: true }); rmSync(join(volume, 'filler-tail'), { force: true })
+    }
+    await daemon?.close(); daemon = undefined
+  })
 
   afterAll(() => {
     if (volume) { try { execFileSync('hdiutil', ['detach', volume, '-force'], { stdio: 'pipe' }) } catch { /* already gone */ } }
@@ -108,25 +114,32 @@ describe.skipIf(!ON)('a full disk', () => {
     const renamed = await client.request('agent_update', { agentId: agents[0].id, name: 'Named while full' }, 30_000)
     if (process.env.DISKFULL_REPORT) writeFileSync(process.env.DISKFULL_REPORT, `rename while full: ${JSON.stringify(renamed.error ?? renamed.agent?.name)}\n`)
     expect(renamed.error, JSON.stringify(renamed)).toBeUndefined()
-    // A new agent binds and works: the record it would resume from cannot be saved, and that must not
-    // keep the windows from hearing it bound.
+    // A new binding must be durable before it is acknowledged. Keep the agent visible with
+    // its storage hold until space returns; the existing agents remain usable meanwhile.
     const cwd = join(d.projectsDir, 'made-while-full')
     mkdirSync(cwd, { recursive: true })
     const made = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 90_000)
     expect(made.error, JSON.stringify(made)).toBeUndefined()
-    const synced = client.waitFor((frame) => frame.type === 'session_synced' && frame.payload?.agentId === made.agent.id, 60_000, 'session_synced for the new agent')
-    const madeRow = await until('the agent made while full to bind', async () => {
+    const held = await until('the new agent to show its durable binding hold', async () => {
       const now = await row(client, made.agent.id)
-      return now?.sessionId && now.status === 'active' ? now : null
-    }, 60_000, 500)
-    await synced
-    await turn(client, madeRow.id, 'made while the disk was full')
+      return now?.identityHold ? now : null
+    }, 15_000, 200)
+    expect(held.identityHold).toContain('ENOSPC')
+    expect(held.sessionId).toBeFalsy()
+    expect(held.status).not.toBe('stopped')
+    expect(client.frames.some(frame => frame.type === 'session_synced' && frame.payload?.agentId === made.agent.id)).toBe(false)
+    for (const agent of agents) await turn(client, agent.id, `while a sibling waits for durable binding (${agent.engine})`)
     expect(d.coresStarted()).toBe(1)
 
     // Space comes back. With no further change asked of it, what the daemon answered while full is
     // written down within a pass or two, and survives a restart.
     rmSync(filler, { force: true })
     rmSync(join(volume, 'filler-tail'), { force: true })
+    const madeRow = await until('the same agent to bind after storage recovers', async () => {
+      const now = await row(client, made.agent.id)
+      return now?.sessionId && !now.identityHold && now.status === 'active' ? now : null
+    }, 60_000, 500)
+    await turn(client, madeRow.id, 'the held binding recovered')
     await new Promise((resolve) => setTimeout(resolve, 15_000))
     client.close()
     await d.restart()

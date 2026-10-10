@@ -436,7 +436,7 @@ describe('models in its own process', () => {
       const d = await fresh({ HARNESSD_TEST_HOLD_CONNECT: `models:${hold}` })
       const client = await LocalClient.connect(d)
       // The launch the desktop sends for a grid it already resolved: models builds it (ModelsPort.gridLaunch).
-      const grid = { networkId: 'net-e2e', networkName: 'e2e-grid', baseUrl: 'https://fixture.invalid/g/net-e2e/relay/v1', apiKey: 'fixture-key', model: 'Small-Q4' }
+      const grid = { networkId: 'net-e2e', networkName: 'e2e-grid', baseUrl: 'https://fixture.invalid/g/net-e2e/relay', apiKey: 'fixture-key', model: 'Small-Q4' }
       const onGrid = await createOn(d, client, 'claude', 'launch-grid-claude', grid)
       expect(onGrid.grid).toMatchObject({ baseUrl: grid.baseUrl, model: 'Small-Q4' })
       const before = modelsPids(d)

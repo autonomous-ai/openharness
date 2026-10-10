@@ -42,10 +42,10 @@ String agentHandoffFilePrompt(
 
 /// Judge the machine's `agent_handoff_prepare` reply.
 ///
-/// `accepted: false` means use the older excerpt road (`agent_recent`). `accepted: true` with a
+/// `accepted: false` holds the switch. Only an explicit UNSUPPORTED reply allows an older protocol. `accepted: true` with a
 /// null prompt means the machine confirmed there was nothing to hand off. A null file with
 /// `transcript` degraded is not that: the machine could not read the history, and the excerpt may
-/// still have it, so it is refused. The prompt is built from [agentId] and [changeId], never from
+/// exist, so the switch must wait. The prompt is built from [agentId] and [changeId], never from
 /// a string the reply carries; any extra field in the reply is ignored.
 ({bool accepted, String? prompt}) acceptAgentHandoffReply(
   Map<String, dynamic> reply, {
@@ -55,10 +55,17 @@ String agentHandoffFilePrompt(
   required String sourceLabel,
 }) {
   const refused = (accepted: false, prompt: null);
-  if (reply['error'] != null || reply['agentId'] != agentId) return refused;
+  if (reply['error'] != null ||
+      reply['held'] == true ||
+      reply['agentId'] != agentId ||
+      !reply.containsKey('file') ||
+      reply['cwd'] != folder ||
+      reply['gitRepo'] is! bool) {
+    return refused;
+  }
   final degraded = reply['degraded'];
   if (degraded is! List || degraded.any((d) => d is! String)) return refused;
-  // A file the machine could not write safely: the excerpt road is the only one left.
+  // An unconfirmed publication cannot authorize closing the source.
   if (degraded.contains('file')) return refused;
   final file = reply['file'];
   if (file == null) {

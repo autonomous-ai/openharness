@@ -241,6 +241,7 @@ class _AgentChange {
   final creation = AgentCreationAttempt(background: true);
   Future<String?>? pending;
   bool preservingViews = false;
+  bool handoffHeld = false;
   bool contextLoaded = false;
   String? handoff;
 
@@ -13091,7 +13092,8 @@ class AppNotifier extends ChangeNotifier {
           : Future.value('The agent is already switching.');
     }
     if (operation != null &&
-        ((!operation.preservingViews) ||
+        ((!operation.preservingViews &&
+                (!operation.handoffHeld || operation.engine != engine)) ||
             operation.launchFailed ||
             (operation.creation._finished &&
                 operation.creation.agentId == null))) {
@@ -13114,9 +13116,9 @@ class AppNotifier extends ChangeNotifier {
   /// Fill [change].handoff for the new agent, or return why the switch must not go on.
   ///
   /// First choice: the machine writes a record of the whole conversation into the project and the
-  /// new agent is told to read it (agent_handoff_prepare). Any failure of that — an older machine,
-  /// a busy or slow one, a reply this client will not trust — falls back to the short excerpt from
-  /// agent_recent. Only when that fails too does the switch stop, with the source still running.
+  /// new agent is told to read it (agent_handoff_prepare). Unavailable or untrusted preparation
+  /// holds the switch with the source still running. Only an explicit older-protocol UNSUPPORTED
+  /// reply permits the bounded agent_recent compatibility path.
   /// Both reads happen BEFORE the source is closed: a creation retry must carry the same choices.
   /// Also sets the flags that pick the hint shown when the new agent gets no first prompt.
   Future<String?> _loadSwitchHandoff(
@@ -13125,6 +13127,7 @@ class AppNotifier extends ChangeNotifier {
     Agent source,
     String folder,
   ) async {
+    change.handoffHeld = true;
     try {
       final reply = await _conn(machineId).request(
         'agent_handoff_prepare',
@@ -13147,11 +13150,19 @@ class AppNotifier extends ChangeNotifier {
         change.handoffEmpty = accepted.prompt == null;
         change.handoffFailed = false;
         change.contextLoaded = true;
+        change.handoffHeld = false;
         _resendUnreadFirstMessage(machineId, change, source);
         return null;
       }
+      if (reply['error'] == 'CHANGE_CONFLICT') {
+        change.handoffHeld = false;
+        return 'The conversation changed. Choose the agent again to start a new switch.';
+      }
+      if (reply['error'] != 'UNSUPPORTED') {
+        return 'Waiting for the conversation handoff. Try switching again.';
+      }
     } catch (_) {
-      // Any failure takes the excerpt road below.
+      return 'Waiting for the conversation handoff. Try switching again.';
     }
     try {
       final recent = await _conn(machineId).request(
@@ -13170,6 +13181,7 @@ class AppNotifier extends ChangeNotifier {
       change.handoffEmpty = change.handoff == null;
       change.handoffFailed = change.handoffEmpty;
       change.contextLoaded = true;
+      change.handoffHeld = false;
     } catch (_) {
       return 'Could not read the conversation for the handoff. Try switching again.';
     }
@@ -13202,6 +13214,7 @@ class AppNotifier extends ChangeNotifier {
     if (current == null ||
         current.createdAt != source.createdAt ||
         current.sessionId != source.sessionId) {
+      change.handoffHeld = false;
       return 'The conversation changed. Reopen Change agent.';
     }
     final folder = source.project?.cwd ?? machine.projectOf(source)?.cwd;
@@ -13217,9 +13230,18 @@ class AppNotifier extends ChangeNotifier {
         return 'This switch is no longer active.';
       }
     }
-    final close = prepareSessionClose(machineId, source);
+    // Preparation can outlive a binding, runtime or project change. Close only the same source.
+    final latest = machine.agents.where((a) => a.id == source.id).firstOrNull;
+    if (latest == null ||
+        latest.createdAt != source.createdAt ||
+        latest.sessionId != source.sessionId ||
+        latest.engine != source.engine ||
+        (latest.project?.cwd ?? machine.projectOf(latest)?.cwd) != folder) {
+      return 'The conversation changed. Reopen Change agent.';
+    }
+    final close = prepareSessionClose(machineId, latest);
     change.preservingViews = true;
-    if (!current.isStopped) {
+    if (!latest.isStopped) {
       final saved = await close('now');
       if (saved['closed'] != true) {
         change.preservingViews = false;

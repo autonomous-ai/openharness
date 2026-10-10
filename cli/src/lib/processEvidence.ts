@@ -64,7 +64,9 @@ async function commandEvidence(row: GraphRow, budget: NativeEvidenceBudget): Pro
     const finalImage = await readlink(`/proc/${row.pid}/exe`).catch(() => '')
     budget.step()
     if (linuxIdentity(before) !== linuxIdentity(after) || finalImage !== imagePath) return nativeUnavailable('the native process changed while its command was read')
-    return { ...row, executable: before.command, args, startTicks: before.startTicks, imagePath,
+    // ps trims the command column; Linux comm can retain padding from a process-title rewrite.
+    // Match discovery's display name while keeping the exact bytes in both native fences below.
+    return { ...row, executable: before.command.trim(), args, startTicks: before.startTicks, imagePath,
       nativeArgv: argv, evidence: JSON.stringify([imagePath, before.command, argv]),
       controlIdentity: controlIdentity({ pid: row.pid, parentPid: before.parentPid, command: before.command, imagePath, argv, birth: String(before.startTicks) }) }
   }

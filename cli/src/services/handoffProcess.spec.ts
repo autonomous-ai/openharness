@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import { HANDOFF_REQUESTS, type CoreApi } from '../core/api.js'
 import { databaseHistory } from '../lib/databaseHistory.js'
+import { createHandoffPublisher } from '../core/handoffPublication.js'
+import type { PreparedHandoff } from '../lib/handoffAuthority.js'
 import { startHandoff } from './handoff.js'
 import { handoffCoreApi, runHandoffService } from './handoffProcess.js'
 import { runServiceProcess, type ServiceProcessOptions } from './process.js'
@@ -30,6 +32,11 @@ vi.mock('../lib/sqliteBuiltin.js', () => {
 afterEach(() => vi.clearAllMocks())
 
 describe('the handoff in the edge host', () => {
+  it.each(['UNKNOWN_AGENT', 'NO_PROJECT', 'BAD_CHANGE_ID', 'BUSY', 'TIMEOUT',
+    'IDENTITY_UNAVAILABLE', 'HANDOFF_UNAVAILABLE', 'CHANGE_CONFLICT'])('preserves a typed %s reply across the service boundary', async error => {
+    const core = handoffCoreApi('/data', async () => ({ error }))
+    await expect(core.conversations.resolve('selected')).rejects.toMatchObject({ code: error })
+  })
   it('queries current retained records, recaps, and verified paths with their exact arguments', async () => {
     let value: unknown = { agentId: 'stopped', engine: 'claude' }
     const ask = vi.fn(async () => ({ value }))
@@ -41,7 +48,7 @@ describe('the handoff in the edge host', () => {
     expect(ask).toHaveBeenLastCalledWith('resolve', { id: 'stopped' })
     value = { agentId: 'new' }
     expect(await core.conversations.resolve('stopped')).toBe(value)
-    value = ['ask', 7, null]
+    value = ['ask']
     expect(await core.conversations.recentAsks('s', 20)).toEqual(['ask'])
     expect(ask).toHaveBeenLastCalledWith('recentAsks', { id: 's', n: 20 })
     value = ['recap']
@@ -61,19 +68,25 @@ describe('the handoff in the edge host', () => {
     expect(ask).toHaveBeenLastCalledWith('transcriptOk', { engine: 'codex', path: '/path', codexHome: null })
   })
 
-  it('never uses a remembered record or guesses when a query has no valid answer', async () => {
-    const core = handoffCoreApi('/data', async () => ({}))
-    expect(await core.conversations.resolve('gone')).toBeNull()
-    expect(await core.conversations.recentAsks('s', 20)).toEqual([])
-    expect(await core.conversations.recaps('s', 5)).toEqual([])
-    expect(await core.conversations.lastFullText('s')).toBeNull()
-    expect(await core.conversations.discover('a')).toBeNull()
-    expect(await core.conversations.findTranscript('codex', 's', {})).toBeNull()
-    expect(await core.conversations.transcriptOk('codex', '/path', null)).toBe(false)
-    for (const value of [null, {}, { engine: 7 }, { engine: 'unknown' }, { engine: 'claude' }, { engine: 'claude', sessionId: 's' }]) {
-      expect(await handoffCoreApi('/data', async () => ({ value })).conversations.discover('a')).toBeNull()
+  it('holds malformed or unavailable query replies, while preserving explicit absence', async () => {
+    for (const answer of [{}, { error: 'QUERY_FAILED' }]) {
+      const core = handoffCoreApi('/data', async () => answer)
+      for (const work of [
+        () => core.conversations.resolve('gone'), () => core.conversations.recentAsks('s', 20),
+        () => core.conversations.recaps('s', 5), () => core.conversations.lastFullText('s'),
+        () => core.conversations.discover('a'), () => core.conversations.findTranscript('codex', 's', {}),
+        () => core.conversations.transcriptOk('codex', '/path', null),
+      ]) await expect(work()).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
     }
-    await expect(handoffCoreApi('/data', async () => ({ error: 'QUERY_FAILED' })).conversations.resolve('a')).rejects.toThrow('the core did not answer')
+    const empty = handoffCoreApi('/data', async () => ({ value: null }))
+    expect(await empty.conversations.resolve('gone')).toBeNull()
+    expect(await empty.conversations.lastFullText('s')).toBeNull()
+    expect(await empty.conversations.discover('a')).toBeNull()
+    expect(await empty.conversations.findTranscript('codex', 's', {})).toBeNull()
+    for (const value of [{}, { engine: 7 }, { engine: 'unknown' }, { engine: 'claude' }, { engine: 'claude', sessionId: 's' }]) {
+      await expect(handoffCoreApi('/data', async () => ({ value })).conversations.discover('a')).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+    }
+    await expect(handoffCoreApi('/data', async () => ({ value: ['ask', 7] })).conversations.recentAsks('s', 20)).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
     await expect(handoffCoreApi('/data', async () => { throw new Error('disconnected') }).conversations.resolve('a')).rejects.toThrow('disconnected')
   })
 
@@ -86,7 +99,7 @@ describe('the handoff in the edge host', () => {
       start: core => { api = core; return { agent_handoff_prepare: async () => ({ value: await core.conversations.resolve('a') }) } },
     })
     expect(options).toMatchObject({ name: 'handoff', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-    expect(await api.conversations.resolve('a')).toBeNull()
+    await expect(api.conversations.resolve('a')).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
     const query = vi.fn(async () => ({ value: { agentId: 'a' } }))
     options.onConnected!({ query })
     expect(await options.requests.agent_handoff_prepare!({}, { local: true, owner: true })).toEqual({ value: { agentId: 'a' } })
@@ -107,8 +120,15 @@ describe('the handoff in the edge host', () => {
         claude: { agentId: 'claude-1', sessionId: 's1', engine: 'claude', cwd: ws, transcriptPath: null, registeredAt: Date.now() - 60_000 },
         opencode: { agentId: 'opencode-1', sessionId: 'ses_handoff1', engine: 'opencode', cwd: ws, transcriptPath: null, registeredAt: Date.now() - 60_000 },
       }
-      const core = handoffCoreApi('/data', async (query, payload) => ({
-        value: query === 'resolve' ? Object.values(agents).find((agent) => agent.agentId === payload.id) ?? null
+      const publicationErrors: unknown[] = []
+      const commit = createHandoffPublisher({ directory: join(ws, 'daemon-data'),
+        resolve: id => Object.values(agents).find(agent => agent.agentId === id) as never,
+        ownedByOther: () => false, isRecentlyDeleted: () => false })
+      const publish = async (prepared: PreparedHandoff) => {
+        try { return await commit(prepared, { current: () => true }) } catch (error) { publicationErrors.push(error); throw error }
+      }
+      const core = handoffCoreApi(join(ws, 'daemon-data'), async (query, payload) => ({
+        value: query === 'publish' ? await publish(payload.prepared as PreparedHandoff) : query === 'resolve' ? Object.values(agents).find((agent) => agent.agentId === payload.id) ?? null
           : query === 'recentAsks' || query === 'recaps' ? [] : null,
       }))
       // The eager SQLite module does not open a database for a file-backed conversation.
@@ -123,8 +143,36 @@ describe('the handoff in the edge host', () => {
       const handed = await prepare({ agentId: 'opencode-1', changeId: 'a'.repeat(32), targetEngine: 'claude' }, asker) as { file: string | null }
       expect(binding.loads).toBe(1)
       expect(binding.reads).toEqual([{ path: join(env.OPENCODE_DATA_DIR, 'opencode.db'), sql: expect.stringContaining('FROM message m'), params: ['ses_handoff1'] }])
-      expect(handed.file).toEqual(expect.any(String))
+      expect(publicationErrors).toEqual([])
+      expect(handed).toMatchObject({ file: expect.any(String) })
       expect(readFileSync(join(ws, handed.file!), 'utf8')).toContain('add a login page')
     } finally { rmSync(ws, { recursive: true, force: true }) }
   })
+})
+
+it('refuses malformed read/publication replies and never sends a revoked publication', async () => {
+  const request = { agentId: 'a', changeId: '1'.repeat(32), targetEngine: 'claude' }
+  const result = { cwd: '/work', file: null, gitRepo: false, degraded: [] }
+  const prepared = { request, result } as never
+  const ask = vi.fn(async () => ({ value: result as unknown })), core = handoffCoreApi('/private-fixture', ask)
+  await expect(core.conversations.publish(prepared, { current: () => false })).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
+  expect(ask).not.toHaveBeenCalled()
+  expect(await core.conversations.publish(prepared, { requestId: 'routed', current: () => true })).toEqual(result)
+  expect(ask).toHaveBeenLastCalledWith('publish', { prepared, originRequestId: 'routed' })
+  for (const value of [null, {}, { ...result, cwd: '/other' }, { ...result, file: 'other' }, { ...result, gitRepo: null }, { ...result, degraded: null }, { ...result, degraded: ['unknown'] }]) {
+    ask.mockResolvedValueOnce({ value })
+    await expect(core.conversations.publish(prepared, { current: () => true })).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
+  }
+  for (const [method, args, value, code] of [
+    ['resolve', ['a'], {}, 'IDENTITY_UNAVAILABLE'],
+    ['lastFullText', ['s'], 3, 'HANDOFF_UNAVAILABLE'],
+    ['findTranscript', ['codex', 's', {}], 3, 'HANDOFF_UNAVAILABLE'],
+    ['transcriptOk', ['codex', '/file', null], null, 'IDENTITY_UNAVAILABLE'],
+    ['recaps', ['s', 5], {}, 'HANDOFF_UNAVAILABLE'],
+  ] as const) {
+    ask.mockResolvedValueOnce({ value })
+    await expect((core.conversations[method] as (...args: any[]) => Promise<unknown>)(...args)).rejects.toMatchObject({ code })
+  }
+  ask.mockResolvedValueOnce({ error: 'IDENTITY_UNAVAILABLE' } as never)
+  await expect(core.conversations.resolve('a')).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
 })
