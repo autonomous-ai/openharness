@@ -135,9 +135,21 @@ broken proof, commit, queue, cancellation and notification wiring. Matched compl
 registry/HTTP/held-admission costs run separately and alone. A frozen head receives
 independent review and every required CI check before the authorized merge.
 
-Validation, exact-head final attestation and merge receipts are pending. Independent
-source review approved `08afe262b` against `cc4983e18`, conditional on the gates. Record
-implementation, validation, review/CI waiting, merge and publication separately.
-The former golden was recorded at 04:33 UTC on October 10; this implementation
-continued after #1133 merged at 05:16 UTC. Publication remains zero; no release is
-authorized.
+[PR #1137](https://github.com/autonomous-ai/openharness/pull/1137) merged as
+`9618c2e2c09c078a27a0d76b94f62365bd7a2c89` at October 10 08:36:54 UTC. Independent
+review approved final head `5af2d4bd25fd4d82ca1061c6b8ffb686f80ddfb8` against base
+`294548e`, following review corrections. Receipt `20261010T083045` passed core/services
+(2,114 tests in 165 files, 100%), harnessd (265 passed and one existing skip, 100%),
+162 native cases, 22 admission-golden/architecture cases and private hook-client
+acceptance (ten passed, one older-release compatibility opt-in skip). Source comparison
+and review retained unchanged serial Resume, 63 private lifecycle e2e cases, all 32
+assertion-failing mutations and the matched cost evidence above.
+
+Automatic [CI run 38038140466](https://github.com/autonomous-ai/openharness/actions/runs/38038140466)
+passed every head check, including `ci/required`. Merge verification occupied
+08:36:40–08:36:54; receipt `20261010T083640.654250Z-merge-1137` records the reviewed
+trees. The former golden was recorded at 04:33; implementation continued after #1133
+merged at 05:16, with review and validation interleaved through the final gate at
+08:30:45. Those overlapping intervals are not added to estimate elapsed request time.
+Publication remains zero; no release is authorized. Restart-persistent delivery and
+legacy native-client acknowledgement/order remain in the completion checklist.

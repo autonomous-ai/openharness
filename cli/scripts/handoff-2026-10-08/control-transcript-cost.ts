@@ -12,6 +12,9 @@ const workload = process.argv[2] ?? 'capture-codex'
 if (!['capture-codex', 'capture-claude', 'checkpoint-small', 'checkpoint-large', 'checkpoint-reuse', 'stop', 'resume-held'].includes(workload)) throw Error('Unknown workload')
 const cli = process.env.CONTROL_COST_CLI ?? resolve(import.meta.dirname, '../..')
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'control-transcript-cost-')))
+// The daemon normally owns live sockets. Its unref'ed zero-delay Stop wait must
+// also finish in this standalone process before its measurements are written.
+const keepAlive = setInterval(() => {}, 60_000)
 const hostPlatform = process.platform
 Object.defineProperty(process, 'platform', { value: 'linux' })
 const forbidden = () => { throw Error('Host binaries are forbidden in the control measurement') }
@@ -99,4 +102,4 @@ try {
   process.stdout.write(JSON.stringify({ workload, iterations, latenciesMs, cpuMs, sourceBytes: statSync(file).size,
     peakRssMiB: process.resourceUsage().maxRSS / 1024, node: process.version, hostPlatform, evidencePlatform: process.platform,
     arch: process.arch, outcomes: { confirmed: iterations } }) + '\n')
-} finally { rmSync(root, { recursive: true, force: true }) }
+} finally { clearInterval(keepAlive); rmSync(root, { recursive: true, force: true }) }
