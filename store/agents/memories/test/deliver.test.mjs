@@ -144,7 +144,8 @@ test('review: About You never cites its own copies as something the person wrote
   const rows = collect({ env, home: dir }).memories
   const told = rows.filter((row) => row.kind === 'instructions')
   assert.ok(told.every((row) => !row.body.includes('Harness Memories')), 'no delivered copy is read back as an instruction')
-  assert.deepEqual(told.map((row) => row.body.trim()), ['# My rules\n\nUse pnpm.', '## Gemini Added Memories\n- Prefers tabs'])
+  // Rows come newest first, and delivery writes both files in the same instant: compare them as a set.
+  assert.deepEqual(told.map((row) => row.body.trim()).sort(), ['# My rules\n\nUse pnpm.', '## Gemini Added Memories\n- Prefers tabs'])
   assert.deepEqual(rows.filter((row) => row.agent === 'gemini' && row.kind === 'you').map((row) => row.body), ['Prefers tabs'], 'nor as something Gemini saved')
 })
 

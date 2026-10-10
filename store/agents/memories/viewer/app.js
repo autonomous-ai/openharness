@@ -90,23 +90,26 @@ function drawSwitch() {
   button.setAttribute('aria-checked', String(on))
   $('switch-word').textContent = switching ? '…' : on ? 'ON' : 'OFF'
   button.disabled = switching || !delivery.built
-  detail.replaceChildren()
+  // One row: the switch and, beside it, only what explains its state. Which agents get it and what it
+  // costs are in About You's own panel; machines that need an update are in the machines list.
   const machines = (snap.machines ?? [])
-  const needUpdate = machines.filter((machine) => !machine.current && machine.online && !machine.ok).length
-  if (!delivery.built) {
-    detail.append(document.createTextNode('Not built yet. Ask the agent on the right: build my About You.'))
-  } else if (on) {
-    const names = (delivery.agents ?? []).filter((row) => row.delivered).map((row) => agent(row.agent).name)
-    const onMachines = 1 + machines.filter((machine) => !machine.current && machine.ok && machine.deliveryOn).length
-    const parts = [names.join(', ') || 'no agent installed here', `on ${onMachines} ${onMachines === 1 ? 'machine' : 'machines'}`, `~${number(delivery.tokens)} tokens per new session`]
-    detail.append(document.createTextNode(parts.join(' · ')))
-  } else {
-    detail.append(document.createTextNode('Your agents don\'t get About You.'))
-  }
-  if (needUpdate) detail.append(document.createTextNode(' · '), el('span', 'warn', `${needUpdate} ${needUpdate === 1 ? 'machine needs' : 'machines need'} the newest Harness`))
-  if (switchError) detail.append(document.createTextNode(' · '), el('span', 'warn', switchError))
-  const failed = (delivery.agents ?? []).filter((row) => row.error)
-  if (failed.length) detail.append(document.createTextNode(' · '), el('span', 'warn', failed.map((row) => `${agent(row.agent).name}: ${row.error}`).join('; ')))
+  const names = (delivery.agents ?? []).filter((row) => row.delivered).map((row) => agent(row.agent).name)
+  const onMachines = 1 + machines.filter((machine) => !machine.current && machine.ok && machine.deliveryOn).length
+  detail.textContent = !delivery.built ? 'not built yet' : !on && delivery.choseOff && delivery.choiceAt > 2 ? `off since ${since(delivery.choiceAt)}` : ''
+  button.title = !delivery.built ? 'Ask the agent on the right: build my About You.'
+    : on ? `Every new ${names.join(', ') || 'agent'} session starts with About You (~${number(delivery.tokens)} tokens), on ${onMachines} ${onMachines === 1 ? 'machine' : 'machines'}.`
+      : 'New sessions start without About You.'
+  const failed = (delivery.agents ?? []).filter((row) => row.error).map((row) => `${agent(row.agent).name}: ${row.error}`)
+  const problem = $('switch-problem')
+  problem.textContent = [switchError, ...failed].filter(Boolean).join(' · ')
+  problem.hidden = !problem.textContent
+}
+
+/** When a choice was made, the way a person says it: a time today, else a date. */
+function since(at) {
+  const date = new Date(at)
+  const today = new Date().toDateString() === date.toDateString()
+  return today ? date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
 $('switch-button').addEventListener('click', async () => {
@@ -739,11 +742,12 @@ function receive(snap) {
 function connect() {
   const live = $('live')
   const source = new EventSource('/events')
+  // Connected is the normal state and says nothing; only a lost connection is worth words.
   source.addEventListener('snapshot', (event) => {
-    live.textContent = 'live'; live.classList.add('on')
+    live.textContent = ''; live.classList.remove('lost')
     try { receive(JSON.parse(event.data)) } catch { /* a malformed frame is skipped; the next one replaces it */ }
   })
-  source.addEventListener('error', () => { live.textContent = 'reconnecting'; live.classList.remove('on') })
+  source.addEventListener('error', () => { live.textContent = 'reconnecting…'; live.classList.add('lost') })
 }
 
 let resizeTimer = null
