@@ -26,8 +26,12 @@ export { MEMORY_REQUESTS } from '../core/api.js'
 
 /** The bridge drops a frame past 8 MB; `mem snapshot` keeps itself under 4 MB. */
 const MAX_OUTPUT = 8 * 1024 * 1024
-const TIMEOUT_MS = 30_000
+/** Under the core's 30 s wait for a routed answer: a slow run is told as this service's failure, with its
+ *  reason, not as the service being down. */
+const TIMEOUT_MS = 25_000
 const MAX_ABOUT = 64 * 1024
+/** `node:sqlite`, which the package reads the session index with, and `--disable-warning`. */
+const NODE_MAJOR = 22
 
 export interface MemoryDeps {
   /** The installed Memories package's folder, or null when it is not installed here. */
@@ -36,15 +40,25 @@ export interface MemoryDeps {
   run(dir: string, args: string[], input?: string): Promise<{ stdout: string }>
 }
 
-export function runMem(dir: string, args: string[], input?: string): Promise<{ stdout: string }> {
+/** What `mem` is run with: this process's environment without the daemon's own credentials. */
+export function memEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith('HARNESSD_')))
+}
+
+export function runMem(dir: string, args: string[], input?: string, node: string = process.versions.node, timeoutMs: number = TIMEOUT_MS): Promise<{ stdout: string }> {
   return new Promise((resolve, reject) => {
+    if (Number(node.split('.')[0]) < NODE_MAJOR) { reject(new Error(`Memories needs Node ${NODE_MAJOR} or newer; this Harness runs on ${node}.`)); return }
     // This process's own Node: the one Harness ships, which has the built-in SQLite the package reads the
     // session index with. Its experimental warning would only reach the log.
     const child = execFile(process.execPath, ['--disable-warning=ExperimentalWarning', join(dir, 'toolchain', 'mem.mjs'), ...args],
-      { cwd: dir, timeout: TIMEOUT_MS, maxBuffer: MAX_OUTPUT, env: process.env },
+      { cwd: dir, timeout: timeoutMs, maxBuffer: MAX_OUTPUT, env: memEnv() },
       (error, stdout, stderr) => {
-        if (error) reject(new Error(String(stderr || error.message).trim().split('\n').slice(-1)[0].slice(0, 300)))
-        else resolve({ stdout })
+        if (!error) { resolve({ stdout }); return }
+        // `mem deliver` exits 1 when one agent's file could not be written (a linked folder, say) and still
+        // prints what it did for every agent: that answer is the truth, not a failure of the whole request.
+        if (stdout.trim().startsWith('{')) { try { JSON.parse(stdout); resolve({ stdout }); return } catch { /* not an answer */ } }
+        const said = String(stderr).trim().split('\n').slice(-1)[0]
+        reject(new Error((said || `mem stopped (${error.killed ? 'too slow' : `exit ${error.code ?? 'unknown'}`})`).slice(0, 300)))
       })
     child.stdin?.end(input ?? '')
   })
@@ -59,6 +73,17 @@ const failed = (error: unknown): Record<string, unknown> =>
   ({ error: 'MEMORY_FAILED', detail: error instanceof Error ? error.message : String(error) })
 
 export function startMemory(_core: CoreApi, deps: MemoryDeps = DEFAULTS): ServiceRequests {
+  // Writes one at a time: two machines' panes can send a choice or a profile at the same moment, and each
+  // run reads and rewrites the same files. In order, "never older over newer" holds; side by side, an older
+  // choice could land last. Snapshots asked for together share one read.
+  // `mem` below never rejects (a failure is an answer), so the chain never breaks.
+  let writes: Promise<unknown> = Promise.resolve()
+  const queued = <T>(work: () => Promise<T>): Promise<T> => {
+    const result = writes.then(work)
+    writes = result
+    return result
+  }
+  let reading: Promise<Record<string, unknown>> | null = null
   const mem = async (args: string[], input?: string): Promise<Record<string, unknown>> => {
     const dir = deps.packageDir()
     if (!dir) return { error: 'MEMORIES_NOT_INSTALLED', detail: 'Memories is not installed on this machine.' }
@@ -70,7 +95,8 @@ export function startMemory(_core: CoreApi, deps: MemoryDeps = DEFAULTS): Servic
   return {
     memory_snapshot: async (_payload, asker) => {
       if (!asker.owner) return { error: 'OWNER_REQUIRED' }
-      const answer = await mem(['snapshot', '--json'])
+      reading ??= mem(['snapshot', '--json']).finally(() => { reading = null })
+      const answer = await reading
       return answer.ok ? { snapshot: answer.value } : answer
     },
     memory_about_put: async (payload, asker) => {
@@ -79,15 +105,16 @@ export function startMemory(_core: CoreApi, deps: MemoryDeps = DEFAULTS): Servic
       const gen = payload.gen
       if (!text.trim() || text.length > MAX_ABOUT) return { error: 'INVALID_MEMORY', detail: 'memory_about_put needs About You text under 64 KB' }
       if (!Number.isSafeInteger(gen)) return { error: 'INVALID_MEMORY', detail: 'memory_about_put needs the build number (gen)' }
-      const answer = await mem(['about', 'write', '--gen', String(gen), '--json'], text)
-      return answer.ok ? { ok: true } : answer
+      const answer = await queued(() => mem(['about', 'write', '--gen', String(gen), '--json'], text))
+      // `written: false`: a newer About You was already here, and stays.
+      return answer.ok ? { ok: true, written: Boolean((answer.value as { written?: unknown }).written) } : answer
     },
     memory_deliver: async (payload, asker) => {
       if (!asker.owner) return { error: 'OWNER_REQUIRED' }
       if (typeof payload.on !== 'boolean' || !Number.isSafeInteger(payload.choiceAt) || (payload.choiceAt as number) < 1) {
         return { error: 'INVALID_MEMORY', detail: 'memory_deliver needs on and the time it was chosen (choiceAt)' }
       }
-      const answer = await mem(['deliver', payload.on ? 'on' : 'off', '--choice-at', String(payload.choiceAt), '--json'])
+      const answer = await queued(() => mem(['deliver', payload.on ? 'on' : 'off', '--choice-at', String(payload.choiceAt), '--json']))
       return answer.ok ? { ok: true, delivery: answer.value } : answer
     },
   }

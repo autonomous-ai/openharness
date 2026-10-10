@@ -33,7 +33,7 @@ they show as `harnessd`, `harnessd-core` and `harnessd-<process>` (`src/harnessd
 | models | grid, local models, the Model Manager | on demand: once grid is in use here (a managed grid, saved grid pictures, local models), or on a models request |
 | updater | checks, downloads and stages a new build (`src/services/updaterProcess.ts`) | by the master, for the installed copy only |
 | devices | the dials, the window bridges, the fleet, the voice router, the Wi-Fi device | on demand: once there is a device |
-| orchestrator, teams (with Tab collaboration), sharing, commandBar | the experiments | on demand: on a request, or saved state at start |
+| orchestrator, teams (with Tab collaboration), sharing, commandBar, memory | the experiments | on demand: on a request, or saved state at start |
 
 `HARNESSD_SERVICES` names a subset to run in their own processes, by service or by process.
 `HARNESSD_SERVICES=none` runs every service in the core's process, for debugging or a quick way back. How

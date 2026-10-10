@@ -177,7 +177,8 @@ The core keeps sessions, and reaches each service only through its link. Measure
         ├── orchestrator           experiment
         ├── teams                  experiment: Tab collaboration
         ├── sharing                experiment: Share
-        └── commandBar             experiment: the command bar
+        ├── commandBar             experiment: the command bar
+        └── memory                 experiment: Memories across machines
 ```
 
 One service failing costs its own process, and the master restarts it. The core answers its requests

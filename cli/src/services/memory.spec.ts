@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
-import { MEMORY_REQUESTS, runMem, startMemory, type MemoryDeps } from './memory.js'
+import { memEnv, MEMORY_REQUESTS, runMem, startMemory, type MemoryDeps } from './memory.js'
 
 vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn(() => undefined) }))
 
@@ -46,7 +46,7 @@ describe('memory: this machine\'s memories for the owner\'s other machines', () 
   it('memory_about_put writes another machine\'s build with its number', async () => {
     const d = deps(() => ({ written: true, refreshed: ['codex'] }))
     const memory = startMemory(fakeCore(), d)
-    expect(await memory.memory_about_put!({ text: '## A\n- one\n', gen: 7 }, owner)).toEqual({ ok: true })
+    expect(await memory.memory_about_put!({ text: '## A\n- one\n', gen: 7 }, owner)).toEqual({ ok: true, written: true })
     expect(d.calls).toEqual([[['about', 'write', '--gen', '7', '--json'], '## A\n- one\n']])
     expect(await memory.memory_about_put!({ text: '  ', gen: 7 }, owner)).toMatchObject({ error: 'INVALID_MEMORY' })
     expect(await memory.memory_about_put!({ text: 'x'.repeat(70_000), gen: 7 }, owner)).toMatchObject({ error: 'INVALID_MEMORY' })
@@ -85,6 +85,42 @@ describe('memory: this machine\'s memories for the owner\'s other machines', () 
   })
 })
 
+describe('memory: one write at a time, one read for many', () => {
+  it('runs writes in the order they came, and shares one snapshot among those asked together', async () => {
+    const order: string[] = []
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let reads = 0
+    const memory = startMemory(fakeCore(), {
+      packageDir: () => '/pkg',
+      run: async (_dir, args) => {
+        if (args[0] === 'snapshot') { reads++; await gate; return { stdout: '{"memories":[]}' } }
+        order.push(`start ${args[1]}`)
+        if (args[1] === 'on') await gate
+        order.push(`end ${args[1]}`)
+        return { stdout: '{"written":false}' }
+      },
+    })
+    const on = memory.memory_deliver!({ on: true, choiceAt: 10 }, owner)
+    const off = memory.memory_deliver!({ on: false, choiceAt: 11 }, owner)
+    const first = memory.memory_snapshot!({}, owner)
+    const second = memory.memory_snapshot!({}, owner)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(order).toEqual(['start on'])
+    release()
+    await Promise.all([on, off, first, second])
+    expect(order).toEqual(['start on', 'end on', 'start off', 'end off'])
+    expect(reads).toBe(1)
+    expect(await memory.memory_about_put!({ text: '## A\n- older\n', gen: 1 }, owner)).toEqual({ ok: true, written: false })
+    // A write that fails does not stop the ones after it.
+    const failing = startMemory(fakeCore(), { packageDir: () => '/pkg', run: async (_dir, args) => { if (args[1] === 'on') throw new Error('no'); return { stdout: '{}' } } })
+    const bad = failing.memory_deliver!({ on: true, choiceAt: 2 }, owner)
+    const good = failing.memory_deliver!({ on: false, choiceAt: 3 }, owner)
+    expect(await bad).toMatchObject({ error: 'MEMORY_FAILED' })
+    expect(await good).toMatchObject({ ok: true })
+  })
+})
+
 describe('runMem: the package\'s own command, on this process\'s Node', () => {
   const pkg = (body: string): string => {
     const dir = mkdtempSync(join(tmpdir(), 'memory-pkg-'))
@@ -102,10 +138,30 @@ describe('runMem: the package\'s own command, on this process\'s Node', () => {
     expect(JSON.parse(quiet.stdout)).toEqual({ args: ['snapshot'], input: '' })
   })
 
-  it('rejects with the command\'s last line of error output', async () => {
+  it('rejects with the command\'s last line of error output, and never with a command line', async () => {
     const dir = pkg(`console.error('first'); console.error('the profile has no lines'); process.exit(1)`)
     await expect(runMem(dir, ['about', 'write'])).rejects.toThrow('the profile has no lines')
     const silent = pkg(`process.exit(3)`)
-    await expect(runMem(silent, [])).rejects.toThrow(/Command failed/)
+    await expect(runMem(silent, [])).rejects.toThrow('mem stopped (exit 3)')
+    const garbled = pkg(`console.log('{ not json'); process.exit(1)`)
+    await expect(runMem(garbled, [])).rejects.toThrow('mem stopped (exit 1)')
+  })
+
+  it('says a run was too slow, or stopped by a signal, in words', async () => {
+    const slow = pkg(`setTimeout(() => {}, 10_000)`)
+    await expect(runMem(slow, [], undefined, process.versions.node, 200)).rejects.toThrow('mem stopped (too slow)')
+    const killed = pkg(`process.kill(process.pid, 'SIGKILL')`)
+    await expect(runMem(killed, [])).rejects.toThrow('mem stopped (exit unknown)')
+  })
+
+  it('takes the answer of a run that wrote some agents and not others (exit 1, its JSON printed)', async () => {
+    const dir = pkg(`console.log(JSON.stringify({ on: true, results: [{ agent: 'claude', ok: true }, { agent: 'codex', ok: false, error: 'is a link' }] })); process.exit(1)`)
+    const { stdout } = await runMem(dir, ['deliver', 'on', '--json'])
+    expect(JSON.parse(stdout).results[1]).toEqual({ agent: 'codex', ok: false, error: 'is a link' })
+  })
+
+  it('needs Node 22, and never hands the daemon\'s credentials to the package', async () => {
+    await expect(runMem('/pkg', [], undefined, '20.10.0')).rejects.toThrow('Memories needs Node 22 or newer; this Harness runs on 20.10.0.')
+    expect(memEnv({ HOME: '/h', HARNESSD_SERVICE_TOKEN: 'secret', HARNESSD_SERVICES: 'x', PATH: '/bin' })).toEqual({ HOME: '/h', PATH: '/bin' })
   })
 })

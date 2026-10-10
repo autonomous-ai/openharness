@@ -227,8 +227,15 @@ it('reports a non-Error dependency failure and still prepares the other bundled 
 })
 
 it('ships Memories with the release, adopting the Store copy and never a developer\'s linked one', () => {
+  // A person who got Memories from the Store before it shipped with Harness: the release takes it over.
+  const storeDir = join(root, 'autonomous', 'memories')
+  mkdirSync(storeDir, { recursive: true })
+  for (const [name, file] of Object.entries(coreFiles(MEMORIES_ID, 'from the store'))) writeFileSync(join(storeDir, name), file.content)
+  upsertInstalledRecord({ id: MEMORIES_ID, dir: storeDir, source: 'https://github.com/autonomous-ai/openharness', path: 'store/agents/memories',
+    ref: 'main', commit: 'b'.repeat(40), linked: false, installedAt: 9 })
   expect(ensureBundledMemories(coreFiles(MEMORIES_ID))).toBe(true)
   expect(installedDsh(MEMORIES_ID)!.source).toBe(MEMORIES_BUILTIN_SOURCE)
+  expect(installedDsh(MEMORIES_ID)!.installedAt).toBe(9)
   const linked = join(root, 'developer-memories')
   upsertInstalledRecord({ id: MEMORIES_ID, dir: linked, source: linked, ref: 'main', commit: null, linked: true, installedAt: 1 })
   expect(ensureBundledMemories(coreFiles(MEMORIES_ID, 'next release'))).toBe(true)

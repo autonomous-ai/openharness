@@ -9,7 +9,8 @@
  * never an older choice over a newer one — the Claude Code hook in this home appearing and going. Killed,
  * it costs its own request alone, the core and the next request go on.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -35,7 +36,12 @@ describe('memory, an experiment in its own process', () => {
   afterEach(async () => { await daemon?.close(); daemon = undefined })
 
   it('answers another machine\'s pane through the package, and never moves this machine backwards', async () => {
-    const d = await IsolatedDaemon.create({ env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000' } })
+    // Every folder the package reads or writes, under this test's own root: a developer's shell may point
+    // any of these at their real agent homes, and delivery writes About You into them (cli/AGENTS.md rule 6).
+    const own = mkdtempSync(join(tmpdir(), 'memory-e2e-'))
+    const homes = Object.fromEntries(['XDG_CONFIG_HOME', 'GEMINI_HOME', 'PI_HOME', 'GROK_HOME', 'HERMES_HOME', 'OPENCLAW_HOME', 'MEMORIES_HOME']
+      .map((name) => [name, join(own, name.toLowerCase())]))
+    const d = await IsolatedDaemon.create({ env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...homes } })
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
     const home = d.env.HOME!
