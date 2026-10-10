@@ -12,10 +12,10 @@ export interface ReplacementPlan { readonly revision: number; readonly closes: r
 export function createTurnReplacements(normalizers: Pick<SessionNormalizers, 'liveParsers'>) {
   const pending = new Map<string, ReturnType<typeof create>>()
   let generation = 0
-  const create = (session: RegisteredSession) => {
+  const create = (session: RegisteredSession, active = true) => {
     const id = session.sessionId
     const binding = JSON.stringify([session.agentId, id, session.engine])
-    let transcriptPath = session.transcriptPath, active = true
+    let transcriptPath = session.transcriptPath
     let state = normalizers.liveParsers.get(id)?.snapshot()
       ?? { identity: `held:${++generation}`, turnOpen: false, continued: false }
     let revision = 0, stopRevision = 0, cancelRevision = 0, failure: string | undefined
@@ -85,7 +85,7 @@ export function createTurnReplacements(normalizers: Pick<SessionNormalizers, 'li
         return true
       },
     }
-    normalizers.liveParsers.set(id, handle)
+    if (active) normalizers.liveParsers.set(id, handle)
     return replacement
   }
   const stage = (session: RegisteredSession) => {
@@ -100,7 +100,14 @@ export function createTurnReplacements(normalizers: Pick<SessionNormalizers, 'li
   }
   return { stage,
     retains: (session: RegisteredSession) => pending.get(session.sessionId)?.binding === JSON.stringify([session.agentId, session.sessionId, session.engine]),
-    cancel: (session: RegisteredSession) => pending.get(session.sessionId)!.cancel(session.transcriptPath),
+    cancel: (session: RegisteredSession) => {
+      let record = pending.get(session.sessionId)
+      if (record?.binding !== JSON.stringify([session.agentId, session.sessionId, session.engine])) {
+        record = create(session, false)
+        pending.set(session.sessionId, record)
+      }
+      return record.cancel(session.transcriptPath)
+    },
     forget: (sessionId: string) => { pending.delete(sessionId) },
   }
 }

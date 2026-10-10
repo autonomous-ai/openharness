@@ -236,3 +236,16 @@ it.each(['inline', 'worker'] as const)('%s holds a later ordinary cancellation w
   expect(t.row.interpretationHold).toBeUndefined()
   expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(false)
 })
+
+it.each(['inline', 'worker'] as const)('%s preserves an ordinary Cancel through the first later binding recovery', async mode => {
+  const t = setup(mode)
+  await t.attach.attachSession(t.row)
+  const live = t.normalizers.liveParsers.get(t.row.sessionId)
+  await t.cancel(t.row.agentId)
+  expect(t.normalizers.liveParsers.get(t.row.sessionId)).toBe(live)
+  expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(false)
+  t.hold(); t.recover(); await t.attach.attachSession(t.row)
+  expect(t.row.interpretationHold).toBeUndefined()
+  expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(false)
+  expect(t.settled).not.toHaveBeenCalled()
+})

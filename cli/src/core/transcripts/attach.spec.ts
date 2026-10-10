@@ -1418,3 +1418,12 @@ it('replays a crash boundary in order with a retained cancellation', async () =>
   expect(run.deps.emit).not.toHaveBeenCalled()
   run.attach.forget(row.sessionId)
 })
+
+it('leaves an ordinary database cancellation on its eager native control path', () => {
+  const run = setup(), row = session('opencode')
+  run.attach.beforeCancel(row)
+  expect(row.interpretationHold).toBeUndefined()
+  expect(run.normalizers.liveParsers.has(row.sessionId)).toBe(false)
+  expect(run.deps.terminalGone).not.toHaveBeenCalled()
+  expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
+})

@@ -99,7 +99,7 @@ export function createAttach({
   }
   const beforeCancel = (session: RegisteredSession): void => {
     if (session.identityHold || session.interpretationHold) turnReplacements.stage(session)
-    else if (turnReplacements.retains(session)) {
+    else if (session.transcriptPath || turnReplacements.retains(session)) {
       const reason = turnReplacements.cancel(session)
       if (reason) holdInterpretation(session, `Waiting for transcript interpretation: ${reason}.`)
     }

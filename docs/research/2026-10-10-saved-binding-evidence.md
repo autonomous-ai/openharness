@@ -100,25 +100,27 @@ mode. Final affected lanes and composed resume are rerun after these changes.
 
 The [raw measurements](2026-10-10-binding-evidence-cost.json) compare main `c7d460b1d`
 and this implementation, using Node 22.23.2 on macOS x64. Three interleaved fresh-process
-repetitions ran alone 02:15:46–02:17:09 UTC (36 processes). Each process measured five
+repetitions of `937e9e6d4` ran alone 04:08:13–04:09:34 UTC (36 processes). Each process measured five
 complete operations after fixture setup. The registry workloads completed all 12,030
 row decisions; native descriptor workloads produced the expected unique bindings or
 ambiguity holds in all 90 calls. No held result was counted as a successful binding.
 
 | Whole operation | Former median latency ms | Candidate median latency ms | Former/candidate process CPU ms | Former/candidate peak RSS MiB |
 | --- | ---: | ---: | ---: | ---: |
-| One saved row, one home | 44.07 | 44.01 | 20.96 / 24.01 | 95.30 / 95.09 |
-| 200 saved rows, one home | 82.39 | 99.21 | 263.34 / 363.64 | 194.17 / 132.32 |
-| 200 saved rows, 63 homes | 167.65 | 134.19 | 672.85 / 553.78 | 144.59 / 131.76 |
-| Native descriptor, one file | 517.52 | 514.43 | 137.82 / 139.18 | 106.30 / 108.05 |
-| Native descriptor, duplicate handles | 513.65 | 517.31 | 137.84 / 139.98 | 105.82 / 106.15 |
-| Native descriptor, competing files | 520.59 | 513.61 | 145.38 / 138.90 | 107.26 / 108.18 |
+| One saved row, one home | 42.46 | 44.36 | 18.50 / 22.99 | 95.26 / 94.07 |
+| 200 saved rows, one home | 83.07 | 96.19 | 275.07 / 361.36 | 195.11 / 131.97 |
+| 200 saved rows, 63 homes | 168.87 | 131.08 | 667.31 / 538.08 | 142.89 / 132.12 |
+| Native descriptor, one file | 516.32 | 517.63 | 135.69 / 138.57 | 107.00 / 104.49 |
+| Native descriptor, duplicate handles | 521.47 | 514.99 | 140.80 / 139.69 | 106.90 / 104.10 |
+| Native descriptor, competing files | 516.94 | 518.96 | 142.02 / 139.93 | 108.25 / 110.04 |
 
 Latency covers a complete load or native lookup, including final proofs. CPU is the
 median for a process's five operations; peak RSS is the median of process peaks.
 The single-home batch pays for complete file/header evidence; sharing roots within
 the operation reduces the former many-home traversal cost. These samples are cost
 evidence for the specified workloads, not a host-independent performance gate.
+The later first-Cancel correction affects neither measured import/call path; these
+measurements do not cover active cancellation latency.
 
 ## Remaining scope and timing
 
@@ -134,8 +136,8 @@ durable lifecycle intent and the other named completion groups remain open.
 
 The independent composed review found that replacing interpretation could lose a
 Cancel or apply it to a later turn. Core now retains ordered cancellation boundaries
-for the conversation, including successful replacement, another reset, repaired path,
-and worker reconstruction. A new explicit Cancel can supersede a rewritten file;
+for the conversation, including the first ordinary Cancel before any outage, successful replacement,
+another reset, repaired path, and worker reconstruction. A new explicit Cancel can supersede a rewritten file;
 an automatic retry cannot move the old decision to a later file position. Each
 boundary records the regular file's device/inode and a digest of at most 1 KiB at
 the beginning and boundary. This samples those bytes; it is not a digest of the
