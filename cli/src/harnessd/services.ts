@@ -386,9 +386,6 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
   // Directors; the agents it runs are the core's.
   orchestrator: { services: ['orchestrator'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true },
-  // The command bar (services/commandBarProcess.ts), an experiment: started at its first request. What it holds
-  // is at most eight decisions in flight and one bounded JEV answer each (lib/commandBar.ts).
-  commandBar: { services: ['commandBar'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
   // Memories (services/memoryProcess.ts), an experiment: started at its first request, another machine's
   // Memories pane asking. It runs the Memories package's own command: writes one at a time, snapshots
   // asked together as one read, each answer at most 8 MB.

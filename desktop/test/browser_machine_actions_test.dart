@@ -42,7 +42,6 @@ class _Connection extends WsConn {
   }) async {
     requests.add((type: type, payload: payload));
     if (failure != null) throw failure!;
-    if (type == 'command_bar') return {'selectedId': null, 'suggestions': []};
     if (type == 'route_send') return {'ok': false, 'reason': 'fixture refused'};
     if (type == 'api_connections') return {'connections': [], 'presets': []};
     if (payload['action'] == 'list') return {'projects': []};
@@ -187,20 +186,7 @@ void main() {
     }
   });
 
-  test('browser commands use the linked host and never send after cancellation or to a shared host', () async {
-    expect(
-      await app.resolveCommandBar({
-        'prompt': 'fixture',
-      }, cancelToken: CancelToken()),
-      {'selectedId': null, 'suggestions': []},
-    );
-    expect(connections['b']!.requests.single.type, 'command_bar');
-    final cancelled = CancelToken()..cancel();
-    await expectLater(
-      app.resolveCommandBar({'prompt': 'cancelled'}, cancelToken: cancelled),
-      throwsA(isA<DioException>()),
-    );
-    expect(connections['b']!.requests, hasLength(1));
+  test('browser task delivery uses the linked host and never sends to a shared host', () async {
     expect(
       await app.sendRoutedTask('a', 'shared', 'not sent'),
       contains('Reconnect'),

@@ -66,12 +66,6 @@
     "renderer": "AppKit"
   },
   {
-    "id": "autonomous/jev-browser",
-    "sourceSha256": "c171c81c07449d2a69419b896a837007c2df6afafd3138baa9e6665c0d37b23a",
-    "pngSha256": "245ccc97c17a1443ddefd6e3758a33583e72597aab9a4d0016ba140a937835a0",
-    "renderer": "AppKit"
-  },
-  {
     "id": "autonomous/godogen",
     "sourceSha256": "47070987c9b643b2385032d7097ca12c5469d06aa0c8d3ac08d88912b0d3287b",
     "pngSha256": "bb978c3cc63c329bb264db308056446c2f8424566c2424d8808e776a648ae549",

@@ -16,10 +16,6 @@ pub struct Row {
     /// Everything else typing should match (label is included automatically).
     pub extra: String,
     pub group: Option<String>,
-    /// The group of groups it is under — the Models view's Chat models and Decision models, as the
-    /// desktop picker heads them — drawn as a stronger heading over its group's wherever it changes.
-    /// None in every other list.
-    pub category: Option<String>,
     /// Drawn before the label (state dot, engine mark).
     pub lead: Vec<Span<'static>>,
     /// Drawn after the label, dim.
@@ -63,12 +59,11 @@ impl Row {
 
 impl Row {
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Row {
-        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, category: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0, volatile_detail: false, volatile_right: 0, label_dim: 0, right_narrow: None, line_first: false, tier: 0 }
+        Row { id: id.into(), label: label.into(), extra: String::new(), group: None, lead: vec![], detail: vec![], right: String::new(), disabled: false, boost: 0, volatile_detail: false, volatile_right: 0, label_dim: 0, right_narrow: None, line_first: false, tier: 0 }
     }
     pub fn tier(mut self, tier: u8) -> Row { self.tier = tier; self }
     pub fn extra(mut self, text: impl Into<String>) -> Row { self.extra = text.into(); self }
     pub fn group(mut self, text: impl Into<String>) -> Row { self.group = Some(text.into()); self }
-    pub fn category(mut self, text: impl Into<String>) -> Row { self.category = Some(text.into()); self }
     pub fn lead(mut self, spans: Vec<Span<'static>>) -> Row { self.lead = spans; self }
     pub fn detail(mut self, spans: Vec<Span<'static>>) -> Row { self.detail = spans; self }
     pub fn right(mut self, text: impl Into<String>) -> Row { self.right = text.into(); self }

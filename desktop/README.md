@@ -127,9 +127,7 @@ For a local production build, run `bash scripts/build-web-release.sh X.Y.Z`.
 - API connections, model controls and orchestrator projects run on a linked
   computer. Editors keep their destination while open; reopening model controls
   selects the current computer. API keys are saved on that computer, not in
-  browser preferences. The command bar uses the same daemon decision service
-  and requires the same provider configuration; local navigation still works
-  without it. Sending a task remains a separate confirmed action.
+  browser preferences.
 - Managed viewer panes accept mouse, keyboard and text input through an
   encrypted owner connection. Their isolated Chromium renderer runs on the
   agent machine and must be installed there. Shared-link viewers remain read

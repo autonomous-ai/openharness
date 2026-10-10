@@ -212,9 +212,7 @@ describe('grid_fleet_models_list (the Model Manager) on a sleeping own grid', ()
     const reply = await ask('grid_fleet_models_list', { refresh: true })
 
     expect(reply.error).not.toBe('Running models could not be checked. Try again.')
-    // (The Jev models offered to get are not this grid's engines; they are listed whatever it runs.)
-    expect((reply.models as Array<{ kind?: string }>).filter((m) => m.kind !== 'decision'))
-      .toEqual([expect.objectContaining({ id: 'local:Small-Q4.gguf', state: 'running', gridAsleep: true, canStop: true })])
+    expect(reply.models).toEqual([expect.objectContaining({ id: 'local:Small-Q4.gguf', state: 'running', gridAsleep: true, canStop: true })])
     expect(seen.map((r) => r.path)).toEqual([`/g/${OWN_ID}${OVERVIEW}`])
     expectNoCredential()
     // The owner status is asked once and remembered, not asked on every tick.

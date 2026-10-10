@@ -1,8 +1,7 @@
 //! Copy to the clipboard of the computer the person is sitting at — which, over SSH, is not this
 //! one. OSC 52 asks the outer terminal to do it; sitting at this computer, its own clipboard is set
 //! too, because a terminal may refuse OSC 52: iTerm2 does unless "Applications in terminal may access
-//! clipboard" is on, and it is off by default — a Jev model's Copy said "Copied" and left nothing to
-//! paste [run].
+//! clipboard" is on, and it is off by default — a copy said "Copied" and left nothing to paste [run].
 
 use std::io::Write;
 use std::process::{Command, Stdio};

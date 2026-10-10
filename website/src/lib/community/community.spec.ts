@@ -8,8 +8,8 @@ import { forkFiles, zipFiles } from './bundle';
 import { previewDocument } from './preview';
 
 describe('portable starter projects', () => {
-  it('ships eighteen real outputs with parseable scripts, covers, and a complete installable fork', async () => {
-    expect(starterHarnesses).toHaveLength(18);
+  it('ships seventeen real outputs with parseable scripts, covers, and a complete installable fork', async () => {
+    expect(starterHarnesses).toHaveLength(17);
     for (const summary of starterHarnesses) {
       const harness = (await getStarter(summary.id))!;
       expect(harness.files.length).toBeGreaterThanOrEqual(1);

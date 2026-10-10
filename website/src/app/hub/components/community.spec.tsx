@@ -37,13 +37,13 @@ describe('community navigation', () => {
     expect(screen.getAllByRole('link', { name: 'Open Orbit' })).toHaveLength(1);
     expect(request).toHaveBeenLastCalledWith('harnesses?mine=true&cursor=next-page');
   });
-  it('renders eighteen linked starter projects, with no fake engagement, and searches them', async () => {
+  it('renders seventeen linked starter projects, with no fake engagement, and searches them', async () => {
     request.mockResolvedValue({ harnesses: [], nextCursor: null, following: [] });
     render(<Feed />);
     // Nothing is drawn under the first page until it answers: the grid would jump when it lands.
     expect(screen.queryAllByRole('link', { name: /^Open / })).toHaveLength(0);
     await screen.findByRole('link', { name: 'Open One more jump' });
-    expect(screen.getAllByRole('link', { name: /^Open / }).filter(link => link.getAttribute('href')?.startsWith('/hub/starter-'))).toHaveLength(18);
+    expect(screen.getAllByRole('link', { name: /^Open / }).filter(link => link.getAttribute('href')?.startsWith('/hub/starter-'))).toHaveLength(17);
     expect(screen.getByRole('link', { name: 'Open One more jump' })).toHaveAttribute('href', '/hub/starter-moonlight');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Search harnesses' }));

@@ -49,21 +49,6 @@ void main() {
       }
     },
   );
-  test('disabled commands are not claimed by native shortcuts', () {
-    final keymap = MemoryKeymap();
-    addTearDown(keymap.dispose);
-    expect(
-      jsonEncode(nativeKeymapSnapshot(keymap)),
-      contains('navigation.command_bar'),
-    );
-    final snapshot = nativeKeymapSnapshot(
-      keymap,
-      disabledCommands: const {'navigation.command_bar'},
-    );
-    expect(jsonEncode(snapshot), isNot(contains('navigation.command_bar')));
-    expect(jsonEncode(snapshot), contains('swarm.new'));
-  });
-
   test('the daemon\'s keys reach native only while daemons are on', () {
     final keymap = MemoryKeymap();
     addTearDown(keymap.dispose);

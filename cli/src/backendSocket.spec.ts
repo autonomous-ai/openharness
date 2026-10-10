@@ -398,30 +398,30 @@ describe('agent_update opened: one "last used" for every app', () => {
 })
 
 describe('viewer forwarding authentication', () => {
-  it('routes a sealed command_bar to the command bar with its connection, who asked, and nothing in the clear', async () => {
+  it('routes a sealed service request with its connection, who asked, and nothing in the clear', async () => {
     const socket = relaySocket('token')
     const routed: Array<{ type: string; asker: unknown }> = []
-    socket.serviceRouter = (type, _payload, asker, reply) => { routed.push({ type, asker }); reply({ selectedId: null }); return true }
+    socket.serviceRouter = (type, _payload, asker, reply) => { routed.push({ type, asker }); reply({ memories: [] }); return true }
     const ownerCommands = vi.spyOn(socket.ownerCommands, 'request')
     vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
     const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
-    const clear = { type: 'command_bar', payload: { requestId: 'one', request: { prompt: 'fixture', candidates: [] } } }
+    const clear = { type: 'memory_snapshot', payload: { requestId: 'one' } }
     vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(clear)
-    const sealedReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: 'command_bar_result', payload: { __e2e: 'sealed' } })
+    const sealedReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: 'memory_snapshot_result', payload: { __e2e: 'sealed' } })
     await dispatchDown(socket, clear, 'remote')
     expect(routed).toEqual([])
-    const sealed = { type: 'command_bar', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
-    // A device's session asks as no owner: the command bar refuses it (services/commandBar.ts).
+    const sealed = { type: 'memory_snapshot', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
+    // A device's session asks as no owner: the service refuses it (services/memory.ts).
     role.mockReturnValue('device')
     await dispatchDown(socket, sealed, 'remote')
     role.mockReturnValue('web')
     await dispatchDown(socket, sealed, 'remote')
     expect(routed).toEqual([
-      { type: 'command_bar', asker: { local: false, owner: false, connection: 'remote', requestId: 'one' } },
-      { type: 'command_bar', asker: { local: false, owner: true, connection: 'remote', requestId: 'one' } },
+      { type: 'memory_snapshot', asker: { local: false, owner: false, connection: 'remote', requestId: 'one' } },
+      { type: 'memory_snapshot', asker: { local: false, owner: true, connection: 'remote', requestId: 'one' } },
     ])
     expect(ownerCommands).not.toHaveBeenCalled()
-    expect(sealedReply).toHaveBeenCalledWith('remote', 'command_bar_result', 'one', { selectedId: null })
+    expect(sealedReply).toHaveBeenCalledWith('remote', 'memory_snapshot_result', 'one', { memories: [] })
     await socket.stop()
   })
 

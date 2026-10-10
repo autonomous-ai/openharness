@@ -61,7 +61,6 @@ that process. A process per risk, not per feature (`SERVICE_HOSTS` in `src/harne
 | `orchestrator` | orchestrator | an experiment | on demand |
 | `teams` | teams, collaboration | an experiment: Tab collaboration beside the prompt scopes | on demand |
 | `sharing` | sharing | an experiment: Share | on demand |
-| `commandBar` | commandBar | an experiment: the command bar | on demand |
 | `memory` | memory | an experiment: Memories across machines | on demand |
 
 A fault in one of the edge host's services can cost the others in it, never the core. Every service in
@@ -207,8 +206,8 @@ like any other. Named in `HARNESSD_SERVICES`, it starts with the others.
 
 ## Experiments
 
-An experiment (the orchestrator, Tab collaboration, Share, the command bar, memory) is a service that costs nothing
-until it is on: its own process, which the master starts only when the core asks for it (`want`), when one of
+An experiment (the orchestrator, Tab collaboration, Share, memory) is a service that costs nothing until it is
+on: its own process, which the master starts only when the core asks for it (`want`), when one of
 its requests arrives or, as the core starts, when its saved state is in the data folder. Off, nothing of it runs or
 is loaded anywhere; one failing costs its own process and nothing else. `e2e/experiments.e2e.ts` proves it:
 off, on by request, on by saved state, killed, hung and crashing on every start.

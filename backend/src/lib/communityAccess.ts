@@ -7,5 +7,5 @@ export const communityStarters = new Set([
   'starter-pocket-film', 'starter-moonlight', 'starter-sales-story', 'starter-pleat',
   'starter-sunday', 'starter-orbit', 'starter-blue-hour', 'starter-field-notes', 'starter-make-space',
   'starter-harness-keynote',
-  'starter-ribbon-lamp', 'starter-signal-study', 'starter-alpine-drift', 'starter-better-questions', 'starter-two-futures', 'starter-molecular-shapes', 'starter-lantern-room', 'starter-portable-light',
+  'starter-ribbon-lamp', 'starter-signal-study', 'starter-alpine-drift', 'starter-two-futures', 'starter-molecular-shapes', 'starter-lantern-room', 'starter-portable-light',
 ])

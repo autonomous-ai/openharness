@@ -4151,47 +4151,6 @@ class AppNotifier extends ChangeNotifier {
     return null;
   }
 
-  Future<Map<String, dynamic>> resolveCommandBar(
-    Map<String, dynamic> request, {
-    required CancelToken cancelToken,
-  }) async {
-    if (viewer == null) {
-      return api.resolveCommandBar(request, cancelToken: cancelToken);
-    }
-    if (cancelToken.isCancelled) throw cancelToken.cancelError!;
-    final machine = ownedActionMachine;
-    if (machine == null) {
-      throw ApiException('Connect a machine, or choose an action below.');
-    }
-    final connection = _conn(machine.machine.machineId);
-    if (!connection.isReady) {
-      throw ApiException('Reconnect this machine, or choose an action below.');
-    }
-    try {
-      return await Future.any([
-        connection.request(
-          'command_bar',
-          payload: {'request': request},
-          timeout: const Duration(seconds: 16),
-        ),
-        cancelToken.whenCancel.then<Map<String, dynamic>>(
-          (error) => throw error,
-        ),
-      ]);
-    } on WsRequestFailure catch (failure) {
-      throw ApiException(
-        failure.code == 'UNSUPPORTED'
-            ? 'Update Harness on this machine to use smart commands.'
-            : failure.detail ??
-                  'This machine could not answer. Choose an action below.',
-      );
-    } on WsRequestTimeout {
-      throw ApiException(
-        'This machine did not answer. Update Harness or choose an action below.',
-      );
-    }
-  }
-
   MachineState? get activeMachineState {
     final terminal = activeTerminal;
     if (terminal != null) return machineStates[terminal.machineId];
@@ -11642,7 +11601,7 @@ class AppNotifier extends ChangeNotifier {
           !models.sections.any(
             (section) =>
                 section.name == choices['gridName'] &&
-                section.harnessModels.any(
+                section.models.any(
                   (model) => model.id == choices['gridModel'],
                 ),
           )) {

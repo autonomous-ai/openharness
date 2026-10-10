@@ -894,7 +894,7 @@ async function gridLogoutCommand(args: string[]): Promise<void> {
 /**
  * `harness grid env <grid>` — `grid --remote info <grid> --env` through the harness's own `grid`, so a
  * shell can `eval` a grid's relay address and key with no `grid` of its own on PATH, or an older one
- * that refuses a resting grid. The Models view's Jev pane builds its copy-paste request on it.
+ * that refuses a resting grid: any OpenAI-compatible client can then call the grid's models.
  *
  * A passthrough like `grid logout`: the exports, the refusals and the exit code are `grid`'s. The key
  * goes to this process's stdout only — the explicit disclosure `info --env` exists for — never a log.

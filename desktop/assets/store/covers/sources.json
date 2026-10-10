@@ -113,20 +113,6 @@
     "harness": "autonomous/lab-bench"
   },
   {
-    "asset": "jev-browser.jpg",
-    "source": "store/showcase/jev-browser/jev-picks-the-columns.jpg",
-    "credit": "OpenHarness example",
-    "sha256": "6ad1491a161e00035a755e990aff05455b8708436adb0c94df078af02fc9d6a9",
-    "harness": "autonomous/jev-browser"
-  },
-  {
-    "asset": "jev-sheets.jpg",
-    "source": "store/showcase/jev-sheets/typed-column.jpg",
-    "credit": "OpenHarness example",
-    "sha256": "8635a777ab9a5f0ddb25d9fdbe27cfceb9805b10a48e63f830c7c53916c7ff03",
-    "harness": "autonomous/jev-sheets"
-  },
-  {
     "asset": "roundtable.jpg",
     "source": "store/showcase/roundtable/claim-map-mid-round.jpg",
     "credit": "OpenHarness example",

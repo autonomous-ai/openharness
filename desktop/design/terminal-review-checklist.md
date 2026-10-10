@@ -10,28 +10,6 @@ Try the first twelve items without a mouse. Use a scratch agent or shell for
 the Fork, Restart, and Stop items. Any action without a listed shortcut is
 available by name in **Cmd-Shift-P** command search.
 
-## PR #136: JEV direct commands and Go back
-
-Open **Cmd-Shift-J**, type each example, and press Enter:
-
-- `Show history`, `Open settings`, or `Show me the layout options`: immediately
-  open the existing control without a provider request. Escape returns to work.
-- `Open <exact tab or agent title>`: switch directly when the title is unique.
-  **Go back** in the completion notice restores the original view and leaves
-  the destination open. Duplicate names should remain a choice.
-- `Open a new tab`: open the normal existing/new-agent chooser. Escape should
-  leave no extra tab and restore terminal typing.
-- `Show me the Harness Store`: open or focus the Store tab.
-
-The review build points to the already-running JEV service on port 18478.
-The initial credit error stopped appearing during user review; its latest
-requests return HTTP 200. The older app instance still uses the old daemon's
-missing endpoint and can show 404, so use the newly opened review build.
-Try `Which sessions are ready for review?`, `Take me back to the
-login bug`, and `Let me know when the tests pass`. Sending a task, creating an
-agent, or starting a watch must still show an explicit action card first.
-Escape or Cmd-Shift-J closes the experimental prompt.
-
 ## New: creation polish and keyboard learning
 
 - **Cmd-Shift-P → Quick start**, or Help → Quick Start. On an empty workspace,

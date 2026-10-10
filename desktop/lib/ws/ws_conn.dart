@@ -633,7 +633,6 @@ class WsConn {
       !type.startsWith('api_connections') &&
       !type.startsWith('connectors') &&
       !type.startsWith('orchestrator') &&
-      !type.startsWith('command_bar') &&
       !type.startsWith('route_') &&
       !type.startsWith('harness_share_') &&
       // Pair responses can contain retained memory quotations and one-use

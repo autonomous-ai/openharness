@@ -1,10 +1,8 @@
 import type { LocalWsServerOptions } from '../localWsServer.js'
 import { ROUTE_COMMAND_TYPES } from './relayFrames.js'
-export { OWNER_COMMAND_TYPES, ROUTE_COMMAND_TYPES } from './relayFrames.js'
+export { ROUTE_COMMAND_TYPES } from './relayFrames.js'
 
-/** ⌘K's task delivery from a remote owner's app, as the desktop does it, behind the paired-owner boundary.
- * The command bar's decisions, which never execute an action, are a service of their own
- * (services/commandBar.ts); the client still reviews and commits the selected action. */
+/** ⌘K's task delivery from a remote owner's app, as the desktop does it, behind the paired-owner boundary. */
 export class OwnerCommands {
   onRouteTask?: LocalWsServerOptions['onRouteTask']
   onRouteSend?: LocalWsServerOptions['onRouteSend']

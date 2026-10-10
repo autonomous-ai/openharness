@@ -7,50 +7,10 @@ import { startHookServer, type HookServerHandlers, chooseHookAgent, hookFiredAt,
 import { registry, type RegisteredSession } from './lib/registry.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
-import { CommandBarService } from './lib/commandBar.js'
-import { routedCommandBar } from './lib/commandBarHttp.js'
-import { COMMAND_BAR_REQUESTS, emptyPorts } from './core/api.js'
-import { createServiceHost } from './core/serviceHost.js'
-import { startCommandBar, type Commands } from './services/commandBar.js'
-import { fakeCore } from './testing/fakeCore.js'
 import { ENGINES } from './engines/types.js'
 import { engineHooks } from './engines/hooks.js'
 
 let server: Server | null = null
-
-describe('native command bar endpoints', () => {
-  /** The command bar in this process, behind the core's door to it, as `HARNESSD_SERVICES=none` runs it. */
-  const commandBar = (commands: Commands) => {
-    const host = createServiceHost(emptyPorts(), { log: () => {} })
-    host.serve('commandBar', (core) => startCommandBar(core, commands), fakeCore(), COMMAND_BAR_REQUESTS)
-    return routedCommandBar({ serviceRouter: host.route, onConnectionClosed: host.closeConnection })
-  }
-
-  it('requires a native local header and rejects browser origins before evaluating', async () => {
-    const decide = vi.fn()
-    const { base } = await start({ onCommandBar: commandBar({ status: vi.fn(), decide }) })
-    const attempts: Record<string, string>[] = [{}, { 'x-adapter-local': '1', origin: 'https://example.com' }]
-    for (const headers of attempts) {
-      const response = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: '{}' })
-      expect(response.status).toBe(403)
-    }
-    expect(decide).not.toHaveBeenCalled()
-  })
-
-  it('returns configuration without credentials and wraps useful setup errors', async () => {
-    const { base } = await start({ onCommandBar: commandBar(new CommandBarService({ key: async () => null })) })
-    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
-    const status = await fetch(`${base}/api/command-bar/status`, { headers })
-    expect(await status.json()).toMatchObject({ success: true, data: { configured: false, provider: 'OpenRouter' } })
-    const response = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: JSON.stringify({ prompt: 'hello', candidates: [] }) })
-    expect(response.status).toBe(503)
-    expect(await response.json()).toMatchObject({ success: false, error: { code: 'OPENROUTER_REQUIRED' } })
-    const bad = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: '{' })
-    expect(bad.status).toBe(400)
-    const large = await fetch(`${base}/api/command-bar/resolve`, { method: 'POST', headers, body: 'x'.repeat(129_000) })
-    expect(large.status).toBe(413)
-  })
-})
 
 afterEach(async () => {
   if (!server) return
@@ -632,8 +592,8 @@ describe('the daemon socket', () => {
     const dir = mkdtempSync('/tmp/hsock-')
     const socketPath = join(dir, 'daemon.sock')
     const onStatus = vi.fn(() => ({ ok: true }))
-    const door = { ask: vi.fn(async () => ({ status: 200, body: { success: true, data: { configured: false } } })), closed: vi.fn() }
-    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus, onCommandBar: door }, { socketPath })
+    const onAutonomousDeviceRequest = vi.fn(async () => ({ status: 200, body: { ok: true } }))
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onStatus, onAutonomousDeviceRequest }, { socketPath })
     server = started.server
     try {
       expect(started.localSocket?.path).toBe(socketPath)
@@ -641,9 +601,11 @@ describe('the daemon socket', () => {
       expect(await viaSocket(socketPath, 'GET', '/api/status')).toBe(200)
       expect(await viaSocket(socketPath, 'GET', '/api/status', { host: 'rebind.evil.example' })).toBe(200)
       expect(onStatus).toHaveBeenCalledTimes(2)
-      // The command bar asked for a loopback PEER; a socket peer has no address and is let in.
-      expect(await viaSocket(socketPath, 'GET', '/api/command-bar/status', { 'x-adapter-local': '1' })).toBe(200)
-      expect(await viaSocket(socketPath, 'GET', '/api/command-bar/status')).toBe(403)
+      // The device routes ask for a loopback PEER; a socket peer has no address and is let in.
+      const bearer = { authorization: `Bearer ${readHookCredential(env.ADAPTER_DATA_DIR)}` }
+      expect(await viaSocket(socketPath, 'GET', '/api/autonomous-device/status', bearer)).toBe(200)
+      expect(await viaSocket(socketPath, 'GET', '/api/autonomous-device/status')).toBe(403)
+      expect(onAutonomousDeviceRequest).toHaveBeenCalledTimes(1)
       // Mutations still need the CSRF header, hooks still need their credential.
       expect(await viaSocket(socketPath, 'POST', '/api/group/sync')).toBe(403)
       expect(await viaSocket(socketPath, 'POST', '/api/hook/session-start')).not.toBe(200)

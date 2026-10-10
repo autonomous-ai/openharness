@@ -102,7 +102,7 @@ class KeyboardLesson {
 }
 
 /// The catalog and live bindings are the source of truth, including aliases,
-/// user sequences, unbindings, and terminal-only overrides. JEV stays optional.
+/// user sequences, unbindings, and terminal-only overrides.
 List<KeyboardLesson> keyboardLessons(AppKeymap keymap) {
   const essentials = [
     'swarm.new',
@@ -114,7 +114,6 @@ List<KeyboardLesson> keyboardLessons(AppKeymap keymap) {
     'keyboard.help',
   ];
   const excluded = {
-    'navigation.command_bar',
     'keyboard.practice',
     'keyboard.quick_start',
     'keyboard.pause_guide',

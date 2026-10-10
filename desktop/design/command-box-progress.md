@@ -4,6 +4,10 @@ Branch: `worktree-command-box`. The desktop overhaul is committed as `f2ff876b`;
 integration now includes `main` through `60764ba9` (PR #164). The earlier sections
 below are a historical record; the current PR checkpoint is at the end.
 
+The experimental JEV command bar (Cmd-Shift-J) and its review service on port
+18478 were removed on 2026-10-10. Where this log still names them, it records
+how a build was made at the time, not what the app does now.
+
 ## Direction carried forward
 
 The terminals are the product; Harness is the frame, one keystroke away.
@@ -485,24 +489,6 @@ Verification and review build:
 - Recovery copies: branch `backup/command-box-before-pr136-20260920` at
   `d46ffaf4`, stash `1b36d3c672ad8f7037b814e427f3cb3eba769056`, and the file archive,
   patch, and hash manifest in `/private/tmp/command-box-before-pr136-cn1qkthp`.
-- **Cmd-Shift-J** still opens the separate experimental JEV prompt. PR #136
-  makes exact app commands and unique session/tab titles run locally on Enter.
-  Navigation offers **Go back** to the original view without closing the target.
-  Duplicate names stay choices; full phrases are checked, including compound
-  and negated requests. Semantic automatic actions use separate intent, target,
-  and fit decisions. Send/create/watch continue to require explicit selection.
-- The review service on `http://127.0.0.1:18478` was already running and connected.
-  Its service, HTTP, credential resolver, and launcher source match the rebased
-  code and predate its process start. The review build uses this service via
-  `JEV_COMMAND_BAR_URL`; no daemon or existing service was restarted. A temporary
-  unconfigured service on port 28577 was stopped after checking it.
-- The initial twelve synthetic live checks were blocked by `OPENROUTER_CREDITS`.
-  During user review, requests to the new service on port 18478 started returning
-  HTTP 200 (01:37–01:40 local). The reported 404s came from the old daemon endpoint
-  on port 18473, used by an older app instance. The new review build targets
-  18478. Transport success is verified; the twelve-case semantic smoke suite has
-  not been rerun, so its decision quality is not yet newly validated live.
-  Exact local commands and Go back do not require provider credits.
 - Project editing now says **on <machine>**, with **Search or name a project**
   at the prompt. An empty query offers **Open folder…**, existing folders on
   that machine, and **Change machine…**. There is no selected-looking `<name>`
@@ -515,9 +501,6 @@ Verification and review build:
   real project choices keep their two-line name/path presentation.
 - Synced Score's bundled tagline to the updated Store manifest brought in by
   PR #134. This fixes the two catalog identity checks exposed by the rebase.
-- Added a native JEV journey covering exact navigation, Go back to the original
-  pane, restored terminal input, and opening the existing New Tab chooser.
-  Like the other native fixtures, it uses fake sessions and injected input.
 
 Verification artifacts are under `/private/tmp/pr136-*`: 73 focused desktop
 checks, 58 CLI checks, TypeScript checking, and the CLI build pass. The first
@@ -641,30 +624,6 @@ Recovery copies retained:
 - Original file archive/patch/hashes: `/private/tmp/command-box-before-main-mthmiuvc`.
 - Validated WIP before the final two upstream commits:
   `d6d70f2f1c9918002ba1373434520d7da7479847`.
-
-### JEV catch-up
-
-- **Cmd-Shift-J** opens the experimental command bar. Typing filters locally;
-  Enter can ask JEV to navigate, find sessions by recent activity, route the
-  exact task to an existing agent, suggest a specialized harness, or propose a
-  watch. Sending, creating, and watching require their explicit action cards.
-- Requests use bounded live evidence (up to 24 sessions, 24 harnesses,
-  96 candidates / 32k characters) and revalidate targets before dispatch. The
-  two watches per window recheck changed evidence at most once per minute.
-- Its new-agent action now supplies engine and task to this dock. A folder
-  from a focused remote pane is not inherited when JEV chooses another machine.
-  JEV and the dock dismiss each other, preserve unsubmitted drafts, and respect
-  an unresolved creation. The experimental JEV pill styling is unchanged.
-- **JEV Sheets** is a separate Store harness: bring a spreadsheet, ask row-wise
-  choice/score/yes-no questions, review confidence, export answers and findings.
-  Its newest fix adds an in-pane file chooser because the macOS web view did
-  not open the system file dialog. It offers recent files, browsing, pasted
-  paths, and a paste-rows box.
-- The command bar needs an updated daemon or the documented standalone
-  service, plus OpenRouter credentials, for provider-backed requests. This
-  continuation did not update/restart the daemon or make live provider calls.
-  See `../../docs/experiments/jev-command-bar.md` and
-  `../../store/agents/jev-sheets/README.md`.
 
 Verification:
 
