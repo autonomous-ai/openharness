@@ -212,8 +212,10 @@ async function open(server, { width = 1000, height = 800, scheme = 'dark', reduc
   await page.waitForTimeout(500)
   check((await page.evaluate(() => window.__frames.n)) === hiddenAt, `${tag}: a hidden tab draws nothing`)
   await page.evaluate(() => { Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true }); document.dispatchEvent(new Event('visibilitychange')) })
-  await page.waitForTimeout(300)
-  check((await page.evaluate(() => window.__frames.n)) > hiddenAt, `${tag}: visible again, it draws again`)
+  // Waits on the frame itself: a software renderer can take longer than a fixed few hundred ms for one under
+  // load, which failed this check one run in five while the loop was right (start() schedules a frame).
+  const drewAgain = await page.waitForFunction((at) => window.__frames.n > at, hiddenAt, { timeout: 3000 }).then(() => true, () => false)
+  check(drewAgain, `${tag}: visible again, it draws again`)
   await done(tag)
 }
 
