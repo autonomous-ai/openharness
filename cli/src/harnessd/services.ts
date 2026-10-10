@@ -390,6 +390,9 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // Memories pane asking. It runs the Memories package's own command: writes one at a time, snapshots
   // asked together as one read, each answer at most 8 MB.
   memory: { services: ['memory'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
+  // The router (services/routerProcess.ts), an experiment: started at its first request. A few decisions in
+  // flight, each one bounded Jev answer.
+  router: { services: ['router'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
   // Tab collaboration and teams, an experiment: the prompt scopes, a few drafts and fingerprints per agent, and
   // beside them the teams, their mailbox and the tab channels (services/collaborationProcess.ts), each on its
   // own link to the core. Started only once it is on (core/api.ts `EXPERIMENTS`).

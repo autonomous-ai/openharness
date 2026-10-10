@@ -17,6 +17,8 @@ import '../core/runtime_platform.dart';
 import '../api/api_client.dart';
 import '../core/desktop_window.dart';
 import '../core/harness_file_store.dart';
+import '../core/first_task.dart';
+import '../core/permission_modes.dart';
 import '../core/project_folder.dart';
 import '../core/launch_setup.dart';
 import '../core/test_run.dart';
@@ -122,6 +124,7 @@ import '../widgets/swarm_switcher.dart';
 import '../widgets/swarm_resource_preview.dart';
 import '../widgets/swarm_wallpaper.dart';
 import '../widgets/task_palette.dart';
+import '../state/task_route.dart';
 import '../orchestrator/orchestrator_launcher.dart';
 import '../orchestrator/orchestrator_workspace.dart';
 import '../teams/team_workspace.dart';
@@ -6207,18 +6210,67 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _closeSearch();
     _spokenPaletteOpen = true;
     if (_menuHost) _syncNative();
+    NewHarnessFromTask? newTask;
     try {
       await revealWindow();
       if (!mounted) {
         spoken.cancelled();
         return;
       }
-      await showTaskPalette(context, app, spoken: spoken);
+      newTask = await showTaskPalette(context, app, spoken: spoken);
     } finally {
       _spokenPaletteOpen = false;
       if (_menuHost && mounted) _syncNative();
       spoken.cancelled();
     }
+    if (newTask != null && mounted) await _createFromTask(newTask);
+  }
+
+  /// ⌘B, Boss mode: say what you want and it is done
+  /// (docs/design/2026-10-09-auto-router.md). The card sends a task to the
+  /// session it belongs to by itself; new work comes back here, once the card
+  /// is gone, to be made.
+  Future<void> _routeTask() async {
+    NewHarnessFromTask? newTask;
+    await _dialog(() async => newTask = await showTaskPalette(context, app));
+    if (newTask != null && mounted) await _createFromTask(newTask!);
+  }
+
+  /// A new harness for a task the router called new work, made at once with
+  /// the setup the models chose; what they were not sure of comes from the
+  /// pane the person is in, as ⌘N then Return would. With no folder to start
+  /// in at all, New Harness opens on the task instead.
+  Future<void> _createFromTask(NewHarnessFromTask plan) async {
+    final fallback = taskRouteDefault(app);
+    final machineId = plan.machineId ?? fallback?.machineId;
+    final folder = plan.machineId != null ? plan.folder : fallback?.folder;
+    final chosen = plan.engine ?? fallback?.engine ?? 'claude';
+    // An agent that cannot take a first task would drop the words.
+    final engine = takesFirstTask(chosen) ? chosen : 'claude';
+    if (machineId == null || folder == null) {
+      await _newAgent(task: plan.task, placement: HarnessPlacement.currentTab);
+      return;
+    }
+    final start = await newWorkFolder(app, machineId, folder);
+    if (!mounted) return;
+    const mode = kDefaultPermissionMode;
+    final failure = await app.createAgent(
+      machineId,
+      engine: engine,
+      folder: start.folder,
+      projectFolder: start.request,
+      prompt: plan.task,
+      name: taskProjectTitle(plan.task),
+      permissionMode: mode,
+      bypassPermission: permissionModeApproves(mode),
+      swarmId: app.activeSwarmId,
+      placement: HarnessPlacement.currentTab,
+    );
+    if (!mounted) return;
+    _showPaneActionHint(
+      failure ??
+          'New harness · ${engineIdentity(engine).label} · ${start.folder.split('/').where((part) => part.isNotEmpty).lastOrNull ?? start.folder}',
+    );
   }
 
   void _maybeLink() {
@@ -6411,8 +6463,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     ShortcutAction.cloneAgent: _cloneAgent,
     ShortcutAction.restartAgent: _restartAgent,
     ShortcutAction.shareAgent: _shareAgent,
-    ShortcutAction.routeTask: () =>
-        _dialog(() => showTaskPalette(context, app)),
+    ShortcutAction.routeTask: _routeTask,
     ShortcutAction.orchestrate: () =>
         _dialog(() => showOrchestratorLauncher(context, app)),
     ShortcutAction.team: () =>

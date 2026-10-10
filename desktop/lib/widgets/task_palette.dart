@@ -8,6 +8,7 @@ import '../core/models.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import 'desktop_chrome.dart';
 import '../state/app_state.dart';
+import '../state/task_route.dart';
 import 'engine_identity.dart';
 
 /// ⌘B — describe the work, and let the daemon say whose it is.
@@ -68,13 +69,29 @@ class SpokenTask {
   }
 }
 
-Future<void> showTaskPalette(
+/// A task the router decided is new work, and the setup it chose: [machineId] and [folder] when a model
+/// was sure of the project, [engine] when one was sure of the agent. The caller makes the harness once
+/// the card is gone, filling what is missing from the pane the person is in.
+class NewHarnessFromTask {
+  const NewHarnessFromTask({
+    required this.task,
+    this.machineId,
+    this.folder,
+    this.engine,
+  });
+  final String task;
+  final String? machineId, folder, engine;
+}
+
+/// Resolves to the new harness to make when the task was decided to be new work; null on every other
+/// way out — sent to a session, cancelled, or asked and answered by the person.
+Future<NewHarnessFromTask?> showTaskPalette(
   BuildContext context,
   AppNotifier notifier, {
   SpokenTask? spoken,
 }) {
   // A keyboard palette opens fully drawn on its first frame.
-  return showGeneralDialog<void>(
+  return showGeneralDialog<NewHarnessFromTask>(
     context: context,
     barrierDismissible: true,
     barrierLabel: 'Dismiss',
@@ -180,6 +197,12 @@ class _TaskPaletteState extends State<_TaskPalette> {
   /// and the rest is one flick or one arrow key away.
   static const double _listMaxHeight = 316;
 
+  /// What the sessions are about, being read since the box opened (`warmTaskRoute`).
+  late final Future<void> _context;
+
+  /// How long Return waits for it: the reads take a few hundred milliseconds, another machine's more.
+  static const _contextWait = Duration(milliseconds: 1500);
+
   /// Which question is still ours. A second Enter — or an Esc and a re-open — must not let a slow first
   /// answer arrive and act: it belongs to a palette state nobody is looking at any more.
   int _generation = 0;
@@ -187,6 +210,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
   @override
   void initState() {
     super.initState();
+    _context = warmTaskRoute(widget.notifier);
     final spoken = widget.spoken;
     if (spoken == null) return;
     // The transcript goes in the field rather than into a variable the person cannot see: this is the
@@ -202,7 +226,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
     // works — routing takes up to twenty seconds, and a dialog that appears already-spinning reads as
     // a hang rather than as an answer being worked out.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_route());
+      if (mounted) unawaited(_decide());
     });
   }
 
@@ -214,6 +238,102 @@ class _TaskPaletteState extends State<_TaskPalette> {
     _fieldFocus.dispose();
     _listScroll.dispose();
     super.dispose();
+  }
+
+  /// SAY IT AND IT IS DONE (docs/design/2026-10-09-auto-router.md). Return asks the daemon to decide,
+  /// and the card acts on the answer without asking: Jev's pick, or a new
+  /// harness. A session gets the task at once — the owner chose no undo window — and new work closes
+  /// the card with the setup the models chose, for the screen to make.
+  ///
+  /// A daemon that cannot decide (older, or signed out) leaves the card as it always was: the full
+  /// router, and a question when it is unsure.
+  Future<void> _decide() async {
+    final task = _text.text.trim();
+    if (task.isEmpty || _stage == _Stage.routing) return;
+    final mine = ++_generation;
+    setState(() {
+      _stage = _Stage.routing;
+      _note = '';
+      _answer = null;
+    });
+    _startClock();
+    // What each session is about, read as the box opened: a fast Return waits for it, briefly.
+    await _context.timeout(_contextWait, onTimeout: () {});
+    if (!mounted || mine != _generation) return;
+    final choices = taskRouteChoices(widget.notifier);
+    final decision = await widget.notifier.routeDecide(task, choices);
+    if (!mounted || mine != _generation) return;
+    if (decision == null) {
+      _stopClock();
+      setState(() => _stage = _Stage.typing);
+      return _route();
+    }
+    if (decision.unavailableBecause case final because?) {
+      _stopClock();
+      setState(() {
+        _stage = _Stage.empty;
+        _note =
+            'Jev could not decide${because.isEmpty ? '' : ' ($because)'}. Nothing was sent.';
+      });
+      return;
+    }
+    final session = decision.session;
+    if (session == null) {
+      _stopClock();
+      final project = decision.project;
+      Navigator.of(context).pop(
+        NewHarnessFromTask(
+          task: task,
+          machineId: project?.machineId,
+          folder: project?.folder,
+          engine: decision.engine,
+        ),
+      );
+      return;
+    }
+    // The receipt lights the row of the session that took it.
+    final taker = RouteCandidate(
+      agentId: session.agentId,
+      machineId: session.machineId,
+      name: session.name,
+      machine: session.machine,
+      recent: session.asks.firstOrNull ?? '',
+      engine: session.engine,
+    );
+    _answer = RouteAnswer(
+      agentId: session.agentId,
+      machineId: session.machineId,
+      name: session.name,
+      confidence: 1,
+      reason: '',
+      candidates: [taker],
+    );
+    final failure = await widget.notifier.sendTaskToSession(
+      session.machineId,
+      session.agentId,
+      task,
+    );
+    if (!mounted || mine != _generation) return;
+    _stopClock();
+    if (failure != null) {
+      setState(() {
+        _stage = _Stage.empty;
+        _note = failure;
+      });
+      return;
+    }
+    widget.notifier.lastRoutedTask = (
+      id: decision.sessionId!,
+      at: DateTime.now(),
+    );
+    widget.spoken?.sent(session.agentId);
+    setState(() {
+      _stage = _Stage.sent;
+      _committed = session.agentId;
+    });
+    await Future<void>.delayed(_confirmBeat);
+    if (!mounted || mine != _generation) return;
+    Navigator.of(context).pop();
   }
 
   Future<void> _route() async {
@@ -388,7 +508,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
     // ⇧Enter is the newline — ignored here so the field does what it always does with it.
     final shift = HardwareKeyboard.instance.isShiftPressed;
     if (isEnter && !shift && _stage != _Stage.choosing) {
-      unawaited(_route());
+      unawaited(_decide());
       return KeyEventResult.handled; // …and NOT a newline
     }
     if (_stage != _Stage.choosing) return KeyEventResult.ignored;

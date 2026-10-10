@@ -464,6 +464,9 @@ export const MONITOR_REQUESTS = ['machine_resources'] as const
 /** Memories (services/memory.ts), an experiment: what this machine's agents remember, for the owner's Memories
  *  panes on their other machines, and the About You profile and its on/off choice from them. */
 export const MEMORY_REQUESTS = ['memory_snapshot', 'memory_about_put', 'memory_deliver'] as const
+/** The router (services/router.ts), an experiment: where a task a person typed or said should go, decided for
+ *  the client that asks, which acts on it. */
+export const ROUTER_REQUESTS = ['route_decide'] as const
 /** The project and folder readers (services/projects.ts). */
 export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
 /** A window's name for its repo and its work, by a small model in the background (services/windowNames.ts). */
@@ -554,6 +557,8 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
   // Request-only, on from its first request until the daemon stops: another machine's Memories pane asks, and
   // the package's own files are its state.
   memory: { requests: MEMORY_REQUESTS, state: [] },
+  // Request-only too: it keeps nothing, and asks Jev only when a client asks it.
+  router: { requests: ROUTER_REQUESTS, state: [] },
 }
 
 /** The core's calls into Share: an observer's frame as the relay handed it over, the relay gone (every observer

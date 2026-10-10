@@ -192,3 +192,23 @@ Future<TerminalSession?> _readySession(
     app.removeListener(check);
   }
 }
+
+/// Sends [task] into an existing harness through its pane, as a person typing it would: once its engine
+/// takes input, as a composer message the machine submits and retries Enter for. ⌘B's router decides
+/// where (docs/design/2026-10-09-auto-router.md); this is the app's own door, the same on every machine.
+/// Returns what went wrong, or null.
+Future<String?> deliverTask(
+  AppNotifier app, {
+  required String machineId,
+  required String agentId,
+  required String task,
+}) async {
+  final session = await _readySession(app, machineId, agentId);
+  if (session == null) {
+    appLog.warn('route', '$agentId never took input');
+    return 'The harness did not open in time. Nothing was sent.';
+  }
+  return await session.sendComposerText(task)
+      ? null
+      : 'The task did not reach the harness. Send it from its pane.';
+}

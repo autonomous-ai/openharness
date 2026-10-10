@@ -1,3 +1,5 @@
+import 'attached_task_delivery.dart';
+import 'task_route.dart';
 import '../core/permission_modes.dart';
 
 import 'dart:async';
@@ -4087,6 +4089,104 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// ⌘O's ranking of the person's sessions for words still being typed (docs/design/2026-10-09-auto-router.md).
+  ///
+  /// ⌘B's decision for a task (docs/design/2026-10-09-auto-router.md): the router, an experiment of its
+  /// own in this computer's daemon (cli/src/services/router.ts), says which of [choices]' sessions the
+  /// task belongs to, or that it is new work and how to set it up — Jev's pick, or new work when Jev is unsure. The card
+  /// acts on it at once, through this app's own doors.
+  ///
+  /// A daemon that predates the router answers `UNSUPPORTED` at once and is not asked again until the
+  /// app restarts; the card then asks Boss mode's old router, as it always did.
+  Future<TaskRouteDecision?> routeDecide(
+    String text,
+    TaskRouteChoices choices,
+  ) async {
+    if (_routeDecideUnsupported) return null;
+    final machineId = localMachineState?.machine.machineId;
+    final connection =
+        machineId == null || (_pool == null && connectionForTest == null)
+        ? null
+        : _conn(machineId);
+    if (connection == null || !connection.isReady) return null;
+    final last = lastRoutedTask;
+    appLog.info(
+      'route',
+      'deciding over ${choices.sessions.length} sessions, ${choices.projects.length} projects, '
+          '${choices.agents.length} agents',
+    );
+    try {
+      final reply = await connection.request(
+        'route_decide',
+        payload: {
+          'text': text,
+          ...choices.toPayload(),
+          if (last != null && choices.sessions.containsKey(last.id))
+            'last': {
+              'id': last.id,
+              'agoMs': DateTime.now().difference(last.at).inMilliseconds,
+            },
+        },
+        timeout: const Duration(seconds: 20),
+      );
+      if (reply['error'] == 'UNSUPPORTED') {
+        _routeDecideUnsupported = true;
+        return null;
+      }
+      return TaskRouteDecision.fromJson(reply, choices);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool _routeDecideUnsupported = false;
+
+  /// A session's last turns as its machine tells them (`agent_recent`): the person's prompts (`asks`) and
+  /// each turn's summary (`events`). Empty when the machine could not say.
+  Future<Map<String, dynamic>> readRecentTurns(
+    String machineId,
+    String agentId,
+  ) async {
+    if (_pool == null && connectionForTest == null) return const {};
+    try {
+      final reply = await _conn(machineId).request(
+        'agent_recent',
+        payload: {'agentId': agentId, 'n': 3},
+        timeout: const Duration(seconds: 4),
+      );
+      return reply['error'] != null ? const {} : reply;
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// The session ⌘B last sent a task to, which the router tells Jev so a follow-up finds it.
+  ({String id, DateTime at})? lastRoutedTask;
+
+  /// ⌘B's send: the session's pane comes forward and the task goes into its prompt, through this app's
+  /// own door on any machine (`deliverTask`). Returns what went wrong, or null.
+  Future<String?> sendTaskToSession(
+    String machineId,
+    String agentId,
+    String task,
+  ) async {
+    bringSessionForward(machineId, agentId);
+    return deliverTask(
+      this,
+      machineId: machineId,
+      agentId: agentId,
+      task: task,
+    );
+  }
+
+  /// The session's own pane, wherever it is: its tab comes forward and the pane takes focus. Only a
+  /// session with no pane in any tab gets a new one, here. 2026-10-10: a task for "Personal AI
+  /// Computer" opened a second pane on it in the current tab while its own sat in the Backlog tab.
+  void bringSessionForward(String machineId, String agentId) {
+    if (revealAgentView(machineId, agentId)) return;
+    unawaited(selectAgent(machineId, agentId));
+  }
+
   /// Commit: deliver the task, then bring the agent onto the grid the way a rail click does.
   ///
   /// The daemon delivers it through the SAME door as the web's messages and the dial's — queueing,
@@ -4147,7 +4247,7 @@ class AppNotifier extends ChangeNotifier {
     // …the PANE opens on the agent's machine. Falling back to this computer would open a tile for an
     // agent it does not have and leave the person looking at an empty terminal.
     final target = agentMachineId.isNotEmpty ? agentMachineId : localId;
-    await selectAgent(target, agentId);
+    if (!revealAgentView(target, agentId)) await selectAgent(target, agentId);
     return null;
   }
 
