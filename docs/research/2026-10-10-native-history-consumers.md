@@ -83,3 +83,29 @@ ownership regressions, with assertion-failing wiring mutations. Select coverage,
 affected private lifecycle/handoff acceptance and matched cost checks before running
 them. Independent exact-head/base review and all required CI checks precede the
 authorized merge. No release is authorized.
+
+## Matched runtime cost
+
+The [raw samples](2026-10-10-native-history-cost.json) compare the final reviewed
+runtime `a61cba5bc` with main `d852e1d99` (the baseline checkout has the identical
+`74afc2030` tree). At October 10 10:40:30–10:40:38 UTC, 24 fresh processes completed
+360 confirmed operations per revision: three interleaved samples of 30 operations
+for each workload. Both use Node 22.23.2 on the same macOS x64 host, explicitly pinned
+Linux evidence behavior, UTC and private homes; host binaries are forbidden. Setup
+and outcome assertions are outside operation timing. No other local validation ran
+during these samples.
+
+Values are the median of the three process medians for latency, median process CPU
+per operation, and median process peak RSS (which includes setup and imports).
+
+| Workload | Latency ms, main → candidate | CPU ms/op, main → candidate | Peak RSS MiB, main → candidate |
+| --- | ---: | ---: | ---: |
+| inspect-claude | 0.330 → 2.392 | 0.411 → 3.342 | 93.9 → 91.7 |
+| inspect-codex | 0.317 → 2.009 | 0.395 → 2.865 | 93.8 → 93.4 |
+| inspect-missing-codex | 0.295 → 0.777 | 0.373 → 1.176 | 91.4 → 91.8 |
+| purge-codex | 0.442 → 3.880 | 0.532 → 5.748 | 95.3 → 93.3 |
+
+The fresh route/header/catalog reads add roughly 1–4 ms to these explicit review
+and deletion operations. These are observations, not a new numerical gate or a
+measurement of live turn throughput. The healthy outputs and confirmed deletion
+outcomes remain the same; this comparison does not cover shared-database deletion.
