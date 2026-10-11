@@ -10,13 +10,29 @@ Follow the [desktop design system](desktop-design-system.md) and
 illustrate data and interaction rules, not the current tab geometry.
 
 ```text
-api ?    web ⠹    blender ✓  +                   Search  Bell  (✿ Harness Store)
+api ?    web ⠹    blender ✓  +             Search  Bell  Devices  Store  (Sign in)
 
                                  panes
 
 Harnesses 118   Machines 3   Models 4   [Claude icon] 68%   [Codex icon] 18%
                                                      M2 > project > branch > #439
 ```
+
+The top row's right end reads like a browser's toolbar (owner, 2026-10-11):
+Search, the bell (where this app draws the row; on a Mac it is in the menu
+bar), Devices and Harness Store are icons side by side, each named by its
+tooltip, and the row's last control is the account's. While this computer
+holds no account that is **Sign in**, the only control in the row with a word
+and a fill; it opens the sign-in over the workspace. Signed in, the same place
+is the account's initial in a circle, and a click opens a short menu: who is
+signed in, then Add Phone (until the account has a phone), Customize Harness,
+Notifications, Settings and Sign out, each opening what the app already has.
+Nothing is drawn between the icons and the account control; `controlGap`
+separates them. A narrow window drops Devices first; the account control
+always stays. A viewer build (the browser) draws none of this. Flutter draws it
+with `WorkspaceStoreButton`, `WorkspaceSignInButton` and `WorkspaceAvatarButton`,
+AppKit with `SwarmStoreButton` and `SwarmAccountButton`; the menu is
+`widgets/account_menu.dart` on both. Run `workspace_account_test.dart`.
 
 The context follows the focused pane. The branch stays clickable in the
 footer; pane headers do not repeat it. An empty New Tab and the first welcome

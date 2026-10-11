@@ -12,6 +12,7 @@ import '../state/app_state.dart';
 import '../widgets/login_fleet_map.dart';
 import '../widgets/login_relay_diagram.dart';
 import '../widgets/or_divider.dart';
+import '../widgets/quiet_link.dart';
 import '../widgets/sign_in_provider_button.dart';
 import '../widgets/web_download_button.dart';
 
@@ -450,6 +451,22 @@ class _ActionState extends State<_Action> {
                     label: const Text('Scan with your phone'),
                   ),
                 ],
+                // The quiet way in: the sign-in page's own chooser, which takes
+                // an email and the code sent to it. Small on purpose — waiting
+                // for a code is slower, and most people use Google or Apple
+                // (owner, 2026-10-11). Not in a browser, whose page is as it
+                // was; and not in a short window, where a row more would push
+                // the line that explains an expired session off the screen.
+                // Words, not a box, and not stretched to the buttons' width:
+                // a text button here drew as one more of them.
+                if (!kIsWeb && !widget.compact)
+                  Center(
+                    child: QuietLink(
+                      key: const Key('login-continue-email'),
+                      label: 'Continue with email',
+                      onPressed: () => unawaited(notifier.login()),
+                    ),
+                  ),
               ],
             ),
           const SizedBox(height: 12),

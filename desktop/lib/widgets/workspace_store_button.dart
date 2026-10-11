@@ -1,14 +1,17 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/workspace_bar_style.dart';
 import '../devices/device_artwork.dart';
 import '../store/store_mark.dart';
-import 'desktop_chrome.dart';
 import 'workspace_bar_control.dart';
 
-/// The Store's rounded, marked button, restored from the original tab bar.
+/// Harness Store, and Devices beside it: each its own mark, and nothing else.
+///
+/// Icons like the search before them, as in a browser's toolbar, so the one
+/// thing in the row with a word on it is Sign in (owner, 2026-10-11;
+/// `workspace_account_button.dart`). The name is the tooltip's and the screen
+/// reader's. They were pills carrying their names until then.
 class WorkspaceStoreButton extends StatelessWidget {
   const WorkspaceStoreButton({
     super.key,
@@ -23,76 +26,30 @@ class WorkspaceStoreButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final bool devices;
 
-  static Size _labelSize(BuildContext context, {bool devices = false}) {
-    final painter = TextPainter(
-      text: TextSpan(
-        text: devices ? 'Devices' : 'Harness Store',
-        style: DesktopChrome.control(),
-      ),
-      textDirection: Directionality.of(context),
-      textScaler: MediaQuery.textScalerOf(context),
-      maxLines: 1,
-    )..layout();
-    final size = painter.size;
-    painter.dispose();
-    return size;
-  }
-
+  /// The slot each takes in the row: the search icon's.
   static double widthOf(BuildContext context, {bool devices = false}) =>
-      _labelSize(context, devices: devices).width + 52;
+      workspaceBarCellSizeOf(context).width * 4;
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final enabled = onPressed != null;
-    final accent = grid.AppPalette.swarmAccent;
     return WorkspaceBarControl(
       label: devices ? 'Devices' : 'Harness Store',
       tooltip: tooltip,
       onPressed: onPressed,
-      builder: (context, emphasized) => Container(
+      builder: (context, emphasized) => SizedBox(
         width: width,
-        height: math.max(
-          grid.AppControl.heightSmall,
-          _labelSize(context, devices: devices).height + 12,
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: ShapeDecoration(
-          color: Color.alphaBlend(
-            accent.withValues(
-              alpha: !enabled
-                  ? .04
-                  : emphasized
-                  ? .18
-                  : .10,
-            ),
-            grid.AppPalette.swarmWelcome,
+        height: workspaceBarControlHeight(context),
+        child: Center(
+          // A mark has its own colors, so it steps forward by opacity, as the
+          // search glyph beside it does.
+          child: Opacity(
+            opacity: !enabled || emphasized ? 1 : .82,
+            child: devices
+                ? DeviceMark(size: 20, enabled: enabled)
+                : StoreMark(size: 18, enabled: enabled),
           ),
-          shape: StadiumBorder(
-            side: BorderSide(
-              color: accent.withValues(alpha: emphasized ? .85 : .12),
-              width: emphasized ? 1.5 : 1,
-            ),
-          ),
-        ),
-        child: Row(
-          children: [
-            if (devices)
-              DeviceMark(enabled: enabled)
-            else
-              StoreMark(enabled: enabled),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                devices ? 'Devices' : 'Harness Store',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: DesktopChrome.control(
-                  color: accent.withValues(alpha: enabled ? 1 : .45),
-                ),
-              ),
-            ),
-          ],
         ),
       ),
     );

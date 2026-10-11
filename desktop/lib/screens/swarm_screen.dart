@@ -35,6 +35,7 @@ import '../notify/system_notifications.dart';
 import '../settings/sections/account_device_detail.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
+import 'login_screen.dart' show showSignInSheet;
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/workspace_bar_style.dart';
 import '../sharing/share_harness_dialog.dart';
@@ -55,6 +56,7 @@ import '../state/notification_inbox.dart';
 import '../state/status_menu.dart';
 import '../widgets/linux_menu_bar.dart'
     show LinuxTitleBar, linuxTitleBarActions;
+import '../widgets/account_menu.dart';
 import '../widgets/notification_inbox.dart';
 import '../widgets/workspace_notifications_button.dart';
 import '../state/harness_sessions.dart';
@@ -92,6 +94,7 @@ import '../widgets/workspace_tab_scroller.dart';
 import '../widgets/session_work_dialog.dart';
 import '../widgets/web_download_button.dart';
 import '../widgets/workspace_share_button.dart';
+import '../widgets/workspace_account_button.dart';
 import '../widgets/workspace_store_button.dart';
 import '../widgets/grid_model_picker.dart';
 import '../widgets/workspace_subscription_usage.dart';
@@ -1816,6 +1819,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       'searchTooltip': _commandTooltip('Open Harness', 'harnesses.list'),
       'storeTooltip': _commandTooltip('Explore Harness Store', 'app.store'),
       'devicesVisible': app.devicesEnabled,
+      // The row's last control: Sign in, or whose account this is.
+      'account': ?_accountPayload,
       // Native accessibility explains that ⏎ enters the selected tab.
       'tabsFocused': app.tabStripFocused && _tabStripFocus.hasPrimaryFocus,
       // Only once the slot is shown: until then (and whenever daemons are
@@ -2346,6 +2351,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
         _openStore();
       case 'devices':
         _openDevices();
+      case 'signIn':
+        unawaited(_signIn());
+      case 'account':
+        unawaited(_showAccountMenu());
       case 'new':
         _newTab();
       case 'reopen':
@@ -2891,6 +2900,122 @@ class _SwarmScreenState extends State<SwarmScreen> {
   );
 
   Future<void> _customize() => _dialog(_showCustomizePane);
+
+  // --- The tab row's last control: Sign in, or the account ----------------
+  // Like a browser's toolbar (owner, 2026-10-11): everything before it is an
+  // icon, and this is Sign in while this computer holds no account, and whose
+  // account it is afterwards. A viewer build's bar is as it was: it has no
+  // guest, and its own ways to its account.
+  bool get _accountControlShown => app.viewer == null;
+
+  /// What the native tab row draws for it. Absent, it draws nothing.
+  Map<String, Object?>? get _accountPayload => !_accountControlShown
+      ? null
+      : app.isGuest
+      ? {'kind': 'signIn', 'tooltip': WorkspaceSignInButton.tooltip}
+      : {
+          'kind': 'avatar',
+          'initial': _accountInitial,
+          'tooltip': _accountTooltip,
+        };
+
+  String get _accountInitial =>
+      accountInitial(app.currentUser?.name, app.currentUser?.email);
+
+  String get _accountTooltip {
+    final user = app.currentUser;
+    if (user == null) return 'Account';
+    return [?user.name, user.email].join(' · ');
+  }
+
+  /// The control and the gap before it, for a row this app draws.
+  List<Widget> _accountControl() => !_accountControlShown
+      ? const []
+      : [
+          const SizedBox(width: DesktopChrome.controlGap),
+          if (app.isGuest)
+            WorkspaceSignInButton(
+              key: const ValueKey('swarm-sign-in-button'),
+              onPressed: _shortcutsEnabled ? () => unawaited(_signIn()) : null,
+            )
+          else
+            WorkspaceAvatarButton(
+              key: const ValueKey('swarm-account-button'),
+              initial: _accountInitial,
+              tooltip: _accountTooltip,
+              onPressed: _shortcutsEnabled
+                  ? () => unawaited(_showAccountMenu())
+                  : null,
+            ),
+        ];
+
+  double _accountControlWidth(BuildContext context) => !_accountControlShown
+      ? 0
+      : DesktopChrome.controlGap +
+            (app.isGuest
+                ? WorkspaceSignInButton.widthOf(context)
+                : WorkspaceAvatarButton.widthOf(context));
+
+  /// Sign in: the sign-in screen, over the desk (`showSignInSheet`).
+  Future<void> _signIn() => _dialog(() => showSignInSheet(context, app));
+
+  /// Whether the account has a phone already, as last read: Add Phone leaves
+  /// the menu then. Unknown shows it.
+  bool? _accountHasPhone;
+  String? _accountPhoneOwner;
+
+  Future<void> _readAccountPhone() async {
+    // No daemon to ask under test, and a request that never ends.
+    if (kUnderTest || app.isGuest) return;
+    final owner = app.currentUser?.email;
+    try {
+      final devices = await app.loadDevices();
+      if (!mounted || devices == null) return;
+      _accountHasPhone = devices.devices.any(
+        (device) => !device.isMachine && !device.self,
+      );
+      _accountPhoneOwner = owner;
+    } catch (_) {
+      // Unread, the row stays: it costs nothing to offer.
+    }
+  }
+
+  /// The avatar's menu (`widgets/account_menu.dart`). Its rows open what the
+  /// app already has, once the menu itself has closed: a [_dialog] made from
+  /// inside one is refused.
+  Future<void> _showAccountMenu() async {
+    final user = app.currentUser;
+    final hasPhone =
+        _accountPhoneOwner == user?.email && _accountHasPhone == true;
+    // For the next opening: this one must not change under the pointer.
+    unawaited(_readAccountPhone());
+    AccountMenuChoice? choice;
+    await _dialog(() async {
+      choice = await showAccountMenu(
+        context,
+        name: user?.name ?? '',
+        email: user?.email ?? '',
+        showAddPhone: !hasPhone,
+        topInset: _native ? 0 : _tabBarHeight,
+      );
+    });
+    if (!mounted) return;
+    switch (choice) {
+      case AccountMenuChoice.addPhone:
+        await _addPhone();
+        unawaited(_readAccountPhone());
+      case AccountMenuChoice.customize:
+        await _customize();
+      case AccountMenuChoice.notifications:
+        await _settings(SettingsSection.notifications);
+      case AccountMenuChoice.settings:
+        await _settings();
+      case AccountMenuChoice.signOut:
+        unawaited(app.logout());
+      case null:
+        break;
+    }
+  }
 
   Future<void> _settings([SettingsSection? section]) => _dialog(
     () => showSettingsScreen(
@@ -6902,17 +7027,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
       children: [
         _searchButton(theme),
         _notificationsButton(theme),
-        const SizedBox(width: DesktopChrome.controlGap),
-        if (app.devicesEnabled) ...[
-          _devicesButton(context),
-          const SizedBox(width: DesktopChrome.controlGap),
-        ],
+        if (app.devicesEnabled) _devicesButton(context),
         WorkspaceStoreButton(
           key: const ValueKey('swarm-store-button'),
           width: WorkspaceStoreButton.widthOf(context),
           tooltip: _commandTooltip('Explore Harness Store', 'app.store'),
           onPressed: _shortcutsEnabled ? _openStore : null,
         ),
+        ..._accountControl(),
       ],
     );
   }
@@ -7735,23 +7857,23 @@ class _SwarmScreenState extends State<SwarmScreen> {
         WorkspaceStoreButton.widthOf(context),
         math.max(0.0, constraints.maxWidth - cell.width * 22),
       );
+      // Sign in or the avatar always stays; see [_accountControl].
+      final accountWidth = _accountControlWidth(context);
       // Devices only where Store keeps its full width beside it. A narrow
       // window drops it from the bar first; Harness Store still opens it.
-      final devicesWidth =
-          WorkspaceStoreButton.widthOf(context, devices: true) +
-          DesktopChrome.controlGap;
+      final devicesWidth = WorkspaceStoreButton.widthOf(context, devices: true);
       final showDevices =
           app.devicesEnabled &&
-          constraints.maxWidth - cell.width * 22 >=
+          constraints.maxWidth - cell.width * 22 - accountWidth >=
               WorkspaceStoreButton.widthOf(context) + devicesWidth;
-      // Store, search and notifications — none of it here when the title bar
-      // holds them.
+      // Search, notifications, Devices, Store and the account — none of it
+      // here when the title bar holds them.
       final actionsWidth = _titleBarActions
           ? 0.0
           : storeWidth +
                 cell.width * 8 +
-                DesktopChrome.controlGap +
-                (showDevices ? devicesWidth : 0);
+                (showDevices ? devicesWidth : 0) +
+                accountWidth;
       final leadingWidth = chrome?.leadingWidth(context) ?? 0.0;
       final tabBudget = math.max(
         0.0,
@@ -7948,11 +8070,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               if (!_titleBarActions) ...[
                 _searchButton(theme),
                 _notificationsButton(theme),
-                const SizedBox(width: DesktopChrome.controlGap),
-                if (showDevices) ...[
-                  _devicesButton(context),
-                  const SizedBox(width: DesktopChrome.controlGap),
-                ],
+                if (showDevices) _devicesButton(context),
                 WorkspaceStoreButton(
                   key: const ValueKey('swarm-store-button'),
                   width: storeWidth,
@@ -7962,6 +8080,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   ),
                   onPressed: _shortcutsEnabled ? _openStore : null,
                 ),
+                ..._accountControl(),
               ],
               if (kIsWeb && _slotShown) _daemonTabButton(),
               const SizedBox(width: grid.AppDesktop.tabBarTrailingInset),

@@ -1017,43 +1017,109 @@ private class SwarmPlainIconButton: SwarmIconButton {
   }
 }
 
-/// A quiet filled pill, with the Store's colorful mark as its focal point.
-/// Drawing the content keeps the same spacing across AppKit button styles.
+/// Harness Store, and Devices beside it: each its own mark and nothing else,
+/// an icon like the search before them (WorkspaceStoreButton in Flutter). The
+/// title stays for accessibility and the tooltip; it is not drawn.
 private final class SwarmStoreButton: SwarmIconButton {
-  var markSize: CGFloat = 16
+  var markSize: CGFloat = 18
   var palette = SwarmNativePalette() { didSet { needsDisplay = true } }
+  /// The search icon's slot.
+  var preferredWidth: CGFloat { 32 }
+
+  override func draw(_ dirtyRect: NSRect) {
+    // A mark has its own colors, so it steps forward by opacity, as the search
+    // glyph does; the keyboard gets a ring, having no hover.
+    let emphasized = hovered || hasKeyboardFocus || isHighlighted
+    let iconRect = NSRect(x: (bounds.width - markSize) / 2, y: (bounds.height - markSize) / 2,
+      width: markSize, height: markSize)
+    image?.draw(in: iconRect,
+      from: .zero, operation: .sourceOver, fraction: !isEnabled ? 0.45 : emphasized ? 1 : 0.82,
+      respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+    if hasKeyboardFocus && isEnabled {
+      let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 2.5, dy: 2.5), xRadius: 7, yRadius: 7)
+      palette.accent.withAlphaComponent(0.85).setStroke()
+      ring.lineWidth = 1.5
+      ring.stroke()
+    }
+  }
+}
+
+/// The tab row's last control, as in a browser's toolbar: Sign in while this
+/// computer holds no account — the only control in the row with a word and a
+/// fill — and the account's initial in a circle once it does
+/// (WorkspaceSignInButton / WorkspaceAvatarButton in Flutter).
+private final class SwarmAccountButton: SwarmIconButton {
+  enum Kind { case signIn, avatar }
+  var kind = Kind.signIn { didSet { needsDisplay = true } }
+  /// One letter, or empty while the profile has not been read.
+  var initial = "" { didSet { needsDisplay = true } }
+  var palette = SwarmNativePalette() { didSet { needsDisplay = true } }
+  static let label = "Sign in"
+  static let avatarDiameter: CGFloat = 24
+  private var labelFont: NSFont { NSFont.systemFont(ofSize: 13, weight: .medium) }
   var preferredWidth: CGFloat {
-    ceil(workspaceBarTextWidth(title,
-      font: font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular))) + 48
+    switch kind {
+    case .signIn:
+      return ceil((Self.label as NSString).size(withAttributes: [.font: labelFont]).width) + 28
+    case .avatar:
+      return Self.avatarDiameter + 8
+    }
   }
 
   override func draw(_ dirtyRect: NSRect) {
-    let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
-      xRadius: bounds.height / 2, yRadius: bounds.height / 2)
-    palette.workspace.setFill()
-    shape.fill()
-    let alpha: CGFloat = !isEnabled ? 0.04 : isHighlighted ? 0.24 : hovered ? 0.18 : 0.10
-    palette.accent.withAlphaComponent(alpha).setFill()
-    shape.fill()
-    palette.accent.withAlphaComponent(hasKeyboardFocus && isEnabled ? 0.85 : 0.12).setStroke()
-    shape.lineWidth = hasKeyboardFocus && isEnabled ? 1.5 : 1
-    shape.stroke()
-    let iconRect = NSRect(x: 12, y: (bounds.height - markSize) / 2, width: markSize, height: markSize)
-    image?.draw(in: iconRect,
-      from: .zero, operation: .sourceOver, fraction: isEnabled ? 1 : 0.45,
-      respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
-    let paragraph = NSMutableParagraphStyle()
-    paragraph.lineBreakMode = .byTruncatingTail
-    let attributes: [NSAttributedString.Key: Any] = [
-      .paragraphStyle: paragraph,
-      .font: font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-      .foregroundColor: palette.accent.withAlphaComponent(isEnabled ? 1 : 0.45),
-    ]
-    let text = title as NSString
-    let height = text.size(withAttributes: attributes).height
-    let textX = 20 + markSize
-    text.draw(in: NSRect(x: textX, y: (bounds.height - height) / 2,
-      width: max(0, bounds.width - textX - 12), height: height), withAttributes: attributes)
+    let emphasized = isEnabled && (hovered || hasKeyboardFocus || isHighlighted)
+    switch kind {
+    case .signIn:
+      let shape = NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2)
+      palette.accent.withAlphaComponent(!isEnabled ? 0.35 : emphasized ? 1 : 0.9).setFill()
+      shape.fill()
+      // The accent is the bar's own ink, so the bar's own surface reads on it.
+      let line = NSAttributedString(string: Self.label, attributes: [
+        .font: labelFont, .foregroundColor: palette.tabBar,
+      ])
+      let size = line.size()
+      line.draw(in: NSRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2,
+        width: size.width, height: size.height))
+      if hasKeyboardFocus && isEnabled {
+        let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: -2, dy: -2),
+          xRadius: bounds.height / 2 + 2, yRadius: bounds.height / 2 + 2)
+        palette.accent.withAlphaComponent(0.85).setStroke()
+        ring.lineWidth = 1.5
+        ring.stroke()
+      }
+    case .avatar:
+      let diameter = Self.avatarDiameter
+      let circle = NSRect(x: (bounds.width - diameter) / 2, y: (bounds.height - diameter) / 2,
+        width: diameter, height: diameter)
+      let shape = NSBezierPath(ovalIn: circle.insetBy(dx: 0.5, dy: 0.5))
+      palette.accent.withAlphaComponent(emphasized ? 0.28 : 0.18).setFill()
+      shape.fill()
+      palette.accent.withAlphaComponent(emphasized ? 0.7 : 0.4).setStroke()
+      shape.lineWidth = hasKeyboardFocus && isEnabled ? 1.5 : 1
+      shape.stroke()
+      let ink = palette.accent.withAlphaComponent(isEnabled ? 1 : 0.45)
+      if initial.isEmpty {
+        // The profile has not been read yet: a person, not a blank.
+        if let person = HarnessControlSymbols.image("person.fill") {
+          let side = diameter * 0.5
+          let rect = NSRect(x: circle.midX - side / 2, y: circle.midY - side / 2, width: side, height: side)
+          let tinted = NSImage(size: rect.size, flipped: false) { area in
+            person.draw(in: area)
+            ink.set()
+            area.fill(using: .sourceAtop)
+            return true
+          }
+          tinted.draw(in: rect)
+        }
+      } else {
+        let line = NSAttributedString(string: initial, attributes: [
+          .font: NSFont.systemFont(ofSize: diameter * 0.48, weight: .medium), .foregroundColor: ink,
+        ])
+        let size = line.size()
+        line.draw(in: NSRect(x: circle.midX - size.width / 2, y: circle.midY - size.height / 2,
+          width: size.width, height: size.height))
+      }
+    }
   }
 }
 
@@ -1863,6 +1929,7 @@ private final class SwarmTabStrip: NSView {
   fileprivate let searchButton = SwarmPlainIconButton()
   fileprivate let storeButton = SwarmStoreButton()
   fileprivate let devicesButton = SwarmStoreButton()
+  fileprivate let accountButton = SwarmAccountButton()
   private var shareTarget: [String: Any]?
   private var barFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
   private var resourceValueGapCells: CGFloat = 0.75
@@ -2020,6 +2087,15 @@ private final class SwarmTabStrip: NSView {
     storeButton.action = #selector(openStore)
     storeButton.setAccessibilityLabel("Harness Store")
     addSubview(storeButton)
+    accountButton.isBordered = false
+    accountButton.title = ""
+    accountButton.palette = palette
+    accountButton.isEnabled = false
+    accountButton.isHidden = true
+    accountButton.focusRingType = .none
+    accountButton.target = self
+    accountButton.action = #selector(openAccount)
+    addSubview(accountButton)
     shareButton.isBordered = false
     shareButton.title = "[ Share ]"
     shareButton.target = self
@@ -2115,6 +2191,7 @@ private final class SwarmTabStrip: NSView {
     storeButton.palette = palette
     newButton.contentTintColor = palette.accent
     devicesButton.palette = palette
+    accountButton.palette = palette
     newButton.foreground = palette.navigationForeground
     for tab in tabs {
       tab.palette = palette
@@ -2135,10 +2212,31 @@ private final class SwarmTabStrip: NSView {
     statusBar.setAccessibilityHidden(passiveFooter || statusBar.isHidden)
     devicesButton.isHidden = state["devicesVisible"] as? Bool != true
     devicesButton.setAccessibilityHidden(devicesButton.isHidden)
-    setAccessibilityChildren(
-      [scroll, newButton, searchButton] +
-      (devicesButton.isHidden ? [] : [devicesButton]) + [storeButton] +
-      (statusBar.isHidden || passiveFooter ? [] : [statusBar]))
+    // The row's last control: Sign in, or whose account this is. Absent (a
+    // viewer build, teardown), nothing is drawn.
+    let account = state["account"] as? [String: Any]
+    let accountKind: SwarmAccountButton.Kind? = switch account?["kind"] as? String {
+    case "signIn": .signIn
+    case "avatar": .avatar
+    default: nil
+    }
+    accountButton.isHidden = accountKind == nil
+    accountButton.setAccessibilityHidden(accountButton.isHidden)
+    if let accountKind {
+      accountButton.kind = accountKind
+      // One character at most reaches the circle, whatever was sent.
+      accountButton.initial = accountKind == .avatar
+        ? String(((account?["initial"] as? String) ?? "").prefix(1)) : ""
+      accountButton.toolTip = (account?["tooltip"] as? String).map { String($0.prefix(200)) }
+      accountButton.setAccessibilityLabel(accountKind == .signIn ? SwarmAccountButton.label : "Account")
+      accountButton.setAccessibilityHelp(accountButton.toolTip)
+    }
+    var children: [Any] = [scroll, newButton, searchButton]
+    if !devicesButton.isHidden { children.append(devicesButton) }
+    children.append(storeButton)
+    if !accountButton.isHidden { children.append(accountButton) }
+    if !(statusBar.isHidden || passiveFooter) { children.append(statusBar) }
+    setAccessibilityChildren(children)
     reduceMotion = state["reduceMotion"] as? Bool == true
     if let style = state["barStyle"] as? [String: Any] {
       let size = CGFloat(min(36, max(8, (style["size"] as? NSNumber)?.doubleValue ?? 13)))
@@ -2157,6 +2255,7 @@ private final class SwarmTabStrip: NSView {
     storeButton.font = navigationFont
     storeButton.isEnabled = actionsEnabled
     devicesButton.isEnabled = actionsEnabled && !devicesButton.isHidden
+    accountButton.isEnabled = actionsEnabled && !accountButton.isHidden
     searchButton.foreground = palette.navigationForeground
     searchButton.isEnabled = actionsEnabled
     searchButton.toolTip = state["searchTooltip"] as? String ?? "Open Harness"
@@ -2399,16 +2498,21 @@ private final class SwarmTabStrip: NSView {
     let trailing: CGFloat = 12 // AppDesktop.tabBarTrailingInset.
     let toolHeight: CGFloat = 32
     let capsuleHeight: CGFloat = 28 // AppControl.heightSmall.
-    let storeWidth = min(storeButton.preferredWidth,
-      max(0, bounds.width - cell * 14))
-    storeButton.frame = NSRect(x: bounds.width - trailing - storeWidth,
-      y: (bounds.height - capsuleHeight) / 2, width: storeWidth, height: capsuleHeight)
     let iconWidth = cell * 4
+    // Search, Devices and Store are icons side by side; then, after
+    // AppDesktop.controlGap, Sign in or the account ends the row.
+    let accountWidth = accountButton.isHidden ? 0 : accountButton.preferredWidth
+    accountButton.frame = NSRect(x: bounds.width - trailing - accountWidth,
+      y: (bounds.height - capsuleHeight) / 2, width: accountWidth, height: capsuleHeight)
+    let actionsEdge = accountButton.isHidden ? bounds.width - trailing : accountButton.frame.minX - 8
+    let storeWidth = min(storeButton.preferredWidth, max(0, actionsEdge))
+    storeButton.frame = NSRect(x: actionsEdge - storeWidth,
+      y: (bounds.height - toolHeight) / 2, width: storeWidth, height: toolHeight)
     let devicesWidth = devicesButton.isHidden ? 0 : devicesButton.preferredWidth
-    devicesButton.frame = NSRect(x: storeButton.frame.minX - devicesWidth - 8,
-      y: (bounds.height - capsuleHeight) / 2, width: devicesWidth, height: capsuleHeight)
+    devicesButton.frame = NSRect(x: storeButton.frame.minX - devicesWidth,
+      y: (bounds.height - toolHeight) / 2, width: devicesWidth, height: toolHeight)
     let searchEdge = devicesButton.isHidden ? storeButton.frame.minX : devicesButton.frame.minX
-    searchButton.frame = NSRect(x: searchEdge - iconWidth - 8,
+    searchButton.frame = NSRect(x: searchEdge - iconWidth,
       y: (bounds.height - toolHeight) / 2, width: iconWidth, height: toolHeight)
     // Only navigation actions share the tab row. Context has the full footer.
     let tabBudget = max(0, searchButton.frame.minX - cell * 6)
@@ -2565,6 +2669,10 @@ private final class SwarmTabStrip: NSView {
 
   @objc private func openDevices() {
     if actionsEnabled && devicesButton.isEnabled && !devicesButton.isHidden { emit?("devices", nil) }
+  }
+  @objc private func openAccount() {
+    guard actionsEnabled, accountButton.isEnabled, !accountButton.isHidden else { return }
+    emit?(accountButton.kind == .signIn ? "signIn" : "account", nil)
   }
   @objc private func openFocusedPullRequest() {
     if actionsEnabled && pullRequestButton.isEnabled, let url = pullRequestButton.actionURL {

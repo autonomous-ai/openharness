@@ -1337,11 +1337,15 @@ private extension SwarmTabStrip {
       setFrameSize(NSSize(width: width, height: 40))
       update(state)
       try checkTitlebar(searchButton.isEnabled && searchButton.frame.width > 0 &&
-        searchButton.frame.maxX < storeButton.frame.minX &&
-        storeButton.frame.maxX <= bounds.width &&
+        searchButton.frame.maxX == storeButton.frame.minX &&
+        storeButton.frame.width == searchButton.frame.width &&
+        storeButton.frame.maxX == bounds.width - 12 &&
         newButton.frame.maxX < searchButton.frame.minX &&
         contextButton.superview === statusBar,
-        "Search and Store stay adjacent after the tabs at width \(width)")
+        "Search and Store are icons side by side after the tabs at width \(width)")
+      try checkTitlebar(accountButton.isHidden && !accountButton.isEnabled &&
+        accessibilityChildren()?.contains(where: { $0 as? NSView === accountButton }) == false,
+        "No account control is drawn until the app says which")
       try checkTitlebar(!subviews.contains { $0.accessibilityLabel() == "Notifications" },
         "Notifications live in the macOS menu bar, with no duplicate titlebar bell")
       try checkTitlebar(devicesButton.isHidden && !devicesButton.isEnabled &&
@@ -1362,8 +1366,9 @@ private extension SwarmTabStrip {
       setFrameSize(NSSize(width: width, height: 40))
       update(state)
       try checkTitlebar(!devicesButton.isHidden && devicesButton.isEnabled &&
-        searchButton.frame.maxX < devicesButton.frame.minX &&
-        devicesButton.frame.maxX < storeButton.frame.minX &&
+        searchButton.frame.maxX == devicesButton.frame.minX &&
+        devicesButton.frame.maxX == storeButton.frame.minX &&
+        devicesButton.frame.width == searchButton.frame.width &&
         newButton.frame.maxX < searchButton.frame.minX &&
         devicesButton.font == storeButton.font &&
         accessibilityChildren()?.contains(where: { $0 as? NSView === devicesButton }) == true,
@@ -1387,9 +1392,68 @@ private extension SwarmTabStrip {
     devicesButton.performClick(nil)
     try checkTitlebar(devicesButton.isHidden && !devicesButton.isEnabled && calls.count == 3,
       "Turning the experiment off removes and disables the native entry")
+    // The row's last control: Sign in while this computer holds no account,
+    // and the account's initial once it does.
+    state["devicesVisible"] = true
+    state["account"] = ["kind": "signIn", "tooltip": "Sign in to Harness"]
+    for width in [CGFloat(360), CGFloat(640), CGFloat(1280)] {
+      setFrameSize(NSSize(width: width, height: 40))
+      update(state)
+      try checkTitlebar(!accountButton.isHidden && accountButton.isEnabled &&
+        accountButton.kind == .signIn &&
+        accountButton.frame.width == accountButton.preferredWidth &&
+        accountButton.frame.maxX == bounds.width - 12 &&
+        storeButton.frame.maxX + 8 == accountButton.frame.minX &&
+        searchButton.frame.maxX == devicesButton.frame.minX &&
+        devicesButton.frame.maxX == storeButton.frame.minX &&
+        newButton.frame.maxX < searchButton.frame.minX &&
+        accountButton.accessibilityLabel() == "Sign in" &&
+        accountButton.toolTip == "Sign in to Harness" &&
+        accessibilityChildren()?.contains(where: { $0 as? NSView === accountButton }) == true,
+        "Sign in ends the row after Search, Devices and Store at width \(width)")
+      try captureTabPresentation("native-tabs-sign-in-\(Int(width))")
+    }
+    accountButton.performClick(nil)
+    try checkTitlebar(calls == ["sessions", "store", "devices", "signIn"],
+      "Sign in opens the sign-in through the native action")
+    state["account"] = ["kind": "avatar", "initial": "Dee", "tooltip": "Dee · dee@example.com"]
+    for width in [CGFloat(360), CGFloat(640), CGFloat(1280)] {
+      setFrameSize(NSSize(width: width, height: 40))
+      update(state)
+      try checkTitlebar(!accountButton.isHidden && accountButton.isEnabled &&
+        accountButton.kind == .avatar && accountButton.initial == "D" &&
+        accountButton.frame.width == 32 &&
+        accountButton.frame.maxX == bounds.width - 12 &&
+        storeButton.frame.maxX + 8 == accountButton.frame.minX &&
+        accountButton.accessibilityLabel() == "Account" &&
+        accountButton.toolTip == "Dee · dee@example.com",
+        "Signed in, the same place is the account's one initial at width \(width)")
+      try captureTabPresentation("native-tabs-account-\(Int(width))")
+    }
+    accountButton.performClick(nil)
+    try checkTitlebar(calls == ["sessions", "store", "devices", "signIn", "account"],
+      "The avatar opens the account menu through the native action")
+    state["account"] = ["kind": "avatar", "initial": ""]
+    update(state)
+    try checkTitlebar(!accountButton.isHidden && accountButton.initial.isEmpty,
+      "An account whose profile is unread still has its place")
+    state["enabled"] = false
+    update(state)
+    accountButton.performClick(nil)
+    try checkTitlebar(!accountButton.isEnabled && calls.count == 5, "A modal prevents the account control")
+    state["enabled"] = true
+    state["account"] = ["kind": "billing"]
+    update(state)
+    accountButton.performClick(nil)
+    try checkTitlebar(accountButton.isHidden && !accountButton.isEnabled && calls.count == 5 &&
+      storeButton.frame.maxX == bounds.width - 12,
+      "A kind this build does not know draws nothing, and Store ends the row")
+    state["account"] = nil
+    state["devicesVisible"] = false
     update([:])
     try checkTitlebar(!searchButton.isEnabled && !storeButton.isEnabled &&
-      devicesButton.isHidden && !devicesButton.isEnabled,
+      devicesButton.isHidden && !devicesButton.isEnabled &&
+      accountButton.isHidden && !accountButton.isEnabled,
       "Teardown disables the toolbar")
   }
 
@@ -1594,7 +1658,7 @@ private extension SwarmTabStrip {
       tab.drawWithHoverControl()
       NSGraphicsContext.restoreGraphicsState()
     }
-    for control in [newButton, searchButton, devicesButton, storeButton] where !control.isHidden {
+    for control in [newButton, searchButton, devicesButton, storeButton, accountButton] where !control.isHidden {
       NSGraphicsContext.saveGraphicsState()
       let transform = NSAffineTransform()
       transform.translateX(by: control.frame.minX, yBy: control.frame.minY + 40)

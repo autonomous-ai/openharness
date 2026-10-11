@@ -29,6 +29,7 @@ import 'widgets/export_logs_dialog.dart';
 import 'widgets/flash_firmware_dialog.dart';
 import 'widgets/linux_menu_bar.dart';
 import 'widgets/setup_tour.dart';
+import 'widgets/sign_in_step.dart';
 import 'core/startup.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
@@ -366,6 +367,10 @@ class _RootShellState extends ConsumerState<RootShell>
         // whatever the status says meanwhile, until the tour opens Harness.
         final touring = app.setupTourShowing;
         if (touring) screen = SetupTourScreen(app: app);
+        // Then, once: a computer new to Harness with no account is offered one
+        // before its first workspace.
+        final signInStep = !touring && app.signInStepShowing;
+        if (signInStep) screen = SignInStepScreen(app: app);
         // Preserve the fragment pin while dialogs navigate; an OAuth callback can restore it later.
         if (kIsWeb) _sharedLocation ??= SharedAgentLocation.parse(Uri.base);
         final shared = _sharedLocation;
@@ -376,7 +381,8 @@ class _RootShellState extends ConsumerState<RootShell>
         // clearance (the rail's head). Every other screen fills the window
         // with a centred card, so the strip goes over it here, once, instead
         // of inside each of them.
-        final home = app.status == AppStatus.authenticated && !touring;
+        final home =
+            app.status == AppStatus.authenticated && !touring && !signInStep;
         final framed = home ? screen : FullWindowScreen(child: screen);
         // The band takes a row of its own rather than floating over one. As an
         // overlay it landed on the rail's head — covering the wordmark and the
@@ -391,6 +397,7 @@ class _RootShellState extends ConsumerState<RootShell>
             LinuxMenuBar(onAction: runAppMenuAction),
             if (app.hasAvailableUpdate &&
                 !touring &&
+                !signInStep &&
                 app.status != AppStatus.bootstrapping &&
                 app.status != AppStatus.checkingEnvironment &&
                 app.status != AppStatus.preparingEnvironment)

@@ -25,6 +25,7 @@ import 'package:harness/widgets/update_notice.dart';
 import 'package:harness/widgets/bootstrapping_screen.dart';
 import 'package:harness/widgets/environment_setup_screen.dart';
 import 'package:harness/widgets/setup_tour.dart';
+import 'package:harness/widgets/sign_in_step.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -1676,11 +1677,13 @@ void main() {
   });
 
   // First launch on a fresh computer (onboarding redesign, 2026-10-08): the
-  // tour is the only screen of an unattended install, and Harness opens by
+  // tour is the only screen of an unattended install, and hands over by
   // itself once setup and the downloads beside it are done, at the end of the
-  // slide on screen.
+  // slide on screen. Not signed in, it hands over to the sign-in step
+  // (2026-10-11), and Skip there opens Harness.
   testWidgets(
-    'a fresh install runs under the tour, which opens Harness by itself',
+    'a fresh install runs under the tour, then offers a sign-in, and Skip '
+    'opens Harness',
     (tester) async {
       final missing = EnvironmentReadiness(
         steps: {
@@ -1749,12 +1752,24 @@ void main() {
 
       app.setupDownloads.value = SetupDownloads.none;
       await tester.pump();
-      expect(tester.widget<Text>(line).data, 'Harness is ready. Opening…');
+      // Not "Opening…": what comes next is the sign-in step, not Harness.
+      expect(tester.widget<Text>(line).data, setupTourReadyLine);
       await tester.pump(tourSlideDuration);
       await tester.pump();
       expect(find.byType(SetupTour), findsNothing);
-      expect(find.text('Workspace reached'), findsOneWidget);
       expect(app.setupTourShowing, isFalse);
+      expect(find.byType(SignInStep), findsOneWidget);
+      expect(find.text('Continue with Google'), findsOneWidget);
+      expect(find.text('Workspace reached'), findsNothing);
+      // It waits for the person: no timer opens Harness behind it.
+      await tester.pump(const Duration(minutes: 5));
+      expect(find.byType(SignInStep), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('sign-in-step-skip')));
+      await tester.pump();
+      expect(find.byType(SignInStep), findsNothing);
+      expect(find.text('Workspace reached'), findsOneWidget);
+      expect(app.isGuest, isTrue);
 
       await tester.pumpWidget(const SizedBox());
       app.dispose();

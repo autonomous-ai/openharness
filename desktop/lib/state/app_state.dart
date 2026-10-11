@@ -1113,7 +1113,8 @@ class AppNotifier extends ChangeNotifier {
   void _firstArrivalBehindTour() {
     if (!firstArrivalBehindTour ||
         viewer != null ||
-        !_setupTour ||
+        // Behind the sign-in step as well: it stands where the tour stood.
+        !(_setupTour || _signInStep) ||
         status != AppStatus.authenticated ||
         !firstArrival.pending) {
       return;
@@ -1126,6 +1127,71 @@ class AppNotifier extends ChangeNotifier {
     if (!_setupTour) return;
     _setupTour = false;
     notifyListeners();
+  }
+
+  // --- Sign-in step (2026-10-11) ------------------------------------------
+  // A computer new to Harness is asked once, after setup and before its first
+  // workspace, whether to sign in (`widgets/sign_in_step.dart`): what an
+  // account adds, Google or Apple, and Skip. Everything on this computer works
+  // without one, so the page never blocks; afterwards the same sign-in is the
+  // button at the right end of the tab row. Design:
+  // `docs/research/2026-10-08-onboarding-redesign/index.html`, section 1b.
+  bool _signInStep = false;
+
+  /// Whether the sign-in step comes after setup: this computer is new to
+  /// Harness and holds no account. Only meaningful once [status] has left
+  /// setup — [signedIn] is presumed true until the CLI has been asked.
+  bool get signInStepNext => _signInStep && viewer == null && !signedIn;
+
+  /// Whether RootShell shows the sign-in step in place of the workspace: from
+  /// the moment setup (and its tour) hands over, until an account arrives or
+  /// the person skips.
+  bool get signInStepShowing {
+    if (!_signInStep || viewer != null || setupTourShowing) return false;
+    final signingInHere = status == AppStatus.bootstrapping && signingIn;
+    if (status != AppStatus.authenticated && !signingInHere) return false;
+    // An account, from this page or from a terminal meanwhile: nothing to ask.
+    // Held while the sign-in is still seating the desk, so the page does not
+    // give way to a bare spinner for that moment.
+    if (signedIn && !signingIn) {
+      _signInStep = false;
+      return false;
+    }
+    return true;
+  }
+
+  /// Skip on the sign-in step: on to the workspace without an account.
+  void skipSignInStep() {
+    if (!_signInStep) return;
+    _signInStep = false;
+    appLog.info('onboarding', 'sign-in step: skipped');
+    // A sign-in left waiting on the browser ends with the page that began it.
+    if (canCancelLogin) {
+      cancelLogin();
+    } else {
+      notifyListeners();
+    }
+  }
+
+  /// The sign-in step's buttons. Unlike the sign-in sheet, the page does not
+  /// change while the browser is open, so every way in stays live: pressing
+  /// one again opens the browser again, and another one switches to it.
+  /// No [provider] is the sign-in page's own chooser — Continue with email.
+  Future<void> signInFromStep([SignInProvider? provider]) async {
+    if (signingIn) {
+      // The same way in, pressed again: its page again, not a second sign-in
+      // (the first one's browser tab would land on a listener that is gone).
+      if (signInProvider == provider) {
+        if (pendingAuthorizeUrl != null && !_loginAuthorized) {
+          await openLoginBrowser();
+        }
+        return;
+      }
+      // Already approved in the browser: let it finish.
+      if (!canCancelLogin) return;
+      cancelLogin();
+    }
+    await login(provider);
   }
 
   /// What is still downloading beside setup (see [SetupDownloads]). The tour
@@ -4426,6 +4492,8 @@ class AppNotifier extends ChangeNotifier {
       if (firstHarness) {
         agentPrefetch?.setupRunning = true;
         agentPrefetch?.start();
+        // Asked once, after setup: see [signInStepShowing].
+        _signInStep = true;
       }
       if (!result.isReady && _canInstallUnattended(result, mode: null)) {
         if (firstHarness) {

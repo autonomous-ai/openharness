@@ -58,6 +58,16 @@ FLUTTER_TEST=1 flutter test -d macos --no-pub integration_test/native_terminal_e
 FLUTTER_TEST=1 flutter test -d macos --no-pub integration_test/native_workspace_e2e_test.dart
 ```
 
+`integration_test/sign_in_native_test.dart` walks a new computer from the tour to the sign-in page
+and on to the workspace, in the real window. AppKit draws the tab row, so no Flutter test can see
+or press it: run `python3 tool/native_driver.py <dir> <shots> &` beside it and pass
+`HARNESS_NATIVE_DRIVER_DIR=<dir> HARNESS_NATIVE_SHOTS_DIR=<shots>`, and the driver reads and
+presses the real title-bar controls through accessibility and photographs that one window (the
+terminal needs Accessibility and Screen Recording). Without it, or with the screen locked, the
+same presses arrive as the row's channel actions. ⚠️ The row is in the window only after
+`invokeMethod('configure')` on `harness/swarm_tabs`, as `configureDesktopWindow` does at launch; a
+native test that skips it has a plain title bar.
+
 Both use in-memory state and fake terminal traffic; the workspace fixture also simulates agent
 creation and machine-link responses. They refuse to run without `FLUTTER_TEST=1`, which disables
 production-only pollers and persistence. The workspace fixture exercises the native macOS titlebar; its injected
@@ -183,6 +193,19 @@ The native desktop target uses the CLI for cloud access and SSO tokens:
   client it was issued to, so the session keeps the client the backend's exchange REPORTS — never
   the one it asked for, since an older backend exchanges as its configured client and names none
   — and every refresh names it again (`AuthSession.ssoClientId`, the CLI's `session.json`).
+  **A computer new to Harness is asked once to sign in, between setup and its first workspace**
+  (`widgets/sign_in_step.dart`, `AppNotifier.signInStepShowing`; design
+  `../docs/research/2026-10-08-onboarding-redesign/index.html` 1b, owner 2026-10-11): what an
+  account adds in four lines, Continue with Google and Continue with Apple, and under them Skip
+  and Continue with email (no provider: the sign-in page's own chooser). It follows the setup
+  tour — or the setup screen, where there was no tour — only when setup installed the CLI on a
+  computer that never had it and nobody is signed in; the first workspace keeps building behind
+  it. ⚠️ The page does not change while the browser is open, so its controls stay live
+  (`signInFromStep`): the same one again reopens its page, another one cancels and switches.
+  Afterwards the same sign-in is the tab row's last control: **Sign in** as a guest, the account's
+  initial once signed in, whose menu is `widgets/account_menu.dart`
+  (`design/workspace-status-bar.md`). The sign-in sheet carries Continue with email too, except
+  in a short window, where one more row pushes the expired-session line off screen.
   Sign-out owns its CLI process, checks its exit, and terminates it on timeout. `AppNotifier` joins
   repeated sign-out requests and blocks another sign-in until credential and connection cleanup
   finish; failure offers keyboard-focused Retry sign out. Development fixture disconnects never
