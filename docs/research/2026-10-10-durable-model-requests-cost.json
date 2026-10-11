@@ -1,0 +1,62 @@
+[
+  {
+    "mode": "legacy",
+    "count": 60,
+    "medianMs": 76.92431600000009,
+    "p95Ms": 96.907463,
+    "totalMs": 4531.940067999998,
+    "cpuMs": 111.741,
+    "rssDeltaMiB": 0.6015625,
+    "iteration": 0
+  },
+  {
+    "mode": "intent",
+    "count": 60,
+    "medianMs": 183.29277000000002,
+    "p95Ms": 305.06287900000007,
+    "totalMs": 12037.063724,
+    "cpuMs": 416.391,
+    "rssDeltaMiB": -0.38671875,
+    "iteration": 0
+  },
+  {
+    "mode": "legacy",
+    "count": 60,
+    "medianMs": 78.92271800000071,
+    "p95Ms": 97.60997899999984,
+    "totalMs": 4756.671986000001,
+    "cpuMs": 120.582,
+    "rssDeltaMiB": 0.46484375,
+    "iteration": 1
+  },
+  {
+    "mode": "intent",
+    "count": 60,
+    "medianMs": 189.75338699999884,
+    "p95Ms": 244.87026799999967,
+    "totalMs": 11460.335184000003,
+    "cpuMs": 431.72,
+    "rssDeltaMiB": 1.0546875,
+    "iteration": 1
+  },
+  {
+    "mode": "legacy",
+    "count": 60,
+    "medianMs": 78.28556500000013,
+    "p95Ms": 113.59663099999943,
+    "totalMs": 5017.650269,
+    "cpuMs": 121.699,
+    "rssDeltaMiB": 0.3203125,
+    "iteration": 2
+  },
+  {
+    "mode": "intent",
+    "count": 60,
+    "medianMs": 182.31383199999993,
+    "p95Ms": 333.90176299999985,
+    "totalMs": 12637.719837999992,
+    "cpuMs": 397.07,
+    "rssDeltaMiB": 1.95703125,
+    "iteration": 2
+  }
+]

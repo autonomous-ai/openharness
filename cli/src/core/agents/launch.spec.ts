@@ -38,6 +38,12 @@ function setup() {
 describe('relaunch helpers', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
+  it('preserves an unknown native permission observation as a launch hold', async () => {
+    const { helpers } = setup()
+    vi.mocked(dropPermissionFlagIfUnsupported).mockResolvedValueOnce({ choice: { bypassPermission: false }, droppedFlag: null, nativeHold: 'Waiting for help.' })
+    expect(await helpers.downgradedPermission(session(), true, 'restore')).toEqual({ bypassPermission: false, nativeHold: 'Waiting for help.' })
+  })
+
   it('rejects preparation that was already revoked before dispatch', async () => {
     const { deps } = setup()
     deps.authority = () => () => false
@@ -101,10 +107,10 @@ describe('relaunch helpers', () => {
     expect(deps.prepareApiTools).toHaveBeenCalledWith('/work', 'claude')
     expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({
       dsh: 'blender', dshRuntime: null, cwd: '/work', agent: 'reviewer', gridLaunch: null,
-    }), 'a1', expect.any(Function))
+    }), 'a1', expect.any(Function), undefined)
     const grid = { networkId: 'grid-1', networkName: 'Home grid' }
     await helpers.relaunchOverrides(session({ dsh: undefined, dshRuntime: undefined, agent: undefined } as Partial<RegisteredSession>), { gridLaunch: grid } as never)
-    expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({ dsh: null, agent: null, gridLaunch: grid }), 'a1', expect.any(Function))
+    expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({ dsh: null, agent: null, gridLaunch: grid }), 'a1', expect.any(Function), undefined)
   })
 
   it('records the web-search decision a relaunch made, when it made one', () => {
@@ -133,7 +139,7 @@ describe('relaunch helpers', () => {
     const { helpers } = setup()
     vi.mocked(dropPermissionFlagIfUnsupported).mockResolvedValueOnce({ choice: { bypassPermission: false }, droppedFlag: '--permission-mode' } as never)
     expect(await helpers.downgradedPermission(session({ permissionMode: 'plan' } as Partial<RegisteredSession>), true, 'restart')).toEqual({ bypassPermission: false })
-    expect(dropPermissionFlagIfUnsupported).toHaveBeenCalledWith('claude', { permissionMode: 'plan', bypassPermission: true })
+    expect(dropPermissionFlagIfUnsupported).toHaveBeenCalledWith('claude', { permissionMode: 'plan', bypassPermission: true }, undefined, undefined)
     expect(String(warn.mock.calls[0][0])).toContain('does not take --permission-mode · starting in Ask · update claude to get plan back')
     vi.mocked(dropPermissionFlagIfUnsupported).mockResolvedValueOnce({ choice: { bypassPermission: true }, droppedFlag: '--dangerously-skip-permissions' } as never)
     await helpers.downgradedPermission(session(), true, 'retarget')

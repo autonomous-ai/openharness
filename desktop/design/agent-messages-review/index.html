@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Messages Tabs</title>
+<style>
+  :root {
+    --bg: #fafaf9; --fg: #1f1f1d; --muted: #6b6b66; --line: #e2e2df; --card: #ffffff;
+    --note-bg: #eef3fb; --note-line: #b9c9e6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #181818; --fg: #f5f5f5; --muted: #a3a3a0; --line: #2c2c2c; --card: #1e1e1e;
+      --note-bg: #1b2230; --note-line: #34425e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 1320px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 40px 0 8px; }
+  p { margin: 4px 0 12px; max-width: 80ch; }
+  ul { margin: 4px 0 12px; padding-left: 20px; max-width: 80ch; }
+  .muted { color: var(--muted); }
+  .scene { margin: 20px 0 28px; }
+  .scene h3 { font-size: 15px; margin: 0 0 2px; }
+  .scene p { margin: 0 0 8px; color: var(--muted); }
+  .bar { display: block; width: 100%; max-width: 1280px; height: auto; border-radius: 8px;
+    border: 1px solid var(--line); margin: 6px 0; }
+  .menus { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .menus img { border-radius: 8px; border: 1px solid var(--line); height: auto; }
+  .tag { display: inline-block; font-size: 12px; color: var(--muted); }
+  .note { background: var(--note-bg); border: 1px solid var(--note-line); border-radius: 10px;
+    padding: 16px; margin: 16px 0; }
+  .note h2 { margin-top: 0; }
+  code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .player { display: grid; gap: 12px; margin: 12px 0 8px; }
+  .player img { display: block; width: 100%; max-width: 600px; height: auto; border-radius: 8px;
+    border: 1px solid var(--line); }
+  .player-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .anim-label { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); min-width: 30ch; }
+  .track { width: 100%; max-width: 600px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+  .track > div { height: 100%; width: 0; background: #2f5bea; }
+  button { font: inherit; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--card); color: var(--fg); cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Agent Messages: the tab bar</h1>
+  <p class="muted">The real macOS title bar and menus (<code>SwarmTitlebar.swift</code>), drawn with sample tabs by
+  <code>tool/agent_messages_preview.swift</code>. In every scene <b>lamp</b> and <b>desktop</b> have Agent Messages
+  on, while <b>website</b> and <b>notes</b> have it off. Traffic lights are grey because the render window is never brought to the front, and tooltips
+  can't be captured.</p>
+
+  <div class="note">
+    <h2>What changed from your review</h2>
+    <ul>
+      <li>No ⌘1/⌘2/⌘3 on tabs. The shortcuts still work, and holding ⌘ no longer changes the tabs.</li>
+      <li>The tab icon is now a <b>chat icon</b>, two speech bubbles for agents talking, instead of ⇄. It's <b>grey</b> when off and <b>blue</b> when on. Blue is the design system's one accent, used for selection and "on", and no status mark uses it. In menus, Show Agent Messages uses a bubble with text lines.</li>
+      <li>While agents message each other, the <b>status slot</b> (where the spinner, ✓ and ? sit) shows the chat icon, its two bubbles swapping sides every half second, for
+      <b>10 seconds</b> after the last message, then goes back to working, done or question.</li>
+      <li>At rest, names use the whole tab again. On hover, a name only moves left as far as 💬 and × need.</li>
+    </ul>
+  </div>
+
+  <h2>The animation</h2>
+  <p>Frames rendered from the real title bar, played at the real timing. A message moves, and lamp's status
+  slot shows the chat icon, its bubbles swapping sides every half second. Ten seconds after the last message,
+  lamp goes back to its working spinner. This loops; each new message would start the ten seconds again.
+  With Reduce Motion on, the icon holds still.</p>
+  <div class="player">
+    <img id="anim-dark" src="anim/anim-messaging-0-dark.png" alt="lamp tab, dark, animating">
+    <img id="anim-light" src="anim/anim-messaging-0-light.png" alt="lamp tab, light, animating">
+    <div class="track" title="Review page only"><div id="anim-progress"></div></div>
+    <span class="tag">The bar and countdown are only on this page, to show the timing; the app shows just the tab.</span>
+    <div class="player-row">
+      <span class="anim-label" id="anim-label">Agents messaging</span>
+      <button id="anim-replay" type="button">Replay</button>
+    </div>
+  </div>
+
+  <h2>Dark (Graphite)</h2>
+  <div class="scene"><h3>1 · At rest, quiet</h3>
+    <p>Name and status only.</p>
+    <img class="bar" src="01-rest-quiet-dark.png" alt=""></div>
+  <div class="scene"><h3>2 · At rest, lamp's agents are messaging</h3>
+    <p>lamp's status slot shows the chat icon in blue, flipping between the two frames below every half second, as if the agents take turns. After 10 s it goes back to lamp's spinner.</p>
+    <img class="bar" src="02-rest-messaging-dark.png" alt="">
+    <img class="bar" src="02b-rest-messaging-next-frame-dark.png" alt=""></div>
+  <div class="scene"><h3>3 · Hover website (off)</h3>
+    <p>Grey 💬 and ×. The status stays. Clicking 💬 turns Agent Messages on.</p>
+    <img class="bar" src="03-hover-off-dark.png" alt=""></div>
+  <div class="scene"><h3>4 · Hover desktop (on, quiet)</h3>
+    <p>💬 in blue. Clicking it turns Agent Messages off.</p>
+    <img class="bar" src="04-hover-on-quiet-dark.png" alt=""></div>
+  <div class="scene"><h3>5 · Hover lamp (on, messaging)</h3>
+    <img class="bar" src="05-hover-on-messaging-dark.png" alt=""></div>
+  <div class="scene"><h3>6 · Pointer on website's 💬</h3>
+    <p>The grey 💬 brightens under the pointer. Its tooltip reads “Agent messages off · click to turn on”.</p>
+    <img class="bar" src="06-pointer-on-arrows-off-dark.png" alt=""></div>
+  <div class="scene"><h3>7 · Nine tabs, at rest, then hovering desktop</h3>
+    <img class="bar" src="08-crowded-rest-dark.png" alt="">
+    <img class="bar" src="09-crowded-hover-dark.png" alt=""></div>
+  <div class="scene"><h3>Nine tabs at rest: before Agent Messages, main today, this change</h3>
+    <span class="tag">before Agent Messages</span><img class="bar" src="before/08-crowded-rest-dark.png" alt="">
+    <span class="tag">main today</span><img class="bar" src="main/08-crowded-rest-dark.png" alt="">
+    <span class="tag">this change</span><img class="bar" src="08-crowded-rest-dark.png" alt=""></div>
+  <div class="scene"><h3>8 · Menus: right-click lamp (on), right-click website (off), File</h3>
+    <div class="menus">
+      <img src="10-tab-menu-on-dark.png" width="177" alt="Tab menu, on">
+      <img src="11-tab-menu-off-dark.png" width="169" alt="Tab menu, off">
+      <img src="12-file-menu-light.png" width="265" alt="File menu (macOS draws it in the system appearance)">
+    </div></div>
+
+  <h2>Light (Paper)</h2>
+  <div class="scene"><h3>1 · At rest, quiet</h3><img class="bar" src="01-rest-quiet-light.png" alt=""></div>
+  <div class="scene"><h3>2 · At rest, lamp's agents are messaging</h3>
+    <img class="bar" src="02-rest-messaging-light.png" alt="">
+    <img class="bar" src="02b-rest-messaging-next-frame-light.png" alt=""></div>
+  <div class="scene"><h3>3 · Hover website (off)</h3><img class="bar" src="03-hover-off-light.png" alt=""></div>
+  <div class="scene"><h3>4 · Hover desktop (on, quiet)</h3><img class="bar" src="04-hover-on-quiet-light.png" alt=""></div>
+  <div class="scene"><h3>5 · Hover lamp (on, messaging)</h3><img class="bar" src="05-hover-on-messaging-light.png" alt=""></div>
+  <div class="scene"><h3>6 · Pointer on website's 💬</h3><img class="bar" src="06-pointer-on-arrows-off-light.png" alt=""></div>
+  <div class="scene"><h3>7 · Nine tabs, at rest, then hovering desktop</h3>
+    <img class="bar" src="08-crowded-rest-light.png" alt="">
+    <img class="bar" src="09-crowded-hover-light.png" alt=""></div>
+  <div class="scene"><h3>8 · Menus</h3>
+    <div class="menus">
+      <img src="10-tab-menu-on-light.png" width="177" alt="Tab menu, on">
+      <img src="11-tab-menu-off-light.png" width="169" alt="Tab menu, off">
+      <img src="12-file-menu-light.png" width="265" alt="File menu">
+    </div></div>
+
+  <p class="muted">Re-render: <code>HARNESS_AGENT_MESSAGES_PREVIEW_DIR=&lt;dir&gt; bash desktop/tool/check_swarm_titlebar.sh &lt;flutter-sdk&gt; --agent-messages-preview</code>.
+  The “before” image comes from the same tool run against the title bar at #1159 (3a97ef3ed4). “main today” is #1161.</p>
+</main>
+<script>
+(() => {
+  const MESSAGING_MS = 10000, STATUS_MS = 4000, CYCLE = MESSAGING_MS + STATUS_MS;
+  const themes = ['dark', 'light'];
+  const frames = {};
+  for (const theme of themes) {
+    frames[theme] = {
+      messaging: [0, 5].map(f => `anim/anim-messaging-${f}-${theme}.png`),
+      working: Array.from({ length: 10 }, (_, f) => `anim/anim-working-${f}-${theme}.png`),
+    };
+    for (const src of [...frames[theme].messaging, ...frames[theme].working]) new Image().src = src;
+  }
+  const label = document.getElementById('anim-label');
+  const progress = document.getElementById('anim-progress');
+  let start = performance.now();
+  function tick(now) {
+    const t = (now - start) % CYCLE;
+    const messaging = t < MESSAGING_MS;
+    for (const theme of themes) {
+      const set = frames[theme];
+      const src = messaging ? set.messaging[Math.floor(t / 500) % 2]
+        : set.working[Math.floor((t - MESSAGING_MS) / 100) % 10];
+      const img = document.getElementById(`anim-${theme}`);
+      if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+    }
+    label.textContent = messaging
+      ? `Agents messaging · ${((MESSAGING_MS - t) / 1000).toFixed(1)} s left`
+      : 'Quiet again · back to its status: Working';
+    progress.style.width = messaging ? `${(100 * t) / MESSAGING_MS}%` : '0%';
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+  document.getElementById('anim-replay').addEventListener('click', () => { start = performance.now(); });
+})();
+</script>
+</body>
+</html>

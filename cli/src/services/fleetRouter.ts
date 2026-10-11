@@ -15,6 +15,7 @@
 import type { ForkResult, SendResult } from '../core/api.js'
 import type { FleetRouting, ForkOutcome, SelectResult } from './fleet.js'
 import { extendShortRecap } from '../lib/deviceRecap.js'
+import { transcriptActivityAt } from '../lib/transcriptActivity.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { RouterContinuity } from '../lib/voiceRouter.js'
 import type { RecentTurn } from '../cable/cableHost.js'
@@ -283,6 +284,20 @@ export class FleetRouter implements FleetRouting {
     return out
   }
 
+  /**
+   * When each local agent last did something: its transcript's last event, else its last hook. Unlike
+   * agentFrame's `lastActivityAt`, never its creation: the Pro's Recent lists agents that had a task, and one
+   * that never did has no time here. Another machine's agents are not known here.
+   */
+  async activityTimes(): Promise<Map<string, number>> {
+    const out = new Map<string, number>()
+    await Promise.all(this.local.sessions().map(async (s) => {
+      const at = await transcriptActivityAt(s.transcriptPath, s.engine) ?? s.lastHookAt
+      if (at) out.set(s.agentId, at)
+    }))
+    return out
+  }
+
   /** How many agents the account has across every machine — the overview's number, sent beside the
    *  tab's list rather than as 70 rows the dial would hold for a digit. Read from the last flat list,
    *  minus the terminals in it: the list is every TILE, this is every AGENT. */
@@ -529,12 +544,12 @@ export class FleetRouter implements FleetRouting {
   }
 
   /** The last few turns, newest first, in the shape the dial's tile draws: a headline and a body. */
-  async recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string }>> {
+  async recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string; fullText?: string }>> {
     const raw = this.isLocalAgent(agentId)
       ? await this.local.recent(agentId, 3)
       : await this.fleet!.recentSummaries(this.machineOf(agentId), agentId)
     return raw
-      .map((r) => ({ recap: extendShortRecap(r?.recap ?? '', r?.text ?? ''), text: r?.text ?? '', ask: r?.ask ?? '' }))
+      .map((r) => ({ recap: extendShortRecap(r?.recap ?? '', r?.text ?? ''), text: r?.text ?? '', ask: r?.ask ?? '', ...(r?.fullText ? { fullText: r.fullText } : {}) }))
       .filter((s) => s.recap || s.text || s.ask)
   }
 

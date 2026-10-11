@@ -6,7 +6,6 @@ import 'package:xterm/xterm.dart' show Terminal;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../teams/team_controller.dart';
 import '../api/api_client.dart';
 import '../viewer/direct_auth_api.dart';
 import '../viewer/direct_link.dart';
@@ -1530,14 +1529,6 @@ class AppNotifier extends ChangeNotifier {
     currentUser = null;
     machines = [];
     machineStates.clear();
-    for (final controller in _teamControllers.values) {
-      controller.dispose();
-    }
-    _teamControllers.clear();
-    for (final controller in _channelControllers.values) {
-      controller.dispose();
-    }
-    _channelControllers.clear();
     // ⚠️ The warm-start cache is this account's machine ids, so it goes with the
     // session. Left behind, the next launch would dial the previous account's
     // machines before its own fetch could say they are not its own — reaching
@@ -3969,50 +3960,6 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  final _teamControllers = <String, TeamController>{};
-  final _channelControllers = <String, TeamController>{};
-  TeamController channelController(String tabId, String gatewayMachineId) =>
-      _channelControllers.putIfAbsent(tabId, () {
-        late final TeamController controller;
-        controller = TeamController(
-          channelTabId: tabId,
-          request: (payload) => teamRequest(
-            controller.team?['machineId'] as String? ?? gatewayMachineId,
-            payload,
-          ),
-        );
-        return controller;
-      });
-  TeamController teamController(String machineId) =>
-      _teamControllers.putIfAbsent(
-        machineId,
-        () => TeamController(
-          request: (payload) => teamRequest(machineId, payload),
-        ),
-      );
-
-  Future<Map<String, dynamic>> teamRequest(
-    String machineId,
-    Map<String, dynamic> payload,
-  ) async {
-    try {
-      return await _conn(
-        machineId,
-      ).request('team', payload: payload, timeout: const Duration(seconds: 35));
-    } on WsRequestFailure catch (e) {
-      throw TeamRequestError(
-        e.code == 'UNSUPPORTED'
-            ? 'Update Harness on this machine to use agent collaboration.'
-            : e.toString(),
-        uncertain: const {
-          'UNCONFIRMED',
-          'DISCONNECTED',
-          'TEAM_UNAVAILABLE',
-        }.contains(e.code),
-      );
-    }
-  }
-
   /// The Git choices [path] offers, read ON the machine that owns it.
   ///
   /// ⚠️ **The phone never looks at a repository itself, and could not.** The
@@ -6405,14 +6352,6 @@ class AppNotifier extends ChangeNotifier {
 
   @override
   void dispose() {
-    for (final controller in _teamControllers.values) {
-      controller.dispose();
-    }
-    _teamControllers.clear();
-    for (final controller in _channelControllers.values) {
-      controller.dispose();
-    }
-    _channelControllers.clear();
     _disposed = true;
     _closedHistory.clear();
     _stopAccountTimers();

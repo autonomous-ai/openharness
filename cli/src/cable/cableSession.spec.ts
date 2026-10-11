@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
-import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
+import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { CableSession, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import type { PetStore } from './pets/store.js'
@@ -840,6 +840,161 @@ describe('cable session', () => {
     port.say({ t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'aa:bb' })
     await settle()
     expect(port.types()).not.toContain('fw.offer')
+    await session.stop()
+  })
+
+  describe('firmware retries', () => {
+    const image = Buffer.alloc(2048, 9)
+    const hi = { t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'aa:bb' }
+    const host = () => makeHost({ firmwareFor: async () => ({ version: '9.9.9', image, sha256: 'x'.repeat(64) }) })
+    const offers = (port: LoopbackPort) => port.types().filter((t) => t === 'fw.offer').length
+
+    it('a declined offer is offered again at the next hello', async () => {
+      const { session, port } = await connect(host())
+      port.say(hi)
+      await settle()
+      port.say({ t: 'fw.error', message: 'busy' })
+      await settle()
+      port.say(hi)
+      await settle()
+      expect(offers(port)).toBe(2)
+      await session.stop()
+    })
+
+    it('holds off after 3 attempts in an hour', async () => {
+      const { session, port } = await connect(host())
+      for (let i = 0; i < 4; i++) {
+        port.say(hi)
+        await settle()
+        port.say({ t: 'fw.error', message: 'busy' })
+        await settle()
+      }
+      expect(offers(port)).toBe(3)
+      await session.stop()
+    })
+
+    it('never re-offers after fw.done, even if the dial greets with the old version again', async () => {
+      const { session, port } = await connect(host())
+      port.say(hi)
+      await settle()
+      port.say({ t: 'fw.done' })
+      await settle()
+      port.say(hi)
+      await settle()
+      expect(offers(port)).toBe(1)
+      await session.stop()
+    })
+
+    it('a transfer whose acked bytes stop advancing for 30 s is over, and is offered again', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const seen: Array<{ updating?: string }> = []
+        const { session, port } = await connect(makeHost({
+          firmwareFor: async () => ({ version: '9.9.9', image, sha256: 'x'.repeat(64) }),
+          onDialStatus: (s) => seen.push(s),
+        }))
+        port.say(hi)
+        await vi.advanceTimersByTimeAsync(5)
+        port.say({ t: 'fw.accept' })
+        await vi.advanceTimersByTimeAsync(20_000)
+        port.say({ t: 'fw.progress', written: 1024 })
+        await vi.advanceTimersByTimeAsync(20_000)
+        expect((session as unknown as { transfer: unknown }).transfer).not.toBeNull()
+        await vi.advanceTimersByTimeAsync(11_000)
+        expect((session as unknown as { transfer: unknown }).transfer).toBeNull()
+        expect(seen.at(-1)?.updating).toBeFalsy()
+        port.say(hi)
+        await vi.advanceTimersByTimeAsync(5)
+        expect(offers(port)).toBe(2)
+        await session.stop()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('logs "no image channel" once per device, not on every hello', async () => {
+      const lines: string[] = []
+      const { session, port } = await connect(makeHost({ firmwareFor: async () => null, log: (l: string) => lines.push(l) }))
+      for (let i = 0; i < 3; i++) {
+        port.say({ ...hi, hw: 'harness-pro', board: 'pro' })
+        await settle()
+      }
+      expect(lines.filter((l) => l.includes('no image channel'))).toHaveLength(1)
+      await session.stop()
+    })
+  })
+
+  it('pro without ota gets no firmware offer', async () => {
+    // The standalone Pro firmware says hw "harness-pro" like the old Player-1 Pro build. Without `ota: "v1"`
+    // it cannot take an image: no lookup, no transfer.
+    const image = Buffer.alloc(2048, 9)
+    const firmwareFor = vi.fn(async () => ({ version: '9.9.9', image, sha256: 'x'.repeat(64) }))
+    const host = makeHost({ firmwareFor })
+    const { session, port } = await connect(host)
+
+    port.say({ t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'aa:bb', hw: 'harness-pro', board: 'pro' })
+    await settle()
+
+    expect(firmwareFor).not.toHaveBeenCalled()
+    expect(port.types()).not.toContain('fw.offer')
+    expect((session as unknown as { transfer: unknown }).transfer).toBeNull()
+    await session.stop()
+  })
+
+  it('pro with ota v1 is offered the harness-pro entry', async () => {
+    const image = Buffer.alloc(2048, 9)
+    const firmwareFor = vi.fn(async (_v: string, _key: string) => ({ version: '9.9.9', image, sha256: 'x'.repeat(64) }))
+    const { session, port } = await connect(makeHost({ firmwareFor }))
+    port.say({ t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'aa:bb', hw: 'harness-pro', board: 'pro', ota: 'v1' })
+    await settle()
+    expect(firmwareFor).toHaveBeenCalledWith('0.0.1', 'harness-pro')
+    expect(port.types().filter((t) => t === 'fw.offer')).toHaveLength(1)
+    await session.stop()
+  })
+
+  it('a pro ota v1 session rewinds on fw.progress with resend and prefixes offsets', async () => {
+    const image = Buffer.alloc(100_000, 9)
+    const { session, port } = await connect(makeHost({ firmwareFor: async () => ({ version: '9.9.9', image, sha256: 'x'.repeat(64) }) }))
+    port.say({ t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'aa:bb', hw: 'harness-pro', board: 'pro', ota: 'v1' })
+    await settle()
+    port.say({ t: 'fw.accept' })
+    await settle()
+    const xfer = (session as unknown as { transfer: { onResend: (n: number) => Promise<void> } }).transfer
+    const spy = vi.spyOn(xfer, 'onResend')
+    port.say({ t: 'fw.progress', written: 8188, resend: true })
+    await settle()
+    expect(spy).toHaveBeenCalledWith(8188)
+    await session.stop()
+  })
+
+  it('hw harness-pro without board is not offered', async () => {
+    const firmwareFor = vi.fn(async () => null)
+    const { session, port } = await connect(makeHost({ firmwareFor }))
+    port.say({ t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'aa:bb', hw: 'harness-pro' })
+    await settle()
+    expect(firmwareFor).not.toHaveBeenCalled()
+    await session.stop()
+  })
+
+  it('reports the board it greeted with, and omits it for a round', async () => {
+    const seen: Array<{ board?: string }> = []
+    const { session, port } = await connect(makeHost({ onDialStatus: (s) => seen.push(s) }))
+    port.say({ t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'aa:bb', hw: 'harness-pro', board: 'pro' })
+    await vi.waitFor(() => expect(seen.at(-1)?.board).toBe('pro'))
+    await session.stop()
+  })
+
+  it('a round hello still gets its offer', async () => {
+    const image = Buffer.alloc(2048, 9)
+    const firmwareFor = vi.fn(async () => ({ version: '9.9.9', image, sha256: 'x'.repeat(64) }))
+    const host = makeHost({ firmwareFor })
+    const { session, port } = await connect(host)
+
+    port.say({ t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'aa:bb', hw: 'cst816s' })
+    await settle()
+
+    expect(firmwareFor).toHaveBeenCalledWith('0.0.1', 'commander')
+    expect(port.types().filter((t) => t === 'fw.offer')).toHaveLength(1)
     await session.stop()
   })
 
@@ -2803,5 +2958,433 @@ describe('spoken output search purpose', () => {
       expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([{ t: 'pet.drop', id: NEW }])
       await session.stop()
     })
+  })
+})
+
+// ── hello capabilities ────────────────────────────────────────────────────────────────────────────────
+//
+// The Harness Pro and the round dial are two clients of one daemon. What the hello NAMES decides what the
+// daemon adds for that session; a hello that names nothing gets exactly the frames it always got.
+describe('hello capabilities', () => {
+  const PRO_HELLO = { t: 'hello', product: 'harness', mac: 'aa:bb', board: 'pro', swarms: 'members-v1',
+    recap: 'long-v1', activity: 'steps-v1', player: 'library-v1' }
+  const answer = '## Kết quả\n\n' + Array.from({ length: 500 }, (_, i) => `**từ${i}**`).join(' ')
+  const uuid = (n: number) => `${String(n).padStart(8, '0')}-aaaa-bbbb-cccc-${'d'.repeat(12)}`
+  const library = Array.from({ length: 71 }, (_, i) => ({ id: `session-${i}`, machineId: `machine-${i % 4}`,
+    name: `Session ${i}`, engine: 'codex', status: 'paused' as const, lastActivityAt: Date.now() - 120_000 }))
+  const swarmsOf = (agentIds: string[][]) => ({ selected: 't1', tiles: [] as never[],
+    swarms: agentIds.map((ids, i) => ({ id: `t${i + 1}`, name: `Tab ${i + 1}`, agents: ids.length, agentIds: ids, panes: ids.length })) })
+  const ofType = (port: LoopbackPort, t: string) => port.sent.filter((m) => m.t === t)
+  /** The firmware's JSON guard counts one token per object, array, string (keys included) and bare value. */
+  const jsonTokens = (value: unknown): number => {
+    if (Array.isArray(value)) return 1 + value.reduce((n: number, v) => n + jsonTokens(v), 0)
+    if (value && typeof value === 'object') return 1 + Object.entries(value).reduce((n, [, v]) => n + 1 + jsonTokens(v), 0)
+    return 1
+  }
+
+  /** A host that offers everything a Pro could ask for, so only the hello decides what is sent. */
+  function richHost(over: Partial<CableHost> = {}) {
+    return makeHost({
+      activityText: async () => 'Working',
+      activitySnapshot: async () => ({ text: 'Working', action: 'Reading the spec', elapsedSeconds: 931 }),
+      listSwarms: () => swarmsOf([['a1', 'a2'], ['a3']]),
+      recentSummaries: async () => [{ recap: 'r', text: 'b', fullText: answer }],
+      playerLibrary: async () => library,
+      ...over,
+    })
+  }
+
+  it('round hello gets no Pro fields', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      // A turn with prose and tool cards, a summary carrying the whole answer, and a library request.
+      await session.turnStarted('a1', 'Processing', 'Looking at the spec first')
+      await session.turnStep('a1', 'Read · cableSession.ts')
+      await session.summary('a1', 'r', 'b', false, false, answer)
+      port.say({ t: 'player.library.get', offset: 0, request: 1 }); await settle()
+      await session.syncSwarms(true)
+
+      // Byte-for-byte what main sent before the capabilities existed.
+      expect(port.sent.map((m) => JSON.stringify(m))).toEqual([
+        '{"t":"turn.started","agentId":"a1","text":"Processing"}',
+        '{"t":"turn.activity","agentId":"a1","text":"Working"}',
+        '{"t":"summary","agentId":"a1","name":"Fix login screen","engine":"claude","machine":"","recap":"r","text":"b"}',
+        '{"t":"swarms","selected":"t1","items":[{"id":"t1","name":"Tab 1","agents":2,"panes":2},{"id":"t2","name":"Tab 2","agents":1,"panes":1}],"tiles":[]}',
+      ])
+    } finally { await session.stop() }
+  })
+
+  it('round hello gets no Pro fields in the greeting or the restores either', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      expect(port.sent[0].features).toEqual(['voice.draft', 'agents.refresh', 'settings'])
+      expect(port.types().some((t) => t.startsWith('player.'))).toBe(false)
+      const text = port.sent.map((m) => JSON.stringify(m)).join('\n')
+      for (const key of ['"full"', '"members"', '"agentIds"', '"step"', '"action"', '"elapsedSeconds"']) expect(text).not.toContain(key)
+      expect(ofType(port, 'summary').filter((m) => m.restore).length).toBeGreaterThan(0)
+    } finally { await session.stop() }
+  })
+
+  it('does not re-push swarms for a reorder a round dial cannot see', async () => {
+    let swarms = swarmsOf([['a', 'b']])
+    const { session, port } = await connect(makeHost({ listSwarms: () => swarms }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(ofType(port, 'swarms')).toHaveLength(1))
+      swarms = swarmsOf([['b', 'a']])
+      await session.syncSwarms()
+      expect(ofType(port, 'swarms')).toHaveLength(1)
+    } finally { await session.stop() }
+  })
+
+  it('pro hello gets steps', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      await session.turnStarted('a1', 'Processing', 'Looking at the spec first')
+      await session.turnStep('a1', 'Read · cableSession.ts')
+      expect(port.sent).toEqual([
+        { t: 'turn.started', agentId: 'a1', text: 'Processing' },
+        // The first activity right after the start: the latest paragraph the agent wrote.
+        { t: 'turn.activity', agentId: 'a1', text: 'Processing', action: 'Looking at the spec first' },
+        { t: 'turn.activity', agentId: 'a1', text: 'Working', action: 'Reading the spec', elapsedSeconds: 931 },
+        { t: 'turn.activity', agentId: 'a1', text: '', step: 'Read · cableSession.ts' },
+      ])
+    } finally { await session.stop() }
+  })
+
+  it('pro hello keeps elapsed seconds and the action inside what the device accepts', async () => {
+    const reading = { value: { text: 'Working', action: 'é'.repeat(300), elapsedSeconds: 2_592_001 } as { text: string; action?: string; elapsedSeconds?: number } }
+    const { session, port } = await connect(richHost({ activitySnapshot: async () => reading.value }))
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      await session.turnStarted('a1')
+      const act = port.sent.find((m) => m.t === 'turn.activity') as { action: string; elapsedSeconds?: number }
+      expect(Buffer.byteLength(act.action)).toBeLessThanOrEqual(188)
+      expect(act.action.endsWith('…')).toBe(true)
+      expect(act).not.toHaveProperty('elapsedSeconds')
+      for (const bad of [-1, 1.5, Number.NaN]) {
+        port.sent.length = 0
+        reading.value = { text: 'Working', elapsedSeconds: bad }
+        await session.turnStarted('a1')
+        expect(port.sent.find((m) => m.t === 'turn.activity')).toEqual({ t: 'turn.activity', agentId: 'a1', text: 'Working' })
+      }
+    } finally { await session.stop() }
+  })
+
+  it('discards the action and timer when a completed turn supersedes the read', async () => {
+    let finish!: (value: { text: string; action: string; elapsedSeconds: number }) => void
+    const { session, port } = await connect(richHost({ activitySnapshot: () => new Promise((resolve) => { finish = resolve }) }))
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      const pending = session.turnStarted('a1'); await settle()
+      await session.turnDone('a1')
+      finish({ text: 'Working', action: 'Read · old.ts', elapsedSeconds: 100 }); await pending
+      expect(port.sent.some((m) => m.t === 'turn.activity')).toBe(false)
+    } finally { await session.stop() }
+  })
+
+  it('round hello reads the footer through activityText, whatever activitySnapshot does', async () => {
+    const snapshot = vi.fn(async () => { throw new Error('UNKNOWN_QUERY') })
+    const { session, port } = await connect(makeHost({ activityText: async () => 'Reading', activitySnapshot: snapshot }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      await session.turnStarted('a1', 'Processing')
+      expect(port.sent).toEqual([{ t: 'turn.started', agentId: 'a1', text: 'Processing' }, { t: 'turn.activity', agentId: 'a1', text: 'Reading' }])
+      expect(snapshot).not.toHaveBeenCalled()
+    } finally { await session.stop() }
+  })
+
+  it('pro hello drops the full text rather than send a summary over the frame cap', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.summary('a1', 'r', 'x'.repeat(7_900), false, false, 'y'.repeat(1_000))
+      const frame = ofType(port, 'summary').at(-1)!
+      expect(frame.text).toBe('x'.repeat(7_900))
+      expect(frame).not.toHaveProperty('full')
+      expect(port.closedWith).toBeNull()
+    } finally { await session.stop() }
+  })
+
+  it('pro hello drops the full text of a restore that would not fit', async () => {
+    const { session, port } = await connect(richHost({ recentSummaries: async () => [{ recap: 'r', text: 'x'.repeat(7_900), fullText: 'y'.repeat(1_000) }] }))
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(ofType(port, 'summary').filter((m) => m.restore).length).toBeGreaterThan(0))
+      expect(ofType(port, 'summary').filter((m) => m.restore)[0]).not.toHaveProperty('full')
+      expect(port.closedWith).toBeNull()
+    } finally { await session.stop() }
+  })
+
+  it('pro hello does not wait on the host for an answer the card did not carry', async () => {
+    const { session, port } = await connect(richHost({ recentSummaries: () => new Promise(() => {}) }))
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      const before = Date.now()
+      await session.summary('a1', 'r', 'b')
+      expect(Date.now() - before).toBeLessThan(3_000)
+      expect(ofType(port, 'summary').at(-1)).not.toHaveProperty('full')
+    } finally { await session.stop() }
+  }, 10_000)
+
+  it('pro hello caps tabs and ids to what the device holds, and stays under the byte and token limits', async () => {
+    const tabs = Array.from({ length: 30 }, (_, t) => Array.from({ length: 40 }, (_, i) => `t${t}-${i}`))
+    const swarms = { ...swarmsOf(tabs), selected: 't28' }
+    const { session, port } = await connect(makeHost({ listSwarms: () => swarms, describe: (id) => ({ name: id, engine: 'claude', machine: 'M' }) }))
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(ofType(port, 'swarms')).toHaveLength(1))
+      const frame = ofType(port, 'swarms')[0] as { selected: string; items: Array<{ id: string; agentIds?: string[] }> }
+      expect(Buffer.byteLength(JSON.stringify(frame))).toBeLessThanOrEqual(8192 - 256)
+      expect(jsonTokens(frame)).toBeLessThanOrEqual(480)
+      expect(frame.selected).toBe('t28')
+      expect(frame.items.length).toBeLessThanOrEqual(24)
+      expect(frame.items.some((i) => i.id === 't28')).toBe(true)
+      for (const i of frame.items) expect((i.agentIds ?? []).length).toBeLessThanOrEqual(24)
+    } finally { await session.stop() }
+  })
+
+  it('pro hello gets full recap', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.summary('a1', 'Kết quả', 'Kết quả', false, false, answer)
+      const frame = ofType(port, 'summary').at(-1) as { full: string }
+      expect(frame.full.length).toBeLessThanOrEqual(1200)
+      expect(Buffer.byteLength(frame.full)).toBeLessThanOrEqual(3600)
+      expect(frame.full.endsWith('…')).toBe(true)
+      expect(frame.full).not.toContain('*')
+      expect(frame.full.startsWith('Kết quả từ0 từ1')).toBe(true)
+      // `recap` and `text` are what a round dial gets, unchanged.
+      expect(frame).toMatchObject({ recap: 'Kết quả', text: 'Kết quả' })
+      for (const f of port.frames) expect(f.length).toBeLessThanOrEqual(CABLE_MAX_FRAME)
+    } finally { await session.stop() }
+  })
+
+  it('pro hello reads the whole answer from the host when the card did not carry it', async () => {
+    const { session, port } = await connect(richHost({ recentSummaries: async () => [{ recap: 'r', text: 'b', fullText: 'The complete answer.' }] }))
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.summary('a1', 'r', 'b')
+      expect(ofType(port, 'summary').at(-1)).toMatchObject({ full: 'The complete answer.' })
+      // A stored turn that is not this one is not this one's answer.
+      await session.summary('a1', 'r', 'another body')
+      expect(ofType(port, 'summary').at(-1)).not.toHaveProperty('full')
+    } finally { await session.stop() }
+  })
+
+  it('pro hello carries full on restores and omits it when there is no text', async () => {
+    const history = [{ recap: 'r', text: 'b', fullText: answer }, { recap: 'old', text: 'old' }]
+    const { session, port } = await connect(richHost({ recentSummaries: async () => history }))
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(ofType(port, 'summary').filter((m) => m.restore).length).toBeGreaterThan(1))
+      const restores = ofType(port, 'summary').filter((m) => m.restore) as Array<{ recap: string; full?: string }>
+      expect(restores.find((m) => m.recap === 'r')!.full!.endsWith('…')).toBe(true)
+      expect(restores.find((m) => m.recap === 'old')).not.toHaveProperty('full')
+      for (const f of port.frames) expect(f.length).toBeLessThanOrEqual(CABLE_MAX_FRAME)
+    } finally { await session.stop() }
+  })
+
+  it('pro hello gets members', async () => {
+    const away: CableMachine = { id: 'm2', name: "Diego's Mac", state: 'offline', local: false }
+    const who: Record<string, { name: string; engine: string; machine: string }> = {
+      mine: { name: 'Devin', engine: 'claude', machine: LOCAL_ROW.name },
+      far: { name: 'Stylist', engine: 'codex', machine: "Diego's Mac" },
+    }
+    const swarms = swarmsOf([['mine', 'far', 'ghost']])
+    const { session, port } = await connect(makeHost({
+      listSwarms: () => swarms,
+      listMachines: async () => ({ machines: [LOCAL_ROW, away], source: 'backend' as const }),
+      describe: (id) => who[id],
+    }))
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(ofType(port, 'swarms')).toHaveLength(1))
+      const item = (ofType(port, 'swarms')[0] as { items: Array<Record<string, unknown>> }).items[0]
+      expect(item.agentIds).toEqual(['mine', 'far', 'ghost'])
+      // An id nobody has heard of has no entry; the rest say where they live, and whether that is reachable.
+      expect(item.members).toEqual([
+        { id: 'mine', name: 'Devin', engine: 'claude', machine: LOCAL_ROW.name, online: true },
+        { id: 'far', name: 'Stylist', engine: 'codex', machine: "Diego's Mac", online: false },
+      ])
+    } finally { await session.stop() }
+  })
+
+  it('pro hello sends every tab its ids, and a plain hello none', async () => {
+    const swarms = swarmsOf([['a', 'b'], ['c']])
+    const pro = await connect(makeHost({ listSwarms: () => swarms }))
+    pro.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', swarms: 'members-v1' })
+    await vi.waitFor(() => expect(ofType(pro.port, 'swarms')).toHaveLength(1))
+    expect((ofType(pro.port, 'swarms')[0] as { items: Array<{ id: string; agentIds: string[] }> }).items.map((i) => [i.id, i.agentIds]))
+      .toEqual([['t1', ['a', 'b']], ['t2', ['c']]])
+    await pro.session.stop()
+    const plain = await connect(makeHost({ listSwarms: () => swarms }))
+    plain.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(ofType(plain.port, 'swarms')).toHaveLength(1))
+    expect((ofType(plain.port, 'swarms')[0] as { items: Array<Record<string, unknown>> }).items)
+      .toEqual([{ id: 't1', name: 'Tab 1', agents: 2, panes: 2 }, { id: 't2', name: 'Tab 2', agents: 1, panes: 1 }])
+    await plain.session.stop()
+  })
+
+  it('a capability is a positive string match: anything else is off', async () => {
+    for (const value of [undefined, '', 'members-v2', 1, true, ['members-v1']]) {
+      const { session, port } = await connect(makeHost({ listSwarms: () => swarmsOf([['a']]) }))
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', swarms: value })
+      await vi.waitFor(() => expect(ofType(port, 'swarms')).toHaveLength(1))
+      expect((ofType(port, 'swarms')[0] as { items: Array<Record<string, unknown>> }).items[0]).not.toHaveProperty('agentIds')
+      await session.stop()
+    }
+  })
+
+  it('keeps the swarms frame under the cap, shrinking members, then ids, then to the selected tab', async () => {
+    const tabs = Array.from({ length: 24 }, (_, t) => Array.from({ length: 24 }, (_, i) => uuid(t * 100 + i)))
+    const swarms = { ...swarmsOf(tabs), selected: 't6' }
+    const describe = (id: string) => ({ name: `name of ${id}`.padEnd(60, 'x'), engine: 'claude', machine: 'A machine with a long name' })
+    const { session, port } = await connect(makeHost({ listSwarms: () => swarms, describe }))
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(ofType(port, 'swarms')).toHaveLength(1))
+      const frame = ofType(port, 'swarms')[0] as { items: Array<{ id: string; agents: number; agentIds?: string[]; members?: unknown[] }> }
+      for (const f of port.frames) expect(f.length).toBeLessThanOrEqual(CABLE_MAX_FRAME)
+      expect(frame.items).toHaveLength(24)
+      expect(frame.items.every((i) => i.members === undefined)).toBe(true)
+      expect(frame.items.find((i) => i.id === 't6')!.agentIds).toEqual(tabs[5])
+      expect(frame.items.find((i) => i.id === 't7')!.agentIds).toBeUndefined()
+      expect(frame.items.find((i) => i.id === 't7')!.agents).toBe(24)
+      expect(port.closedWith).toBeNull()
+    } finally { await session.stop() }
+  })
+
+  it('drops member names before ids when the frame is over the firmware\'s token budget', async () => {
+    const tabs = [0, 1].map((t) => Array.from({ length: 24 }, (_, i) => `agent-${t}-${i}`))
+    const describe = (id: string) => ({ name: `name of ${id}`, engine: 'claude', machine: 'A machine' })
+    const { session, port } = await connect(makeHost({ listSwarms: () => swarmsOf(tabs), describe }))
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(ofType(port, 'swarms')).toHaveLength(1))
+      const items = (ofType(port, 'swarms')[0] as { items: Array<Record<string, unknown>> }).items
+      expect(items.map((i) => i.agentIds)).toEqual(tabs)
+      expect(items.every((i) => i.members === undefined)).toBe(true)
+    } finally { await session.stop() }
+  })
+
+  it('pro hello pushes again when a member\'s machine goes offline or an agent moves', async () => {
+    let state: CableMachine['state'] = 'ready'
+    let swarms = swarmsOf([['far', 'b'], ['c']])
+    const { session, port } = await connect(makeHost({
+      listSwarms: () => swarms,
+      listMachines: async () => ({ machines: [LOCAL_ROW, { id: 'm2', name: 'Far', state, local: false }], source: 'backend' as const }),
+      describe: (id) => id === 'far' ? { name: 'Stylist', engine: 'codex', machine: 'Far' } : undefined,
+    }))
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(ofType(port, 'swarms')).toHaveLength(1))
+      state = 'offline'
+      await session.syncSwarms()
+      const sent = ofType(port, 'swarms') as Array<{ items: Array<{ members: Array<{ online: boolean }> }> }>
+      expect(sent).toHaveLength(2)
+      expect([sent[0].items[0].members[0].online, sent[1].items[0].members[0].online]).toEqual([true, false])
+      swarms = swarmsOf([['b', 'far'], ['c']])      // a reorder inside the tab: same counts, same shape
+      await session.syncSwarms()
+      expect(ofType(port, 'swarms')).toHaveLength(3)
+    } finally { await session.stop() }
+  })
+
+  it('pro hello gets the library, 6 rows a page', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(port.types()).toContain('player.library'))
+      expect(port.sent[0].features).toContain('player.library')
+      const first = ofType(port, 'player.library')[0] as { rows: unknown[] }
+      expect(first).toMatchObject({ total: 71, offset: 0, request: 0 })
+      expect(first.rows).toHaveLength(6)
+      port.say({ t: 'player.library.get', offset: 65, request: 3 })
+      await vi.waitFor(() => expect(ofType(port, 'player.library').at(-1)).toMatchObject({ offset: 65, request: 3 }))
+      const page = ofType(port, 'player.library').at(-1)!
+      expect((page.rows as Array<{ id: string }>).map((r) => r.id)).toEqual(library.slice(65).map((r) => r.id))
+      expect(ofType(port, 'agent')).not.toContainEqual(expect.objectContaining({ id: 'session-70' }))
+      expect(Math.max(...port.frames.map((f) => f.length))).toBeLessThan(CABLE_MAX_FRAME)
+    } finally { await session.stop() }
+  })
+
+  it('library rows say working or question while this daemon has seen the turn live, the host status after', async () => {
+    const { session, port } = await connect(richHost())
+    const statusOf = (id: string) => ((ofType(port, 'player.library').at(-1)!.rows as Array<{ id: string; status: string }>)
+      .find((r) => r.id === id))?.status
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(port.types()).toContain('player.library'))
+      expect(statusOf('session-0')).toBe('paused')
+      await session.turnStarted('session-0')
+      await session.turnStep('session-1', 'Read · a.ts')
+      await session.syncPlayerLibrary(true)
+      expect([statusOf('session-0'), statusOf('session-1')]).toEqual(['working', 'working'])
+      await session.question('session-0', 'q1', [{ key: 'k', q: 'Go?', options: ['Yes'] }])
+      await session.syncPlayerLibrary(true)
+      expect(statusOf('session-0')).toBe('question')
+      await session.questionClose('session-0', 'q1')
+      await session.syncPlayerLibrary(true)
+      expect(statusOf('session-0')).toBe('working')        // answered: the turn goes on
+      await session.summary('session-0', 'Sub done.', 'Sub done.', false, true)
+      await session.syncPlayerLibrary(true)
+      expect(statusOf('session-0')).toBe('working')        // a sub-agent's end is not the turn's
+      await session.turnDone('session-0')
+      await session.turnError('session-1', 'boom')
+      await session.syncPlayerLibrary(true)
+      expect([statusOf('session-0'), statusOf('session-1')]).toEqual(['paused', 'paused'])
+    } finally { await session.stop() }
+  })
+
+  it('ignores a malformed library request, and the capability resets with the port', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(port.types()).toContain('player.library'))
+      const before = ofType(port, 'player.library').length
+      for (const bad of [{ offset: -1, request: 1 }, { offset: 1_000_001, request: 1 }, { offset: 0, request: 4294967296 }, { offset: 1.5, request: 1 }, { offset: 0 }]) {
+        port.say({ t: 'player.library.get', ...bad })
+      }
+      await settle()
+      expect(ofType(port, 'player.library')).toHaveLength(before)
+      await port.close('reconnect')
+    } finally { await session.stop() }
+    // A round dial on the next connection is not served the library, whatever the last one asked.
+    const round = await connect(richHost())
+    try {
+      round.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(round.port.types()).toContain('notif.replace'))
+      round.port.say({ t: 'player.library.get', offset: 0, request: 1 }); await settle()
+      expect(round.port.types()).not.toContain('player.library')
+    } finally { await round.session.stop() }
+  })
+
+  it('offers the library only when the host can list it', async () => {
+    const { session, port } = await connect(makeHost())
+    try {
+      port.say(PRO_HELLO)
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      expect(port.sent[0].features).not.toContain('player.library')
+      expect(port.types()).not.toContain('player.library')
+    } finally { await session.stop() }
   })
 })

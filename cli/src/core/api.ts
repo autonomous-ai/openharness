@@ -1,3 +1,4 @@
+import type { PreparedHandoff, HandoffPermit, HandoffOutcome } from '../lib/handoffAuthority.js'
 import type { AgentTokenUsage, AgentUsageTarget } from '../lib/agentUsageWire.js'
 import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAssignmentWire.js'
 /**
@@ -39,7 +40,6 @@ import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
 import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
 import { VIEWER_UP_TYPES } from '../lib/viewerFrames.js'
 import type { RouteAnswer } from '../localWsServer.js'
-import type { SwarmPromptScopes } from '../teams/promptScope.js'
 import type { DeviceInputStatus } from './deviceInput.js'
 import { FAIL, later, readFallback, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
 
@@ -86,6 +86,7 @@ export const TERMINALS_OFF: TerminalsPort = {
 /** Read-only conversation facts for the handoff in the edge host. Each lookup asks the core now;
  * a stopped record is never replaced by a stale live-agent list in another process. */
 export interface ConversationReads {
+  publish(prepared: PreparedHandoff, permit: HandoffPermit): Promise<HandoffOutcome>
   /** A live agent by agent/session id, otherwise the stopped record by agent id. */
   resolve(id: string): Promise<RegisteredSession | null>
   recentAsks(sessionId: string, n: number): Promise<string[]>
@@ -99,6 +100,7 @@ export interface ConversationReads {
 
 /** No retained record or history, no discovered session and no permission to read a guessed path. */
 export const CONVERSATIONS_OFF: ConversationReads = {
+  publish: async () => { throw new Error('handoff publication is unavailable') },
   resolve: async () => null,
   recentAsks: async () => [],
   lastFullText: async () => null,
@@ -164,6 +166,9 @@ export interface CoreApi {
     /** What a live Claude Code or Codex agent's pane footer says it is doing ("Reading 3 files"), or null:
      *  the dial's working card. The pane is read by the core; only the line leaves it. */
     activityText(agentId: string): Promise<string | null>
+    /** `activityText` with the footer's timer, for a Harness Pro. Absent in a
+     *  core that cannot read them; the dial then gets the footer alone. */
+    activitySnapshot?(agentId: string): Promise<{ text: string; elapsedSeconds?: number } | null>
   }
   /** A device's or another machine's turns for an agent on this one: the doors the web and the hooks use. */
   turns: {
@@ -176,12 +181,12 @@ export interface CoreApi {
     recent(agentId: string, n: number): Promise<RecentTurn[]>
     /** The person's own last questions to a live agent, newest first. */
     asks(agentId: string): Promise<string[]>
-    /** Deliver text into a live agent under a delivery id of the caller's own, as the Wi-Fi device, a team
-     *  and the orchestrator deliver their turns: one path for the three. What becomes of it is heard through
+    /** Deliver text into a live agent under a delivery id of the caller's own, as the Wi-Fi device, Agent
+     *  Messages and the orchestrator deliver their turns: one path for the three. What becomes of it is heard through
      *  `onDelivery`, under the same id. */
     deliver(agentId: string, text: string, deliveryId: string): void
     /** Take back a delivery not yet being written: true when it was, and it never will be; false for one
-     *  the agent's pane is already taking. Answered at once, as the teams and the orchestrator read it in
+     *  the agent's pane is already taking. Answered at once, as the orchestrator reads it in
      *  line: in a service's own process the core is asked and the answer cannot wait, so it is false there,
      *  and a delivery the core did take back is then heard `rejected` (`cancelled`). */
     cancelDelivery(deliveryId: string): boolean
@@ -232,7 +237,7 @@ export interface CoreApi {
      *  until the first one lands. */
     machineName(): string | null
     /** A read or write of the account's backend, signed in by the core (`proxyBackend`): an experiment's
-     *  account-wide settings (Tab collaboration's tab channels). A failure is an answer: 502, 504, 401. */
+     *  account-wide settings (Agent Messages' tabs). A failure is an answer: 502, 504, 401. */
     backend(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }>
     /** Hear the account's changes the backend announces (`desk_changed`, …). Returns how to stop hearing. */
     onNotice(listener: (notice: BackendNotice) => void): () => void
@@ -530,9 +535,9 @@ export const SHARE_REQUESTS = [
   'harness_share_comments', 'harness_share_comment_post', 'harness_share_comment_remove',
 ] as const
 
-/** Tab collaboration and teams (services/collaboration.ts): the teams' own requests, from the apps, from `harness team`
- *  in an agent's shell and from the other machines' teams. */
-export const TEAMS_REQUESTS = ['team', 'team_delivery'] as const
+/** Agent Messages (services/messages.ts, messages/service.ts): from `harness send` in an agent's pane, from the
+ *  owner's other machines and from the windows. */
+export const MESSAGES_REQUESTS = ['agent_messages'] as const
 
 /**
  * The experiments: services that cost nothing until they are on (docs/design/2026-10-06-core-boundary-next.md,
@@ -549,9 +554,8 @@ export const TEAMS_REQUESTS = ['team', 'team_delivery'] as const
  */
 export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[]; state: readonly string[] }>> = {
   orchestrator: { requests: ORCHESTRATOR_REQUESTS, state: ['orchestrator/*.json'] },
-  // Tab collaboration and teams, beside the prompt scopes in the teams' process (harnessd/services.ts). Its
-  // ledgers and mailboxes: a team was made here, or another machine's team delivered to an agent here.
-  collaboration: { requests: TEAMS_REQUESTS, state: ['teams'] },
+  // Agent Messages. Its history and waiting deliveries: a message was sent from here or delivered to an agent here.
+  messages: { requests: MESSAGES_REQUESTS, state: ['agent-messages'] },
   // Its invitations and links: a harness was shared from here.
   sharing: { requests: SHARE_REQUESTS, state: ['harness-shares.json', 'harness-collaboration.json'] },
   // Request-only, on from its first request until the daemon stops: another machine's Memories pane asks, and
@@ -806,35 +810,14 @@ export interface WorkspacesPort {
 /** What the core gets when workspaces fails: branches keep their names and nothing is swept. */
 export const WORKSPACES_FALLBACKS: PortFallbacks<WorkspacesPort> = { nameBranches: undefined, sweepUnused: undefined }
 
-/** The prompt scopes whole: the core's calls, which team a prompt belongs to, recorded as a message is
- *  written, as a turn starts (from its hook or its transcript), as it is typed into a scoped terminal, and
- *  forgotten with its agent; and the team a prompt came from (`current`), which an agent's answer to a
- *  team's question moves back (`replied`). In the core's process the teams service's own; in their own,
- *  core/teamsLink.ts. */
-export type PromptScopes = Pick<SwarmPromptScopes, 'prepare' | 'started' | 'raw' | 'forget' | 'current' | 'replied'>
-
-/** The core's calls into the teams: the prompt scopes' records, and whether a team's delivery still holds
- *  the agent's pane, asked in line as its turn is written (core/input.ts). */
-export type TeamsPort = Pick<PromptScopes, 'prepare' | 'started' | 'raw' | 'forget'> & {
+/** The core's call into Agent Messages: whether one of its typed deliveries (a `team:` id) may still be written,
+ *  asked in line as it is written (core/input.ts). */
+export interface MessagesPort {
   canWrite(deliveryId: string): boolean
 }
 
-/** What the core gets when the teams fail: the prompt is written with no team recorded for it, and a team's
- *  delivery holds no pane (it waits, unwritten). */
-export const TEAMS_FALLBACKS: PortFallbacks<TeamsPort> = { prepare: () => {}, started: undefined, raw: undefined, forget: undefined, canWrite: false }
-
-
-/** A change to the prompt scopes, as the core tells the teams' own process (core/teamsLink.ts,
- *  services/teamsProcess.ts): numbered within one core's life, stamped with when it happened, and
- *  given to the process in order, once. `raw` bytes travel as base64. */
-export type TeamsEvent = { seq: number; core: string; at: number; agentId: string } & (
-  | { kind: 'prepare'; text: string; tabId?: string; deliveryId?: string }
-  | { kind: 'unprepare'; of: number }
-  | { kind: 'started'; text: string; source: 'hook' | 'transcript'; engine?: string }
-  | { kind: 'raw'; bytes: string; tabId?: string; pasted: boolean }
-  | { kind: 'forget' }
-  | { kind: 'replied'; teamId: string; questionId: string }
-)
+/** What the core gets when Agent Messages fails: none of its deliveries may be written (each waits, unwritten). */
+export const MESSAGES_FALLBACKS: PortFallbacks<MessagesPort> = { canWrite: false }
 
 /** What a delivered turn answers: delivered, or refused with the machine's name and a reason a person can read. */
 export type SendResult = { ok: true } | { ok: false; machine: string; reason: string }
@@ -1321,7 +1304,7 @@ export interface CorePorts {
   viewers: ViewersPort | null
   models: ModelsPort | null
   workspaces: WorkspacesPort | null
-  teams: TeamsPort | null
+  messages: MessagesPort | null
   devices: DevicesPort | null
   wifi: WifiPort | null
   monitor: MonitorPort | null
@@ -1331,7 +1314,7 @@ export interface CorePorts {
 }
 
 export function emptyPorts(): CorePorts {
-  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null }
+  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null }
 }
 
 export interface CoreApiDeps {
@@ -1368,6 +1351,7 @@ export interface CoreApiDeps {
   questions: CoreApi['questions']
   machine: CoreApi['machine']
   activityText: CoreApi['agents']['activityText']
+  activitySnapshot?: CoreApi['agents']['activitySnapshot']
   signedIn: CoreApi['account']['signedIn']
   environment: CoreApi['account']['environment']
   machines: CoreApi['account']['machines']
@@ -1390,7 +1374,7 @@ export interface CoreApiDeps {
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, observer, privateGridName, machineName, backend, onNotice,
-  runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText,
+  runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, lastTurn, turnCard, turnSummary,
   log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
@@ -1422,6 +1406,7 @@ export function createCoreApi({
       create,
       dsh,
       activityText,
+      activitySnapshot,
     },
     turns,
     questions,

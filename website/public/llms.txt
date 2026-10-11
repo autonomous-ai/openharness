@@ -1,0 +1,42 @@
+# Harness
+
+> Harness runs coding agents (Claude Code, Codex and others) in terminal sessions called harnesses, on the person's own computers, and shows every one in its desktop, web and phone apps. An agent can start harnesses from its shell, wait for them, read their answers, message them and close them, while the person watches.
+
+Install on macOS or Linux, then start it. No account is needed for harnesses on this computer:
+
+```
+curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
+harness start
+```
+
+The commands an agent uses:
+
+```
+harness ps [--all]                                  # the harnesses here: state, who started each, what each is about
+harness new [agent] [@machine] [folder] --name NAME -- TASK
+harness wait NAME[,NAME…] [--any] [--timeout 30m]   # exits 0 idle, 3 needs the person, 4 stopped or gone, 124 timed out
+harness show NAME [--chars N]                       # its state, the last ask and its answer
+harness send NAME "text"                            # a follow-up to one you started, from inside a harness
+harness close NAME [--now]                          # save its screen and stop it; the conversation is kept
+```
+
+`harness mcp` serves the same as MCP tools over stdio (command `harness`, arguments `["mcp"]`): `harness_list`, `harness_start`, `harness_wait`, `harness_read`, `harness_close`, and `harness_send` inside a harness.
+
+Start a harness for work that can run beside yours, needs another agent's view (a review, a second opinion from Codex), takes long, or belongs in its own folder; do small, quick work yourself. List first, name every harness, then wait, read and close it. Give work only to harnesses you started, and close only those; never answer a harness's question or permission prompt, and never ask one to publish, deploy, delete or push. An agent outside Harness (Claude Code or Codex in a terminal app or editor) is recognized by its session: it gets the same limits, may close only what its session started, and cannot be messaged.
+
+## For agents
+
+- [Harness for agents](https://harness.autonomous.ai/agents): install, every command with examples and exit codes, the MCP tools, running agents in parallel, waiting for a background agent, handing a task to Codex
+- [The harness skill](https://raw.githubusercontent.com/autonomous-ai/openharness/main/plugins/harness/skills/harness/SKILL.md): instructions for Claude Code, Codex and any agent that reads SKILL.md
+- [Claude Code and Codex plugin](https://github.com/autonomous-ai/openharness/tree/main/plugins/harness): for Claude Code, `claude plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins`, then `claude plugin install harness@openharness` (in a session: `/plugin marketplace add autonomous-ai/openharness`, then `/plugin install harness@openharness`); for Codex, `codex plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin --sparse plugins`, then `codex plugin add harness@openharness`
+
+## Docs
+
+- [README](https://github.com/autonomous-ai/openharness/blob/main/README.md): what Harness is and how to start
+- [The CLI](https://github.com/autonomous-ai/openharness/blob/main/cli/README.md): the harness command and the daemon behind it
+- [Download](https://harness.autonomous.ai/download): the desktop app and the CLI
+
+## Optional
+
+- [How the agent commands work](https://github.com/autonomous-ai/openharness/blob/main/docs/design/2026-10-11-agent-client.md): the design, its limits and why
+- [Source](https://github.com/autonomous-ai/openharness): the whole of Harness, MIT licensed

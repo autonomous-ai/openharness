@@ -26,6 +26,7 @@ class _App extends AppNotifier {
       authMode: MachineAuthMode.remote,
       name: 'Office',
     );
+    currentUser = const CurrentUserProfile(id: 'u1', email: 'u1@example.com');
     machines = [machine];
     machineStates['m'] = MachineState(machine)
       ..nodeOnline = true
@@ -57,12 +58,16 @@ class _App extends AppNotifier {
 
   TaskRouteDecision? Function(String text)? decision;
 
+  /// Holds the decision until it completes, when set.
+  Future<void>? later;
+
   @override
   Future<TaskRouteDecision?> routeDecide(
     String text,
     TaskRouteChoices choices,
   ) async {
     payloads.add(choices.toPayload());
+    await later;
     if (decision case final decide?) return decide(text);
     final answer = reply(text);
     return answer == null ? null : TaskRouteDecision.fromJson(answer, choices);
@@ -224,11 +229,13 @@ Agent _agent(
 );
 
 void main() {
-  test('the router is offered live sessions on reachable machines, newest first, forty at most', () {
+  test('the router is offered sessions on reachable machines: live ones first, newest first, eighty at most', () {
     final app = _App();
     addTearDown(app.dispose);
     app.machineStates['m']!.agents = [
-      for (var i = 0; i < 50; i++) _agent('a$i', minutesAgo: i),
+      // A stopped session more recent than every live one still comes after them.
+      _agent('recent', status: 'stopped', sessionId: 'c-r', minutesAgo: 0),
+      for (var i = 0; i < 90; i++) _agent('a$i', minutesAgo: i + 1),
       _agent('stopped', status: 'stopped'),
       const Agent(
         id: 'sh',
@@ -250,7 +257,15 @@ void main() {
       app,
       now: _now,
     ).sessions.values.map((s) => s.agentId).toList();
-    expect(ids, [for (var i = 0; i < 40; i++) 'a$i']);
+    expect(ids, [for (var i = 0; i < 80; i++) 'a$i']);
+    app.machineStates['m']!.agents = [
+      _agent('recent', status: 'stopped', sessionId: 'c-r', minutesAgo: 0),
+      for (var i = 0; i < 3; i++) _agent('a$i', minutesAgo: i + 1),
+    ];
+    expect(
+      taskRouteChoices(app, now: _now).sessions.values.map((s) => s.agentId),
+      ['a0', 'a1', 'a2', 'recent'],
+    );
   });
 
   test('a stopped session is offered for a week, when it can resume its own conversation', () {
@@ -292,16 +307,22 @@ void main() {
       app,
       now: _now,
     ).sessions.values.map((s) => s.agentId).toList();
-    expect(ids, ['tuesday', 'live']);
-    // Jev is told it is stopped, and since when; a live one says nothing of the kind.
+    // Live first, whatever is more recent.
+    expect(ids, ['live', 'tuesday']);
+    // Jev is told it is stopped, and since when; a live one says nothing of the kind. Each says where it
+    // runs, and which conversation it is.
     final sent = {
       for (final row
           in taskRouteChoices(app, now: _now).toPayload()['sessions'] as List)
-        (row as Map)['id']: row['stoppedAgoMs'],
+        (row as Map)['id']: (
+          row['stoppedAgoMs'],
+          row['machine'],
+          row['conversation'],
+        ),
     };
     expect(sent, {
-      'm\ntuesday': const Duration(days: 4).inMilliseconds,
-      'm\nlive': null,
+      'm\ntuesday': (const Duration(days: 4).inMilliseconds, 'Office', 'c-1'),
+      'm\nlive': (null, 'Office', null),
     });
     // A machine whose clock runs ahead still reads as stopped, never as live.
     final ahead = taskRouteChoices(
@@ -428,10 +449,11 @@ void main() {
     expect(app.sent, [('m', 'a0', "what's the D3 retention rate")]);
     expect(app.routed, isEmpty);
     expect(app.lastRoutedTask?.id, _session);
-    // The receipt names who took it, then the card goes.
-    expect(find.text('Analyze Harness usage data'), findsOneWidget);
-    await tester.pumpAndSettle(const Duration(seconds: 1));
+    // No receipt in the box: it goes at once, and the pane the words landed in lights.
+    await tester.pump();
     expect(find.byType(TextField), findsNothing);
+    expect(app.paneLanding.value?.agentId, 'a0');
+    expect(app.paneLanding.value?.machineId, 'm');
     expect(await result(), isNull);
   });
 
@@ -541,18 +563,28 @@ void main() {
     expect(app.routed, isEmpty);
   });
 
-  testWidgets('Return during the receipt does not send the task again', (
-    tester,
-  ) async {
-    final (app, _) = await _open(tester);
-    app.reply = (_) => {'decided': 'session', 'id': _session, 'via': 'jev'};
-    await _say(tester, "what's the D3 retention rate");
-    expect(app.sent, hasLength(1));
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pump();
-    await tester.pumpAndSettle(const Duration(seconds: 1));
-    expect(app.sent, hasLength(1));
-  });
+  testWidgets(
+    'Return pressed again while it decides does not send the task twice',
+    (tester) async {
+      final (app, _) = await _open(tester);
+      final answer = Completer<Map<String, dynamic>?>();
+      app.decision = null;
+      app.later = answer.future;
+      app.reply = (_) => {'decided': 'session', 'id': _session, 'via': 'jev'};
+      await tester.enterText(
+        find.byType(TextField),
+        "what's the D3 retention rate",
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      answer.complete(null);
+      await tester.pumpAndSettle();
+      expect(app.sent, hasLength(1));
+      expect(app.payloads, hasLength(1));
+    },
+  );
 
   testWidgets('Esc while the pane comes forward stops the send', (
     tester,
@@ -644,6 +676,119 @@ void main() {
     final plan = await result!;
     expect(plan?.prompt, '/loop plot signups by week');
     expect(reports, ['taken']);
+  });
+
+  group('recent prompts', () {
+    Future<_App> withHistory(WidgetTester tester, List<String> said) async {
+      final (app, _) = await _open(tester);
+      for (final prompt in said.reversed) {
+        await app.taskHistory.add(prompt, account: 'u1');
+      }
+      // The box draws them once read.
+      await tester.pump();
+      return app;
+    }
+
+    testWidgets('an empty box offers the latest six, newest first', (
+      tester,
+    ) async {
+      final app = await withHistory(tester, [
+        for (var i = 0; i < 8; i++) 'task $i',
+      ]);
+      // Reopened, so the box reads the history it now has.
+      Navigator.of(tester.element(find.byType(TextField))).pop();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      for (var i = 0; i < 6; i++) {
+        expect(find.text('task $i'), findsOneWidget);
+      }
+      expect(find.text('task 6'), findsNothing);
+      expect(app.payloads, isEmpty);
+    });
+
+    testWidgets('typing narrows them to the ones that fit', (tester) async {
+      await withHistory(tester, [
+        'what is the d3 retention rate',
+        'also add tests for the parser',
+      ]);
+      await tester.enterText(find.byType(TextField), 'retention');
+      await tester.pump();
+      expect(find.text('what is the d3 retention rate'), findsOneWidget);
+      expect(find.text('also add tests for the parser'), findsNothing);
+    });
+
+    testWidgets(
+      'a recent prompt clicked is said again, decided on the desk now',
+      (tester) async {
+        final app = await withHistory(tester, ['ship the retention chart']);
+        app.reply = (_) => {'decided': 'session', 'id': _session, 'via': 'jev'};
+        await tester.enterText(find.byType(TextField), 'ship');
+        await tester.pump();
+        await tester.tap(find.text('ship the retention chart'));
+        await tester.pump();
+        await tester.pump();
+        expect(app.sent, [('m', 'a0', 'ship the retention chart')]);
+      },
+    );
+
+    testWidgets(
+      'down and Return say the one picked; Return alone says what is typed',
+      (tester) async {
+        final app = await withHistory(tester, [
+          'plot signups by week',
+          'ship the chart',
+        ]);
+        app.reply = (_) => {'decided': 'session', 'id': _session, 'via': 'jev'};
+        await tester.enterText(find.byType(TextField), 'by week');
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump();
+        await tester.pump();
+        expect(app.sent.single.$3, 'plot signups by week');
+      },
+    );
+
+    testWidgets(
+      'a prompt of several lines keeps its arrows for its own lines',
+      (tester) async {
+        await withHistory(tester, ['deploy the dev firmware']);
+        await tester.enterText(find.byType(TextField), 'deploy\n');
+        await tester.pump();
+        expect(find.text('deploy the dev firmware'), findsNothing);
+      },
+    );
+
+    testWidgets('another account signed in here sees none of them', (
+      tester,
+    ) async {
+      final app = await withHistory(tester, ['a private prompt']);
+      app.currentUser = const CurrentUserProfile(
+        id: 'u2',
+        email: 'u2@example.com',
+      );
+      Navigator.of(tester.element(find.byType(TextField))).pop();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      expect(find.text('a private prompt'), findsNothing);
+    });
+
+    testWidgets(
+      'Return with nothing picked sends what is typed, and remembers it',
+      (tester) async {
+        final app = await withHistory(tester, ['plot signups by week']);
+        app.reply = (_) => {'decided': 'session', 'id': _session, 'via': 'jev'};
+        await _say(tester, 'plot');
+        expect(app.sent.single.$3, 'plot');
+        expect(app.taskHistory.recentFor('u1'), [
+          'plot',
+          'plot signups by week',
+        ]);
+      },
+    );
   });
 
   testWidgets('a daemon without the router leaves the card as it was', (

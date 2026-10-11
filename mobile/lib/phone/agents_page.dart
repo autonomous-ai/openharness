@@ -21,7 +21,6 @@ import 'phone_navigation.dart';
 import 'phone_sheet.dart';
 import 'phone_status.dart';
 import 'status_pill.dart';
-import 'team_page.dart';
 
 /// One machine's agents. A tap opens that agent full screen, and it is the only one open.
 class AgentsPage extends StatelessWidget {
@@ -103,17 +102,6 @@ class AgentsPage extends StatelessWidget {
       context,
       title: machine.machine.displayName,
       actions: [
-        if (linked)
-          PhoneSheetAction(
-            icon: LucideIcons.users300,
-            label: 'Swarms',
-            chevron: true,
-            onTap: () => Navigator.of(context).push(
-              phoneRoute(
-                (_) => TeamPage(notifier: notifier, machineId: machineId),
-              ),
-            ),
-          ),
         PhoneSheetAction(
           icon: LucideIcons.refreshCw300,
           label: 'Reload harnesses',

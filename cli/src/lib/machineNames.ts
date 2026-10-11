@@ -17,6 +17,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { hostname } from 'node:os'
+import { harnessdEnv } from './harnessdEnv.js'
 
 export const MACHINE_NAMES_KEPT = 16
 
@@ -85,4 +86,4 @@ export function hostnameReader(file: string | undefined): () => string {
 }
 
 /** The daemon's: what its title sweep and its tmux panes read, and what titles are refused as. */
-export const machineNames = createMachineNames(hostnameReader(process.env.HARNESSD_TEST_HOSTNAME_FILE))
+export const machineNames = createMachineNames(hostnameReader(harnessdEnv().HARNESSD_TEST_HOSTNAME_FILE))

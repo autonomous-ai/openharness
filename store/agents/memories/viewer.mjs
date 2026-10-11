@@ -1,7 +1,8 @@
 /**
  * The Memories pane: a loopback server that reads every agent's memory and the session index, and
- * serves one page to browse them. It never writes anything an agent owns and needs no model: opening
- * the pane sends no prompt. The only file it writes is the pane header's verdict.
+ * serves one page to see them: Sense of Self, About You held up by every memory (viewer/self.js). It
+ * never writes anything an agent owns and needs no model: opening the pane sends no prompt. The only
+ * file it writes is the pane header's verdict.
  *
  * While a pane is connected it looks again every few seconds and pushes a new snapshot when anything
  * changed — an agent saved a memory, the About You was rebuilt, you finished a turn somewhere.
@@ -16,7 +17,7 @@ import { homes } from './lib/agents.mjs'
 import { noteSeen, writeAbout } from './lib/about.mjs'
 import { DEFAULT_CHOICE_AT, deliver } from './lib/deliver.mjs'
 import { askMachines, merge, newestChoice, syncAbout, syncChoice } from './lib/fleet.mjs'
-import { search } from './lib/sessions.mjs'
+import { around, asks, headings, search } from './lib/sessions.mjs'
 import { closeIndex, fingerprint, sessionIndex, snapshot as takeSnapshot, writeVerdict } from './lib/state.mjs'
 
 const PACKAGE = dirname(fileURLToPath(import.meta.url))
@@ -24,10 +25,16 @@ const ASSETS = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/app.css': ['app.css', 'text/css; charset=utf-8'],
-  '/markdown.js': ['markdown.js', 'text/javascript; charset=utf-8'],
-  '/fuzzy.js': ['fuzzy.js', 'text/javascript; charset=utf-8'],
-  '/heatmap.js': ['heatmap.js', 'text/javascript; charset=utf-8'],
+  '/self.css': ['self.css', 'text/css; charset=utf-8'],
+  '/self.js': ['self.js', 'text/javascript; charset=utf-8'],
+  '/self-model.js': ['self-model.js', 'text/javascript; charset=utf-8'],
+  '/loop.js': ['loop.js', 'text/javascript; charset=utf-8'],
+  '/memory-data.js': ['memory-data.js', 'text/javascript; charset=utf-8'],
 }
+// What /api/asks answers: the person's latest messages, cut short. Fixed, not asked for: a page can
+// never read more of what the person typed than the scene draws as mist.
+export const ASKS_LIMIT = 4000
+export const ASKS_CHARS = 400
 const STOP = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'your', 'you', 'are', 'not', 'but', 'use', 'when', 'what', 'how', 'why', 'all', 'any', 'one', 'its', 'has', 'have', 'was', 'were', 'out', 'new', 'via', 'per'])
 
 /**
@@ -189,10 +196,66 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
     timer = setTimeout(async () => { await look(); schedule() }, intervalMs)
   }
 
+  // This machine's id as the bridge names it: asked once, and again after a failure.
+  let hereId = null
+  async function thisMachine() {
+    if (hereId) return hereId
+    const report = await fleet.machinesReport()
+    hereId = report?.machines?.find((machine) => machine.current)?.machineId ?? null
+    return hereId
+  }
+
+  /**
+   * Conversations, found by the same search as Cmd-P: the daemon's session index service (`session_search`),
+   * so the same words find the same sessions in both. Measured on one Mac's 9,928 messages (2026-10-10), this
+   * package's own search wanted every word in one turn, ranked tool output like what the person said, and
+   * found nothing for a question ("what did i decide about pricing": one unrelated session); the daemon's
+   * found twelve, from what the person asked. Its hits are labeled from the index here. The package's own
+   * search stays for a daemon that cannot answer (none running, or too old) and for related conversations,
+   * which want any of the words rather than all.
+   */
   async function sessionSearch(text, options) {
+    if (fleet && !options.any) {
+      try {
+        const here = await thisMachine()
+        const answer = here ? await fleet.request(here, 'session_search', { query: text, limit: options.limit }, { timeoutMs: 5000 }) : null
+        if (Array.isArray(answer?.hits)) return { hits: await labeled(answer.hits) }
+      } catch { hereId = null }
+    }
     const index = await sessionIndex(homes(env, home))
     if (!index.db) return { hits: [], error: index.error }
     try { return { hits: search(index.db, text, options) } } catch (error) { return { hits: [], error: String(error?.message ?? error) } }
+  }
+
+  /** The daemon's hits in this viewer's shape, titled and placed from the index. */
+  async function labeled(hits) {
+    const index = await sessionIndex(homes(env, home))
+    let known = new Map()
+    try { if (index.db) known = headings(index.db, hits.map((hit) => hit?.sessionId)) } catch { /* unlabeled is still found */ }
+    return hits.filter((hit) => typeof hit?.sessionId === 'string').map((hit) => {
+      const heading = known.get(hit.sessionId)
+      return {
+        sessionId: hit.sessionId, turn: Number.isInteger(hit.turn) ? hit.turn : -1, at: hit.at ?? hit.lastAt ?? null, engine: String(hit.engine ?? ''),
+        title: String(hit.external?.title || heading?.title || heading?.header || ''), cwd: String(hit.external?.cwd || heading?.cwd || ''),
+        snippet: String(hit.snippet ?? '').replace(/\s+/g, ' ').slice(0, 400),
+      }
+    })
+  }
+
+  /** What was said around where a search found a conversation: read from the index, never a transcript. */
+  async function conversation(sessionId, turn) {
+    const index = await sessionIndex(homes(env, home))
+    if (!index.db) return { turns: [], error: index.error }
+    try {
+      const [heading] = headings(index.db, [sessionId]).values()
+      return { sessionId, title: heading?.title || heading?.header || '', cwd: heading?.cwd ?? '', turns: around(index.db, sessionId, turn) }
+    } catch (error) { return { turns: [], error: String(error?.message ?? error) } }
+  }
+
+  async function recentAsks() {
+    const index = await sessionIndex(homes(env, home))
+    if (!index.db) return { asks: [], error: index.error }
+    try { return { asks: asks(index.db, { limit: ASKS_LIMIT, maxChars: ASKS_CHARS }) } } catch (error) { return { asks: [], error: String(error?.message ?? error) } }
   }
 
   const server = createServer(async (req, res) => {
@@ -228,7 +291,19 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
       }
       if (url.pathname === '/api/search') {
         const q = (url.searchParams.get('q') ?? '').slice(0, 200)
-        json(res, 200, { q, ...(await sessionSearch(q, { limit: 12 })) })
+        json(res, 200, { q, ...(await sessionSearch(q, { limit: 20 })) })
+        return
+      }
+      if (url.pathname === '/api/conversation') {
+        const sessionId = (url.searchParams.get('sessionId') ?? '').slice(0, 200)
+        const turn = Number.parseInt(url.searchParams.get('turn') ?? '', 10)
+        json(res, 200, sessionId ? await conversation(sessionId, Number.isInteger(turn) ? turn : null) : { turns: [] })
+        return
+      }
+      if (url.pathname === '/api/asks') {
+        // Your own latest messages, the mist over the lake (viewer/memory-data.js). Takes no
+        // parameters: how many and how long is fixed here.
+        json(res, 200, { limit: ASKS_LIMIT, maxChars: ASKS_CHARS, ...(await recentAsks()) })
         return
       }
       if (url.pathname === '/api/related') {

@@ -1,0 +1,102 @@
+{
+  "linux": {
+    "events": [
+      [
+        "terminal",
+        true
+      ],
+      [
+        "terminal",
+        true
+      ],
+      [
+        "observed",
+        42
+      ],
+      [
+        "terminal",
+        true
+      ],
+      [
+        "terminal",
+        true
+      ],
+      [
+        "terminal",
+        true
+      ],
+      [
+        "terminal",
+        true
+      ],
+      [
+        "dormant",
+        "engine process absent after 2 confirmed scans"
+      ],
+      [
+        "terminal",
+        false
+      ],
+      [
+        "removed",
+        "terminal runtime absent after 2 confirmed scans"
+      ]
+    ],
+    "active": false,
+    "processIdentity": {
+      "pid": 42,
+      "executable": "/fixture/bin/codex",
+      "startMarker": "fixture-start"
+    }
+  },
+  "darwin": {
+    "events": [
+      [
+        "terminal",
+        true
+      ],
+      [
+        "terminal",
+        true
+      ],
+      [
+        "observed",
+        42
+      ],
+      [
+        "terminal",
+        true
+      ],
+      [
+        "terminal",
+        true
+      ],
+      [
+        "terminal",
+        true
+      ],
+      [
+        "terminal",
+        true
+      ],
+      [
+        "dormant",
+        "engine process absent after 2 confirmed scans"
+      ],
+      [
+        "terminal",
+        false
+      ],
+      [
+        "removed",
+        "terminal runtime absent after 2 confirmed scans"
+      ]
+    ],
+    "active": false,
+    "processIdentity": {
+      "pid": 42,
+      "executable": "/fixture/bin/codex",
+      "startMarker": "fixture-start"
+    }
+  }
+}

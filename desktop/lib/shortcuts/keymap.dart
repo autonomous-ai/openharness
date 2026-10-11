@@ -212,7 +212,12 @@ class KeymapConfig {
       }
       final command = row['command'];
       // Retired actions must not invalidate the user's other custom shortcuts.
-      if (const {'picker.preview', 'navigation.quick_open'}.contains(command) &&
+      // `team.open` was Swarm's Tab conversation, now Show Agent Messages.
+      if (const {
+            'picker.preview',
+            'navigation.quick_open',
+            'team.open',
+          }.contains(command) &&
           !commands.contains(command)) {
         continue;
       }

@@ -15,8 +15,8 @@ export const hookContracts = { claude, codex } satisfies Record<string, HookCont
 /** An engine's hooks as core calls them: the kit's mechanics, run on that engine's declaration. */
 function composed(engine: HookEngine, { settings, children, sessionFile, stopClosesTurns }: HookContract): EngineHooks {
   return {
-    install: (port) => installHookSettings(engine, settings, port),
-    installIn: (port, home) => installHookSettings(engine, settings, port, home),
+    install: (port, options) => installHookSettings(engine, settings, port, undefined, options),
+    installIn: (port, home, options) => installHookSettings(engine, settings, port, home, options),
     ...(sessionFile ? { transcriptFor: (body: HookSession, agent: HookSession | undefined) => knownTranscript(body, agent, sessionFile) } : {}),
     ...(children ? {
       admit: (body: HookSession): HookAdmission => body.transcriptPath && isChildSession(body.transcriptPath, children)

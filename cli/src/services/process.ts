@@ -15,6 +15,7 @@ import { existsSync } from 'node:fs'
 import WebSocket from 'ws'
 import type { Asker, ServiceRequests } from '../core/api.js'
 import { heartbeatInterval, processLoopDelay, type LoopDelay, type MasterChannel } from '../harnessd/coreLink.js'
+import { harnessdEnv } from '../lib/harnessdEnv.js'
 
 type Payload = Record<string, unknown>
 
@@ -125,7 +126,7 @@ export const LEAVE_GRACE_MS = 5_000
 /** The process the services run in: alive to the master, and gone with it. */
 export function hostServices(options: ServiceHostOptions): ServiceHost {
   const channel: MasterChannel = options.channel ?? (process as unknown as MasterChannel)
-  const env = options.env ?? process.env
+  const env = options.env ?? harnessdEnv()
   const exit = options.exit ?? ((code: number) => process.exit(code))
   const faults = [options.name, ...options.services].map((name) => serviceFaults(env, name))
   const services: ServiceProcess[] = []
@@ -181,7 +182,7 @@ const HELD_OFF_POLL_MS = 200
 
 /** One service in its process: its own link to the core, answering what the core routes to it. */
 export function runServiceProcess(options: ServiceProcessOptions): ServiceProcess {
-  const env = options.env ?? process.env
+  const env = options.env ?? harnessdEnv()
   const faults = serviceFaults(env, options.name)
   // As a service whose start throws: it is not run, and, alone in its process, the process ends and the
   // master decides whether to try again.

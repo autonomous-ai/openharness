@@ -165,6 +165,16 @@ export interface HookServerHandlers {
   /** POST /api/desk/ops — the window's tab edits, applied on the backend (its routes/desk.ts); a
    *  local write, so CSRF-guarded like a rename. */
   onDeskOps?: (body: unknown) => Promise<PairOutcome>
+  /** GET /api/agent-messages — which tabs have Agent Messages on (docs/design/2026-10-10-agent-messages.md),
+   *  proxied like the desk: the window draws each tab's chat icon from it without starting the experiment's process. */
+  onAgentMessagesRead?: () => Promise<PairOutcome>
+  /** PATCH /api/agent-messages/tabs/:tabId — turn Agent Messages on or off for one tab; a local write, so
+   *  CSRF-guarded like the desk's ops. */
+  onAgentMessagesWrite?: (tabId: string, body: unknown) => Promise<PairOutcome>
+  /** GET/PATCH /api/agent-settings — what the person lets agents do on this computer (lib/agentSettings.ts), kept by
+   *  this daemon rather than the account: Settings ▸ Agents. The write is CSRF-guarded like the others. */
+  onAgentSettingsRead?: () => Promise<PairOutcome>
+  onAgentSettingsWrite?: (body: unknown) => Promise<PairOutcome>
   /** The account's Experimental switches, proxied with the daemon's own identity. */
   onExperimentalRead?: () => Promise<PairOutcome>
   onExperimentalWrite?: (body: unknown) => Promise<PairOutcome>
@@ -981,6 +991,29 @@ export function startHookServer(
         let body: unknown
         try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
         await proxied(() => handlers.onDeskOps!(body)); return
+      }
+      if (req.method === 'GET' && url === '/api/agent-messages') {
+        if (!handlers.onAgentMessagesRead) { json(503, { error: 'UNAVAILABLE' }); return }
+        await proxied(handlers.onAgentMessagesRead); return
+      }
+      const agentMessagesTab = req.method === 'PATCH' ? /^\/api\/agent-messages\/tabs\/([A-Za-z0-9_-]{1,64})$/.exec(url) : null
+      if (agentMessagesTab) {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onAgentMessagesWrite) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: unknown
+        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
+        await proxied(() => handlers.onAgentMessagesWrite!(agentMessagesTab[1], body)); return
+      }
+      if (req.method === 'GET' && url === '/api/agent-settings') {
+        if (!handlers.onAgentSettingsRead) { json(503, { error: 'UNAVAILABLE' }); return }
+        await proxied(handlers.onAgentSettingsRead); return
+      }
+      if (req.method === 'PATCH' && url === '/api/agent-settings') {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onAgentSettingsWrite) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: unknown
+        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }); return }
+        await proxied(() => handlers.onAgentSettingsWrite!(body)); return
       }
       if (req.method === 'GET' && url === '/api/experimental-settings') {
         if (!handlers.onExperimentalRead) { json(503, { error: 'UNAVAILABLE' }); return }

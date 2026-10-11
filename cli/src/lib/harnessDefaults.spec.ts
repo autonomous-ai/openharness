@@ -31,7 +31,27 @@ it('honours an explicit Ask choice instead of enabling automatic approvals', () 
 })
 
 it('does not replace an explicit route, a restored conversation, or another agent', () => {
-  const env = { OPENCODE_CONFIG_CONTENT: '{"model":"custom/chosen"}' }
+  const env = { OPENCODE_CONFIG_CONTENT: '{"mcp":{}}', OPENCODE_CONFIG: '/grid.json' }
   expect(freshHarnessEnvironment('opencode', env, true)).toBe(env)
-  expect(freshHarnessEnvironment('codex', env)).toBe(env)
+  expect(freshHarnessEnvironment('opencode', {}, true)).toEqual({})
+  const pinned = { OPENCODE_CONFIG_CONTENT: '{"model":"custom/chosen"}' }
+  expect(freshHarnessEnvironment('codex', pinned)).toBe(pinned)
+})
+
+it("a grid's model is not outranked by a package's: the package's inline model goes, its tools stay", () => {
+  const env = { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: 'opencode/space-bunny-free', small_model: 'opencode/space-bunny-free', mcp: { x: {} } }), OPENCODE_CONFIG: '/grid.json' }
+  const result = freshHarnessEnvironment('opencode', env, true)
+  expect(JSON.parse(result.OPENCODE_CONFIG_CONTENT!)).toEqual({ mcp: { x: {} } })
+  expect(result.OPENCODE_CONFIG).toBe('/grid.json')
+  expect(JSON.parse(freshHarnessEnvironment('opencode', { OPENCODE_CONFIG_CONTENT: '{"small_model":"a/b"}' }, true).OPENCODE_CONFIG_CONTENT!)).toEqual({})
+})
+
+it("keeps the model a package pins, with the launch's approvals, and adds no effort of its own", () => {
+  const pinned = { model: 'opencode/space-bunny-free', small_model: 'opencode/space-bunny-free' }
+  const result = JSON.parse(freshHarnessEnvironment('opencode', { OPENCODE_CONFIG_CONTENT: JSON.stringify(pinned) }).OPENCODE_CONFIG_CONTENT!)
+  expect(result).toEqual({ ...pinned, permission: 'allow' })
+  const asked = JSON.parse(freshHarnessEnvironment('opencode', { OPENCODE_CONFIG_CONTENT: JSON.stringify(pinned) }, false, 'ask').OPENCODE_CONFIG_CONTENT!)
+  expect(asked).toEqual({ ...pinned, permission: 'ask' })
+  // An empty name is no choice: the default applies.
+  expect(JSON.parse(freshHarnessEnvironment('opencode', { OPENCODE_CONFIG_CONTENT: '{"model":""}' }).OPENCODE_CONFIG_CONTENT!).model).toBe(DEFAULT_HARNESS_MODEL)
 })

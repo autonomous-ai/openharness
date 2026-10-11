@@ -16,15 +16,17 @@ import type { RegisteredSession, registry } from '../../lib/registry.js'
 import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
-import type { SwarmPromptScopes } from '../../teams/promptScope.js'
 import type { Watcher } from '../../watcher/watcher.js'
 import type { SessionNormalizers } from '../transcripts/normalizers.js'
 import type { RelaunchMarks } from '../transcripts/relaunch.js'
+import type { ConversationOwners } from './conversationOwners.js'
 
 type Frame = { type: string; payload: Record<string, unknown> }
 
 export interface ForgetDeps {
   onRemoved?: (agentId: string) => void
+  /** One owner per conversation, stopped harnesses included (conversationOwners.ts). */
+  owners?: Pick<ConversationOwners, 'settleSaved'>
   registry: Pick<typeof registry, 'resolve' | 'unbindSession' | 'removeAgent' | 'remove'>
   stoppedAgents: Pick<StoppedAgentStore, 'save'>
   syncRecapPool: () => void
@@ -41,7 +43,6 @@ export interface ForgetDeps {
   runtimeProfiles: Pick<RuntimeProfileManager, 'forget'>
   watcher: Pick<Watcher, 'removeSession'>
   stopHeartbeat: (sessionId: string) => void
-  teams: Pick<SwarmPromptScopes, 'forget'>
   input: Pick<SessionInputController, 'forget'>
   deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   detachDsh: (agentId: string) => void
@@ -53,8 +54,8 @@ export interface ForgetDeps {
 
 export function createForgetSession({
   registry, stoppedAgents, syncRecapPool, normalizers, forgetAttach, turnStartedAt, neverFoldedHistory, replayedFirstTurn, relaunchMarks,
-  clearAgyIdleWatch, cursorDiscovery, cursorSubagents, runtimeProfiles, watcher, stopHeartbeat, teams, input,
-  deviceInput, detachDsh, mirror, clients, dataDir, onRemoved,
+  clearAgyIdleWatch, cursorDiscovery, cursorSubagents, runtimeProfiles, watcher, stopHeartbeat, input,
+  deviceInput, detachDsh, mirror, clients, dataDir, onRemoved, owners,
 }: ForgetDeps) {
   /** Release a mutable session binding, or remove the process-owned agent everywhere. */
   const forgetSession = (
@@ -90,6 +91,12 @@ export function createForgetSession({
     if (opts.keepAgent) registry.unbindSession(sessionId)
     else if (doomed) registry.removeAgent(doomed.agentId)
     else registry.remove(sessionId)
+    // No longer running, its last record may still hold a conversation another harness took meanwhile: the
+    // save keeps a known one through an unbound row (StoppedAgentStore.save). One owner each from here on.
+    if (!opts.keepAgent && doomed) {
+      try { owners?.settleSaved(doomed.agentId) }
+      catch (error) { console.warn(`[agent] ${sid(doomed.agentId)} could not settle who owns its conversation: ${error instanceof Error ? error.message : error}`) }
+    }
     syncRecapPool()
     normalizers.forget(sessionId)
     forgetAttach(sessionId)
@@ -107,7 +114,6 @@ export function createForgetSession({
     runtimeProfiles.forget(sessionId)
     void watcher.removeSession(sessionId)
     stopHeartbeat(sessionId)
-    teams.forget(announceId)
     input.forget(announceId)
     deviceInput.forget(announceId)
     if (!opts.keepAgent) { detachDsh(announceId); onRemoved?.(announceId) }

@@ -26,6 +26,7 @@ import { accountLink } from './accountLink.js'
 import { startDevices, type DevicesDeps } from './devices.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
 import { processCoreApi } from './processCoreApi.js'
+import { harnessdEnv } from '../lib/harnessdEnv.js'
 
 /** An agent as the core lists it for the dial: with the name the apps show and the model it runs. */
 type Viewed = RegisteredSession & { displayName?: string; runtimeProfile?: string | null }
@@ -72,7 +73,7 @@ function faultsOf(value: string | undefined): ReadonlySet<string> {
 }
 
 export function runDevicesService(options: DevicesServiceOptions): ServiceProcess {
-  const processEnv = options.processEnv ?? process.env
+  const processEnv = options.processEnv ?? harnessdEnv()
   let core: CoreConnection | null = null
   /** Whether a dial watches, as the cable last said: told again to every core this process connects to.
    *  A dial says hello as soon as its port opens, which is often before a core that just started has
@@ -134,6 +135,13 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       activityText: async (agentId) => {
         const said = (await ask('activityText', { agentId })).text
         return typeof said === 'string' ? said : null
+      },
+      activitySnapshot: async (agentId) => {
+        // A core that predates the query (or has no timer to give) still has the footer.
+        const said = (await ask('activitySnapshot', { agentId }).catch((): Record<string, unknown> => ({}))).activity
+        if (said && typeof said === 'object' && typeof (said as { text?: unknown }).text === 'string') return said as { text: string; elapsedSeconds?: number }
+        const text = (await ask('activityText', { agentId })).text
+        return typeof text === 'string' && text ? { text } : null
       },
       // The devices make no agent of their own and show no harness's viewer.
       ...AGENT_ACTIONS_OFF,

@@ -10,6 +10,7 @@
  */
 import { env } from './config/env.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
+import { harnessdEnv, holdHarnessdEnv } from './lib/harnessdEnv.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
 import { localSocketPath } from './lib/localSocket.js'
 import { ignoreLogWriteErrors, installTimestampedConsole } from './lib/log.js'
@@ -42,8 +43,7 @@ export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new M
   ['connectors', async () => (await import('./services/connectorsProcess.js')).runConnectorsService],
   ['recaps', async () => (await import('./services/recapsProcess.js')).runRecapsService],
   ['store', async () => (await import('./services/storeProcess.js')).runStoreService],
-  ['teams', async () => (await import('./services/teamsProcess.js')).runTeamsService],
-  ['collaboration', async () => (await import('./services/collaborationProcess.js')).runCollaborationService],
+  ['messages', async () => (await import('./services/messagesProcess.js')).runMessagesService],
   ['sharing', async () => (await import('./services/sharingProcess.js')).runSharingService],
   ['orchestrator', async () => (await import('./services/orchestratorProcess.js')).runOrchestratorService],
   ['memory', async () => (await import('./services/memoryProcess.js')).runMemoryService],
@@ -71,6 +71,9 @@ const describe = (error: unknown): string => (error instanceof Error ? error.mes
  * always did: the process ends, and the master decides whether to try again.
  */
 export async function startServiceProcess(named: string | undefined, deps: ServiceProcessDeps = {}): Promise<ServiceProcess> {
+  // First, before any service starts a child that would inherit them: the viewers' servers, an engine's
+  // app-server, a one-shot engine run (lib/harnessdEnv.ts). Read through `harnessdEnv()` from here on.
+  holdHarnessdEnv()
   const runners = deps.runners ?? SERVICE_RUNNERS
   const exit = deps.exit ?? ((code: number) => process.exit(code))
   const names = [...new Set((named ?? '').split(',').map((name) => name.trim()).filter(Boolean))]
@@ -89,7 +92,7 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
   // The master names the process (`edge` for the services it shares); a process started by hand is named
   // for what it runs. The same name as the hard link it was exec'd through (harnessd/processName.ts): one
   // name in ps and Activity Monitor.
-  const title = process.env.HARNESSD_SERVICE || names.join(',')
+  const title = harnessdEnv().HARNESSD_SERVICE || names.join(',')
   process.title = `harnessd-${title}`
   // Its lines share the daemon's log with the master's: a write a full disk refuses is dropped, not fatal.
   ignoreLogWriteErrors()
@@ -103,7 +106,7 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
     dataDir: env.ADAPTER_DATA_DIR,
     socketPath: socketPath ?? '',
     machineId: readOrMintComputerId(env.ADAPTER_COMPUTER_ID_FILE, env.ADAPTER_COMPUTER_ID),
-    token: process.env.HARNESSD_SERVICE_TOKEN ?? '',
+    token: harnessdEnv().HARNESSD_SERVICE_TOKEN ?? '',
   }
   const running: ServiceProcess[] = []
   let failure: unknown = null

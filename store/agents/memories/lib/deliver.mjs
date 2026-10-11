@@ -60,8 +60,16 @@ export function inert(text) {
 /** Headings become plain lines: Gemini CLI adds memories at the next `## ` after its own section. */
 const flatHeadings = (text) => text.replace(/^#{1,6}[ \t]+(.+?)[ \t#]*$/gm, '$1:')
 
+/**
+ * About You without its sources: the `[claude:short-answers.md, asks:98]` after each line is for the person
+ * reading it in the pane, and a fifth of what every session would carry (824 tokens → 582 on one Mac,
+ * 2026-10-10). Only a bracket of `name:value` sources at the very end of a line is one.
+ */
+export const CITATION = /[ \t]*\[[a-z][a-z-]*:[^\]\n]*\][ \t]*$/gm
+export const withoutSources = (text) => String(text).replace(CITATION, '')
+
 export function packet(text) {
-  let body = flatHeadings(inert(text).trim())
+  let body = flatHeadings(inert(withoutSources(text)).trim())
   if (body.length > MAX_DELIVERED) {
     const cut = body.lastIndexOf('\n', MAX_DELIVERED)
     body = body.slice(0, cut > 0 ? cut : MAX_DELIVERED) + '\n(cut here: the full profile is in ~/.harness/memory/about-you.md)'
@@ -77,7 +85,8 @@ const quote = (value) => `'${String(value).replace(/'/g, `'"'"'`)}'`
  */
 export function hookCommand(aboutPath) {
   const intro = `<about-you source="Harness Memories">\n${PREAMBLE}\n`
-  const neutralize = `sed -e 's/harness-memories:about-you/harness-memories about-you/g' -e 's#<\\(/*\\)about-you#<\\1about_you#g'`
+  // The last expression is CITATION in POSIX basic regular expressions, which BSD and GNU sed both read.
+  const neutralize = `sed -e 's/harness-memories:about-you/harness-memories about-you/g' -e 's#<\\(/*\\)about-you#<\\1about_you#g' -e 's/[[:blank:]]*\\[[a-z][a-z-]*:[^]]*][[:blank:]]*$//'`
   return `f=${quote(aboutPath)}; if [ -f "$f" ]; then printf '%s\\n' ${quote(intro)}; head -c ${MAX_DELIVERED} "$f" | ${neutralize}; printf '\\n%s\\n' '</about-you>'; fi; true ${HOOK_TAG}`
 }
 

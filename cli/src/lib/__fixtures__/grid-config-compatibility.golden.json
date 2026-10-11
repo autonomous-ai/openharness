@@ -1,0 +1,34 @@
+{
+  "pi-0": {
+    "files": {
+      "models.json": "{\"providers\":{\"fixture\":{\"apiKey\":\"GRID_API_KEY\"}}}\n",
+      "settings.json": "{\"skills\":[\"/fixture/skills\"]}\n"
+    },
+    "links": {},
+    "conversation": "{\"fixture\":\"retained conversation\"}\n"
+  },
+  "opencode-1": {
+    "files": {
+      "opencode.json": "{\"provider\":{\"fixture\":{\"npm\":\"@ai-sdk/openai-compatible\"}}}\n"
+    },
+    "links": {},
+    "conversation": "{\"fixture\":\"retained conversation\"}\n"
+  },
+  "grok-2": {
+    "files": {
+      "settings.json": "{\"baseUrl\":\"https://fixture.invalid/v1\"}\n"
+    },
+    "links": {
+      "sessions": "<root>/native-sessions"
+    },
+    "conversation": "{\"fixture\":\"retained conversation\"}\n"
+  },
+  "pi-3": {
+    "files": {
+      "models.json": "{\"providers\":{\"other\":{\"apiKey\":\"GRID_API_KEY\"}}}\n",
+      "settings.json": "{\"skills\":[\"/fixture/skills\"]}\n"
+    },
+    "links": {},
+    "conversation": "{\"fixture\":\"retained conversation\"}\n"
+  }
+}

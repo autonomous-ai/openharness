@@ -5,6 +5,7 @@ import 'package:harness/terminal/terminal_text.dart';
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/skeleton.dart';
+import '../state/essential_harness_controller.dart';
 import 'store_collections.dart';
 import 'store_editorial.dart';
 import 'store_exploration.dart';
@@ -25,6 +26,8 @@ class StoreDiscover extends StatelessWidget {
     required this.onCategory,
     required this.onAll,
     required this.onEngines,
+    this.essentialLabel,
+    this.onEssential,
   });
 
   final List<DshEntry> entries;
@@ -34,6 +37,11 @@ class StoreDiscover extends StatelessWidget {
   final ValueChanged<String> onCategory;
   final VoidCallback onAll;
   final VoidCallback onEngines;
+
+  /// The Store's Essentials are created or opened in one click, never through New Harness: the
+  /// button's word ("Create" or "Open") and what it does. Absent, the section is not shown.
+  final String Function(String id)? essentialLabel;
+  final ValueChanged<String>? onEssential;
 
   @override
   Widget build(BuildContext context) {
@@ -47,6 +55,10 @@ class StoreDiscover extends StatelessWidget {
     ];
     final engines = [
       for (final id in ['claude', 'codex', 'cursor']) ?byId[id],
+    ];
+    final essentials = [
+      if (essentialLabel != null && onEssential != null)
+        for (final essential in storeEssentials) ?byId[essential.id],
     ];
     final crafts = entries
         .where((entry) => !entry.isEngine && !entry.isViewerPackage)
@@ -68,7 +80,9 @@ class StoreDiscover extends StatelessWidget {
     final topRated = storeTopRated(entries, ratingFor).take(6).toList();
     final categories = [
       for (final name in [...storeCategoryDomains.keys, 'Other'])
+        // Essentials have their own section above; they are not a discipline.
         if (name != 'Coding' &&
+            name != 'Essentials' &&
             crafts.any((entry) => storeCategoryFor(entry) == name))
           name,
     ];
@@ -128,6 +142,26 @@ class StoreDiscover extends StatelessWidget {
                           ),
                         );
                       },
+                    ),
+                  ],
+                  if (essentials.isNotEmpty) ...[
+                    const SizedBox(height: 28),
+                    const StoreExploreHeading(
+                      title: 'Essentials',
+                      subtitle: 'Made by Harness. Free to run on OpenCode; switch to any agent from the pane.',
+                    ),
+                    const SizedBox(height: 8),
+                    StoreListing(
+                      key: const ValueKey('store-essentials-collection'),
+                      rowKeyPrefix: 'store-essential',
+                      entries: essentials,
+                      ratingFor: ratingFor,
+                      onOpen: onOpen,
+                      actionFor: (entry) => _EssentialButton(
+                        key: ValueKey('store-essential-action:${entry.id}'),
+                        label: essentialLabel!(entry.id),
+                        onPressed: () => onEssential!(entry.id),
+                      ),
                     ),
                   ],
                   if (engines.isNotEmpty) ...[
@@ -409,6 +443,33 @@ class _DisciplineLink extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// The Essentials row's one-click button, the size of a row's title.
+class _EssentialButton extends StatelessWidget {
+  const _EssentialButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+  });
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return FilledButton(
+      onPressed: onPressed,
+      style: FilledButton.styleFrom(
+        backgroundColor: grid.AppSurface.selectedFill,
+        foregroundColor: grid.AppPalette.textPrimary,
+        minimumSize: const Size(72, 30),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        textStyle: grid.AppType.label(fontWeight: grid.AppFont.semibold),
+        shape: const StadiumBorder(),
+      ),
+      child: Text(label),
     );
   }
 }

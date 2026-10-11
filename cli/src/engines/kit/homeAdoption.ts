@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { MAX_CATALOG_HOMES, readHomeCatalog, type HomeCatalog, type HomeCatalogRead } from './homeCatalog.js'
 import { IdentityReadUnavailable } from './identityScan.js'
+import { NATIVE_EVIDENCE_MS } from './nativeEvidence.js'
 
 const MAX_RECORDS = MAX_CATALOG_HOMES * 2 + 2
 const MAX_BYTES = 64 * 1024
@@ -20,7 +21,7 @@ const digest = (text: string) => createHash('sha256').update(text).digest('hex')
 const stamp = (info: BigIntStats) => [info.dev, info.ino, info.mode, info.uid, info.size, info.mtimeNs, info.ctimeNs].join(':')
 const empty = (): HomeCatalog => ({ claude: [], codex: [] })
 const deadline = () => {
-  const until = performance.now() + 250
+  const until = performance.now() + NATIVE_EVIDENCE_MS
   return () => { if (performance.now() > until) throw unavailable('exceeded its work deadline') }
 }
 function inspect(info: BigIntStats, directory = false): void {

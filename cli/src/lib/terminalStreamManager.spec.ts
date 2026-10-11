@@ -120,26 +120,16 @@ describe('TerminalStreamManager', () => {
     expect((result.payload.engines as Array<{ id: string }>).map((row) => row.id)).toEqual([...ENGINES])
   })
 
-  it('records the origin only for accepted input from the owning stream, before writing bytes', async () => {
-    const onScopedInput = vi.fn(() => expect(stream.writes).toHaveLength(0))
-    await manager.stop()
-    manager = newManager({ onScopedInput })
+  it('asks no window for the tab its input came from, and still writes input from an older one that names it', async () => {
     await manager.handleFrame('web-1', 'terminal_open', {
       requestId: 'scoped', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
     })
     const ready = sent.findLast(f => f.type === 'terminal_ready')!.payload
-    expect(ready.swarmInput).toBe(true)
+    expect(ready).not.toHaveProperty('swarmInput')
     const frame = { kind: TerminalBinaryKind.input, streamId: String(ready.streamId), seq: 0,
       bytes: Buffer.from('hello\r'), compressed: false, tabId: 'swarm-a' }
-    await manager.handleBinary('wrong-owner', frame)
-    expect(onScopedInput).not.toHaveBeenCalled()
-    await manager.handleBinary('web-1', { ...frame, seq: 2 })
-    expect(onScopedInput).not.toHaveBeenCalled()
     await manager.handleBinary('web-1', frame)
-    expect(onScopedInput).toHaveBeenCalledWith('agent-1', frame.bytes, 'swarm-a', false)
     expect(stream.writes).toEqual([frame.bytes])
-    await manager.handleBinary('web-1', frame)
-    expect(onScopedInput).toHaveBeenCalledOnce()
   })
 
   it('uses the same generic path for every current engine', async () => {

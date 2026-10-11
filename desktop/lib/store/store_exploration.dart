@@ -35,6 +35,16 @@ class StoreDiscipline {
 }
 
 const storeDisciplines = <String, StoreDiscipline>{
+  'Essentials': StoreDiscipline(
+    name: 'Essentials',
+    headline: 'Made by Harness,\nfor every desk.',
+    description:
+        'Your agents\u2019 memories in one place, and every harness at a glance. '
+        'Free to run on OpenCode; switch to any agent from the pane.',
+    invitation: 'One click each. Nothing to set up.',
+    color: Color(0xfff0b9a6),
+    featured: ['autonomous/memories', 'autonomous/harness-monitor'],
+  ),
   'Coding': StoreDiscipline(
     name: 'Coding',
     headline: 'Start with what\nyou know.',

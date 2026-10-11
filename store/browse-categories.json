@@ -1,6 +1,16 @@
 {
   "categories": [
     {
+      "name": "Essentials",
+      "domains": [
+        "Essentials"
+      ],
+      "featured": [
+        "memories",
+        "harness-monitor"
+      ]
+    },
+    {
       "name": "Coding",
       "domains": [
         "Code",
@@ -36,7 +46,7 @@
         "Firmware",
         "Automation",
         "Home automation",
-      "Devices"
+        "Devices"
       ],
       "featured": [
         "autonomous-circuit",

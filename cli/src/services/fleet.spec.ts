@@ -192,6 +192,7 @@ describe('this computer’s side of every route', () => {
     expect(await fleet.listAgentsFlat()).toEqual([
       { id: 'a1', name: 'api', engine: 'claude', machineId: 'mine', machine: 'MacbookPro.local', model: 'opus', effort: 'high' },
     ])
+    expect(await fleet.activityTimes()).toBeInstanceOf(Map)
     expect(fleet.sendTurn('a1', 'hello')).toEqual({ ok: true })
     expect(core.turns.send).toHaveBeenCalledWith('a1', 'hello')
     expect(fleet.routeSend('a1', 'from cmd-k')).toEqual({ ok: true })

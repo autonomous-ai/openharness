@@ -451,6 +451,14 @@ jobs:
               raise SystemExit('Failed firmware contracts: ' + ', '.join(failures))
           print(f'Passed all {len(files)} firmware host contracts')
           PY
+      - name: Run the Harness Pro host contracts
+        env:
+          PRO_FONT: ${{ github.workspace }}/devices/harness-pro/firmware/fonts/LiberationSans-Regular.ttf
+        run: |
+          python3 -m pip install --user --break-system-packages pillow==12.1.1
+          bash devices/harness-pro/firmware/test/run.sh
+          python3 devices/harness-pro/firmware/test/test_tree_isolation.py
+          python3 devices/harness-pro/firmware/test/test_fonts.py
 
   mobile-checks:
     concurrency:

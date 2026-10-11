@@ -10,7 +10,7 @@ describe('the experiments on as the core starts', () => {
   afterEach(() => rmSync(dataDir, { recursive: true, force: true }))
 
   it('finds saved state by path, or by a file of its kind in its folder', () => {
-    expect(stateIsThere(dataDir, ['teams'])).toBe(false)
+    expect(stateIsThere(dataDir, ['agent-messages'])).toBe(false)
     expect(stateIsThere(dataDir, ['orchestrator/*.json'])).toBe(false)
     mkdirSync(join(dataDir, 'orchestrator'))
     // A folder made by a look, with no project in it, is not a project.
@@ -18,8 +18,8 @@ describe('the experiments on as the core starts', () => {
     expect(stateIsThere(dataDir, ['orchestrator/*.json'])).toBe(false)
     writeFileSync(join(dataDir, 'orchestrator', `${'a'.repeat(32)}.json`), '{}')
     expect(stateIsThere(dataDir, ['orchestrator/*.json'])).toBe(true)
-    mkdirSync(join(dataDir, 'teams'))
-    expect(stateIsThere(dataDir, ['nothing', 'teams'])).toBe(true)
+    mkdirSync(join(dataDir, 'agent-messages'))
+    expect(stateIsThere(dataDir, ['nothing', 'agent-messages'])).toBe(true)
     expect(stateIsThere(dataDir, [])).toBe(false)
   })
 
@@ -30,9 +30,9 @@ describe('the experiments on as the core starts', () => {
     const want = vi.fn()
     const woken = wakeExperiments({
       dataDir,
-      experiments: { orchestrator: { state: ['orchestrator/*.json'] }, sharing: { state: ['harness-shares.json'] }, teams: { state: ['teams'] } },
+      experiments: { orchestrator: { state: ['orchestrator/*.json'] }, sharing: { state: ['harness-shares.json'] }, messages: { state: ['agent-messages'] } },
       // Share runs in the core's process here: it is started there, not asked for.
-      outOfProcess: new Set(['orchestrator', 'teams']),
+      outOfProcess: new Set(['orchestrator', 'messages']),
       want,
     })
     expect(woken).toEqual(['orchestrator'])
@@ -68,21 +68,20 @@ describe('the experiments on as the core starts', () => {
     }
   })
 
-  it('asks for an experiment after doing what it must not miss, and tells each experiment in its own process the account\'s notices', () => {
+  it('asks for an experiment, and tells each experiment in its own process the account\'s notices', () => {
     const order: string[] = []
     const notify = vi.fn(() => true)
     const hooks = createExperimentHooks({
-      want: (service) => order.push(`want ${service}`), notify, outOfProcess: new Set(['collaboration']), experiments: ['orchestrator', 'collaboration'],
-      onWant: { collaboration: () => order.push('keep the scopes') },
+      want: (service) => order.push(`want ${service}`), notify, outOfProcess: new Set(['messages']), experiments: ['orchestrator', 'messages'],
     })
-    hooks.want('collaboration')
+    hooks.want('messages')
     hooks.want('orchestrator')
-    expect(order).toEqual(['keep the scopes', 'want collaboration', 'want orchestrator'])
+    expect(order).toEqual(['want messages', 'want orchestrator'])
     const heard = vi.fn()
     hooks.onNotice(heard)
     hooks.notice({ type: 'desk_changed', revision: 5 })
     expect(heard).toHaveBeenCalledWith({ type: 'desk_changed', revision: 5 })
-    expect(notify.mock.calls).toEqual([['collaboration', { type: 'service_event', payload: { kind: 'notice', notice: { type: 'desk_changed', revision: 5 } } }]])
+    expect(notify.mock.calls).toEqual([['messages', { type: 'service_event', payload: { kind: 'notice', notice: { type: 'desk_changed', revision: 5 } } }]])
     createExperimentHooks({ want: vi.fn(), notify, outOfProcess: new Set(), experiments: [] }).want('x')
   })
 })

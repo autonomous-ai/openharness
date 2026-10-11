@@ -46,7 +46,7 @@ const DEPS: LaunchOverridesDeps = {
   machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
   writeGridConfigDir: async (key) => `/state/grid-engine-config/${key}`,
   tmuxSupportsSessionEnv: async () => true,
-  installCodexHooks: () => {},
+  installCodexHooks: () => true,
 }
 
 const IDENTITY = { pid: 4242, executable: 'claude', startMarker: 'boot-1' }

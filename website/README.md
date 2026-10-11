@@ -14,6 +14,8 @@ retired; only the host routes below were kept.
 | `/download` (and `/install` → it) | Install page: CLI command and desktop downloads |
 | `/pair` | Phone setup guidance — the mobile app and the desktop "add phone" dialog link here |
 | `/os` | The Harness operating system landing page: plain HTML/CSS, local fonts and screenshots in `public/os/` |
+| `/agents` | Harness for agents: install, the agent commands with examples and exit codes, the plugin and skill. One plain HTML file, `public/agents/index.html`, with no script |
+| `/llms.txt` | The [llms.txt](https://llmstxt.org) summary for agents, `public/llms.txt` |
 | `/os/latest` | Redirect to the newest complete published OS release; OS tags only, stable preferred, five-minute server lookup cache |
 | `/desktop` | Desktop download page; offers the build for the visitor's OS and CPU (`src/lib/desktopPlatform.ts`), with links to every other build and the CLI command |
 | `/hub`, `/hub/following`, `/hub/yours` | Public three-column gallery, followed creators, and your publications; `?q=`, `?category=` and `?sort=popular` narrow and order them |
@@ -27,6 +29,11 @@ retired; only the host routes below were kept.
 | `/flash-circle.sh` | The dial firmware flasher script |
 | `/install.sh`, `/cli/install.sh`, `/desktop/install.sh` | Redirect to the installers on `cdn.autonomous.ai` |
 | `ac.autonomous.ai`, `fleet.autonomous.ai` | Redirect to `harness.autonomous.ai` |
+
+`/agents` and `/llms.txt` describe commands agents run as written. `scripts/agents-site.spec.ts` checks every
+`harness` command on them against `cli/src/cli.ts`, the exit codes against the agent commands, and the install
+lines against `.claude-plugin/marketplace.json`; `scripts/check-agents-site.mjs` checks the built server serves
+both unchanged. Change them with the CLI and the [harness skill](../plugins/harness/skills/harness/SKILL.md).
 
 The CLI installer is `cli/scripts/install.sh`. The desktop installer's source is
 `scripts/desktop-install.sh` here, published with `scripts/upload-desktop-install-sh.sh`.

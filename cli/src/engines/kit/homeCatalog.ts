@@ -3,6 +3,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, type St
 import { dirname, isAbsolute } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { IdentityReadUnavailable } from './identityScan.js'
+import { NATIVE_EVIDENCE_MS } from './nativeEvidence.js'
 
 export type HomeCatalog = { claude: string[]; codex: string[] }
 export type HomeCatalogRead = { homes: HomeCatalog; text: string | null; version: string | null }
@@ -75,7 +76,7 @@ function parse(text: string): HomeCatalog {
 /** Fresh, bounded bytes tied to their opened descriptor and current pathname. No stamp cache. */
 export function readHomeCatalog(file: string): HomeCatalogRead {
   const started = performance.now()
-  const deadline = () => { if (performance.now() - started > 250) throw unavailable('exceeded its read deadline') }
+  const deadline = () => { if (performance.now() - started > NATIVE_EVIDENCE_MS) throw unavailable('exceeded its read deadline') }
   let info: Stats
   try { info = lstatSync(file) }
   catch (error) {

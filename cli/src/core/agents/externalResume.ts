@@ -30,7 +30,7 @@ export interface ExternalResumeDeps {
   generation(): unknown
   stopped(): readonly Pick<RegisteredSession, 'sessionId' | 'externalResume'>[]
   cancelled(agentId: string): boolean
-  preflight(row: RegisteredSession, session: NonNullable<ExternalResumeIntent['session']>): Promise<{ detail: string } | null>
+  preflight(row: RegisteredSession, session: NonNullable<ExternalResumeIntent['session']>, current?: () => boolean): Promise<{ detail: string } | { current(): boolean } | null>
   announce(row: RegisteredSession): void
   launch(): void
   forget(agentId: string): void
@@ -78,9 +78,11 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
     }
     if (!commit({ ...intent, session, ...(owner ? { owner } : {}) })) return
     if (owner && decision.busy && intent.takeOver === 'wait') { hold(row, activityUnknown(answer) ? ACTIVITY_UNKNOWN : 'Waiting for the conversation’s current turn to finish in its terminal.'); return }
-    const refusal = await deps.preflight(row, session)
+    const refusal = await deps.preflight(row, session, current)
     if (!current()) return
-    if (refusal) { hold(row, refusal.detail); return }
+    if (refusal && 'detail' in refusal) { hold(row, refusal.detail); return }
+    const nativeCurrent = () => !refusal || refusal.current()
+    if (!nativeCurrent()) { hold(row, 'Waiting to confirm the prepared native launch.'); return }
     if (owner) {
       // Journal the exact target before a signal. A crash or a later process cannot inherit consent.
       if (!commit({ ...row.externalResume!, phase: 'quitting', owner })) return
@@ -92,13 +94,13 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
         if (!current() || !answer.ok || !answer.session) return false
         const fresh = adoptionDecision(intent.request.sessionId, intent.request.engine, intent.takeOver, answer, id => held(id, row.agentId))
         interrupted = answer.busyConfirmed === true
-        return fresh.ok && answer.session.sessionId === session.sessionId && answer.session.cwd === session.cwd
+        return nativeCurrent() && fresh.ok && answer.session.sessionId === session.sessionId && answer.session.cwd === session.cwd
           && answer.session.transcriptPath === session.transcriptPath
           && JSON.stringify(answer.session.launchArgs) === JSON.stringify(session.launchArgs)
           && !!answer.owner && !!answer.generation && sameOwner(owner, { process: answer.owner, generation: answer.generation })
           && (intent.takeOver === 'now' || !answer.busy)
       }
-      if (!await (deps.stopOwner ?? stopExternalOwner)(owner, { current, same,
+      if (!await (deps.stopOwner ?? stopExternalOwner)(owner, { current: () => current() && nativeCurrent(), same,
         beforeSignal: signal => {
           // KILL needs the same locked conflict check after TERM's grace period, even when the
           // durable intent is unchanged. A daemon-down hook can bind another owner meanwhile.
@@ -121,6 +123,7 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
     // No asynchronous work may separate this final read from the durable admission.
     answer = await inspect(intent.request)
     if (!current()) return
+    if (!nativeCurrent()) { hold(row, 'Waiting to confirm the prepared native launch is still current.'); return }
     const final = adoptionDecision(intent.request.sessionId, intent.request.engine, intent.takeOver, answer, id => held(id, row.agentId))
     if (!final.ok) { hold(row, final.detail); return }
     if (!answer.ok || !answer.session || answer.owner || answer.session.sessionId !== session.sessionId

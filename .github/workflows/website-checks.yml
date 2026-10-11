@@ -49,7 +49,7 @@ jobs:
       - name: Production build (standalone, with the pinned Flutter bundle)
         run: npm run build
 
-      - name: Verify production routes and static OS page
+      - name: Verify production routes and the static OS and agents pages
         # The Install link resolves the latest OS release through the GitHub API; the job token keeps that
         # lookup off the shared runner address's 60-an-hour unauthenticated limit (website/src/lib/osRelease.ts).
         env:
@@ -69,4 +69,5 @@ jobs:
           done
           if [ "$ready" != true ]; then cat /tmp/website-server.log; exit 1; fi
           node scripts/check-os-site.mjs
+          node scripts/check-agents-site.mjs
           node scripts/check-harness-web.mjs

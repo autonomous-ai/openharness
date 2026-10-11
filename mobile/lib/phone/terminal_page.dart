@@ -47,7 +47,6 @@ import 'phone_status.dart';
 import 'settings_page.dart';
 import 'session_work_page.dart';
 import 'terminal_action_column.dart';
-import 'team_page.dart';
 import 'terminal_chrome_scroll.dart';
 import 'terminal_input_dock.dart';
 import 'terminal_search.dart';
@@ -1003,11 +1002,10 @@ class _TerminalPageState extends State<TerminalPage>
   /// that question, as its answer or not at all. Nothing is echoed when it lands: the words appear
   /// in the prompt, and a tap is felt. Only what went wrong is said (see [_flash]).
   Future<bool> _deliverVoice(String text) async {
-    final origin = widget.notifier.activeSwarmId;
     final session = await _sessionForInput();
     if (session == null) return false;
     if (_questionWatcher?.view != null) return _answerByVoice(session, text);
-    final sent = await session.sendComposerText(text, tabId: origin);
+    final sent = await session.sendComposerText(text);
     // After the send is acknowledged, never before: a tap felt first would be a promise.
     if (sent && mounted) HapticFeedback.lightImpact();
     return sent;
@@ -1035,8 +1033,7 @@ class _TerminalPageState extends State<TerminalPage>
   /// A voice take while the agent's question is open: it answers the question or it is not sent.
   Future<bool> _answerByVoice(TerminalSession session, String text) async {
     final view = _questionWatcher?.view;
-    final origin = widget.notifier.activeSwarmId;
-    if (view == null) return session.sendComposerText(text, tabId: origin);
+    if (view == null) return session.sendComposerText(text);
     if (!view.answerable || view.multi) {
       _flash('✗ answer on screen', error: true);
       return false;
@@ -1052,7 +1049,7 @@ class _TerminalPageState extends State<TerminalPage>
     if (match.rest case final rest?) {
       Timer(const Duration(milliseconds: 900), () {
         if (!mounted || _questionWatcher?.view != null) return;
-        unawaited(session.sendComposerText(rest, tabId: origin));
+        unawaited(session.sendComposerText(rest));
       });
     }
     return true;
@@ -1882,9 +1879,6 @@ class _TerminalPageState extends State<TerminalPage>
                                               : pane == null || session == null
                                               ? _Attaching(key: _skeletonKey)
                                               : TerminalPanel(
-                                                  tabId: widget
-                                                      .notifier
-                                                      .activeSwarmId,
                                                   key: ValueKey(pane.id),
                                                   notifier: widget.notifier,
                                                   session: session,
@@ -2349,21 +2343,6 @@ class _TerminalPageState extends State<TerminalPage>
         // the computers are a row in Settings.
         PhoneSheetSection(
           actions: [
-            PhoneSheetAction(
-              icon: LucideIcons.users300,
-              label: 'Swarm conversation',
-              chevron: true,
-              onTap: () => Navigator.of(context).push(
-                phoneRoute(
-                  (_) => TeamPage(
-                    notifier: widget.notifier,
-                    machineId: widget.machineId,
-                    tabId: widget.notifier.activeDeskTabId,
-                    agentId: widget.agentId,
-                  ),
-                ),
-              ),
-            ),
             // In the sample: the way back out, where a person looks for "what else can I do".
             if (SampleMode.maybeOf(context) case final sample?)
               PhoneSheetAction(

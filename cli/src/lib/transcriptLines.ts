@@ -4,7 +4,7 @@
  * which re-exports it, so the adoption readers that only stream lines load none of the engines' normalizers that
  * file holds for search.
  */
-import { open } from 'node:fs/promises'
+import { open, type FileHandle } from 'node:fs/promises'
 
 /** How much of a line is read before deciding whether to skip it. */
 const HEAD_BYTES = 1024
@@ -27,9 +27,9 @@ export async function forEachLine(
   path: string,
   start: number,
   visit: (line: LineVisit) => void | Promise<void>,
-  options: { skip?: ((head: string) => boolean) | null; shouldStop?: () => boolean } = {},
+  options: { skip?: ((head: string) => boolean) | null; shouldStop?: () => boolean; handle?: FileHandle; end?: number } = {},
 ): Promise<{ end: number }> {
-  const handle = await open(path, 'r')
+  const handle = options.handle ?? await open(path, 'r')
   try {
     const buffer = Buffer.allocUnsafe(CHUNK_BYTES)
     let position = start
@@ -40,7 +40,9 @@ export async function forEachLine(
     let dropping = false
     for (;;) {
       if (options.shouldStop?.()) return { end: lineStart }
-      const { bytesRead } = await handle.read(buffer, 0, CHUNK_BYTES, position)
+      const count = Math.min(CHUNK_BYTES, Math.max(0, (options.end ?? Infinity) - position))
+      if (!count) return { end: lineStart }
+      const { bytesRead } = await handle.read(buffer, 0, count, position)
       if (bytesRead === 0) return { end: lineStart }
       let cursor = 0
       while (cursor < bytesRead) {
@@ -82,6 +84,6 @@ export async function forEachLine(
       position += bytesRead
     }
   } finally {
-    await handle.close()
+    if (!options.handle) await handle.close()
   }
 }

@@ -2,10 +2,10 @@
   "spec": 1,
   "id": "autonomous/memories",
   "name": "Memories",
-  "category": "Code",
+  "category": "Essentials",
   "author": "Autonomous",
   "description": "Browse what every agent on this computer remembers — Claude Code, Codex, Grok Build, Hermes and more — beside a year of your work with them, and build an About You from your own words.",
-  "engine": "claude",
+  "engine": "opencode",
   "workspace": {
     "template": "template",
     "marker": "NOTES.md",
@@ -18,7 +18,8 @@
     ],
     "env": {
       "MEM_CLI": "${dsh}/toolchain/mem",
-      "MEMORIES_DSH_DIR": "${dsh}"
+      "MEMORIES_DSH_DIR": "${dsh}",
+      "OPENCODE_CONFIG_CONTENT": "{\"model\":\"opencode/space-bunny-free\",\"small_model\":\"opencode/space-bunny-free\"}"
     }
   },
   "toolchain": {

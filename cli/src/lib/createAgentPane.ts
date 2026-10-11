@@ -26,6 +26,7 @@ const DEFAULT_MAX_ATTEMPTS = 3
 export interface CreateAgentPaneDeps {
   tmuxBackend: Pick<TerminalBackend<TmuxRuntimeRef>, 'create' | 'kill'>
   registry: { openPendingAgent: (input: {
+    nativeToken?: string
     engine: AgentEngine
     runtimes: TmuxRuntimeRef[]
     primaryRuntimeKey?: string
@@ -44,6 +45,7 @@ export interface CreateAgentPaneDeps {
     forkedFrom?: ForkOrigin | null
     externalResume?: ExternalResumeIntent
   }) => RegisteredSession | null }
+  nativeToken?: string
   engine: AgentEngine
   cwd?: string | null
   bypassPermission?: boolean
@@ -108,6 +110,7 @@ export async function createAndRegisterPane(deps: CreateAgentPaneDeps): Promise<
       return { ok: false, error: missing ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED', detail: spawned.reason }
     }
     const pending = deps.registry.openPendingAgent({
+      ...(deps.nativeToken ? { nativeToken: deps.nativeToken } : {}),
       engine: deps.engine,
       runtimes: [spawned.runtime],
       primaryRuntimeKey: terminalRouteKey(spawned.runtime),

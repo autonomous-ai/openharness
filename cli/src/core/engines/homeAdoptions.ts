@@ -4,7 +4,7 @@ import type { SessionStoreEngine } from '../../engines/sessionStoreContracts.js'
 export interface HomeAdoptionDeps {
   read(): HomeCatalog
   confirm(environment: NodeJS.ProcessEnv): Record<SessionStoreEngine, string | null>
-  install(engine: SessionStoreEngine, home: string): void
+  install(engine: SessionStoreEngine, home: string): void | Promise<void>
   held(reason: string | null): void
 }
 
@@ -15,6 +15,18 @@ export function createHomeAdoptions(deps: HomeAdoptionDeps) {
   const requests = new Map<string, NodeJS.ProcessEnv>()
   const installs = new Map<string, [SessionStoreEngine, string]>()
   const installed = new Set<string>()
+  const inFlight = new Set<string>()
+  const failures = new Map<string, string>()
+  let catalogHold: string | null = null
+  const progress = (): void => {
+    if (closed) return
+    const held = catalogHold ?? failures.values().next().value ?? (inFlight.size ? 'Waiting for hook installation in an adopted home.' : null)
+    if (held !== reported) { reported = held; deps.held(held) }
+    if ((restoring || requests.size || [...installs.keys()].some(key => !inFlight.has(key))) && !timer) {
+      timer = setTimeout(() => { timer = undefined; retry() }, 1_000)
+      timer.unref()
+    }
+  }
   const queue = (engine: SessionStoreEngine, home: string): void => {
     const key = JSON.stringify([engine, home])
     if (!installed.has(key)) installs.set(key, [engine, home])
@@ -38,18 +50,27 @@ export function createHomeAdoptions(deps: HomeAdoptionDeps) {
         restoring = false
       } catch (error) { held ??= reason(error) }
     }
+    catalogHold = held
     for (const [key, [engine, home]] of installs) {
-      try { deps.install(engine, home); installed.add(key); installs.delete(key) }
-      catch (error) { held ??= reason(error) }
+      if (inFlight.has(key)) continue
+      const confirm = () => { installed.add(key); installs.delete(key); failures.delete(key) }
+      try {
+        const result = deps.install(engine, home)
+        if (!result) { confirm(); continue }
+        inFlight.add(key)
+        void result.then(() => {
+          if (!closed) confirm()
+        }, error => { if (!closed) failures.set(key, reason(error)) }).finally(() => {
+          inFlight.delete(key); progress()
+        })
+      } catch (error) { failures.set(key, reason(error)) }
     }
-    if (held !== reported) { reported = held; deps.held(held) }
-    if ((restoring || requests.size || installs.size) && !timer) {
-      timer = setTimeout(() => { timer = undefined; retry() }, 1_000)
-      timer.unref()
-    }
+    progress()
   }
+
   return {
     retry,
+    current: () => !closed,
     submit(environment: NodeJS.ProcessEnv): void {
       if (closed) return
       // Only two declared home variables survive this callback; never retain login-shell credentials.
@@ -62,7 +83,7 @@ export function createHomeAdoptions(deps: HomeAdoptionDeps) {
     close(): void {
       closed = true
       if (timer) clearTimeout(timer)
-      timer = undefined; requests.clear(); installs.clear(); installed.clear()
+      timer = undefined; requests.clear(); installs.clear(); installed.clear(); failures.clear()
     },
   }
 }

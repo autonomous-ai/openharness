@@ -283,7 +283,7 @@ const _harnesses = <String, EngineIdentity>{
   'autonomous/memories': EngineIdentity(
     id: "autonomous/memories",
     label: "Memories",
-    category: "Code",
+    category: "Essentials",
     tagline: "Every memory your agents keep, in one place",
     creator: "Autonomous",
     color: Color(0xfff0b9a6),
@@ -770,7 +770,7 @@ const _linkedHarnesses = <String, EngineIdentity>{
   'autonomous/harness-monitor': EngineIdentity(
     id: "autonomous/harness-monitor",
     label: "Harness Monitor",
-    category: "Compute",
+    category: "Essentials",
     tagline: "htop for your harnesses: pause the idle ones, keep the fleet in your head",
     creator: "Autonomous",
     color: Color(0xffadd1a3),
@@ -795,7 +795,7 @@ const knownHarnessBase = <String, String>{
   'autonomous/foam-agent': 'codex',
   'autonomous/juce-agent-toolkit': 'codex',
   'autonomous/machine-monitor': 'claude',
-  'autonomous/memories': 'claude',
+  'autonomous/memories': 'opencode',
   'autonomous/simskill': 'codex',
 
   'autonomous/roundtable': 'claude',

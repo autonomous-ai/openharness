@@ -25,24 +25,24 @@ describe('isOpencodeV2', () => {
 })
 
 describe('opencodeMajorVersion', () => {
-  it('runs --version once per installed binary, and again once the binary changes', () => {
+  it('runs --version once per installed binary, and again once the binary changes', async () => {
     let calls = 0
     let stamp = 'a'
     const probe = { identity: () => stamp, read: () => { calls++; return stamp === 'a' ? '1.18.31' : 'opencode v2.0.18' } }
     const cache = new Map<string, number | null>()
-    expect(opencodeMajorVersion(probe, cache)).toBe(1)
-    expect(opencodeMajorVersion(probe, cache)).toBe(1)
+    expect(await opencodeMajorVersion(probe, cache)).toBe(1)
+    expect(await opencodeMajorVersion(probe, cache)).toBe(1)
     expect(calls).toBe(1)
     // OpenCode updates itself in place (1.18 → 2.0 happened under a running daemon): a new file is a
     // new answer.
     stamp = 'b'
-    expect(opencodeMajorVersion(probe, cache)).toBe(2)
+    expect(await opencodeMajorVersion(probe, cache)).toBe(2)
     expect(calls).toBe(2)
   })
 
-  it('answers null, without throwing, when the binary is missing or will not answer', () => {
+  it('answers null, without throwing, when the binary is missing or will not answer', async () => {
     const cache = new Map<string, number | null>()
-    expect(opencodeMajorVersion({ identity: () => null, read: () => { throw new Error('ENOENT') } }, cache)).toBeNull()
-    expect(opencodeMajorVersion({ identity: () => 'x', read: () => { throw new Error('timeout') } }, cache)).toBeNull()
+    expect(await opencodeMajorVersion({ identity: () => null, read: () => { throw new Error('ENOENT') } }, cache)).toBeNull()
+    expect(await opencodeMajorVersion({ identity: () => 'x', read: () => { throw new Error('timeout') } }, cache)).toBeNull()
   })
 })

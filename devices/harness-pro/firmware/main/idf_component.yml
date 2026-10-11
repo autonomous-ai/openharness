@@ -1,0 +1,14 @@
+# Managed component dependencies (pulled by the IDF Component Manager on build).
+dependencies:
+  idf:
+    version: ">=5.5.0"
+  # The panel driver carries the ST7703's power-on register sequence and the DSI timings for THIS panel:
+  # ST7703_720_720_PANEL_60HZ_DPI_CONFIG (38 MHz pixel clock, porches 50/20/50 by 20/4/20) and
+  # ST7703_PANEL_BUS_DSI_2CH_CONFIG (2 lanes at 480 Mbps). It is published for esp32p4 only.
+  waveshare/esp_lcd_st7703: "^2.0.0"
+  # Its reset is done BY HAND in display/touch_gt911.c before this driver is opened, because the chip
+  # decides its own I2C address from the INT pin at the rising edge of RESET — so the driver is always
+  # given GPIO_NUM_NC and must never be allowed to pulse it again.
+  espressif/esp_lcd_touch_gt911: "^1.1.0"
+  # Audio codec abstraction (ES7210 mics, ES8311 speaker); used once audio joins.
+  espressif/esp_codec_dev: "*"

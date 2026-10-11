@@ -72,6 +72,8 @@ module.exports = {
         { source: '/harness-web', destination: '/harness-web/index.html' },
         // Plain HTML/CSS; served as a file without a React or Flutter runtime.
         { source: '/os', destination: '/os/index.html' },
+        // Harness for agents: one plain HTML file (no script, inline style) for agents that fetch it.
+        { source: '/agents', destination: '/agents/index.html' },
       ],
     }
   },
@@ -94,6 +96,14 @@ module.exports = {
         source,
         // Keep the standalone page intact: CDN analytics must not inject JavaScript.
         headers: [{ key: 'Cache-Control', value: 'no-store, no-transform' }],
+      })),
+      ...['/agents', '/agents/index.html', '/llms.txt'].map((source) => ({
+        source,
+        // Read by agents as written: no CDN script injection or rewriting, and no stale copy after a deploy.
+        headers: [
+          { key: 'Cache-Control', value: 'no-store, no-transform' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+        ],
       })),
       {
         source: '/os/latest',

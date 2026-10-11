@@ -741,6 +741,22 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('keeps a processing card\'s update for the devices tee and off the relay', async () => {
+    const socket = relaySocket('token')
+    const tee = vi.fn()
+    socket.onOutboundCommander = tee
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    const relayed = vi.fn()
+    vi.spyOn(socket as unknown as { toGateway(what: string, call: (g: unknown) => void): void }, 'toGateway')
+      .mockImplementation((_what, call) => call({ commander: relayed }))
+    socket.sendCommander({ type: 'commander_event', agentId: 's1', dbSessionId: 's1', payload: { kind: 'processing', text: 'Working', update: 'Reading the spec' } })
+    expect((tee.mock.calls[0][0] as { payload: Record<string, unknown> }).payload.update).toBe('Reading the spec')
+    expect((relayed.mock.calls[0][0] as { payload: Record<string, unknown> }).payload).toEqual({ kind: 'processing', text: 'Working' })
+    await socket.stop()
+  })
+
   it('sends a frame though the orchestrator watching the frames cannot read its state', async () => {
     // A full disk: reading the orchestrator's state makes its folder, and that threw out of every send,
     // so a turn's end never reached a window (e2e/diskfull.e2e.ts).
@@ -2234,6 +2250,18 @@ describe('BackendSocket outbound queue', () => {
         type: 'agent_create_status_result', payload: { requestId: 'missing', creationId, state: 'missing' },
       }))
       socket.handleLocalFrame('local:missing-receipt', {
+        type: 'agent_create_cancel', payload: { requestId: 'cancel', creationId },
+      })
+      await vi.waitFor(() => expect(frames).toContainEqual({
+        type: 'agent_create_cancel_result', payload: { requestId: 'cancel', creationId, state: 'cancelled' },
+      }))
+      socket.handleLocalFrame('local:missing-receipt', {
+        type: 'agent_create', payload: { requestId: 'late', creationId, engine: 'claude', cwd: '/tmp/work' },
+      })
+      await vi.waitFor(() => expect(frames).toContainEqual({
+        type: 'agent_create_result', payload: { requestId: 'late', creationId, state: 'cancelled' },
+      }))
+      socket.handleLocalFrame('local:missing-receipt', {
         type: 'agent_create', payload: { requestId: 'invalid', creationId: '../bad', engine: 'claude', cwd: '/tmp/work' },
       })
       await vi.waitFor(() => expect(frames).toContainEqual(expect.objectContaining({
@@ -3299,7 +3327,7 @@ describe('agent_create with a prompt, a name and a named agent', () => {
 
   it('passes the named agent through for opencode, and null when none was given', async () => {
     // v1 — pinned, so the answer does not depend on the OpenCode installed where the suite runs.
-    vi.spyOn(opencodeVersion, 'opencodeMajorVersion').mockReturnValue(1)
+    vi.spyOn(opencodeVersion, 'opencodeMajorVersion').mockResolvedValue(1)
     const { seen, reply } = await create({ agent: 'harness-compute', name: 'Local model' })
     expect(seen).toEqual([expect.objectContaining({ engine: 'opencode', agent: 'harness-compute', name: 'Local model', prompt: null })])
     expect(reply).toMatchObject({ agent: expect.objectContaining({ id: 'named-1' }) })
@@ -3308,7 +3336,7 @@ describe('agent_create with a prompt, a name and a named agent', () => {
   })
 
   it('refuses a named agent for opencode v2, whose TUI exits 1 on --agent, before any pane exists', async () => {
-    vi.spyOn(opencodeVersion, 'opencodeMajorVersion').mockReturnValue(2)
+    vi.spyOn(opencodeVersion, 'opencodeMajorVersion').mockResolvedValue(2)
     const { seen, reply } = await create({ agent: 'harness-compute' })
     expect(reply).toMatchObject({ error: 'AGENT_UNSUPPORTED', detail: expect.stringContaining('opencode') })
     expect(seen).toHaveLength(0)
@@ -4110,6 +4138,6 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     await dispatch({ type: 'message', payload: { content: 'hi', agentId: 'a1' } }, 'local:app', 'local')
     expect(onMessage).toHaveBeenCalledWith('a1', 'hi')
     await dispatch({ type: 'message', payload: { content: 'task in A', agentId: 'a1', tabId: 'swarm-a' } }, 'local:app', 'local')
-    expect(onMessage).toHaveBeenLastCalledWith('a1', 'task in A', undefined, 'swarm-a')
+    expect(onMessage).toHaveBeenLastCalledWith('a1', 'task in A')
   })
 })

@@ -407,7 +407,7 @@ async function overridesCases(): Promise<Record<string, unknown>> {
       machine: () => ({ hermesSystemManaged: false, opencodeMajor: null }), gridLaunch: gridLaunchInProcess(),
       writeGridConfigDir: async (key, files) => { calls.push(`writeGridConfigDir ${key} ${files.map((file) => file.name).join(',')}`); return `/state/grid-engine-config/${key}` },
       tmuxSupportsSessionEnv: async () => true,
-      installCodexHooks: (home) => { calls.push(`installCodexHooks ${home}`) },
+      installCodexHooks: (home) => { calls.push(`installCodexHooks ${home}`); return true },
       readCodexConfig: (path) => { calls.push(`readCodexConfig ${path}`); return config },
       dshLaunch: async (dsh, workspace, eng, key) => {
         calls.push(`dshLaunch ${dsh} ${workspace} ${eng} ${key}`)

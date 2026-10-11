@@ -18,6 +18,7 @@ import { enginePathOverride } from './engineBin.js'
 import { installedDsh } from '../dsh/installed.js'
 import { createLaunchHelpers } from '../core/agents/launch.js'
 import { createLaunchAuthority } from '../core/agents/launchAuthority.js'
+import type { NativeLaunch } from '../engines/nativeLaunch.js'
 
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn() }))
 vi.mock('./tmuxAgentDiscovery.js', () => ({ listTmuxPanes: vi.fn() }))
@@ -103,7 +104,7 @@ describe('production resume handler', () => {
       authority: createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: id => deps.restartJobs.revision(id), cancelled: id => deps.stopJobs.has(id) }),
       prepareApiTools: apiNotes, setGridLaunch: vi.fn(), setTail: vi.fn(),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
-        tmuxSupportsSessionEnv: async () => true, writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(), readCodexConfig: () => null },
+        tmuxSupportsSessionEnv: async () => true, writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null },
     })
     deps.relaunchOverrides = helpers.relaunchOverrides
     expect(registry.byAgent(saved.agentId)).toBeUndefined()
@@ -129,6 +130,63 @@ describe('production resume handler', () => {
     })
     registry.load()
     expect(registry.byAgent(saved.agentId)?.permissionMode).toBe(permissionMode)
+  })
+
+  it('carries the captured native launch and token through permission, argv and registration', async () => {
+    const native: NativeLaunch = { token: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', opencodeMajor: null,
+      environment: {}, proofs: [], current: vi.fn(() => true),
+      prepareHooks: vi.fn(async () => true), permission: vi.fn(async () => 'supported' as const) }
+    vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true,
+      overrides: { env: {}, extraArgs: [], clearEnv: [], native } })
+    const starting = vi.fn()
+    vi.mocked(deps.announceSession).mockImplementation(row => {
+      if (row.launch?.state === 'starting') starting(row.launch.nativeToken)
+    })
+    create.mockImplementationOnce(async request => {
+      expect(request.current()).toBe(true)
+      return { state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } }
+    })
+    expect(await start()).toMatchObject({ ok: true, resumed: true })
+    expect(dropPermissionFlagIfUnsupported).toHaveBeenCalledWith('codex', expect.any(Object), undefined, native)
+    expect(buildEngineLaunchArgv).toHaveBeenCalledWith('codex', expect.objectContaining({ native }))
+    expect(starting).toHaveBeenCalledExactlyOnceWith(native.token)
+  })
+
+  it.each(['permission', 'expired'] as const)('holds a saved resume when native %s evidence is unavailable', async reason => {
+    const native: NativeLaunch = { opencodeMajor: null, environment: {}, proofs: [], current: () => reason !== 'expired',
+      prepareHooks: async () => true, permission: async () => 'supported' }
+    vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true,
+      overrides: { env: {}, extraArgs: [], clearEnv: [], native } })
+    if (reason === 'permission') vi.mocked(dropPermissionFlagIfUnsupported).mockImplementationOnce(async (_engine, choice) => ({
+      choice, droppedFlag: null, nativeHold: 'Waiting for the captured executable permission probe.',
+    }))
+    expect(await start()).toEqual({ ok: false, error: 'NATIVE_LAUNCH_HELD', detail: reason === 'permission'
+      ? 'Waiting for the captured executable permission probe.' : 'Waiting for fresh executable and hook evidence.' })
+    expect(create).not.toHaveBeenCalled()
+    expect(buildEngineLaunchArgv).not.toHaveBeenCalled()
+    expect(registry.byAgent(saved.agentId)).toBeUndefined()
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
+    expect(deps.stoppedAgents.get(saved.agentId)).toMatchObject({ sessionId: saved.sessionId, transcriptPath: saved.transcriptPath })
+  })
+
+  it.each(['native', 'cancel'] as const)('rechecks %s authority at terminal dispatch and releases an unstarted reservation', async reason => {
+    let valid = true
+    const native: NativeLaunch = { opencodeMajor: null, environment: {}, proofs: [], current: () => valid,
+      prepareHooks: async () => true, permission: async () => 'supported' }
+    vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true,
+      overrides: { env: {}, extraArgs: [], clearEnv: [], native } })
+    create.mockImplementationOnce(async request => {
+      expect(request.current()).toBe(true)
+      if (reason === 'native') valid = false
+      else deps.restartJobs.cancel(saved.agentId)
+      expect(request.current()).toBe(false)
+      return { state: 'failed', reason: 'launch authority changed', dispatch: 'not_started' }
+    })
+    expect(await start()).toMatchObject({ ok: false, error: reason === 'native' ? 'RESUME_UNCONFIRMED' : 'AGENT_CHANGED' })
+    expect(kill).not.toHaveBeenCalled()
+    expect(registry.byAgent(saved.agentId)).toBeUndefined()
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
+    expect(deps.stoppedAgents.get(saved.agentId)?.sessionId).toBe(saved.sessionId)
   })
 
   it('notes where the relaunched engine\'s writing begins, after the history is prepared and before the launch', async () => {

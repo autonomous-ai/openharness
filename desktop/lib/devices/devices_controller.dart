@@ -93,6 +93,7 @@ class HarnessDevice {
       'mac': status.mac,
       'fw': status.fw,
       'hw': status.hw,
+      'board': status.board,
       if (status.settings != null) 'settings': status.settings!.toJson(),
     },
   };
@@ -279,6 +280,7 @@ class DevicesController extends ChangeNotifier {
           mac: live.mac ?? known?.status.mac,
           fw: live.fw ?? known?.status.fw,
           hw: live.hw ?? known?.status.hw,
+          board: live.board ?? known?.status.board,
           updating: live.updating,
           // A disconnect frame may omit readings. Preserve them for reference,
           // but require fresh settings when a connected device greets us again.
@@ -337,6 +339,7 @@ class DevicesController extends ChangeNotifier {
           mac: status.mac,
           fw: status.fw,
           hw: status.hw,
+          board: status.board,
           settings: status.settings,
         ),
       );

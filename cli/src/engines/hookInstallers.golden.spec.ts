@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { expectForeignHooksPreserved, preservedHookFiles } from '../testing/hookGoldenSafety.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/hook-installers.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_HOOK_GOLDEN === '1'
@@ -219,6 +220,9 @@ function snapshot(): Record<string, Entry> {
     try { names = readdirSync(dir).sort() } catch { return }
     for (const name of names) {
       const path = join(dir, name)
+      // Agent Messages' hook script (engines/kit/messagesHook.ts), written beside the settings by the same install:
+      // its own spec proves it; recorded here it would repeat the whole script in every case.
+      if (relative(root, path) === join('home', '.harness', 'agent-messages')) continue
       const stat = lstatSync(path)
       const key = normalize(relative(root, path))
       if (stat.isSymbolicLink()) files[key] = { type: 'link', target: normalize(readlinkSync(path)) }
@@ -255,13 +259,14 @@ function reset(): void {
   mkdirSync(join(root, 'home'), { recursive: true })
 }
 
-function run(engine: Engine, via: Via, scenario: Case): Outcome {
+async function run(engine: Engine, via: Via, scenario: Case) {
   reset()
   const home = homes()[engine][via]
   const commandFor = (port: number): string => engine === 'claude' ? command(port, 'claude') : command(port, 'codex', home)
   const target: Target = { engine, via, home, file: join(home, FILE[engine]), cmd: commandFor(PORT), otherCmd: commandFor(OTHER_PORT), elsewhere: join(root, 'elsewhere') }
   if (!scenario.noHome) mkdirSync(home, { recursive: true })
   scenario.setup?.(target)
+  const before = snapshot(), ready: boolean[] = []
   const runs: Run[] = []
   for (let i = 0; i < 2; i++) {
     const logs: string[] = []
@@ -272,15 +277,16 @@ function run(engine: Engine, via: Via, scenario: Case): Outcome {
       vi.spyOn(console, 'warn').mockImplementation(capture('warn'))]
     let threw: string | null = null
     try {
-      if (via === 'install') hooks[engine].install(PORT)
-      else hooks[engine].installIn(PORT, home)
+      ready.push(via === 'install' ? await hooks[engine].install(PORT) : await hooks[engine].installIn(PORT, home))
     } catch (error) { threw = describeError(error) } finally { for (const spy of spies) spy.mockRestore() }
     runs.push({ logs, threw })
   }
-  return { runs, files: snapshot() }
+  return { outcome: { runs, files: snapshot() }, before, ready, file: normalize(relative(root, target.file)) }
 }
 
+const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
 beforeAll(async () => {
+  Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
   root = mkdtempSync(join(tmpdir(), 'hook-golden-'))
   for (const name of ['HOME', 'CODEX_HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'CLAUDE_PROJECTS_DIR']) saved[name] = process.env[name]
   // Every folder the hook command names is inside the throwaway root, so the command reads the same on every machine.
@@ -313,26 +319,52 @@ beforeAll(async () => {
       for (const timeout of [5, 30]) hashes.push([reviewHash(codex.settings.reviewed!, event, matcher, { command: cmd, timeout }), `<hash ${event} ${token.slice(1, -1)}${timeout === 5 ? '' : ` timeout ${timeout}`}>`])
     }
   }
+  // Agent Messages' block (kit/messagesHook.ts), the same command in every case: its command and Codex's hash of it.
+  const { messagesCommand } = await import('./kit/messagesHook.js')
+  const messages = messagesCommand(join(root, 'home', '.harness', 'agent-messages'))
+  for (const timeout of [5, 30]) hashes.push([reviewHash(codex.settings.reviewed!, 'PostToolUse', undefined, { command: messages, timeout }), `<hash PostToolUse messages${timeout === 5 ? '' : ` timeout ${timeout}`}>`])
+  hashes.push([messages, '<messages command>'])
   // The real path first: on macOS the temporary folder is reached through /var, and Codex keys by /private/var.
   tokens = [...hashes, ...commands, [notify.HOOK_SCRIPT, '<script>'], [process.execPath, '<node>'], [realpathSync(root), '<root>'], [root, '<root>'], [`.${process.pid}.`, '.<pid>.']]
 })
 
 afterAll(() => {
+  Object.defineProperty(process, 'platform', platform)
   for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value
   if (root) { reset(); rmSync(root, { recursive: true, force: true }) }
   if (RECORD) writeFileSync(GOLDEN, JSON.stringify(recorded, null, 1) + '\n')
 })
 
+// These recorded cases exposed destructive recovery, unknown ownership or
+// permission failures. Keep their original artifact and assert preservation.
+const HELD = new Set(['empty file', 'whitespace only', 'malformed JSON', 'byte order mark', 'JSON null', 'JSON array',
+  'JSON string', 'JSON number', 'hooks is a string', 'hooks is an array', 'hooks is null', 'an event is not a list',
+  'odd blocks', 'a command that is not text', 'a dangling symlink', 'a symlink into a missing folder',
+  'a read-only file', 'an unreadable file', 'a read-only folder', 'a read-only folder holding a writable file', 'the file is a folder'])
+const PRESERVE_COMMANDS = new Set(['our old hook', 'our old hook beside foreign hooks',
+  'ours current on some events, old or missing on others', 'ours twice, the first old'])
+
 describe.each(['claude', 'codex'] as const)('%s hook installer, byte for byte', (engine) => {
   for (const via of ['installIn', 'install'] as const) {
     for (const scenario of CASES.filter((one) => via === 'installIn' || DEFAULT_HOME_CASES.has(one.name))) {
       const key = `${engine} ${via}: ${scenario.name}`
-      it.skipIf(scenario.permissions && ROOT_USER)(key, () => {
+      it.skipIf(scenario.permissions && ROOT_USER)(key, async () => {
         const previous = process.umask(0o022)
         try {
-          const outcome = run(engine, via, scenario)
+          const { outcome, before, ready, file } = await run(engine, via, scenario)
           recorded[key] = outcome
-          if (!RECORD) expect(outcome).toEqual(golden[key])
+          if (!RECORD) {
+            if (HELD.has(scenario.name)) {
+              expect(ready).toEqual([false, false])
+              expect(outcome.files).toEqual(before)
+              for (const run of outcome.runs) { expect(run.threw).toBeNull(); expect(run.logs.some(line => line.startsWith('error '))).toBe(true) }
+            } else if (PRESERVE_COMMANDS.has(scenario.name) || (engine === 'codex' && scenario.name === 'our block led by a foreign hook')) {
+              expect(ready).toEqual([true, true])
+              expectForeignHooksPreserved(before, outcome.files, golden[key].files, file)
+            } else {
+              expect(outcome).toEqual({ ...golden[key], files: preservedHookFiles(before, golden[key].files) })
+            }
+          }
         } finally { process.umask(previous) }
       })
     }

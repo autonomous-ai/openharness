@@ -28,7 +28,7 @@ class _Pane extends TerminalSession {
   bool get acceptsInput => true;
 
   @override
-  Future<bool> sendComposerText(String text, {String? tabId}) async {
+  Future<bool> sendComposerText(String text) async {
     typed.add(text);
     return true;
   }

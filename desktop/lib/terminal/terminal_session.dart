@@ -150,10 +150,6 @@ class TerminalSession extends ChangeNotifier {
   final TerminalFrameSender send;
   final TerminalBinarySender sendBinary;
 
-  /// Set by the view receiving input. Capture it with the bytes, before any async send.
-  String? inputTabId;
-  String? _bufferedInputTabId;
-  bool _swarmInput = false;
   final Duration resyncTimeout;
   final bool readOnly;
 
@@ -568,7 +564,6 @@ class TerminalSession extends ChangeNotifier {
         // Which kind of stream came back. A watcher renders the terminal and
         // may not type into it; the band says who has it and offers to ask.
         watching = payload['readOnly'] == true;
-        _swarmInput = payload['swarmInput'] == true;
         // The claim is spent here: from now on this session holds the lease,
         // and every later open of its own rests on holding it rather than on a
         // gesture nobody has made since. See [takeover].
@@ -1023,13 +1018,12 @@ class TerminalSession extends ChangeNotifier {
   /// the injection from there: it adapts slash commands to the pane's engine and retries the
   /// submit Enter. A client typing bytes can do neither — which is exactly how Codex ended up
   /// holding a composed line unsent, its Enter arriving in the same read as the text.
-  Future<bool> sendComposerText(String text, {String? tabId}) async {
+  Future<bool> sendComposerText(String text) async {
     if (!acceptsInput) return false;
     final content = text.trimRight();
     if (content.trim().isEmpty) return false;
     return send('message', {
       'content': content,
-      'tabId': ?(tabId ?? inputTabId),
       'agentId': agentId,
       'mode': 'auto',
     });
@@ -1052,7 +1046,7 @@ class TerminalSession extends ChangeNotifier {
   ///
   /// The caller must check [MachineState.terminalPasteRawAvailable] first: an older CLI does not know
   /// this binary kind at all, so sending it there would silently go nowhere.
-  Future<bool> pasteText(String text, {String? tabId}) async {
+  Future<bool> pasteText(String text) async {
     if (!acceptsInput) return false;
     // Forwarded verbatim, including a stray 0x03 — same as _onTerminalOutput/sendComposerText.
     if (text.isEmpty) return false;
@@ -1061,7 +1055,6 @@ class TerminalSession extends ChangeNotifier {
     final generation = _generation;
     final frame = TerminalBinaryFrame(
       kind: TerminalBinaryKind.paste,
-      tabId: _swarmInput ? (tabId ?? inputTabId) : null,
       streamId: currentStreamId,
       // Unused server-side (a paste is one self-contained unit, not part of the ordered keystroke
       // stream `input`'s seq guards) — kept at 0 rather than threading a second counter for a field
@@ -1227,11 +1220,6 @@ class TerminalSession extends ChangeNotifier {
 
   void _onTerminalOutput(String data) {
     if (!acceptsInput || data.isEmpty) return;
-    final origin = _swarmInput ? inputTabId : null;
-    if (_inputBytes.isNotEmpty && _bufferedInputTabId != origin) {
-      unawaited(_flushInput());
-    }
-    _bufferedInputTabId = origin;
     final bytes = utf8.encode(data);
     final isBoundary =
         data.contains('\r') ||
@@ -1276,7 +1264,6 @@ class TerminalSession extends ChangeNotifier {
       return;
     }
     final bytes = List<int>.from(_inputBytes);
-    final origin = _bufferedInputTabId;
     _inputBytes.clear();
     _lastInputFlushAt = inputClockForTest();
     final currentStreamId = streamId;
@@ -1311,7 +1298,6 @@ class TerminalSession extends ChangeNotifier {
         final end = min(offset + kInputFrameMaxBytes, bytes.length);
         final frame = TerminalBinaryFrame(
           kind: TerminalBinaryKind.input,
-          tabId: origin,
           streamId: currentStreamId,
           seq: _inputSeq++,
           bytes: Uint8List.fromList(bytes.sublist(offset, end)),

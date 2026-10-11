@@ -14,7 +14,7 @@ import {
 const shell = vi.hoisted(() => ({ env: {} as NodeJS.ProcessEnv }))
 vi.mock('./loginShellEnv.js', () => ({ loginShellEnvironment: () => shell.env }))
 const clock = vi.hoisted(() => ({ remaining: Infinity }))
-vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => --clock.remaining < 0 ? 251 : 0 } }))
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => --clock.remaining < 0 ? 3_001 : 0 } })) // past NATIVE_EVIDENCE_MS
 vi.mock('node:fs', async original => {
   const actual = await original<typeof fs>()
   return { ...actual, linkSync: vi.fn(actual.linkSync), lstatSync: vi.fn(actual.lstatSync) }

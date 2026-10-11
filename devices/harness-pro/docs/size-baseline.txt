@@ -1,0 +1,27 @@
+Baseline 2026-10-11, before the lightweight pass
+Build: idf.py -B build -DPROJECT_VER=0.0.99-pod -DPOD_PANEL_TURN=180 build; python -m esp_idf_size build/harness_pro.map
+
+Total image size: 3093612 bytes (.bin may be padded larger)
+Used Flash size: 2997844 bytes (.text 575584, .rodata 2421744)
+Used stat D/IRAM: 135764 bytes (.data 11332, .bss 39996, .text 84436)
+Top 10 files by flash_total (bytes):
+  pets.c.obj                 1257169
+  pro_fonts.c.obj            707003
+  engine_logos.c.obj         251266
+  esp_app_desc.c.obj         110419
+  esp_hosted_rpc.pb-c.c.ob   76698
+  rpc_rsp.c.obj              16006
+  protobuf-c.c.obj           13136
+  pod_model.c.obj            12354
+  pro_cable.c.obj            12290
+  i2c_master.c.obj           12095
+
+After the lightweight pass, 2026-10-11 (same build flags)
+Total image size: 1,868,494 B (was 3,093,612; -40%). harness_pro.bin 0x1c85e0, app partition 77% free.
+  pets.c.obj           956,634 (was 1,257,169)  unreachable relax/alert scenes and codex WORKING/DONE frames pruned
+  pro_fonts.c.obj      199,649 (was   707,003)  sizes 42/56 carry masks only for # > _ ?
+  engine_logos.c.obj   204,610 (was   251,266)  no 72 px logo for engines with a pet
+  Wi-Fi (esp_hosted, lwip, sdmmc, protobuf)  gone; the ESP32-C5 is held in reset (GPIO13 low)
+D/IRAM used 130,742 B (was 135,764). On the device: heap= 401,031 free (was 384,103), psram 30.26 MB free (was 28.96).
+Host raster, -O2, us per full frame: recap:be ~1050 -> ~330, agent:fw 375 -> 220, talk:fw 296 -> 158.
+Device: raster_max_us 19,753 / frame_max_us 21,273 in the first minute after boot (was ~43,000 / ~44,500 with a pet).

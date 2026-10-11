@@ -1,0 +1,918 @@
+{
+  "linux:create": {
+    "events": [
+      [
+        "dispatch",
+        "create",
+        {
+          "engine": "claude",
+          "cwd": "<root>/create/work",
+          "bypassPermission": false,
+          "permissionMode": "ask",
+          "grid": null,
+          "codexHome": null,
+          "dsh": null,
+          "prompt": "First request",
+          "name": "Fixture",
+          "agent": null,
+          "resumeSessionId": null,
+          "takeOver": null
+        }
+      ]
+    ],
+    "replies": [
+      {
+        "creationId": "fixture-creation-create",
+        "state": "pending"
+      },
+      {
+        "creationId": "fixture-creation-create",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/create/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-create",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/create/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-create",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/create/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-create",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/create/work"
+        }
+      }
+    ]
+  },
+  "linux:codex": {
+    "events": [
+      [
+        "dispatch",
+        "create",
+        {
+          "engine": "codex",
+          "cwd": "<root>/codex/work",
+          "bypassPermission": false,
+          "permissionMode": "ask",
+          "grid": null,
+          "codexHome": "<root>/CODEX_HOME",
+          "dsh": null,
+          "prompt": "First request",
+          "name": "Fixture",
+          "agent": null,
+          "resumeSessionId": null,
+          "takeOver": null
+        }
+      ]
+    ],
+    "replies": [
+      {
+        "creationId": "fixture-creation-codex",
+        "state": "pending"
+      },
+      {
+        "creationId": "fixture-creation-codex",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "codex",
+          "cwd": "<root>/codex/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-codex",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "codex",
+          "cwd": "<root>/codex/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-codex",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "codex",
+          "cwd": "<root>/codex/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-codex",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "codex",
+          "cwd": "<root>/codex/work"
+        }
+      }
+    ]
+  },
+  "linux:model": {
+    "events": [
+      [
+        "models",
+        {
+          "model": "fixture-model",
+          "grid": "fixture-grid"
+        }
+      ],
+      [
+        "dispatch",
+        "create",
+        {
+          "engine": "claude",
+          "cwd": "<root>/model/work",
+          "bypassPermission": false,
+          "permissionMode": "ask",
+          "grid": {
+            "networkId": "fixture-grid",
+            "networkName": "Fixture",
+            "baseUrl": "http://fixture.invalid/v1",
+            "apiKey": "fixture-key",
+            "model": "fixture-model"
+          },
+          "codexHome": null,
+          "dsh": null,
+          "prompt": "First request",
+          "name": "Fixture",
+          "agent": null,
+          "resumeSessionId": null,
+          "takeOver": null
+        }
+      ]
+    ],
+    "replies": [
+      {
+        "creationId": "fixture-creation-model",
+        "state": "pending"
+      },
+      {
+        "creationId": "fixture-creation-model",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/model/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-model",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/model/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-model",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/model/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-model",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/model/work"
+        }
+      }
+    ]
+  },
+  "linux:project": {
+    "events": [
+      [
+        "prepare-folder",
+        {
+          "source": "new",
+          "name": "Fixture"
+        },
+        "Claude"
+      ],
+      [
+        "trust",
+        "claude",
+        null,
+        "<root>/project/prepared"
+      ],
+      [
+        "dispatch",
+        "create",
+        {
+          "engine": "claude",
+          "cwd": "<root>/project/prepared",
+          "bypassPermission": false,
+          "permissionMode": "ask",
+          "grid": null,
+          "codexHome": null,
+          "dsh": null,
+          "prompt": "First request",
+          "name": "Fixture",
+          "agent": null,
+          "resumeSessionId": null,
+          "takeOver": null,
+          "scmLaunchRecord": null
+        }
+      ]
+    ],
+    "replies": [
+      {
+        "creationId": "fixture-creation-project",
+        "state": "pending"
+      },
+      {
+        "creationId": "fixture-creation-project",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/project/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-project",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/project/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-project",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/project/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-project",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/project/work"
+        }
+      }
+    ]
+  },
+  "linux:fork": {
+    "events": [
+      [
+        "dispatch",
+        "fork",
+        {
+          "agentId": "fixture-agent",
+          "name": "Fork",
+          "prompt": "Try another approach"
+        }
+      ]
+    ],
+    "replies": [
+      {
+        "creationId": "fixture-creation-fork",
+        "state": "pending"
+      },
+      {
+        "creationId": "fixture-creation-fork",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/fork/work"
+        },
+        "level": "native"
+      },
+      {
+        "creationId": "fixture-creation-fork",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/fork/work"
+        },
+        "level": "native"
+      },
+      {
+        "creationId": "fixture-creation-fork",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/fork/work"
+        },
+        "level": "native"
+      },
+      {
+        "creationId": "fixture-creation-fork",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/fork/work"
+        },
+        "level": "native"
+      }
+    ]
+  },
+  "linux:resume": {
+    "events": [
+      [
+        "dispatch",
+        "resume",
+        {
+          "agentId": "fixture-agent",
+          "permissionMode": "ask"
+        }
+      ]
+    ],
+    "replies": [
+      {
+        "creationId": "fixture-creation-resume",
+        "state": "pending"
+      },
+      {
+        "creationId": "fixture-creation-resume",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/resume/work"
+        },
+        "resumed": true
+      },
+      {
+        "creationId": "fixture-creation-resume",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/resume/work"
+        },
+        "resumed": true
+      },
+      {
+        "creationId": "fixture-creation-resume",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/resume/work"
+        },
+        "resumed": true
+      },
+      {
+        "creationId": "fixture-creation-resume",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/resume/work"
+        },
+        "resumed": true
+      }
+    ]
+  },
+  "linux:restart": {
+    "events": [
+      [
+        "dispatch",
+        "restart",
+        {
+          "agentId": "fixture-agent"
+        }
+      ]
+    ],
+    "replies": [
+      {
+        "creationId": "fixture-creation-restart",
+        "state": "pending"
+      },
+      {
+        "creationId": "fixture-creation-restart",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/restart/work"
+        },
+        "resumed": false
+      },
+      {
+        "creationId": "fixture-creation-restart",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/restart/work"
+        },
+        "resumed": false
+      },
+      {
+        "creationId": "fixture-creation-restart",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/restart/work"
+        },
+        "resumed": false
+      },
+      {
+        "creationId": "fixture-creation-restart",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/restart/work"
+        },
+        "resumed": false
+      }
+    ]
+  },
+  "darwin:create": {
+    "events": [
+      [
+        "dispatch",
+        "create",
+        {
+          "engine": "claude",
+          "cwd": "<root>/create/work",
+          "bypassPermission": false,
+          "permissionMode": "ask",
+          "grid": null,
+          "codexHome": null,
+          "dsh": null,
+          "prompt": "First request",
+          "name": "Fixture",
+          "agent": null,
+          "resumeSessionId": null,
+          "takeOver": null
+        }
+      ]
+    ],
+    "replies": [
+      {
+        "creationId": "fixture-creation-create",
+        "state": "pending"
+      },
+      {
+        "creationId": "fixture-creation-create",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/create/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-create",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/create/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-create",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/create/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-create",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/create/work"
+        }
+      }
+    ]
+  },
+  "darwin:codex": {
+    "events": [
+      [
+        "dispatch",
+        "create",
+        {
+          "engine": "codex",
+          "cwd": "<root>/codex/work",
+          "bypassPermission": false,
+          "permissionMode": "ask",
+          "grid": null,
+          "codexHome": "<root>/CODEX_HOME",
+          "dsh": null,
+          "prompt": "First request",
+          "name": "Fixture",
+          "agent": null,
+          "resumeSessionId": null,
+          "takeOver": null
+        }
+      ]
+    ],
+    "replies": [
+      {
+        "creationId": "fixture-creation-codex",
+        "state": "pending"
+      },
+      {
+        "creationId": "fixture-creation-codex",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "codex",
+          "cwd": "<root>/codex/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-codex",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "codex",
+          "cwd": "<root>/codex/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-codex",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "codex",
+          "cwd": "<root>/codex/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-codex",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "codex",
+          "cwd": "<root>/codex/work"
+        }
+      }
+    ]
+  },
+  "darwin:model": {
+    "events": [
+      [
+        "models",
+        {
+          "model": "fixture-model",
+          "grid": "fixture-grid"
+        }
+      ],
+      [
+        "dispatch",
+        "create",
+        {
+          "engine": "claude",
+          "cwd": "<root>/model/work",
+          "bypassPermission": false,
+          "permissionMode": "ask",
+          "grid": {
+            "networkId": "fixture-grid",
+            "networkName": "Fixture",
+            "baseUrl": "http://fixture.invalid/v1",
+            "apiKey": "fixture-key",
+            "model": "fixture-model"
+          },
+          "codexHome": null,
+          "dsh": null,
+          "prompt": "First request",
+          "name": "Fixture",
+          "agent": null,
+          "resumeSessionId": null,
+          "takeOver": null
+        }
+      ]
+    ],
+    "replies": [
+      {
+        "creationId": "fixture-creation-model",
+        "state": "pending"
+      },
+      {
+        "creationId": "fixture-creation-model",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/model/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-model",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/model/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-model",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/model/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-model",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/model/work"
+        }
+      }
+    ]
+  },
+  "darwin:project": {
+    "events": [
+      [
+        "prepare-folder",
+        {
+          "source": "new",
+          "name": "Fixture"
+        },
+        "Claude"
+      ],
+      [
+        "trust",
+        "claude",
+        null,
+        "<root>/project/prepared"
+      ],
+      [
+        "dispatch",
+        "create",
+        {
+          "engine": "claude",
+          "cwd": "<root>/project/prepared",
+          "bypassPermission": false,
+          "permissionMode": "ask",
+          "grid": null,
+          "codexHome": null,
+          "dsh": null,
+          "prompt": "First request",
+          "name": "Fixture",
+          "agent": null,
+          "resumeSessionId": null,
+          "takeOver": null,
+          "scmLaunchRecord": null
+        }
+      ]
+    ],
+    "replies": [
+      {
+        "creationId": "fixture-creation-project",
+        "state": "pending"
+      },
+      {
+        "creationId": "fixture-creation-project",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/project/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-project",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/project/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-project",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/project/work"
+        }
+      },
+      {
+        "creationId": "fixture-creation-project",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/project/work"
+        }
+      }
+    ]
+  },
+  "darwin:fork": {
+    "events": [
+      [
+        "dispatch",
+        "fork",
+        {
+          "agentId": "fixture-agent",
+          "name": "Fork",
+          "prompt": "Try another approach"
+        }
+      ]
+    ],
+    "replies": [
+      {
+        "creationId": "fixture-creation-fork",
+        "state": "pending"
+      },
+      {
+        "creationId": "fixture-creation-fork",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/fork/work"
+        },
+        "level": "native"
+      },
+      {
+        "creationId": "fixture-creation-fork",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/fork/work"
+        },
+        "level": "native"
+      },
+      {
+        "creationId": "fixture-creation-fork",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/fork/work"
+        },
+        "level": "native"
+      },
+      {
+        "creationId": "fixture-creation-fork",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/fork/work"
+        },
+        "level": "native"
+      }
+    ]
+  },
+  "darwin:resume": {
+    "events": [
+      [
+        "dispatch",
+        "resume",
+        {
+          "agentId": "fixture-agent",
+          "permissionMode": "ask"
+        }
+      ]
+    ],
+    "replies": [
+      {
+        "creationId": "fixture-creation-resume",
+        "state": "pending"
+      },
+      {
+        "creationId": "fixture-creation-resume",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/resume/work"
+        },
+        "resumed": true
+      },
+      {
+        "creationId": "fixture-creation-resume",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/resume/work"
+        },
+        "resumed": true
+      },
+      {
+        "creationId": "fixture-creation-resume",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/resume/work"
+        },
+        "resumed": true
+      },
+      {
+        "creationId": "fixture-creation-resume",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/resume/work"
+        },
+        "resumed": true
+      }
+    ]
+  },
+  "darwin:restart": {
+    "events": [
+      [
+        "dispatch",
+        "restart",
+        {
+          "agentId": "fixture-agent"
+        }
+      ]
+    ],
+    "replies": [
+      {
+        "creationId": "fixture-creation-restart",
+        "state": "pending"
+      },
+      {
+        "creationId": "fixture-creation-restart",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/restart/work"
+        },
+        "resumed": false
+      },
+      {
+        "creationId": "fixture-creation-restart",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/restart/work"
+        },
+        "resumed": false
+      },
+      {
+        "creationId": "fixture-creation-restart",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/restart/work"
+        },
+        "resumed": false
+      },
+      {
+        "creationId": "fixture-creation-restart",
+        "state": "created",
+        "agent": {
+          "id": "fixture-agent",
+          "engine": "claude",
+          "cwd": "<root>/restart/work"
+        },
+        "resumed": false
+      }
+    ]
+  }
+}

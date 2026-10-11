@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resolveOpenRouterKey } from '../openrouter.js'
-import { createJevDecide, JevUnavailable, resolveJevKey, type JevChoice } from './jevClient.js'
+import { createJevDecide, JevUnavailable, resolveJevKey, type AccountBackend, type JevChoice } from './jevClient.js'
 
 // The env key and `ori login`'s file are openrouter.ts's to read, and its spec's to test: here they are none,
 // unless a test says otherwise.
@@ -115,7 +115,7 @@ describe('asking Jev', () => {
     expect(costs).toEqual([[0.000167, 3986], [0.0001, 0]])
   })
 
-  it('asks nothing without a key', async () => {
+  it('asks nothing without a key or a backend to ask', async () => {
     const fetch = fetching()
     const failure = await createJevDecide({ key: async () => null, fetch })(STATE, QUESTIONS).catch((error: unknown) => error)
     expect(failure).toBeInstanceOf(JevUnavailable)
@@ -134,6 +134,14 @@ describe('asking Jev', () => {
     vi.mocked(resolveOpenRouterKey).mockResolvedValue(null)
     vi.stubEnv('TYPESAFE_CREDENTIALS', join(root, 'missing'))
     await expect(createJevDecide()(STATE, QUESTIONS)).rejects.toMatchObject({ code: 'NO_KEY' })
+  })
+
+  it("prefers the person's own key over Harness's", async () => {
+    const fetch = fetching()
+    const backend = vi.fn<AccountBackend>(async () => ({ status: 200, body: {} }))
+    await createJevDecide({ key: async () => 'sk-or-fixture', backend, fetch })(STATE, QUESTIONS)
+    expect(backend).not.toHaveBeenCalled()
+    expect(fetch.mock.calls[0]![0]).toBe('https://openrouter.ai/api/alpha/decisions')
   })
 
   it.each([
@@ -181,5 +189,60 @@ describe('asking Jev', () => {
     const decide = createJevDecide({ key: async () => 'sk-or-fixture', fetch: fetching(body) })
     expect(await decide(STATE, QUESTIONS)).toEqual({ target: { choice: 's0', probabilities: { s0: 0.9, new: 0.1 } } })
     expect(await createJevDecide({ key: async () => 'sk-or-fixture', fetch: fetching('{"answers":{}}') })(STATE, QUESTIONS)).toEqual({})
+  })
+})
+
+describe("asking Jev on Harness's key", () => {
+  const QUESTIONS: Record<string, JevChoice> = { target: { type: 'choice', instructions: 'Which?', criteria: { s0: 'billing', new: 'none' } } }
+  const STATE = { message: 'why was the card charged twice' }
+  const ANSWERS = { target: { choice: 's0', probabilities: { s0: 0.9, new: 0.1 } } }
+  const answering = (status: number, body: Record<string, unknown>) => vi.fn<AccountBackend>(async () => ({ status, body }))
+  const decide = (backend: AccountBackend, onCost?: (usd: number, tokens: number) => void) =>
+    createJevDecide({ key: async () => null, backend, onCost })
+
+  it('posts the state and the questions to the backend the core signs, and reads the answers', async () => {
+    const backend = answering(200, { success: true, data: { answers: ANSWERS } })
+    const onCost = vi.fn()
+    expect(await decide(backend, onCost)(STATE, QUESTIONS)).toEqual(ANSWERS)
+    // No model and no key from here: the backend fixes both.
+    expect(backend).toHaveBeenCalledWith('POST', '/api/route/jev', { state: STATE, questions: QUESTIONS })
+    // Harness pays, so nothing is charged to the person.
+    expect(onCost).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [401, { success: false, error: { code: 'NOT_SIGNED_IN' } }, 'NO_KEY', 'sign in to Harness to use ⌘B'],
+    [401, { success: false, error: { code: 'UNAUTHORIZED' } }, 'AUTH', 'Harness could not confirm your sign-in'],
+    [403, {}, 'AUTH', 'Harness could not confirm your sign-in'],
+    [502, { success: false, error: { code: 'AUTH_UNAVAILABLE' } }, 'UNAVAILABLE', 'Harness could not refresh your sign-in'],
+    [429, { success: false, error: { code: 'RATE_LIMITED' } }, 'BUSY', 'too many ⌘B decisions, try again in a minute'],
+    [503, { success: false, error: { code: 'JEV_CREDITS' } }, 'CREDITS', "Harness's Jev budget has run out"],
+    [503, { success: false, error: { code: 'JEV_BUSY' } }, 'BUSY', 'Jev is busy'],
+    [504, { success: false, error: { code: 'BACKEND_TIMEOUT' } }, 'UNAVAILABLE', "Harness's server did not answer in time"],
+    [502, { success: false, error: { code: 'BACKEND_UNREACHABLE' } }, 'UNAVAILABLE', "Harness's server cannot be reached"],
+    [503, { error: 'SERVICE_UNAVAILABLE' }, 'UNAVAILABLE', "Harness's server cannot be reached"],
+    [503, { error: 'GATEWAY_UNAVAILABLE' }, 'UNAVAILABLE', "Harness's server cannot be reached"],
+    [404, {}, 'UNAVAILABLE', "Harness's server cannot decide yet"],
+    [503, { success: false, error: { code: 'JEV_NOT_CONFIGURED' } }, 'UNAVAILABLE', "Harness's server answered 503"],
+    [502, { error: 7 }, 'UNAVAILABLE', "Harness's server answered 502"],
+  ])('names a %i (%j) as %s', async (status, body, code, message) => {
+    await expect(decide(answering(status, body))(STATE, QUESTIONS)).rejects.toMatchObject({ code, message })
+  })
+
+  it('refuses a reply with no answers', async () => {
+    await expect(decide(answering(200, { success: true, data: {} }))(STATE, QUESTIONS)).rejects.toMatchObject({ code: 'INVALID' })
+    await expect(decide(answering(200, {}))(STATE, QUESTIONS)).rejects.toMatchObject({ code: 'INVALID' })
+  })
+
+  it('stops waiting when the caller does: its slot is not held by a slow backend', async () => {
+    const never = vi.fn<AccountBackend>(() => new Promise(() => {}))
+    const caller = new AbortController()
+    const asked = decide(never)(STATE, QUESTIONS, caller.signal)
+    caller.abort(new Error('the window closed'))
+    await expect(asked).rejects.toThrow('the window closed')
+    // Already gone before it asked: nothing is asked, so nothing is paid for.
+    const unasked = vi.fn<AccountBackend>(() => new Promise(() => {}))
+    await expect(decide(unasked)(STATE, QUESTIONS, caller.signal)).rejects.toThrow('the window closed')
+    expect(unasked).not.toHaveBeenCalled()
   })
 })

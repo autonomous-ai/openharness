@@ -28,19 +28,22 @@ native module to compile — the same `cli.js` runs everywhere.
 
 Windows is not supported.
 
-## Swarm tabs and agent communication
+## Agent Messages
 
-Turn on **Settings → Experimental → Swarm collaboration** to try it; it is **off by default**.
-Each tab is a swarm, with membership supplied by its agent panes. Agents keep their engines and contexts,
-automatically discover peers in their tab, ask a focused question, and continue with the answer.
-Agents consult peers only within their current tab. Cross-swarm requests and
-Cmd+Shift+A are deferred. **Cmd+Shift+P → Swarm conversation** opens the shared
-questions, replies, and delivery states without starting work. Desktop/web and
-mobile show the same shared history.
+Harnesses in the same tab can message each other once **Agent Messages** is on for that tab (the chat icon on the tab;
+off by default). An agent runs, in its own pane:
 
-See the [channel guide](../docs/tab-channels.md) for the account opt-in, ownership,
-scope, and verification limits. Run `harness channel --help` for commands. The underlying [team protocol](../docs/agent-teams.md) and advanced
-`harness team` CLI remain available; delivery preserves busy sessions, drafts, and dialogs.
+```bash
+harness send                          # who is in this tab, and how to work together
+harness send api "Is the cleanup fix in?"
+harness send api,web --text-file note.md
+```
+
+The pane says who is sending; a message goes only to harnesses that share a tab with Agent Messages on, on this
+machine or another of the owner's paired machines. A working agent reads it at its next tool call, through
+Harness's PostToolUse hook, with nothing typed into its pane; an idle agent gets it as a prompt, typed only into
+an empty composer. Each message arrives under one header line naming its sender, never as the person's words,
+and waits until it is delivered. See the [design](../docs/design/2026-10-10-agent-messages.md).
 
 ## Remote media previews
 

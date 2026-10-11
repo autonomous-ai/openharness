@@ -1834,7 +1834,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     if (attachments == null) {
       return Align(
         alignment: Alignment.centerRight,
-        child: _desktopStartButton(),
+        child: _desktopLaunchActions(),
       );
     }
     return Row(
@@ -1863,7 +1863,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           ),
         ),
         const SizedBox(width: 12),
-        _desktopStartButton(),
+        _desktopLaunchActions(),
       ],
     );
   }
@@ -2070,6 +2070,21 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     };
     return '$action: ${_value(row)}';
   }
+
+  Widget _cancelPendingButton() => TextButton(
+    key: const ValueKey('cancel-pending-creation'),
+    onPressed: box.busy ? null : box.cancelPending,
+    child: const Text('Cancel request'),
+  );
+
+  Widget _desktopLaunchActions() => Wrap(
+    spacing: 8,
+    crossAxisAlignment: WrapCrossAlignment.center,
+    children: [
+      if (box.canCancelPending) _cancelPendingButton(),
+      _desktopStartButton(),
+    ],
+  );
 
   Widget _desktopStartButton() => ListenableBuilder(
     listenable: _desktopFocus[_Row.start]!,
@@ -2786,7 +2801,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
               ),
             ),
-            _desktopStartButton(),
+            _desktopLaunchActions(),
           ],
         ),
       ],
@@ -2835,6 +2850,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 ),
               ),
             _buildButton(),
+            if (box.canCancelPending) _cancelPendingButton(),
             if (!_picking && box.requiredChoice != null) ...[
               SizedBox(height: _rowHeight),
               Padding(
@@ -3071,6 +3087,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
               SizedBox(height: _rowHeight),
               _buildButton(),
+              if (box.canCancelPending) _cancelPendingButton(),
             ],
           ),
         ),

@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
+import { fakeJwt, installFakeGrid } from '../src/lib/__fixtures__/fakeGrid.js'
 
 type Engine = 'claude' | 'codex'
 
@@ -50,6 +51,14 @@ function searchPids(d: IsolatedDaemon): number[] {
 }
 const finds = async (client: LocalClient, word: string, sessionId: string): Promise<boolean> =>
   JSON.stringify(await client.request('session_search', { query: word }, 30_000)).includes(sessionId)
+/** A session's row in the index file, read as the Memories package reads it: directly and read-only. */
+function indexRow(d: IsolatedDaemon, sessionId: string): Record<string, unknown> | undefined {
+  const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as {
+    DatabaseSync: new (path: string, options: { readOnly: boolean }) => { prepare(sql: string): { get(...args: string[]): Record<string, unknown> | undefined }; close(): void }
+  }
+  const db = new DatabaseSync(join(d.dataDir, 'session-search.db'), { readOnly: true })
+  try { return db.prepare('SELECT agent_id, title, cwd, origin FROM sessions WHERE session_id = ?').get(sessionId) } finally { db.close() }
+}
 
 describe('services in their own processes', () => {
   let daemon: IsolatedDaemon | undefined
@@ -78,6 +87,15 @@ describe('services in their own processes', () => {
       const word = `axolotl${engine}`
       await turn(client, agent.id, `about the ${word}`)
       await until(`search to find the ${engine} conversation`, () => finds(client, word, agent.sessionId) || null, 60_000, 1_000)
+      // Its row holds the harness's folder and title, the ones the catalog joins from the harness
+      // records, for what reads the file itself (the Memories package); and it is still Harness's.
+      await until(`the ${engine} row to carry its folder and title`, async () => {
+        const catalog = await client.request('session_search', { query: '', catalogAfter: '', limit: 100 }, 30_000)
+        const entry = (catalog.hits as Array<Record<string, any>> | undefined)?.find((hit) => hit.sessionId === agent.sessionId)?.catalogEntry
+        const indexed = indexRow(d, agent.sessionId)
+        return entry && indexed && String(indexed.cwd).endsWith(`search-out-${engine}`) && indexed.cwd === entry.cwd
+          && indexed.title && indexed.title === entry.title && indexed.agent_id === agent.id && indexed.origin === '' ? indexed : null
+      }, 30_000, 1_000)
     }
     expect(d.coresStarted()).toBe(1)
     client.close()
@@ -436,7 +454,7 @@ describe('models in its own process', () => {
       const d = await fresh({ HARNESSD_TEST_HOLD_CONNECT: `models:${hold}` })
       const client = await LocalClient.connect(d)
       // The launch the desktop sends for a grid it already resolved: models builds it (ModelsPort.gridLaunch).
-      const grid = { networkId: 'net-e2e', networkName: 'e2e-grid', baseUrl: 'https://fixture.invalid/g/net-e2e/relay/v1', apiKey: 'fixture-key', model: 'Small-Q4' }
+      const grid = { networkId: 'net-e2e', networkName: 'e2e-grid', baseUrl: 'https://fixture.invalid/g/net-e2e/relay', apiKey: 'fixture-key', model: 'Small-Q4' }
       const onGrid = await createOn(d, client, 'claude', 'launch-grid-claude', grid)
       expect(onGrid.grid).toMatchObject({ baseUrl: grid.baseUrl, model: 'Small-Q4' })
       const before = modelsPids(d)
@@ -473,6 +491,74 @@ describe('models in its own process', () => {
       expect(d.coresStarted()).toBe(1)
       client.close()
     } finally { rmSync(holdDir, { recursive: true, force: true }) }
+  })
+
+  it('keeps manual model requests through an outage and core crash, cancels durably, then launches each remaining ID once', async () => {
+    const holdDir = mkdtempSync(join(tmpdir(), 'models-intent-hold-'))
+    const hold = join(holdDir, 'hold')
+    const gridName = 'fixture-grid'
+    const token = fakeJwt({ exp: Math.floor(Date.now() / 1000) + 86400 * 300, sub: 'fixture' })
+    const grid = installFakeGrid({
+      ls: { stdout: JSON.stringify([{ grid: gridName, id: 'fixture-grid-id', type: 'permissioned-public' }]) },
+      // No network address for inventory: the reader uses the fake CLI only.
+      info: { stdout: '{}' },
+      [`info ${gridName} --env`]: { stdout: `export OPENAI_BASE_URL="http://127.0.0.1:9/v1"\nexport OPENAI_API_KEY="${token}"\n` },
+      models: { stdout: JSON.stringify([{ model: 'Fixture-Q4', node: 'fixture-node', engine: 'llama' }]) },
+      mcp: { stdout: JSON.stringify({ server: 'grid-web', url: 'http://127.0.0.1:9/mcp', authorization: `Bearer ${token}` }) },
+    })
+    try {
+      const d = await fresh({ HARNESSD_TEST_HOLD_CONNECT: `models:${hold}`,
+        HARNESS_GRID_BIN: process.env.HARNESS_GRID_BIN!, FAKE_GRID_PLAN: process.env.FAKE_GRID_PLAN!, FAKE_GRID_LOG: process.env.FAKE_GRID_LOG! })
+      let client = await LocalClient.connect(d)
+      writeFileSync(hold, '')
+      for (const pid of modelsPids(d)) process.kill(pid, 'SIGKILL')
+      await until('models disconnected for the saved request', () => d.log().includes('[services] models disconnected') || null)
+      const payloads = ['claude', 'codex', 'claude'].map((engine, n) => {
+        const cwd = join(d.projectsDir, `saved-model-${n}`)
+        mkdirSync(cwd)
+        return { creationId: `saved-model-request-${n}`, engine, cwd, gridModel: 'Fixture-Q4', gridName, bypassPermission: true }
+      })
+      for (const payload of payloads) {
+        expect(await client.request('agent_create', payload, 15_000)).toMatchObject({ creationId: payload.creationId, state: 'pending', held: { service: 'models' } })
+      }
+      expect((await client.request('agents_list', { includeStopped: true })).agents).toHaveLength(0)
+      const before = d.log().length
+      const asked = Date.now()
+      process.kill(d.corePid()!, 'SIGKILL')
+      client.close()
+      await until('the replacement core ready while models is unavailable', () => d.log().slice(before).includes('[cli] ready') || null, 15_000)
+      expect(Date.now() - asked).toBeLessThan(15_000)
+      client = await LocalClient.connect(d)
+      for (const { creationId } of payloads) {
+        expect(await client.request('agent_create_status', { creationId })).toMatchObject({ state: 'pending', held: { service: 'models' } })
+      }
+      const cancelled = payloads[2]!
+      expect(await client.request('agent_create_cancel', { creationId: cancelled.creationId })).toMatchObject({ state: 'cancelled' })
+      expect(await client.request('agent_create', cancelled)).toMatchObject({ state: 'cancelled' })
+      const plain = await create(d, client, 'claude', 'unrelated-during-held-request')
+      await turn(client, plain.id, 'the held requests do not block my turn')
+      rmSync(hold)
+      const completed: Record<string, any>[] = []
+      for (const payload of payloads.slice(0, 2)) {
+        const result = await until(`${payload.engine} saved model request to complete`, async () => {
+          const reply = await client.request('agent_create_status', { creationId: payload.creationId })
+          return reply.state === 'created' ? reply : null
+        }, 60_000, 250)
+        completed.push(result.agent)
+        expect(await client.request('agent_create', payload)).toMatchObject({ state: 'created', agent: { id: result.agent.id } })
+        await until(`${payload.engine} recovered model to bind`, async () => (await row(client, result.agent.id))?.sessionId || null)
+        await turn(client, result.agent.id, 'exactly one saved launch recovered')
+      }
+      const rows = (await client.request('agents_list', { includeStopped: true })).agents as Array<Record<string, any>>
+      expect(rows.map(agent => agent.id).sort()).toEqual([plain.id, ...completed.map(agent => agent.id)].sort())
+      expect(await client.request('agent_create_status', { creationId: cancelled.creationId })).toMatchObject({ state: 'cancelled' })
+      expect(d.coresStarted()).toBe(2)
+      client.close()
+    } finally {
+      await daemon?.close(); daemon = undefined
+      grid.dispose()
+      rmSync(holdDir, { recursive: true, force: true })
+    }
   })
 
   /**

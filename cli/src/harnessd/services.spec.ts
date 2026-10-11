@@ -314,7 +314,7 @@ describe('ServiceSupervisor', () => {
   })
 
   it('starts an experiment\'s process only once the core asks for one of its services, and keeps it like any other', () => {
-    const experiment: ServiceSpec = { name: 'experiments', services: ['orchestrator', 'teams'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true }
+    const experiment: ServiceSpec = { name: 'experiments', services: ['orchestrator', 'messages'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true }
     const supervisor = make([search, experiment])
     supervisor.start()
     expect(children.map((child) => child.spec.name)).toEqual(['search'])
@@ -322,12 +322,12 @@ describe('ServiceSupervisor', () => {
     supervisor.want('search')
     supervisor.want('nobody')
     expect(children).toHaveLength(1)
-    supervisor.want('teams')
+    supervisor.want('messages')
     expect(latest('experiments').env.HARNESSD_SERVICE).toBe('experiments')
     // Asked again, while it runs or after it crashed: the master's to restart, once.
     supervisor.want('orchestrator')
     latest('experiments').exit(1)
-    supervisor.want('teams')
+    supervisor.want('messages')
     expect(children.filter((child) => child.spec.name === 'experiments')).toHaveLength(1)
     vi.advanceTimersByTime(1_000)
     expect(children.filter((child) => child.spec.name === 'experiments')).toHaveLength(2)
@@ -337,7 +337,7 @@ describe('ServiceSupervisor', () => {
   it('starts every process on demand a core too old to ask for it would never ask for, and stops one never started at once', () => {
     const experiment: ServiceSpec = { name: 'orchestrator', services: ['orchestrator'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true }
     const devices: ServiceSpec = { name: 'devices', services: ['devices', 'wifi'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4 }
-    const idle: ServiceSpec = { ...experiment, name: 'teams', services: ['teams'] }
+    const idle: ServiceSpec = { ...experiment, name: 'messages', services: ['messages'] }
     // A core of protocol 3 asks for the experiments, not for the devices: theirs starts as it binds.
     const three = make([search, experiment, devices])
     three.start()
@@ -361,10 +361,10 @@ describe('ServiceSupervisor', () => {
     never.start()
     expect(never.status()[0].state).toBe('off')
     never.unasked(2)
-    expect(children.map((child) => child.spec.name)).toEqual(['orchestrator', 'devices', 'teams'])
+    expect(children.map((child) => child.spec.name)).toEqual(['orchestrator', 'devices', 'messages'])
     // One running then is stopped and started with the others, and waits to be asked for again.
     never.stop(vi.fn())
-    latest('teams').exit(0)
+    latest('messages').exit(0)
     never.start()
     expect(never.status()[0].state).toBe('off')
   })
@@ -467,7 +467,7 @@ describe('ServiceSupervisor', () => {
 })
 
 describe('which services the core leaves to its master', () => {
-  const known = ['search', 'viewers', 'workspaces', 'teams']
+  const known = ['search', 'viewers', 'workspaces', 'messages']
   const supervised = { HARNESSD_SUPERVISED: '1', HARNESSD_SERVICE_TOKEN: 'token' }
 
   it('is what the master says it runs, told in a form a core from before the list reads too', () => {
@@ -484,7 +484,7 @@ describe('which services the core leaves to its master', () => {
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(specs, 42) }, known)]).toEqual(['search', 'workspaces'])
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv([], 42) }, known)]).toEqual([])
     // What the master says wins over whatever HARNESSD_SERVICES the core inherited; names it does not know are its own.
-    expect([...servicesTheMasterRuns({ ...supervised, [SERVICE_PROCESSES_ENV]: ' teams, nothing ', HARNESSD_SERVICES: 'search' }, known)]).toEqual(['teams'])
+    expect([...servicesTheMasterRuns({ ...supervised, [SERVICE_PROCESSES_ENV]: ' messages, nothing ', HARNESSD_SERVICES: 'search' }, known)]).toEqual(['messages'])
   })
 
   it('under a master too old to say, is what HARNESSD_SERVICES names, and nothing when it names none: never every service', () => {

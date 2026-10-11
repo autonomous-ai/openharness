@@ -1,0 +1,929 @@
+// Host test for pro_cable (main/cable/pro_cable.c): framed JSON in, pro_app_* calls out. Built against the real
+// cJSON from $IDF_PATH/components/json/cJSON, the real cable_json_guard, cable_features, cable_machines and
+// cable_scroll, a recording stub of pro_app_api.h and a stub cable_link (see run.sh for the flags).
+#define _GNU_SOURCE
+#include <assert.h>
+#include <limits.h>
+#include <pthread.h>
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "cable/pro_cable.h"
+#include "cable_features.h"
+#include "cable_frame.h"
+#include "cable_link.h"
+#include "esp_app_desc.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+#include "pod/pod_model.h"
+#include "pro_app_api.h"
+#include "sys/device_mac.h"
+#include "sys/last_words.h"
+#include "board/board.h"
+#include "sys/config_store.h"
+#include "sys/fw_update.h"
+
+static int checks;
+#define CHECK(c) do { if (!(c)) { fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #c); abort(); } checks++; } while (0)
+
+// ---- the recorder --------------------------------------------------------------------------------------
+enum { EV_LINK, EV_AGENTS, EV_SWARMS, EV_LIBRARY, EV_CONTEXT, EV_TURN, EV_SUMMARY, EV_QUESTION, EV_QCLOSE, EV_FOCUS,
+       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN };
+typedef struct { int kind; char id[64]; char a[2400], b[2400], c[2400], d[128]; long n1, n2, n3, n4; } ev_t;
+#define EV_MAX 64
+static ev_t evs[EV_MAX];
+static int nev;
+static cable_swarm_t rec_swarms[SWARMS_MAX];
+static cable_swarm_members_t rec_members;
+static cable_tile_t rec_tiles[SWARM_TILES_MAX];
+static char rec_agent_ids[POD_AGENTS_MAX][ID_MAX];
+
+static ev_t *add(int kind, const char *id)
+{
+    CHECK(nev < EV_MAX);
+    ev_t *e = &evs[nev++];
+    memset(e, 0, sizeof *e);
+    e->kind = kind;
+    snprintf(e->id, sizeof e->id, "%s", id ? id : "<null>");
+    return e;
+}
+static void put(char *dst, const char *s) { snprintf(dst, 2400, "%s", s ? s : "<null>"); }
+
+void pro_app_link(bool up, const char *machine) { ev_t *e = add(EV_LINK, NULL); e->n1 = up; put(e->a, machine); }
+void pro_app_agents(const pro_agent_row_t *rows, int n)
+{
+    ev_t *e = add(EV_AGENTS, NULL);
+    e->n1 = n;
+    for (int i = 0; i < n && i < POD_AGENTS_MAX; i++) snprintf(rec_agent_ids[i], ID_MAX, "%s", rows[i].id);
+    if (n > 0) { put(e->a, rows[0].name); put(e->b, rows[0].machine); put(e->c, rows[0].engine); }
+}
+void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members_t *members, const char *selected,
+                    const cable_tile_t *tiles, int tile_n)
+{
+    ev_t *e = add(EV_SWARMS, NULL);
+    e->n1 = n; e->n2 = members != NULL; e->n3 = tile_n;
+    put(e->a, selected);
+    memcpy(rec_swarms, items, (size_t)n * sizeof *items);
+    if (members) memcpy(&rec_members, members, sizeof rec_members);
+    memcpy(rec_tiles, tiles, (size_t)tile_n * sizeof *tiles);
+}
+void pro_app_library(const pro_library_row_t *rows, int count, int offset, int total)
+{
+    ev_t *e = add(EV_LIBRARY, NULL);
+    e->n1 = count; e->n2 = offset; e->n3 = total;
+    if (count > 0) { put(e->a, rows[0].name); put(e->b, rows[0].machine); put(e->c, rows[0].status); e->n4 = rows[0].age_s; }
+}
+void pro_app_context(const char *id, const char *machine, const char *project, const char *branch, const char *engine)
+{
+    ev_t *e = add(EV_CONTEXT, id); put(e->a, machine); put(e->b, project); put(e->c, branch); (void)engine;
+}
+void pro_app_turn(const char *id, const char *kind, const char *text, int elapsed_s)
+{
+    ev_t *e = add(EV_TURN, id); put(e->a, kind); put(e->b, text); e->n1 = elapsed_s;
+}
+void pro_app_summary(const char *id, const char *text, const char *recap, const char *full, bool restore, bool notify)
+{
+    ev_t *e = add(EV_SUMMARY, id); put(e->a, text); put(e->b, recap); put(e->c, full); e->n1 = restore; e->n2 = notify;
+}
+void pro_app_notif_replace(const pro_notif_row_t *rows, int n)
+{
+    ev_t *e = add(EV_NREPLACE, NULL); e->n1 = n;
+    if (n > 0) { put(e->a, rows[0].agent_id); put(e->b, rows[0].summary); put(e->c, rows[0].token); }
+    if (n > 1) snprintf(e->d, sizeof e->d, "%s", rows[n - 1].token);
+}
+void pro_app_notif_seen(const char *id, const char *token)
+{
+    ev_t *e = add(EV_NSEEN, id); put(e->a, token ? token : "(none)");
+}
+void pro_app_question(const char *id, const char *text) { put(add(EV_QUESTION, id)->a, text); }
+void pro_app_question_close(const char *id) { add(EV_QCLOSE, id); }
+void pro_app_focus(const char *id) { add(EV_FOCUS, id); }
+void pro_app_voice_result(int kind, const char *text) { ev_t *e = add(EV_VOICE, NULL); e->n1 = kind; put(e->a, text); }
+void pro_app_machines(const cable_machine_t *rows, int count, const char *selected)
+{
+    ev_t *e = add(EV_MACHINES, NULL); e->n1 = count; put(e->a, selected);
+    if (count > 0) put(e->b, rows[0].name);
+}
+
+// ---- stubs for everything below pro_cable ---------------------------------------------------------------
+static char sent[16][8192];
+static int nsent;
+bool cable_link_send(uint8_t type, const uint8_t *payload, size_t len)
+{
+    if (type == CABLE_TYPE_JSON && nsent < 16 && len < sizeof sent[0]) { memcpy(sent[nsent], payload, len); sent[nsent++][len] = 0; }
+    return true;
+}
+static uint32_t link_corrupt;
+void cable_link_counters(uint32_t *c, uint32_t *d) { *c = link_corrupt; *d = 0; }
+static int nowait_sent;
+bool cable_link_send_nowait(uint8_t type, const uint8_t *payload, size_t len)
+{
+    nowait_sent++;
+    return cable_link_send(type, payload, len);
+}
+bool cable_link_start(cable_frame_cb cb, cable_tick_cb tick, void *ctx) { (void)cb; (void)tick; (void)ctx; return true; }
+void cable_link_set_log_framing(bool on) { (void)on; }
+static int64_t now_us = 1000000;
+int64_t esp_timer_get_time(void) { return now_us; }
+const esp_app_desc_t *esp_app_get_description(void) { static const esp_app_desc_t d = { .version = "0.0.0" }; return &d; }
+const board_t *board(void) { static const board_t b = { .name = "stub" }; return &b; }
+bool device_mac_str(char *o, size_t n) { snprintf(o, n, "aa"); return true; }
+void last_words_report(void) {}
+struct host_mutex { pthread_mutex_t m; };
+SemaphoreHandle_t xSemaphoreCreateMutex(void) { struct host_mutex *m = malloc(sizeof *m); pthread_mutex_init(&m->m, NULL); return m; }
+BaseType_t xSemaphoreTake(SemaphoreHandle_t m, TickType_t w) { (void)w; pthread_mutex_lock(&m->m); return pdTRUE; }
+BaseType_t xSemaphoreGive(SemaphoreHandle_t m) { pthread_mutex_unlock(&m->m); return pdTRUE; }
+BaseType_t xTaskCreate(TaskFunction_t f, const char *n, uint32_t s, void *a, unsigned p, TaskHandle_t *o)
+{ (void)f; (void)n; (void)s; (void)a; (void)p; (void)o; return pdPASS; }
+void vTaskDelete(TaskHandle_t t) { (void)t; }
+void vTaskDelay(TickType_t t) { (void)t; }
+uint32_t ulTaskNotifyTake(BaseType_t c, TickType_t w) { (void)c; (void)w; return 0; }
+BaseType_t xTaskNotifyGive(TaskHandle_t t) { (void)t; return pdPASS; }
+
+// ---- settings: an in-memory config_store and the panel ----
+static uint8_t cfg_bright = 220, panel_level;
+static bool cfg_muted = true;
+static char cfg_lang[CFG_VLANG_MAX] = "en";
+uint8_t config_load_brightness(void) { return cfg_bright; }
+void config_save_brightness(uint8_t l) { cfg_bright = l; }
+bool config_load_muted(void) { return cfg_muted; }
+bool config_save_muted(bool m) { cfg_muted = m; return true; }
+void config_load_voicelang(char *o, size_t n) { snprintf(o, n, "%s", cfg_lang); }
+bool config_save_voicelang(const char *l) { snprintf(cfg_lang, sizeof cfg_lang, "%s", l); return true; }
+void pro_app_set_brightness(uint8_t level) { panel_level = level; }
+
+// ---- fw_update recorders: this test is about ROUTING, so fw_update.c is not linked (its own test covers the logic) ----
+static bool voice_is_open;
+bool pro_voice_open(void) { return voice_is_open; }
+static struct { int offers, slices, aborts, ticks; char version[32], sha[80], why[32]; int size; bool busy; size_t slice_len; uint8_t first; uint32_t now; } fw;
+// What the gate says, how long the stubbed fw_update_* "block" (the slot erase, the read-back hash), what they answer.
+static bool gate_ok = true, offer_accepts, offer_active;
+static int gate_begins, gate_ends, confirms, notes;
+static int64_t block_us;
+bool pro_app_begin_update_gate(void) { gate_begins++; return gate_ok; }
+void pro_app_end_update_gate(void) { gate_ends++; }
+void pro_app_note_update(void) { notes++; }
+bool fw_confirm_session_up(void) { confirms++; return confirms == 1; }
+bool fw_update_active(void) { return offer_active; }
+bool fw_update_offer(const char *v, int size, const char *sha, bool busy)
+{
+    now_us += block_us;
+    fw.offers++; fw.size = size; fw.busy = busy;
+    snprintf(fw.version, sizeof fw.version, "%s", v ? v : "<null>");
+    snprintf(fw.sha, sizeof fw.sha, "%s", sha ? sha : "<null>");
+    return offer_accepts;
+}
+void fw_update_slice(const uint8_t *d, size_t n) { now_us += block_us; fw.slices++; fw.slice_len = n; fw.first = n ? d[0] : 0; }
+void fw_update_abort(const char *why) { fw.aborts++; snprintf(fw.why, sizeof fw.why, "%s", why); }
+void fw_update_tick(uint32_t now) { fw.ticks++; fw.now = now; }
+
+// ---- helpers -------------------------------------------------------------------------------------------
+static void reset(void) { nev = 0; nsent = 0; }
+
+static void feed(const char *json)
+{
+    pro_cable_on_frame(CABLE_FRAME_VERSION, CABLE_TYPE_JSON, (const uint8_t *)json, strlen(json), NULL);
+}
+// printf into a heap buffer, then feed it (the long-string cases).
+static void feedf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void feedf(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    char *s = NULL;
+    int n = vasprintf(&s, fmt, ap);
+    va_end(ap);
+    CHECK(n > 0 && s);
+    feed(s);
+    free(s);
+}
+static char *repeat(const char *unit, int times)
+{
+    size_t u = strlen(unit);
+    char *s = malloc(u * (size_t)times + 1);
+    for (int i = 0; i < times; i++) memcpy(s + (size_t)i * u, unit, u);
+    s[u * (size_t)times] = 0;
+    return s;
+}
+static bool utf8_ok(const char *s)
+{
+    const unsigned char *p = (const unsigned char *)s;
+    while (*p) {
+        int n = *p < 0x80 ? 0 : (*p >> 5) == 6 ? 1 : (*p >> 4) == 14 ? 2 : (*p >> 3) == 30 ? 3 : -1;
+        if (n < 0) return false;
+        p++;
+        while (n--) { if ((*p & 0xC0) != 0x80) return false; p++; }
+    }
+    return true;
+}
+static void welcome(void)
+{
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[\"player.library\"]}");
+}
+
+// ---- cases ---------------------------------------------------------------------------------------------
+static void pro_cable_test_turn_activity(void)
+{
+    welcome();   // frames only count inside a session
+    reset();
+    feed("{\"t\":\"turn.activity\",\"agentId\":\"a\",\"text\":\"Infusing...\",\"action\":\"Reading\",\"step\":\"Read \xC2\xB7 x.c\",\"elapsedSeconds\":12}");
+    CHECK(nev == 3);
+    CHECK(evs[0].kind == EV_TURN && !strcmp(evs[0].id, "a") && !strcmp(evs[0].a, "verb") && !strcmp(evs[0].b, "Infusing...") && evs[0].n1 == -1);
+    CHECK(evs[1].kind == EV_TURN && !strcmp(evs[1].a, "activity") && !strcmp(evs[1].b, "Reading") && evs[1].n1 == 12);
+    CHECK(evs[2].kind == EV_TURN && !strcmp(evs[2].a, "step") && !strcmp(evs[2].b, "Read \xC2\xB7 x.c") && evs[2].n1 == -1);
+
+    // An empty text gives no verb; the step still comes.
+    reset();
+    feed("{\"t\":\"turn.activity\",\"agentId\":\"a\",\"text\":\"\",\"step\":\"Bash \xC2\xB7 ls\"}");
+    CHECK(nev == 1 && !strcmp(evs[0].a, "step"));
+    reset();   // an empty step too: nothing at all
+    feed("{\"t\":\"turn.activity\",\"agentId\":\"a\",\"text\":\"\",\"step\":\"\"}");
+    CHECK(nev == 0);
+
+    // elapsedSeconds: only an integer 0..2592000; anything else is -1 (keep the model's clock).
+    const char *bad[] = { "-1", "1.5", "2592001", "\"12\"", "null", "1e999" };
+    for (unsigned i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        reset();
+        feedf("{\"t\":\"turn.activity\",\"agentId\":\"a\",\"action\":\"x\",\"elapsedSeconds\":%s}", bad[i]);
+        CHECK(nev == 1 && evs[0].n1 == -1);
+    }
+    reset();   // elapsed alone is an activity with an empty sentence; the limits are inclusive
+    feed("{\"t\":\"turn.activity\",\"agentId\":\"a\",\"elapsedSeconds\":2592000}");
+    CHECK(nev == 1 && !strcmp(evs[0].a, "activity") && !strcmp(evs[0].b, "") && evs[0].n1 == 2592000);
+    reset();
+    feed("{\"t\":\"turn.activity\",\"agentId\":\"a\",\"elapsedSeconds\":0}");
+    CHECK(nev == 1 && evs[0].n1 == 0);
+
+    // The rest of a turn.
+    reset();
+    feed("{\"t\":\"turn.started\",\"agentId\":\"a\",\"text\":\"Working\"}");
+    feed("{\"t\":\"turn.started\",\"agentId\":\"b\"}");
+    feed("{\"t\":\"turn.done\",\"agentId\":\"a\"}");
+    feed("{\"t\":\"turn.error\",\"agentId\":\"a\",\"message\":\"boom\"}");
+    feed("{\"t\":\"focus\",\"agentId\":\"a\"}");
+    feed("{\"p\":{\"agentId\":\"c\"},\"t\":\"turn.done\"}");   // enveloped form
+    CHECK(nev == 6);
+    CHECK(!strcmp(evs[0].a, "started") && !strcmp(evs[0].b, "Working") && evs[0].n1 == 0);
+    CHECK(!strcmp(evs[1].a, "started") && !strcmp(evs[1].b, "") && !strcmp(evs[1].id, "b"));
+    CHECK(!strcmp(evs[2].a, "done") && !strcmp(evs[2].b, ""));
+    CHECK(!strcmp(evs[3].a, "error"));
+    CHECK(evs[4].kind == EV_FOCUS && !strcmp(evs[4].id, "a"));
+    CHECK(evs[5].kind == EV_TURN && !strcmp(evs[5].id, "c"));
+    // No agent, or one too long for ID_MAX: dropped.
+    reset();
+    feed("{\"t\":\"turn.done\"}");
+    feed("{\"t\":\"turn.done\",\"agentId\":\"\"}");
+    feedf("{\"t\":\"turn.done\",\"agentId\":\"%0*d\"}", ID_MAX, 7);
+    CHECK(nev == 0);
+}
+
+static void pro_cable_test_old_daemon(void)
+{
+    welcome();   // frames only count inside a session
+    // turn.activity with only `text`: a verb, nothing else.
+    reset();
+    feed("{\"t\":\"turn.activity\",\"agentId\":\"a\",\"text\":\"Thinking...\"}");
+    CHECK(nev == 1 && !strcmp(evs[0].a, "verb") && !strcmp(evs[0].b, "Thinking..."));
+
+    // summary without `full`.
+    reset();
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"done it\",\"recap\":\"short\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_SUMMARY);
+    CHECK(!strcmp(evs[0].a, "done it") && !strcmp(evs[0].b, "short") && !strcmp(evs[0].c, "<null>") && evs[0].n1 == 0);
+    reset();   // no recap either, restore on
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"restore\":true}");
+    CHECK(nev == 1 && !strcmp(evs[0].b, "<null>") && !strcmp(evs[0].c, "<null>") && evs[0].n1 == 1);
+    reset();   // a full that is present arrives, and an empty one is not NULL
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"recap\":\"r\",\"full\":\"the long one\"}");
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"full\":\"\"}");
+    CHECK(!strcmp(evs[0].c, "the long one") && !strcmp(evs[1].c, ""));
+
+    // swarms without agentIds/members/tiles: members NULL, panes falls back to agents.
+    reset();
+    feed("{\"t\":\"swarms\",\"selected\":\"s1\",\"items\":[{\"id\":\"s1\",\"name\":\"One\",\"agents\":3},{\"id\":\"s2\",\"name\":\"Two\",\"agents\":1,\"panes\":4}]}");
+    CHECK(nev == 1 && evs[0].kind == EV_SWARMS && evs[0].n1 == 2 && evs[0].n2 == 0 && evs[0].n3 == 0);
+    CHECK(!strcmp(evs[0].a, "s1") && rec_swarms[0].agents == 3 && rec_swarms[0].panes == 3 && rec_swarms[1].panes == 4);
+    // agentIds without members (a daemon that sends the ids only): members present, nothing described.
+    reset();
+    feed("{\"t\":\"swarms\",\"items\":[{\"id\":\"s1\",\"agents\":2,\"agentIds\":[\"x\",\"y\"]}]}");
+    CHECK(nev == 1 && evs[0].n2 == 1 && !strcmp(evs[0].a, "<null>"));
+    CHECK(rec_members.count[0] == 2 && !strcmp(rec_members.id[0][1], "y") && !rec_members.meta[0][0].has && !rec_members.meta[0][1].has);
+    // ...and with members: matched by id, an unknown id skipped, online defaults to true.
+    reset();
+    feed("{\"t\":\"swarms\",\"items\":[{\"id\":\"s1\",\"agentIds\":[\"x\",\"y\"],\"members\":[{\"id\":\"y\",\"name\":\"Why\",\"engine\":\"codex\",\"machine\":\"Box\",\"online\":false},{\"id\":\"zz\",\"name\":\"no\"},{\"id\":\"x\",\"name\":\"Ex\"}]}],\"tiles\":[{\"x1\":0,\"y1\":0,\"x2\":500,\"y2\":1000,\"a\":\"x\"},{\"x1\":9,\"y1\":0,\"x2\":5,\"y2\":9}]}");
+    CHECK(evs[0].n3 == 1 && !strcmp(rec_tiles[0].agent_id, "x") && rec_tiles[0].x2 == 500);
+    CHECK(rec_members.meta[0][1].has && !rec_members.meta[0][1].online && !strcmp(rec_members.meta[0][1].machine, "Box"));
+    CHECK(rec_members.meta[0][0].has && rec_members.meta[0][0].online && !strcmp(rec_members.meta[0][0].name, "Ex"));
+
+    // welcome with no features: no library; roster and machines still flow.
+    reset();
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m9\",\"name\":\"Old\"}}");
+    CHECK(pro_cable_connected() && !pro_cable_library_supported());
+    feed("{\"t\":\"agents.begin\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a1\",\"name\":\"Alpha\",\"engine\":\"claude\"}");
+    feed("{\"t\":\"agents.end\"}");
+    int agents = -1;
+    for (int i = 0; i < nev; i++) if (evs[i].kind == EV_AGENTS) { agents = (int)evs[i].n1; CHECK(!strcmp(evs[i].a, "Alpha")); }
+    CHECK(agents == 1);
+}
+
+static void pro_cable_test_oversize(void)
+{
+    welcome();   // frames only count inside a session
+    // A 400-character step (199 two-byte letters after an 'a': the cut at 120 B falls inside a letter) arrives cut
+    // on a boundary, at 120 B or less.
+    char *step_tail = repeat("\xC3\xA9", 199);
+    reset();
+    feedf("{\"t\":\"turn.activity\",\"agentId\":\"a\",\"step\":\"a%s\"}", step_tail);
+    CHECK(nev == 1 && !strcmp(evs[0].a, "step"));
+    CHECK(strlen(evs[0].b) <= 120 && strlen(evs[0].b) >= 118 && utf8_ok(evs[0].b));
+    free(step_tail);
+    char *ascii = repeat("x", 400);   // plain ASCII: exactly 120
+    reset();
+    feedf("{\"t\":\"turn.activity\",\"agentId\":\"a\",\"step\":\"%s\"}", ascii);
+    CHECK(strlen(evs[0].b) == 120);
+    free(ascii);
+
+    // A 900-character activity and verb fit their buffers.
+    char *act = repeat("\xE2\x80\xA6", 300);   // 900 chars, 900 bytes (3-byte ellipses), so every cut is mid-letter
+    reset();
+    feedf("{\"t\":\"turn.activity\",\"agentId\":\"a\",\"text\":\"%s\",\"action\":\"%s\"}", act, act);
+    CHECK(nev == 2);
+    CHECK(strlen(evs[0].b) <= PRO_VERB_BYTES - 1 && strlen(evs[0].b) > 0 && utf8_ok(evs[0].b));
+    CHECK(strlen(evs[1].b) <= PRO_ACTION_BYTES - 1 && strlen(evs[1].b) > 0 && utf8_ok(evs[1].b));
+    free(act);
+
+    // A 3000-character full is cut to fit the 2048 B recap; text and recap likewise.
+    char *big = repeat("\xC3\xA9", 3000);
+    reset();
+    // (a frame is capped at 8192 B, so each field gets its own frame)
+    feedf("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"%s\"}", big);
+    feedf("{\"t\":\"summary\",\"agentId\":\"a\",\"recap\":\"%s\"}", big);
+    feedf("{\"t\":\"summary\",\"agentId\":\"a\",\"full\":\"%s\"}", big);
+    CHECK(nev == 3);
+    const char *got[3] = { evs[0].a, evs[1].b, evs[2].c };
+    for (int i = 0; i < 3; i++)
+        CHECK(strlen(got[i]) <= POD_RECAP_BYTES - 1 && strlen(got[i]) >= POD_RECAP_BYTES - 2 && utf8_ok(got[i]));
+    free(big);
+
+    // A question prompt and a library-free voice error are cut the same way.
+    char *prompt = repeat("\xC3\xA9", 600);
+    reset();
+    feedf("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q1\",\"questions\":[{\"q\":\"%s\"}]}", prompt);
+    CHECK(nev == 1 && evs[0].kind == EV_QUESTION && strlen(evs[0].a) <= PRO_QUESTION_BYTES - 1 && utf8_ok(evs[0].a));
+    free(prompt);
+
+    // 64 swarms over the cap: exactly SWARMS_MAX come through, once, and the call returns.
+    char *items = malloc(64 * 20);
+    items[0] = 0;
+    for (int i = 0; i < 64; i++) sprintf(items + strlen(items), "%s{\"id\":\"t%d\"}", i ? "," : "", i);
+    reset();
+    feedf("{\"t\":\"swarms\",\"items\":[%s]}", items);
+    CHECK(nev == 1 && evs[0].n1 == SWARMS_MAX && !strcmp(rec_swarms[SWARMS_MAX - 1].id, "t23"));
+    free(items);
+    // 64 full-size swarms are over the JSON guard's token budget: the frame is refused as bad, no call, no loop.
+    char *full = malloc(64 * 120);
+    full[0] = 0;
+    for (int i = 0; i < 64; i++)
+        sprintf(full + strlen(full), "%s{\"id\":\"t%d\",\"name\":\"n%d\",\"agents\":1,\"panes\":1,\"agentIds\":[\"x%d\"]}", i ? "," : "", i, i, i);
+    uint32_t bad0, unknown0, bad1;
+    pro_cable_counters(&bad0, &unknown0);
+    reset();
+    feedf("{\"t\":\"swarms\",\"items\":[%s]}", full);
+    pro_cable_counters(&bad1, &unknown0);
+    CHECK(nev == 0 && bad1 == bad0 + 1);
+    free(full);
+    // ...and 24 members x 24 tabs of ids within the budget are bounded by SWARM_MEMBERS_MAX.
+    char *ids = malloc(40 * 30);
+    ids[0] = 0;
+    for (int i = 0; i < 40; i++) sprintf(ids + strlen(ids), "%s\"p%d\"", i ? "," : "", i);
+    reset();
+    feedf("{\"t\":\"swarms\",\"items\":[{\"id\":\"s\",\"agentIds\":[%s]}]}", ids);
+    CHECK(nev == 1 && rec_members.count[0] == SWARM_MEMBERS_MAX);
+    free(ids);
+
+    // 40 agents: the roster holds POD_AGENTS_MAX; duplicate and over-long ids are dropped.
+    reset();
+    feed("{\"t\":\"agents.begin\"}");
+    feed("{\"t\":\"agent\",\"id\":\"d0\"}");
+    feed("{\"t\":\"agent\",\"id\":\"d0\",\"name\":\"again\"}");
+    feedf("{\"t\":\"agent\",\"id\":\"%0*d\"}", ID_MAX, 1);
+    for (int i = 1; i < 40; i++) feedf("{\"t\":\"agent\",\"id\":\"d%d\",\"name\":\"N%d\"}", i, i);
+    feed("{\"t\":\"agents.end\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_AGENTS && evs[0].n1 == POD_AGENTS_MAX);
+    CHECK(!strcmp(rec_agent_ids[0], "d0") && !strcmp(rec_agent_ids[POD_AGENTS_MAX - 1], "d31") && !strcmp(evs[0].a, "d0"));
+    reset();   // an end with no begin is not a roster
+    feed("{\"t\":\"agents.end\"}");
+    CHECK(nev == 0);
+
+    // A frame bigger than the JSON guard's byte budget, a deep one and a non-object are refused, never parsed.
+    uint32_t b0, b1;
+    pro_cable_counters(&b0, &unknown0);
+    char *deep = repeat("[", 40);
+    reset();
+    feedf("{\"t\":\"x\",\"v\":%s}", deep);
+    feed("[1,2]");
+    feed("{\"t\":\"turn.done\"");
+    pro_cable_counters(&b1, &unknown0);
+    CHECK(nev == 0 && b1 == b0 + 3);
+    free(deep);
+}
+
+static void pro_cable_test_ignores_round(void)
+{
+    welcome();   // frames only count inside a session
+    const char *round[] = {
+        "{\"t\":\"carry.state\",\"agentId\":\"a\",\"carryId\":\"c1\",\"state\":\"ready\"}",
+        "{\"t\":\"draft.state\",\"agentId\":\"a\",\"draftId\":\"d\",\"text\":\"x\"}",
+        "{\"t\":\"visit.state\",\"agentId\":\"a\",\"visitId\":\"v\"}",
+        "{\"t\":\"form.state\",\"formId\":\"f\"}",
+        "{\"t\":\"selection.state\",\"agentId\":\"a\"}",
+        "{\"t\":\"metrics.state\",\"requestId\":\"r\"}",
+        "{\"t\":\"workspace.state\"}",
+        "{\"t\":\"perf\"}",
+        "{\"t\":\"toast\",\"text\":\"hi\"}",
+        "{\"t\":\"models\",\"agentId\":\"a\",\"items\":[]}",
+        "{\"t\":\"speech.state\",\"agentId\":\"a\"}",
+        "{\"t\":\"wifi.configure\",\"ssid\":\"x\",\"password\":\"y\"}",
+        "{\"t\":\"voice.draft\",\"agentId\":\"a\"}",
+        "{\"t\":\"player.overview\",\"harnesses\":1}",
+        "{\"t\":\"question.state\",\"agentId\":\"a\"}",
+        "{\"t\":\"no.such.message\"}",
+    };
+    uint32_t bad0, unknown0, bad1, unknown1;
+    pro_cable_counters(&bad0, &unknown0);
+    reset();
+    for (unsigned i = 0; i < sizeof round / sizeof round[0]; i++) feed(round[i]);
+    pro_cable_counters(&bad1, &unknown1);
+    CHECK(nev == 0 && nsent == 0);
+    CHECK(unknown1 == unknown0 + sizeof round / sizeof round[0] && bad1 == bad0);
+    // The frame kinds the Pro does not take (PCM, speech 0x05; firmware slices 0x03 are routed, see fw_frame_routes) are counted too.
+    pro_cable_counters(&bad0, &unknown0);
+    pro_cable_on_frame(CABLE_FRAME_VERSION, CABLE_TYPE_PCM, (const uint8_t *)"abc", 3, NULL);
+    pro_cable_on_frame(CABLE_FRAME_VERSION, 0x05, (const uint8_t *)"abc", 3, NULL);
+    pro_cable_counters(&bad1, &unknown1);
+    CHECK(nev == 0 && unknown1 == unknown0 + 2);
+}
+
+static void end_session(void)
+{
+    now_us += 16 * 1000000;
+    pro_cable_tick(NULL);
+    CHECK(!pro_cable_connected());
+}
+
+// Without a session (before the welcome, or after it ended) only welcome and ping are heard: nothing reaches pro_app.
+static void pro_cable_test_no_session(void)
+{
+    reset();
+    CHECK(!pro_cable_connected());
+    feed("{\"t\":\"agents.begin\"}");
+    feed("{\"t\":\"agent\",\"id\":\"a1\",\"name\":\"Alpha\",\"engine\":\"claude\"}");
+    feed("{\"t\":\"agents.end\"}");
+    feed("{\"t\":\"turn.started\",\"agentId\":\"a1\",\"text\":\"Working\"}");
+    feed("{\"t\":\"question\",\"agentId\":\"a1\",\"id\":\"q\",\"questions\":[{\"q\":\"x\"}]}");
+    feed("{\"t\":\"summary\",\"agentId\":\"a1\",\"text\":\"done\"}");
+    feed("{\"t\":\"swarms\",\"items\":[{\"id\":\"s1\",\"agents\":1}]}");
+    feed("{\"t\":\"focus\",\"agentId\":\"a1\"}");
+    feed("{\"t\":\"machines.begin\"}");
+    feed("{\"t\":\"machines.end\"}");
+    feed("{\"t\":\"agent.updated\",\"agentId\":\"a1\"}");
+    CHECK(nev == 0 && nsent == 0);   // no pro_app call, no reply on the wire
+    feed("{\"t\":\"ping\"}");
+    CHECK(nev == 0 && nsent == 1 && strstr(sent[0], "pong"));   // the link's own keepalive still answers
+    // After a session ends the same holds: the welcome opens the gate, the silence closes it.
+    welcome();
+    CHECK(pro_cable_connected() && nev == 1 && evs[0].kind == EV_LINK);
+    reset();
+    end_session();
+    reset();
+    feed("{\"t\":\"turn.started\",\"agentId\":\"a1\"}");
+    feed("{\"t\":\"agents.begin\"}");
+    CHECK(nev == 0 && nsent == 0);
+}
+
+static void test_session_machines_library_voice(void)
+{
+    end_session();
+    // welcome: link up, then machines.list + agents.list are asked for; a repeat greeting does nothing more.
+    reset();
+    welcome();
+    CHECK(nev == 1 && evs[0].kind == EV_LINK && evs[0].n1 == 1 && !strcmp(evs[0].a, "Mac"));
+    CHECK(nsent == 2 && strstr(sent[0], "machines.list") && strstr(sent[1], "agents.list"));
+    CHECK(pro_cable_connected() && pro_cable_library_supported());
+    reset();
+    welcome();
+    CHECK(nev == 0 && nsent == 0);
+    feed("{\"t\":\"ping\"}");
+    CHECK(nsent == 1 && strstr(sent[0], "pong"));
+    reset();
+    feed("{\"t\":\"agent.updated\",\"agentId\":\"a\"}");
+    CHECK(nsent == 1 && strstr(sent[0], "agents.list"));
+
+    // machines: an identical list is not re-delivered; an update that changes a row is.
+    reset();
+    feed("{\"t\":\"machines.begin\"}");
+    feed("{\"t\":\"machine\",\"id\":\"m1\",\"name\":\"Mac\",\"state\":\"ready\",\"local\":true}");
+    feed("{\"t\":\"machine\",\"id\":\"m2\",\"name\":\"Box\",\"state\":\"offline\"}");
+    feed("{\"t\":\"machines.end\",\"selected\":\"m1\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_MACHINES && evs[0].n1 == 2 && !strcmp(evs[0].a, "m1"));
+    reset();
+    feed("{\"t\":\"machines.begin\"}");
+    feed("{\"t\":\"machine\",\"id\":\"m1\",\"name\":\"Mac\",\"state\":\"ready\",\"local\":true}");
+    feed("{\"t\":\"machine\",\"id\":\"m2\",\"name\":\"Box\",\"state\":\"offline\"}");
+    feed("{\"t\":\"machines.end\",\"selected\":\"m1\"}");
+    CHECK(nev == 0);
+    feed("{\"t\":\"machine.updated\",\"id\":\"m2\",\"state\":\"ready\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_MACHINES && evs[0].n1 == 2);
+
+    // library: only the latest request's reply, strictly parsed; the machine id becomes the machine name.
+    const char *page = "{\"t\":\"player.library\",\"request\":%d,\"offset\":0,\"total\":2,\"machines\":2,\"rows\":["
+        "{\"id\":\"a\",\"machineId\":\"m2\",\"name\":\"Alpha\",\"engine\":\"claude\",\"status\":\"working\",\"ageSeconds\":5},"
+        "{\"id\":\"b\",\"machineId\":\"zz\",\"name\":\"Beta\",\"engine\":\"codex\",\"status\":\"idle\",\"ageSeconds\":-1}]}";
+    reset();
+    feedf(page, 7);   // never requested: dropped
+    CHECK(nev == 0);
+    CHECK(pro_cable_request_library(0, 7) && nsent == 1 && strstr(sent[0], "player.library.get") && strstr(sent[0], "\"request\":7"));
+    CHECK(!pro_cable_request_library(-1, 8) && !pro_cable_request_library(1000001, 8));
+    feedf(page, 6);   // an older request: dropped
+    CHECK(nev == 0);
+    feedf(page, 7);
+    CHECK(nev == 1 && evs[0].kind == EV_LIBRARY && evs[0].n1 == 2 && evs[0].n3 == 2);
+    CHECK(!strcmp(evs[0].a, "Alpha") && !strcmp(evs[0].b, "Box") && !strcmp(evs[0].c, "working") && evs[0].n4 == 5);
+    reset();   // a count that does not match min(6, total - offset) rejects the whole page
+    feed("{\"t\":\"player.library\",\"request\":7,\"offset\":0,\"total\":3,\"machines\":1,\"rows\":[{\"id\":\"a\",\"machineId\":\"m\",\"name\":\"A\",\"engine\":\"e\",\"status\":\"idle\",\"ageSeconds\":0}]}");
+    feed("{\"t\":\"player.library\",\"request\":7,\"offset\":0,\"total\":1,\"machines\":1,\"rows\":[{\"id\":\"a\",\"machineId\":\"m\",\"name\":\"A\",\"engine\":\"e\",\"status\":\"sleeping\",\"ageSeconds\":0}]}");
+    CHECK(nev == 0);
+
+    // questions
+    reset();
+    feed("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q1\",\"questions\":[{\"q\":\"Proceed?\"}]}");
+    feed("{\"t\":\"question\",\"agentId\":\"b\",\"id\":\"q2\"}");
+    feed("{\"t\":\"question\",\"agentId\":\"c\"}");
+    feed("{\"t\":\"question.close\",\"agentId\":\"a\",\"id\":\"q1\"}");
+    feed("{\"t\":\"question.close\",\"agentId\":\"a\"}");
+    CHECK(nev == 3 && !strcmp(evs[0].a, "Proceed?") && !strcmp(evs[1].a, "Needs your answer") && evs[2].kind == EV_QCLOSE);
+
+    // player.context is delivered (pro_app ignores it)
+    reset();
+    feed("{\"t\":\"player.context\",\"id\":\"a\",\"machine\":\"Mac\",\"project\":\"p\",\"branch\":\"main\",\"engine\":\"claude\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_CONTEXT && !strcmp(evs[0].a, "Mac"));
+
+    // voice: replies for another upload are dropped; a route that needs confirming is confirmed
+    reset();
+    CHECK(pro_cable_voice_begin("a", NULL, 16000, "up1") && nsent == 1 && strstr(sent[0], "\"lang\":\"en\"") && strstr(sent[0], "\"uploadId\":\"up1\""));
+    feed("{\"t\":\"voice.transcript\",\"uploadId\":\"up0\",\"agentId\":\"a\"}");
+    feed("{\"t\":\"voice.error\",\"uploadId\":\"up0\",\"message\":\"no\"}");
+    CHECK(nev == 0);
+    feed("{\"t\":\"voice.transcript\",\"uploadId\":\"up1\",\"agentId\":\"a\",\"needsConfirm\":true,\"routeId\":\"r1\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_VOICE && evs[0].n1 == PRO_VOICE_OK && !strcmp(evs[0].a, "a"));
+    CHECK(nsent == 2 && strstr(sent[1], "voice.confirm") && strstr(sent[1], "\"routeId\":\"r1\""));
+    feed("{\"t\":\"voice.error\",\"uploadId\":\"up1\",\"message\":\"Didn't catch that\"}");
+    CHECK(nev == 2 && evs[1].n1 == PRO_VOICE_ERROR && !strcmp(evs[1].a, "Didn't catch that"));
+    feed("{\"t\":\"voice.error\"}");   // no upload id named: accepted
+    CHECK(nev == 3 && !strcmp(evs[2].a, ""));
+
+    // sends
+    reset();
+    CHECK(pro_cable_send_open("a") && strstr(sent[0], "\"t\":\"agent.open\"") && strstr(sent[0], "\"agentId\":\"a\""));
+    nowait_sent = 0;
+    CHECK(pro_cable_send_scroll(PRO_SCROLL_UP, -5, 300) && strstr(sent[1], "\"phase\":\"up\"") && strstr(sent[1], "\"v\":300"));
+    CHECK(pro_cable_send_scroll(PRO_SCROLL_DOWN, 0, 0) && !strstr(sent[2], "\"v\""));
+    CHECK(!pro_cable_send_open(""));
+    CHECK(nowait_sent == 2);   // both scroll echoes went out without waiting; the open (a tap) may wait
+    CHECK(pro_cable_request_library(0, 77) && nowait_sent == 3 && strstr(sent[nsent - 1], "player.library.get"));
+    CHECK(pro_cable_voice_pcm((const uint8_t *)"ab", 2) && pro_cable_voice_end("up1") && pro_cable_voice_abort("up1", "short")
+          && pro_cable_voice_cancel("up1"));
+
+    // the link goes quiet for SILENCE_MS: the session ends, and everything the daemon said is withdrawn
+    reset();
+    now_us += 16 * 1000000;
+    pro_cable_tick(NULL);
+    CHECK(nev == 2 && evs[0].kind == EV_MACHINES && evs[0].n1 == 0 && evs[1].kind == EV_LINK && evs[1].n1 == 0);
+    CHECK(!pro_cable_connected() && !pro_cable_library_supported());
+    reset();
+    pro_cable_tick(NULL);
+    CHECK(nev == 0);
+}
+
+// ---- the small stack -------------------------------------------------------------------------------------
+// pro_cable's parser runs on the cable_link task: 6 KB, shared with the reader loop and the decoder. This runs the
+// heaviest frames on a thread whose stack is painted first, and measures how deep it went.
+#define PAINT 0xA5
+static size_t used_bytes;
+
+static void *parse_heavy(void *arg)
+{
+    (void)arg;
+    char *big = repeat("\xC3\xA9", 1100);
+    reset();
+    welcome();
+    for (int round = 0; round < 2; round++) {
+        feedf("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"%s\",\"recap\":\"%s\",\"full\":\"%s\"}", big, big, big);
+        feedf("{\"t\":\"turn.activity\",\"agentId\":\"a\",\"text\":\"%s\",\"action\":\"%s\",\"step\":\"%s\",\"elapsedSeconds\":9}", big, big, big);
+        feedf("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q\",\"questions\":[{\"q\":\"%s\"}]}", big);
+        feed("{\"t\":\"swarms\",\"selected\":\"s0\",\"items\":["
+             "{\"id\":\"s0\",\"name\":\"A\",\"agents\":2,\"panes\":2,\"agentIds\":[\"a\",\"b\"],\"members\":[{\"id\":\"a\",\"name\":\"x\",\"engine\":\"claude\",\"machine\":\"m\",\"online\":true}]},"
+             "{\"id\":\"s1\",\"name\":\"B\",\"agents\":1,\"agentIds\":[\"c\"]}],"
+             "\"tiles\":[{\"x1\":0,\"y1\":0,\"x2\":500,\"y2\":1000,\"a\":\"a\"},{\"x1\":500,\"y1\":0,\"x2\":1000,\"y2\":1000,\"a\":\"b\"}]}");
+        feed("{\"t\":\"machines.begin\"}");
+        feed("{\"t\":\"machine\",\"id\":\"m1\",\"name\":\"Mac\",\"state\":\"ready\"}");
+        feed("{\"t\":\"machines.end\",\"selected\":\"m1\"}");
+        pro_cable_request_library(0, 3 + (uint32_t)round);
+        feedf("{\"t\":\"player.library\",\"request\":%d,\"offset\":0,\"total\":2,\"machines\":1,\"rows\":["
+              "{\"id\":\"a\",\"machineId\":\"m1\",\"name\":\"Alpha\",\"engine\":\"claude\",\"status\":\"working\",\"ageSeconds\":5},"
+              "{\"id\":\"b\",\"machineId\":\"m1\",\"name\":\"Beta\",\"engine\":\"codex\",\"status\":\"idle\",\"ageSeconds\":-1}]}", 3 + round);
+        feed("{\"t\":\"agents.begin\"}");
+        feed("{\"t\":\"agent\",\"id\":\"a\",\"name\":\"Alpha\",\"engine\":\"claude\",\"machineId\":\"m1\",\"machine\":\"Mac\"}");
+        feed("{\"t\":\"agents.end\"}");
+        feed("{\"t\":\"voice.transcript\",\"agentId\":\"a\",\"needsConfirm\":true,\"routeId\":\"r\"}");
+    }
+    free(big);
+    CHECK(nev > 10);
+    return NULL;
+}
+
+static void *painted_entry(void *arg)
+{
+    unsigned char *base = arg;
+    (void)base;
+    return parse_heavy(NULL);
+}
+
+static void pro_cable_test_small_stack(void)
+{
+    // (1) A real thread at the device's size: max(12288, PTHREAD_STACK_MIN). The OS minimum is 16 KB on macOS and
+    // glibc, so this proves the parser runs on a thread of that kind, not that 6 KB is enough.
+    size_t want = 12288 > (size_t)PTHREAD_STACK_MIN ? 12288 : (size_t)PTHREAD_STACK_MIN;
+    pthread_attr_t attr;
+    pthread_t th;
+    CHECK(pthread_attr_init(&attr) == 0 && pthread_attr_setstacksize(&attr, want) == 0);
+    CHECK(pthread_create(&th, &attr, parse_heavy, NULL) == 0 && pthread_join(th, NULL) == 0);
+    pthread_attr_destroy(&attr);
+
+    // (2) The real measurement: our own 64 KB stack, painted, and the deepest untouched byte read back. The parser
+    // plus the reader loop's own frames (decoder + 256 B read chunk, < 1.5 KB) must fit in READER_STACK (cable_link.c, 12288).
+    const size_t size = 64 * 1024 > (size_t)PTHREAD_STACK_MIN ? 64 * 1024 : (size_t)PTHREAD_STACK_MIN;   // 128 KB minimum on aarch64 glibc
+    unsigned char *stack = NULL;
+    CHECK(posix_memalign((void **)&stack, 4096, size) == 0);
+    memset(stack, PAINT, size);
+    CHECK(pthread_attr_init(&attr) == 0 && pthread_attr_setstack(&attr, stack, size) == 0);
+    CHECK(pthread_create(&th, &attr, painted_entry, stack) == 0 && pthread_join(th, NULL) == 0);
+    pthread_attr_destroy(&attr);
+    size_t low = 0;
+    while (low < size && stack[low] == PAINT) low++;
+    used_bytes = size - low;
+    free(stack);
+    fprintf(stderr, "pro_cable parser stack high-water: %zu B on the host (thread stack for case 1: %zu B)\n", used_bytes, want);
+    CHECK(used_bytes + 1536 <= 12288);
+}
+
+static void test_settings(void)
+{
+    reset();
+    welcome();
+    reset();
+    // muted round-trip: the reply carries every key the app's parser requires, and the value read back
+    feed("{\"t\":\"settings.set\",\"muted\":false}");
+    CHECK(nsent == 1 && strstr(sent[0], "\"t\":\"settings.state\"") && strstr(sent[0], "\"ok\":true"));
+    CHECK(strstr(sent[0], "\"muted\":false") && !cfg_muted);
+    CHECK(strstr(sent[0], "\"voiceLang\":\"en\"") && strstr(sent[0], "\"round\":false") && strstr(sent[0], "\"character\":0"));
+    // absent fields stay: brightness untouched by the muted-only set
+    CHECK(cfg_bright == 220 && panel_level == 0);
+    reset();
+    // brightness is a percent on the wire; the panel and NVS keep 0..255. Clamped, applied and stored.
+    feed("{\"t\":\"settings.set\",\"brightness\":50,\"voiceLang\":\"vi\"}");
+    CHECK(nsent == 1 && strstr(sent[0], "\"ok\":true") && strstr(sent[0], "\"brightness\":50") && strstr(sent[0], "\"voiceLang\":\"vi\""));
+    CHECK(cfg_bright == 128 && panel_level == 128 && !strcmp(cfg_lang, "vi") && !cfg_muted);
+    reset();
+    feed("{\"t\":\"settings.set\",\"brightness\":500}");
+    CHECK(strstr(sent[0], "\"brightness\":100") && cfg_bright == 255);
+    // an invalid language refuses the whole set: nothing changes, the values are read back
+    reset();
+    feed("{\"t\":\"settings.set\",\"muted\":true,\"voiceLang\":\"waytoolongcode\"}");
+    CHECK(nsent == 1 && strstr(sent[0], "\"ok\":false") && strstr(sent[0], "\"error\"") && strstr(sent[0], "\"muted\":false"));
+    CHECK(!cfg_muted && !strcmp(cfg_lang, "vi"));
+    // a round-only field that differs is refused; the same value as the Pro's fixed one is accepted
+    reset();
+    feed("{\"t\":\"settings.set\",\"muted\":true,\"quiet\":true}");
+    CHECK(nsent == 1 && strstr(sent[0], "\"ok\":false") && strstr(sent[0], "Not on this device") && strstr(sent[0], "\"quiet\":false"));
+    CHECK(!cfg_muted);
+    reset();
+    feed("{\"t\":\"settings.set\",\"face\":3}");
+    CHECK(strstr(sent[0], "\"ok\":false") && strstr(sent[0], "\"face\":0"));
+    reset();
+    feed("{\"t\":\"settings.set\",\"muted\":true,\"quiet\":false,\"round\":false,\"character\":0}");
+    CHECK(strstr(sent[0], "\"ok\":true") && cfg_muted);
+}
+
+// summary flags: only a plain live summary is news; quiet, silent and restore still deliver the recap.
+static void test_notifications(void)
+{
+    welcome();
+    reset();
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"recap\":\"r\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_SUMMARY && evs[0].n1 == 0 && evs[0].n2 == 1);          // plain: notify
+    reset();
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"quiet\":true}");
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"silent\":true}");
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"restore\":true}");
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"quiet\":false,\"silent\":false,\"restore\":false}");
+    CHECK(nev == 4 && evs[0].n2 == 0 && evs[1].n2 == 0 && evs[2].n2 == 0 && evs[2].n1 == 1 && evs[3].n2 == 1);
+
+    // notif.replace: every valid item, in order; duplicates pass through (the model drops them); a bad token is blanked.
+    reset();
+    feed("{\"t\":\"notif.replace\",\"items\":[{\"agentId\":\"a\",\"name\":\"A\",\"summary\":\"did a\",\"readToken\":\"tok_1-x\"},"
+         "{\"agentId\":\"\",\"summary\":\"no id\"},{\"summary\":\"no id either\"},{\"agentId\":\"b\",\"summary\":\"did b\",\"readToken\":\"bad token!\"}]}");
+    CHECK(nev == 1 && evs[0].kind == EV_NREPLACE && evs[0].n1 == 2);
+    CHECK(!strcmp(evs[0].a, "a") && !strcmp(evs[0].b, "did a") && !strcmp(evs[0].c, "tok_1-x") && !strcmp(evs[0].d, ""));
+    reset();
+    feed("{\"t\":\"notif.replace\",\"items\":[]}");
+    CHECK(nev == 1 && evs[0].n1 == 0);
+    reset();
+    feed("{\"t\":\"notif.replace\"}");
+    CHECK(nev == 0);
+
+    // notif.seen: by agent, or with a valid token; an invalid token drops it.
+    reset();
+    feed("{\"t\":\"notif.seen\",\"agentId\":\"a\"}");
+    feed("{\"t\":\"notif.seen\",\"agentId\":\"a\",\"readToken\":\"tok_1-x\"}");
+    feed("{\"t\":\"notif.seen\",\"agentId\":\"a\",\"readToken\":\"no good\"}");
+    feed("{\"t\":\"notif.seen\",\"agentId\":\"a\",\"readToken\":7}");
+    feed("{\"t\":\"notif.seen\"}");
+    CHECK(nev == 2 && evs[0].kind == EV_NSEEN && !strcmp(evs[0].id, "a") && !strcmp(evs[0].a, "(none)") && !strcmp(evs[1].a, "tok_1-x"));
+
+    // notif.read goes out with the token, and never without a valid one.
+    reset();
+    CHECK(pro_cable_send_notif_read("a", "tok_1-x"));
+    CHECK(nsent == 1 && strstr(sent[0], "\"t\":\"notif.read\"") && strstr(sent[0], "\"agentId\":\"a\"") && strstr(sent[0], "\"readToken\":\"tok_1-x\""));
+    reset();
+    CHECK(!pro_cable_send_notif_read("a", "") && !pro_cable_send_notif_read("a", NULL) && !pro_cable_send_notif_read("", "t") &&
+          !pro_cable_send_notif_read("a", "no good") && nsent == 0);
+}
+
+#define SHA64 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+static void fw_offer_routes(void)
+{
+    welcome(); reset(); memset(&fw, 0, sizeof fw);
+    feed("{\"t\":\"fw.offer\",\"p\":{\"version\":\"1.2.3\",\"size\":4096,\"sha256\":\"" SHA64 "\"}}");
+    CHECK(fw.offers == 1 && fw.size == 4096 && !fw.busy && !strcmp(fw.version, "1.2.3") && !strcmp(fw.sha, SHA64));
+    gate_ok = false;
+    feed("{\"t\":\"fw.offer\",\"version\":\"1.2.3\",\"size\":1,\"sha256\":\"" SHA64 "\"}");   // flat form
+    CHECK(fw.offers == 2 && fw.busy);
+    gate_ok = true;
+    // wrong or missing types reach fw_update as NULL / 0, which it refuses
+    feed("{\"t\":\"fw.offer\",\"p\":{\"version\":7,\"size\":\"big\"}}");
+    CHECK(fw.offers == 3 && !strcmp(fw.version, "<null>") && !strcmp(fw.sha, "<null>") && fw.size == 0);
+    feed("{\"t\":\"fw.offer\",\"p\":{\"version\":\"1\",\"size\":1e99,\"sha256\":\"x\"}}");
+    CHECK(fw.offers == 4 && fw.size == 0);
+    // no session: not heard
+    end_session(); memset(&fw, 0, sizeof fw);
+    feed("{\"t\":\"fw.offer\",\"p\":{\"version\":\"1.2.3\",\"size\":4096,\"sha256\":\"" SHA64 "\"}}");
+    CHECK(fw.offers == 0);
+}
+
+static void fw_frame_routes(void)
+{
+    uint32_t bad0, unk0, bad1, unk1;
+    memset(&fw, 0, sizeof fw);
+    pro_cable_counters(&bad0, &unk0);
+    const uint8_t slice[3] = { 0xAB, 2, 3 };
+    pro_cable_on_frame(CABLE_FRAME_VERSION, CABLE_TYPE_FW, slice, sizeof slice, NULL);
+    pro_cable_counters(&bad1, &unk1);
+    CHECK(fw.slices == 1 && fw.slice_len == 3 && fw.first == 0xAB && unk1 == unk0 && bad1 == bad0);
+    fw.ticks = 0;
+    now_us += 5000000;
+    pro_cable_tick(NULL);
+    CHECK(fw.ticks == 1 && fw.now == (uint32_t)(now_us / 1000));
+}
+
+// LOW: slices keep the silence timer alive, and so do the blocking calls (the slot erase on the offer, the read-back hash
+// after the last slice) - the reader cannot hear the daemon meanwhile.
+static void fw_keeps_the_session_alive(void)
+{
+    welcome(); memset(&fw, 0, sizeof fw);
+    now_us += 10 * 1000000;
+    const uint8_t slice[3] = { 1, 2, 3 };
+    pro_cable_on_frame(CABLE_FRAME_VERSION, CABLE_TYPE_FW, slice, sizeof slice, NULL);   // 10 s after the welcome
+    now_us += 10 * 1000000;                                                              // 20 s: silent but for the slice
+    pro_cable_tick(NULL);
+    CHECK(pro_cable_connected());
+    block_us = 12 * 1000000;   // the final slice's checks take 12 s: the clock is refreshed after it returns
+    pro_cable_on_frame(CABLE_FRAME_VERSION, CABLE_TYPE_FW, slice, sizeof slice, NULL);
+    now_us += 5 * 1000000;
+    pro_cable_tick(NULL);
+    CHECK(pro_cable_connected());
+    feed("{\"t\":\"fw.offer\",\"p\":{\"version\":\"1.2.3\",\"size\":4096,\"sha256\":\"" SHA64 "\"}}");   // erase: 12 s
+    now_us += 5 * 1000000;
+    pro_cable_tick(NULL);
+    CHECK(pro_cable_connected());
+    block_us = 0;
+    end_session();
+}
+
+// LOW: the gate decides busy and holds voice off; a refusal that left nothing in flight releases it (no screen, no notice).
+static void fw_offer_gate(void)
+{
+    welcome(); memset(&fw, 0, sizeof fw); gate_begins = gate_ends = 0;
+    const char *offer = "{\"t\":\"fw.offer\",\"p\":{\"version\":\"1.2.3\",\"size\":4096,\"sha256\":\"" SHA64 "\"}}";
+    offer_accepts = false; offer_active = false;                   // refused (a bad field), nothing in flight
+    feed(offer);
+    CHECK(gate_begins == 1 && !fw.busy && gate_ends == 1);
+    offer_accepts = true;                                          // accepted: the gate stays held for the transfer
+    feed(offer);
+    CHECK(gate_begins == 2 && gate_ends == 1);
+    offer_accepts = false; offer_active = true;                    // a second offer while one is in flight: not ours to release
+    feed(offer);
+    CHECK(gate_begins == 3 && gate_ends == 1);
+    offer_active = false; gate_ok = false;                         // voice open: busy, and nothing to release but the call is safe
+    feed(offer);
+    CHECK(fw.busy);
+    gate_ok = true;
+    end_session();
+}
+
+// H3: the first welcome asks fw to confirm the image (once per session-up), and announces the update only if it did.
+static void fw_confirms_on_welcome(void)
+{
+    confirms = notes = 0;
+    welcome();
+    CHECK(confirms == 1 && notes == 1);
+    welcome();                          // a repeat welcome on a live session is not a new session
+    CHECK(confirms == 1 && notes == 1);
+    end_session();
+    welcome();                          // a new session asks again, but nothing confirmed this time
+    CHECK(confirms == 2 && notes == 1);
+    end_session();
+}
+
+static void session_down_aborts_then_new_offer_ok(void)
+{
+    welcome(); memset(&fw, 0, sizeof fw);
+    end_session();
+    CHECK(fw.aborts == 1 && !strcmp(fw.why, "session down"));
+    welcome();
+    feed("{\"t\":\"fw.offer\",\"p\":{\"version\":\"1.2.4\",\"size\":10,\"sha256\":\"" SHA64 "\"}}");
+    CHECK(fw.offers == 1 && !strcmp(fw.version, "1.2.4"));
+}
+
+static void send_shapes(void)
+{
+    welcome(); reset();
+    fw_update_send_accept();
+    fw_update_send_progress(65536);
+    fw_update_send_done();
+    fw_update_send_error("bad sha256");
+    CHECK(nsent == 4);
+    CHECK(!strcmp(sent[0], "{\"t\":\"fw.accept\"}"));
+    CHECK(!strcmp(sent[1], "{\"t\":\"fw.progress\",\"written\":65536}"));
+    CHECK(!strcmp(sent[2], "{\"t\":\"fw.done\"}"));
+    CHECK(!strcmp(sent[3], "{\"t\":\"fw.error\",\"message\":\"bad sha256\"}"));
+    reset();
+    fw_update_send_resend(4096);
+    CHECK(nsent == 1 && !strcmp(sent[0], "{\"t\":\"fw.progress\",\"written\":4096,\"resend\":true}"));
+}
+
+// A frame lost on the way in outside a transfer: ask for both lists once, not again within 5 s, never mid-transfer.
+static void link_resync(void)
+{
+    welcome(); reset();
+    pro_cable_tick(NULL); CHECK(nsent == 0);                  // counter unchanged
+    link_corrupt++; pro_cable_tick(NULL);
+    CHECK(nsent == 2 && strstr(sent[0], "swarms.list") && strstr(sent[1], "agents.list"));
+    reset(); link_corrupt++; now_us += 4999 * 1000; pro_cable_tick(NULL); CHECK(nsent == 0);
+    now_us += 1000 * 1000; pro_cable_tick(NULL);               // 5 s on: the pending loss is answered
+    CHECK(nsent == 2);
+    reset(); offer_active = true; link_corrupt++; now_us += 6000 * 1000; pro_cable_tick(NULL);
+    CHECK(nsent == 0);                                        // a transfer covers it with resend
+    offer_active = false; pro_cable_tick(NULL); CHECK(nsent == 0);   // and the loss during it is not replayed
+    end_session();
+}
+
+int main(void)
+{
+    pro_cable_start();   // the lock and the machine table; no tasks run on the host
+    pro_cable_test_no_session();
+    pro_cable_test_turn_activity();
+    pro_cable_test_old_daemon();
+    pro_cable_test_oversize();
+    pro_cable_test_ignores_round();
+    test_session_machines_library_voice();
+    pro_cable_test_small_stack();
+    test_settings();
+    test_notifications();
+    fw_offer_routes();
+    fw_frame_routes();
+    fw_keeps_the_session_alive();
+    fw_offer_gate();
+    fw_confirms_on_welcome();
+    session_down_aborts_then_new_offer_ok();
+    send_shapes();
+    link_resync();
+    printf("test_pro_cable: %d checks passed\n", checks);
+    return 0;
+}

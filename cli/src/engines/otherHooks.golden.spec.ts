@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { expectForeignHooksPreserved, preservedHookFiles } from '../testing/hookGoldenSafety.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/other-hooks.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_OTHER_ENGINES_GOLDEN === '1'
@@ -269,21 +270,25 @@ async function install(vendor: Vendor, port: number): Promise<Run> {
   const spies = [vi.spyOn(console, 'log').mockImplementation(capture('log')), vi.spyOn(console, 'error').mockImplementation(capture('error')),
     vi.spyOn(console, 'warn').mockImplementation(capture('warn'))]
   let threw: string | null = null
-  try { await installEngineHooks(port, { only: new Set([vendor]), environment: {} }) }
+  try {
+    const installed = await installEngineHooks(port, { only: new Set([vendor]), environment: {} }) as { close(): void; settled?: Promise<void> }
+    try { await installed.settled } finally { installed.close() }
+  }
   catch (error) { threw = describeError(error) } finally { for (const spy of spies) spy.mockRestore() }
   return { logs, threw }
 }
 
-async function run(vendor: Vendor, scenario: Case): Promise<Outcome> {
+async function run(vendor: Vendor, scenario: Case) {
   reset()
   opencode(scenario.opencode === undefined ? 2 : scenario.opencode)
   const file = targets()[vendor]
   const home = dirname(file)
   if (!scenario.noHome) mkdirSync(home, { recursive: true })
   scenario.setup?.({ vendor, file, home, elsewhere: join(root, 'elsewhere'), texts: texts[vendor] })
+  const before = snapshot()
   const runs: Run[] = []
   for (let i = 0; i < 2; i++) runs.push(await install(vendor, PORT))
-  return { runs, files: snapshot() }
+  return { outcome: { runs, files: snapshot() }, before, file: normalize(relative(root, file)) }
 }
 
 /** What an install writes into a clean home for `port`: the current file, read raw. */
@@ -334,7 +339,7 @@ beforeAll(async () => {
     }
     legacyOpencodePlugin = await installed('opencode', PORT, 1)
   } finally { process.umask(previous) }
-})
+}, 60_000)
 
 afterAll(() => {
   Object.defineProperty(process, 'platform', platform)
@@ -345,19 +350,48 @@ afterAll(() => {
 
 const casesFor = (vendor: Vendor): Case[] => CASES.filter((one) => !one.vendors || one.vendors.includes(vendor))
 
+// Keep the former artifact intact. Its destructive/unknown-input cases now
+// assert a visible hold and exact preservation, while healthy cases remain a
+// byte-for-byte compatibility check (including modes and aliases).
+const IO_HELD = new Set(['a dangling symlink', 'a symlink into a missing folder', 'a read-only file', 'an unreadable file',
+  'a read-only folder', 'a read-only folder holding a writable file', 'the file is a folder'])
+const INVALID_VALUE = new Set(['empty file', 'whitespace only', 'malformed JSON', 'byte order mark', 'JSON null', 'JSON array', 'JSON string', 'JSON number'])
+const INVALID_HOOKS = new Set(['hooks is a string', 'hooks is an array', 'hooks is null'])
+const FOREIGN_SOURCE = new Set([...INVALID_VALUE, ...INVALID_HOOKS, 'foreign content', 'a symlink to foreign content', 'a private file', 'a temporary file left by this process'])
+function held(vendor: Vendor, name: string): boolean {
+  if (IO_HELD.has(name)) return true
+  if (KIND[vendor] === 'source') return FOREIGN_SOURCE.has(name)
+    || name === "OpenCode 2 with a foreign plugin where OpenCode 1's goes" || name === "OpenCode 2 with a folder where OpenCode 1's plugin goes"
+  if (KIND[vendor] === 'json') return INVALID_VALUE.has(name) || (vendor !== 'agy' && INVALID_HOOKS.has(name))
+  return ['no file', 'no home folder', 'malformed JSON', 'byte order mark', 'JSON null', 'JSON array', 'JSON string', 'JSON number',
+    ...INVALID_HOOKS, 'a foreign hooks mapping'].includes(name)
+}
+
 describe.each(VENDORS)('%s\'s hooks, installed by the core, byte for byte', (vendor) => {
   for (const scenario of casesFor(vendor)) {
     const key = `${vendor}: ${scenario.name}`
     it.skipIf(scenario.permissions && ROOT_USER)(key, async () => {
       const previous = process.umask(0o022)
       try {
-        const outcome = await run(vendor, scenario)
+        const { outcome, before, file } = await run(vendor, scenario)
         recorded.outcomes[key] = outcome
         if (!RECORD) {
           const expected = golden.outcomes[key]
           const files = (outcome: Outcome, table: Record<string, string>) => Object.fromEntries(Object.entries(outcome.files)
             .map(([path, entry]) => [path, entry.text ? { ...entry, text: table[entry.text] } : entry]))
-          expect({ runs: outcome.runs, files: files(outcome, recorded.texts) }).toEqual({ runs: expected?.runs, files: expected && files(expected, golden.texts) })
+          const initial = files({ runs: [], files: before }, recorded.texts), after = files(outcome, recorded.texts), former = files(expected, golden.texts)
+          if (held(vendor, scenario.name)) {
+            expect(after).toEqual(initial)
+            for (const run of outcome.runs) {
+              expect(run.threw).toBeNull()
+              expect(run.logs.some(line => line.startsWith(`warn [hooks] ${vendor} install skipped ·`))).toBe(true)
+            }
+          } else if (vendor === 'copilot' && ['foreign content', 'a symlink to foreign content', 'a private file', 'a temporary file left by this process'].includes(scenario.name)) {
+            const location = initial[file].type === 'link' ? initial[file].target!.replace('<root>/', '') : file
+            const corrected = preservedHookFiles(initial, former)
+            expectForeignHooksPreserved(initial, after, corrected, location)
+            if (location !== file) expect(after[file]).toEqual(initial[file])
+          } else expect({ runs: outcome.runs, files: after }).toEqual({ runs: expected.runs, files: preservedHookFiles(initial, former) })
         }
       } finally { process.umask(previous) }
     })

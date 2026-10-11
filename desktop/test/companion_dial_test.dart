@@ -33,7 +33,7 @@ Map<String, Object?> settings({
       'uid': uid,
       'version': version,
       'seed': 0,
-        'colour': -1,
+      'colour': -1,
       'mark': 0,
     },
   },
@@ -198,4 +198,21 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  testWidgets('a Harness Pro says Harness Pro while updating', (tester) async {
+    await mount(tester, species: 'tim', uid: 'tim-one');
+    dial.apply(
+      DialStatus.fromJson({
+        'attached': true,
+        'id': 'pro-usb',
+        'board': 'pro',
+        'updating': '0.1.0',
+        'settings': settings(),
+      }),
+    );
+    await tester.pump();
+    expect(find.text('Your Harness Pro is updating'), findsOneWidget);
+    expect(find.text('Your dial is updating'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
 }

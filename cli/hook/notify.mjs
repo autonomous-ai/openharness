@@ -849,10 +849,22 @@ async function rootEngineProcess(rootPid, engine) {
     }
     for (const child of children.get(current.pid) || []) queue.push({ pid: child.pid, depth: current.depth + 1 })
   }
-  return best ? {
-    state: 'alive',
-    identity: { pid: best.row.pid, executable: best.row.executable, startMarker: best.row.startMarker },
-  } : { state: 'gone' }
+  if (!best) return { state: 'gone' }
+  const identity = { pid: best.row.pid, executable: best.row.executable, startMarker: best.row.startMarker }
+  let native = null
+  if (process.platform === 'linux') {
+    native = linuxOwnerBirth(identity.pid)
+    if (!native) return { state: 'unknown' }
+    identity.startTicks = native.startTicks
+  }
+  // Retain kernel facts across the registry lock and durable staging. A live PID with the
+  // same ticks can still have changed its command or parent since the pane/caller walk.
+  const current = () => {
+    if (!native) return true
+    const now = linuxOwnerBirth(identity.pid)
+    return !!now && now.startTicks === native.startTicks && now.parentPid === native.parentPid && now.command === native.command
+  }
+  return { state: 'alive', identity, current }
 }
 
 /**
@@ -1169,7 +1181,7 @@ function readRegistryState(file) {
   }
 }
 
-function writeRegistry(file, sessions) {
+function writeRegistry(file, sessions, current = () => true) {
   secureStateDirectory(dirname(file))
   hardenPrivateStateFileIfPresent(file)
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`
@@ -1181,10 +1193,12 @@ function writeRegistry(file, sessions) {
       fchmodSync(fd, 0o600)
       fsyncSync(fd)
     } finally { closeSync(fd) }
+    if (!current()) return false
     renameSync(tmp, file)
     renamed = true
     const directoryFd = openSync(dirname(file), 'r')
     try { fsyncSync(directoryFd) } finally { closeSync(directoryFd) }
+    return true
   } finally {
     if (!renamed) {
       try { rmSync(tmp, { force: true }) } catch { /* ignore */ }
@@ -1284,7 +1298,8 @@ function validRegistryProcess(identity) {
   return identity === null || (!!identity && typeof identity === 'object'
     && Number.isSafeInteger(identity.pid) && identity.pid > 0
     && validRegistryString(identity.executable, 1000)
-    && validRegistryString(identity.startMarker, 200) && identity.startMarker.length > 0)
+    && validRegistryString(identity.startMarker, 200) && identity.startMarker.length > 0
+    && (identity.startTicks === undefined || Number.isSafeInteger(identity.startTicks) && identity.startTicks >= 0))
 }
 
 function validV2Registry(rows) {
@@ -1337,14 +1352,30 @@ function validLegacyRegistryRow(row) {
   return /^%\d+$/.test(row.tmuxPane || '') || (Array.isArray(row.runtimes) && row.runtimes.length > 0)
 }
 
-async function callerOwns(identity) {
+function linuxOwnerBirth(pid) {
+  try {
+    // /proc stat is a kernel-sized record; accept only complete evidence for this exact live PID.
+    const text = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const start = text.indexOf('('), end = text.lastIndexOf(')')
+    if (text.length > 8192 || !text.endsWith('\n') || start < 1 || end <= start
+      || Number(text.slice(0, start).trim()) !== pid) return null
+    const fields = text.slice(end + 1).trim().split(/\s+/)
+    if (!/^[RSDTtKWPI]$/.test(fields[0] || '') || !/^\d+$/.test(fields[1] || '')
+      || !/^\d+$/.test(fields[19] || '')) return null
+    const parentPid = Number(fields[1]), startTicks = Number(fields[19])
+    if (!Number.isSafeInteger(parentPid) || parentPid > 0x7fffffff || !Number.isSafeInteger(startTicks)) return null
+    return { parentPid, startTicks, command: text.slice(start + 1, end) }
+  } catch { return null }
+}
+
+async function callerOwns(identity, current) {
   const rows = await processRows()
   if (!rows) return false
   const parents = new Map(rows.map((row) => [row.pid, row.parentPid]))
   let pid = process.ppid
   const visited = new Set()
   while (pid > 0 && !visited.has(pid)) {
-    if (pid === identity.pid) return true
+    if (pid === identity.pid) return current()
     visited.add(pid)
     pid = parents.get(pid) || 0
   }
@@ -1367,13 +1398,14 @@ async function fallbackRegister(input, engine, tmuxPane) {
   const taken = pane?.taken ?? 'no'
   if (taken === 'no' || !pane.pid) return
   const tmux = await rootEngineProcess(pane.pid, engine)
-  if (tmux.state === 'alive' && tmux.identity && await callerOwns(tmux.identity)) {
-    observations.push({ identity: tmux.identity, runtime: { backend: 'tmux', paneId: tmuxPane } })
+  if (tmux.state === 'alive' && tmux.identity && await callerOwns(tmux.identity, tmux.current)) {
+    observations.push({ identity: tmux.identity, current: tmux.current, runtime: { backend: 'tmux', paneId: tmuxPane } })
   }
   if (!observations.length) return
   const process = observations[0]
   if (observations.some((observation) => observation.identity.pid !== process.identity.pid
-    || observation.identity.startMarker !== process.identity.startMarker)) return
+    || observation.identity.startMarker !== process.identity.startMarker
+    || observation.identity.startTicks !== process.identity.startTicks)) return
   const observedRuntimes = observations.map((observation) => observation.runtime)
   // The store that turned out to hold it — recorded below, so the daemon's mirror reads this agent's
   // OWN history when it comes back up rather than the default home's.
@@ -1385,7 +1417,7 @@ async function fallbackRegister(input, engine, tmuxPane) {
   }
 
   await withRegistryLock(p.registryFile, () => {
-    if (remainingBudget(600) < 50) return
+    if (remainingBudget(600) < 50 || !process.current()) return
     const loaded = rebootedSinceSnapshot(p.bootFile) ? [] : readRegistryState(p.registryFile)
     // Corrupt/non-array/unknown-schema/unsafe bytes are operator-owned recovery data. Never turn them
     // into an empty registry merely because the daemon is down.
@@ -1397,10 +1429,12 @@ async function fallbackRegister(input, engine, tmuxPane) {
       : s.tmuxPane && routeKeys.has(runtimeRouteKey({ backend: 'tmux', paneId: s.tmuxPane })))
     // A session an older build named is the daemon's only while its registry holds an agent there.
     if (taken === 'if-held' && !sessions.some(onRoute)) return
-    writeBoot(p.bootFile)
     const now = Date.now()
     const sameRuntime = (s) => s && s.engine === engine
-      && s.processIdentity?.pid === process.identity.pid && s.processIdentity?.startMarker === process.identity.startMarker
+      && s.processIdentity?.pid === process.identity.pid
+      && (s.processIdentity?.startTicks !== undefined && process.identity.startTicks !== undefined
+        ? s.processIdentity.startTicks === process.identity.startTicks
+        : s.processIdentity?.startMarker === process.identity.startMarker)
     let existingIndex = sessions.findIndex(sameRuntime)
     // An engine typed into a terminal is that terminal's agent from then on, as the daemon adopts it
     // (registry.adoptEngine): the same agent, its name and its tile, now this engine's. Taken for a
@@ -1489,7 +1523,11 @@ async function fallbackRegister(input, engine, tmuxPane) {
     if (!tmuxProjection) delete entry.tmuxPane
     if (existingIndex >= 0) sessions[existingIndex] = entry
     else sessions.push(entry)
-    writeRegistry(p.registryFile, sessions)
+    if (!process.current()) return
+    // Commit rows before advancing their boot authority. If the native fence or durability
+    // fails, an old registry must not become current-boot evidence. A failed boot write
+    // after this commit leaves the old marker, so recovery cannot accept those rows as current.
+    if (writeRegistry(p.registryFile, sessions, process.current)) writeBoot(p.bootFile)
   })
 }
 

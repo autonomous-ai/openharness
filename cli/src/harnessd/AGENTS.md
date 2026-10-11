@@ -52,3 +52,11 @@ It keeps the core and the services running, and nothing else.
    as that core binds. Making a process on demand bumps `HARNESSD_PROTOCOL` and sets `askedSince` to it.
    A `want` is heard before the core binds too: a core signed in asks for the gateway as it starts, so the
    relay comes up beside it.
+11. **`HARNESSD_*` are for harnessd's processes alone, never a child's.** What the master tells the core and
+   each service (the service token among them) leaves process.env first thing in those processes
+   (`../lib/harnessdEnv.ts` `holdHarnessdEnv`), and is read through `harnessdEnv()`, never
+   `process.env.HARNESSD_*`. Left in, every child inherited it: the tmux server the core starts copies its
+   environment into every pane, and every agent and terminal had them (found 2026-10-11). A harnessd
+   process the core starts (the updater beside it, a master it hands over to, the master's probe) is given
+   it explicitly. The core also unsets them from a tmux server an earlier boot started
+   (`TmuxBackend.unsetServerEnvironment`).

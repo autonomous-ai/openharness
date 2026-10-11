@@ -80,16 +80,16 @@ describe('delivered turns', () => {
   })
 
   it('remembers the makers of the last deliveries only, a delivery made again as the newest', () => {
-    const { deps, deliveries } = setup({ deliverers: new Set(['orchestrator', 'teams']) })
+    const { deps, deliveries } = setup({ deliverers: new Set(['orchestrator', 'messages']) })
     deliveries.answer('orchestrator', 'deliver', { agentId: 'a', text: 't', deliveryId: 'first' })
-    deliveries.answer('teams', 'deliver', { agentId: 'a', text: 't', deliveryId: 'second' })
+    deliveries.answer('messages', 'deliver', { agentId: 'a', text: 't', deliveryId: 'second' })
     // Made again: the newest now, and by its new maker.
-    deliveries.answer('teams', 'deliver', { agentId: 'a', text: 't', deliveryId: 'first' })
+    deliveries.answer('messages', 'deliver', { agentId: 'a', text: 't', deliveryId: 'first' })
     for (let i = 0; i < KEPT_DELIVERERS - 1; i++) deliveries.answer('orchestrator', 'deliver', { agentId: 'a', text: 't', deliveryId: `d${i}` })
     deps.tell.mockClear()
     deliveries.settled(event('second'))
     deliveries.settled(event('first'))
-    expect(deps.tell.mock.calls).toEqual([['teams', event('first')]])
+    expect(deps.tell.mock.calls).toEqual([['messages', event('first')]])
   })
 
   it('holds what is delivered before the core\'s input is wired, writes it in order once it is, and the rest as it comes', () => {

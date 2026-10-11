@@ -33,10 +33,9 @@ one core. GPU readings are attributable driver counters; missing counters are un
 checkpoints separately. Both remain when a session stops. Last active comes from real
 daemon conversation activity, not file mtime.
 
-The default OpenCode model is Muse Spark 1.3 Contributor Free. It is a limited-time offer and allows
-Meta to train on prompts and responses. Both the main and small model are explicitly configured to
-that ID. Never silently switch to a paid model. The viewer includes an Assistant model disclosure; users can choose another model with
-OpenCode's `/models` command.
+The default OpenCode model is Space Bunny Free, a free model whose provider, OpenCode Zen says, keeps no
+data and trains on none. Both the main and small model are explicitly configured to that ID. Never
+silently switch to a paid model. Users can choose another model with OpenCode's `/models` command.
 
 Never start another viewer: Harness already manages this one. For permanent deletion, direct the
 person to the table's Delete dialog. It offers separate Session data and Worktree data checkboxes,

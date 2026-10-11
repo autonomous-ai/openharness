@@ -2,8 +2,18 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
+import { ENUMERATION_ATTEMPTS } from '../engines/kit/nativeFiles.js'
 
-const fault = vi.hoisted(() => ({ beforeVerify: undefined as (() => void) | undefined, captures: 0 }))
+const fault = vi.hoisted(() => ({ beforeVerify: undefined as (() => void) | undefined, captures: 0,
+  onDirectoryOpen: undefined as (() => void) | undefined }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual, opendirSync: (...args: Parameters<typeof actual.opendirSync>) => {
+    const directory = actual.opendirSync(...args)
+    fault.onDirectoryOpen?.()
+    return directory
+  } }
+})
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 function observeHomeReads(): void { vi.doMock('./engineHomes.js', async original => {
   const actual = await original<typeof import('./engineHomes.js')>()
@@ -18,7 +28,7 @@ vi.mock('./processLiveness.js', async original => ({ ...await original<object>()
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
 let root: string | undefined
-afterEach(() => { fault.beforeVerify = undefined; fault.captures = 0; vi.doUnmock('./engineHomes.js'); vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { fault.beforeVerify = undefined; fault.onDirectoryOpen = undefined; fault.captures = 0; vi.doUnmock('./engineHomes.js'); vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, { recursive: true, force: true }) })
 
 it('repairs a child-overwritten parent from an adopted Codex home before the login shell is read', async () => {
   // Found by QA on a quiet machine: restart searched only the default home and discarded this parent binding.
@@ -43,9 +53,24 @@ it('repairs a child-overwritten parent from an adopted Codex home before the log
   }]), { mode: 0o600 })
   vi.resetModules()
   const { registry } = await import('./registry.js')
+  // An ancestor that changes during every look (`ENUMERATION_ATTEMPTS`); one change alone is looked at again.
+  let looks = ENUMERATION_ATTEMPTS
+  fault.onDirectoryOpen = () => {
+    if (--looks === 0) fault.onDirectoryOpen = undefined
+    writeFileSync(join(root!, `sibling-${looks}`), 'changed during enumeration')
+  }
   registry.load()
-  expect(registry.get(parentId)?.transcriptPath).toBe(parent)
-  expect(JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(parent)
+  expect(fault.onDirectoryOpen).toBeUndefined()
+  expect(registry.get(parentId)).toMatchObject({ transcriptPath: child, identityHold: expect.stringContaining('ancestor changed') })
+  expect(JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(child)
+  // A changed ancestor is incomplete evidence, even when another CI fixture
+  // caused it. The preserved binding can be repaired by the next fresh read.
+  await vi.waitFor(() => {
+    registry.load()
+    expect(registry.get(parentId)?.transcriptPath).toBe(parent)
+    expect(registry.get(parentId)?.identityHold).toBeUndefined()
+    expect(JSON.parse(readFileSync(join(root!, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(parent)
+  }, { timeout: 3_000 })
 })
 
 

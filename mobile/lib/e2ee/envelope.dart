@@ -16,8 +16,6 @@ const int e2eVersion = 1;
 const Set<String> encryptedDownTypes = {
   'harness_devices_list',
   'harness_device_settings',
-  'team',
-  'team_delivery',
   'message',
   'question_response',
   'agents_list',
@@ -26,6 +24,7 @@ const Set<String> encryptedDownTypes = {
   'models_list',
   'agent_create',
   'agent_create_status',
+  'agent_create_cancel',
   'agent_delete',
   'agent_restart',
   // Reopens stopped work (`AppNotifier.resumeAgent`). Missing here, every tap on a Stopped row came

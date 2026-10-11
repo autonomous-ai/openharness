@@ -57,6 +57,26 @@ void main() {
     },
   );
 
+  test('a copy installed before the Essentials category is listed there', () {
+    final catalog = currentHarnessCatalog([
+      DshEntry(
+        id: 'autonomous/harness-monitor',
+        name: 'Harness Monitor',
+        engine: 'opencode',
+        category: 'Compute',
+        installed: true,
+      ),
+      DshEntry(
+        id: 'autonomous/memories',
+        name: 'Memories',
+        engine: 'opencode',
+        category: 'Code',
+        installed: true,
+      ),
+    ]);
+    expect(catalog.map((e) => e.category), everyElement('Essentials'));
+  });
+
   test('published copy provides presentation; installed copy provides runtime facts', () {
     final rows = [
       const DshEntry(

@@ -1,0 +1,10 @@
+firmware/build*/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/sdkconfig.defaults.stamp
+firmware/sdkconfig.superseded
+firmware/managed_components/
+
+# Generated text atlases (built from a system font, never committed)
+**/pro_fonts.c
+firmware/test/out/

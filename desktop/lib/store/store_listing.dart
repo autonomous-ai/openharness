@@ -45,12 +45,16 @@ class StoreListing extends StatelessWidget {
     required this.onOpen,
     this.rowKeyPrefix = 'store-card',
     this.showRanks = false,
+    this.actionFor,
   });
   final List<DshEntry> entries;
   final StoreRating Function(DshEntry) ratingFor;
   final ValueChanged<String> onOpen;
   final String rowKeyPrefix;
   final bool showRanks;
+
+  /// A button at the end of a row, for an entry that acts in one click (the Store's Essentials).
+  final Widget? Function(DshEntry entry)? actionFor;
 
   @override
   Widget build(BuildContext context) {
@@ -75,6 +79,7 @@ class StoreListing extends StatelessWidget {
                   reserveRating: reserveRating,
                   reserveUpdate: reserveUpdate,
                   onOpen: () => onOpen(entry.id),
+                  action: actionFor?.call(entry),
                 ),
               ),
           ],
@@ -93,6 +98,7 @@ class _ProductRow extends StatelessWidget {
     required this.reserveUpdate,
     required this.onOpen,
     this.rank,
+    this.action,
   });
   final DshEntry entry;
   final StoreRating rating;
@@ -100,6 +106,7 @@ class _ProductRow extends StatelessWidget {
   final bool reserveUpdate;
   final VoidCallback onOpen;
   final int? rank;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
@@ -202,6 +209,7 @@ class _ProductRow extends StatelessWidget {
                   ],
                 ),
               ),
+              if (action != null) ...[const SizedBox(width: 12), action!],
             ],
           ),
         ),

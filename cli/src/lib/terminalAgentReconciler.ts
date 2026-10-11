@@ -127,7 +127,7 @@ export class TerminalAgentReconciler {
    *  identity like `suppressed` — the replacement process's identity is not known until the swap
    *  finishes, so there is nothing to key a process-identity suppression on yet. */
   private readonly heldRoutes = new Set<string>()
-  private readonly heldRouteTimers = new Map<string, NodeJS.Timeout>()
+  private readonly heldRouteOwners = new Map<string, { timer?: NodeJS.Timeout }>()
   /** When each route was last held or released, as a sequence number, so a probe can tell a route
    *  that changed hands while it ran (see `reconcileOnce`). */
   private routeSeq = 0
@@ -181,30 +181,32 @@ export class TerminalAgentReconciler {
    * process appearing in the same pane before the restart handler rebinds it would otherwise be opened
    * as a brand-new agent (`onDiscovered` mints a fresh `agentId`).
    *
-   * `autoReleaseMs` is a belt-and-suspenders bound: the caller is expected to `releaseRoute` in a
-   * `finally`, but a future refactor that drops that `finally` must not leave a route permanently
-   * invisible to reconciliation.
+   * A timed hold is useful when there is no operation to await. Pass null for a bounded operation
+   * that owns the route through publication and releases it in finally: a timer expiring while its
+   * replacement is still being confirmed would let discovery create a second agent for that process.
    */
-  holdRoute(routeKey: string, autoReleaseMs = 30_000): () => void {
+  holdRoute(routeKey: string, autoReleaseMs: number | null = 30_000): () => void {
     this.heldRoutes.add(routeKey)
     this.routeTouched.set(routeKey, ++this.routeSeq)
-    const existing = this.heldRouteTimers.get(routeKey)
-    if (existing) clearTimeout(existing)
-    const timer = setTimeout(() => this.releaseRoute(routeKey), autoReleaseMs)
-    timer.unref?.()
-    this.heldRouteTimers.set(routeKey, timer)
+    const existing = this.heldRouteOwners.get(routeKey)
+    if (existing?.timer) clearTimeout(existing.timer)
+    const owner: { timer?: NodeJS.Timeout } = {}
+    this.heldRouteOwners.set(routeKey, owner)
     // A cancelled restore cannot release the newer Stop/restart that took this route over.
-    return () => { if (this.heldRouteTimers.get(routeKey) === timer) this.releaseRoute(routeKey) }
+    const release = () => { if (this.heldRouteOwners.get(routeKey) === owner) this.releaseRoute(routeKey) }
+    if (autoReleaseMs !== null) {
+      owner.timer = setTimeout(release, autoReleaseMs)
+      owner.timer.unref?.()
+    }
+    return release
   }
 
   /** Resume normal reconciliation for a route held by `holdRoute`. Idempotent. */
   releaseRoute(routeKey: string): void {
     if (this.heldRoutes.delete(routeKey)) this.routeTouched.set(routeKey, ++this.routeSeq)
-    const timer = this.heldRouteTimers.get(routeKey)
-    if (timer) {
-      clearTimeout(timer)
-      this.heldRouteTimers.delete(routeKey)
-    }
+    const owner = this.heldRouteOwners.get(routeKey)
+    if (owner?.timer) clearTimeout(owner.timer)
+    this.heldRouteOwners.delete(routeKey)
   }
 
   /** Held now, or held or released since the probe numbered `probeSeq` began: that probe cannot speak
@@ -261,6 +263,7 @@ export class TerminalAgentReconciler {
     // (e2e/soak.e2e.ts, 2026-10-04).
     const probedAs = new Map(this.deps.current().map((agent) => [agent.agentId, {
       processKey: currentProcessKey(agent),
+      starting: agent.launch?.state === 'starting',
       placements: new Set(agent.runtimes.map(terminalPlacementKey)),
     }]))
     // Routes that change hands from here on are this probe's blind spot. Reconciliation is serial, so
@@ -402,7 +405,10 @@ export class TerminalAgentReconciler {
 
         if (terminalVerified) await this.deps.onTerminalAvailability?.(current, true)
         const probed = probedAs.get(current.agentId)
-        if (observed) {
+        if (observed || (processKey === null && (current.launch?.state === 'starting' || probed?.starting))) {
+          // Before the first engine exists, two quick scans prove no exit. The
+          // startup watcher owns that decision; discovery still checks the pane.
+          // A pre-start snapshot cannot count after readiness changes mid-probe.
           this.engineMisses.delete(current.agentId)
         } else if (probed && probed.processKey === processKey
           && current.active && terminalVerified && !isTerminalEngine(current.engine) && !current.runtimes.some((runtime) =>

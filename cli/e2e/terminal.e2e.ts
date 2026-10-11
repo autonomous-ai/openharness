@@ -444,6 +444,9 @@ describe('the terminal', () => {
     const agent = await create(d, client, 'claude', 'stopped-under')
     const terminal = await Terminal.open(client, agent.id)
     await terminal.keyframe()
+    const initialTurn = client.next(isTurn('turn_ended', agent.id), 45_000, 'the native conversation to be written before Stop')
+    terminal.type('retain this conversation before Stop\r')
+    await initialTurn
     const stopped = await client.request('agent_delete', { agentId: agent.id }, 60_000)
     expect(stopped.error, JSON.stringify(stopped)).toBeUndefined()
     await terminal.closed()

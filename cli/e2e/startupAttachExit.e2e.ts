@@ -43,6 +43,13 @@ describe('a native exit during the pending startup attach', () => {
     const sessionId = bound.sessionId
     const registered = (JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as Row[]).find(agent => agent.agentId === bound.id)!
     expect(registered.processIdentity?.startMarker).toBeTruthy()
+    // Claude has no identity-bearing opening before its first message. Produce actual native
+    // history while attachment is pending; an empty file cannot prove a resumable conversation.
+    client.send('message', { agentId: bound.id, content: 'preserve this conversation through native exit' })
+    await until('the pending conversation to have a complete native answer', () => {
+      const text = readFileSync(registered.transcriptPath, 'utf8')
+      return text.includes('answer 1: preserve this conversation through native exit') || null
+    }, 15_000, 50)
     const pid = registered.processIdentity.pid as number
     // The native process leaves; no stop/restart RPC owns this transition. Retirement belongs to
     // discovery as before, after the pending attach resumes and observes the engine really gone.

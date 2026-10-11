@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { MARK_CLOSE, MARK_OPEN, SessionSearchStore, makeSnippet, queryTerms, type IndexedSession } from './store.js'
+import { MARK_CLOSE, MARK_OPEN, SessionSearchStore, makeSnippet, queryTerms, wordFamily, type IndexedSession } from './store.js'
 import type { IndexedTurn } from './turns.js'
 
 const DAY = 86_400_000
@@ -130,6 +130,30 @@ describe('SessionSearchStore', () => {
       'the dial [scroll] jumps two rows',
     ])
     expect(hits.find((hit) => hit.sessionId === 'dial')).toMatchObject({ turn: 1, field: 'ask', agentId: 'agent-dial', engine: 'claude' })
+  })
+
+  // On one Mac's index (2026-10-10) "dark mode" put a desk-lamp *model* first and "mode" found only "model".
+  it('puts a word typed out above turns that only begin with it, and otherwise keeps the order', () => {
+    const store = open()
+    store.writeSession(session('lamp', 'Desk lamp', NOW), 0, [turn(0, 'model a desk lamp in the dark room')])
+    store.writeSession(session('theme', 'Theme', NOW - 5 * DAY), 0, [turn(0, 'the dark modes need more contrast')])
+    store.writeSession(session('night', 'Night', NOW - 9 * DAY), 0, [turn(0, 'dark mode by default at night')])
+    expect(store.search('dark mode', { now: NOW }).map((hit) => hit.sessionId)).toEqual(['theme', 'night', 'lamp'])
+    // A word still being typed begins every hit alike, so it moves nothing: relevance and recency decide, as
+    // before (two words in one turn, then the newer), and the lamp is no longer last.
+    expect(store.search('dark mod', { now: NOW }).map((hit) => hit.sessionId)).toEqual(['theme', 'lamp', 'night'])
+    // A turn holding the word as a word elsewhere is not one that only begins with it.
+    store.writeSession(session('both', 'Both', NOW), 0, [turn(0, 'the model picker', 'and the plan mode')])
+    expect(store.search('mode', { now: NOW, limit: 2 }).map((hit) => hit.sessionId)).toEqual(['both', 'theme'])
+  })
+
+  it('knows a word by its common endings, the index keeping words as written', () => {
+    expect(wordFamily('mode')).toEqual(['mode', 'modes', 'moded', 'moding'])
+    expect(wordFamily('search')).toEqual(['search', 'searchs', 'searches', 'searched', 'searching'])
+    expect(wordFamily('copy')).toEqual(['copy', 'copys', 'copyes', 'copyed', 'copying', 'copies', 'copied'])
+    expect(wordFamily('play')).not.toContain('plaies')
+    expect(wordFamily('v2')).toEqual(['v2'])
+    expect(wordFamily('a')).toEqual(['a'])
   })
 
   it('ranks a turn holding every word above a session that has them only in different turns', () => {

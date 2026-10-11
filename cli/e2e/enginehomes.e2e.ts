@@ -133,7 +133,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const agent = await until('the model-picker agent to bind', async () => {
       const now = await row(client, created.agent.id); return now?.sessionId ? now : null
     }, 30_000)
-    if (engine === 'codex') expect(agent.codexHome).toBeNull()
+    if (engine === 'codex') expect(agent.codexHome).toBe(home)
     const answer = await client.request('models_list', { agentId: agent.id }, 30_000)
     expect(answer.error, JSON.stringify(answer)).toBeUndefined()
     const ids = answer.models.map((model: Row) => model.id)
@@ -161,7 +161,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
       const agent = await until('the shared conversation to bind', async () => {
         const now = await row(client, created.agent.id); return now?.sessionId ? now : null
       }, 30_000)
-      expect(agent.codexHome).toBeNull()
+      expect(agent.codexHome).toBe(home)
       server.state.threadId = agent.sessionId
       const started = client.next(isTurn('turn_started', agent.id), 30_000)
       client.send('message', { agentId: agent.id, content: '!hold' })
@@ -206,7 +206,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     for (const [folder, thread_name] of [[d.env.CODEX_HOME!, 'Wrong login name'], [home, 'Moved home conversation']]) {
       writeFileSync(join(folder, 'session_index.jsonl'), JSON.stringify({ id: agent.sessionId, thread_name }) + '\n')
     }
-    expect(agent.codexHome).toBeNull()
+    expect(agent.codexHome).toBe(home)
     await until('the moved-home name on the agent', async () => (await row(client, agent.id))?.name === 'Moved home conversation', 20_000)
     client.close()
   })

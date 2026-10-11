@@ -139,19 +139,21 @@ class _DeviceSettingsPanelState extends State<DeviceSettingsPanel> {
           ),
         ),
         const SizedBox(height: 10),
-        SettingRow(
-          title: 'Reverse scrolling',
-          detail: 'Change the direction of a vertical swipe.',
-          controlSemanticLabel: 'Reverse scrolling',
-          control: Switch(
-            key: ValueKey('devices-scroll-${device.key}'),
-            value: settings.scrollReversed,
-            onChanged: enabled
-                ? (value) => change({'scrollReversed': value})
-                : null,
+        if (!device.status.isPro) ...[
+          SettingRow(
+            title: 'Reverse scrolling',
+            detail: 'Change the direction of a vertical swipe.',
+            controlSemanticLabel: 'Reverse scrolling',
+            control: Switch(
+              key: ValueKey('devices-scroll-${device.key}'),
+              value: settings.scrollReversed,
+              onChanged: enabled
+                  ? (value) => change({'scrollReversed': value})
+                  : null,
+            ),
           ),
-        ),
-        const SizedBox(height: 10),
+          const SizedBox(height: 10),
+        ],
         SettingRow(
           title: 'Voice language',
           detail: 'The language you speak to this device.',
@@ -189,17 +191,19 @@ class _DeviceSettingsPanelState extends State<DeviceSettingsPanel> {
                   ),
           ),
         ),
-        SizedBox(height: 10 + widget.petGap),
-        KeyedSubtree(
-          key: widget.petKey,
-          child: PetSettingsSection(
-            device: device,
-            controller: controller,
-            editor: widget.petEditor,
-            showViewer: !widget.petViewerBeside,
-            pickFile: widget.pickPetFile,
+        if (!device.status.isPro) ...[
+          SizedBox(height: 10 + widget.petGap),
+          KeyedSubtree(
+            key: widget.petKey,
+            child: PetSettingsSection(
+              device: device,
+              controller: controller,
+              editor: widget.petEditor,
+              showViewer: !widget.petViewerBeside,
+              pickFile: widget.pickPetFile,
+            ),
           ),
-        ),
+        ],
         const SizedBox(height: 12),
         Semantics(
           liveRegion: true,

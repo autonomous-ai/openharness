@@ -39,6 +39,17 @@ vi.mock('ioredis', () => {
     get = vi.fn(async (_key: string): Promise<string | null> => null)
     pipelines: FakePipeline[] = []
     pipeline() { const p = new FakePipeline(); this.pipelines.push(p); return p }
+    multiCalls: Array<{ cmd: string; args: unknown[] }> = []
+    multiResult: unknown = [[null, 'OK'], [null, 1]]
+    multi() {
+      const calls = this.multiCalls, result = () => this.multiResult
+      const m = {
+        set: (...args: unknown[]) => { calls.push({ cmd: 'set', args }); return m },
+        incr: (...args: unknown[]) => { calls.push({ cmd: 'incr', args }); return m },
+        exec: async () => result(),
+      }
+      return m
+    }
     opts: unknown
     constructor(_url: string, opts: unknown) { this.opts = opts; state.instances.push(this) }
   }
@@ -56,6 +67,7 @@ type MockFn = ReturnType<typeof vi.fn>
 const pub = state.instances[0] as unknown as {
   publish: MockFn; subscribe: MockFn; opts: unknown
   eval: MockFn; get: MockFn
+  multiCalls: Array<{ cmd: string; args: unknown[] }>; multiResult: unknown
   pipelines: Array<{ calls: Array<{ cmd: string; args: unknown[] }> }>
 }
 
@@ -185,5 +197,25 @@ describe('consumeNewIdQuota', () => {
   it('fails open when Redis is unreachable', async () => {
     pub.eval.mockRejectedValue(new Error('ECONNREFUSED'))
     expect(await bus.consumeNewIdQuota('device', 'u1')).toBe(true)
+  })
+})
+
+describe('redisCount', () => {
+  beforeEach(() => { pub.multiCalls.length = 0; pub.multiResult = [[null, 'OK'], [null, 1]] })
+
+  it('starts a window once, with its expiry, and counts in it', async () => {
+    pub.multiResult = [[null, null], [null, 7]]
+    expect(await bus.redisCount('jev:m:u1:42', 60_000)).toBe(7)
+    expect(pub.multiCalls).toEqual([
+      { cmd: 'set', args: ['jev:m:u1:42', '0', 'PX', 60_000, 'NX'] },
+      { cmd: 'incr', args: ['jev:m:u1:42'] },
+    ])
+  })
+
+  it('throws when the count did not happen, so the caller counts elsewhere', async () => {
+    pub.multiResult = [[null, 'OK'], [new Error('READONLY'), null]]
+    await expect(bus.redisCount('k', 1_000)).rejects.toThrow('READONLY')
+    pub.multiResult = null
+    await expect(bus.redisCount('k', 1_000)).rejects.toThrow('redis count failed')
   })
 })

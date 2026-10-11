@@ -1,0 +1,336 @@
+{
+  "claude fresh": [
+    "claude"
+  ],
+  "claude resume": [
+    "claude",
+    "--resume",
+    "fixture-conversation"
+  ],
+  "claude fork": [
+    "claude",
+    "--resume",
+    "fixture-parent",
+    "--fork-session"
+  ],
+  "claude permission": [
+    "claude",
+    "--permission-mode",
+    "auto",
+    "--model",
+    "fixture/model"
+  ],
+  "claude first": [
+    "claude",
+    "literal ; $(first message)"
+  ],
+  "codex fresh": [
+    "codex"
+  ],
+  "codex resume": [
+    "codex",
+    "resume",
+    "fixture-conversation"
+  ],
+  "codex fork": [
+    "codex",
+    "fork",
+    "fixture-parent"
+  ],
+  "codex permission": [
+    "codex",
+    "--approve-for-me",
+    "--model",
+    "fixture/model"
+  ],
+  "codex first": [
+    "codex",
+    "literal ; $(first message)"
+  ],
+  "cursor fresh": [
+    "cursor-agent"
+  ],
+  "cursor resume": [
+    "cursor-agent",
+    "--resume",
+    "fixture-conversation"
+  ],
+  "cursor fork": [
+    "cursor-agent"
+  ],
+  "cursor permission": [
+    "cursor-agent",
+    "--force",
+    "--model",
+    "fixture/model"
+  ],
+  "cursor first": {
+    "refused": "FirstPromptUnsupportedError",
+    "detail": "cursor has no documented way to start with a first prompt, so the agent was not created."
+  },
+  "opencode fresh": [
+    "opencode"
+  ],
+  "opencode resume": [
+    "opencode",
+    "--session",
+    "fixture-conversation"
+  ],
+  "opencode fork": [
+    "opencode"
+  ],
+  "opencode permission": [
+    "opencode",
+    "--auto",
+    "--model",
+    "fixture/model"
+  ],
+  "opencode first": [
+    "opencode",
+    "--prompt",
+    "literal ; $(first message)"
+  ],
+  "pi fresh": [
+    "pi"
+  ],
+  "pi resume": [
+    "pi",
+    "--session",
+    "fixture-conversation"
+  ],
+  "pi fork": [
+    "pi"
+  ],
+  "pi permission": [
+    "pi",
+    "--model",
+    "fixture/model"
+  ],
+  "pi first": {
+    "refused": "FirstPromptUnsupportedError",
+    "detail": "pi has no documented way to start with a first prompt, so the agent was not created."
+  },
+  "hermes fresh": [
+    "hermes"
+  ],
+  "hermes resume": [
+    "hermes",
+    "--resume",
+    "fixture-conversation"
+  ],
+  "hermes fork": [
+    "hermes"
+  ],
+  "hermes permission": [
+    "hermes",
+    "--model",
+    "fixture/model"
+  ],
+  "hermes first": [
+    "hermes",
+    "chat",
+    "-q",
+    "literal ; $(first message)"
+  ],
+  "commandcode fresh": [
+    "cmd"
+  ],
+  "commandcode resume": [
+    "cmd",
+    "--resume",
+    "fixture-conversation"
+  ],
+  "commandcode fork": [
+    "cmd"
+  ],
+  "commandcode permission": [
+    "cmd",
+    "--model",
+    "fixture/model"
+  ],
+  "commandcode first": {
+    "refused": "FirstPromptUnsupportedError",
+    "detail": "commandcode has no documented way to start with a first prompt, so the agent was not created."
+  },
+  "devin fresh": [
+    "devin"
+  ],
+  "devin resume": [
+    "devin",
+    "--resume",
+    "fixture-conversation"
+  ],
+  "devin fork": [
+    "devin"
+  ],
+  "devin permission": [
+    "devin",
+    "--model",
+    "fixture/model"
+  ],
+  "devin first": {
+    "refused": "FirstPromptUnsupportedError",
+    "detail": "devin has no documented way to start with a first prompt, so the agent was not created."
+  },
+  "muse fresh": [
+    "muse"
+  ],
+  "muse resume": [
+    "muse",
+    "resume",
+    "fixture-conversation"
+  ],
+  "muse fork": [
+    "muse"
+  ],
+  "muse permission": [
+    "muse",
+    "--model",
+    "fixture/model"
+  ],
+  "muse first": {
+    "refused": "FirstPromptUnsupportedError",
+    "detail": "muse has no documented way to start with a first prompt, so the agent was not created."
+  },
+  "amp fresh": [
+    "amp"
+  ],
+  "amp resume": [
+    "amp",
+    "threads",
+    "continue",
+    "fixture-conversation"
+  ],
+  "amp fork": [
+    "amp"
+  ],
+  "amp permission": [
+    "amp",
+    "--model",
+    "fixture/model"
+  ],
+  "amp first": {
+    "refused": "FirstPromptUnsupportedError",
+    "detail": "amp has no documented way to start with a first prompt, so the agent was not created."
+  },
+  "kilo fresh": [
+    "kilo"
+  ],
+  "kilo resume": [
+    "kilo",
+    "--session",
+    "fixture-conversation"
+  ],
+  "kilo fork": [
+    "kilo"
+  ],
+  "kilo permission": [
+    "kilo",
+    "--model",
+    "fixture/model"
+  ],
+  "kilo first": {
+    "refused": "FirstPromptUnsupportedError",
+    "detail": "kilo has no documented way to start with a first prompt, so the agent was not created."
+  },
+  "grok fresh": [
+    "grok"
+  ],
+  "grok resume": [
+    "grok",
+    "--resume",
+    "fixture-conversation"
+  ],
+  "grok fork": [
+    "grok"
+  ],
+  "grok permission": [
+    "grok",
+    "--model",
+    "fixture/model"
+  ],
+  "grok first": {
+    "refused": "FirstPromptUnsupportedError",
+    "detail": "grok has no documented way to start with a first prompt, so the agent was not created."
+  },
+  "agy fresh": [
+    "agy"
+  ],
+  "agy resume": [
+    "agy",
+    "--conversation",
+    "fixture-conversation"
+  ],
+  "agy fork": [
+    "agy"
+  ],
+  "agy permission": [
+    "agy",
+    "--model",
+    "fixture/model"
+  ],
+  "agy first": {
+    "refused": "FirstPromptUnsupportedError",
+    "detail": "agy has no documented way to start with a first prompt, so the agent was not created."
+  },
+  "copilot fresh": [
+    "copilot"
+  ],
+  "copilot resume": [
+    "copilot",
+    "--resume",
+    "fixture-conversation"
+  ],
+  "copilot fork": [
+    "copilot"
+  ],
+  "copilot permission": [
+    "copilot",
+    "--model",
+    "fixture/model"
+  ],
+  "copilot first": {
+    "refused": "FirstPromptUnsupportedError",
+    "detail": "copilot has no documented way to start with a first prompt, so the agent was not created."
+  },
+  "installation installed": {
+    "code": 0,
+    "trace": [
+      "engine",
+      "--prompt",
+      "literal ; $(first message)"
+    ],
+    "executable": true
+  },
+  "installation vendor": {
+    "code": 0,
+    "trace": [
+      "install:vendor",
+      "engine",
+      "--prompt",
+      "literal ; $(first message)"
+    ],
+    "executable": true
+  },
+  "installation fallback": {
+    "code": 0,
+    "trace": [
+      "primary",
+      "install:vendor",
+      "engine",
+      "--prompt",
+      "literal ; $(first message)"
+    ],
+    "executable": true
+  },
+  "installation npm": {
+    "code": 0,
+    "trace": [
+      "install:<root>/home/.local",
+      "engine",
+      "--prompt",
+      "literal ; $(first message)"
+    ],
+    "executable": true
+  }
+}

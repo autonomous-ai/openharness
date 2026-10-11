@@ -46,6 +46,7 @@ import '../shared/theme/workspace_bar_style.dart';
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
 import 'harness_agent_control.dart';
+import '../agent_messages/pane_message_mark.dart';
 import 'harness_activity_mark.dart';
 import 'grid_model_picker.dart';
 import 'pane_header_actions.dart';
@@ -407,9 +408,6 @@ class _TerminalPanelState extends State<TerminalPanel>
   @override
   void didUpdateWidget(TerminalPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.visible && (_focusNode.hasFocus || _composerFocus.hasFocus)) {
-      widget.session.inputTabId = widget.paneLocation?.$1;
-    }
     if (!identical(oldWidget.notifier, widget.notifier)) {
       oldWidget.notifier.modelStarts.removeListener(_onModelStartsChanged);
       widget.notifier.modelStarts.addListener(_onModelStartsChanged);
@@ -758,7 +756,6 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// Typing in the composer focuses the tile, exactly like clicking into the terminal does.
   void _handleComposerFocusChange() {
     if (_composerFocus.hasFocus) {
-      widget.session.inputTabId = widget.paneLocation?.$1;
       widget.onRendererFocus?.call();
     }
   }
@@ -766,7 +763,6 @@ class _TerminalPanelState extends State<TerminalPanel>
   void _handleFocusChange() {
     _syncCursorBlink();
     if (_focusNode.hasFocus) {
-      widget.session.inputTabId = widget.paneLocation?.$1;
       widget.onRendererFocus?.call();
     }
   }
@@ -1749,7 +1745,6 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// clipboard than this one — see `MachineState.isLocalMachine`.
   Future<void> _paste() async {
     final target = widget.session;
-    final origin = widget.paneLocation?.$1;
     final streamId = target.streamId;
     bool stillOwnsPaste() =>
         mounted &&
@@ -1780,7 +1775,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       final machine = widget.notifier.stateOf(target.machineId);
       _controller.clearSelection();
       if (machine != null && machine.terminalPasteRawAvailable) {
-        await target.pasteText(text, tabId: origin);
+        await target.pasteText(text);
       } else {
         target.terminal.paste(text);
       }
@@ -1854,7 +1849,6 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// platform's exact one: Linux reserves Ctrl-V for the terminal program and pastes with
   /// Ctrl-Shift-V.
   KeyEventResult _onTerminalKey(FocusNode node, KeyEvent event) {
-    widget.session.inputTabId = widget.paneLocation?.$1;
     if (_passageId != null && event.logicalKey == LogicalKeyboardKey.escape) {
       if (event is KeyDownEvent) _closePassage();
       return KeyEventResult.handled;
@@ -2460,7 +2454,6 @@ class _TerminalPanelState extends State<TerminalPanel>
               ColoredBox(
                 color: grid.AppPalette.windowBg,
                 child: TerminalComposer(
-                  tabId: widget.paneLocation?.$1,
                   session: session,
                   focusNode: _composerFocus,
                   inputEnabled: !widget.readOnly,
@@ -2934,7 +2927,10 @@ class _TerminalHeader extends StatelessWidget {
                 Expanded(
                   child: Row(
                     children: [
+                      // Four parts to an Agent Messages mark's one while it
+                      // shows; alone, the title has all the room.
                       Flexible(
+                        flex: 4,
                         child: Tooltip(
                           message: identityDetail,
                           waitDuration: const Duration(milliseconds: 500),
@@ -2963,6 +2959,12 @@ class _TerminalHeader extends StatelessWidget {
                         app: notifier,
                         machineId: session.machineId,
                         agentId: session.agentId,
+                      ),
+                      PaneMessageMarkView(
+                        controller: notifier.agentMessages,
+                        machineId: session.machineId,
+                        agentId: session.agentId,
+                        style: titleStyle,
                       ),
                       if ((status != null && !leadingStatus) ||
                           starting != null ||

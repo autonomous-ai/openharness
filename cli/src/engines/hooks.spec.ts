@@ -31,19 +31,19 @@ it('keeps every contract plain data: nothing in it runs', () => {
   expect(JSON.parse(JSON.stringify(hookContracts))).toEqual(hookContracts)
 })
 
-it('installs Claude hooks into the requested home through its facet', () => {
+it('installs Claude hooks into the requested home through its facet', async () => {
   const home = mkdtempSync(join(tmpdir(), 'claude-hook-facet-'))
   try {
-    engineHooks.claude.installIn(19473, home)
+    await engineHooks.claude.installIn(19473, home)
     const file = join(home, 'settings.json')
     const first = readFileSync(file, 'utf8')
     const settings = JSON.parse(first)
-    expect(Object.keys(settings.hooks)).toEqual(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure'])
+    expect(Object.keys(settings.hooks)).toEqual(['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'Stop', 'StopFailure', 'PostToolUse'])
     const command = settings.hooks.Stop[0].hooks[0].command as string
     expect(command).toContain('--port 19473')
     expect(command).toContain(fileURLToPath(new URL('../../hook/notify.mjs', import.meta.url)))
     expect(command).not.toContain('--engine')
-    engineHooks.claude.installIn(19473, home)
+    await engineHooks.claude.installIn(19473, home)
     expect(readFileSync(file, 'utf8')).toBe(first)
   } finally { rmSync(home, { recursive: true, force: true }) }
 })

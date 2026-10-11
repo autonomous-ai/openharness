@@ -2,6 +2,7 @@
 // handoff provider's dependencies (cli.ts passes the real functions, specs pass fakes). Discovery is
 // read-only: it never binds anything, and it answers only when the answer is certain — a Change agent
 // must not guess whose conversation it hands over. Consumed by lib/agentHandoff.ts.
+import { handoffSessionFact, HandoffError } from './handoffAuthority.js'
 import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { HandoffDeps } from './agentHandoff.js'
@@ -21,6 +22,8 @@ export interface DiscoveryDeps {
   processSession(engine: AgentEngine, pid: number, cwd: string, startedAtMs: number): Promise<RepairedSession | null>
   /** The agent has a live pane (not a stopped copy). */
   isLive(agentId: string): boolean
+  current?(agentId: string): RegisteredSession | null | undefined
+  observed?(session: RegisteredSession, found: TurnSource | null): void
   /** Another agent, running or stopped, already holds this session. Must answer true when it cannot tell. */
   ownedByOther(sessionId: string, agentId: string): boolean
   isRecentlyDeleted(sessionId: string): boolean
@@ -44,11 +47,17 @@ export function sessionDiscovery(deps: DiscoveryDeps): (session: RegisteredSessi
       const found = live && 'record' in live
         ? await deps.processSession(session.engine, pid, cwd, startedAt)
         : await deps.findLiveSession(session.engine, cwd, startedAt, { bornOnly: true, pid, codexHome: session.codexHome ?? undefined })
-      const path = found?.transcriptPath
-      if (!found || !found.sessionId || !path || isSubagentTranscript(path)) return null
-      if (deps.isRecentlyDeleted(found.sessionId) || deps.ownedByOther(found.sessionId, session.agentId)) return null
-      return { engine: session.engine, sessionId: found.sessionId, transcriptPath: path }
-    } catch { return null }
+      const current = deps.current?.(session.agentId)
+      if (!deps.isLive(session.agentId) || deps.current && (!current || current.identityHold
+        || handoffSessionFact(current).fingerprint !== handoffSessionFact(session).fingerprint)) throw new HandoffError('IDENTITY_UNAVAILABLE')
+      if (!found) { deps.observed?.(session, null); return null }
+      const path = found.transcriptPath
+      if (!found.sessionId || !path || isSubagentTranscript(path)
+        || deps.isRecentlyDeleted(found.sessionId) || deps.ownedByOther(found.sessionId, session.agentId)) throw new HandoffError('IDENTITY_UNAVAILABLE')
+      const source = { engine: session.engine, sessionId: found.sessionId, transcriptPath: path }
+      deps.observed?.(session, source)
+      return source
+    } catch { throw new HandoffError('IDENTITY_UNAVAILABLE') }
   }
 
   return (session) => {
@@ -61,10 +70,11 @@ export function sessionDiscovery(deps: DiscoveryDeps): (session: RegisteredSessi
     let live = false
     try { live = deps.isLive(session.agentId) } catch { live = false }
     if (!live) return Promise.resolve(null)
-    const running = pending.get(session.agentId)
+    const key = handoffSessionFact(session).fingerprint
+    const running = pending.get(key)
     if (running) return running
-    const promise = find(session, session.cwd, pid, startedAt).finally(() => { if (pending.get(session.agentId) === promise) pending.delete(session.agentId) })
-    pending.set(session.agentId, promise)
+    const promise = find(structuredClone(session), session.cwd, pid, startedAt).finally(() => { if (pending.get(key) === promise) pending.delete(key) })
+    pending.set(key, promise)
     return promise
   }
 }
@@ -97,6 +107,8 @@ export function ownedByOther(deps: OwnershipDeps, sessionId: string, agentId: st
 
 /** The real functions the provider is built from (cli.ts), so a spec can pass fakes and see each one reached. */
 export interface HandoffWiring {
+  publish?: HandoffDeps['publish']
+  observed?: DiscoveryDeps['observed']
   registry: {
     resolve(id: string): RegisteredSession | null | undefined
     byAgent(id: string): unknown
@@ -123,6 +135,7 @@ export interface HandoffWiring {
  */
 export function handoffProviderDeps(w: HandoffWiring): HandoffDeps {
   return {
+    publish: w.publish,
     resolve: (id) => w.registry.resolve(id) ?? w.stopped.get(id),
     readHistory: w.databaseHistory,
     recentAsks: (sid, n) => w.mirror.recentAsks(sid, n),
@@ -131,9 +144,11 @@ export function handoffProviderDeps(w: HandoffWiring): HandoffDeps {
     // A pane that has not found its session yet (a repair still pending): the session it runs, only when it is
     // certain. Never a fork, never a database engine, never one another agent holds.
     discoverSession: sessionDiscovery({
+      observed: w.observed,
       findLiveSession: w.findLiveSession,
       processSession: w.processSession,
       isLive: (id) => !!w.registry.byAgent(id),
+      current: (id) => w.registry.resolve(id),
       ownedByOther: (sid, id) => ownedByOther({
         bySession: (s) => w.registry.bySession(s), stoppedIds: () => w.stopped.ids(), stopped: (s) => w.stopped.get(s),
       }, sid, id),

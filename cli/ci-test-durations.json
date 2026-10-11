@@ -57,8 +57,6 @@
     "src/machinesCommand.spec.ts": 5800,
     "src/orchestrator/service.spec.ts": 2700,
     "src/remoteCommand.spec.ts": 1400,
-    "src/scripts/install.spec.ts": 10100,
-    "src/teams/remote.spec.ts": 20500,
-    "src/teams/transport.spec.ts": 8200
+    "src/scripts/install.spec.ts": 10100
   }
 }

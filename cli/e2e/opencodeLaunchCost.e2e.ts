@@ -48,7 +48,7 @@ console.log('┃'); setInterval(() => {}, 1000);
         const cwd = join(d.projectsDir, String(i)); mkdirSync(cwd)
         const before = sample(d.corePid()!), start = performance.now()
         const result = await client.request('agent_create', { engine: 'opencode', cwd }, 30000)
-        expect(result.error).toBeUndefined()
+        expect(result.error, `${which}: ${JSON.stringify(result)}\n${d.output}`).toBeUndefined()
         const after = sample(d.corePid()!)
         launches.push({ phase: i ? 'warm' : 'cold', requestMs: performance.now() - start, coreCpuMs: after.cpuMs - before.cpuMs, rssMiB: after.rssMiB })
       }

@@ -77,7 +77,7 @@ class CompanionDial extends StatelessWidget {
     final title = !device.attached
         ? 'Your dial is unplugged'
         : device.updating != null
-        ? 'Your dial is updating'
+        ? 'Your ${device.isPro ? 'Harness Pro' : 'dial'} is updating'
         : settings == null
         ? 'Connecting to your dial…'
         : !supported

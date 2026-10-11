@@ -47,7 +47,7 @@ describe('buildLaunchOverrides with a DSH', () => {
     machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
     writeGridConfigDir: async () => '/cfg',
     tmuxSupportsSessionEnv: async () => true,
-    installCodexHooks: () => undefined,
+    installCodexHooks: () => true,
     dshLaunch: async (id, workspace, engine) => id === installed.id ? { ok: true, launch: dshLaunch(installed, workspace, {}, engine) } : { ok: false, error: 'DSH_NOT_INSTALLED', detail: `${id} is not installed on this machine` },
   }
 

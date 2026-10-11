@@ -7,7 +7,7 @@
 //    window does not slow this side down — the dial's ring overflows and the bytes are gone with no error.
 import { describe, expect, it, vi } from 'vitest'
 
-import { CIRCLE_OTA_KEY, FW_SLICE_BYTES, FW_WINDOW_BYTES, FirmwareTransfer, PRO_OTA_KEY, otaKeyForBoard, shouldOffer } from './fwPush.js'
+import { CIRCLE_OTA_KEY, FW_MAX_RESENDS, FW_SLICE_BYTES, FW_WINDOW_BYTES, FirmwareTransfer, PRO_OTA_KEY, otaKeyFor, otaKeyForBoard, shouldOffer } from './fwPush.js'
 
 describe('shouldOffer', () => {
   it('offers a strictly newer release', () => {
@@ -134,6 +134,80 @@ describe('FirmwareTransfer', () => {
   })
 })
 
+describe('FirmwareTransfer with offsets (Pro) and resend', () => {
+  const mk = (size: number, offsets: boolean, park?: (t: FirmwareTransfer) => Promise<void>) => {
+    const image = Buffer.alloc(size)
+    for (let i = 0; i < size; i++) image[i] = (i * 31 + (i >> 8)) & 0xff
+    const frames: Buffer[] = []
+    const t: FirmwareTransfer = new FirmwareTransfer(image, '1.2.3', async (s) => {
+      frames.push(Buffer.from(s))
+      await park?.(t)
+    }, () => {}, { offsets })
+    return { t, frames, image }
+  }
+  const off = (f: Buffer) => f.readUInt32LE(0)
+
+  it('prefixes every slice with its LE offset, data at most 8188', async () => {
+    const { t, frames, image } = mk(30_000, true)
+    await t.pump()
+    for (const f of frames) expect(f.length - 4).toBeLessThanOrEqual(8188)
+    expect(frames.map(off)).toEqual(frames.map((_, i) => i * 8188))
+    expect(frames.every((f) => f.subarray(4).equals(image.subarray(off(f), off(f) + f.length - 4)))).toBe(true)
+  })
+
+  it('round slices stay plain 8192 bytes with no prefix', async () => {
+    const { t, frames, image } = mk(30_000, false)
+    await t.pump()
+    expect(frames[0]!.length).toBe(8192)
+    expect(frames[0]!.equals(image.subarray(0, 8192))).toBe(true)
+  })
+
+  it('resend rewinds and re-sends the image from `written`', async () => {
+    const { t, frames } = mk(100_000, true)
+    await t.pump()
+    const n = frames.length
+    await t.onResend(8188)
+    expect(off(frames[n]!)).toBe(8188)
+    // the rest is delivered contiguously from the rewind point
+    await t.onProgress(8188 + 16_000)
+    const offs = frames.slice(n).map(off)
+    expect(offs.every((o, i) => i === 0 || o > offs[i - 1]!)).toBe(true)
+  })
+
+  it('a resend during a parked write starts no second loop and duplicates nothing', async () => {
+    let fired = false
+    const { t, frames } = mk(8188 * 6, true, async (self) => {
+      await Promise.resolve()
+      if (!fired && frames.length === 2) {
+        fired = true
+        void self.onResend(0)
+      }
+    })
+    await t.pump()
+    // sent 0, 8188, then (rewound) 0, 8188 ... the window is not exceeded and no offset repeats back-to-back
+    const offs = frames.map(off)
+    expect(offs.slice(0, 3)).toEqual([0, 8188, 0])
+    for (let i = 1; i < offs.length; i++) expect(offs[i]).not.toBe(offs[i - 1])
+  })
+
+  it('ignores stale resends', async () => {
+    const { t, frames } = mk(100_000, true)
+    await t.pump()
+    await t.onProgress(16_376)
+    const n = frames.length
+    await t.onResend(8188) // behind acked
+    await t.onResend(10_000_000) // beyond what was sent
+    expect(frames.length).toBe(n)
+  })
+
+  it('gives up after too many resends', async () => {
+    const { t } = mk(100_000, true)
+    await t.pump()
+    for (let i = 0; i <= FW_MAX_RESENDS && !t.isDone; i++) await t.onResend(0)
+    expect(t.isDone).toBe(true)
+  })
+})
+
 // ONE IMAGE PER BOARD, AND NEVER A GUESS.
 //
 // Until Harness Pro existed there was one kind of device on the cable, so the offer took the manifest's
@@ -154,6 +228,34 @@ describe('which firmware a board may be offered', () => {
     // point: the alternative is picking one of the two images we do have, and both are wrong.
     expect(otaKeyForBoard('harness-ultra')).toBeNull()
     expect(otaKeyForBoard('')).not.toBeNull()   // empty is "did not say", handled below — not unknown
+  })
+
+  it('pro with ota v1 is offered the harness-pro entry', () => {
+    expect(otaKeyFor('harness-pro', 'pro', 'v1')).toBe(PRO_OTA_KEY)
+  })
+
+  it('pro without ota is not offered', () => {
+    expect(otaKeyFor('harness-pro', 'pro', undefined)).toBeNull()
+    expect(otaKeyFor('harness-pro', 'pro', 'v2')).toBeNull()
+  })
+
+  it('hw harness-pro without board is not offered', () => {
+    expect(otaKeyFor('harness-pro', undefined, undefined)).toBeNull()
+  })
+
+  it('round choice unchanged', () => {
+    expect(otaKeyFor('cst816s', undefined, undefined)).toBe(CIRCLE_OTA_KEY)
+    expect(otaKeyFor(undefined, undefined, undefined)).toBe(CIRCLE_OTA_KEY)
+    expect(otaKeyFor('harness-ultra', undefined, undefined)).toBeNull()
+  })
+
+  it('pro -pod version not offered', () => {
+    expect(shouldOffer('0.0.99-pod', '0.1.0')).toBe(false)
+  })
+
+  it('pro equal or older version not offered', () => {
+    expect(shouldOffer('0.1.0', '0.1.0')).toBe(false)
+    expect(shouldOffer('0.2.0', '0.1.9')).toBe(false)
   })
 
   it('treats a device that does not say as the dial', () => {

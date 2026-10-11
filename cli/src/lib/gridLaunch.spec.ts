@@ -43,6 +43,14 @@ function launchOf(engine: AgentEngine, override = WITH_MODEL, machine = PLAIN_MA
   return built.launch
 }
 
+it('borrows Grok conversations and Pi skills from the captured launch home', () => {
+  const machine = { ...PLAIN_MACHINE, grokHome: '/fixture/shell-grok', piSkillsDir: '/fixture/shell-pi/skills' }
+  expect(launchOf('grok', WITH_MODEL, machine).configDir!.links!.map(link => link.target))
+    .toEqual(expect.arrayContaining(['/fixture/shell-grok/sessions']))
+  const settings = launchOf('pi', WITH_MODEL, machine).configDir!.files.find(file => file.name === 'settings.json')!
+  expect(JSON.parse(settings.content).skills).toEqual(['/fixture/shell-pi/skills'])
+})
+
 describe('parseGridLaunchOverride', () => {
   it('reads absent as absent, not as a failure', () => {
     // The whole no-regression promise rests on this: a client with no grid selected sends no field,

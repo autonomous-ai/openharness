@@ -54,9 +54,8 @@ function deps(over: Partial<InputDeps> = {}) {
       keyTerminalAction: vi.fn(async (id: string, key: string) => { calls.push(`key ${id} ${key}`); return ok }),
       pinTerminalControl: vi.fn(() => () => { calls.push('unpin') }),
     },
-    teams: {
-      prepare: vi.fn(() => () => {}),
-      delivery: vi.fn((event: SessionInputDelivery) => { calls.push(`teams delivery ${event.deliveryId}`) }),
+    deliveries: {
+      settled: vi.fn((event: SessionInputDelivery) => { calls.push(`delivery settled ${event.deliveryId}`) }),
       canWrite: vi.fn(() => true),
     },
     device: () => device,
@@ -82,24 +81,22 @@ const delivery = (deliveryId: string) => ({ deliveryId }) as unknown as SessionI
 describe('the session input controller\'s dependencies', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('scopes a prompt, finds a session and checks its pane through what it was given', async () => {
+  it('finds a session and checks its pane through what it was given', async () => {
     const { deps: given } = deps()
     const wired = sessionInputDeps(given, () => lock([]))
-    wired.beforeSubmit!('a1', 'hello', 'tab', 'd1')
-    expect(given.teams.prepare).toHaveBeenCalledWith('a1', 'hello', 'tab', 'd1')
     expect(wired.getSession('s1')?.agentId).toBe('a1')
     expect(wired.validateRuntime).toBe(given.terminal.validateTerminal)
     expect(wired.capture).toBe(given.terminal.captureTerminal)
     expect(await wired.beforeTeamWrite!(agents.get('a1')!)).toBeNull()
   })
 
-  it('tells the device of a delivery first, then the teams; the teams alone without a device', () => {
+  it('tells the device of a delivery first, then its caller; its caller alone without a device', () => {
     const one = deps()
     sessionInputDeps(one.deps, () => lock([])).onDelivery!(delivery('d1'))
-    expect(one.calls).toEqual(['device delivery d1', 'teams delivery d1'])
+    expect(one.calls).toEqual(['device delivery d1', 'delivery settled d1'])
     const two = deps({ device: () => undefined })
     sessionInputDeps(two.deps, () => lock([])).onDelivery!(delivery('d2'))
-    expect(two.calls).toEqual(['teams delivery d2'])
+    expect(two.calls).toEqual(['delivery settled d2'])
   })
 
   it('writes and keys through the device\'s pane lock', async () => {
@@ -286,7 +283,7 @@ describe('the session input controller\'s dependencies', () => {
     run.setPane(null)
     expect(await wired.injectTeam!('a1', 'hi', 'd1')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'team_waiting_unavailable' })
     run.setPane(READY_PANE)
-    vi.mocked(run.deps.teams.canWrite).mockReturnValueOnce(false)
+    vi.mocked(run.deps.deliveries.canWrite).mockReturnValueOnce(false)
     expect(await wired.injectTeam!('a1', 'hi', 'd1')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'team_waiting_control' })
     expect(await wired.injectTeam!('a1', 'hi', 'd1')).toBe(ok)
     expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual(['submit a1 hi'])
@@ -435,13 +432,13 @@ describe('createInput', () => {
     const inputs = createInput(deps().deps)
     const submit = vi.spyOn(inputs.input, 'submit').mockImplementation(() => {})
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    inputs.submitAgent('s1', 'hello', 'd1', 'tab')
+    inputs.submitAgent('s1', 'hello', 'd1')
     inputs.submitAgent('cc', '/loop fix it')
     inputs.submitAgent('nobody', 'hi')
     expect(submit.mock.calls).toEqual([
-      ['a1', 'hello', 'd1', 'tab'],
-      ['cc', 'fix it', undefined, undefined],
-      ['nobody', 'hi', undefined, undefined],
+      ['a1', 'hello', 'd1'],
+      ['cc', 'fix it', undefined],
+      ['nobody', 'hi', undefined],
     ])
     expect(log.mock.calls.flat().filter((line) => String(line).includes('slash-command adapted'))).toHaveLength(1)
   })
@@ -450,24 +447,23 @@ describe('createInput', () => {
 describe('message', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('writes what a person typed into the agent the frame names, in the tab it names', () => {
+  it('writes what a person typed into the agent the frame names, and reads no tab an older window still names', () => {
     const inputs = createInput(deps().deps)
     const submit = vi.spyOn(inputs.input, 'submit').mockImplementation(() => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
     inputs.messageRequest({ content: 'hello', agentId: 's1', tabId: 'swarm-a' })
-    expect(submit.mock.calls).toEqual([['a1', 'hello', undefined, 'swarm-a']])
+    expect(submit.mock.calls).toEqual([['a1', 'hello', undefined]])
   })
 
-  it('names the agent by agent id or session id, takes a tab only in a tab id\'s shape, and drops a frame with no text or no agent', () => {
+  it('names the agent by agent id or session id, and drops a frame with no text or no agent', () => {
     const submit = vi.fn()
     const message = createMessageRequest(submit)
     message({ content: 'hi', agentId: 'a1', sessionId: 's1' })
     message({ content: 'hi', sessionId: 's1' })
     message({ content: 'in a tab', agentId: 'a1', tabId: 'swarm-a' })
-    message({ content: 'not a tab', agentId: 'a1', tabId: '../../etc' })
     message({ content: '', agentId: 'a1' })
     message({ content: 'nobody to type into' })
-    expect(submit.mock.calls).toEqual([['a1', 'hi'], ['s1', 'hi'], ['a1', 'in a tab', undefined, 'swarm-a'], ['a1', 'not a tab']])
+    expect(submit.mock.calls).toEqual([['a1', 'hi'], ['s1', 'hi'], ['a1', 'in a tab']])
   })
 })
 
@@ -483,9 +479,9 @@ describe('every route a message takes to a pane', () => {
     ['the phone, through the relay\'s message frame', 'a1', (inputs) => inputs.messageRequest({ sessionId: 's1', content: 'from the phone', tabId: 'tab-1' }),
       (run) => expect(run.deps.clients.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'error', agentId: 'a1', payload: { message: asking } }))],
     ['the orchestrator', 'a1', (inputs) => inputs.submitAgent('a1', 'from the orchestrator', 'orchestrator-1'),
-      (run) => expect(run.deps.teams.delivery).toHaveBeenCalledWith(refused('orchestrator-1', 'permission_open'))],
-    ['a team', 'a1', (inputs) => inputs.submitAgent('a1', 'from a team', 'team:1'),
-      (run) => expect(run.deps.teams.delivery).toHaveBeenCalledWith(refused('team:1', 'team_waiting_user'))],
+      (run) => expect(run.deps.deliveries.settled).toHaveBeenCalledWith(refused('orchestrator-1', 'permission_open'))],
+    ['Agent Messages', 'a1', (inputs) => inputs.submitAgent('a1', 'from a teammate', 'team:1'),
+      (run) => expect(run.deps.deliveries.settled).toHaveBeenCalledWith(refused('team:1', 'team_waiting_user'))],
     ['the Device, to Claude Code', 'a1', (inputs) => inputs.deviceInput.submit('a1', 'from the device', 'device-1'),
       (run) => expect(run.device.inputStatus).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'device-1', phase: 'waiting_for_user' }))],
     ['the Device, to an engine it queues for', 'cc', (inputs) => inputs.deviceInput.submit('cc', 'from the device', 'device-2'),

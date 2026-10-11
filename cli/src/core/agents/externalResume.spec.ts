@@ -146,6 +146,48 @@ it('never transfers takeover permission to a replacement owner or interrupts wor
   expect(test.deps.stopOwner).toHaveBeenCalledTimes(1)
 })
 
+it('checks the prepared executable after durably saving a signal intent before touching its original owner', async () => {
+  const actual = await vi.importActual<typeof import('./externalOwner.js')>('./externalOwner.js')
+  const test = setup(), kill = vi.fn()
+  let nativeCurrent = true
+  test.inspect.mockImplementation(async request => held(request))
+  vi.mocked(test.deps.preflight).mockResolvedValue({ current: () => nativeCurrent })
+  const save = vi.mocked(test.registry.setExternalResume).getMockImplementation()!
+  vi.mocked(test.registry.setExternalResume).mockImplementation((id, intent) => {
+    const row = save(id, intent)
+    if (intent.signal === 'prepared') nativeCurrent = false
+    return row
+  })
+  test.deps.stopOwner = (owner, control) => actual.stopExternalOwner(owner, {
+    ...control, generation: () => 'ps:1', exists: () => true,
+    job: async () => null, kill, sleep: async () => {},
+  })
+  const id = await test.stage({ takeOver: 'idle' }); await test.controller.settled()
+  expect(kill).not.toHaveBeenCalled()
+  expect(test.deps.launch).not.toHaveBeenCalled()
+  expect(test.rows.get(id)?.externalResume).toMatchObject({ phase: 'quitting', signal: 'prepared' })
+})
+
+it('holds admission when native preparation changes during the last search read', async () => {
+  const test = setup()
+  let prepared = false, current = true
+  vi.mocked(test.deps.preflight).mockImplementation(async () => { prepared = true; return { current: () => current } })
+  test.inspect.mockImplementation(async request => { if (prepared) current = false; return free(request) })
+  const id = await test.stage(); await test.controller.settled()
+  expect(test.rows.get(id)?.launch).toMatchObject({ state: 'held', detail: expect.stringContaining('native launch') })
+  expect(test.rows.get(id)?.externalResume?.phase).toBe('waiting')
+  expect(test.deps.launch).not.toHaveBeenCalled()
+})
+
+it('does not take over a terminal when its completed native preparation is already obsolete', async () => {
+  const test = setup(); test.inspect.mockImplementation(async request => held(request))
+  vi.mocked(test.deps.preflight).mockResolvedValue({ current: () => false })
+  const id = await test.stage({ takeOver: 'idle' }); await test.controller.settled()
+  expect(test.deps.stopOwner).not.toHaveBeenCalled()
+  expect(test.deps.launch).not.toHaveBeenCalled()
+  expect(test.rows.get(id)?.launch?.state).toBe('held')
+})
+
 it('explicit takeover of unknown activity never manufactures a continuation prompt', async () => {
   const test = setup()
   test.inspect.mockImplementation(async request => ({ ...held(request), busy: true }))

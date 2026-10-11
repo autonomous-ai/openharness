@@ -58,8 +58,7 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   in this process. `serviceLinks.ts`: services in their own processes. `viewersLink.ts`: what the core
   keeps of the viewers when they run in theirs. `viewerStreams.ts`: a client's viewer stream and rendered
   frames, handed to the viewers, and refused at once while they are down. `workspacesLink.ts`: what the core tells workspaces in
-  theirs. `teamsLink.ts`: every change to the teams' prompt scopes, kept until their process has it once Tab
-  collaboration is on, which of its deliveries may be written, and the scopes' own two questions.
+  theirs. `messagesLink.ts`: which of Agent Messages' deliveries may be written, as its process last said.
   `monitorLink.ts`: the monitor's port, asked of its process. `recapsLink.ts`: the recaps in their process,
   told each turn's lifecycle and never waited on, and read back from what they last said
   (`turns/recaps.ts` is the core's whole side of them). `storeLink.ts`: what the Store in its

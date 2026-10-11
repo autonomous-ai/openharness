@@ -23,8 +23,10 @@ import '../models/model_manager_controller.dart';
 import '../companions/coding_memory_connection.dart';
 import 'first_arrival.dart';
 import 'harness_monitor_controller.dart';
+import 'essential_harness_controller.dart';
 import 'agent_handoff_file.dart';
 import 'agent_switch_handoff.dart';
+import '../agent_messages/agent_messages.dart';
 import '../api/api_client.dart';
 import '../viewer/sign_in_browser.dart';
 import '../viewer/direct_link.dart';
@@ -63,6 +65,7 @@ import '../core/machine_resources.dart';
 import '../core/project_folder.dart';
 import '../core/git_worktree.dart';
 import '../core/project_history.dart';
+import '../core/task_history.dart';
 import '../core/project_preview.dart';
 import '../core/repository_clone.dart';
 import '../core/retry.dart';
@@ -116,8 +119,6 @@ import '../usage/models_menu_controller.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
 import '../orchestrator/orchestrator_controller.dart';
-import '../teams/team_controller.dart';
-import '../teams/swarm_settings_controller.dart';
 import '../notify/agent_alerts.dart';
 import '../notify/alert_sounds.dart';
 import '../notify/system_notifications.dart';
@@ -242,6 +243,7 @@ class _AgentChange {
   final creation = AgentCreationAttempt(background: true);
   Future<String?>? pending;
   bool preservingViews = false;
+  bool handoffHeld = false;
   bool contextLoaded = false;
   String? handoff;
 
@@ -265,6 +267,8 @@ class AgentCreationAttempt {
   HarnessPlacement? _placement;
   Future<String?>? _inFlight;
   bool _awaitingConfirmation = false, _finished = false;
+  String? _holdReason;
+  bool _cancelling = false;
 
   /// Prepare a session without adding a pane or changing the selected tab.
   final bool background;
@@ -282,6 +286,7 @@ class AgentCreationAttempt {
   bool _codexHomeTrusted = false;
 
   bool get awaitingConfirmation => _awaitingConfirmation;
+  bool get canCancelPending => _awaitingConfirmation && _holdReason != null;
 
   /// The machine's code for a request it refused before launching anything,
   /// such as `SESSION_BUSY_IN_TERMINAL`: what a caller can offer next.
@@ -295,6 +300,7 @@ class AgentCreationAttempt {
   String? _complete(String? error) {
     _finished = true;
     _awaitingConfirmation = false;
+    _holdReason = null;
     return _outcome = error;
   }
 }
@@ -1129,7 +1135,8 @@ class AppNotifier extends ChangeNotifier {
   void _firstArrivalBehindTour() {
     if (!firstArrivalBehindTour ||
         viewer != null ||
-        !_setupTour ||
+        // Behind the sign-in step as well: it stands where the tour stood.
+        !(_setupTour || _signInStep) ||
         status != AppStatus.authenticated ||
         !firstArrival.pending) {
       return;
@@ -1142,6 +1149,71 @@ class AppNotifier extends ChangeNotifier {
     if (!_setupTour) return;
     _setupTour = false;
     notifyListeners();
+  }
+
+  // --- Sign-in step (2026-10-11) ------------------------------------------
+  // A computer new to Harness is asked once, after setup and before its first
+  // workspace, whether to sign in (`widgets/sign_in_step.dart`): what an
+  // account adds, Google or Apple, and Skip. Everything on this computer works
+  // without one, so the page never blocks; afterwards the same sign-in is the
+  // button at the right end of the tab row. Design:
+  // `docs/research/2026-10-08-onboarding-redesign/index.html`, section 1b.
+  bool _signInStep = false;
+
+  /// Whether the sign-in step comes after setup: this computer is new to
+  /// Harness and holds no account. Only meaningful once [status] has left
+  /// setup — [signedIn] is presumed true until the CLI has been asked.
+  bool get signInStepNext => _signInStep && viewer == null && !signedIn;
+
+  /// Whether RootShell shows the sign-in step in place of the workspace: from
+  /// the moment setup (and its tour) hands over, until an account arrives or
+  /// the person skips.
+  bool get signInStepShowing {
+    if (!_signInStep || viewer != null || setupTourShowing) return false;
+    final signingInHere = status == AppStatus.bootstrapping && signingIn;
+    if (status != AppStatus.authenticated && !signingInHere) return false;
+    // An account, from this page or from a terminal meanwhile: nothing to ask.
+    // Held while the sign-in is still seating the desk, so the page does not
+    // give way to a bare spinner for that moment.
+    if (signedIn && !signingIn) {
+      _signInStep = false;
+      return false;
+    }
+    return true;
+  }
+
+  /// Skip on the sign-in step: on to the workspace without an account.
+  void skipSignInStep() {
+    if (!_signInStep) return;
+    _signInStep = false;
+    appLog.info('onboarding', 'sign-in step: skipped');
+    // A sign-in left waiting on the browser ends with the page that began it.
+    if (canCancelLogin) {
+      cancelLogin();
+    } else {
+      notifyListeners();
+    }
+  }
+
+  /// The sign-in step's buttons. Unlike the sign-in sheet, the page does not
+  /// change while the browser is open, so every way in stays live: pressing
+  /// one again opens the browser again, and another one switches to it.
+  /// No [provider] is the sign-in page's own chooser — Continue with email.
+  Future<void> signInFromStep([SignInProvider? provider]) async {
+    if (signingIn) {
+      // The same way in, pressed again: its page again, not a second sign-in
+      // (the first one's browser tab would land on a listener that is gone).
+      if (signInProvider == provider) {
+        if (pendingAuthorizeUrl != null && !_loginAuthorized) {
+          await openLoginBrowser();
+        }
+        return;
+      }
+      // Already approved in the browser: let it finish.
+      if (!canCancelLogin) return;
+      cancelLogin();
+    }
+    await login(provider);
   }
 
   /// What is still downloading beside setup (see [SetupDownloads]). The tour
@@ -1407,91 +1479,98 @@ class AppNotifier extends ChangeNotifier {
   Iterable<TerminalPane> get allPanes => swarms.expand((s) => s.panes).toSet();
   String get activeSwarmId => activeSwarm.id;
 
+  /// Agent Messages (docs/design/2026-10-10-agent-messages.md): each tab's
+  /// flag, the traffic the daemons push as `messages_changed`, and the marks it
+  /// leaves on panes. Its own notifier, so traffic never rebuilds the workspace.
+  late final agentMessages = AgentMessagesController(
+    read: () => api.readAgentMessageTabs(),
+    write: (tabId, enabled) => api.setAgentMessages(tabId, enabled),
+    request: (machineId, payload) => _conn(machineId).request(
+      'agent_messages',
+      payload: payload,
+      timeout: const Duration(seconds: 8),
+    ),
+    nameOf: (machineId, agentId) =>
+        stateOf(machineId)?.agents
+            .where((agent) => agent.id == agentId)
+            .firstOrNull
+            ?.displayName,
+  );
+
+  /// Whether [tabId] has Agent Messages to offer: a tab the desk holds, since
+  /// the backend keeps the flag per desk tab, once the daemon and backend have
+  /// answered for it. The Store, Devices and Companions, an orchestrator or a
+  /// draft tab, a window before it joins the desk, and an older CLI or backend
+  /// get no 💬, menu row or command.
+  bool agentMessagesOffered(String tabId) {
+    final swarm = swarms.where((s) => s.id == tabId).firstOrNull;
+    return swarm != null &&
+        _desk.enabled &&
+        _deskTracks(swarm) &&
+        isDeskId(swarm.id) &&
+        agentMessages.loaded;
+  }
+
+  /// The machines of the owner's with a harness in [tabId], and this
+  /// computer: every daemon that may hold part of the tab's log. A shared
+  /// machine's harnesses never take part.
+  Set<String> _agentMessageMembers(String tabId) {
+    final tab = swarms.where((swarm) => swarm.id == tabId).firstOrNull;
+    return {
+      ?localMachineState?.machine.machineId,
+      for (final pane in tab?.panes ?? const <TerminalPane>[])
+        if (pane.agentId != null &&
+            machineStates[pane.machineId]?.machine.isShared != true)
+          pane.machineId,
+    };
+  }
+
+  /// Of [_agentMessageMembers], those that can answer now.
+  List<String> agentMessageMachines(String tabId) => [
+    for (final id in _agentMessageMembers(tabId))
+      if (machineStates[id] case final machine?
+          when !machine.machine.isShared &&
+              !machine.needsLink &&
+              machine.nodeOnline != false &&
+              machine.connectionStatus == ConnectionStatus.connected)
+        id,
+  ];
+
+  /// [tabId]'s Agent Messages log, from every daemon that may hold part of it.
+  Future<AgentMessageLog> readAgentMessages(String tabId) =>
+      agentMessages.history(
+        tabId,
+        agentMessageMachines(tabId),
+        expected: _agentMessageMembers(tabId),
+      );
+
+  /// The tabs with Agent Messages on, each with its connected machines other
+  /// than this computer: their daemons' `messages_changed` reaches only their
+  /// own computer's windows, so [agentMessagesRemote] asks them instead. In a
+  /// browser every machine is another computer.
+  List<AgentMessagesRemoteTab> agentMessagesRemoteTabs() {
+    final local = localMachineState?.machine.machineId;
+    return [
+      for (final swarm in swarms)
+        if (agentMessagesOffered(swarm.id) && agentMessages.isOn(swarm.id))
+          if ([
+                for (final id in agentMessageMachines(swarm.id))
+                  if (id != local) id,
+              ]
+              case final remote when remote.isNotEmpty)
+            (tabId: swarm.id, machineIds: remote),
+    ];
+  }
+
+  /// Polls [agentMessagesRemoteTabs] while the window is in front; the
+  /// workspace starts it.
+  late final agentMessagesRemote = AgentMessagesRemoteWatch(
+    controller: agentMessages,
+    foreground: foreground,
+    tabs: agentMessagesRemoteTabs,
+  );
+
   final _orchestratorProjects = <String, OrchestratorController>{};
-  final _teamControllers = <String, TeamController>{};
-  final _channelControllers = <String, TeamController>{};
-  SwarmSettingsController? _swarmSettings;
-  SwarmSettingsController get swarmSettings =>
-      _swarmSettings ??= SwarmSettingsController(
-        request: (payload) {
-          final gateway = channelGateway(localMachineState?.machine.machineId);
-          if (gateway == null) {
-            throw const TeamRequestError(
-              'Connect one of your machines to configure tab collaboration.',
-            );
-          }
-          return teamRequest(gateway, payload);
-        },
-      );
-
-  /// The first hop may change; the request still names its original tab and
-  /// the daemon routes it to that tab's saved host. Observation links cannot
-  /// carry owner collaboration commands.
-  String? channelGateway(String? preferredMachineId) {
-    final candidates = <MachineState>[
-      ?machineStates[preferredMachineId],
-      ...machineStates.values,
-    ].where((state) => !state.machine.isShared);
-    return (candidates
-                .where(
-                  (state) =>
-                      state.connectionStatus == ConnectionStatus.connected,
-                )
-                .firstOrNull ??
-            candidates.firstOrNull)
-        ?.machine
-        .machineId;
-  }
-
-  TeamController channelController(String tabId, String gatewayMachineId) =>
-      _channelControllers.putIfAbsent(tabId, () {
-        late final TeamController controller;
-        controller = TeamController(
-          channelTabId: tabId,
-          request: (payload) {
-            final machineId =
-                controller.team?['machineId'] as String? ??
-                channelGateway(gatewayMachineId);
-            if (machineId == null) {
-              throw const TeamRequestError(
-                'Connect one of your machines to use tab collaboration.',
-              );
-            }
-            return teamRequest(machineId, payload);
-          },
-        );
-        return controller;
-      });
-
-  Future<Map<String, dynamic>> teamRequest(
-    String machineId,
-    Map<String, dynamic> payload,
-  ) async {
-    try {
-      return await _conn(
-        machineId,
-      ).request('team', payload: payload, timeout: const Duration(seconds: 35));
-    } on WsRequestFailure catch (e) {
-      throw TeamRequestError(
-        e.code == 'UNSUPPORTED'
-            ? 'Update Harness on this machine to use agent collaboration.'
-            : e.toString(),
-        uncertain: const {
-          'UNCONFIRMED',
-          'DISCONNECTED',
-          'TEAM_UNAVAILABLE',
-        }.contains(e.code),
-      );
-    }
-  }
-
-  TeamController teamController(String machineId) =>
-      _teamControllers.putIfAbsent(
-        machineId,
-        () => TeamController(
-          request: (payload) => teamRequest(machineId, payload),
-        ),
-      );
 
   Future<Map<String, dynamic>> orchestratorRequest(
     String machineId,
@@ -3157,6 +3236,7 @@ class AppNotifier extends ChangeNotifier {
        agentPreference = AgentPreference(paneLayoutStore?.storage),
        firstArrival = FirstArrival(paneLayoutStore?.storage),
        projectHistory = ProjectHistory(paneLayoutStore?.storage),
+       taskHistory = TaskHistory(paneLayoutStore?.storage),
        session = authSession,
        _store = configStore,
        config = configStore?.config ?? config,
@@ -3359,6 +3439,9 @@ class AppNotifier extends ChangeNotifier {
   final DialState dial;
   final AgentPreference agentPreference;
   final ProjectHistory projectHistory;
+
+  /// ⌘B's recent prompts (`core/task_history.dart`).
+  final TaskHistory taskHistory;
 
   /// The first workspace on a computer new to Harness opens with agents already in it.
   final FirstArrival firstArrival;
@@ -4273,6 +4356,27 @@ class AppNotifier extends ChangeNotifier {
   /// The session ⌘B last sent a task to, which the router tells Jev so a follow-up finds it.
   ({String id, DateTime at})? lastRoutedTask;
 
+  /// The pane a task just landed in — ⌘B's receipt: its rim lights once (`pane_grid.dart`), so the eye
+  /// sees where the words went, in whichever tab. [seq] tells one landing from the next on the same pane.
+  final paneLanding =
+      ValueNotifier<
+        ({String machineId, String agentId, int seq, DateTime at})?
+      >(null);
+  int _landings = 0;
+
+  void markLanding(String machineId, String agentId) => paneLanding.value = (
+    machineId: machineId,
+    agentId: agentId,
+    seq: ++_landings,
+    at: DateTime.now(),
+  );
+
+  /// The landing is over: a pane of that session opened later (reopened from ⌘P, restored at sign-in)
+  /// must not light for words that landed long ago.
+  void endLanding(int seq) {
+    if (paneLanding.value?.seq == seq) paneLanding.value = null;
+  }
+
   /// ⌘B's send: the session's pane comes forward and the task goes into its prompt, through this app's
   /// own door on any machine (`deliverTask`). [stillWanted] is asked just before the words are typed:
   /// the pane comes forward first, and a person who sees the wrong one and presses Esc stops the send.
@@ -4485,6 +4589,8 @@ class AppNotifier extends ChangeNotifier {
       if (firstHarness) {
         agentPrefetch?.setupRunning = true;
         agentPrefetch?.start();
+        // Asked once, after setup: see [signInStepShowing].
+        _signInStep = true;
       }
       if (!result.isReady && _canInstallUnattended(result, mode: null)) {
         if (firstHarness) {
@@ -5402,6 +5508,8 @@ class AppNotifier extends ChangeNotifier {
       if (refetch && !machinesRefreshing) unawaited(retryMachines());
       if (currentUser == null) unawaited(_loadProfile());
       _deskEnsure(_authRevision);
+      // A daemon whose backend was away answered the last read with an error.
+      if (_desk.enabled) unawaited(agentMessages.refresh());
     }
     notifyListeners();
   }
@@ -5687,6 +5795,7 @@ class AppNotifier extends ChangeNotifier {
   void _clearAccountWorkspace({bool notices = true}) {
     if (notices) _clearDeviceNoticeState();
     experimentalFeatures.bind(null);
+    agentMessages.reset();
     _agentChanges.clear();
     ++_layoutRevision;
     // Sign-out sends the desk nothing: the tabs closing here are this window
@@ -5736,16 +5845,6 @@ class AppNotifier extends ChangeNotifier {
       controller.dispose();
     }
     _orchestratorProjects.clear();
-    for (final controller in _teamControllers.values) {
-      controller.dispose();
-    }
-    _teamControllers.clear();
-    for (final controller in _channelControllers.values) {
-      controller.dispose();
-    }
-    _channelControllers.clear();
-    _swarmSettings?.dispose();
-    _swarmSettings = null;
     final starter = Swarm(id: 'swarm-${_nextSwarmId++}');
     swarms
       ..clear()
@@ -7222,6 +7321,10 @@ class AppNotifier extends ChangeNotifier {
           _desk.enabled &&
           _desk.pending.isEmpty) {
         unawaited(_deskFetch());
+      }
+      // So are Agent Messages' flags (desk_changed); this catches a missed one.
+      if (!_disposed && status == AppStatus.authenticated && _desk.enabled) {
+        unawaited(agentMessages.refresh());
       }
       unawaited(_rereadMachinesInBackground(pushed: false));
     });
@@ -9088,6 +9191,17 @@ class AppNotifier extends ChangeNotifier {
   /// Model Manager keeps the original package ID for installed workspaces.
   static const gridHarness = 'autonomous/autonomous-grid';
   late final harnessMonitor = HarnessMonitorController(this);
+  late final _essentials = <String, EssentialHarnessController>{
+    harnessMonitorId: harnessMonitor,
+  };
+
+  /// The one-click opener for a Store essential (`essentialFor`), or null for any other harness.
+  EssentialHarnessController? essential(String id) {
+    final known = essentialFor(id);
+    if (known == null) return null;
+    return _essentials[id] ??= EssentialHarnessController(this, known);
+  }
+
   ModelManagerController? _modelManager;
   ModelManagerController get modelManager =>
       _modelManager ??= ModelManagerController(this);
@@ -10499,8 +10613,9 @@ class AppNotifier extends ChangeNotifier {
     return changed;
   }
 
-  /// Opening a monitor reveals its ordinary DSH pair. Zoom is an explicit pane action.
-  void showHarnessMonitor(String machineId, String agentId) {
+  /// Opening an essential (Harness Monitor, Memories) reveals its ordinary DSH pair: its viewer is
+  /// focused in the active tab, unzoomed. Zoom is an explicit pane action.
+  void showHarnessViewer(String machineId, String agentId) {
     final pane = activeSwarm.panes
         .where(
           (p) =>
@@ -10921,7 +11036,13 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// Reads the focused pane rather than taking an id, so every route into a
   /// harness clears it without each one having to remember to.
-  void _seeFocusedAgent() => seeWatchedAgents();
+  void _seeFocusedAgent() {
+    seeWatchedAgents();
+    // Its Agent Messages mark has done its job once the person is looking.
+    if (focusedPane case TerminalPane(:final machineId, :final agentId?)) {
+      agentMessages.seen(machineId, agentId);
+    }
+  }
 
   String? _eventAgentId(
     MachineState machine,
@@ -11875,6 +11996,39 @@ class AppNotifier extends ChangeNotifier {
     return _createAgentWithReceipt(creation);
   }
 
+  /// Cancellation is confirmed by the machine's durable receipt. Losing this
+  /// reply cannot turn the original request into a fresh creation attempt.
+  Future<String?> cancelAgentCreation(AgentCreationAttempt creation) async {
+    if (!creation.canCancelPending ||
+        creation._cancelling ||
+        creation._inFlight != null) {
+      return 'Check the request status before cancelling.';
+    }
+    final machineId = creation._machineId;
+    if (machineId == null || !machineStates.containsKey(machineId)) {
+      return 'The original machine is unavailable. The request is still saved.';
+    }
+    creation._cancelling = true;
+    try {
+      final result = await _conn(machineId).request(
+        'agent_create_cancel',
+        payload: {'creationId': creation._id},
+        timeout: const Duration(seconds: 10),
+      );
+      if (result['creationId'] == creation._id &&
+          result['state'] == 'cancelled') {
+        creation._complete('Creation cancelled.');
+        _activeAgentCreations.remove(creation);
+        return null;
+      }
+      return 'The request may already be starting. Check status before starting another.';
+    } catch (_) {
+      return 'Cancellation is not confirmed. Check status before starting another.';
+    } finally {
+      creation._cancelling = false;
+    }
+  }
+
   Future<String?> _createAgentWithReceipt(AgentCreationAttempt creation) async {
     final machineId = creation._machineId!;
     var targetId = creation._targetId!;
@@ -12137,7 +12291,18 @@ class AppNotifier extends ChangeNotifier {
         return '$machineName has no record of this request. '
             'Use Open Harness to look for it before starting another.';
       case 'pending':
+        final held = result['held'];
+        if (held is Map) {
+          final detail = held['detail'];
+          if (detail is String && detail.isNotEmpty) {
+            creation._holdReason = detail;
+            return detail;
+          }
+        }
+        creation._holdReason = null;
         return '$machineName is still starting your harness. Check again in a moment.';
+      case 'cancelled':
+        return creation._complete('Creation cancelled.');
       case 'unconfirmed':
         return '$machineName could not confirm whether this harness started. '
             'Use New Pane to look for it before starting another.';
@@ -13300,7 +13465,8 @@ class AppNotifier extends ChangeNotifier {
           : Future.value('The agent is already switching.');
     }
     if (operation != null &&
-        ((!operation.preservingViews) ||
+        ((!operation.preservingViews &&
+                (!operation.handoffHeld || operation.engine != engine)) ||
             operation.launchFailed ||
             (operation.creation._finished &&
                 operation.creation.agentId == null))) {
@@ -13323,9 +13489,9 @@ class AppNotifier extends ChangeNotifier {
   /// Fill [change].handoff for the new agent, or return why the switch must not go on.
   ///
   /// First choice: the machine writes a record of the whole conversation into the project and the
-  /// new agent is told to read it (agent_handoff_prepare). Any failure of that — an older machine,
-  /// a busy or slow one, a reply this client will not trust — falls back to the short excerpt from
-  /// agent_recent. Only when that fails too does the switch stop, with the source still running.
+  /// new agent is told to read it (agent_handoff_prepare). Unavailable or untrusted preparation
+  /// holds the switch with the source still running. Only an explicit older-protocol UNSUPPORTED
+  /// reply permits the bounded agent_recent compatibility path.
   /// Both reads happen BEFORE the source is closed: a creation retry must carry the same choices.
   /// Also sets the flags that pick the hint shown when the new agent gets no first prompt.
   Future<String?> _loadSwitchHandoff(
@@ -13334,6 +13500,7 @@ class AppNotifier extends ChangeNotifier {
     Agent source,
     String folder,
   ) async {
+    change.handoffHeld = true;
     try {
       final reply = await _conn(machineId).request(
         'agent_handoff_prepare',
@@ -13356,11 +13523,19 @@ class AppNotifier extends ChangeNotifier {
         change.handoffEmpty = accepted.prompt == null;
         change.handoffFailed = false;
         change.contextLoaded = true;
+        change.handoffHeld = false;
         _resendUnreadFirstMessage(machineId, change, source);
         return null;
       }
+      if (reply['error'] == 'CHANGE_CONFLICT') {
+        change.handoffHeld = false;
+        return 'The conversation changed. Choose the agent again to start a new switch.';
+      }
+      if (reply['error'] != 'UNSUPPORTED') {
+        return 'Waiting for the conversation handoff. Try switching again.';
+      }
     } catch (_) {
-      // Any failure takes the excerpt road below.
+      return 'Waiting for the conversation handoff. Try switching again.';
     }
     try {
       final recent = await _conn(machineId).request(
@@ -13379,6 +13554,7 @@ class AppNotifier extends ChangeNotifier {
       change.handoffEmpty = change.handoff == null;
       change.handoffFailed = change.handoffEmpty;
       change.contextLoaded = true;
+      change.handoffHeld = false;
     } catch (_) {
       return 'Could not read the conversation for the handoff. Try switching again.';
     }
@@ -13411,6 +13587,7 @@ class AppNotifier extends ChangeNotifier {
     if (current == null ||
         current.createdAt != source.createdAt ||
         current.sessionId != source.sessionId) {
+      change.handoffHeld = false;
       return 'The conversation changed. Reopen Change agent.';
     }
     final folder = source.project?.cwd ?? machine.projectOf(source)?.cwd;
@@ -13426,9 +13603,18 @@ class AppNotifier extends ChangeNotifier {
         return 'This switch is no longer active.';
       }
     }
-    final close = prepareSessionClose(machineId, source);
+    // Preparation can outlive a binding, runtime or project change. Close only the same source.
+    final latest = machine.agents.where((a) => a.id == source.id).firstOrNull;
+    if (latest == null ||
+        latest.createdAt != source.createdAt ||
+        latest.sessionId != source.sessionId ||
+        latest.engine != source.engine ||
+        (latest.project?.cwd ?? machine.projectOf(latest)?.cwd) != folder) {
+      return 'The conversation changed. Reopen Change agent.';
+    }
+    final close = prepareSessionClose(machineId, latest);
     change.preservingViews = true;
-    if (!current.isStopped) {
+    if (!latest.isStopped) {
       final saved = await close('now');
       if (saved['closed'] != true) {
         change.preservingViews = false;
@@ -15500,6 +15686,8 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     _desk.enabled = true;
+    // Each tab's Agent Messages flag lives beside the desk, read once it is.
+    unawaited(agentMessages.refresh());
     // Tabs from before the desk carry per-window ids (`swarm-N`) two computers
     // would both mint. Give them desk ids once; the layout store keys by the
     // same string, so it follows on the next save.
@@ -16778,11 +16966,10 @@ class AppNotifier extends ChangeNotifier {
       _orchestratorProjects['$machineId/${payload['id']}']?.changed();
       return;
     }
-    if (type == 'team_changed') {
-      _teamControllers[machineId]?.changed();
-      for (final controller in _channelControllers.values) {
-        controller.changed();
-      }
+    if (type == 'messages_changed') {
+      // Before the activity check below: this payload is traffic between
+      // harnesses, never a turn of the pane's own.
+      agentMessages.handleEvent(payload);
       return;
     }
     // Only terminal protocol frames visit the session pool. Heartbeats, dial
@@ -17087,7 +17274,11 @@ class AppNotifier extends ChangeNotifier {
         break;
       case 'desk_changed':
         unawaited(experimentalFeatures.refresh());
-        if (_swarmSettings case final settings?) unawaited(settings.refresh());
+        // Turning Agent Messages on or off for a tab says `desk_changed` too,
+        // with the desk itself unchanged (backend routes/agentMessages.ts).
+        if (status == AppStatus.authenticated) {
+          unawaited(agentMessages.refresh());
+        }
         // Another window — on another computer, or this one — changed the
         // tabs. The payload is only the revision; the document is fetched.
         final deskRevision = payload['revision'];
@@ -17581,6 +17772,7 @@ class AppNotifier extends ChangeNotifier {
     if (cliLogin case final CliLogin cli) {
       cli.waitingNote.removeListener(_loginWaitingChanged);
     }
+    paneLanding.dispose();
     _closeOwnerMemories();
     _agentDownloadsTick?.cancel();
     agentPrefetch?.close();
@@ -17590,18 +17782,12 @@ class AppNotifier extends ChangeNotifier {
     viewer?.auth.dispose();
     _deviceVisit?.dispose();
     _modelManager?.dispose();
-    harnessMonitor.dispose();
+    for (final controller in _essentials.values) {
+      controller.dispose();
+    }
     _modelsMenu?.dispose();
-    for (final controller in _teamControllers.values) {
-      controller.dispose();
-    }
-    _teamControllers.clear();
-    for (final controller in _channelControllers.values) {
-      controller.dispose();
-    }
-    _channelControllers.clear();
-    _swarmSettings?.dispose();
-    _swarmSettings = null;
+    agentMessagesRemote.dispose();
+    agentMessages.dispose();
     for (final project in _orchestratorProjects.values) {
       project.dispose();
     }

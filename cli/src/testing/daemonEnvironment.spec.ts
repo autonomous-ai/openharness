@@ -14,4 +14,8 @@ describe('a daemon under test', () => {
       PATH: '/test/bin', HOME: '/test/home', HARNESSD_SERVICES: 'edge',
     })
   })
+  it('does not borrow the session of an agent running the tests', () => {
+    expect(daemonEnvironment({ PATH: '/test/bin', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's', CODEX_THREAD_ID: 't', CLAUDE_CODE_USE_BEDROCK: '1' }, {}))
+      .toEqual({ PATH: '/test/bin', CLAUDE_CODE_USE_BEDROCK: '1' })
+  })
 })

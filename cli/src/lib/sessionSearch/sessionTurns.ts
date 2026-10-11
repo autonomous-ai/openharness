@@ -12,6 +12,7 @@
  * every few milliseconds, as the indexer does, and stops at a caller's deadline.
  */
 
+import type { FileHandle } from 'node:fs/promises'
 import { performance } from 'node:perf_hooks'
 
 import type { LiveEvent } from '../normalize.js'
@@ -35,6 +36,9 @@ export class SessionTurnsError extends Error {
 }
 
 export interface ReadOptions {
+  /** A caller-owned verified descriptor and finite snapshot boundary; never reopened or closed here. */
+  handle?: FileHandle
+  end?: number
   /** How long to hold the thread between yields (ms). */
   sliceMs?: number
   /** Epoch ms after which the read gives up with `DEADLINE`. */
@@ -129,7 +133,7 @@ export async function readSessionTurns(source: TurnSource, options: ReadOptions 
       if (at !== null && (lastAt === null || at > lastAt)) lastAt = at
       collector.feed(normalize(text).map(boundedEvent), offset, at)
       await pace()
-    }, { skip: skipPredicate(source.engine), shouldStop: pastDeadline })
+    }, { skip: skipPredicate(source.engine), shouldStop: pastDeadline, handle: options.handle, end: options.end })
     if (expired) throw new SessionTurnsError('DEADLINE')
   } else if (source.transcriptPath) {
     throw new SessionTurnsError('NO_NORMALIZER')
