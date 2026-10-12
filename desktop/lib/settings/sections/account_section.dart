@@ -63,9 +63,11 @@ class AccountSection extends StatelessWidget {
           child: SettingRow(
             title:
                 profile?.displayName ?? (local ? 'Local session' : 'Signed in'),
-            detail:
-                profile?.email ??
-                (local ? 'Loopback backend' : 'Profile unavailable'),
+            // An account with no name is called by its email, so the row has
+            // said it already: signing up by email showed the address twice.
+            detail: profile == null
+                ? (local ? 'Loopback backend' : 'Profile unavailable')
+                : (profile.displayName == profile.email ? null : profile.email),
             control: OutlinedButton(
               key: const Key('settings-sign-out-button'),
               onPressed: () {

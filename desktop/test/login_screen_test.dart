@@ -386,6 +386,29 @@ void main() {
     );
   });
 
+  test('the window is this computer on a Mac and on Linux alike', () {
+    double wide(String label) => label.length * 6.0;
+    final roomy = loginFleetHereLabel(web: false, room: 400, measure: wide);
+    final tight = loginFleetHereLabel(web: false, room: 100, measure: wide);
+
+    // One picture for both: "this Mac" stood on Linux too.
+    expect(roomy, '● this computer · 4 linked');
+    expect('$roomy $tight', isNot(contains('Mac')));
+    // The count goes where it would run out of the window, as it did in the
+    // sign-in sheet.
+    expect(tight, '● this computer');
+    expect(wide(tight), lessThanOrEqualTo(100));
+    // A browser is not one of the person's computers.
+    expect(
+      loginFleetHereLabel(web: true, room: 400, measure: wide),
+      'this browser · 4 linked',
+    );
+    expect(
+      loginFleetHereLabel(web: true, room: 100, measure: wide),
+      'this browser',
+    );
+  });
+
   testWidgets('dark is drawn deliberately, not inherited', (tester) async {
     final app = _notifier(AppStatus.unauthenticated);
     // After the notifier, which resets the global to light for the other tests.

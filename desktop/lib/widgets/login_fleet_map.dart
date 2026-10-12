@@ -2,7 +2,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 
 import '../shared/theme/app_theme.dart' as grid;
 
@@ -154,6 +154,24 @@ class _Pin {
 /// design (a recess is white at 6%, a hairline at 8%), and `withValues(alpha:)`
 /// would replace that with a solid — a 6% white well painted as pure white.
 Color _fade(Color color, double k) => color.withValues(alpha: color.a * k);
+
+/// The line over the window's panes: where "here" is, and how many machines
+/// are linked to it.
+///
+/// One name for a Mac and a Linux computer, so the map is one picture for both.
+/// The count is left off where the line would not fit: labels keep their point
+/// size while the drawing scales, and in the sign-in sheet "this Mac · 4 linked"
+/// already ran into the window's right edge.
+@visibleForTesting
+String loginFleetHereLabel({
+  required bool web,
+  required double room,
+  required double Function(String label) measure,
+}) {
+  final here = web ? 'this browser' : '● this computer';
+  final counted = '$here · 4 linked';
+  return measure(counted) <= room ? counted : here;
+}
 
 /// The drawing, in its own 512×190 space; the canvas is scaled to fit so every
 /// number here is the one from the mockup rather than a fraction to re-derive.
@@ -342,7 +360,12 @@ class _MapPainter extends CustomPainter {
     );
     _text(
       canvas,
-      kIsWeb ? 'this browser · 4 linked' : '● this Mac · 4 linked',
+      loginFleetHereLabel(
+        web: kIsWeb,
+        // As wide as the panes under it.
+        room: _panes[1].right - _panes[0].left,
+        measure: _measure,
+      ),
       Offset(_window.left + 7, _window.top + 6),
 
       color: _fade(palette.ink2, landed),

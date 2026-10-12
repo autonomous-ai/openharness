@@ -261,6 +261,42 @@ void main() {
     }
   });
 
+  testWidgets('Settings says who is signed in, and an email only once', (
+    tester,
+  ) async {
+    for (final (name, lines) in [
+      ('Dee Example', ['Dee Example', 'dee@example.com']),
+      // Signed up by email: the account is called by its address.
+      (null, ['dee@example.com']),
+    ]) {
+      final app = createApp()
+        ..currentUser = CurrentUserProfile(
+          name: name,
+          email: 'dee@example.com',
+        );
+      await mount(tester, app);
+      await tester.tap(_avatar);
+      await tester.pump();
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('account-menu-settings')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      Finder said(String text) => find.descendant(
+        of: find.byType(SettingsScreen),
+        matching: find.text(text),
+      );
+      for (final line in lines) {
+        expect(said(line), findsOneWidget, reason: '$name: $line');
+      }
+      Navigator.of(tester.element(find.byType(SettingsScreen))).pop();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    }
+  });
+
   testWidgets('the native tab row is told which of the two to draw', (
     tester,
   ) async {
