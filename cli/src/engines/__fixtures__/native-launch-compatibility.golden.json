@@ -24,6 +24,40 @@
     "claude",
     "literal ; $(first message)"
   ],
+  "cline fresh": [
+    "cline",
+    "--tui",
+    "--auto-approve",
+    "false"
+  ],
+  "cline resume": [
+    "cline",
+    "--tui",
+    "--auto-approve",
+    "false"
+  ],
+  "cline fork": [
+    "cline",
+    "--tui",
+    "--auto-approve",
+    "false"
+  ],
+  "cline permission": [
+    "cline",
+    "--tui",
+    "--auto-approve",
+    "true",
+    "--model",
+    "fixture/model"
+  ],
+  "cline first": [
+    "cline",
+    "--tui",
+    "--auto-approve",
+    "false",
+    "--",
+    "\nliteral ; $(first message)"
+  ],
   "codex fresh": [
     "codex"
   ],
