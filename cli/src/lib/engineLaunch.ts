@@ -1311,18 +1311,19 @@ export function buildEngineInstallationArgv(engine: AgentEngine, recipe: EngineI
   return engineShellArgv(shell, [body, 'harness-native-install', engineBin(engine)])
 }
 
-function availabilityScript(recipe: EngineInstallRecipe | undefined): string {
+function availabilityScript(recipe: EngineInstallRecipe | undefined, runtimeNode: string): string {
   const names = recipe?.executable.names.map(shellSingleQuote).join(' ') ?? ''
   const paths = recipe ? engineInstallPaths(recipe).map(shellSingleQuote).join(' ') : ''
   const candidates = [names, paths].filter(Boolean).join(' ')
   return [
-    ...(recipe ? [npmRuntimePrelude(recipe, managedNodePath())] : []),
+    ...(recipe ? [npmRuntimePrelude(recipe, managedNodePath(), false)] : []),
+    engineProbeScript(runtimeNode, recipe?.executable.probeArgs),
     `for candidate in "$@" ${candidates}; do`,
     '  case "$candidate" in',
     '    */*) resolved="$candidate" ;;',
     '    *) resolved="$(command -v "$candidate" 2>/dev/null)" || true ;;',
     '  esac',
-    '  if [ -n "$resolved" ] && [ -f "$resolved" ] && [ -x "$resolved" ]; then exit 0; fi',
+    '  if [ -f "$resolved" ] && [ -x "$resolved" ] && probe_engine "$resolved"; then exit 0; fi',
     'done',
     ...(recipe?.executable.npmGlobal ? [
       'npm_prefix="$(npm prefix -g 2>/dev/null)" || true',
@@ -1355,7 +1356,7 @@ export async function commandAvailableInInteractiveShell(
     }
     return false
   }
-  const [file, ...args] = engineShellArgv(interactive, [availabilityScript(recipe), 'harness-engine-probe', command])
+  const [file, ...args] = engineShellArgv(interactive, [availabilityScript(recipe, managedNodePath()), 'harness-engine-probe', command])
   return await new Promise((resolve) => {
     execFile(
       file,
