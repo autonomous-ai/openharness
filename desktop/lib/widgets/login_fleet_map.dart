@@ -159,9 +159,10 @@ Color _fade(Color color, double k) => color.withValues(alpha: color.a * k);
 /// are linked to it.
 ///
 /// One name for a Mac and a Linux computer, so the map is one picture for both.
-/// The count is left off where the line would not fit: labels keep their point
-/// size while the drawing scales, and in the sign-in sheet "this Mac · 4 linked"
-/// already ran into the window's right edge.
+/// The count is left off where the line would not fit. Labels keep their point
+/// size while the drawing scales, so the desktop's sign-in sheet has no room
+/// for it ("this Mac · 4 linked" ran into the window's right edge there); the
+/// browser's wide page does.
 @visibleForTesting
 String loginFleetHereLabel({
   required bool web,

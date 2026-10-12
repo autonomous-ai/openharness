@@ -8,6 +8,7 @@ import 'package:harness/screens/login_screen.dart';
 import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/settings/settings_section.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/widgets/setting_row.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/account_menu.dart';
 import 'package:harness/widgets/workspace_account_button.dart';
@@ -266,8 +267,9 @@ void main() {
   ) async {
     for (final (name, lines) in [
       ('Dee Example', ['Dee Example', 'dee@example.com']),
-      // Signed up by email: the account is called by its address.
-      (null, ['dee@example.com']),
+      // Signed up by email: the account is called by its address, which is
+      // the line under the title already.
+      (null, ['Signed in', 'dee@example.com']),
     ]) {
       final app = createApp()
         ..currentUser = CurrentUserProfile(
@@ -289,6 +291,11 @@ void main() {
       for (final line in lines) {
         expect(said(line), findsOneWidget, reason: '$name: $line');
       }
+      // Both are the same raised row: one with no second line is drawn bare.
+      expect(
+        tester.widget<SettingRow>(find.byType(SettingRow)).detail,
+        'dee@example.com',
+      );
       Navigator.of(tester.element(find.byType(SettingsScreen))).pop();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
