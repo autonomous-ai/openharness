@@ -822,7 +822,13 @@ void main() {
       // Signed out after all: the desk, as a guest, not a browser sign-in.
       expect(app.status, AppStatus.authenticated);
       expect(app.isGuest, isTrue);
-      expect(find.text('Sign in'), findsNothing);
+      // Upstream's tab row offers a guest Sign in; the browser sign-in wall
+      // (its providers) stays closed.
+      expect(find.text('Continue with Google'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('swarm-sign-in-button')),
+        findsOneWidget,
+      );
       await tester.pumpWidget(const SizedBox());
       app.dispose();
     },

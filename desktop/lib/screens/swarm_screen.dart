@@ -532,9 +532,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
   }
 
+  /// The fork's projects toggle: compact (40px) on every platform, as the
+  /// desktop platforms' default density already draws it, so the tab row's
+  /// reservation ([_sidebarButtonWidth]) holds under test hosts too.
+  static const _sidebarButtonWidth = 40.0;
+
   Widget _sidebarButton() => IconButton(
     key: const ValueKey('project-sidebar-toggle'),
     tooltip: 'Projects and machines',
+    visualDensity: VisualDensity.compact,
     icon: const Icon(AppIcons.panelLeft, size: 20),
     onPressed: () {
       if (_narrowSidebar) {
@@ -7994,8 +8000,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
         WorkspaceStoreButton.widthOf(context),
         // Keep one complete tab revealable; the optional Store label truncates
         // before the tab's number, activity mark, or close control is clipped.
-        // 48 reserves the fork's projects toggle at the start of this row.
-        math.max(0.0, constraints.maxWidth - cell.width * 22 - 48),
+        // The fork's projects toggle at the start of this row is reserved too.
+        math.max(
+          0.0,
+          constraints.maxWidth - cell.width * 22 - _sidebarButtonWidth,
+        ),
       );
       // Sign in or the avatar always stays; see [_accountControl].
       final accountWidth = _accountControlWidth(context);
@@ -8019,8 +8028,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         0.0,
         constraints.maxWidth -
             cell.width * 5 -
-            // 48: the fork's projects toggle at the start of this row.
-            48 -
+            // The fork's projects toggle at the start of this row.
+            _sidebarButtonWidth -
             grid.AppDesktop.tabBarTrailingInset -
             actionsWidth -
             (_slotShown ? 44 : 0) -
@@ -8049,8 +8058,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
           ),
           child: Row(
             children: [
+              // The toggle's own padding is this row's leading inset (the
+              // cell kept in the budget above): beside upstream's account
+              // control, a separate inset overflows a narrow pane.
               _sidebarButton(),
-              SizedBox(width: cell.width),
               if (chrome != null)
                 SizedBox(
                   width: leadingWidth,
