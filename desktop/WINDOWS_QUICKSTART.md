@@ -548,6 +548,20 @@ job also receives the plan without its per-path lists, so a sync-sized pull
 request no longer stops it with "Argument list too long". Product behavior and
 the Windows preview are unchanged.
 
+## October 12 test home isolation on Windows
+
+The CLI test setup moved the home folder to a throwaway one by setting `HOME`,
+which Node ignores on Windows: it reads `USERPROFILE` there. A Windows run of
+the suite therefore kept the developer's profile as home, and the hook installer
+golden spec installed its throwaway Claude Code hooks into the real
+`~/.claude/settings.json`. Those hooks failed on every Claude Code event once the
+temporary folder was gone. The setup and that spec now set `USERPROFILE` to the
+same throwaway folder. The spec refuses to run an installer whose own home lookup
+leaves its temporary root. `envIsolation.spec.ts` checks this on every platform,
+so Linux CI also fails if the setting is removed. Product behavior is unchanged.
+Hooks already written into a profile by earlier runs are not removed by this
+change.
+
 ## Disposable WSL smoke admission
 
 A smoke supervisor can opt in to an explicit fixture contract by setting all four

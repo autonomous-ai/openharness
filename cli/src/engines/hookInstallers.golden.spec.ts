@@ -193,6 +193,8 @@ interface Outcome { runs: Run[]; files: Record<string, Entry> }
 let root = ''
 const saved: Record<string, string | undefined> = {}
 let hooks: typeof import('./hooks.js')['engineHooks']
+let contracts: typeof import('./hooks.js')['hookContracts']
+let defaultHookHome: typeof import('./kit/hookSettings.js')['defaultHookHome']
 let command: typeof import('./kit/notifyHooks.js')['command']
 let tokens: Array<[string, string]> = []
 const golden: Record<string, Outcome> = RECORD ? {} : JSON.parse(readFileSync(GOLDEN, 'utf8')) as Record<string, Outcome>
@@ -258,6 +260,12 @@ function reset(): void {
 function run(engine: Engine, via: Via, scenario: Case): Outcome {
   reset()
   const home = homes()[engine][via]
+  // `install` finds the engine's home on its own. Run it only when that is this case's throwaway folder, so a home
+  // lookup that leaves the root (HOME alone, on Windows) fails the case before anything is written.
+  if (via === 'install') {
+    const found = defaultHookHome(contracts[engine].settings)
+    if (found !== home) throw new Error(`${engine}'s default home is ${found}, not ${home}: not installing there`)
+  }
   const commandFor = (port: number): string => engine === 'claude' ? command(port, 'claude') : command(port, 'codex', home)
   const target: Target = { engine, via, home, file: join(home, FILE[engine]), cmd: commandFor(PORT), otherCmd: commandFor(OTHER_PORT), elsewhere: join(root, 'elsewhere') }
   if (!scenario.noHome) mkdirSync(home, { recursive: true })
@@ -282,9 +290,11 @@ function run(engine: Engine, via: Via, scenario: Case): Outcome {
 
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), 'hook-golden-'))
-  for (const name of ['HOME', 'CODEX_HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'CLAUDE_PROJECTS_DIR']) saved[name] = process.env[name]
+  for (const name of ['HOME', 'USERPROFILE', 'CODEX_HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'CLAUDE_PROJECTS_DIR']) saved[name] = process.env[name]
   // Every folder the hook command names is inside the throwaway root, so the command reads the same on every machine.
   process.env.HOME = join(root, 'home')
+  // Node finds the home folder in USERPROFILE on Windows, where HOME alone sent `install` to the real profile.
+  process.env.USERPROFILE = process.env.HOME
   process.env.CODEX_HOME = join(root, 'home', '.codex')
   process.env.ADAPTER_DATA_DIR = join(root, 'data')
   process.env.ADAPTER_RUNTIME_DIR = join(root, 'runtime')
@@ -292,7 +302,8 @@ beforeAll(async () => {
   mkdirSync(join(root, 'data'), { recursive: true })
   mkdirSync(join(root, 'runtime'), { recursive: true })
   vi.resetModules()
-  ;({ engineHooks: hooks } = await import('./hooks.js'))
+  ;({ engineHooks: hooks, hookContracts: contracts } = await import('./hooks.js'))
+  ;({ defaultHookHome } = await import('./kit/hookSettings.js'))
   const notify = await import('./kit/notifyHooks.js')
   command = notify.command
   const all = homes()
@@ -337,6 +348,13 @@ describe.each(['claude', 'codex'] as const)('%s hook installer, byte for byte', 
       })
     }
   }
+})
+
+// Found on a Windows host, 2026-10-12: with HOME alone, this spec's `install` cases wrote their hooks into the
+// developer's own ~/.claude/settings.json, and every Claude Code event failed once the throwaway folder was gone.
+it('finds each engine\'s default home inside the throwaway root, never the profile of whoever runs it', () => {
+  expect(process.env.USERPROFILE).toBe(process.env.HOME)
+  for (const engine of ['claude', 'codex'] as const) expect(defaultHookHome(contracts[engine].settings)).toBe(homes()[engine].install)
 })
 
 it('has a recorded outcome for every case, and no other', () => {
