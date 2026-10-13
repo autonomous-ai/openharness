@@ -1318,11 +1318,14 @@ function availabilityScript(recipe: EngineInstallRecipe | undefined, runtimeNode
   return [
     ...(recipe ? [npmRuntimePrelude(recipe, managedNodePath(), false)] : []),
     engineProbeScript(runtimeNode, recipe?.executable.probeArgs),
+    'previous_resolved=""',
     `for candidate in "$@" ${candidates}; do`,
     '  case "$candidate" in',
     '    */*) resolved="$candidate" ;;',
     '    *) resolved="$(command -v "$candidate" 2>/dev/null)" || true ;;',
     '  esac',
+    '  if [ -z "$resolved" ] || [ "$resolved" = "$previous_resolved" ]; then continue; fi',
+    '  previous_resolved="$resolved"',
     '  if [ -f "$resolved" ] && [ -x "$resolved" ] && probe_engine "$resolved"; then exit 0; fi',
     'done',
     ...(recipe?.executable.npmGlobal ? [
