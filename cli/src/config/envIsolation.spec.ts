@@ -8,9 +8,12 @@
  * binaries instead of the code under test.
  */
 import { existsSync, realpathSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { homedir, tmpdir, userInfo } from 'node:os'
 import { join, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { hooks as claude } from '../engines/claude/hookContract.js'
+import { hooks as codex } from '../engines/codex/hookContract.js'
+import { defaultHookHome } from '../engines/kit/hookSettings.js'
 import { env } from './env.js'
 import { AUTH_DIR } from '../lib/authSession.js'
 import { assertTestIsolation, TEST_ISOLATED } from './testIsolation.js'
@@ -28,6 +31,21 @@ describe('test environment isolation', () => {
     expect(inTemp(homedir())).toBe(true)
     for (const folder of [env.CLAUDE_PROJECTS_DIR, env.CODEX_HOME, env.CURSOR_HOME, env.GROK_HOME, env.COPILOT_HOME, env.HERMES_HOME, env.OPENCODE_DATA_DIR]) {
       expect(folder.startsWith(homedir() + sep), folder).toBe(true)
+    }
+  })
+  // Node reads the home folder from USERPROFILE on Windows and ignores HOME there. With HOME alone, a Windows run
+  // installed the hook golden spec's throwaway Claude Code hooks into the developer's own settings.json, and every
+  // Claude Code event failed once the temporary folder was gone. These hold on every platform, so a setup that
+  // stops naming the throwaway home in USERPROFILE fails on Linux CI too.
+  it('names the throwaway home in USERPROFILE too, so no engine\'s hook settings file is the developer\'s', () => {
+    expect(process.env.USERPROFILE).toBe(process.env.HOME)
+    expect(homedir()).toBe(process.env.HOME)
+    let account: string | undefined
+    try { account = userInfo().homedir } catch { /* no account entry for this user id: nothing to compare */ }
+    if (account) expect(homedir()).not.toBe(account)
+    for (const { settings } of [claude, codex]) {
+      const file = join(defaultHookHome(settings), settings.file)
+      expect(file.startsWith(homedir() + sep), file).toBe(true)
     }
   })
 
