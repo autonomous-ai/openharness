@@ -1,6 +1,6 @@
 /**
  * Delivered turns: text a feature writes into an agent under a delivery id of its own, and what becomes of
- * it. The Wi-Fi device, the teams and the orchestrator each deliver their turns this way, one path for the
+ * it. The Wi-Fi device, Agent Messages and the orchestrator each deliver their turns this way, one path for the
  * three (docs/design/2026-10-06-core-boundary-next.md, "Experimental features: move only"). It is what
  * lets a feature that delivers turns run in a process of its own: before, each was a slot on the socket
  * (`onMessage`, `onCancelOrchestratorMessage`, `orchestratorDelivery`, `teamDelivery`) that only code in
@@ -15,7 +15,7 @@ import type { CoreApi, TurnDelivery } from './api.js'
 
 type Payload = Record<string, unknown>
 
-/** The most deliveries held while the core starts: a teams' mailbox resumes a few at most. */
+/** The most deliveries held while the core starts: Agent Messages' mailbox resumes a few at most. */
 export const HELD_DELIVERIES = 1_000
 
 /** The most deliveries whose maker is remembered: past it the oldest is forgotten, and what becomes of it
@@ -43,8 +43,8 @@ export function createDeliveries(deps: DeliveriesDeps) {
   /** Which process made each delivery, oldest first. */
   const makers = new Map<string, string>()
   /**
-   * What was delivered before the core's input was wired (`ready`), in order. A teams' mailbox resumes its
-   * queue on a timer as soon as it starts, in the core's process or in its own, and the socket held such a
+   * What was delivered before the core's input was wired (`ready`), in order. Agent Messages' mailbox resumes
+   * its queue on a timer as soon as it starts, in the core's process or in its own, and the socket held such a
    * turn back with "Agent input is not ready" until then; dropped, it would read as written and never be.
    */
   let held: Array<{ agentId: string; text: string; deliveryId: string }> | null = []

@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import '../../shared/widgets/section_scaffold.dart';
 import '../../shared/widgets/setting_row.dart';
 import '../experimental_features.dart';
-import '../../teams/swarm_settings_controller.dart';
 import '../../companions/coding_memory_connection.dart';
 import '../../companions/coding_memory_settings.dart';
 
@@ -13,12 +12,10 @@ class ExperimentalSection extends StatefulWidget {
   const ExperimentalSection({
     super.key,
     this.store,
-    this.controller,
     this.openCodingMemory,
   });
 
   final ExperimentalFeaturesStore? store;
-  final SwarmSettingsController? controller;
   final CodingMemoryConnection? Function()? openCodingMemory;
 
   @override
@@ -30,8 +27,6 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
   void initState() {
     super.initState();
     unawaited((widget.store ?? _fallbackStore).refresh());
-    final controller = widget.controller;
-    if (controller != null) unawaited(controller.refresh());
   }
 
   final _fallbackStore = ExperimentalFeaturesStore();
@@ -51,7 +46,7 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
       subtitle: 'Try features that are still taking shape. Account experiments sync across your devices; coding memory is local to this computer.',
       child: SingleChildScrollView(
         child: ListenableBuilder(
-          listenable: Listenable.merge([preferences, widget.controller]),
+          listenable: preferences,
           builder: (context, _) => Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             spacing: 10,
@@ -118,8 +113,6 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
                         )
                       : null,
                 ),
-              if (widget.controller case final controller?)
-                _SwarmCollaborationSetting(controller: controller),
               if (widget.openCodingMemory case final open?)
                 _CodingMemorySetting(
                   open: open,
@@ -213,64 +206,4 @@ class _CodingMemorySettingState extends State<_CodingMemorySetting> {
       ),
     ),
   );
-}
-
-class _SwarmCollaborationSetting extends StatelessWidget {
-  const _SwarmCollaborationSetting({required this.controller});
-  final SwarmSettingsController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final state = controller;
-    final status = state.saving
-        ? 'Saving…'
-        : !state.loaded && state.error == null
-        ? 'Loading…'
-        : null;
-    return SettingRow(
-      title: 'Tab collaboration',
-      detail:
-          'Let agents automatically consult only peers in the same tab. '
-          'Off by default.',
-      control: Semantics(
-        label: 'Tab collaboration',
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Switch(
-            key: const Key('experimental-swarm-collaboration'),
-            value: state.enabled,
-            onChanged: state.loaded && !state.saving
-                ? (on) => unawaited(state.setEnabled(on))
-                : null,
-          ),
-        ),
-      ),
-      footer: DefaultTextStyle.merge(
-        style: Theme.of(context).textTheme.bodySmall,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Use “Tab conversation” in the command palette to inspect '
-              'their questions and replies.',
-            ),
-            if (status != null) ...[
-              const SizedBox(height: 8),
-              Semantics(liveRegion: true, child: Text(status)),
-            ],
-            if (state.error case final error?) ...[
-              const SizedBox(height: 8),
-              Semantics(liveRegion: true, child: Text(error)),
-              TextButton(
-                onPressed: state.saving
-                    ? null
-                    : () => unawaited(state.refresh()),
-                child: const Text('Refresh setting'),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
 }

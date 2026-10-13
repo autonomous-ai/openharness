@@ -61,9 +61,9 @@ describe('what an experiment in its own process may ask of the core', () => {
   it('reads and writes the account\'s backend under /api/, signed in by the core, and nothing else', async () => {
     const backend = vi.fn(async () => ({ status: 200, body: { success: true, data: { tabs: [] } } }))
     const core = fakeCore({ account: { backend } })
-    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'backend', { method: 'PATCH', path: '/api/tab-channels/settings', body: { enabled: true } }))
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'backend', { method: 'PATCH', path: '/api/agent-messages/tabs/t1', body: { enabled: true } }))
       .toEqual({ status: 200, body: { success: true, data: { tabs: [] } } })
-    expect(backend).toHaveBeenCalledWith('PATCH', '/api/tab-channels/settings', { enabled: true })
+    expect(backend).toHaveBeenCalledWith('PATCH', '/api/agent-messages/tabs/t1', { enabled: true })
     for (const bad of [{ method: 'TRACE', path: '/api/x' }, { method: 'GET', path: '/auth/token' }, { method: 'GET' }]) {
       expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'backend', bad)).toEqual({ error: 'INVALID_REQUEST' })
     }

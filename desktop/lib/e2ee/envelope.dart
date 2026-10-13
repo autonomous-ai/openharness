@@ -17,8 +17,8 @@ const int e2eVersion = 1;
 const Set<String> encryptedDownTypes = {
   'harness_devices_list',
   'harness_device_settings',
-  'team',
-  'team_delivery',
+  // Agent Messages (CLI messages/wire.ts): a tab's log carries what agents said to each other.
+  'agent_messages',
   'harness_share_list',
   'harness_share_invite',
   'harness_share_remove',
@@ -50,7 +50,7 @@ const Set<String> encryptedDownTypes = {
   'session_get',
   'models_list',
   'agent_create',
-  'agent_create_status',
+  'agent_create_status', 'agent_create_cancel',
   'agent_delete',
   'agent_restart',
   // Reopens stopped work and forks a harness: the CLI has required both sealed since they were

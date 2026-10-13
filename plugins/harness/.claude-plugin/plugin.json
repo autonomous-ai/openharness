@@ -1,0 +1,13 @@
+{
+  "name": "harness",
+  "displayName": "Harness",
+  "description": "Start Claude Code, Codex and other coding agents as harnesses the person can watch, then wait for them, read their answers, message them and close them. Uses the Harness CLI.",
+  "author": {
+    "name": "Autonomous",
+    "url": "https://harness.autonomous.ai"
+  },
+  "homepage": "https://harness.autonomous.ai/agents",
+  "repository": "https://github.com/autonomous-ai/openharness",
+  "license": "MIT",
+  "keywords": ["agents", "parallel", "codex", "claude-code", "orchestration", "tmux", "mcp"]
+}

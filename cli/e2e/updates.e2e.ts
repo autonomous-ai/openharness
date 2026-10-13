@@ -239,7 +239,7 @@ describe('engines updated in place', () => {
     client.close()
   })
 
-  it.each(engines)('%s: uninstalled while an agent runs: it goes on; a new agent and a restart fail at once with the reason; reinstalled, both work with no daemon restart', async (engine) => {
+  it.each(engines)('%s: uninstalled while an agent runs: it goes on; a new request waits while restart preserves the running agent; reinstalled, both work with no daemon restart', async (engine) => {
     const d = await fresh()
     const client = await LocalClient.connect(d)
     const agent = await create(d, client, engine, `uninstalled-${engine}`)
@@ -253,26 +253,30 @@ describe('engines updated in place', () => {
     const cwd = join(d.projectsDir, `missing-${engine}`)
     mkdirSync(cwd, { recursive: true })
     let startedAt = Date.now()
-    const created = await client.request('agent_create', { engine, cwd, bypassPermission: true }, 90_000)
-    const failed = await until('the launch to fail with its reason', async () => {
-      const now = created.agent?.id ? await row(client, created.agent.id) : undefined
-      return now?.launch?.state === 'failed' ? now : null
-    }, 30_000, 250)
+    const payload = { creationId: `uninstalled-${engine}-request`, engine, cwd, bypassPermission: true }
+    const created = await client.request('agent_create', payload, 90_000)
     expect(Date.now() - startedAt).toBeLessThan(10_000)
-    expect(failed.launch.error).toBe('ENGINE_NOT_INSTALLED')
-    expect(failed.launch.detail).toContain(`${engine} is not installed`)
+    expect(created).toMatchObject({ state: 'pending', held: { service: 'native' } })
+    expect(created.held.detail).toContain('executable')
+    expect((await rows(client)).map(row => row.id)).toEqual([agent.id])
 
-    // A restart cannot bring the agent back on an engine that is not there, so it is refused before the
-    // running agent is touched, with the reason, the way the agent's folder is checked first.
+    // Restart holds before touching the live process. Repairing the executable
+    // then retrying must keep this agent's original conversation.
     startedAt = Date.now()
     const restarted = await client.request('agent_restart', { agentId: agent.id }, 90_000)
     expect(Date.now() - startedAt).toBeLessThan(10_000)
-    expect(restarted.error, JSON.stringify(restarted)).toBe('ENGINE_NOT_INSTALLED')
-    expect(String(restarted.detail)).toContain(`${engine} is not installed`)
+    expect(restarted.error, JSON.stringify(restarted)).toBe('NATIVE_LAUNCH_HELD')
+    expect(String(restarted.detail)).toContain('executable')
+    expect(await row(client, agent.id)).toMatchObject({ status: 'active', sessionId: agent.sessionId })
     await turn(client, agent.id, 'after the refused restart')
 
     install(d, engine, { version: NEW[engine] })
-    const next = await create(d, client, engine, `reinstalled-${engine}`)
+    const recovered = await until('the original request after reinstall', async () => {
+      const reply = await client.request('agent_create_status', { creationId: payload.creationId })
+      return reply.state === 'created' ? reply : null
+    }, 60_000, 250)
+    const next = await bound(client, recovered.agent.id)
+    expect(await client.request('agent_create', payload)).toMatchObject({ state: 'created', agent: { id: next.id } })
     expect(await runningVersion(client, next.id)).toBe(versionLine(engine, NEW[engine]))
     // The first agent restarts onto the engine installed again, in its own conversation.
     const back = await client.request('agent_restart', { agentId: agent.id }, 90_000)

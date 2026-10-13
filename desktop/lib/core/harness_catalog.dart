@@ -18,7 +18,13 @@ const retiredHarnessIds = <String, String>{
 String canonicalHarnessId(String id) => retiredHarnessIds[id] ?? id;
 
 // Older daemons can report an old manifest's name even under the current id.
+// A copy installed before a package moved category still carries the old one.
 const _currentIdentity = {
+  'autonomous/memories': (name: 'Memories', category: 'Essentials'),
+  'autonomous/harness-monitor': (
+    name: 'Harness Monitor',
+    category: 'Essentials',
+  ),
   'autonomous/kicad': (name: 'KiCad', category: 'PCB'),
   'autonomous/machine-monitor': (name: 'Machine Monitor', category: 'Compute'),
   'autonomous/ollama': (name: 'Ollama', category: 'Local AI'),

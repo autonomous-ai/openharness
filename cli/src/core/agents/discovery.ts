@@ -19,7 +19,6 @@ import type { SessionInputController } from '../../lib/sessionInput.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import { bypassPermissionActive, permissionModeFromArgv, tmuxPaneState } from '../../lib/tmux.js'
-import type { SwarmPromptScopes } from '../../teams/promptScope.js'
 
 export interface DiscoveryDeps {
   registry: Pick<typeof registry,
@@ -33,7 +32,6 @@ export interface DiscoveryDeps {
   syncRecapPool: () => void
   attachSession: (session: RegisteredSession) => Promise<boolean>
   invalidateTerminalControl: (agentId: string) => void
-  teams: Pick<SwarmPromptScopes, 'forget'>
   input: Pick<SessionInputController, 'forget'>
   deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   questionWatcher: Pick<QuestionWatcher, 'stop'>
@@ -47,7 +45,7 @@ export interface DiscoveryDeps {
 
 export function createDiscoveryHandlers({
   registry, attachDsh, forgetSession, announceSession, bindObservedAgent, syncRecapPool, attachSession,
-  invalidateTerminalControl, teams, input, deviceInput, questionWatcher, stopHeartbeat, retainExitedSession,
+  invalidateTerminalControl, input, deviceInput, questionWatcher, stopHeartbeat, retainExitedSession,
   stoppedAgents, restoreDegraded,
 }: DiscoveryDeps) {
   const onDiscovered = async (observed: DiscoveredTerminalAgent): Promise<void> => {
@@ -188,7 +186,6 @@ export function createDiscoveryHandlers({
   const onDormant = async (agent: RegisteredSession, reason: string): Promise<void> => {
     if (!agent.active || agent.launch?.state === 'held') return
     invalidateTerminalControl(agent.agentId)
-    teams.forget(agent.agentId)
     input.forget(agent.agentId)
     deviceInput.forget(agent.agentId)
     if (agent.sessionId) {

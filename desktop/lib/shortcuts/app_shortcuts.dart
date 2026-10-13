@@ -75,7 +75,6 @@ enum ShortcutAction {
   shareAgent,
   routeTask,
   orchestrate,
-  team,
   reload,
   showLayout,
   pinPane,

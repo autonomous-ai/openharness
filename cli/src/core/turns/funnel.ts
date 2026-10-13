@@ -1,6 +1,6 @@
 /**
  * The event funnel: the one place a session's live events fan out from, to the app, search, input, the
- * teams, the device's input, the device service, the heartbeat, the question watcher and the recaps. The
+ * device's input, the device service, the heartbeat, the question watcher and the recaps. The
  * order is exact and it matters: per event, the frame goes to the app before anything acts on it; the
  * recaps hear the whole batch after the loop; the device stream comes last and never on a replay.
  *
@@ -23,7 +23,6 @@ import type { QuestionWatcher } from '../../lib/questionController.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import type { TurnActivity } from '../../lib/turnActivity.js'
-import type { SwarmPromptScopes } from '../../teams/promptScope.js'
 
 type Events = ReturnType<CursorNormalizer['ingest']>
 type EmitOptions = { resumed?: boolean; replay?: boolean }
@@ -47,7 +46,6 @@ export interface FunnelDeps {
   search: { touch(sessionId: string): void } | null | undefined
   turnStartedAt: Map<string, number>
   input: Pick<SessionInputController, 'onTurnStarted' | 'onTurnEnded'>
-  teams: Pick<SwarmPromptScopes, 'started'>
   deviceInput: Pick<AutonomousDeviceInput, 'onTurnStarted' | 'onTurnEnded'>
   /** Which engines take a message typed mid-turn into their own queue (their declared submission policy). */
   submission: Pick<SubmissionReader, 'policy'>
@@ -62,7 +60,7 @@ export interface FunnelDeps {
 type OutsideConsumers = (consumer: string, call: () => void) => void
 
 /**
- * A consumer outside the core — the teams and the device service — answers for itself: one that
+ * A consumer outside the core — the device service — answers for itself: one that
  * throws is logged, at most once a minute per consumer and with how many were not, and every consumer
  * after it still gets the event. The heartbeat, the question watcher and the recaps must not miss a
  * turn because a device was unplugged mid-call. The services on the boundary are guarded the same way
@@ -96,7 +94,7 @@ export function outsideConsumers(options: {
 
 /** The funnel itself, over what it feeds. */
 export function funnelFor({
-  bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, input, teams,
+  bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, input,
   deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(),
 }: FunnelDeps) {
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
@@ -134,7 +132,6 @@ export function funnelFor({
         turnStartedAt.set(sessionId, Date.now())
         console.log(`[turn] ${sid(sessionId)} started · engine=${bySession(sessionId)?.engine ?? 'claude'} · bytes=${Buffer.byteLength(event.payload.userMessage, 'utf8')}`)
         input.onTurnStarted(agentIdFor(sessionId), event.payload.userMessage)
-        if (!opts?.resumed && !opts?.replay) outside('teams', () => teams.started(agentId, event.payload.userMessage, 'transcript', bySession(sessionId)?.engine))
         deviceInput.onTurnStarted(agentId, event.payload.userMessage)
         outside('devices', () => device()?.turnStarted(agentId))
         startHeartbeat(sessionId)

@@ -8,6 +8,7 @@ import { registry, type RegisteredSession } from './lib/registry.js'
 import { env } from './config/env.js'
 import { readHookCredential } from './lib/hookAuth.js'
 import { ENGINES } from './engines/types.js'
+import { agentSettingsRoutes } from './lib/agentSettings.js'
 import { engineHooks } from './engines/hooks.js'
 
 let server: Server | null = null
@@ -316,6 +317,31 @@ describe('the desk proxy', () => {
   })
 })
 
+describe('the Agent Messages proxy', () => {
+  it('reads which tabs have Agent Messages on ungated, and sets one tab only with the local header', async () => {
+    const write = vi.fn(async (tabId: string, body: unknown) => ({ status: 200, body: { success: true, data: { tabId, echo: body } } }))
+    const { base } = await start({
+      onAgentMessagesRead: async () => ({ status: 200, body: { success: true, data: { revision: 1, machines: [], tabs: [] } } }),
+      onAgentMessagesWrite: write,
+    })
+    expect(await (await fetch(`${base}/api/agent-messages`)).json()).toEqual({ success: true, data: { revision: 1, machines: [], tabs: [] } })
+    const patch = (path: string, body: string, local = true) => fetch(`${base}${path}`, { method: 'PATCH', headers: { 'content-type': 'application/json', ...(local ? { 'x-adapter-local': '1' } : {}) }, body })
+    expect((await patch('/api/agent-messages/tabs/app', '{"enabled":true}', false)).status).toBe(403)
+    expect(write).not.toHaveBeenCalled()
+    const saved = await patch('/api/agent-messages/tabs/app', '{"enabled":true}')
+    expect(((await saved.json()) as { data: unknown }).data).toEqual({ tabId: 'app', echo: { enabled: true } })
+    expect(write).toHaveBeenCalledExactlyOnceWith('app', { enabled: true })
+    expect((await patch('/api/agent-messages/tabs/app', '{nope')).status).toBe(400)
+    expect((await patch('/api/agent-messages/tabs/bad.tab', '{}')).status).toBe(404)
+  })
+
+  it('answers UNAVAILABLE where the daemon has no handler for it', async () => {
+    const { base } = await start({})
+    expect((await fetch(`${base}/api/agent-messages`)).status).toBe(503)
+    expect((await fetch(`${base}/api/agent-messages/tabs/app`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{}' })).status).toBe(503)
+  })
+})
+
 describe('account Experimental settings proxy', () => {
   it('reads through the account proxy and guards writes with the local header', async () => {
     const snapshot = { accountId: 'owner', revision: 0, features: { focus_bar_creature: false, share_button: false } }
@@ -329,6 +355,29 @@ describe('account Experimental settings proxy', () => {
     expect(saved.status).toBe(200)
     expect(write).toHaveBeenCalledExactlyOnceWith(body)
     expect((await fetch(`${base}/api/experimental-settings`, { method: 'PATCH', headers: { 'x-adapter-local': '1' }, body: '{bad' })).status).toBe(400)
+  })
+})
+
+describe('what the person lets agents do', () => {
+  it('reads and writes this computer\'s agent settings, the write guarded by the local header', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agent-settings-route-'))
+    try {
+      const routes = agentSettingsRoutes(dataDir)
+      const { base } = await start({ onAgentSettingsRead: routes.read, onAgentSettingsWrite: routes.write })
+      const patch = (body: string, local = true) => fetch(`${base}/api/agent-settings`, { method: 'PATCH', headers: { 'content-type': 'application/json', ...(local ? { 'x-adapter-local': '1' } : {}) }, body })
+      expect(await (await fetch(`${base}/api/agent-settings`)).json()).toEqual({ agentsStartAgents: true })
+      expect((await patch('{"agentsStartAgents":false}', false)).status).toBe(403)
+      expect(await (await patch('{"agentsStartAgents":false}')).json()).toEqual({ agentsStartAgents: false })
+      expect(await (await fetch(`${base}/api/agent-settings`)).json()).toEqual({ agentsStartAgents: false })
+      expect((await patch('{"other":1}')).status).toBe(400)
+      expect((await patch('{bad')).status).toBe(400)
+    } finally { rmSync(dataDir, { recursive: true, force: true }) }
+  })
+
+  it('answers UNAVAILABLE without a handler', async () => {
+    const { base } = await start({})
+    expect((await fetch(`${base}/api/agent-settings`)).status).toBe(503)
+    expect((await fetch(`${base}/api/agent-settings`, { method: 'PATCH', headers: { 'x-adapter-local': '1' }, body: '{}' })).status).toBe(503)
   })
 })
 

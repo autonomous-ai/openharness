@@ -133,6 +133,31 @@ class ApiClient {
     return unwrapApiResponse(res) as Map<String, dynamic>?;
   }
 
+  // -- Agent Messages: which desk tabs let their harnesses message each other (proxied like the desk) --
+
+  /// `{revision, machines, tabs: [{id, name, enabled, panes}]}` (backend routes/agentMessages.ts). Null
+  /// when the daemon or backend predates Agent Messages (404): the app then offers none. Signed out
+  /// (401) or a backend out of reach (503) throws [ApiException], a moment the app waits out.
+  Future<Map<String, dynamic>?> readAgentMessageTabs() async {
+    final res = await _dio.get('/api/agent-messages');
+    if (res.statusCode == 404) return null;
+    return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
+  /// Turn Agent Messages on or off for one tab; answers `{tabId, enabled, revision}`. A local write
+  /// to the daemon, like [deskOps].
+  Future<Map<String, dynamic>> setAgentMessages(
+    String tabId,
+    bool enabled,
+  ) async {
+    final res = await _dio.patch(
+      '/api/agent-messages/tabs/${Uri.encodeComponent(tabId)}',
+      data: {'enabled': enabled},
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    return Map<String, dynamic>.from(unwrapApiResponse(res) as Map);
+  }
+
   // -- account-wide Experimental preferences --
   Future<Map<String, dynamic>> experimentalSettings() async {
     final res = await _dio.get('/api/experimental-settings');

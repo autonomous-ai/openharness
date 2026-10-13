@@ -713,40 +713,45 @@ class _DeviceShowcase extends StatelessWidget {
         ),
       ),
       const SizedBox(height: 16),
-      Material(
-        color: DesktopChrome.surface,
-        borderRadius: BorderRadius.circular(14),
-        child: InkWell(
-          key: const Key('devices-faces'),
+      if (!device.status.isPro) ...[
+        Material(
+          color: DesktopChrome.surface,
           borderRadius: BorderRadius.circular(14),
-          onTap: () => showDeviceFaces(context),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(
-              children: [
-                const FocusFacePreview(size: 52),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Faces', style: DesktopChrome.control(medium: true)),
-                      const SizedBox(height: 3),
-                      Text('Focus', style: DesktopChrome.metadata()),
-                    ],
+          child: InkWell(
+            key: const Key('devices-faces'),
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => showDeviceFaces(context),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(
+                children: [
+                  const FocusFacePreview(size: 52),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Faces',
+                          style: DesktopChrome.control(medium: true),
+                        ),
+                        const SizedBox(height: 3),
+                        Text('Focus', style: DesktopChrome.metadata()),
+                      ],
+                    ),
                   ),
-                ),
-                Icon(
-                  AppIcons.chevronRight,
-                  size: 16,
-                  color: DesktopChrome.muted,
-                ),
-              ],
+                  Icon(
+                    AppIcons.chevronRight,
+                    size: 16,
+                    color: DesktopChrome.muted,
+                  ),
+                ],
+              ),
             ),
           ),
         ),
-      ),
-      const SizedBox(height: 16),
+        const SizedBox(height: 16),
+      ],
       _DeviceFacts(device: device),
     ],
   );

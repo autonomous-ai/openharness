@@ -100,7 +100,7 @@ void main() {
       expect(app.zoomedPaneId, isNull);
       expect(app.focusedPane, terminal);
       expect(app.sent, isEmpty);
-      app.showHarnessMonitor('m', 'manager');
+      app.showHarnessViewer('m', 'manager');
       expect(app.zoomedPaneId, isNull);
       expect(
         await app.handleHarnessMonitorAction(viewer, {

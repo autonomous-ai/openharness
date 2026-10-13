@@ -16,6 +16,7 @@ import { hooks as codex } from '../engines/codex/hookContract.js'
 import { defaultHookHome } from '../engines/kit/hookSettings.js'
 import { env } from './env.js'
 import { AUTH_DIR } from '../lib/authSession.js'
+import { assertTestIsolation, TEST_ISOLATED } from './testIsolation.js'
 
 const productRoot = join(homedir(), '.harness')
 
@@ -59,6 +60,14 @@ describe('test environment isolation', () => {
   })
   it('keeps the hook routes off the developer\'s ~/.harness, so no spec records a daemon beside theirs or routes by one', () => {
     expect(env.HARNESS_HOOK_ROUTES_DIR.startsWith(productRoot)).toBe(false)
+  })
+  // From the repository root Vitest finds no config and skips vitest.setup.ts, and every spec used the real
+  // ~/.harness: 19 stopped-harness fixtures turned up in one Mac's live store (2026-10-10).
+  it('refuses a Vitest run that vitest.setup.ts did not isolate, and nothing else', () => {
+    expect(process.env[TEST_ISOLATED]).toBe('1')
+    expect(() => assertTestIsolation({ VITEST: 'true' })).toThrow('no isolated home or data folder')
+    expect(() => assertTestIsolation({ VITEST: 'true', [TEST_ISOLATED]: '1' })).not.toThrow()
+    expect(() => assertTestIsolation({})).not.toThrow()
   })
   it('keeps account reads and refreshes in the test-owned auth directory', () => {
     expect(AUTH_DIR).toBe(join(env.ADAPTER_DATA_DIR, 'auth'))

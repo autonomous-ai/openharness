@@ -1,7 +1,7 @@
 /** Change agent prepares its file in the edge host. A failure there costs no agent its turn. */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
@@ -71,6 +71,31 @@ describe('change agent in the edge host', () => {
     client.close()
   })
 
+  it.each(['claude', 'codex'])('holds an unavailable %s native identity before publication and recovers the same request', async engine => {
+    const { d, client, cwd, agentId } = await start({}, engine)
+    await turn(client, agentId, 'keep this conversation while identity is unavailable')
+    const row = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8'))
+      .find((entry: Record<string, unknown>) => entry.agentId === agentId)
+    expect(row.transcriptPath.startsWith(d.root + sep)).toBe(true)
+    const original = readFileSync(row.transcriptPath)
+    writeFileSync(row.transcriptPath, '{"incompleteNativeHeader":')
+    const request = { agentId, changeId: CHANGE, targetEngine: 'codex' }
+    try {
+      expect(await client.request('agent_handoff_prepare', request)).toMatchObject({
+        error: 'IDENTITY_UNAVAILABLE', held: true, retryable: true,
+      })
+      expect(existsSync(join(cwd, '.harness', 'handoff'))).toBe(false)
+      const { agents } = await client.request('agents_list')
+      expect(agents.find((entry: Record<string, unknown>) => entry.id === agentId)).toBeDefined()
+    } finally { writeFileSync(row.transcriptPath, original) }
+    const prepared = await client.request('agent_handoff_prepare', request)
+    expect(prepared).toMatchObject({ agentId, gitRepo: true, cwd, degraded: [] })
+    expect(readFileSync(join(cwd, prepared.file), 'utf8')).toContain('keep this conversation while identity is unavailable')
+    await turn(client, agentId, 'continue after the held handoff recovered')
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
   it.each(['claude', 'codex'])('a stopped %s fork that never bound inherits only the conversation before the fork from its stopped parent', async (engine) => {
     const { d, client, cwd, agentId } = await start({}, engine)
     await turn(client, agentId, 'the request before the fork')
@@ -92,11 +117,15 @@ describe('change agent in the edge host', () => {
     expect((await client.request('agent_delete', { agentId: forkId }, 30_000)).error).toBeUndefined()
     client.close()
     await d.stop()
-    // Exercise the handoff reader against the exact pending row observed above. Stop's separate
-    // resume-identity capture can find the source named on a fork's argv; it is not the state this
-    // case covers. With the daemon off, seed the retained unbound record as the store would save it.
+    // Stop must preserve the actual unbound fork and its parent. A recent-file
+    // guess used to give the fork its parent's identity, then ownership settlement
+    // set the parent aside. Verify the saved records before restarting the daemon.
     const savedPath = join(d.dataDir, 'stopped-agents', `${forkId}.json`)
-    writeFileSync(savedPath, JSON.stringify({ version: 1, session: { ...pending, active: false, launch: { state: 'ready' } } }))
+    expect(JSON.parse(readFileSync(savedPath, 'utf8')).session).toMatchObject({
+      agentId: forkId, sessionId: '', forkedFrom: pending.forkedFrom,
+    })
+    expect(JSON.parse(readFileSync(join(d.dataDir, 'stopped-agents', `${agentId}.json`), 'utf8')).session)
+      .toMatchObject({ agentId, sessionId: pending.forkedFrom.sessionId })
     await d.start()
     await until('handoff to reconnect after the restart', () => d.log().split('[services] handoff connected').length >= 3 || null, 30_000, 200)
     const restarted = await LocalClient.connect(d)

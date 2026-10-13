@@ -1,6 +1,7 @@
-/** Eager mechanics for the native JSON hook schemas. Each engine declares its events and ownership rules. */
-import { existsSync, readFileSync } from 'node:fs'
-import { command, isOurs, writeJsonAtomic, type Settings, type HookBlock } from './notifyHooks.js'
+/** Eager mechanics for native JSON hook schemas; unreadable settings are never empty settings. */
+import { command, isOurs, isManagedHookCommand, foreignHookBlocks, type Settings, type HookBlock } from './notifyHooks.js'
+import { HookPreparationHeld, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
+import type { NativeHookOptions } from './nativeLocations.js'
 
 export interface NativeHookSettings {
   file: string
@@ -16,78 +17,68 @@ export interface NativeHookSettings {
 }
 type Entry = { type?: string; command: string; timeout?: number; failClosed?: boolean }
 type EntrySettings = { version?: number; hooks?: Record<string, Entry[]> } & Record<string, unknown>
-type NamedSettings = Record<string, Record<string, Entry[]> | unknown>
-const UNREADABLE = Symbol('unreadable')
 
-function readSettings(rule: NativeHookSettings, file: string): unknown | typeof UNREADABLE {
-  if (!existsSync(file)) return {}
-  try { return JSON.parse(readFileSync(file, 'utf-8')) } catch {
-    for (const line of rule.messages.malformed ?? []) console.error(line.replace('{file}', () => file))
-    return UNREADABLE
+const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
+const ours = (entry: Entry) => isManagedHookCommand(entry?.command)
+function entries(value: unknown): Entry[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new HookPreparationHeld('a hook event is not a list')
+  if (value.some(entry => !object(entry) || (entry.command !== undefined && typeof entry.command !== 'string'))) {
+    throw new HookPreparationHeld('a hook entry has an unconfirmed shape')
   }
-}
-function writeSettings(rule: NativeHookSettings, file: string, settings: unknown): void {
-  try {
-    writeJsonAtomic(file, settings)
-    console.log(rule.messages.installed.replace('{file}', () => file))
-    if (rule.messages.after) console.log(rule.messages.after)
-  } catch (err) { console.error(rule.messages.failed, err) }
+  return value
 }
 
-export function installNativeHookSettings(rule: NativeHookSettings, port: number): void {
-  const file = rule.file
-  if (rule.schema === 'file') {
-    const cmd = command(port, rule.engine)
-    const settings = { version: rule.version!, hooks: Object.fromEntries(rule.events.map(event =>
-      [event, [{ type: 'command', command: `${cmd} ${rule.eventFlag} ${event}` }]])) }
-    let existing: unknown = null
-    if (existsSync(file)) { try { existing = JSON.parse(readFileSync(file, 'utf-8')) } catch { existing = null } }
-    if (JSON.stringify(existing) === JSON.stringify(settings)) { console.log(rule.messages.current); return }
-    writeSettings(rule, file, settings)
-    return
-  }
-  const parsed = readSettings(rule, file)
-  if (parsed === UNREADABLE) return
-  if (rule.schema === 'named') {
-    const settings: NamedSettings = !parsed || typeof parsed !== 'object' || Array.isArray(parsed) ? {} : parsed as NamedSettings
-    const cmd = command(port, rule.engine)
-    const block = Object.fromEntries(rule.events.map(event => [event,
-      [{ type: 'command', command: `${cmd} ${rule.eventFlag} ${event}`, timeout: rule.timeout }]]))
-    if (JSON.stringify(settings[rule.block!]) === JSON.stringify(block)) { console.log(rule.messages.current); return }
-    settings[rule.block!] = block
-    writeSettings(rule, file, settings)
-    return
-  }
-  if (rule.schema === 'entries') {
-    const settings = parsed as EntrySettings
-    if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {}
-    if (typeof settings.version !== 'number') settings.version = rule.version
-    const cmd = command(port, rule.engine)
+export async function installNativeHookSettings(rule: NativeHookSettings, port: number, options: NativeHookOptions = {}): Promise<boolean> {
+  const cmd = command(port, rule.engine, undefined, undefined, options.environment)
+  try { return await runHookPreparation([rule.file], async attempt => {
+    const observed = inspectHookFile(rule.file)
+    const parsed: unknown = observed.content === null ? {} : JSON.parse(observed.content)
+    if (!object(parsed)) throw new HookPreparationHeld('the settings do not have the declared object shape')
     let changed = false
-    for (const event of rule.events) {
-      const entries = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : []
-      const foreign = entries.filter(entry => !entry?.command?.includes('notify.mjs'))
-      const ours = entries.filter(entry => entry?.command?.includes('notify.mjs'))
-      const canonical: Entry = { command: cmd, failClosed: rule.failClosed }
-      if (ours.length !== 1 || ours[0]?.command !== cmd || ours[0]?.failClosed !== rule.failClosed) changed = true
-      settings.hooks[event] = [...foreign, canonical]
+    if (rule.schema === 'named') {
+      const prior = parsed[rule.block!]
+      if (prior !== undefined && !object(prior)) throw new HookPreparationHeld('the named hooks block is not an object')
+      const block = { ...(prior as Record<string, unknown> | undefined) }
+      for (const event of rule.events) {
+        const list = entries(block[event])
+        block[event] = [...list.filter(entry => !ours(entry)),
+          { type: 'command', command: `${cmd} ${rule.eventFlag} ${event}`, timeout: rule.timeout }]
+      }
+      changed = JSON.stringify(prior) !== JSON.stringify(block)
+      parsed[rule.block!] = block
+    } else {
+      if (rule.schema === 'file' && parsed.version === undefined) { parsed.version = rule.version; changed = true }
+      if (parsed.hooks !== undefined && !object(parsed.hooks)) throw new HookPreparationHeld('the hooks member is not an object')
+      const hooks = (parsed.hooks ??= {}) as Record<string, unknown>
+      if (rule.schema === 'entries' || rule.schema === 'file') {
+        const settings = parsed as EntrySettings
+        if (settings.version === undefined) { settings.version = rule.version; changed = true }
+        for (const event of rule.events) {
+          const list = entries(hooks[event]), owned = list.filter(ours)
+          const canonical: Entry = rule.schema === 'file'
+            ? { type: 'command', command: `${cmd} ${rule.eventFlag} ${event}` }
+            : { command: cmd, failClosed: rule.failClosed }
+          if (owned.length !== 1 || JSON.stringify(owned[0]) !== JSON.stringify(canonical)) changed = true
+          hooks[event] = [...list.filter(entry => !ours(entry)), canonical]
+        }
+      } else {
+        const settings = parsed as Settings
+        for (const event of rule.events) {
+          const blocks = entries(hooks[event]) as unknown as HookBlock[]
+          const owned = blocks.filter(isOurs)
+          if (owned.length !== 1 || owned[0]?.hooks?.[0]?.command !== cmd) changed = true
+          settings.hooks![event] = [...foreignHookBlocks(blocks), { hooks: [{ type: 'command', command: cmd, timeout: rule.timeout }] }]
+        }
+      }
     }
-    if (!changed) { console.log(rule.messages.current); return }
-    writeSettings(rule, file, settings)
-    return
+    const published = await observed.replace(changed ? JSON.stringify(parsed, null, 2) + '\n' : observed.content!, attempt)
+    published.verify()
+    console.log(changed ? rule.messages.installed.replace('{file}', () => rule.file) : rule.messages.current)
+    if (changed && rule.messages.after) console.log(rule.messages.after)
+    return true
+  }, { ...options, identity: JSON.stringify([rule, port, cmd]) }) } catch (error) {
+    console.error(rule.messages.failed, error)
+    return false
   }
-  const settings = parsed as Settings
-  if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {}
-  const cmd = command(port, rule.engine)
-  let changed = false
-  for (const event of rule.events) {
-    const blocks = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : []
-    const foreign = blocks.filter(block => !isOurs(block))
-    const ours = blocks.filter(isOurs)
-    const canonical: HookBlock = { hooks: [{ type: 'command', command: cmd, timeout: rule.timeout }] }
-    if (ours.length !== 1 || ours[0]?.hooks?.[0]?.command !== cmd) changed = true
-    settings.hooks[event] = [...foreign, canonical]
-  }
-  if (!changed) { console.log(rule.messages.current); return }
-  writeSettings(rule, file, settings)
 }

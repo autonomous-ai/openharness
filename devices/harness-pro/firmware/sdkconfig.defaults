@@ -1,0 +1,84 @@
+# Harness Pro (WT01P4C5-S1: ESP32-P4 + ESP32-C5, 720x720 MIPI-DSI).
+#
+# Values taken from the vendor's HARDWARE.md, which was written off a board that runs. Not guessed from
+# the P4 datasheet: the PSRAM mode and speed in particular are module facts, and the wrong pair boots to
+# a blank screen rather than to an error.
+CONFIG_IDF_TARGET="esp32p4"
+
+# --- Silicon revision ---
+# The fitted P4 is revision 3.2 (the v3.x part, N16R32X). Requires ESP-IDF 5.5.3 or later. The image will
+# not boot on a v1.x board.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=n
+CONFIG_ESP32P4_REV_MIN_300=y
+
+# --- Flash (16 MB) ---
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- OTA (over-the-air firmware update) ---
+# Dual-OTA partitions (see partitions.csv) + rollback: a freshly-flashed OTA image boots in
+# PENDING_VERIFY and must call esp_ota_mark_app_valid_cancel_rollback() once healthy, else the
+# bootloader reverts to the previous slot on the next reboot (a bad update can't brick the device).
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# Keep bootloader generation compatible with the installed 0x8000 table.
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+
+# --- FreeRTOS ---
+CONFIG_FREERTOS_HZ=1000
+
+# --- CPU ---
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_400=y
+
+# --- Main task stack ---
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# --- Log level ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# Asserts everywhere, on a build that has been on real hardware for days. SILENT keeps the abort (a
+# failed invariant still stops) and drops the file/line strings and the formatting.
+CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_SILENT=y
+
+# --- PSRAM (32 MB hex SPI at 200 MHz, executing in place) ---
+# 200 MHz is behind IDF_EXPERIMENTAL_FEATURES; without it the speed choice is not offered and the build
+# silently drops to 80 MHz.
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_SPEED=200
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+# Only allocations of 1 KiB or less stay in internal RAM, and 32 KiB of it is held back from the
+# PSRAM-first allocator so an interrupt path always has somewhere to allocate from.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+# Keep the large model and scenes in PSRAM, leaving internal RAM for the DMA strip buffers and the
+# display task stack.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# --- MIPI-DSI ---
+# The panel is fed by DMA from PSRAM, so the DSI interrupt must not be parked behind a cache miss on the
+# very memory it is servicing: its handler is pinned in IRAM and its object in internal RAM.
+CONFIG_LCD_DSI_ISR_HANDLER_IN_IRAM=y
+CONFIG_LCD_DSI_OBJ_FORCE_INTERNAL=y
+
+# --- Touch ---
+# Observe every GT911 contact; extra fingers must cancel, never be truncated.
+CONFIG_ESP_LCD_TOUCH_MAX_POINTS=5
+
+# Panic output must reach the wire. USB-Serial-JTAG is the PRIMARY console, so a panic goes out the same
+# cable the protocol uses and the daemon records it. Secondary is NONE because a console cannot be its
+# own mirror.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# A wedged task reboots instead of freezing: the reset reason and the last log lines before it come back
+# over the cable (last_words.c). 10 s, so a full-face redraw is never mistaken for a hang.
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10

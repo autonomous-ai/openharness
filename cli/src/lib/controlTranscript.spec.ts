@@ -286,17 +286,30 @@ it('preserves a repaired parent through Stop and the final real forget archive',
     forgetAttach: vi.fn(), turnStartedAt: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
     clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, cursorSubagents: { forget: vi.fn() },
     runtimeProfiles: { forget: vi.fn() }, watcher: { removeSession: vi.fn(async () => {}) },
-    stopHeartbeat: vi.fn(), teams: { forget: vi.fn() }, input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
+    stopHeartbeat: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
     detachDsh: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() },
     dataDir: join(root, 'ADAPTER_DATA_DIR') })
   const stop = createStopAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(),
     stopJobs: new Map(), tmuxBackend: { kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) },
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
     forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => {} })
-  await stop(row.agentId, { checkpoint: async session => {
+  const checkpoint = async (session: typeof row) => {
     expect(session.transcriptPath).toBe(parent)
     stopped.save({ ...row, title: 'A hook saved the stale child path' })
-  } })
+  }
+  // Other Linux shard fixtures create/remove siblings under /tmp. The native
+  // reader correctly refuses an ancestor changed during enumeration; retry the
+  // untouched Stop just as its caller can, rather than treating that hold as loss.
+  for (let attempt = 0; ; attempt++) {
+    try { await stop(row.agentId, { checkpoint }); break }
+    catch (error) {
+      if (attempt >= 2) throw error
+      expect(error).toMatchObject({ code: 'IDENTITY_UNAVAILABLE',
+        message: 'Conversation identity is held: a binding directory or ancestor changed during enumeration.' })
+      expect(registry.byAgent(row.agentId)?.sessionId).toBe(A)
+      await new Promise(done => setTimeout(done, 10))
+    }
+  }
   expect(registry.byAgent(row.agentId)).toBeUndefined()
   expect(stopped.get(row.agentId)).toMatchObject({ active: false, sessionId: A, transcriptPath: parent })
 })

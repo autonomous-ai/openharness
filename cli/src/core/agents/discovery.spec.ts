@@ -49,7 +49,6 @@ function setup(over: Partial<DiscoveryDeps> = {}) {
     syncRecapPool: vi.fn(),
     attachSession: vi.fn(async () => true),
     invalidateTerminalControl: vi.fn(),
-    teams: { forget: vi.fn() },
     input: { forget: vi.fn() },
     deviceInput: { forget: vi.fn() },
     questionWatcher: { stop: vi.fn() },
@@ -242,7 +241,6 @@ describe('discovery', () => {
       const exited = row({ resumeOnly: true } as Partial<RegisteredSession>)
       await run.handlers.onDormant(exited, 'engine exited')
       expect(run.deps.invalidateTerminalControl).toHaveBeenCalledWith('a1')
-      expect(run.deps.teams.forget).toHaveBeenCalledWith('a1')
       expect(run.deps.input.forget).toHaveBeenCalledWith('a1')
       expect(run.deps.deviceInput.forget).toHaveBeenCalledWith('a1')
       expect(run.deps.questionWatcher.stop).toHaveBeenCalledWith('s1')

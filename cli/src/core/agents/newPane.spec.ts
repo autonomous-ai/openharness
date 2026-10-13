@@ -12,7 +12,7 @@ vi.mock('../../lib/tmux.js', async (real) => ({
 }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), commandAvailableInInteractiveShell: vi.fn(async () => true) }))
 
-const pending = { agentId: 'a1', sessionId: '', engine: 'claude' } as RegisteredSession
+const pending = { agentId: 'a1', sessionId: '', engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7' }] } as RegisteredSession
 const runtime = { backend: 'tmux', paneId: '%7' }
 const spawned = { runtime } as never
 const identity = { pid: 99, startMarker: 'now' }
@@ -37,6 +37,23 @@ function setup(over: Partial<PaneWatcherDeps> = {}) {
 }
 
 describe('watching a new pane', () => {
+  it.each(['held', 'row removed', 'not held', 'unknown', 'no probe'] as const)('retains a post-rc native guard hold without failing or archiving: %s', async result => {
+    const entry = { ...pending, launch: { state: 'starting', nativeToken: 'fixture-native' } } as RegisteredSession
+    const waitingPane = vi.fn(async () => result === 'unknown' ? 'unknown' as const : result === 'held' || result === 'row removed')
+    const { deps, rows, watch } = setup(result === 'no probe' ? {} : { waitingPane })
+    rows.set('a1', entry)
+    if (result === 'row removed') vi.mocked(deps.registry.setLaunch).mockReturnValue(null)
+    const watching = watch('claude', entry, spawned, ['claude'], undefined, 1)
+    await vi.advanceTimersByTimeAsync(50)
+    await watching
+    expect(deps.retainExitedSession).not.toHaveBeenCalled()
+    expect(deps.registry.releaseEngine).not.toHaveBeenCalled()
+    if (result === 'held' || result === 'row removed') {
+      expect(deps.registry.setLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ state: 'held', service: 'native', nativeToken: 'fixture-native' }))
+      expect(deps.announceSession).toHaveBeenCalledTimes(result === 'held' ? 1 : 0)
+    } else expect(deps.registry.setLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ state: 'held', service: 'native', nativeToken: 'fixture-native' }))
+  })
+
   beforeEach(() => {
     vi.useFakeTimers()
     vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -47,6 +64,58 @@ describe('watching a new pane', () => {
     vi.mocked(commandAvailableInInteractiveShell).mockReset().mockResolvedValue(true)
   })
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+
+  it.each(['token', 'route', 'binding', 'removed', 'stopped', 'ready'] as const)('discards a delayed native hold after its %s changes', async change => {
+    const entry = { ...pending, launch: { state: 'starting', nativeToken: 'original' } } as RegisteredSession
+    let finish!: (waiting: true) => void
+    const waitingPane = vi.fn(() => new Promise<true>(done => { finish = done }))
+    const { deps, rows, watch } = setup({ waitingPane })
+    rows.set('a1', entry)
+    const watching = watch('claude', entry, spawned, ['claude'], undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(waitingPane).toHaveBeenCalledOnce()
+    const replacement = structuredClone(entry)
+    if (change === 'token') replacement.launch = { state: 'starting', nativeToken: 'replacement' }
+    if (change === 'route') replacement.runtimes = [{ backend: 'tmux', paneId: '%8' }]
+    if (change === 'binding') replacement.sessionId = 'new-conversation'
+    if (change === 'stopped') replacement.active = false
+    if (change === 'ready') replacement.launch = { state: 'ready' }
+    if (change === 'removed') rows.delete('a1'); else rows.set('a1', replacement)
+    finish(true)
+    await watching
+    expect(deps.registry.setLaunch).not.toHaveBeenCalled()
+    expect(deps.announceSession).not.toHaveBeenCalled()
+    expect(rows.get('a1')).toEqual(change === 'removed' ? undefined : replacement)
+  })
+
+  it.each(['before probe', 'process', 'state', 'installed', 'capture', 'clear', 'sleep'] as const)(
+    'fences native watcher effects when superseded at %s', async stage => {
+      const entry = { ...pending, launch: { state: 'starting', nativeToken: 'original' } } as RegisteredSession
+      const { deps, rows, watch } = setup()
+      rows.set('a1', entry)
+      const replace = () => rows.set('a1', { ...entry, launch: { state: 'starting', nativeToken: 'replacement' } })
+      if (stage === 'before probe') replace()
+      if (stage === 'process') vi.mocked(resolvePaneEngineProcess).mockImplementationOnce(async () => { replace(); return identity as never })
+      if (stage === 'state') vi.mocked(tmuxPaneState).mockImplementationOnce(async () => { replace(); return 'gone' })
+      if (stage === 'installed') {
+        vi.mocked(tmuxPaneState).mockResolvedValueOnce({ dead: true, engineExit: null } as never)
+        vi.mocked(commandAvailableInInteractiveShell).mockImplementationOnce(async () => { replace(); return false })
+      }
+      if (stage === 'capture' || stage === 'clear') {
+        vi.mocked(tmuxPaneState).mockResolvedValueOnce({ dead: false, engineExit: 2 } as never)
+        if (stage === 'capture') vi.mocked(deps.captureTerminal).mockImplementationOnce(async () => { replace(); return 'old exit' })
+        else vi.mocked(clearPaneRemainOnExit).mockImplementationOnce(async () => { replace() })
+      }
+      const watching = watch('claude', entry, spawned, ['claude'], undefined, 1)
+      await vi.advanceTimersByTimeAsync(0)
+      if (stage === 'sleep') replace()
+      await vi.advanceTimersByTimeAsync(50)
+      await watching
+      expect(deps.registry.setLaunch).not.toHaveBeenCalled()
+      expect(deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+      expect(deps.registry.releaseEngine).not.toHaveBeenCalled()
+      expect(deps.retainExitedSession).not.toHaveBeenCalled()
+    })
 
   it('marks the agent ready once its engine process shows up, and asks discovery to bind it', async () => {
     const { deps, watch } = setup()
@@ -127,7 +196,7 @@ describe('watching a new pane', () => {
     await watch('claude', pending, spawned, ['claude'], undefined)
     expect(deps.registry.releaseEngine).toHaveBeenCalledWith('a1')
     expect(deps.announceSession).toHaveBeenCalledWith(expect.objectContaining({ engine: 'terminal' }))
-    expect(clearPaneRemainOnExit).toHaveBeenCalledWith('%7')
+    expect(clearPaneRemainOnExit).toHaveBeenCalledWith('%7', expect.any(Function))
     expect(warn.mock.calls.map(([line]) => String(line)).some((line) => line.includes('exited (2) before ready · agent a1 kept as a terminal'))).toBe(true)
     // A hook bound a conversation meanwhile: that conversation is kept, the engine not released.
     rows.set('a1', { ...pending, sessionId: 's1' } as RegisteredSession)

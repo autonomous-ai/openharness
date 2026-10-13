@@ -2,12 +2,10 @@
  * The socket and its gateway in one process, as the daemon builds them (core/main.ts), for the specs that
  * drive the relay through the socket. It takes the arguments the socket took when it held the backend link
  * itself, so a spec written against that reads as it did; `gatewayOf` is the gateway it was built with.
- * The teams ride on it as they did when they were the socket's (testing/teamFixture.ts).
  */
 import { BackendSocket } from '../backendSocket.js'
 import { RelayGateway } from '../gateway/gateway.js'
 import type { AuthSessionManager } from '../lib/authSession.js'
-import { attachTeams, type TeamFixture } from './teamFixture.js'
 
 export function relaySocket(
   machineId: string,
@@ -15,10 +13,10 @@ export function relaySocket(
   onStatus?: (connected: boolean) => void,
   computerId = '',
   autonomousEnv = 'prod',
-): BackendSocket & TeamFixture {
+): BackendSocket {
   const socket = new BackendSocket(machineId, onStatus)
   socket.useGateway(new RelayGateway({ machineId, auth, computerId, autonomousEnv, core: socket.fromGateway }))
-  return attachTeams(socket)
+  return socket
 }
 
 /** The gateway a socket from `relaySocket` was built with. */

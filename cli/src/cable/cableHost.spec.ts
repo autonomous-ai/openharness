@@ -1,13 +1,13 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
 import { describe, expect, it, vi } from 'vitest'
 
-import { DaemonCableHost, cableEventFor, type CableHostWiring } from './cableHost.js'
+import { DaemonCableHost, cableEventFor, cableStepFor, type CableHostWiring } from './cableHost.js'
 import type { FleetMachine, MachineFleet } from './machineFleet.js'
 import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 import type { RegisteredSession } from '../lib/registry.js'
 
-const AGENTS: Array<{ agentId: string; registeredAt: number; active: boolean; terminalAvailable: boolean; engine: string }> = []
+const AGENTS: Array<{ agentId: string; registeredAt: number; active: boolean; terminalAvailable: boolean; engine: string; lastHookAt?: number }> = []
 
 function wiring(over: Partial<CableHostWiring> = {}): CableHostWiring {
   return {
@@ -680,11 +680,11 @@ describe('DaemonCableHost.listSwarms', () => {
     expect(host.listSwarms()).toEqual({
       selected: 'work',
       swarms: [
-        { id: 'work', name: 'harness-1', agents: 1, panes: 1 },
+        { id: 'work', name: 'harness-1', agents: 1, agentIds: ['a1'], panes: 1 },
         // No agents and still a place to go: this is the row that used to disappear.
-        { id: 'shell', name: 'harness-2', agents: 0, panes: 1 },
+        { id: 'shell', name: 'harness-2', agents: 0, agentIds: [], panes: 1 },
         // Nothing on it at all — still nothing the dial can offer, which was always the intent.
-        { id: 'fresh', name: 'New Harness', agents: 0, panes: 0 },
+        { id: 'fresh', name: 'New Harness', agents: 0, agentIds: [], panes: 0 },
       ],
       tiles: [],
     })
@@ -768,6 +768,7 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     return {
       listMachines: vi.fn(async () => ({ machines: [{ id: 'mine', name: 'MacbookPro.local', state: 'ready' as const, local: true }, { id: 'other', name: 'office-imac', state: 'ready' as const, local: false }], source: 'backend' as const })),
       listAgentsFlat: vi.fn(async () => [{ id: 'r1', name: 'api', machineId: 'other', machine: 'office-imac' }]),
+      activityTimes: vi.fn(async () => new Map()),
       agentTotal: vi.fn(() => 7),
       describe: vi.fn(() => ({ name: 'api', engine: 'claude', machine: 'office-imac' })),
       noteAgent: vi.fn(),
@@ -899,5 +900,55 @@ describe('the dial reaches the fleet through the core\'s port', () => {
     expect(await host.forkAgent('r1')).toEqual({ ok: false, error: 'FORK_FAILED', detail: 'busy' })
     expect(w.log).toHaveBeenCalledWith('cable: fork other/r1 refused (FORK_FAILED: busy)')
     expect(w.opened).not.toHaveBeenCalled()
+  })
+})
+
+describe('cableStepFor', () => {
+  const tool = (text: string, recap = '') => ({ type: 'commander_event', agentId: 'a1', payload: { kind: 'tool', text, recap } })
+  it('turns a tool card into one step line, a path into its last segment', () => {
+    expect(cableStepFor(tool('Read', '/work/cli/src/cable/cableSession.ts'))).toEqual({ agentId: 'a1', step: 'Read · cableSession.ts' })
+    expect(cableStepFor(tool('Bash', 'npm test -- --run'))).toEqual({ agentId: 'a1', step: 'Bash · npm test -- --run' })
+    expect(cableStepFor(tool('TodoWrite'))).toEqual({ agentId: 'a1', step: 'TodoWrite' })
+  })
+  it('ignores every other card, and clips long arguments', () => {
+    expect(cableStepFor({ type: 'commander_event', agentId: 'a1', payload: { kind: 'processing', text: 'Processing' } })).toBeNull()
+    expect(cableStepFor(tool(''))).toBeNull()
+    expect(cableStepFor(tool('Bash', 'x'.repeat(400)))!.step.length).toBe(120)
+  })
+})
+
+describe('cableEventFor fullText', () => {
+  it('carries the whole answer of a summary card, and only a summary\'s', () => {
+    const card = (kind: string) => ({ type: 'commander_event', agentId: 'a1', payload: { kind, text: 'b', recap: 'r', fullText: 'the whole answer' } })
+    expect(cableEventFor(card('summary'))).toMatchObject({ kind: 'summary', fullText: 'the whole answer' })
+    expect(cableEventFor(card('done'))).not.toHaveProperty('fullText')
+    expect(cableEventFor({ ...card('summary'), payload: { kind: 'summary', text: 'b' } })).not.toHaveProperty('fullText')
+  })
+})
+
+describe('cableEventFor update', () => {
+  it('carries the latest assistant paragraph of a processing card, and only then', () => {
+    const card = (payload: Record<string, unknown>) => ({ type: 'commander_event', agentId: 'a1', payload })
+    expect(cableEventFor(card({ kind: 'processing', text: 'Working', update: 'Checking the tests' })))
+      .toEqual({ kind: 'processing', agentId: 'a1', text: 'Working', recap: '', subagent: false, update: 'Checking the tests' })
+    expect(cableEventFor(card({ kind: 'processing', text: 'Working' }))).not.toHaveProperty('update')
+  })
+})
+
+describe('DaemonCableHost player library and member ids', () => {
+  it('keeps each tab\'s agent ids in the window\'s order', () => {
+    const host = new DaemonCableHost(wiring(), fleetOf([]))
+    host.setSwarms({ active: 'w', swarms: [{ id: 'w', name: 'Work', agentIds: ['b', 'a'], panes: 2 }], tiles: [] })
+    expect(host.listSwarms().swarms).toEqual([{ id: 'w', name: 'Work', agents: 2, agentIds: ['b', 'a'], panes: 2 }])
+  })
+  it('lists every agent the router knows, idle, aged by its last activity and never by its creation', async () => {
+    AGENTS.length = 0
+    AGENTS.push({ agentId: 'a1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' },
+      { agentId: 'a2', registeredAt: 2, active: true, terminalAvailable: true, engine: 'claude', lastHookAt: 5000 })
+    const host = new DaemonCableHost(wiring(), fleetOf([]))
+    const rows = await host.playerLibrary()
+    expect(rows).toMatchObject([{ id: 'a1', machineId: 'mine', status: 'idle', lastActivityAt: null },
+      { id: 'a2', machineId: 'mine', status: 'idle', lastActivityAt: 5000 }])
+    AGENTS.length = 0
   })
 })

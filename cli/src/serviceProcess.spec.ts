@@ -8,10 +8,26 @@ vi.mock('./lib/localSocket.js', async (real) => ({ ...await real<object>(), loca
 // The test's own console stays as it is: it is shared with every other test in this worker.
 const stamped = vi.hoisted(() => ({ times: 0 }))
 vi.mock('./lib/log.js', async (real) => ({ ...await real<object>(), installTimestampedConsole: () => { stamped.times++ } }))
+// What the master said leaves process.env as the process starts (lib/harnessdEnv.ts): held here, as there,
+// but in a store each test starts empty, since the process is every test's in this worker.
+const harnessd = vi.hoisted(() => ({ held: {} as Record<string, string> }))
+vi.mock('./lib/harnessdEnv.js', async (real) => {
+  const actual = await real<typeof import('./lib/harnessdEnv.js')>()
+  return {
+    ...actual,
+    holdHarnessdEnv: () => {
+      for (const name of Object.keys(process.env).filter(actual.isHarnessdVariable)) {
+        harnessd.held[name] = process.env[name]!
+        delete process.env[name]
+      }
+    },
+    harnessdEnv: () => ({ ...process.env, ...harnessd.held }),
+  }
+})
 
 describe('a service in its own process', () => {
   const title = process.title
-  afterEach(() => { process.title = title; local.socket = '/data/daemon-18473.sock'; vi.restoreAllMocks() })
+  afterEach(() => { process.title = title; local.socket = '/data/daemon-18473.sock'; harnessd.held = {}; vi.restoreAllMocks() })
 
   it('can run every service the master knows, and the updater it runs beside them, and loads each one\'s runner on its own', async () => {
     expect([...SERVICE_RUNNERS.keys()].sort()).toEqual([...KNOWN_SERVICES, ...UPDATER_HOST.services].sort())
@@ -34,8 +50,10 @@ describe('a service in its own process', () => {
     const seen: ServiceProcessOptions[] = []
     const handle = { stop: vi.fn() }
     const loaded: string[] = []
+    // What a service would hand anything it starts (a viewer's server, an engine), as it loads.
+    const inherited: Array<string | undefined> = []
     const runners = new Map([
-      ['search', async () => { loaded.push('search'); return (options: ServiceProcessOptions) => { seen.push(options); return handle } }],
+      ['search', async () => { loaded.push('search'); inherited.push(process.env.HARNESSD_SERVICE_TOKEN); return (options: ServiceProcessOptions) => { seen.push(options); return handle } }],
       ['viewers', async () => { loaded.push('viewers'); return () => handle }],
     ])
     const { host, hosted } = fakeHost()
@@ -44,6 +62,8 @@ describe('a service in its own process', () => {
       await startServiceProcess('search', { runners, host })
     } finally { delete process.env.HARNESSD_SERVICE_TOKEN }
     expect(loaded).toEqual(['search'])
+    // The token is the service's to connect with, and no child's: out of process.env before any service loads.
+    expect(inherited).toEqual([undefined])
     expect(process.title).toBe('harnessd-search')
     // Its lines are stamped like the core's and the master's in the log they share.
     expect(stamped.times).toBe(1)

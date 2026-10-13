@@ -3,7 +3,7 @@
  * work, its master killed outright, an engine missing from this machine, and a registry lock left by
  * a daemon that crashed holding it. Agents live in tmux, so every way back must find them again.
  */
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -79,25 +79,29 @@ describe('coming back', () => {
     again.close()
   })
 
-  it('an engine missing from this machine fails its launch with the reason, and the other engine works', async () => {
+  it('an unavailable engine holds its saved launch while another engine works, then recovers the same request', async () => {
     const d = await fresh()
-    rmSync(join(d.root, 'bin', 'codex'), { force: true })
+    const executable = join(d.root, 'bin', 'codex')
+    renameSync(executable, executable + '.unavailable')
     await d.start()
     const client = await LocalClient.connect(d)
     const cwd = join(d.projectsDir, 'no-codex')
     mkdirSync(cwd, { recursive: true })
-    // The pane opens and the launch fails in it, so the person sees why: the agent says it, and so does
-    // its terminal.
-    const created = await client.request('agent_create', { engine: 'codex', cwd, bypassPermission: true }, 90_000)
-    const failed = await until('the launch to fail with its reason', async () => {
-      const agent = created.agent?.id ? await row(client, created.agent.id) : undefined
-      return agent?.launch?.state === 'failed' ? agent : null
-    }, 30_000, 250)
-    expect(failed.launch.error).toBe('ENGINE_NOT_INSTALLED')
-    expect(failed.launch.detail).toContain('codex is not installed')
-    expect(failed.status).not.toBe('active')
+    const payload = { creationId: 'missing-codex-recovery', engine: 'codex', cwd, bypassPermission: true }
+    const created = await client.request('agent_create', payload, 90_000)
+    expect(created).toMatchObject({ state: 'pending', held: { service: 'native' } })
+    expect(created.held.detail).toContain('executable')
+    expect((await client.request('agents_list', { includeStopped: true })).agents).toEqual([])
     const claude = await create(d, client, 'claude', 'still-claude')
     await turn(client, claude.id, 'claude is still here')
+    renameSync(executable + '.unavailable', executable)
+    const recovered = await until('the original missing-engine request to recover', async () => {
+      const reply = await client.request('agent_create_status', { creationId: payload.creationId })
+      return reply.state === 'created' ? reply : null
+    }, 60_000, 250)
+    await until('the recovered Codex conversation to bind', async () => (await row(client, recovered.agent.id))?.sessionId || null)
+    expect(await client.request('agent_create', payload)).toMatchObject({ state: 'created', agent: { id: recovered.agent.id } })
+    await turn(client, recovered.agent.id, 'the held launch recovered')
     expect(d.coresStarted()).toBe(1)
     client.close()
   })

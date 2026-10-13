@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { parseAbout, readAbout, writeAbout } from '../lib/about.mjs'
+import { citeSessions, parseAbout, readAbout, writeAbout } from '../lib/about.mjs'
 
 const PROFILE = `# About you
 
@@ -43,4 +43,12 @@ test('an empty, shapeless or oversized profile is refused', () => {
   assert.throws(() => writeAbout(dir, '  \n'), /empty/)
   assert.throws(() => writeAbout(dir, 'just a paragraph'), /at least one/)
   assert.throws(() => writeAbout(dir, `## A\n- ${'x'.repeat(40_000)}`), /limited/)
+})
+
+test('a conversation cited by its agent is cited as a session; nothing else changes', () => {
+  const known = (id) => id === 's1' || id === 'abc-2'
+  const text = '# About you\nIntro [codex:s1]\n\n## How\n- One. [codex:s1, claude:s1.md, grok:abc-2, session:s1, asks:3]  \n- Two. [claude:zzz]\n- Three, no sources.\n* Four. [hermes:s1]'
+  assert.equal(citeSessions(text, known),
+    '# About you\nIntro [codex:s1]\n\n## How\n- One. [session:s1, claude:s1.md, session:abc-2, session:s1, asks:3]\n- Two. [claude:zzz]\n- Three, no sources.\n* Four. [session:s1]')
+  assert.equal(citeSessions(null, known), '')
 })

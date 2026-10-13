@@ -226,6 +226,22 @@ export interface NewCommandDeps {
   output: (line: string) => void
   error: (line: string) => void
   timeoutMs?: number
+  /** Who is starting it, when an agent runs this from its pane (agentClient/commands.ts `agentOrigin`). */
+  origin?: () => Promise<NewOrigin | null>
+  sleep?: (ms: number) => Promise<void>
+}
+
+/** An agent starting a harness (docs/design/2026-10-11-agent-client.md): its limits, the header its task carries,
+ *  and the record of who started what. */
+export interface NewOrigin {
+  /** Rejects when the caller may not start another harness now. */
+  check(): Promise<void>
+  /** The first message as the new harness reads it. */
+  prompt(text: string, machineId: string): string
+  /** Records it; a warning to print when the record could not be kept everywhere. */
+  created(machineId: string, agent: Record<string, unknown>): Promise<string | null>
+  /** How to read, wait for and message what was started. */
+  next(agent: Record<string, unknown>): string
 }
 
 const ERRORS: Record<string, string> = {
@@ -234,6 +250,7 @@ const ERRORS: Record<string, string> = {
   INVALID_DSH: 'That harness is not in the machine\'s catalog, or does not run on that engine.',
   PROJECT_EXISTS: 'A project with that name already exists. Name its folder instead.',
   PROMPT_UNSUPPORTED: 'That agent cannot be started with a first message.',
+  PROMPT_TOO_LONG: 'A first message holds at most 2,000 characters. Put the rest in a file and name the file in it.',
   SPAWN_FAILED: 'The agent could not be started.',
 }
 
@@ -251,7 +268,8 @@ export function daemonSession(deps: Pick<NewCommandDeps, 'port' | 'connect' | 't
       waiting.clear()
       if (!ready) rejectSession(error)
     }
-    socket.on('open', () => socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } })))
+    // A tool, not a window: a window's registration turns on the question watcher and counts as someone looking.
+    socket.on('open', () => socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, tool: true } })))
     socket.on('error', (error) => failAll(error))
     socket.on('close', (code, reason) => failAll(new Error(
       code === 4404 ? 'That machine is not linked to this one yet. Run `harness link` first.'
@@ -302,6 +320,8 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
     return 1
   }
   try {
+    const origin = (await deps.origin?.()) ?? null
+    await origin?.check()
     let machineId = deps.localMachineId
     let machineLabel = 'this computer'
     if (args.machine !== null) {
@@ -333,13 +353,36 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
         if (entry.installed === false) throw new Error(`Install it first: harness dsh install ${args.agent}`)
         if (typeof entry.engine === 'string' && entry.engine) baseEngine = entry.engine
       }
-      const result = await session.request('agent_create', newAgentPayload(args, cwd, baseEngine))
+      const asked = origin && args.prompt ? { ...args, prompt: origin.prompt(args.prompt, machineId) } : args
+      const payload = newAgentPayload(asked, cwd, baseEngine)
+      let result = await session.request('agent_create', payload)
+      // A launch the daemon holds (a native launch waiting its turn) is still on its way: asked after until it is not,
+      // for a minute. Given up on at once, it could start later with an agent's task and no record of who started it
+      // (the review of #1180).
+      for (let i = 0; i < 30 && (result.state === 'pending' || result.state === 'unconfirmed'); i++) {
+        await (deps.sleep ?? ((ms: number) => new Promise((done) => setTimeout(done, ms))))(2_000)
+        result = await session.request('agent_create_status', { creationId: payload.creationId })
+      }
+      // With a creation id the daemon answers what became of the launch: only `created` made a harness. A refusal
+      // it recorded (`failed`) and an outcome it could not confirm used to print "Created" all the same.
+      if (result.state !== undefined && result.state !== 'created') {
+        const failure = (result.failure ?? {}) as Record<string, unknown>
+        const code = typeof failure.code === 'string' ? failure.code : ''
+        const detail = typeof failure.detail === 'string' && failure.detail ? ` (${failure.detail})` : ''
+        throw new Error(result.state === 'failed'
+          ? `${ERRORS[code] ?? (code || 'The harness could not be started.')}${detail}`
+          : `Harness could not confirm the harness started (${String(result.state)}). Check with \`harness ps\` before starting another.`)
+      }
       const agent = (result.agent ?? {}) as Record<string, unknown>
+      const warning = await origin?.created(machineId, agent)
+      if (warning) deps.error(warning)
       if (args.json) deps.output(JSON.stringify({ ok: true, machineId, agent }))
       else {
-        const where = typeof agent.cwd === 'string' ? ` in ${agent.cwd}` : cwd ? ` in ${cwd}` : ''
-        deps.output(`Created ${String(agent.name ?? agent.id ?? 'a harness')} on ${machineLabel}${where}.`)
-        deps.output('Open it in Harness with ⌘O.')
+        const project = (agent.project ?? {}) as Record<string, unknown>
+        const where = typeof project.cwd === 'string' ? ` in ${project.cwd}` : cwd ? ` in ${cwd}` : ''
+        const name = String(agent.name ?? agent.id ?? 'a harness')
+        deps.output(`Created ${name} on ${machineLabel}${where}.`)
+        deps.output(origin ? origin.next(agent) : 'Open it in Harness with ⌘O.')
       }
       return 0
     } finally { session.close() }

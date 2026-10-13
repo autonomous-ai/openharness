@@ -10,7 +10,7 @@
  * - `windows`: a change notice for every window on this computer (`orchestrator_changed`);
  * - `daemon`: how an agent's shell reaches this daemon, for the prompts the experiment writes;
  * - `backend`: a read or write of the account's backend under `/api/`, signed in by the core, which holds the
- *   sign-in (Tab collaboration's tab channels);
+ *   sign-in (Agent Messages' tabs);
  * - `observer_key`: this machine's public key, or its signature on a welcome to one observer of one share, by
  *   the gateway, which holds the identity (Share's owner);
  * - `observer_send`: a frame Share sealed for one of its observers, to the relay through the gateway.

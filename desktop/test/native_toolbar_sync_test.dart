@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +12,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm.dart';
 import 'package:harness/state/swarm_catalog.dart';
 
+import 'support/agent_messages_api.dart';
 import 'swarm_screen_test.dart' show mount;
 
 class _App extends AppNotifier {
@@ -215,4 +218,92 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  testWidgets('tabs carry Agent Messages, and its actions reach the tab', (
+    tester,
+  ) async {
+    final app = _App();
+    addTearDown(app.dispose);
+    final api = await joinAgentMessagesDesk(app);
+    await mount(tester, app, nativeTabs: true);
+    await tester.pumpAndSettle();
+    final tab = app.activeSwarmId;
+    Map row() => (updates().last['tabs'] as List).single as Map;
+
+    // Traffic alone rebuilds no workspace; it reaches the tab only while on,
+    // since a tab that is off says nothing about agents messaging.
+    app.agentMessages.handleEvent({'tabId': tab, 'messageId': 'm0000001'});
+    await tester.idle();
+    expect(row()['agentMessages'], isFalse);
+    expect(row()['agentMessagesFlowing'], isFalse);
+    expect(updates().last['activeAgentMessages'], isFalse);
+
+    Future<void> native(String method) =>
+        tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          'harness/swarm_tabs',
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall(method, {'id': tab}),
+          ),
+          (_) {},
+        );
+    // 💬 or the tab's menu turns it on for that tab.
+    unawaited(native('toggleAgentMessages'));
+    await tester.pumpAndSettle();
+    expect(api.writes, [(tab, true)]);
+    expect(row()['agentMessages'], isTrue);
+    expect(row()['agentMessagesFlowing'], isTrue);
+    expect(updates().last['activeAgentMessages'], isTrue);
+
+    // A refused turn off goes back, and says so where the click was.
+    api.writeError = StateError('offline');
+    unawaited(native('toggleAgentMessages'));
+    await tester.pumpAndSettle();
+    expect(app.agentMessages.isOn(tab), isTrue);
+    expect(row()['agentMessages'], isTrue);
+    expect(find.textContaining('could not be turned off'), findsOneWidget);
+    api.writeError = null;
+
+    // Show Agent Messages opens the tab's log.
+    unawaited(native('showAgentMessages'));
+    await tester.pumpAndSettle();
+    expect(find.text('Before · Agent Messages'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.text('Before · Agent Messages'), findsNothing);
+
+    await tester.pump(const Duration(seconds: 61));
+    await tester.idle();
+    expect(row()['agentMessagesFlowing'], isFalse);
+
+    // An older CLI or backend: no 💬, no menu row.
+    api.unsupported = true;
+    await app.agentMessages.refresh();
+    await tester.idle();
+    expect(row().containsKey('agentMessages'), isFalse);
+    expect(updates().last['activeAgentMessages'], isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a tab off the desk has no Agent Messages', (tester) async {
+    final app = _App();
+    addTearDown(app.dispose);
+    await mount(tester, app, nativeTabs: true);
+    await tester.pumpAndSettle();
+    expect(app.agentMessagesOffered(app.activeSwarmId), isFalse);
+    final row = (updates().last['tabs'] as List).single as Map;
+    expect(row.containsKey('agentMessages'), isFalse);
+    expect(updates().last['activeAgentMessages'], isNull);
+    unawaited(
+      tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'harness/swarm_tabs',
+        const StandardMethodCodec().encodeMethodCall(
+          MethodCall('showAgentMessages'),
+        ),
+        (_) {},
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Agent Messages'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
 }

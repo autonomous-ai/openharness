@@ -1,0 +1,50 @@
+[
+  {
+    "pair": 0,
+    "mode": "before",
+    "count": 10000,
+    "elapsedMs": 81.304879,
+    "cpuMs": 145.579,
+    "rssDeltaMiB": 17.83984375
+  },
+  {
+    "pair": 0,
+    "mode": "after",
+    "count": 10000,
+    "elapsedMs": 74.26582400000001,
+    "cpuMs": 135.199,
+    "rssDeltaMiB": 15.6953125
+  },
+  {
+    "pair": 1,
+    "mode": "before",
+    "count": 10000,
+    "elapsedMs": 77.363237,
+    "cpuMs": 140.724,
+    "rssDeltaMiB": 17.76171875
+  },
+  {
+    "pair": 1,
+    "mode": "after",
+    "count": 10000,
+    "elapsedMs": 78.21921900000001,
+    "cpuMs": 141.177,
+    "rssDeltaMiB": 12.2265625
+  },
+  {
+    "pair": 2,
+    "mode": "before",
+    "count": 10000,
+    "elapsedMs": 81.15286400000001,
+    "cpuMs": 147.805,
+    "rssDeltaMiB": 14.1640625
+  },
+  {
+    "pair": 2,
+    "mode": "after",
+    "count": 10000,
+    "elapsedMs": 74.90714700000001,
+    "cpuMs": 135.301,
+    "rssDeltaMiB": 16.02734375
+  }
+]

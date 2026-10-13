@@ -138,8 +138,15 @@ Machine:
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of
                                every harness, live or stopped (--limit=N, --json)
-  harness channel --help       consult agents in a swarm and read shared collaboration history
-  harness team --help          advanced team commands and correlated agent replies
+  harness send <name> "text"   from an agent's pane: message a teammate in this tab, when Agent Messages
+                               are on there (the tab's chat icon), or a harness it started;
+                               \`harness send\` alone lists who is here
+  harness ps [--all]           the harnesses here: state, who started each, what each is about
+  harness show <name>          a harness's state and last turn: what it was asked and what it answered
+  harness wait <name>[,<name>] wait until they stop working (--any, --timeout 30m); exit 3 = needs the person
+  harness close <name> [--now] save a harness's screen and stop it; an agent closes only what it started
+  harness mcp                  the agent verbs as an MCP server on stdin/stdout, for agents that use MCP
+  harness settings [<name> on|off]  what agents may do here (agents-start-agents), as Settings ▸ Agents
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
   harness remote               from a Harness terminal tile: open a terminal on another of your machines and move this tile to it
   harness version              print the installed version (v${VERSION})
@@ -2480,8 +2487,10 @@ async function logsExportCommand(json: boolean): Promise<void> {
 }
 
 import { orchestratorCommand } from './orchestrator/command.js'
-import { teamCommand } from './teams/command.js'
-import { channelCommand } from './teams/channelCommand.js'
+import { paneOwner, sendCommand } from './messages/command.js'
+import { agentOrigin, closeCommand, psCommand, showCommand, waitCommand } from './agentClient/commands.js'
+import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
+import { settingsCommand } from './agentClient/settings.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
 // `hn` is the terminal client's short name (like tmux, fzf): the same CLI, entered at `tui`. A call
@@ -2510,11 +2519,28 @@ if (cmd === 'version' || cmd === '--version' || cmd === '-v') { console.log(VERS
 
 
 switch (cmd) {
-  case 'team':
-    teamCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+  case 'send':
+    sendCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
-  case 'channel':
-    channelCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+  case 'ps':
+    psCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'settings':
+    process.exitCode = settingsCommand(rest, env.ADAPTER_DATA_DIR)
+    break
+  case 'mcp': {
+    const pane = process.env.TMUX_PANE
+    mcpCommand({ run: harnessRunner(SCRIPT_PATH), inPane: !!pane && !!paneOwner(pane) }).then(code => { process.exitCode = code }).catch(onError)
+    break
+  }
+  case 'show':
+    showCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'wait':
+    waitCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'close':
+    closeCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
@@ -2589,7 +2615,7 @@ switch (cmd) {
     else if (args[0] === 'setup') {
       gridSetupCommand({
         port: daemonPort(),
-        localMachineId: readAuthSession()?.machineId ?? null,
+        localMachineId: wantedDaemonIdentity(),
         daemonRunning: isDaemonRunning,
         connect: (url) => new NewCommandSocket(url),
         output: (line) => console.log(line),
@@ -2626,7 +2652,7 @@ switch (cmd) {
       cwd: process.cwd(),
       home: homedir(),
       port: daemonPort(),
-      localMachineId: readAuthSession()?.machineId ?? null,
+      localMachineId: wantedDaemonIdentity(),
       daemonRunning: isDaemonRunning,
       listMachines: async () => {
         const { session, headers } = await controlPlaneAuth()
@@ -2640,6 +2666,7 @@ switch (cmd) {
       connect: (url) => new NewCommandSocket(url),
       output: (line) => console.log(line),
       error: (line) => console.error(line),
+      origin: () => agentOrigin(),
     }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'shell-launch':
@@ -2651,7 +2678,7 @@ switch (cmd) {
   case 'remote':
     remoteCommand({
       tmuxPane: process.env.TMUX_PANE,
-      localMachineId: readAuthSession()?.machineId ?? null,
+      localMachineId: wantedDaemonIdentity(),
       port: daemonPort(),
       daemonRunning: isDaemonRunning,
       listMachines: async () => {

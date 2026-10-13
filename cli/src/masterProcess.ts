@@ -16,6 +16,7 @@ import { env } from './config/env.js'
 import { processExecve, probeMaster, runMaster, type Execve } from './harnessd/master.js'
 import { baseNode, namedNode } from './harnessd/processName.js'
 import { PROBE_ANSWER, PROBE_TIMEOUT_MS } from './harnessd/reexec.js'
+import { dropAgentSessionEnv } from './lib/agentSessionEnv.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE } from './lib/daemonState.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
@@ -70,6 +71,9 @@ export function startMaster(start: MasterStart, exit: (code: number) => void = (
   // core and the services inherit this environment (lib/childLocale.ts). launchd and systemd start the
   // master with no `harness start` before it to have set it.
   ensureUtf8Locale()
+  // And the session of the agent whose shell ran `harness start`, which every pane would otherwise have
+  // (lib/agentSessionEnv.ts).
+  dropAgentSessionEnv()
   const { serviceScriptPath } = start
   return runMaster({
     env: masterEnv(process.env, localSocketPath(env.ADAPTER_DATA_DIR, env.PORT)),

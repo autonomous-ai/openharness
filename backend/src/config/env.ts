@@ -17,9 +17,6 @@ const envSchema = z.object({
   // Same MongoDB (and database) as the agent-manager — backend owns `users` +
   // `machines`; reads `managers`/`machine_nodes` via raw queries when needed.
   DATABASE_URL: z.string().default('mongodb://localhost:27017/harness?replicaSet=rs0'),
-  // Module availability only. Each account must separately opt in in Experimental;
-  // no settings record means OFF. False disables the whole module for operators.
-  HARNESS_CHANNELS: z.string().default('true').transform(v => v === 'true'),
 
   // Redis for the cross-instance data bus. Behind a load balancer an agent's web socket and its
   // manager socket may land on different backend instances; Redis pub/sub bridges them
@@ -212,6 +209,15 @@ const envSchema = z.object({
   CURSOR_LLM_BASE_URL: z.string().optional(),
   CURSOR_LLM_API_KEY: z.string().optional(),
   CURSOR_LLM_MODEL: z.string().default('DeepSeek-V4-Flash-0731'),
+
+  // Harness's own OpenRouter key, spent on ⌘B's Jev decisions for people with no key of their own
+  // (routes/jevRoute.ts). Optional here, but the route fails CLOSED without it. Give it its own key with
+  // a credit limit on OpenRouter: that limit is the budget, the route's per-account caps only spread it.
+  JEV_OPENROUTER_API_KEY: z.string().optional(),
+  // Decisions a day across every account, on top of each account's own cap: at an average ⌘B (~$0.00017),
+  // the default is about $34 a day. A decision at the route's size bounds costs several times that, so the
+  // key's OpenRouter credit limit stays the hard cap. Past it ⌘B says Harness's Jev budget has run out until the next UTC day.
+  JEV_DAILY_DECISIONS: z.coerce.number().int().positive().default(200_000),
 
   // TTL for the in-memory subdomain→machineId cache on the public app-proxy hot path
   // (avoids a Mongo lookup per request). Bounds staleness after a cross-instance app teardown.

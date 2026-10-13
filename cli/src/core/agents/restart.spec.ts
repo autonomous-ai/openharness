@@ -76,6 +76,51 @@ describe('restarting an agent', () => {
   beforeEach(() => { vi.spyOn(console, 'log').mockImplementation(() => {}) })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
+  it.each(['starting', 'held'] as const)('does not replace an unbound native %s launch with a generic fresh restart', async state => {
+    const run = setup(agent({ sessionId: '', launch: state === 'starting' ? { state, nativeToken: 'original' }
+      : { state, nativeToken: 'original', service: 'native', detail: 'Original request held' } }))
+    expect(await run.restart('a1')).toMatchObject({ ok: false, error: 'NATIVE_LAUNCH_HELD' })
+    expect(run.deps.restartHeld).not.toHaveBeenCalled()
+    expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+    expect(restartAgent).not.toHaveBeenCalled()
+  })
+
+  it.each(['inspection', 'permission', 'snapshot'] as const)('preserves the live process when restart loses %s evidence', async stage => {
+    let nativeCurrent = true
+    const launch = { current: () => nativeCurrent } as never
+    const run = setup(agent(), {
+      native: async () => { if (stage === 'inspection') run.state.live = false; return { ok: true, launch } },
+      relaunchOverrides: async () => ({ ok: true, overrides: { native: launch, env: {}, extraArgs: [], clearEnv: [] } }),
+      downgradedPermission: async () => {
+        if (stage === 'snapshot') nativeCurrent = false
+        return { bypassPermission: false, ...(stage === 'permission' ? { nativeHold: 'Waiting for native flags.' } : {}) }
+      },
+    })
+    expect(await run.restart('a1')).toMatchObject({ ok: false, error: stage === 'inspection' ? 'AGENT_CHANGED' : 'NATIVE_LAUNCH_HELD' })
+    expect(restartAgent).not.toHaveBeenCalled()
+    expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+  })
+
+  it('holds native installation before killing the live process, without an independent shell probe', async () => {
+    const native = vi.fn(async () => ({ ok: false as const, error: 'NATIVE_LAUNCH_HELD' as const, unavailable: 'native' as const, detail: 'Waiting for installation' }))
+    const run = setup(agent(), { native })
+    expect(await run.restart('a1')).toMatchObject({ unavailable: 'native' })
+    expect(commandAvailableInInteractiveShell).not.toHaveBeenCalled()
+    expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+    expect(restartAgent).not.toHaveBeenCalled()
+  })
+
+  it('passes its one native snapshot through restart preparation and permission checks', async () => {
+    const launch = { current: () => true } as never
+    const run = setup(agent(), { native: async () => ({ ok: true, launch }),
+      relaunchOverrides: vi.fn(async () => ({ ok: true as const, overrides: { native: launch, env: {}, extraArgs: [], clearEnv: [] } })),
+    })
+    expect(await run.restart('a1')).toMatchObject({ ok: true })
+    expect(commandAvailableInInteractiveShell).not.toHaveBeenCalled()
+    expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.any(Object), expect.any(Object), expect.any(Function), launch)
+    expect(run.deps.downgradedPermission).toHaveBeenCalledWith(expect.any(Object), true, 'restart', launch)
+  })
+
   it('never starts a fresh conversation when an admitted external resume fails', async () => {
     const actual = await vi.importActual<typeof import('../../lib/restartAgent.js')>('../../lib/restartAgent.js')
     vi.mocked(restartAgent).mockImplementationOnce(actual.restartAgent)
@@ -252,8 +297,8 @@ describe('restarting an agent', () => {
       expect(await run.restart('a1')).toEqual({ ok: true, session: agent(), resumed: true })
       expect(bypassPermissionFor).toHaveBeenCalledWith(agent(), expect.any(Function))
       expect(run.deps.liveBypassPermission).toHaveBeenCalledWith(agent())
-      expect(run.deps.downgradedPermission).toHaveBeenCalledWith(agent(), true, 'restart')
-      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(agent(), runtime, { env: { GRID_KEY: 'k' } }, 'auto')
+      expect(run.deps.downgradedPermission).toHaveBeenCalledWith(agent(), true, 'restart', undefined)
+      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(agent(), runtime, { env: { GRID_KEY: 'k' } }, 'auto', expect.any(Function))
       const [target, bypass, swapDeps] = vi.mocked(restartAgent).mock.calls[0]
       expect(target).toEqual({ engine: 'claude', sessionId: 's1' })
       expect(bypass).toBe(true)
@@ -277,7 +322,7 @@ describe('restarting an agent', () => {
       const run = setup(grid, { downgradedPermission: vi.fn(async () => ({ bypassPermission: false })) as never })
       vi.mocked(restartAgent).mockResolvedValueOnce({ ok: true, resumed: false, processIdentity: newProcess } as never)
       expect(await run.restart('a1')).toEqual({ ok: true, session: grid, resumed: false })
-      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(grid, runtime, { env: { GRID_KEY: 'k' } }, null)
+      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(grid, runtime, { env: { GRID_KEY: 'k' } }, null, expect.any(Function))
       expect(vi.mocked(restartAgent).mock.calls[0][1]).toBe(false)
       expect(console.log).toHaveBeenCalledWith('[restart] a1 claude · fresh session · grid Home')
     })

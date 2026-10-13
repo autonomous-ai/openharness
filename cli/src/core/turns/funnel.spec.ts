@@ -27,7 +27,6 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
     search: { touch: vi.fn(log('search')) },
     turnStartedAt: new Map(),
     input: { onTurnStarted: vi.fn(log('input started')), onTurnEnded: vi.fn(log('input ended')) },
-    teams: { started: vi.fn(log('teams started')) },
     deviceInput: { onTurnStarted: vi.fn(log('deviceInput started')), onTurnEnded: vi.fn(log('deviceInput ended')) },
     submission: inlineSubmission,
     device: () => ({ turnStarted: vi.fn(log('device started')), turnEnded: vi.fn(log('device ended')), stream: vi.fn(log('device stream')) }),
@@ -42,12 +41,11 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
 describe('the event funnel', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('carries on past a teams or device service that throws: every consumer after it still gets the event', () => {
+  it('carries on past a device service that throws: every consumer after it still gets the event', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const boom = (what: string) => vi.fn(() => { throw new Error(`${what} unplugged`) })
     const { funnel, calls } = setup('claude', {
-      teams: { started: boom('teams') },
       device: () => ({ turnStarted: boom('device'), turnEnded: boom('device'), stream: boom('device') }),
     })
     funnel('s1', [started(), text(), ended()])
@@ -60,7 +58,7 @@ describe('the event funnel', () => {
       'mirror',
     ])
     // Once a minute per consumer: the devices failed three times and said so once.
-    expect(error.mock.calls.map(([line]) => line)).toEqual(['[funnel] teams failed · teams unplugged', '[funnel] devices failed · device unplugged'])
+    expect(error.mock.calls.map(([line]) => line)).toEqual(['[funnel] devices failed · device unplugged'])
   })
 
 
@@ -70,7 +68,7 @@ describe('the event funnel', () => {
     funnel('s1', [started(), text(), ended()])
     expect(calls).toEqual([
       'send turn_started', 'search',
-      'input started', 'teams started', 'deviceInput started', 'device started', 'heartbeat', 'questions start', 'questions pre-turn',
+      'input started', 'deviceInput started', 'device started', 'heartbeat', 'questions start', 'questions pre-turn',
       'send text_delta',
       'send turn_ended', 'search',
       'device ended', 'deviceInput ended', 'input ended', 'questions stop',
@@ -82,7 +80,7 @@ describe('the event funnel', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { funnel, calls, deps } = setup()
     funnel('s1', [started()], { resumed: true })
-    // Not a turn starting now: the teams do not count it, and a dialog already up belongs to it.
+    // Not a turn starting now: a dialog already up belongs to it.
     expect(calls).toEqual([
       'send turn_started', 'search',
       'input started', 'deviceInput started', 'device started', 'heartbeat', 'questions start',
@@ -94,11 +92,10 @@ describe('the event funnel', () => {
     expect(vi.mocked(deps.mirror.ingest).mock.calls[0][2]).toEqual({ replay: true })
   })
 
-  it('re-reads a transcript as history: no team count, and nothing streamed to the device', () => {
+  it('re-reads a transcript as history: nothing streamed to the device', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { funnel, calls, deps } = setup()
     funnel('s1', [started(), ended()], { replay: true })
-    expect(calls).not.toContain('teams started')
     expect(calls).not.toContain('device stream')
     expect(calls).toContain('questions pre-turn')
     const end = vi.mocked(deps.clients.send).mock.calls[1][0] as Record<string, any>
@@ -168,7 +165,7 @@ describe('the event funnel', () => {
     const { funnel, calls } = setup('claude', { search: null, device: () => undefined })
     funnel('s1', [started(), ended()])
     expect(calls).toEqual([
-      'send turn_started', 'input started', 'teams started', 'deviceInput started', 'heartbeat', 'questions start', 'questions pre-turn',
+      'send turn_started', 'input started', 'deviceInput started', 'heartbeat', 'questions start', 'questions pre-turn',
       'send turn_ended', 'deviceInput ended', 'input ended', 'questions stop',
       'mirror',
     ])
@@ -220,12 +217,12 @@ describe('a consumer outside the core', () => {
     outside('devices', () => { throw new Error('serial port gone') })
     at += 10_000
     outside('devices', () => { throw 'still gone' })
-    outside('teams', () => { ran.push('teams') })
+    outside('recaps', () => { ran.push('recaps') })
     at += 60_000
     outside('devices', () => { throw 'back and gone again' })
     at += 60_001
     outside('devices', () => { throw new Error('once more') })
-    expect(ran).toEqual(['teams'])
+    expect(ran).toEqual(['recaps'])
     expect(lines).toEqual([
       '[funnel] devices failed · serial port gone',
       '[funnel] devices failed · back and gone again · 1 more since',
@@ -235,8 +232,8 @@ describe('a consumer outside the core', () => {
 
   it('reports to the error log by default', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    outsideConsumers()('teams', () => { throw new Error('x') })
-    expect(error).toHaveBeenCalledWith('[funnel] teams failed · x')
+    outsideConsumers()('devices', () => { throw new Error('x') })
+    expect(error).toHaveBeenCalledWith('[funnel] devices failed · x')
     error.mockRestore()
   })
 

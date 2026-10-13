@@ -9,6 +9,8 @@ import { controlIdentity, type ControlIdentityRule } from './controlIdentity.js'
 
 const stamp = (info: BigIntStats) => `${nativeFileKey(info)}:${info.mode}:${info.uid}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 type Location = { path: string; info: BigIntStats }
+/** Listings of one directory before a route that keeps changing is called unavailable (`entries`). */
+export const ENUMERATION_ATTEMPTS = 4
 type Read = { location: Location; limit: number; line?: string; prefix?: Buffer }
 
 export class NativeFiles {
@@ -16,7 +18,7 @@ export class NativeFiles {
   private readonly reads = new Map<string, Read>()
   private readonly directories = new Map<string, string>()
   private entriesLeft = 4096
-  constructor(readonly budget = new NativeEvidenceBudget(250)) { this.paths = new NativePaths(budget) }
+  constructor(readonly budget = new NativeEvidenceBudget()) { this.paths = new NativePaths(budget) }
 
   locate(path: string, missingOkay = false): Location | null {
     return this.paths.resolveSync(path, missingOkay)
@@ -106,34 +108,43 @@ export class NativeFiles {
     const location = this.locate(path, missingOkay)
     if (!location) return []
     if (!location.info.isDirectory()) return nativeUnavailable('a binding session directory is not a directory')
-    const route = this.directoryRoute(location.path)
-    let before: BigIntStats
-    try { before = lstatSync(location.path, { bigint: true }) }
-    catch { return nativeUnavailable('a binding session directory became unreadable') }
-    if (nativeFileKey(before) !== nativeFileKey(location.info)) return nativeUnavailable('a binding session directory was replaced')
-    let directory
-    const names: string[] = []
-    try {
-      directory = opendirSync(location.path, { bufferSize: 32 })
-      for (;;) {
-        this.budget.step()
-        const entry = directory.readSync()
-        if (!entry) break
-        if (--this.entriesLeft < 0) return nativeUnavailable('the binding directory entry limit was reached')
-        names.push(entry.name)
+    // A busy ancestor (the temporary folder, ~/.harness) changes its stamps whenever anything else creates a
+    // file in it, which says nothing about this directory. Only a listing whose whole route held still counts,
+    // so look again a few times before calling the evidence unavailable: on CI and on a Mac at load 40 one
+    // look was not enough, and healthy installations and handoffs were held (2026-10-11). A route that keeps
+    // moving is still refused.
+    const left = this.entriesLeft
+    for (let attempt = 1; ; attempt++) {
+      this.entriesLeft = left
+      const route = this.directoryRoute(location.path)
+      let before: BigIntStats
+      try { before = lstatSync(location.path, { bigint: true }) }
+      catch { return nativeUnavailable('a binding session directory became unreadable') }
+      if (nativeFileKey(before) !== nativeFileKey(location.info)) return nativeUnavailable('a binding session directory was replaced')
+      let directory
+      const names: string[] = []
+      try {
+        directory = opendirSync(location.path, { bufferSize: 32 })
+        for (;;) {
+          this.budget.step()
+          const entry = directory.readSync()
+          if (!entry) break
+          if (--this.entriesLeft < 0) return nativeUnavailable('the binding directory entry limit was reached')
+          names.push(entry.name)
+        }
+      } catch (error) {
+        if (error instanceof IdentityReadUnavailable) throw error
+        return nativeUnavailable('a binding session directory could not be read completely')
+      } finally {
+        if (directory) { try { directory.closeSync() } catch { nativeUnavailable('a binding session directory could not be closed') } }
       }
-    } catch (error) {
-      if (error instanceof IdentityReadUnavailable) throw error
-      return nativeUnavailable('a binding session directory could not be read completely')
-    } finally {
-      if (directory) { try { directory.closeSync() } catch { nativeUnavailable('a binding session directory could not be closed') } }
+      const after = this.directoryRoute(location.path)
+      if (route.size === after.size && [...route].every(([part, version]) => after.get(part) === version)) {
+        this.directories.set(location.path, stamp(before))
+        return names
+      }
+      if (attempt >= ENUMERATION_ATTEMPTS) return nativeUnavailable('a binding directory or ancestor changed during enumeration')
     }
-    const after = this.directoryRoute(location.path)
-    if (route.size !== after.size || [...route].some(([part, version]) => after.get(part) !== version)) {
-      return nativeUnavailable('a binding directory or ancestor changed during enumeration')
-    }
-    this.directories.set(location.path, stamp(before))
-    return names
   }
 
   /** Selected identity is checked last. Appended body text does not change a complete header. */

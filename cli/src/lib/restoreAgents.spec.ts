@@ -8,6 +8,7 @@ import { AgentRestartCoordinator } from './restartAgent.js'
 import { createHeldLaunches } from '../core/agents/heldLaunches.js'
 import { createPaneSwap } from '../core/agents/swap.js'
 import { createPaneOperations } from '../core/agents/paneOperations.js'
+import { createAgentRestarter, type RestartDeps } from '../core/agents/restart.js'
 
 vi.mock('./captureResumeIdentity.js', () => ({ captureResumeIdentity: async (entry: RegisteredSession) => entry }))
 
@@ -64,6 +65,111 @@ interface Harness {
   transactionDepth: number
   released: string[]
 }
+
+it.each(['held alive', 'held gone', 'starting alive', 'starting gone'] as const)('preserves the original native first launch through recovery: %s', async phase => {
+  const entry = row({ sessionId: '', launch: phase.startsWith('held')
+    ? { state: 'held', service: 'native', nativeToken: 'original', detail: 'Original launch held' }
+    : { state: 'starting', nativeToken: 'original' } })
+  const h = harness([entry], { alivePanes: phase.endsWith('alive') ? ['%3'] : [] })
+  h.deps.waitingPane = async () => true
+  h.deps.keepAbandoned = vi.fn()
+  const held = createHeldLaunches({ registry: h.deps.registry, restore: only => restoreAgents({ ...h.deps, only }), log: () => {} })
+  await held.boot(() => restoreAgents(h.deps))
+  expect(entry.launch).toMatchObject({ state: 'held', nativeToken: 'original' })
+  expect(await held.restartHeld(entry.agentId)).toMatchObject({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+  await held.restoreHeld()
+  held.close()
+  expect(h.launches).toEqual([])
+  expect(h.paneCreates).toBe(0)
+  expect(h.respawns).toBe(0)
+  expect(h.deps.keepAbandoned).not.toHaveBeenCalled()
+})
+
+it('revokes an active held restore when shutdown begins during launch preparation', async () => {
+  const entry = row({ launch: heldLaunch('native') }), before = structuredClone(entry)
+  const h = harness([entry], { alivePanes: ['%3'] })
+  let finish!: (launch: RestoreLaunch) => void, preparationCurrent!: () => boolean
+  h.deps.buildLaunch = vi.fn(async (_entry, control) => {
+    preparationCurrent = control.current!
+    expect(preparationCurrent()).toBe(true)
+    return new Promise<RestoreLaunch>(done => { finish = done })
+  })
+  h.deps.keepAbandoned = vi.fn()
+  const held = createHeldLaunches({ registry: h.deps.registry, log: () => {},
+    restore: (only, current) => restoreAgents({ ...h.deps, only, cancelled: () => !current() }) })
+  await held.boot(async () => {})
+  const pending = held.restoreHeld()
+  await vi.waitFor(() => expect(h.deps.buildLaunch).toHaveBeenCalledOnce())
+  held.close()
+  expect(preparationCurrent()).toBe(false)
+  finish({ argv: ['must-not-run-after-shutdown'] })
+  await pending
+  expect(entry).toEqual(before)
+  expect(h.paneCreates).toBe(0)
+  expect(h.respawns).toBe(0)
+  expect(h.deps.keepAbandoned).not.toHaveBeenCalled()
+})
+
+it.each([false, 'unknown'] as const)('keeps an unrecognized inert launch held after crash and watcher expiry: %s', async waiting => {
+  const entry = row({ sessionId: '', launch: { state: 'starting', nativeToken: 'original' } })
+  const h = harness([entry], { alivePanes: ['%3'], budgetMs: 0 })
+  h.deps.waitingPane = vi.fn(async () => waiting)
+  h.deps.keepAbandoned = vi.fn()
+  await restoreAgents(h.deps)
+  await settled(h, 1)
+  expect(entry.launch).toMatchObject({ state: 'held', service: 'native', nativeToken: 'original' })
+  const restart = createAgentRestarter({
+    registry: { ...h.deps.registry, resolve: (id: string) => h.rows.get(id) },
+    restartJobs: new AgentRestartCoordinator(), purgeBusy: () => false,
+    stopJobs: new Map(), pinnedControls: new Set(), tmuxBackend: null, restartHeld: () => null,
+  } as unknown as RestartDeps)
+  expect(await restart(entry.agentId)).toMatchObject({ ok: false, error: 'NATIVE_LAUNCH_HELD' })
+  expect(h.launches).toEqual([])
+  expect(h.paneCreates).toBe(0)
+  expect(h.respawns).toBe(0)
+  expect(h.deps.keepAbandoned).not.toHaveBeenCalled()
+})
+
+it.each([false, true])('does not abandon a resume when its fresh fallback proof expires waiting for the pane: terminal %s', async terminalHost => {
+  const h = harness([row({ terminalHost })])
+  h.deps.keepAbandoned = vi.fn()
+  h.states.set('%0', [{ dead: true }])
+  let valid = true, fallback = false
+  const build = h.deps.buildLaunch
+  h.deps.buildLaunch = async (entry, options) => {
+    if (options.resumeSessionId) return build(entry, options)
+    fallback = true
+    return { argv: ['fixture-fresh'], current: () => valid, nativeToken: 'replacement' }
+  }
+  h.deps.paneOperation = async (_id, work) => { if (fallback) valid = false; return work() }
+  await restoreAgents(h.deps)
+  await vi.waitFor(() => expect(fallback).toBe(true))
+  await vi.waitFor(() => expect(h.released).toHaveLength(1))
+  expect(h.deps.keepAbandoned).not.toHaveBeenCalled()
+  expect(h.calls).not.toContain('unbind:session-a')
+  expect(h.respawns).toBe(1) // The original resume only; no fresh fallback.
+})
+
+it('publishes the fresh fallback token before dispatch and recognizes its own guard hold', async () => {
+  const h = harness([row()])
+  h.states.set('%0', [{ dead: true }, { dead: false }])
+  const build = h.deps.buildLaunch
+  h.deps.buildLaunch = async (entry, options) => options.resumeSessionId ? build(entry, options)
+    : { argv: ['fixture-fresh'], current: () => true, nativeToken: 'fresh-fallback' }
+  const respawn = h.deps.respawn
+  h.deps.respawn = async (runtime, launch, control) => {
+    if (!launch.nativeToken) return respawn(runtime, launch, control)
+    control!.onDispatch!()
+    expect(h.rows.get('agent-a')!.launch).toEqual({ state: 'starting', nativeToken: 'fresh-fallback' })
+    expect(control!.current!()).toBe(true)
+    return respawn(runtime, launch, { ...control!, onDispatch: undefined })
+  }
+  h.deps.waitingPane = vi.fn(async (_runtime, token) => token === 'fresh-fallback')
+  await restoreAgents(h.deps)
+  await vi.waitFor(() => expect(h.rows.get('agent-a')!.launch).toMatchObject({ state: 'held', nativeToken: 'fresh-fallback' }))
+  expect(h.deps.waitingPane).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%0' }, 'fresh-fallback')
+  expect(h.respawns).toBe(2) // Resume, then the one proven fresh fallback.
+})
 
 function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; alivePanes?: string[]; failCreate?: boolean; refuseLaunch?: boolean; budgetMs?: number; settleMs?: number } = {}): Harness {
   const h: Harness = {

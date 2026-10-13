@@ -73,7 +73,7 @@ describe('namedNode', () => {
     expect(namedNode(node, 'harnessd-core', runtime, { fs: crossDevice.fs, platform: 'darwin', log })).toBe(node)
     expect(namedNode(node, 'harnessd-core', runtime, { fs: crossDevice.fs, platform: 'darwin', log })).toBe(node)
     const readOnly = memFs({ [node]: { dev: 1, ino: 7 } }, { mkdir: 'EROFS' as unknown as Error })
-    expect(namedNode(node, 'harnessd-teams', runtime, { fs: readOnly.fs, platform: 'darwin' })).toBe(node)
+    expect(namedNode(node, 'harnessd-messages', runtime, { fs: readOnly.fs, platform: 'darwin' })).toBe(node)
     expect(log.mock.calls.map(([line]) => line)).toEqual([
       '[harnessd] harnessd runs as node (no node binary)',
       '[harnessd] harnessd-core runs as node (EXDEV)',

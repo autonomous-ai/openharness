@@ -48,6 +48,7 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     question = recorder('question')
     questionClose = recorder('questionClose')
     turnStarted = recorder('turnStarted')
+    turnStep = recorder('turnStep')
     turnDone = recorder('turnDone')
     summary = recorder('summary')
     turnError = recorder('turnError')
@@ -390,7 +391,42 @@ describe('what the windows say, reaching the dial', () => {
     port.card({ type: 'commander_question', agentId: 'a1', payload: { requestId: 'r1', questions: [] } })
     port.card({ type: 'commander_question_close', agentId: 'a1', payload: { requestId: 'r1' } })
     port.card({ type: 'agent_deleted', payload: {} })
-    expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'turnStarted', 'turnDone', 'turnError', 'question', 'questionClose'])
+    expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'turnStarted', 'turnDone', 'turnError', 'turnStep', 'question', 'questionClose'])
+  })
+
+  it('hands the dial a tool card as a step, and a processing card\'s latest sentence beside the status', () => {
+    const { port } = start()
+    port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'tool', text: 'Read', recap: '/work/cli/src/cable/cableSession.ts' } })
+    port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'processing', text: 'Working', update: 'Reading the spec' } })
+    expect(seen.cable.calls.slice(1)).toEqual([['turnStep', ['a1', 'Read · cableSession.ts']], ['turnStarted', ['a1', 'Working', 'Reading the spec']]])
+  })
+
+  it('hands the dial the whole answer a summary card carries', () => {
+    const { port } = start()
+    port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'b', recap: 'r', fullText: 'the whole answer' } })
+    expect(seen.cable.calls.slice(1)).toEqual([['summary', ['a1', 'r', 'b', false, false, 'the whole answer']]])
+  })
+
+  it('forgets an agent\'s latest sentence when its processing card has none, and when the agent goes', async () => {
+    const { port, core } = start()
+    vi.mocked(core.agents.activityText).mockResolvedValue('Working')
+    const wired = () => seen.host.activitySnapshot!('a1')
+    port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'processing', text: 'Working', update: 'First' } })
+    expect(await wired()).toMatchObject({ action: 'First' })
+    port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'processing', text: 'Working' } })
+    expect(await wired()).not.toHaveProperty('action')
+    port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'processing', text: 'Working', update: 'Second' } })
+    port.card({ type: 'agent_deleted', payload: { agentId: 'a1' } })
+    expect(await wired()).not.toHaveProperty('action')
+  })
+
+  it('prefers the core\'s activity snapshot, and has none when the core has nothing to say', async () => {
+    const { core } = start()
+    const wired = () => seen.host.activitySnapshot!('a1')
+    vi.mocked(core.agents.activityText).mockResolvedValue(null as never)
+    expect(await wired()).toBeNull()
+    ;(core.agents as { activitySnapshot?: unknown }).activitySnapshot = vi.fn(async () => ({ text: 'Core', since: 5 }))
+    expect(await wired()).toEqual({ text: 'Core', since: 5 })
   })
 
   it('says, with frame logging on, whether each card was teed to the dial', () => {

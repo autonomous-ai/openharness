@@ -268,6 +268,9 @@ export interface GridLaunchRecord {
  * caller (create, retarget, restore) gets the same answer from the same code.
  */
 export interface GridLaunchMachine {
+  /** Original native locations captured before a grid redirects configuration. */
+  grokHome?: string
+  piSkillsDir?: string
   /**
    * Whether an administrator pinned Hermes settings in [HERMES_SYSTEM_MANAGED_DIR]. Hermes's web
    * tools ride a managed-scope overlay that REPLACES that directory rather than adding to it, so on

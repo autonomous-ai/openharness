@@ -43,6 +43,8 @@ import { terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
 
 export interface RestoreLaunch {
+  nativeToken?: string
+  current?(): boolean
   argv: string[]
   env?: Record<string, string>
 }
@@ -395,7 +397,18 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
     // Held: its pane, alive, runs no engine on purpose, so it is neither a stopped engine nor a terminal. Its
     // launch goes into that pane, or a new one if the pane went (a reboot).
     if (entry.launch?.state === 'held') {
+      // A first launch/fork has no conversation to resume yet. Its saved row
+      // cannot reconstruct the original prompt or fork argv. Keep the explicit
+      // hold until that exact request can recover it; a fresh launch is different work.
+      if (entry.launch.nativeToken && !entry.sessionId) {
+        summary.skipped.push({ agentId: entry.agentId, reason: 'original native launch awaits recovery' })
+        continue
+      }
       const alive = deps.livePane ? await surveyed(deps, patience, () => deps.livePane!(runtime)) : false
+      if (alive && entry.launch.nativeToken && await deps.waitingPane?.(runtime, entry.launch.nativeToken) !== true) {
+        if (current()) summary.unsurveyed.push(entry.agentId)
+        continue
+      }
       if (current()) missing.push({ entry, runtime, current, ...(alive ? { alive: true as const } : {}) })
       continue
     }
@@ -414,6 +427,20 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         // clock misread; a tmux server that outlived the daemon) is re-identified right here, so the
         // reconciler adopts it by process instead of treating it as an unbound route.
         if (!entry.processIdentity) deps.registry.updateProcessIdentity(entry.agentId, engineLive)
+      } else if (entry.launch?.state === 'starting' && entry.launch.nativeToken) {
+        const waiting = await deps.waitingPane?.(runtime, entry.launch.nativeToken)
+        if (!current()) continue
+        if (waiting === true) {
+          const row = deps.registry.setLaunch(entry.agentId, { state: 'held', service: 'native', nativeToken: entry.launch.nativeToken,
+            detail: 'Waiting to confirm the engine executable and native hooks.' })!
+          const copy = { ...row }
+          if (!copy.sessionId) summary.skipped.push({ agentId: entry.agentId, reason: 'original native launch awaits recovery' })
+          else missing.push({ entry: copy, runtime, alive: true, current: restoreOwner(deps, copy) })
+        } else {
+          const route = terminalRouteKey(runtime)
+          const release = deps.holdRoute(route, (deps.budgetMs ?? DEFAULT_BUDGET_MS) + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(route))
+          void watchRestoredPane(deps, entry, runtime, !!entry.sessionId, deps.budgetMs ?? DEFAULT_BUDGET_MS, current, release)
+        }
       } else if (entry.externalResume?.phase === 'admitted' && entry.launch?.state === 'starting') {
         // The dispatch journal precedes tmux. If its exact waiting shell remains, no engine ran;
         // otherwise an installer/engine may still be starting: observe it, never respawn over it.
@@ -433,6 +460,12 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         else deps.registry.releaseEngine(entry.agentId)
         deps.log(`[restore] ${entry.engine} → terminal · agent ${entry.agentId} · its engine exited while the daemon was down`)
       }
+      continue
+    }
+    if (entry.launch?.state === 'starting' && entry.launch.nativeToken && !entry.sessionId) {
+      deps.registry.setLaunch(entry.agentId, { state: 'held', service: 'native', nativeToken: entry.launch.nativeToken,
+        detail: 'The first launch was interrupted before its conversation was confirmed. The original request is held for recovery.' })
+      summary.skipped.push({ agentId: entry.agentId, reason: 'original native launch awaits recovery' })
       continue
     }
     // A strict-resume row that was never CONFIRMED (its launch still `starting` when the daemon
@@ -502,7 +535,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
   const unavailable = new Map<string, string | undefined>()
   /** Held in its waiting pane: the one it has, or a new one. False when no pane could be opened for it. */
   const hold = async (entry: RegisteredSession, runtime: TmuxRuntimeRef, alive: boolean, current: () => boolean, service: string, detail?: string): Promise<boolean> => inPane(deps, entry, current, async owns => {
-    const launch = { ...heldLaunch(service), ...(detail ? { detail } : {}) } as Extract<AgentLaunch, { state: 'held' }>
+    const launch = { ...heldLaunch(service), ...((entry.launch?.state === 'held' || entry.launch?.state === 'starting') && entry.launch.nativeToken ? { nativeToken: entry.launch.nativeToken } : {}), ...(detail ? { detail } : {}) } as Extract<AgentLaunch, { state: 'held' }>
     let pane = runtime
     if (!alive) {
       const created = await deps.createPane(entry, deps.waitingLaunch?.(entry, launch) ?? { argv: [] }, { current })
@@ -570,7 +603,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         let owns = initialOwner
         const pane = dead
         const existing = !!alive
-        const dispatchCurrent = () => owns() && !deps.cancelled?.(entry.agentId)
+        const dispatchCurrent = () => owns() && !deps.cancelled?.(entry.agentId) && launch.current?.() !== false
         if (!dispatchCurrent()) return
         let release: (() => void) | undefined
         if (existing && !isTerminalEngine(entry.engine)) {
@@ -579,10 +612,15 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
         }
         let watching = false
         try {
-          const control = { current: dispatchCurrent, ...(entry.externalResume ? { expectedHeldToken: entry.externalResume.token } : {}), onDispatch: () => {
+          const control = { current: dispatchCurrent, ...(entry.externalResume ? { expectedHeldToken: entry.externalResume.token } : entry.launch?.state === 'held' && entry.launch.nativeToken ? { expectedHeldToken: entry.launch.nativeToken } : {}), onDispatch: () => {
             if (entry.externalResume?.phase === 'admitted') {
               const committed = deps.registry.beginExternalDispatch?.(entry.agentId)
               if (!committed) throw new Error('External resume dispatch could not be committed')
+              owns = restoreOwner(deps, committed, !!deps.paneOperation)
+            }
+            if (launch.nativeToken) {
+              const committed = deps.registry.setLaunch(entry.agentId, { state: 'starting', nativeToken: launch.nativeToken })
+              if (!committed) throw new Error('Native launch dispatch could not be committed')
               owns = restoreOwner(deps, committed, !!deps.paneOperation)
             }
             // Before the engine can hook/attach, not after tmux's asynchronous reply.
@@ -627,7 +665,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
             deps.log(`[restore] terminal · agent ${entry.agentId} · pane ${dead.paneId} → ${created.runtime.paneId}`)
             return
           }
-          deps.registry.setLaunch(entry.agentId, { state: 'starting' })
+          deps.registry.setLaunch(entry.agentId, { state: 'starting', ...(launch.nativeToken ? { nativeToken: launch.nativeToken } : {}) })
           summary.restored.push(entry.agentId)
           deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · pane ${dead.paneId} → ${created.runtime.paneId}`
             + (resumeSessionId ? ` · resuming ${resumeSessionId.slice(0, 8)}` : ' · fresh session')
@@ -704,12 +742,13 @@ async function watchRestoredPane(
         fail(launch.error, launch.detail)
         return false
       }
-      return inPane(deps, entry, current, async () => {
+      const dispatchCurrent = () => current() && launch.current?.() !== false
+      return inPane(deps, entry, dispatchCurrent, async () => {
         deps.keepAbandoned?.({ ...entry })
         deps.registry.releaseEngine(agentId)
         current = restoreOwner(deps, deps.registry.byAgent(agentId)!)
         const owns = restoreOwner(deps, deps.registry.byAgent(agentId)!, !!deps.paneOperation)
-        const spawned = await deps.respawn(runtime, launch, { current })
+        const spawned = await deps.respawn(runtime, launch, { current: dispatchCurrent })
         if (!owns()) return false
         if (!spawned.ok) {
           fail('ENGINE_DID_NOT_START', `The terminal could not be reopened: ${spawned.reason ?? 'unknown reason'}`)
@@ -731,17 +770,25 @@ async function watchRestoredPane(
       fail(launch.error, launch.detail)
       return false
     }
-    return inPane(deps, entry, current, async () => {
+    const dispatchCurrent = () => current() && launch.current?.() !== false
+    return inPane(deps, entry, dispatchCurrent, async () => {
       // Preparation is confirmed before archiving or unbinding. A service outage preserves the
       // conversation held here, including when a refused resume falls back to a fresh launch.
       deps.keepAbandoned?.({ ...entry })
       deps.registry.inheritName(entry.sessionId, agentId)
       deps.registry.unbindSession(entry.sessionId)
       current = restoreOwner(deps, deps.registry.byAgent(agentId)!)
-      const owns = restoreOwner(deps, deps.registry.byAgent(agentId)!, !!deps.paneOperation)
+      let owns = restoreOwner(deps, deps.registry.byAgent(agentId)!, !!deps.paneOperation)
       // Renew before dispatch, so discovery cannot bind the new engine before its tmux reply.
       release = deps.holdRoute(key, budgetMs + HOLD_SLACK_MS) ?? (() => deps.releaseRoute(key))
-      const spawned = await deps.respawn(runtime, launch, { current })
+      const spawned = await deps.respawn(runtime, launch, { current: dispatchCurrent, onDispatch: () => {
+        if (launch.nativeToken) {
+          const committed = deps.registry.setLaunch(agentId, { state: 'starting', nativeToken: launch.nativeToken })
+          if (!committed) throw new Error('Native fallback dispatch could not be committed')
+          current = restoreOwner(deps, committed)
+          owns = restoreOwner(deps, committed, !!deps.paneOperation)
+        }
+      } })
       if (!owns()) return false
       if (!spawned.ok) {
         fail('ENGINE_DID_NOT_START', `${engine} could not be relaunched fresh: ${spawned.reason ?? 'unknown reason'}`)
@@ -784,6 +831,13 @@ async function watchRestoredPane(
         fail('ENGINE_DID_NOT_START', `${engine}'s restored pane disappeared before its engine process became ready.`)
         return
       }
+      const row = deps.registry.byAgent(agentId)
+      const nativeToken = row?.launch?.state === 'starting' ? row.launch.nativeToken : undefined
+      if (nativeToken && await deps.waitingPane?.(runtime, nativeToken) === true) {
+        if (current()) deps.registry.setLaunch(agentId, { state: 'held', service: 'native', nativeToken,
+          detail: 'The engine did not start because its executable or native hooks changed. The original launch is held for recovery.' })
+        return
+      }
       // A pane tmux could not read is asked again, like one still starting.
       if (engineGone(state)) {
         if (!await relaunchFresh()) return
@@ -792,6 +846,16 @@ async function watchRestoredPane(
       }
       await sleep(delayMs)
       delayMs = Math.min(delayMs * 2, 750)
+    }
+    if (!current()) return
+    const latest = deps.registry.byAgent(agentId)
+    const nativeToken = latest?.launch?.state === 'starting' ? latest.launch.nativeToken : undefined
+    if (nativeToken) {
+      // A core crash can lose the new-pane watcher while the guard's tmux
+      // publication is unavailable. No process observation is proof of failure.
+      deps.registry.setLaunch(agentId, { state: 'held', service: 'native', nativeToken,
+        detail: 'Waiting to confirm the native engine process. The original launch and terminal are preserved.' })
+      return
     }
     fail('START_TIMEOUT', `${engine} did not expose an engine process within ${Math.round(budgetMs / 60_000)} minutes. The terminal remains available.`)
   } catch (error) {

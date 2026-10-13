@@ -19,6 +19,7 @@ import { describeSpawnLockOwner, withSpawnLock } from '../lib/daemonSpawnLock.js
 import { DOWNLOAD_LIMITS, startSelfUpdater } from '../lib/selfUpdate.js'
 import { startTuiUpdater } from '../tui/update.js'
 import { VERSION } from '../version.js'
+import { harnessdEnv } from '../lib/harnessdEnv.js'
 import type { ServiceProcess } from './process.js'
 
 export interface UpdaterServiceDeps {
@@ -43,6 +44,8 @@ export const processUpdaterDeps = (): UpdaterServiceDeps => ({
 })
 
 export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps = processUpdaterDeps()): ServiceProcess {
+  // What its master, or the core it runs beside, said: held out of process.env (lib/harnessdEnv.ts).
+  const harnessd = harnessdEnv()
   const cli = deps.startCli({
     currentVersion: VERSION,
     url: env.ADAPTER_UPDATE_URL,
@@ -65,7 +68,7 @@ export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps =
     // A master judges a build staged while the one before is on probation (#807). Beside a core, under a
     // master too old to run the updater (core/updaterBeside.ts), only one that says so: one from before
     // rolled the newer build back with the one it judged.
-    stageWhileJudged: process.env.HARNESSD_UPDATER_BESIDE_CORE !== '1' || process.env.HARNESSD_JUDGES_SUPERSEDED === '1',
+    stageWhileJudged: harnessd.HARNESSD_UPDATER_BESIDE_CORE !== '1' || harnessd.HARNESSD_JUDGES_SUPERSEDED === '1',
   })
   // hn is an independent, optional download: its failure never holds up the CLI's fix.
   const hn = deps.startHn({

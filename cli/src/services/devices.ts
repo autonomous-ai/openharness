@@ -21,7 +21,7 @@ import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { DEVICES_REQUESTS, type CoreApi, type CorePorts, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
-import { cableEventFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
+import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
 import { CableSession } from '../cable/cableSession.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
@@ -134,12 +134,22 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   let revision = 0
   // Built before the cable starts: a dial's first hello may read the mapping.
   const pets = new PetStore(deps.petsDir ?? join(env.HARNESS_DEVICES_DIR, 'pets'))
+  // The assistant's latest paragraph per agent, as the processing cards carry it; gone when the turn ends.
+  const latestUpdate = new Map<string, string>()
   const cableHost = new DaemonCableHost({
     sessions: () => core.agents.advertised(),
     refresh: deps.refresh,
     displayName: (session) => core.agents.displayName(session),
     appFocus: () => focus.voice ?? undefined,
     activityText: (agentId) => core.agents.activityText(agentId),
+    // The footer and its timer from the core; the agent's own latest sentence from the cards already seen here.
+    activitySnapshot: async (agentId) => {
+      const reading = core.agents.activitySnapshot
+        ? await core.agents.activitySnapshot(agentId)
+        : await core.agents.activityText(agentId).then((text) => text ? { text } : null)
+      const action = latestUpdate.get(agentId)
+      return reading && action ? { ...reading, action } : reading
+    },
     machineName: () => core.machine.name(),
     machineId: () => core.machine.id(),
     computerId: () => core.machine.computerId(),
@@ -211,11 +221,15 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** One card for the dial, in its four calls. A remote machine's and this computer's are the same calls,
    *  so a new kind of card lands on both the day it lands on either. */
   const toDial = (event: NonNullable<ReturnType<typeof cableEventFor>>): void => {
-    if (event.kind === 'processing') void cable.turnStarted(event.agentId, event.text)
-    else if (event.kind === 'done') void cable.turnDone(event.agentId)
+    if (event.kind !== 'processing') latestUpdate.delete(event.agentId)
+    if (event.kind === 'processing') {
+      if (event.update) latestUpdate.set(event.agentId, event.update)
+      else latestUpdate.delete(event.agentId)
+      void cable.turnStarted(event.agentId, event.text, event.update)
+    } else if (event.kind === 'done') void cable.turnDone(event.agentId)
     // Quiet when the window already has this agent on screen; silent when the turn was a sub-agent's. The
     // tile still updates — the recap is what it draws — only the beep and the drawer entry are withheld.
-    else if (event.kind === 'summary') void cable.summary(event.agentId, event.recap || event.text, event.text, alreadyOnScreen(event.agentId), event.subagent)
+    else if (event.kind === 'summary') void cable.summary(event.agentId, event.recap || event.text, event.text, alreadyOnScreen(event.agentId), event.subagent, ...(event.fullText ? [event.fullText] : []))
     else void cable.turnError(event.agentId, event.text)
   }
 
@@ -244,6 +258,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (close) { void cable.questionClose(close.agentId, close.requestId); return }
       const question = cableQuestionFor(frame as Parameters<typeof cableQuestionFor>[0])
       if (question) { void cable.question(question.agentId, question.requestId, question.questions); return }
+      // A tool card is a step for a `steps-v1` device and nothing for any other: the session drops it.
+      const gone = (frame as { type?: string; payload?: { agentId?: unknown } })
+      if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') latestUpdate.delete(gone.payload.agentId)
+      const step = cableStepFor(frame as Parameters<typeof cableStepFor>[0])
+      if (step) { void cable.turnStep(step.agentId, step.step); return }
       const event = cableEventFor(frame as Parameters<typeof cableEventFor>[0])
       // Logged at the fork, not at the send: this answers "did the daemon even decide to tell the dial",
       // a different question from "did the wire carry it", and the one nobody could answer when a tile

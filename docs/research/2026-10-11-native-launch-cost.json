@@ -1,0 +1,100 @@
+{
+  "schema": 1,
+  "baseline": "16569f3d27e1b51352904aded33e71971b7e2724",
+  "candidate": "3be7d7ca014b3246c85b45c338c73d9640c90978 plus final resume/assertion correction",
+  "receipt": "20261011T060343.168480Z-33631",
+  "nativeHooks": true,
+  "node": "v22.23.2",
+  "platform": "darwin",
+  "tmux": "tmux 3.5a",
+  "samples": [
+    {
+      "bundle": "baseline",
+      "readyMs": 2903.850002,
+      "atReady": {
+        "cpuMs": 540,
+        "rssMiB": 86.640625
+      },
+      "launches": [
+        {
+          "phase": "cold",
+          "requestMs": 214.4027799999999,
+          "coreCpuMs": 60,
+          "rssMiB": 87.48046875
+        },
+        {
+          "phase": "warm",
+          "requestMs": 112.28748200000018,
+          "coreCpuMs": 30,
+          "rssMiB": 88.671875
+        }
+      ]
+    },
+    {
+      "bundle": "candidate",
+      "readyMs": 3217.6684000000005,
+      "atReady": {
+        "cpuMs": 510,
+        "rssMiB": 84.796875
+      },
+      "launches": [
+        {
+          "phase": "cold",
+          "requestMs": 340.0986549999998,
+          "coreCpuMs": 80,
+          "rssMiB": 86.59765625
+        },
+        {
+          "phase": "warm",
+          "requestMs": 363.8914049999994,
+          "coreCpuMs": 60,
+          "rssMiB": 89.08203125
+        }
+      ]
+    },
+    {
+      "bundle": "candidate",
+      "readyMs": 2676.0425509999995,
+      "atReady": {
+        "cpuMs": 530,
+        "rssMiB": 87.66796875
+      },
+      "launches": [
+        {
+          "phase": "cold",
+          "requestMs": 357.45592600000055,
+          "coreCpuMs": 80,
+          "rssMiB": 89.3359375
+        },
+        {
+          "phase": "warm",
+          "requestMs": 306.4411990000008,
+          "coreCpuMs": 60,
+          "rssMiB": 91.25
+        }
+      ]
+    },
+    {
+      "bundle": "baseline",
+      "readyMs": 2482.4306109999998,
+      "atReady": {
+        "cpuMs": 530,
+        "rssMiB": 86.75
+      },
+      "launches": [
+        {
+          "phase": "cold",
+          "requestMs": 212.46589400000084,
+          "coreCpuMs": 60,
+          "rssMiB": 87.62890625
+        },
+        {
+          "phase": "warm",
+          "requestMs": 132.80414699999892,
+          "coreCpuMs": 30,
+          "rssMiB": 88.15625
+        }
+      ]
+    }
+  ]
+}

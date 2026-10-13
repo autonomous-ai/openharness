@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/workspace_bar_style.dart';
@@ -205,6 +206,109 @@ class _ActivityMarkState extends State<ActivityMark> {
     return widget.tooltip
         ? Tooltip(message: widget.activity.label, child: child)
         : child;
+  }
+}
+
+/// What a tab says while its agents message one another.
+const agentsMessagingLabel = 'Agents messaging';
+
+/// A tab's status cell while its agents message one another (Agent Messages):
+/// two chat bubbles, mirrored every half second on the same clock as the
+/// spinner so the speakers trade sides; still under Reduce Motion or when
+/// scrolled away.
+class MessagingMark extends StatefulWidget {
+  const MessagingMark({
+    super.key,
+    required this.color,
+    this.visible = true,
+    this.clock,
+  });
+  final Color color;
+  final bool visible;
+  final ActivityClock? clock;
+
+  /// The tab's status slot.
+  static const width = 16.0;
+
+  /// Half a second per side: five of the spinner's 100ms frames.
+  static bool mirroredAt(int frame) => (frame ~/ 5).isOdd;
+
+  @override
+  State<MessagingMark> createState() => _MessagingMarkState();
+}
+
+class _MessagingMarkState extends State<MessagingMark> {
+  ActivityClock get clock => widget.clock ?? _activityClock;
+  bool _listening = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(MessagingMark oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.clock != widget.clock && _listening) {
+      (oldWidget.clock ?? _activityClock).removeListener(_tick);
+      _listening = false;
+    }
+    _sync();
+  }
+
+  void _sync() {
+    final listen =
+        widget.visible &&
+        TickerMode.valuesOf(context).enabled &&
+        !MediaQuery.disableAnimationsOf(context);
+    if (listen == _listening) return;
+    _listening = listen;
+    if (listen) {
+      clock.addListener(_tick);
+    } else {
+      clock.removeListener(_tick);
+    }
+  }
+
+  void _tick() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    if (_listening) clock.removeListener(_tick);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mirrored = _listening && MessagingMark.mirroredAt(clock.frame);
+    // The tab's 16px status slot, the glyph centered in it: mirroring then
+    // turns the arrows in place instead of moving them.
+    return Semantics(
+      label: agentsMessagingLabel,
+      child: ExcludeSemantics(
+        child: RepaintBoundary(
+          child: SizedBox(
+            width: MessagingMark.width,
+            child: Center(
+              child: Transform.flip(
+                key: ValueKey(
+                  'messaging-mark:${mirrored ? 'mirrored' : 'plain'}',
+                ),
+                flipX: mirrored,
+                child: Icon(
+                  AppIcons.messagesSquare,
+                  size: 13,
+                  color: widget.color,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

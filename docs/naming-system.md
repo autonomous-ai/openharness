@@ -73,8 +73,9 @@ existing action name.
 
 A pane is a view, so closing a pane or tab closes views. **Stop Harness** ends the
 running harness. Adding harnesses to a tab groups them without a separate team
-setup. **Settings → Experimental → Tab collaboration** lets their agents consult
-peers; it is off by default. The word *tab* can also name the keyboard key or a
+setup. Turning on **Agent Messages** for a tab lets its harnesses message each
+other (`harness send`); it is off by default, per tab, and **Show Agent Messages**
+opens the tab's log. The word *tab* can also name the keyboard key or a
 browser tab; context distinguishes them.
 
 A project belongs to a computer; identical paths on different computers do not

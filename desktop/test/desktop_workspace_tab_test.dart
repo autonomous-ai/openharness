@@ -12,24 +12,24 @@ import 'package:harness/widgets/desktop_workspace_tab.dart';
 
 import 'support/real_fonts.dart';
 
-typedef _Tab = ({String name, String? hint, bool working});
+typedef _Tab = ({String name, bool working});
 
 const _eightTabs = <_Tab>[
-  (name: 'New Tab', hint: '⌘1', working: false),
-  (name: 'Desktop', hint: '⌘2', working: true),
-  (name: 'Docs', hint: '⌘3', working: false),
-  (name: 'Web', hint: '⌘4', working: false),
-  (name: 'Notes', hint: '⌘5', working: false),
-  (name: 'API', hint: '⌘6', working: false),
-  (name: 'Tests', hint: '⌘7', working: false),
-  (name: 'Release', hint: '⌘8', working: false),
+  (name: 'New Tab', working: false),
+  (name: 'Desktop', working: true),
+  (name: 'Docs', working: false),
+  (name: 'Web', working: false),
+  (name: 'Notes', working: false),
+  (name: 'API', working: false),
+  (name: 'Tests', working: false),
+  (name: 'Release', working: false),
 ];
 
-Widget _host(
-  ValueNotifier<bool> hints, {
+Widget _host({
   List<_Tab> tabs = _eightTabs,
   Brightness brightness = Brightness.dark,
   double scale = 1,
+  double? tabWidth,
   GlobalKey? boundary,
   VoidCallback? onSelect,
   VoidCallback? onClose,
@@ -66,16 +66,16 @@ Widget _host(
                           for (final tab in tabs)
                             Builder(
                               builder: (context) => SizedBox(
-                                width: DesktopWorkspaceTab.widthForStrip(
-                                  constraints.maxWidth,
-                                  tabs.length,
-                                ),
+                                width:
+                                    tabWidth ??
+                                    DesktopWorkspaceTab.widthForStrip(
+                                      constraints.maxWidth,
+                                      tabs.length,
+                                    ),
                                 child: DesktopWorkspaceTab(
                                   id: tab.name,
                                   label: tab.name,
                                   selected: tab.name == 'Desktop',
-                                  shortcutHint: tab.hint,
-                                  showShortcuts: hints,
                                   onSelect: enabled
                                       ? (onSelect ?? () {})
                                       : null,
@@ -142,7 +142,6 @@ Future<void> _capture(
 }
 
 Finder _label(String name) => find.byKey(ValueKey('tab-label:$name'));
-Finder _hint(String name) => find.byKey(ValueKey('tab-shortcut:$name'));
 Finder _close(String name) => find.byKey(ValueKey('tab-close:$name'));
 Finder _tab(String name) => find.byWidgetPredicate(
   (widget) => widget is DesktopWorkspaceTab && widget.id == name,
@@ -187,16 +186,9 @@ void main() {
         tester.view.physicalSize = const Size(1280, 100);
         addTearDown(tester.view.reset);
         grid.AppTheme.brightness.value = brightness;
-        final hints = ValueNotifier(false);
-        addTearDown(hints.dispose);
         final boundary = GlobalKey();
         await tester.pumpWidget(
-          _host(
-            hints,
-            brightness: brightness,
-            scale: scale,
-            boundary: boundary,
-          ),
+          _host(brightness: brightness, scale: scale, boundary: boundary),
         );
         expect(tester.takeException(), isNull);
         if (scale == 1) {
@@ -211,6 +203,15 @@ void main() {
         final tabBounds = tester.getRect(_tab('Desktop'));
         final mark = find.byKey(const ValueKey('status:Desktop'));
         expect(mark, findsOneWidget);
+        final slot = tester.getRect(
+          find.ancestor(of: mark, matching: find.byType(Center)).first,
+        );
+        expect(slot.left - title.right, closeTo(6, .01));
+        expect(
+          (title.left + slot.right) / 2,
+          closeTo(tabBounds.center.dx, .5),
+          reason: 'the name and its status are centered together',
+        );
         expect(_close('Desktop').hitTestable(), findsNothing);
         final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
         await mouse.addPointer(location: const Offset(1260, 90));
@@ -219,51 +220,34 @@ void main() {
         await mouse.moveTo(title.center);
         await tester.pumpAndSettle();
         expect(_close('Desktop').hitTestable(), findsOneWidget);
-        expect(tester.getRect(_label('Desktop')), title);
+        expect(mark, findsOneWidget, reason: 'hover keeps the status');
+        // Eight tabs are narrow: the name moves left only as far as 💬 and ×
+        // need, never right.
+        expect(
+          tester.getRect(_label('Desktop')).left,
+          lessThanOrEqualTo(title.left),
+        );
+        expect(tester.getRect(_tab('Desktop')), tabBounds);
+        expect(
+          tester.getRect(mark).right,
+          lessThanOrEqualTo(tester.getRect(_close('Desktop')).left),
+        );
         final icon = tester.widget<Icon>(
           find.descendant(of: _close('Desktop'), matching: find.byType(Icon)),
         );
         expect(icon.icon, AppIcons.close);
         expect(icon.size, 12);
-        expect(tester.getSize(_close('Desktop')), const Size(32, 32));
+        expect(
+          tester.getSize(_close('Desktop')),
+          const Size(DesktopWorkspaceTab.closeWidth, 32),
+        );
         await _capture(
           tester,
           boundary,
           'tabs-${brightness.name}-$scale-hover',
         );
-        hints.value = true;
-        await tester.pump();
-        expect(mark, findsNothing);
-        expect(_hint('Desktop'), findsOneWidget);
-        expect(_close('Desktop').hitTestable(), findsOneWidget);
-        expect(tester.getRect(_label('Desktop')), title);
-        expect(tester.getRect(_tab('Desktop')), tabBounds);
-        final shortcut = tester.getRect(_hint('Desktop'));
-        final indicator = tester.getRect(
-          find.ancestor(of: _hint('Desktop'), matching: find.byType(Center)),
-        );
-        // The stable slot also holds the 16px activity mark. A narrower hint
-        // remains centered inside it; its font-dependent glyph edge can be
-        // farther from the label than the slot's six-pixel gap.
-        expect(indicator.left - title.right, closeTo(6, .5));
-        expect(shortcut.center.dx, closeTo(indicator.center.dx, .01));
-        expect(
-          indicator.right,
-          lessThanOrEqualTo(tester.getRect(_close('Desktop')).left),
-        );
-        expect(
-          (title.left + indicator.right) / 2,
-          closeTo(tabBounds.center.dx, .5),
-        );
-        await _capture(
-          tester,
-          boundary,
-          'tabs-${brightness.name}-$scale-command',
-        );
         await mouse.removePointer();
-        hints.value = false;
         await tester.pump();
-        expect(mark, findsOneWidget);
         expect(tester.getRect(_label('Desktop')), title);
         expect(_close('Desktop').hitTestable(), findsNothing);
         expect(tester.takeException(), isNull);
@@ -271,116 +255,115 @@ void main() {
     }
   }
 
-  testWidgets('a narrow hint preserves the centered activity slot', (
+  testWidgets('a wide tab\'s name never moves on hover', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1280, 100);
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      _host(
+        tabs: const [
+          (name: 'Desktop', working: true),
+          (name: 'Docs', working: false),
+        ],
+      ),
+    );
+    for (final name in ['Desktop', 'Docs']) {
+      final title = tester.getRect(_label(name));
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: title.center);
+      await tester.pump();
+      expect(_close(name).hitTestable(), findsOneWidget);
+      expect(tester.getRect(_label(name)), title, reason: name);
+      await mouse.removePointer();
+      await tester.pump();
+    }
+  });
+
+  testWidgets('a narrow tab gives its name the whole tab at rest', (
     tester,
   ) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(640, 100);
     addTearDown(tester.view.reset);
-    final hints = ValueNotifier(false);
-    addTearDown(hints.dispose);
     await tester.pumpWidget(
-      _host(hints, tabs: [(name: 'Desktop', hint: '1', working: true)]),
-    );
-    final title = tester.getRect(_label('Desktop'));
-    final slot = tester.getRect(
-      find.ancestor(
-        of: find.byKey(const ValueKey('status:Desktop')),
-        matching: find.byType(Center),
+      _host(
+        tabWidth: grid.AppDesktop.tabMinWidth,
+        tabs: const [(name: 'website', working: true)],
       ),
     );
-    expect(slot.width, 16);
-    expect(slot.left - title.right, closeTo(6, .01));
-    hints.value = true;
-    await tester.pump();
-    final shortcut = tester.getRect(_hint('Desktop'));
-    expect(shortcut.width, lessThan(slot.width));
-    expect(shortcut.left - title.right, greaterThan(6));
-    expect(shortcut.center.dx, closeTo(slot.center.dx, .01));
-    expect(tester.getRect(_label('Desktop')), title);
-    expect(
-      (title.left + slot.right) / 2,
-      closeTo(tester.getCenter(_tab('Desktop')).dx, .01),
+    final natural = DesktopWorkspaceTab.labelWidth(
+      tester.element(_label('website')),
+      'website',
     );
+    final title = tester.getRect(_label('website'));
+    expect(title.width, closeTo(natural, .01), reason: 'not cut at rest');
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: title.center);
+    await tester.pump();
+    final close = tester.getRect(_close('website'));
+    final status = tester.getRect(find.byKey(const ValueKey('status:website')));
+    expect(
+      status.right,
+      lessThanOrEqualTo(close.left - DesktopWorkspaceTab.messagesWidth),
+      reason: 'revealed, the name and status clear 💬 and ×',
+    );
+    expect(
+      tester.getRect(_label('website')).left,
+      greaterThanOrEqualTo(tester.getRect(_tab('website')).left + 14),
+    );
+    await mouse.removePointer();
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets(
-    'resolved remaps replace status and preserve purposeful actions',
-    (tester) async {
-      final semantics = tester.ensureSemantics();
-      final hints = ValueNotifier(false);
-      var selections = 0, closes = 0, renames = 0;
-      try {
-        await tester.pumpWidget(
-          _host(
-            hints,
-            tabs: const [(name: 'Desktop', hint: '⌃⌥⌘R', working: true)],
-            onSelect: () => selections++,
-            onClose: () => closes++,
-            onRename: () => renames++,
-          ),
-        );
-        final title = tester.getRect(_label('Desktop'));
-        final status = find.bySemanticsLabel('Desktop, Working');
-        expect(status, findsOneWidget);
-        expect(
-          tester
-              .getSemantics(status)
-              .getSemanticsData()
-              .flagsCollection
-              .isButton,
-          isTrue,
-        );
-        hints.value = true;
-        await tester.pump();
-        expect(find.text('⌃⌥⌘R'), findsOneWidget);
-        expect(find.text('⌘1'), findsNothing);
-        expect(tester.getRect(_label('Desktop')), title);
-        expect(status, findsOneWidget);
-        Focus.of(tester.element(_label('Desktop'))).requestFocus();
-        await tester.pump();
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-        expect(selections, 1);
-        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-        await mouse.addPointer(location: title.center);
-        await tester.pump();
-        await tester.tap(_close('Desktop'));
-        await tester.pump();
-        expect(closes, 1);
-        expect(selections, 1);
-        await tester.tap(_label('Desktop'));
-        await tester.pump(const Duration(milliseconds: 80));
-        await tester.tap(_label('Desktop'));
-        await tester.pumpAndSettle();
-        expect(renames, 1);
-        await mouse.removePointer();
-      } finally {
-        await tester.pumpWidget(const SizedBox());
-        semantics.dispose();
-        hints.dispose();
-      }
-    },
-  );
-
-  testWidgets('unbound and disabled tabs advertise no shortcut', (
+  testWidgets('Return selects, × closes, a double click renames', (
     tester,
   ) async {
-    final hints = ValueNotifier(true);
-    addTearDown(hints.dispose);
+    final semantics = tester.ensureSemantics();
+    var selections = 0, closes = 0, renames = 0;
+    try {
+      await tester.pumpWidget(
+        _host(
+          tabs: const [(name: 'Desktop', working: true)],
+          onSelect: () => selections++,
+          onClose: () => closes++,
+          onRename: () => renames++,
+        ),
+      );
+      final title = tester.getRect(_label('Desktop'));
+      final status = find.bySemanticsLabel('Desktop, Working');
+      expect(status, findsOneWidget);
+      expect(
+        tester.getSemantics(status).getSemanticsData().flagsCollection.isButton,
+        isTrue,
+      );
+      expect(find.text('⌘1'), findsNothing, reason: 'tabs show no shortcut');
+      Focus.of(tester.element(_label('Desktop'))).requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      expect(selections, 1);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: title.center);
+      await tester.pump();
+      await tester.tap(_close('Desktop'));
+      await tester.pump();
+      expect(closes, 1);
+      expect(selections, 1);
+      await tester.tap(_label('Desktop'));
+      await tester.pump(const Duration(milliseconds: 80));
+      await tester.tap(_label('Desktop'));
+      await tester.pumpAndSettle();
+      expect(renames, 1);
+      await mouse.removePointer();
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('a disabled tab reveals nothing', (tester) async {
     await tester.pumpWidget(
-      _host(hints, tabs: const [(name: 'Notes', hint: null, working: true)]),
+      _host(tabs: const [(name: 'Notes', working: true)], enabled: false),
     );
-    expect(_hint('Notes'), findsNothing);
-    expect(find.byKey(const ValueKey('status:Notes')), findsOneWidget);
-    await tester.pumpWidget(
-      _host(
-        hints,
-        tabs: const [(name: 'Notes', hint: '⌘2', working: true)],
-        enabled: false,
-      ),
-    );
-    expect(_hint('Notes'), findsNothing);
     expect(find.byKey(const ValueKey('status:Notes')), findsOneWidget);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: tester.getCenter(_label('Notes')));

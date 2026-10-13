@@ -1724,27 +1724,21 @@ void main() {
       for (final element in barControls.evaluate()) {
         final control = element.widget as WorkspaceBarControl;
         final rect = tester.getRect(find.byWidget(control));
+        // Harness Store is an icon like the rest (2026-10-11): its name is
+        // its tooltip's, and it has the row's one height.
         if (control.label == 'Harness Store') {
-          final label = find.descendant(
-            of: find.byWidget(control),
-            matching: find.text('Harness Store'),
-          );
           expect(
-            tester.widget<Text>(label).style!.fontFamily,
-            grid.AppType.sansFamily,
-          );
-          expect(
-            rect.height,
-            greaterThanOrEqualTo(tester.getSize(label).height + 12),
-          );
-        } else {
-          expect(
-            rect.height,
-            control.selectedBackground == null
-                ? 28
-                : tester.getSize(bar).height,
+            find.descendant(
+              of: find.byWidget(control),
+              matching: find.byType(Text),
+            ),
+            findsNothing,
           );
         }
+        expect(
+          rect.height,
+          control.selectedBackground == null ? 28 : tester.getSize(bar).height,
+        );
         if (control.selected == true) {
           final fill = find.descendant(
             of: find.byWidget(control),
@@ -1802,6 +1796,8 @@ void main() {
       }
       await captureControls(tester, 'workspace-bottom-bar');
       final workspace = tester.widget<SwarmScreen>(find.byType(SwarmScreen));
+      // A computer with no account: the row then ends in Sign in.
+      app.signedIn = false;
       for (final scale in [1.0, 2.0]) {
         await tester.pumpWidget(
           MaterialApp(
@@ -1821,16 +1817,23 @@ void main() {
           MediaQuery.textScalerOf(tester.element(store)).scale(13),
           13 * scale,
         );
+        // Store is its mark alone (2026-10-11); the row's one word is Sign
+        // in, which follows the window's text size as Store's name did.
+        expect(
+          find.descendant(of: store, matching: find.byType(Text)),
+          findsNothing,
+        );
+        final signIn = find.byKey(const ValueKey('swarm-sign-in-button'));
         final label = find.descendant(
-          of: store,
-          matching: find.text('Harness Store'),
+          of: signIn,
+          matching: find.text('Sign in'),
         );
         expect(
           tester.renderObject<RenderParagraph>(label).didExceedMaxLines,
           isFalse,
         );
         expect(
-          tester.getSize(store).height,
+          tester.getSize(signIn).height,
           greaterThanOrEqualTo(tester.getSize(label).height + 12),
         );
         expect(

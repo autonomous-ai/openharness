@@ -97,3 +97,39 @@ it('fences queued retries and late login-shell callbacks when the owning daemon 
   expect(c.deps.install).not.toHaveBeenCalled()
   expect(vi.getTimerCount()).toBe(0)
 })
+
+it('keeps an asynchronous install pending, lets a sibling complete, and acknowledges only success', async () => {
+  let reject!: (error: Error) => void
+  const install = vi.fn<HomeAdoptionDeps['install']>()
+    .mockImplementationOnce(() => new Promise<void>((_, fail) => { reject = fail }))
+    .mockResolvedValue(undefined)
+  const c = setup({ confirm: vi.fn(() => ({ claude: '/slow', codex: '/ready' })), install })
+  c.submit({}); c.retry()
+  expect(install).toHaveBeenCalledTimes(2)
+  expect(c.deps.held).toHaveBeenLastCalledWith('Waiting for hook installation in an adopted home.')
+  await vi.advanceTimersByTimeAsync(0)
+  c.retry()
+  expect(install).toHaveBeenCalledTimes(2)
+  reject(new Error('disk unavailable'))
+  await vi.advanceTimersByTimeAsync(0)
+  expect(c.deps.held).toHaveBeenLastCalledWith('disk unavailable')
+  await vi.advanceTimersByTimeAsync(1_000)
+  expect(install.mock.calls).toEqual([['claude', '/slow'], ['codex', '/ready'], ['claude', '/slow']])
+  expect(c.deps.held).toHaveBeenLastCalledWith(null)
+  expect(vi.getTimerCount()).toBe(0)
+})
+
+it.each([true, false])('revokes an in-flight home installation and ignores its late success=%s on shutdown', async succeeds => {
+  let finish!: () => void
+  const c = setup({ read: () => ({ claude: ['/pending'], codex: [] }), install: () => new Promise<void>((done, reject) => {
+    finish = () => succeeds ? done() : reject(new Error('late'))
+  }) })
+  c.retry()
+  expect(c.current()).toBe(true)
+  const reports = vi.mocked(c.deps.held).mock.calls.length
+  c.close(); finish()
+  await vi.advanceTimersByTimeAsync(10_000)
+  expect(c.current()).toBe(false)
+  expect(c.deps.held).toHaveBeenCalledTimes(reports)
+  expect(vi.getTimerCount()).toBe(0)
+})

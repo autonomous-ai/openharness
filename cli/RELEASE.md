@@ -79,6 +79,20 @@ Its command contract (flags, exit codes, what it refuses) is pinned by `cli/src/
 which runs with the rest of `make cli-test`. Not to be confused with `cli/scripts/install-cli.sh`, the
 local dev loop below.
 
+## The npm wrapper of `harness mcp`
+
+`cli/packages/harness-mcp` is `@autonomous-ai/harness-mcp`, for MCP clients and directories that install servers
+with `npx`. It is not the CLI: it runs `harness mcp` from the installed CLI, and where there is none it offers one
+tool that says how to install it. Its `mcpName` ties it to the Official MCP Registry entry. It changes rarely, and
+apart from the CLI's releases:
+
+```bash
+npm login                                   # an account in the npm organization autonomous-ai
+cd cli/packages/harness-mcp && npm publish --access public
+```
+
+Its tests are `cli/src/agentClient/mcpPackage.spec.ts`, in `make cli-test`.
+
 ## Local install (no upload)
 
 `bash cli/scripts/install-cli.sh` bundles **this working tree** into `~/.harness/cli` — the same

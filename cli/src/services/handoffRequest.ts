@@ -40,7 +40,9 @@ export function createHandoffRequest({ prepare }: { prepare: ((req: HandoffReque
         // Name and errno code only: a message can quote the project path or, from a parser, a
         // slice of the transcript it choked on.
         if (!known) console.error(`[handoff] prepare failed: ${e instanceof Error ? e.name : typeof e}${typeof code === 'string' && /^[A-Z0-9_]{1,40}$/.test(code) ? ` ${code}` : ''}`)
-        reply({ error: known ? code : 'INTERNAL' })
+        const held = known && ['IDENTITY_UNAVAILABLE', 'HANDOFF_UNAVAILABLE', 'TIMEOUT', 'BUSY'].includes(code)
+        reply({ error: known ? code : 'INTERNAL', ...(held ? { held: true, retryable: true,
+          reason: code === 'IDENTITY_UNAVAILABLE' ? 'Waiting for verified conversation history.' : 'Waiting for the handoff to become available.' } : {}) })
       })
   }
 }

@@ -339,6 +339,71 @@ void main() {
     dial.dispose();
   });
 
+  testWidgets('a Pro shows exactly Brightness, Sound and Voice language', (
+    tester,
+  ) async {
+    final dial = DialState();
+    final controller = DevicesController(
+      dial: dial,
+      accountId: 'a',
+      sendSettings: (_, _) async => true,
+    );
+    await controller.load();
+    final pro = DialStatus.fromJson({
+      'attached': true,
+      'id': 'pro',
+      'mac': 'aa:bb:cc:dd',
+      'fw': '0.0.1',
+      'hw': 'harness-pro',
+      'board': 'pro',
+      'settings': {
+        'brightness': 70,
+        'character': 2,
+        'face': 720,
+        'round': false,
+        'muted': false,
+        'quiet': false,
+        'straightTitle': true,
+        'focusFace': true,
+        'scrollReversed': false,
+        'voiceLang': 'en',
+      },
+    });
+    expect(pro.board, 'pro');
+    report(dial, [pro, deviceStatus('round')]);
+    await pump(tester, controller);
+    Future<void> select(int i) async {
+      await tester.tap(
+        find.byKey(ValueKey('device-card-${controller.devices[i].key}')),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    await select(0);
+    for (final t in ['Brightness', 'Sound', 'Voice language']) {
+      expect(find.text(t), findsOneWidget, reason: t);
+    }
+    for (final t in ['Reverse scrolling', 'Faces']) {
+      expect(find.text(t), findsNothing, reason: t);
+    }
+    expect(find.byKey(const Key('devices-faces')), findsNothing);
+    expect(find.textContaining('Pet'), findsNothing);
+
+    await select(1);
+    for (final t in [
+      'Brightness',
+      'Sound',
+      'Voice language',
+      'Reverse scrolling',
+      'Faces',
+    ]) {
+      expect(find.text(t), findsOneWidget, reason: t);
+    }
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    dial.dispose();
+  });
+
   testWidgets(
     'selected device owns changes through reorder and disconnect; Faces is a single choice',
     (tester) async {

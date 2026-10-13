@@ -18,11 +18,31 @@ export function harnessPermissionEnvironment(engine: AgentEngine, env: Record<st
   return { ...env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...config, permission: opencodePermission(config, permissionMode) }) }
 }
 
-/** Fresh own-provider launches only. Restores and explicit model routes keep their choices. */
+/**
+ * A chosen grid names its model in the file it writes (`OPENCODE_CONFIG`, lib/gridLaunch.ts), and OpenCode
+ * lets inline config outrank that file: a package's own model there would run instead of the person's grid.
+ */
+function withoutPackageModel(env: Record<string, string>): Record<string, string> {
+  if (!env.OPENCODE_CONFIG_CONTENT) return env
+  const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT)
+  if (config.model === undefined && config.small_model === undefined) return env
+  delete config.model
+  delete config.small_model
+  return { ...env, OPENCODE_CONFIG_CONTENT: JSON.stringify(config) }
+}
+
+/** Fresh own-provider launches only. Restores, explicit model routes and a package's own model keep their choices. */
 export function freshHarnessEnvironment(engine: AgentEngine, env: Record<string, string> = {},
   explicitRoute = false, permissionMode = DEFAULT_HARNESS_PERMISSION): Record<string, string> {
-  if (engine !== DEFAULT_HARNESS_ENGINE || explicitRoute) return env
+  if (engine !== DEFAULT_HARNESS_ENGINE) return env
+  if (explicitRoute) return withoutPackageModel(env)
   const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT || '{}')
+  // A package that names its own model keeps it. Memories reads a person's whole message history, so it
+  // pins a free model whose provider keeps nothing and trains on nothing (store/agents/memories/harness.json)
+  // rather than the default above, whose terms let its maker train on what it is sent.
+  if (typeof config.model === 'string' && config.model) {
+    return { ...env, OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...config, permission: opencodePermission(config, permissionMode) }) }
+  }
   const modelId = DEFAULT_HARNESS_MODEL.split('/')[1]!
   const provider = config.provider?.opencode ?? {}
   const model = provider.models?.[modelId] ?? {}

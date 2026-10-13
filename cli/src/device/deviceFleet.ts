@@ -303,6 +303,7 @@ export class DeviceFleet implements MachineFleet {
           recap: typeof r.recap === 'string' ? r.recap : '',
           text: typeof r.text === 'string' ? r.text : '',
           ask: typeof r.ask === 'string' ? r.ask : '',
+          ...(typeof r.fullText === 'string' && r.fullText ? { fullText: r.fullText } : {}),
         }
       })
       this.recapCache.set(key, turns)
@@ -369,6 +370,7 @@ export class DeviceFleet implements MachineFleet {
         agentId: frame.agentId,
         text: typeof payload.text === 'string' ? payload.text : '',
         recap: typeof payload.recap === 'string' ? payload.recap : '',
+        ...(kind === 'processing' && typeof payload.update === 'string' ? { update: payload.update } : {}),
         // A specialist on another Mac is as silent here as one on this one.
         ...(payload.subagent === true ? { subagent: true } : {}),
       })

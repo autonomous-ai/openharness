@@ -47,32 +47,33 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     ])
   })
 
-  it('installs the hooks and records them, so Codex runs them without asking; a second start changes nothing', () => {
+  it('installs the hooks and records them, so Codex runs them without asking; a second start changes nothing', async () => {
     const codexHome = home()
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    installHookSettings('codex', hooks.settings, 18473, codexHome)
+    await installHookSettings('codex', hooks.settings, 19473, codexHome)
     const installed = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8'))
     const config = readFileSync(join(codexHome, 'config.toml'), 'utf8')
     for (const [key, hash] of reviewRecords(record, join(codexHome, 'hooks.json'), installed)) {
       expect(config).toContain(`[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = ${JSON.stringify(hash)}\n`)
     }
     expect(lstatSync(join(codexHome, 'config.toml')).mode & 0o777).toBe(0o600)
-    installHookSettings('codex', hooks.settings, 18473, codexHome)
+    await installHookSettings('codex', hooks.settings, 19473, codexHome)
     expect(readFileSync(join(codexHome, 'config.toml'), 'utf8')).toBe(config)
   })
 
-  it('records them for hooks an earlier start installed, and again when Harness’s command changes', () => {
+  it('records them for hooks an earlier start installed, and again when Harness’s command changes', async () => {
     const codexHome = home()
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    installHookSettings('codex', hooks.settings, 18473, codexHome)
+    await installHookSettings('codex', hooks.settings, 19473, codexHome)
     writeFileSync(join(codexHome, 'config.toml'), 'model = "gpt-6"\n')
-    installHookSettings('codex', hooks.settings, 18473, codexHome)
+    await installHookSettings('codex', hooks.settings, 19473, codexHome)
     const first = readFileSync(join(codexHome, 'config.toml'), 'utf8')
     expect(first.startsWith('model = "gpt-6"\n\n[hooks.state.')).toBe(true)
     // Another port: another command, so another hash, in the same tables.
-    installHookSettings('codex', hooks.settings, 18999, codexHome)
+    await installHookSettings('codex', hooks.settings, 18999, codexHome)
     const second = readFileSync(join(codexHome, 'config.toml'), 'utf8')
-    expect(second.match(/^\[hooks\.state\./gm)).toHaveLength(2)
+    // Agent Messages' block makes three: notify.mjs's two, and its one.
+    expect(second.match(/^\[hooks\.state\./gm)).toHaveLength(3)
     expect(second).not.toBe(first)
     const installed = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8'))
     for (const [, hash] of reviewRecords(record, join(codexHome, 'hooks.json'), installed)) expect(second).toContain(hash)
@@ -97,16 +98,16 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     expect(withReviewRecords(crlf, record, records)).toBe(crlf.replace('sha256:old', 'sha256:new'))
   })
 
-  it('records what hooks.json holds on disk: a block of the person’s before Harness’s, another timeout', () => {
+  it('records what hooks.json holds on disk: a block of the person’s before Harness’s, another timeout', async () => {
     const codexHome = home()
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    installHookSettings('codex', hooks.settings, 18473, codexHome)
+    await installHookSettings('codex', hooks.settings, 19473, codexHome)
     const installed = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8'))
     // Harness's block first, the person's added after it, and a timeout of their own: current, so not rewritten.
     installed.hooks.UserPromptSubmit = [{ hooks: [{ ...installed.hooks.UserPromptSubmit[0].hooks[0], timeout: 30 }] }, { hooks: [{ type: 'command', command: 'echo theirs' }] }]
     writeFileSync(join(codexHome, 'hooks.json'), JSON.stringify(installed))
     rmSync(join(codexHome, 'config.toml'))
-    installHookSettings('codex', hooks.settings, 18473, codexHome)
+    await installHookSettings('codex', hooks.settings, 19473, codexHome)
     expect(readFileSync(join(codexHome, 'hooks.json'), 'utf8')).toBe(JSON.stringify(installed))
     const config = readFileSync(join(codexHome, 'config.toml'), 'utf8')
     const hook = installed.hooks.UserPromptSubmit[0].hooks[0]
@@ -114,15 +115,15 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     expect(config).not.toContain('user_prompt_submit:1:0')
   })
 
-  it('records nothing for hooks that never reached the file', () => {
+  it('records nothing for hooks that never reached the file', async () => {
     const codexHome = home()
     writeFileSync(join(codexHome, 'hooks.json'), '[]\n')
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    recordReviewed(record, codexHome, join(codexHome, 'hooks.json'))
+    await recordReviewed(record, codexHome, join(codexHome, 'hooks.json'))
     expect(existsSync(join(codexHome, 'config.toml'))).toBe(false)
   })
 
-  it('leaves a config alone that defines the table in a form an appended table could collide with', () => {
+  it('leaves a config alone that defines the table in a form an appended table could collide with', async () => {
     const records = new Map([['/h/hooks.json:session_start:0:0', 'sha256:new']])
     for (const text of [
       'hooks = { state = {} }\n',
@@ -142,25 +143,26 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     ]) expect(withReviewRecords(text, record, records), text).toBe('unsafe')
     const codexHome = home()
     writeFileSync(join(codexHome, 'config.toml'), '[hooks]\nstate = {}\n')
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    installHookSettings('codex', hooks.settings, 18473, codexHome)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(await installHookSettings('codex', hooks.settings, 19473, codexHome)).toBe(false)
     expect(readFileSync(join(codexHome, 'config.toml'), 'utf8')).toBe('[hooks]\nstate = {}\n')
-    expect(log.mock.calls.flat().join('\n')).toContain('defines hooks.state in a form Harness does not edit')
+    expect(existsSync(join(codexHome, 'hooks.json'))).toBe(false)
+    expect(error).toHaveBeenCalledWith(hooks.settings.messages.failed, expect.objectContaining({ name: 'HookPreparationHeld' }))
   })
 
-  it('keys a symlinked hooks.json by its own name in CODEX_HOME, not its target, as Codex does', () => {
+  it('keys a symlinked hooks.json by its own name in CODEX_HOME, not its target, as Codex does', async () => {
     const codexHome = home()
     const dotfiles = home()
     writeFileSync(join(dotfiles, 'hooks.json'), '{}\n')
     symlinkSync(join(dotfiles, 'hooks.json'), join(codexHome, 'hooks.json'))
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    installHookSettings('codex', hooks.settings, 18473, codexHome)
+    await installHookSettings('codex', hooks.settings, 19473, codexHome)
     const config = readFileSync(join(codexHome, 'config.toml'), 'utf8')
     expect(config).toContain(`[hooks.state.${JSON.stringify(`${codexHome}/hooks.json:session_start:0:0`)}]`)
     expect(config).not.toContain(dotfiles)
   })
 
-  it('keys by the real path of a symlinked CODEX_HOME, as Codex does, and writes through a symlinked config', () => {
+  it('keys by the real path of a symlinked CODEX_HOME, as Codex does, and writes through a symlinked config', async () => {
     const real = home()
     const link = `${real}-link`
     symlinkSync(real, link)
@@ -169,16 +171,16 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     writeFileSync(join(dotfiles, 'config.toml'), 'model = "gpt-6"\n')
     symlinkSync(join(dotfiles, 'config.toml'), join(real, 'config.toml'))
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    installHookSettings('codex', hooks.settings, 18473, link)
+    await installHookSettings('codex', hooks.settings, 19473, link)
     expect(lstatSync(join(real, 'config.toml')).isSymbolicLink()).toBe(true)
     const config = readFileSync(join(dotfiles, 'config.toml'), 'utf8')
     expect(config).toContain(`[hooks.state.${JSON.stringify(`${real}/hooks.json:session_start:0:0`)}]`)
     expect(config).not.toContain(link)
   })
 
-  it('never throws: an unreadable settings path is a hook Codex asks about, as before', () => {
+  it('never throws: an unreadable settings path is a hook Codex asks about, as before', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    expect(() => recordReviewed(record, '/nonexistent-home', '/nonexistent-home/hooks.json')).not.toThrow()
+    expect(await recordReviewed(record, '/nonexistent-home', '/nonexistent-home/hooks.json')).toBe(false)
     expect(error).toHaveBeenCalled()
   })
 })

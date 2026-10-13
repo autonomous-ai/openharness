@@ -84,14 +84,13 @@ describe('SessionInputController', () => {
 
     it('typed but its Enter withheld, as something opened: never pressed later, and the person told where the text is', async () => {
       const withheld: TerminalActionResult = { state: 'unknown', dispatch: 'possibly_executed', reason: 'enter_withheld:permission_open' }
-      const onError = vi.fn(), onSubmitted = vi.fn(), sendKey = vi.fn(async () => true), forget = vi.fn(), onDelivery = vi.fn()
+      const onError = vi.fn(), onSubmitted = vi.fn(), sendKey = vi.fn(async () => true), onDelivery = vi.fn()
       vi.useFakeTimers()
       const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'), validateRuntime: async () => true,
-        inject: async () => withheld, sendKey, onError, onSubmitted, onDelivery, beforeSubmit: () => forget, beforeTeamWrite: async () => null })
+        inject: async () => withheld, sendKey, onError, onSubmitted, onDelivery, beforeTeamWrite: async () => null })
       controller.submit('s1', 'a message from the app')
       await vi.advanceTimersByTimeAsync(30_000)
       expect(onError).toHaveBeenCalledWith('s1', 'Claude Code asked for permission just as your message was typed, so it was not sent; it waits in Claude Code\'s prompt. Answer the request in the app or in its terminal, then press Enter in its terminal to send the message, or clear it there.')
-      expect(forget).toHaveBeenCalled()
       expect(onSubmitted).not.toHaveBeenCalled()
       expect(sendKey).not.toHaveBeenCalled()
       // With a receipt: refused with the reason; a team's, without telling a person.
@@ -204,18 +203,6 @@ describe('SessionInputController', () => {
     })
   })
 
-
-  it('retains the submitted swarm through the input queue and records it only at dispatch', async () => {
-    const beforeSubmit = vi.fn(() => vi.fn())
-    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('cursor'), validateRuntime: async () => true,
-      inject: async () => true, sendKey: async () => true, beforeSubmit, onError: vi.fn() })
-    controller.setTurnOpen('s1', true)
-    controller.submit('s1', 'task from A', undefined, 'swarm-a')
-    expect(beforeSubmit).not.toHaveBeenCalled()
-    controller.onTurnEnded('s1')
-    await vi.waitFor(() => expect(beforeSubmit).toHaveBeenCalledWith('h1', 'task from A', 'swarm-a'))
-    controller.forget('s1')
-  })
 
   it.each(['team_waiting_draft', 'team_waiting_user', 'team_waiting_idle'])('team input preserves the composer on %s', async reason => {
     const inject = vi.fn(async () => true), sendKey = vi.fn(async () => true), onDelivery = vi.fn()

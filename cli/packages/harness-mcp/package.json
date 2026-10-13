@@ -1,0 +1,27 @@
+{
+  "name": "@autonomous-ai/harness-mcp",
+  "version": "0.1.0",
+  "description": "Harness as an MCP server: start, wait for, read and close Claude Code and Codex agents the person can watch.",
+  "mcpName": "io.github.autonomous-ai/harness",
+  "type": "module",
+  "bin": {
+    "harness-mcp": "bin.mjs"
+  },
+  "exports": "./index.mjs",
+  "files": [
+    "bin.mjs",
+    "index.mjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["mcp", "mcp-server", "agents", "claude-code", "codex", "parallel", "harness"],
+  "homepage": "https://harness.autonomous.ai/agents",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/autonomous-ai/openharness.git",
+    "directory": "cli/packages/harness-mcp"
+  },
+  "license": "MIT"
+}

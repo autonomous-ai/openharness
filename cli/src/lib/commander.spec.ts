@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { CommanderMirror, type CommanderFrame } from './commander.js'
+import { withoutUpdate } from './cardUpdate.js'
 import type { LiveEvent } from './normalize.js'
 import { BODY_MAX_CHARS, RECAP_MAX_CHARS, deriveTurnSummary } from './deviceRecap.js'
 
@@ -17,6 +18,41 @@ describe('CommanderMirror recap events', () => {
   afterEach(() => {
     vi.useRealTimers()
     rmSync(dataDir, { recursive: true, force: true })
+  })
+
+  it('reports the latest assistant paragraph as `update` while tools continue running', () => {
+    const frames: CommanderFrame[] = []
+    const mirror = new CommanderMirror({ send: f => frames.push(f), sendWeb: () => {}, hasDevice: () => true,
+      summarize: async () => null, dataDir })
+    mirror.ingest([{ type: 'turn_started', payload: {} },
+      { type: 'text_delta', payload: { content: 'CI passed for the integrated head too.' } },
+      { type: 'tool_start', payload: { tool: 'Bash', input: { command: 'python3 check.py' } } } ] as LiveEvent[], 's')
+    expect(mirror.latestUpdate('s')).toBe('CI passed for the integrated head too.')
+    mirror.heartbeat('s')
+    expect(frames.some(f => f.payload.kind === 'processing' && f.payload.update === mirror.latestUpdate('s'))).toBe(true)
+    mirror.ingest([{ type: 'text_delta', payload: { content: 'The build is ready.' } }] as LiveEvent[], 's')
+    expect(mirror.latestUpdate('s')).toBe('The build is ready.')
+    mirror.ingest([{ type: 'turn_started', payload: {} }] as LiveEvent[], 's')
+    expect(mirror.latestUpdate('s')).toBe('')
+  })
+
+  it('withoutUpdate strips the sentence from a processing card and touches nothing else', () => {
+    const card = { type: 'commander_event', agentId: 'a', payload: { kind: 'processing', text: 'Working', update: 'x' } }
+    expect(withoutUpdate(card)).toEqual({ type: 'commander_event', agentId: 'a', payload: { kind: 'processing', text: 'Working' } })
+    expect(card.payload.update).toBe('x')
+    const summary = { type: 'commander_event', payload: { kind: 'summary', text: 'b' } }
+    expect(withoutUpdate(summary)).toBe(summary)
+    const other = { type: 'agent_deleted', payload: { agentId: 'a' } }
+    expect(withoutUpdate(other)).toBe(other)
+  })
+
+  it('leaves `update` off a processing card before the assistant has written anything', () => {
+    const frames: CommanderFrame[] = []
+    const mirror = new CommanderMirror({ send: f => frames.push(f), sendWeb: () => {}, hasDevice: () => true,
+      summarize: async () => null, dataDir })
+    mirror.ingest([{ type: 'turn_started', payload: {} }] as LiveEvent[], 's')
+    mirror.heartbeat('s')
+    for (const f of frames.filter(f => f.payload.kind === 'processing')) expect(f.payload).not.toHaveProperty('update')
   })
 
   it('keeps what the user ASKED, not only what the agent answered', async () => {
@@ -583,7 +619,8 @@ describe('CommanderMirror recap events', () => {
 
     // Turn closed but summarize in flight → heartbeat re-asserts Summarizing… and still reports busy.
     expect(mirror.heartbeat('session-sum')).toBe(true)
-    expect(deviceFrames.map((f) => f.payload)).toEqual([{ kind: 'processing', text: 'Summarizing…' }])
+    // `update` is the agent's last sentence, which the Pro's working screen shows; other consumers ignore it.
+    expect(deviceFrames.map((f) => f.payload)).toEqual([{ kind: 'processing', text: 'Summarizing…', update: 'answer' }])
 
     releaseSummarize('recap\n\nbody')
     await vi.runAllTimersAsync()

@@ -901,6 +901,18 @@ export async function getCommanderJoinGeneration(machineId: string): Promise<num
 // here would also swallow the difference between "absent" and "Redis is down" for anyone reading logs.
 // The key is a digest of the token — see `ssoProfileCache.ts` — and the value holds no credential.
 
+/**
+ * A fixed-window counter shared by every process and pod: the count after this one. The window is in the
+ * key, so the key's expiry only cleans up. ⌘B's Jev caps (routes/jevRoute.ts) count here, because a
+ * process-local count multiplies by workers × pods and resets on every deploy.
+ */
+export async function redisCount(key: string, ttlMs: number): Promise<number> {
+  const results = await pub.multi().set(key, '0', 'PX', Math.max(1, Math.floor(ttlMs)), 'NX').incr(key).exec()
+  const counted = results?.[1]
+  if (!counted || counted[0]) throw counted?.[0] ?? new Error('redis count failed')
+  return Number(counted[1])
+}
+
 export const redisSsoProfileStore = {
   get: (key: string): Promise<string | null> => pub.get(key),
   async set(key: string, value: string, ttlMs: number): Promise<void> {

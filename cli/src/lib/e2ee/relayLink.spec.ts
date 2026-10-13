@@ -155,8 +155,8 @@ describe('remote-password link + relay session crypto (interop with the real E2e
       expect(sealedResult.payload).not.toHaveProperty('stdout')
       expect(crypto.unwrapIncoming(sealedResult)?.payload).toEqual(gridResult)
 
-      // Team capabilities, peer context, and answers stay opaque to the relay in both directions.
-      for (const type of ['team', 'team_delivery']) {
+      // What agents say to each other (Agent Messages) stays opaque to the relay in both directions.
+      for (const type of ['agent_messages']) {
         const request = { requestId: `private-${type}`, memberKey: 'member-capability', text: 'private peer question' }
         const sealed = crypto.wrapOutgoing({ type, payload: request })
         expect(JSON.stringify(sealed)).not.toContain('member-capability')

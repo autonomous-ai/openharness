@@ -42,13 +42,13 @@ class _RecordingSession extends TerminalSession {
   }
 
   @override
-  Future<bool> pasteText(String text, {String? tabId}) async {
+  Future<bool> pasteText(String text) async {
     calls.add('paste:$text');
     return true;
   }
 
   @override
-  Future<bool> sendComposerText(String text, {String? tabId}) async {
+  Future<bool> sendComposerText(String text) async {
     calls.add('send:$text');
     return true;
   }

@@ -113,6 +113,14 @@ describe('what a client sends', () => {
     for (const odd of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY, '3600000']) expect(sent(odd), String(odd)).toEqual({ id: 'a1', name: 'lamp v1', asks: [] })
   })
 
+  it('says where a session runs and which conversation it is, when those are short strings', () => {
+    const sent = (machine: unknown, conversation: unknown) => routeInput({ text: 'go', sessions: [{ id: 'a1', name: 'X Posts', machine, conversation }] })?.sessions[0]
+    expect(sent('M2', 'c-1')).toEqual({ id: 'a1', name: 'X Posts', asks: [], machine: 'M2', conversation: 'c-1' })
+    for (const [machine, conversation] of [[undefined, undefined], ['  ', ''], ['m'.repeat(101), 'c'.repeat(201)], [4, ['c']]]) {
+      expect(sent(machine, conversation), String(machine)).toEqual({ id: 'a1', name: 'X Posts', asks: [] })
+    }
+  })
+
   it('says where the last task went only with a session id and a finite time', () => {
     const last = (value: unknown) => routeInput({ text: 'go', last: value })!
     expect(last({ id: 'a1', agoMs: 0 }).last).toEqual({ id: 'a1', agoMs: 0 })
@@ -250,11 +258,16 @@ describe('the router', () => {
 })
 
 describe('the router this computer runs', () => {
-  it('asks Jev through the person\'s key, and logs as [route]', () => {
+  it('asks Jev through the person\'s key or the account\'s backend, and logs as [route]', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const made = defaultRouter()
+    const core = fakeCore()
+    const backend = vi.spyOn(core.account, 'backend').mockResolvedValue({ status: 200, body: {} })
+    const made = defaultRouter(core)
     // No key or fetch of its own: the client finds the person's key when it is asked, and not before.
-    expect(createJevDecide).toHaveBeenCalledWith({ onCost: expect.any(Function) })
+    expect(createJevDecide).toHaveBeenCalledWith({ backend: expect.any(Function), onCost: expect.any(Function) })
+    // Harness's key is the core's to sign for: the router holds no credential.
+    await vi.mocked(createJevDecide).mock.calls[0]![0]!.backend!('POST', '/api/route/jev', { state: {} })
+    expect(backend).toHaveBeenCalledWith('POST', '/api/route/jev', { state: {} })
     expect(made.jev).toEqual(expect.any(Function))
     expect(Object.keys(made).sort()).toEqual(['jev', 'log'])
     made.log!('session — 2 sessions')

@@ -65,7 +65,7 @@ void main() {
       ...machineRequests,
       ...namesIn(frames, 'FLEET_REQUESTS'),
       ...namesIn(cli('sharing/protocol.ts'), 'SHARE_REQUEST_TYPES'),
-      ...namesIn(cli('teams/wire.ts'), 'TEAM_REQUEST_TYPES'),
+      ...namesIn(cli('messages/wire.ts'), 'AGENT_MESSAGES_REQUEST_TYPES'),
       ...namesIn(cli('lib/viewerFrames.ts'), 'VIEWER_DOWN_TYPES'),
     };
   });

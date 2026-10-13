@@ -3,9 +3,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHomeAdopter, readAdoptedHomes } from './homeAdoption.js'
+import { NATIVE_EVIDENCE_MS } from './nativeEvidence.js'
 
 const clock = vi.hoisted(() => ({ now: 0, remaining: Infinity }))
-vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => --clock.remaining < 0 ? 251 : clock.now } }))
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => --clock.remaining < 0 ? 3_001 : clock.now } })) // past NATIVE_EVIDENCE_MS
 
 vi.mock('node:fs', async original => {
   const actual = await original<typeof fs>()
@@ -305,7 +306,7 @@ describe('durable monotone home adoption', () => {
     })
 
   it('holds when an I/O call exhausts the shared work deadline', () => {
-    vi.mocked(fs.fsyncSync).mockImplementation(fd => { actual.fsyncSync(fd); clock.now += 251 })
+    vi.mocked(fs.fsyncSync).mockImplementation(fd => { actual.fsyncSync(fd); clock.now += NATIVE_EVIDENCE_MS + 1 })
     expect(() => adopter.adopt(add('/held'))).toThrow('work deadline')
     expect(actual.existsSync(record(0))).toBe(false)
   })

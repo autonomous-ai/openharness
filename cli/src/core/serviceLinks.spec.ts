@@ -115,10 +115,10 @@ describe('service links', () => {
     ])
     expect(stays).not.toHaveBeenCalled()
     expect(core).not.toHaveBeenCalled()
-    // Sent, it is the process's to abort when its connection closes.
+    // A closed owner revokes even a request already sent to the process.
     links.closeConnection('stays')
     expect(orchestrator.sent.at(-1)).toEqual({ type: 'service_connection_closed', payload: { connection: 'stays' } })
-    expect(stays).not.toHaveBeenCalled()
+    expect(stays).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'orchestrator', retryable: true })
   })
 
   it('acknowledges an accepted service before held events and the requests that woke it', () => {
@@ -334,7 +334,7 @@ describe('service links', () => {
     // The old connection's end does not take the newer one with it.
     old.closed()
     expect(links.connected('search')).toBe(true)
-    expect(waiting).not.toHaveBeenCalled()
+    expect(waiting).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
     const pending = vi.fn()
     links.route('session_search', {}, ASKER, pending)
     newer.closed()
@@ -372,6 +372,19 @@ describe('service links', () => {
     links.accept('search', TOKEN, search, vi.fn())
     expect(links.notify('search', { type: 'service_event', payload: { kind: 'touch' } })).toBe(true)
     expect(search.sent).toEqual([{ type: 'service_event', payload: { kind: 'touch' } }])
+  })
+
+  it('revokes a queued query and binary frames when that service connection is replaced', async () => {
+    const answer = vi.fn(() => ({})), binary = vi.fn(), links = make({ answer, binary }), old = sink()
+    const retired = links.accept('search', TOKEN, old, vi.fn())!
+    retired.receive({ type: 'service_query', payload: { requestId: 'queued', query: 'agents' } })
+    const current = links.accept('search', TOKEN, sink(), vi.fn())!
+    retired.receiveBinary(Buffer.from('old')); current.receiveBinary(Buffer.from('current'))
+    await vi.waitFor(() => expect(old.sent).toHaveLength(1))
+    expect(answer).not.toHaveBeenCalled()
+    expect(old.sent[0].payload).toMatchObject({ requestId: 'queued', error: 'SERVICE_UNAVAILABLE' })
+    expect(binary).toHaveBeenCalledExactlyOnceWith('search', Buffer.from('current'))
+    current.closed()
   })
 
   it('holds what a service must hear while it is down, and says it, in order, when it connects', () => {

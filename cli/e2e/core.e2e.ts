@@ -139,6 +139,7 @@ describe('the core under pressure', () => {
     const client = await LocalClient.connect(d)
     const id = await create(d, client, engine, `exits-${engine}`)
     await bound(client, id)
+    await turn(client, id, 'retain this conversation before the native exit')
     client.send('message', { agentId: id, content: '!exit' })
     const gone = await until('the agent to stop counting as active', async () => {
       const agent = await row(client, id)
@@ -173,6 +174,7 @@ describe('the core under pressure', () => {
     expect((await rows(client)).find((agent) => agent.id === ghost)).toBeUndefined()
     const id = await create(d, client, 'claude', 'after-the-ghosts')
     await bound(client, id)
+    await turn(client, id, 'retain this conversation before Stop and resume')
     expect((await client.request('agent_delete', { agentId: id }, 60_000)).error).toBeUndefined()
     // Stopping it again, and resuming it twice at once, answer rather than race.
     const twice = await client.request('agent_delete', { agentId: id }, 60_000)

@@ -77,7 +77,6 @@ function setup(over: Partial<BindDeps> = {}) {
     announceSession: vi.fn(),
     stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(() => null) },
     syncRecapPool: vi.fn(),
-    teams: { forget: vi.fn() },
     input: { forget: vi.fn() },
     deviceInput: { forget: vi.fn() },
     homes: { copilot: '/copilot', grok: '/grok', agy: '/agy' },
@@ -112,6 +111,26 @@ describe('binding a registered session to its agent', () => {
       type: 'session_synced',
       payload: { sessionId: 's1', agentId: 'a1', title: expect.any(String), createdAt: '2026-10-04T10:00:00.000Z' },
     })
+  })
+
+  // A conversation new to this harness takes it from any stopped harness it came from (conversationOwners.ts).
+  it('settles who owns a newly bound conversation, and only a newly bound one; a failure never stops the bind', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const owners = { settle: vi.fn(() => []) }
+    const run = setup({ owners })
+    const entry = agent({ boundAt: Date.parse('2026-10-04T10:00:00Z') })
+    await registered(run, entry, meta({ isNew: true }))
+    expect(owners.settle).toHaveBeenCalledWith(['claude\u0000\u0000\u0000s1'])
+    await registered(run, entry, meta({ isNew: false }))
+    expect(owners.settle).toHaveBeenCalledTimes(1)
+    owners.settle.mockImplementationOnce(() => { throw new Error('stopped store unreadable') })
+    await registered(run, entry, meta({ isNew: true }))
+    owners.settle.mockImplementationOnce(() => { throw 'plain' })
+    await registered(run, entry, meta({ isNew: true }))
+    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns s1: stopped store unreadable')
+    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns s1: plain')
+    // Each new binding is still announced after a failed settle (the one that was not new announces nothing).
+    expect(run.deps.announceSession).toHaveBeenCalledTimes(3)
   })
 
   it('still tells the app of a binding when the record it resumes from cannot be saved, as on a full disk', async () => {
@@ -769,7 +788,6 @@ describe('binding a running process to its session', () => {
       run.bySession.set('r', previous)
       vi.mocked(run.deps.registry.register).mockReturnValue({ entry: agent({ sessionId: 'r' }), ...meta({ isNew: true }) } as never)
       await run.binding.bindObservedAgent(observed({ resumeSessionId: 'r' } as Partial<DiscoveredTerminalAgent>))
-      expect(run.deps.teams.forget).toHaveBeenCalledWith('old')
       expect(run.deps.input.forget).toHaveBeenCalledWith('old')
       expect(run.deps.deviceInput.forget).toHaveBeenCalledWith('old')
       expect(run.deps.announceSession).toHaveBeenCalledWith(previous)
@@ -778,6 +796,21 @@ describe('binding a running process to its session', () => {
   })
 
   describe('a repair', () => {
+    it('keeps a stopped parent out of an unbound fork\'s fallback discovery', async () => {
+      const owners = { settle: vi.fn(() => []) }, run = setup({ owners })
+      const parent = agent({ agentId: 'parent-agent', sessionId: 'parent', active: false })
+      const fork = agent({ sessionId: '', forkedFrom: { agentId: parent.agentId, name: 'Parent', sessionId: parent.sessionId } })
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(fork)
+      vi.mocked(run.deps.stoppedAgents.get).mockReturnValue(parent)
+      vi.mocked(findLiveSession).mockImplementation(async (_engine, _cwd, _start, options) =>
+        options?.excludedSessionId === parent.sessionId ? null : { sessionId: parent.sessionId, transcriptPath: '/parent' })
+      await run.binding.bindObservedAgent(observed())
+      expect(run.deps.registry.register).not.toHaveBeenCalled()
+      expect(run.deps.stoppedAgents.save).not.toHaveBeenCalled()
+      expect(owners.settle).not.toHaveBeenCalled()
+      expect(fork.sessionId).toBe('')
+    })
+
     it.each(['rebound', 'stopped'] as const)('does not publish native Codex evidence after its owner was %s', async change => {
       const run = setup(), entry = agent({ engine: 'codex', sessionId: '' }), seen = observed({ engine: 'codex' })
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(entry)

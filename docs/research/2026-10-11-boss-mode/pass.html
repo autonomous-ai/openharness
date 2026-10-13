@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Pass</title>
+<style>
+  :root {
+    --bg: #0b0c0d; --steel: #1a1d20; --text: #e7e3d8; --muted: #8d8a82; --faint: #55534e; --line: #23262a;
+    --paper: #ebe5d5; --paper-2: #e2dbc8; --ink: #1d1b17; --ink-2: #5b564b;
+    --red: #e5484d; --heat: #ffad4a; --green: #57c27e; --cold: #8fb3d9;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 12px/1.4 var(--mono); }
+  body { overflow: hidden; }
+  #kitchen { position: fixed; inset: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 0;
+    background:
+      radial-gradient(ellipse 80% 50% at 50% 52%, rgba(255,173,74,.07), transparent 70%),
+      repeating-linear-gradient(90deg, rgba(255,255,255,.012) 0 1px, transparent 1px 3px),
+      linear-gradient(#0e1012, #0a0b0c); }
+
+  /* the expo's call: all day */
+  #call { display: flex; align-items: baseline; gap: 22px; padding: 14px 22px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; }
+  #call .brand { color: var(--muted); letter-spacing: .34em; font-size: 11px; }
+  #call .allday { font-size: 18px; letter-spacing: .06em; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+  #call .allday .k { color: var(--faint); font-size: 12px; letter-spacing: .2em; margin-right: 10px; }
+  #call .allday b { font-weight: 600; }
+  #call .allday .hands { color: var(--red); }
+  #call .allday .up { color: var(--heat); }
+  #call .allday .x86 { color: #c9c4b8; text-decoration: line-through; text-decoration-color: var(--red); }
+  #call .clock { margin-left: auto; color: var(--muted); text-align: right; font-size: 11px; }
+  #call.flash .allday { animation: call 1.2s ease-out; }
+  @keyframes call { 0% { color: #fff; text-shadow: 0 0 18px rgba(255,173,74,.8); } 100% { text-shadow: none; } }
+
+  .zone { position: relative; min-height: 0; }
+  .zone > h2 { position: absolute; left: 22px; top: 8px; margin: 0; font-size: 10.5px; font-weight: 500; letter-spacing: .3em; color: var(--faint); z-index: 3; }
+  .zone > h2 b { color: var(--muted); font-weight: 500; }
+  .zone.cur > h2 b { color: var(--text); }
+  .zone.cur > h2::before { content: '▸ '; color: var(--heat); }
+
+  /* the rail: tickets fired, hanging from steel */
+  #rail { height: 352px; padding: 0 22px; }
+  #rail .bar { position: absolute; left: 14px; right: 14px; top: 34px; height: 12px; border-radius: 3px;
+    background: linear-gradient(#5d636a, #2c3035 45%, #1b1e21 55%, #3a3f45); box-shadow: 0 3px 8px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.22); }
+  #rail .printer { position: absolute; right: 22px; top: 2px; width: 64px; height: 26px; border-radius: 4px 4px 0 0; background: linear-gradient(#2a2e33, #1a1d20); border: 1px solid #33383e; border-bottom: 0; color: var(--faint); font-size: 9px; text-align: center; line-height: 26px; letter-spacing: .2em; z-index: 4; }
+  #rail .printer.on::after { content: ''; position: absolute; right: 8px; top: 9px; width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+  #railtickets { position: absolute; left: 22px; right: 96px; top: 30px; bottom: 0; }
+
+  /* the pass: plates up under the heat lamps */
+  #pass { padding: 0 22px; border-top: 1px solid #1d2023; border-bottom: 1px solid #1d2023;
+    background: linear-gradient(rgba(255,173,74,.035), transparent 30%), linear-gradient(transparent 80%, rgba(255,255,255,.03)); }
+  #pass .lamps { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  #pass .lamp { position: absolute; top: 0; width: 120px; height: 18px; transform: translateX(-50%); border-radius: 0 0 50% 50% / 0 0 100% 100%;
+    background: linear-gradient(#3b3f44, #1c1f22); box-shadow: 0 6px 24px rgba(255,173,74,.35); }
+  #pass .lamp::after { content: ''; position: absolute; left: 50%; top: 14px; width: 560px; height: 520px; transform: translateX(-50%);
+    background: radial-gradient(ellipse 50% 60% at 50% 0%, rgba(255,160,60,.16), rgba(255,140,40,.05) 55%, transparent 75%); mix-blend-mode: screen; }
+  #passplates { position: absolute; left: 22px; right: 22px; top: 34px; bottom: 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); grid-auto-rows: min-content; gap: 14px 14px; align-content: start; overflow-y: auto; scrollbar-width: none; padding: 4px; margin: -4px; }
+  #pass .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); letter-spacing: .2em; }
+
+  /* the bottom: the spike, the 86 board, the stations */
+  #floor { display: grid; grid-template-columns: 260px 1fr 300px; gap: 0; height: 206px; border-top: 1px solid var(--line); }
+  #floor > section { position: relative; padding: 32px 18px 14px; min-width: 0; overflow: hidden; }
+  #floor > section + section { border-left: 1px solid var(--line); }
+  #spike .pin { position: absolute; left: 120px; top: 40px; width: 3px; height: 128px; background: linear-gradient(#cfd3d8, #6a7077); border-radius: 2px 2px 0 0; box-shadow: 0 0 6px rgba(255,255,255,.15); }
+  #spike .pin::before { content: ''; position: absolute; left: -2px; top: -6px; border: 3.5px solid transparent; border-bottom: 7px solid #e6e9ec; }
+  #spike .base { position: absolute; left: 84px; top: 166px; width: 76px; height: 10px; border-radius: 5px; background: linear-gradient(#4a5057, #24282c); }
+  #spiked { position: absolute; left: 0; right: 0; top: 0; bottom: 0; }
+  #spiked .stub { position: absolute; left: 66px; width: 112px; padding: 5px 7px; background: var(--paper-2); color: var(--ink); font-size: 9.5px; line-height: 1.3; border-radius: 1px; box-shadow: 0 1px 2px rgba(0,0,0,.5); text-transform: uppercase; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; filter: brightness(.82); }
+  #spiked .stub.sel { outline: 2px solid var(--heat); filter: none; z-index: 5; }
+  #spiked .stub::after { content: ''; position: absolute; left: 52px; top: 45%; width: 7px; height: 7px; border-radius: 50%; background: #0b0c0d; }
+  #spike .count { position: absolute; left: 18px; bottom: 10px; color: var(--faint); font-size: 10.5px; }
+
+  #board { background: linear-gradient(#141617, #111314); }
+  #board .slate { position: absolute; left: 18px; right: 18px; top: 34px; bottom: 14px; border: 1px solid #2a2d30; border-radius: 3px; background: radial-gradient(ellipse at 30% 20%, #1d2122, #151819); padding: 12px 16px; overflow: hidden; }
+  #board .row86 { color: #e8e2d2; font-size: 13px; letter-spacing: .05em; text-transform: uppercase; margin: 0 0 10px; transform: rotate(-.4deg); opacity: .92; cursor: pointer; padding: 2px 4px; }
+  #board .row86 .no { color: var(--red); font-weight: 700; margin-right: 8px; }
+  #board .row86 .why { display: block; text-transform: none; color: #a8a294; font-size: 11.5px; letter-spacing: 0; margin: 2px 0 0 0; transform: rotate(.3deg); }
+  #board .row86.sel { outline: 1px dashed var(--red); }
+  #board .none { color: var(--faint); }
+
+  #stations .st { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; margin-bottom: 10px; }
+  #stations .st b { color: var(--text); font-weight: 500; letter-spacing: .12em; text-transform: uppercase; font-size: 11px; }
+  #stations .st .n { color: var(--faint); font-size: 10.5px; text-align: right; }
+  #stations .st .cooks { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
+  #stations .st .cook { width: 12px; height: 12px; border-radius: 2px; background: #22262a; border: 1px solid #2f343a; }
+  #stations .st .cook.working { background: var(--green); border-color: var(--green); box-shadow: 0 0 6px rgba(87,194,126,.6); }
+  #stations .st .cook.asking { background: var(--red); border-color: var(--red); animation: bell 1s steps(1) infinite; }
+  #stations .st .cook.done { background: var(--heat); border-color: var(--heat); }
+  #stations .st.closed b { color: var(--faint); text-decoration: line-through; }
+  @keyframes bell { 50% { opacity: .35; } }
+
+  #keys { padding: 8px 16px 10px; text-align: center; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-top: 1px solid var(--line); }
+  #keys kbd { font: inherit; color: var(--muted); }
+
+  /* a ticket: thermal paper */
+  .ticket { position: absolute; width: var(--tw, 172px); color: var(--ink); background: var(--paper); padding: 9px 10px 14px; font-size: 11px; line-height: 1.32; text-transform: uppercase;
+    box-shadow: 0 10px 22px rgba(0,0,0,.55), 0 1px 0 rgba(255,255,255,.5) inset; cursor: pointer; transform-origin: 50% 0;
+    -webkit-mask: linear-gradient(#000 0 0) top / 100% calc(100% - 6px) no-repeat, conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / 10px 6px repeat-x;
+            mask: linear-gradient(#000 0 0) top / 100% calc(100% - 6px) no-repeat, conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / 10px 6px repeat-x; }
+  .ticket::before { content: ''; position: absolute; left: 50%; top: -1px; width: 28px; height: 9px; transform: translateX(-50%); background: linear-gradient(#8b9198, #3e4349); border-radius: 0 0 3px 3px; }
+  .ticket .hd { display: flex; gap: 8px; font-weight: 700; font-size: 12px; margin-top: 2px; }
+  .ticket .hd .at { font-weight: 500; color: var(--ink-2); }
+  .ticket .meta { color: var(--ink-2); font-size: 10px; letter-spacing: .04em; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ticket hr { border: 0; border-top: 1px dashed #9a937f; margin: 6px 0; }
+  .ticket .order { display: grid; grid-template-columns: 14px 1fr; font-weight: 600; font-size: 11.5px; }
+  .ticket .order .what { display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+  .ticket .cook { font-size: 10px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ticket .timer { margin-top: 7px; display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 12px; padding: 3px 6px; color: #fff; background: #2f8a55; border-radius: 2px; }
+  .ticket .timer.amber { background: #b9741c; }
+  .ticket .timer.red { background: #b8312f; }
+  .ticket .timer span { font-weight: 500; font-size: 9.5px; letter-spacing: .12em; opacity: .9; }
+  .ticket.sel { outline: 2px solid var(--heat); outline-offset: 3px; z-index: 30 !important; }
+  .ticket.dim { opacity: .2; }
+  .ticket.new { animation: print 1.4s cubic-bezier(.2,.7,.2,1); }
+  @keyframes print { 0% { clip-path: inset(0 0 100% 0); transform: translateY(-30px); } 60% { clip-path: inset(0 0 0 0); transform: translateY(-14px); } 100% { transform: none; } }
+  .ticket.swing { animation: swing 2.6s ease-in-out infinite; }
+  @keyframes swing { 0%, 100% { rotate: -1.3deg; } 50% { rotate: 1.3deg; } }
+
+  /* the cook needs the chef: a red flag and the question chit */
+  .ticket .flag { position: absolute; right: -2px; top: 14px; background: var(--red); color: #fff; font-weight: 700; font-size: 10px; letter-spacing: .1em; padding: 2px 7px 2px 9px; clip-path: polygon(8px 0, 100% 0, 100% 100%, 8px 100%, 0 50%); }
+  .ticket .chit { margin: 8px -4px 0; padding: 7px 8px; background: #fff4d6; border-left: 3px solid var(--red); color: #3a2a12; font-size: 11px; text-transform: none; line-height: 1.38; font-style: italic;
+    box-shadow: 0 1px 3px rgba(0,0,0,.25); display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+
+  /* a plate up on the pass */
+  .plate { position: relative; color: var(--ink); background: var(--paper); padding: 10px 12px 12px; font-size: 11px; line-height: 1.38; cursor: pointer;
+    box-shadow: 0 0 0 1px rgba(255,190,110,.25), 0 14px 30px rgba(0,0,0,.55), 0 0 44px rgba(255,160,60,var(--warm, .22)); filter: saturate(var(--sat, 1)) hue-rotate(var(--hue, 0deg)); }
+  .plate .hd { display: flex; justify-content: space-between; font-weight: 700; font-size: 12px; text-transform: uppercase; }
+  .plate .order { text-transform: uppercase; font-weight: 600; font-size: 10.5px; color: var(--ink-2); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .plate .result { margin-top: 7px; padding-top: 7px; border-top: 1px dashed #9a937f; font-size: 11.5px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; min-height: 4.2em; }
+  .plate .hd .where { font-weight: 500; color: var(--ink-2); font-size: 10.5px; }
+  .plate .state { margin-top: 7px; font-size: 10px; font-weight: 700; letter-spacing: .1em; color: #a3501b; }
+  .plate.cold .state { color: #3d6488; }
+  .plate .up { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; font-size: 10px; color: var(--ink-2); line-height: 1.35; }
+  .plate .stamp { flex: none; color: rgba(184,49,47,.8); border: 2px solid rgba(184,49,47,.65); font-weight: 800; font-size: 12px; letter-spacing: .1em; padding: 1px 6px; transform: rotate(-7deg); margin-left: 8px; }
+  .plate .steam { position: absolute; left: 0; right: 0; top: -26px; height: 26px; pointer-events: none; }
+  .plate .steam i { position: absolute; bottom: 0; width: 14px; height: 22px; border-radius: 50%; background: radial-gradient(rgba(255,255,255,.22), transparent 70%); filter: blur(3px); animation: steam 3.2s ease-out infinite; }
+  @keyframes steam { 0% { transform: translateY(6px) scale(.6); opacity: 0; } 30% { opacity: .9; } 100% { transform: translateY(-14px) scale(1.4); opacity: 0; } }
+  .plate.sel { box-shadow: 0 0 0 2px var(--heat), 0 0 0 6px rgba(255,173,74,.18), 0 14px 30px rgba(0,0,0,.55), 0 0 44px rgba(255,160,60,var(--warm, .22)); }
+  .plate.dim { opacity: .2; }
+  .plate.bumped { animation: bump .5s ease-in forwards; }
+  @keyframes bump { to { transform: translate(-60px, 120px) rotate(-8deg) scale(.6); opacity: 0; } }
+
+  /* a ticket read in full */
+  #read { position: fixed; inset: 0; background: rgba(5,6,7,.72); backdrop-filter: blur(3px); display: none; align-items: flex-start; justify-content: center; padding: 48px 16px; z-index: 50; overflow-y: auto; }
+  #read.on { display: flex; }
+  #read .big { position: relative; width: min(470px, 100%); background: var(--paper); color: var(--ink); padding: 18px 20px 26px; font-size: 12.5px; line-height: 1.5; box-shadow: 0 30px 80px rgba(0,0,0,.7);
+    -webkit-mask: linear-gradient(#000 0 0) top / 100% calc(100% - 8px) no-repeat, conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / 14px 8px repeat-x;
+            mask: linear-gradient(#000 0 0) top / 100% calc(100% - 8px) no-repeat, conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg) bottom / 14px 8px repeat-x; }
+  #read .big h1 { font-size: 15px; margin: 0; display: flex; justify-content: space-between; text-transform: uppercase; }
+  #read .big .meta { color: var(--ink-2); text-transform: uppercase; font-size: 11px; }
+  #read .big hr { border: 0; border-top: 1px dashed #9a937f; margin: 10px 0; }
+  #read .big .order { font-weight: 700; text-transform: uppercase; font-size: 14px; overflow-wrap: anywhere; }
+  #read .big .said { white-space: pre-wrap; overflow-wrap: anywhere; }
+  #read .big .said.q { background: #fff4d6; border-left: 3px solid var(--red); padding: 8px 10px; font-style: italic; }
+  #read .big .line { display: grid; grid-template-columns: 96px 1fr; gap: 8px; font-size: 11.5px; margin: 3px 0; }
+  #read .big .line b { text-transform: uppercase; color: var(--ink-2); font-weight: 600; letter-spacing: .04em; }
+  #read .big .tl { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; text-transform: uppercase; color: var(--ink-2); }
+  #read .big .tl span b { color: var(--ink); }
+  #read .big .keys { margin-top: 14px; font-size: 11px; color: var(--ink-2); }
+  #read .big .keys kbd { font: inherit; font-weight: 700; color: var(--ink); }
+
+  #find { position: fixed; left: 50%; bottom: 46px; transform: translateX(-50%); background: #121416; border: 1px solid #2c3034; padding: 6px 12px; font-size: 13px; display: none; z-index: 40; white-space: nowrap; }
+  #find.on { display: block; }
+  #find .c { color: var(--heat); }
+  #find i { display: inline-block; width: .6em; height: 1.05em; background: var(--text); transform: translateY(2px); animation: blink 1.05s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  #toast { position: fixed; left: 50%; top: 58px; transform: translateX(-50%); background: #16181a; border: 1px solid #2d3135; color: var(--text); padding: 6px 14px; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 60; white-space: nowrap; letter-spacing: .04em; }
+  #toast.on { opacity: 1; }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); letter-spacing: .3em; pointer-events: none; }
+
+  @media (max-width: 980px) {
+    #floor { grid-template-columns: 180px 1fr; height: 214px; }
+    #stations { display: none; }
+    #spike .pin { left: 80px; } #spike .base { left: 44px; } #spiked .stub { left: 26px; }
+    #call .allday { font-size: 15px; }
+    #call .brand { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ticket.swing, .plate .steam i, .ticket.new, #stations .cook.asking { animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div id="kitchen">
+  <header id="call"><span class="brand">THE PASS</span><span class="allday" id="allday"></span><span class="clock" id="clock"></span></header>
+  <section class="zone" id="rail"><h2><b>THE RAIL</b> · fired, oldest first</h2><div class="bar"></div><div class="printer" id="printer">⌘B</div><div id="railtickets"></div></section>
+  <section class="zone" id="pass"><h2><b>THE PASS</b> · up, waiting for you to pick it up</h2><div class="lamps" id="lamps"></div><div id="passplates"></div></section>
+  <div id="floor">
+    <section class="zone" id="spike"><h2><b>THE SPIKE</b></h2><div class="pin"></div><div class="base"></div><div id="spiked"></div><div class="count" id="spikecount"></div></section>
+    <section class="zone" id="board"><h2><b>86</b> · failed, or never sent</h2><div class="slate" id="slate"></div></section>
+    <section class="zone" id="stations"><h2><b>STATIONS</b></h2><div id="crew"></div></section>
+  </div>
+  <footer id="keys"></footer>
+</div>
+<div id="read"><article class="big" id="big"></article></div>
+<div id="find"><span class="c">/</span> <span id="q"></span><i></i></div>
+<div id="toast"></div>
+<div id="loading">firing</div>
+<script src="boss-data.js"></script>
+<script src="pass.js"></script>
+</body>
+</html>

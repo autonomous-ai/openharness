@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FleetError, type FleetMachine, type MachineFleet } from '../cable/machineFleet.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { transcriptActivityAt } from '../lib/transcriptActivity.js'
 import { FleetRouter, type FleetLocal } from './fleetRouter.js'
+
+vi.mock('../lib/transcriptActivity.js', () => ({ transcriptActivityAt: vi.fn(async () => null) }))
 
 const session = (agentId: string, registeredAt: number, engine?: string) =>
   ({ agentId, registeredAt, engine, sessionId: `s-${agentId}` }) as unknown as RegisteredSession
@@ -307,6 +310,20 @@ describe('a turn, delivered and said so', () => {
     expect(updateAgent).toHaveBeenCalledWith('a1', 'sonnet', undefined)
     // A daemon with no model switch: nothing happens.
     new FleetRouter(localOf()).updateAgent('a1', 'opus')
+  })
+
+  it('times each local agent by its transcript, else its last hook, and skips one with neither', async () => {
+    vi.mocked(transcriptActivityAt).mockImplementation(async (path) => (path === '/t' ? 500 : null))
+    const at = (agentId: string, over: object) => ({ ...session(agentId, 1, 'claude'), ...over }) as unknown as RegisteredSession
+    const router = new FleetRouter(localOf({}, [
+      at('a1', { transcriptPath: '/t', lastHookAt: 9 }), at('a2', { transcriptPath: null, lastHookAt: 700 }), at('a3', { transcriptPath: null }),
+    ]))
+    expect([...(await router.activityTimes())]).toEqual([['a1', 500], ['a2', 700]])
+  })
+
+  it('carries the whole answer of a recent turn when it has one', async () => {
+    const router = new FleetRouter(localOf({ recent: vi.fn(() => [{ recap: 'r', text: 't', fullText: 'all of it' }] as never) }, [session('a1', 1)]))
+    expect(await router.recentSummaries('a1')).toEqual([{ recap: expect.any(String), text: 't', ask: '', fullText: 'all of it' }])
   })
 
   it('reads recaps, questions and models from the agent’s own machine, tidied', async () => {

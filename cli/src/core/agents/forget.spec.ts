@@ -28,7 +28,6 @@ function setup() {
     runtimeProfiles: { forget: vi.fn() },
     watcher: { removeSession: vi.fn(async () => {}) },
     stopHeartbeat: vi.fn(),
-    teams: { forget: vi.fn() },
     input: { forget: vi.fn() },
     deviceInput: { forget: vi.fn() },
     detachDsh: vi.fn(),
@@ -55,7 +54,6 @@ function expectLetGo(deps: ForgetDeps, sessionId: string, agentId: string) {
   expect(deps.runtimeProfiles.forget).toHaveBeenCalledWith(sessionId)
   expect(deps.watcher.removeSession).toHaveBeenCalledWith(sessionId)
   expect(deps.stopHeartbeat).toHaveBeenCalledWith(sessionId)
-  expect(deps.teams.forget).toHaveBeenCalledWith(agentId)
   expect(deps.input.forget).toHaveBeenCalledWith(agentId)
   expect(deps.deviceInput.forget).toHaveBeenCalledWith(agentId)
   expect(deps.mirror.forget).toHaveBeenCalledWith(sessionId)
@@ -139,6 +137,30 @@ describe('forgetting a session', () => {
     expect(String(log.mock.calls[0][0])).toContain('forgotten')
   })
 
+  // Its last record may hold a conversation another harness took meanwhile (conversationOwners.ts).
+  it('settles who owns the conversation its last record holds, once it is no longer running; never on a release', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { deps } = setup()
+    const order: string[] = []
+    vi.mocked(deps.registry.removeAgent).mockImplementation(() => { order.push('removed'); return true })
+    const owners = { settleSaved: vi.fn(() => { order.push('settled'); return [] }) }
+    const forget = createForgetSession({ ...deps, owners })
+    forget('s1')
+    expect(owners.settleSaved).toHaveBeenCalledWith('a1')
+    expect(order).toEqual(['removed', 'settled'])
+    forget('s1', { keepAgent: true })
+    forget('unknown-session')
+    expect(owners.settleSaved).toHaveBeenCalledTimes(1)
+    owners.settleSaved.mockImplementationOnce(() => { throw new Error('stopped store unreadable') })
+    forget('s1')
+    owners.settleSaved.mockImplementationOnce(() => { throw 'plain' })
+    forget('s1')
+    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns its conversation: stopped store unreadable')
+    expect(warn).toHaveBeenCalledWith('[agent] a1 could not settle who owns its conversation: plain')
+    expect(deps.clients.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1', retained: true } })
+  })
+
   it('removes a session the registry no longer knows, announced by the agent id the caller names', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const named = setup()
@@ -157,8 +179,8 @@ describe('forgetting a session', () => {
   it('clears agent-keyed input after binding revalidation has already released the session index', () => {
     const { deps } = setup()
     vi.mocked(deps.registry.resolve).mockReturnValue(undefined)
-    const pending = ['teams', 'input', 'deviceInput'].map(() => new Map([['a1', 'queued'], ['other', 'keep']]))
-    for (const [index, key] of (['teams', 'input', 'deviceInput'] as const).entries()) {
+    const pending = ['input', 'deviceInput'].map(() => new Map([['a1', 'queued'], ['other', 'keep']]))
+    for (const [index, key] of (['input', 'deviceInput'] as const).entries()) {
       deps[key].forget = id => { pending[index]!.delete(id) }
     }
     createForgetSession(deps)('s1', { force: true, keepAgent: true, agentId: 'a1' })

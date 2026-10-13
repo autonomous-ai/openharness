@@ -9,6 +9,29 @@ const identity = (info: BigIntStats | null) => info && `${nativeFileKey(info)}:$
 const version = (info: BigIntStats) => `${identity(info)}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 type Part = { info: BigIntStats | null; target?: string }
 type Location = { path: string; info: BigIntStats } | null
+/** Immutable route facts can cross a service boundary; timestamps matter for aliases, not sibling churn. */
+export type NativePathFact = { path: string; identity: string | null; alias?: { target: string; version: string } }
+export function verifyNativePathFacts(facts: readonly NativePathFact[]): void {
+  const budget = new NativeEvidenceBudget()
+  if (!facts.length || facts.length > 256) return nativeUnavailable('the retained route exceeds its limit')
+  for (const fact of facts) {
+    budget.step()
+    if (!isAbsolute(fact.path) || fact.path.includes('\0') || Buffer.byteLength(fact.path) > 4096) {
+      return nativeUnavailable('the retained route is invalid')
+    }
+    let info: BigIntStats | null, target: string | undefined
+    try {
+      info = lstatSync(fact.path, { bigint: true })
+      if (info.isSymbolicLink()) target = readlinkSync(fact.path)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return nativeUnavailable('the retained route became unreadable')
+      info = null
+    }
+    if (identity(info) !== fact.identity || (fact.alias && (!info || version(info) !== fact.alias.version || target !== fact.alias.target))) {
+      return nativeUnavailable('the retained route changed during preparation')
+    }
+  }
+}
 
 export class NativePaths {
   private readonly parts = new Map<string, Part>()
@@ -49,6 +72,12 @@ export class NativePaths {
     return next.value
   }
 
+  snapshot(): NativePathFact[] {
+    this.verify()
+    return [...this.parts].map(([path, part]) => ({ path, identity: identity(part.info),
+      ...(part.target !== undefined ? { alias: { target: part.target, version: version(part.info!) } } : {}) }))
+  }
+
   /** Only an observed absent leaf can be announced before creation. A dangling alias is
    * still an existing leaf and must not borrow the authority of its original parent. */
   absentLeaf(path: string): boolean { return this.parts.get(path)?.info === null }
@@ -59,7 +88,7 @@ export class NativePaths {
     this.budget.step()
     const retained = [...this.parts].filter(([path]) => path !== removedPath && !path.startsWith(removedPath + '/'))
     return () => {
-      const fresh = new NativePaths(new NativeEvidenceBudget(250))
+      const fresh = new NativePaths(new NativeEvidenceBudget())
       for (const [path, part] of retained) fresh.parts.set(path, part)
       fresh.verify()
     }

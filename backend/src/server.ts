@@ -16,13 +16,13 @@ import { deviceKeyRoutes } from './routes/deviceKeys.js'
 import { qrSignInRoutes } from './routes/qrSignIn.js'
 import { deskRoutes } from './routes/desk.js'
 import { connectorRoutes } from './routes/connectors.js'
-import { tabChannelRoutes } from './routes/tabChannels.js'
+import { agentMessagesRoutes } from './routes/agentMessages.js'
 import { zooRoutes } from './routes/zoo.js'
 import { experimentalSettingsRoutes } from './routes/experimentalSettings.js'
 import { describeDaemonsSwitch } from './lib/daemonsSwitch.js'
 import { handleObserverUpgrade } from './lib/observerWs.js'
 import { deviceAuthRoutes } from './routes/deviceAuth.js'
-import { healthRoutes, authRoutes, userRoutes, machineRoutes, planRoutes, gridRoutes, deviceRoutes, mobileRoutes, appRoutes, analyticsRoutes, agentRouteRoutes, storeRoutes } from './routes/index.js'
+import { healthRoutes, authRoutes, userRoutes, machineRoutes, planRoutes, gridRoutes, deviceRoutes, mobileRoutes, appRoutes, analyticsRoutes, agentRouteRoutes, jevRouteRoutes, storeRoutes } from './routes/index.js'
 import { startSubdomainProxy, startMeshProxy } from './lib/subdomainProxy.js'
 import { handleDeviceUpgrade } from './lib/deviceWs.js'
 import { handleWebUpgrade } from './lib/webWs.js'
@@ -30,7 +30,7 @@ import { handleManagerUpgrade } from './lib/managerWs.js'
 import { handleAdapterUpgrade } from './lib/adapterWs.js'
 import { logger } from './utils/logger.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
-import { closeBus, redisSsoProfileStore } from './lib/bus.js'
+import { closeBus, redisCount, redisSsoProfileStore } from './lib/bus.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
 
@@ -166,6 +166,7 @@ async function start(): Promise<void> {
   await app.register(appRoutes)
   await app.register(analyticsRoutes)
   await app.register(agentRouteRoutes) // which agent a task belongs to — the prompt lives here, not in the CLI
+  await app.register(jevRouteRoutes, { count: redisCount }) // ⌘B's Jev decisions on Harness's key, for people with none of their own
   await app.register(cursorRoutes)   // standalone STT + LLM for the Cursor desktop app (self-contained)
   // The cabled dial's transcription, authenticated by the caller's SSO token rather than a shared secret.
   // Absent from the auth middleware's skip-list on purpose: that absence IS the gate.
@@ -179,7 +180,7 @@ async function start(): Promise<void> {
   await app.register(deviceKeyRoutes)     // the account's device key log: signing in is what trusts a device
   await app.register(deskRoutes)          // the account's tabs, the same on every computer (lib/desk.ts)
   await app.register(connectorRoutes)     // sign-in to GitHub, Slack, Google… for local agents (lib/connectorGateway.ts)
-  if (env.HARNESS_CHANNELS) await app.register(tabChannelRoutes)
+  await app.register(agentMessagesRoutes)   // which tabs' harnesses may message each other (lib/agentMessages.ts)
   await app.register(experimentalSettingsRoutes, { daemons: DAEMONS })
   // Availability is separate from opt-in: every account starts off, and its collection is retained.
   await app.register(zooRoutes, { daemons: DAEMONS, requireAccountOptIn: true })

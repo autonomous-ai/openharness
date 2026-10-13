@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Score</title>
+<style>
+  :root {
+    --bg: #0c0b0a; --ink: #e8e1d0; --muted: #9a9284; --faint: #5c574e; --line: #24211d;
+    --gold: #e8b860; --amber: #ffb547; --red: #ff6b5f; --fine: #f4efe2;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); font: 12px/1.45 var(--mono); }
+  #page { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #head { position: fixed; left: 22px; right: 22px; top: 12px; display: flex; align-items: baseline; gap: 20px; white-space: nowrap; overflow: hidden; pointer-events: none; }
+  #head .t { font: italic 22px/1 var(--serif); letter-spacing: .02em; color: var(--fine); }
+  #head .t small { font: 11px var(--mono); font-style: normal; color: var(--faint); letter-spacing: .2em; margin-left: 10px; }
+  #head .glance { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  #head .glance b { font-weight: 600; }
+  #head .glance .held { color: var(--amber); }
+  #head .glance .fine { color: var(--fine); }
+  #head .glance .broke { color: var(--red); }
+  #head .clock { margin-left: auto; color: var(--faint); }
+  #cue { position: fixed; left: 22px; right: 22px; bottom: 34px; color: var(--muted); font: italic 14px/1.4 var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+  #cue b { font: 600 11px var(--mono); font-style: normal; color: var(--gold); border: 1px solid var(--gold); padding: 0 4px; margin-right: 8px; }
+  #cue .who { font: 11px var(--mono); font-style: normal; color: var(--faint); margin-left: 10px; }
+  #keys { position: fixed; left: 0; right: 0; bottom: 10px; text-align: center; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 12px; pointer-events: none; }
+  #keys kbd { font: inherit; color: var(--muted); }
+
+  /* a part: one harness's music, taken out of the score */
+  #part { position: fixed; top: 54px; right: 16px; bottom: 56px; width: min(440px, calc(100% - 32px)); background: rgba(16,15,13,.97); border: 1px solid #2c2822; border-radius: 4px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.6); padding: 20px 22px; overflow-y: auto; transform: translateX(24px); opacity: 0; pointer-events: none; transition: opacity .25s, transform .3s cubic-bezier(.2,.7,.2,1); scrollbar-width: thin; scrollbar-color: #2c2822 transparent; }
+  #part.on { opacity: 1; transform: none; pointer-events: auto; }
+  #part h1 { font: italic 26px/1.15 var(--serif); margin: 0; color: var(--fine); overflow-wrap: anywhere; }
+  #part .sub { color: var(--faint); margin-top: 4px; letter-spacing: .04em; }
+  #part .now { margin: 18px 0 6px; padding: 10px 12px; border-left: 2px solid var(--edge, var(--faint)); background: rgba(255,255,255,.03); font: 15px/1.5 var(--serif); color: var(--ink); overflow-wrap: anywhere; }
+  #part .now .k { display: block; font: 600 10.5px var(--mono); letter-spacing: .18em; color: var(--edge, var(--muted)); margin-bottom: 4px; text-transform: uppercase; }
+  #part h2 { font: 500 10.5px var(--mono); letter-spacing: .2em; color: var(--faint); margin: 22px 0 8px; text-transform: uppercase; }
+  #part .mark { display: grid; grid-template-columns: 34px 1fr; gap: 0 10px; margin-bottom: 12px; }
+  #part .mark .box { font: 600 11px var(--mono); color: var(--gold); border: 1px solid var(--gold); text-align: center; height: 20px; line-height: 18px; }
+  #part .mark .said { font: italic 14px/1.4 var(--serif); color: var(--ink); overflow-wrap: anywhere; }
+  #part .mark .how { color: var(--faint); font-size: 11px; margin-top: 2px; overflow-wrap: anywhere; }
+  #part .stats { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; color: var(--muted); font-size: 11.5px; }
+  #part .stats b { color: var(--faint); font-weight: 400; }
+  #part .keys { margin-top: 18px; color: var(--faint); font-size: 11px; }
+  #part .keys kbd { font: inherit; color: var(--ink); }
+
+  #find { position: fixed; left: 50%; top: 46px; transform: translateX(-50%); padding: 5px 12px; background: #141210; border: 1px solid #2c2822; font-size: 13px; display: none; white-space: nowrap; }
+  #find.on { display: block; }
+  #find .c { color: var(--gold); }
+  #find i { display: inline-block; width: .6em; height: 1.05em; background: var(--ink); transform: translateY(2px); animation: blink 1.05s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  #toast { position: fixed; left: 50%; top: 46px; transform: translateX(-50%); padding: 5px 12px; background: #141210; border: 1px solid #2c2822; opacity: 0; transition: opacity .3s; pointer-events: none; white-space: nowrap; }
+  #toast.on { opacity: 1; }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); letter-spacing: .3em; pointer-events: none; }
+  @media (max-width: 900px) { #head .clock { display: none; } #head .t small { display: none; } }
+</style>
+</head>
+<body>
+<canvas id="page" aria-label="The night as an orchestral score: every harness is a staff, every task you handed off is a rehearsal mark, a fermata is held for you"></canvas>
+<header id="head"><span class="t">Score<small>BOSS MODE</small></span><span class="glance" id="glance"></span><span class="clock" id="clock"></span></header>
+<div id="cue"></div>
+<aside id="part" aria-live="polite"></aside>
+<div id="find"><span class="c">/</span> <span id="q"></span><i></i></div>
+<div id="toast"></div>
+<footer id="keys"></footer>
+<div id="loading">tuning</div>
+<script src="boss-data.js"></script>
+<script src="score.js"></script>
+</body>
+</html>

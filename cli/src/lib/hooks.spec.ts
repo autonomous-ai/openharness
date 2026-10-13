@@ -51,7 +51,7 @@ describe('Codex hook installation', () => {
     process.argv[1] = join(cliDir, 'cli.js')
     try {
       const { codex } = await loadHooks()
-      codex.install(19473)
+      await codex.install(19473)
       expect(readFileSync(join(codexHome, 'hooks.json'), 'utf-8')).toContain(join(cliDir, 'notify.mjs'))
     } finally {
       process.argv[1] = script
@@ -70,7 +70,7 @@ describe('Codex hook installation', () => {
     }))
 
     const { codex } = await loadHooks()
-    codex.install(19473)
+    await codex.install(19473)
     const first = readFileSync(file, 'utf-8')
     const parsed = JSON.parse(first)
 
@@ -81,7 +81,7 @@ describe('Codex hook installation', () => {
     expect(parsed.hooks.UserPromptSubmit[1]).not.toHaveProperty('matcher')
     expect(parsed.hooks.UserPromptSubmit[1].hooks[0].command).toContain('--engine codex')
 
-    codex.install(19473)
+    await codex.install(19473)
     expect(readFileSync(file, 'utf-8')).toBe(first)
   })
 
@@ -89,7 +89,7 @@ describe('Codex hook installation', () => {
     const customProfile = mkdtempSync(join(tmpdir(), 'adapter-codex-profile-'))
     try {
       const { codex } = await loadHooks()
-      codex.installIn(19473, customProfile)
+      await codex.installIn(19473, customProfile)
 
       const profileFile = join(customProfile, 'hooks.json')
       const first = readFileSync(profileFile, 'utf-8')
@@ -101,7 +101,7 @@ describe('Codex hook installation', () => {
       expect(existsSync(join(codexHome, 'hooks.json'))).toBe(false)
 
       // Idempotent: a second install into the same profile is a no-op.
-      codex.installIn(19473, customProfile)
+      await codex.installIn(19473, customProfile)
       expect(readFileSync(profileFile, 'utf-8')).toBe(first)
     } finally {
       rmSync(customProfile, { recursive: true, force: true })
@@ -113,7 +113,7 @@ describe('Codex hook installation', () => {
     writeFileSync(file, '{not-json')
 
     const { codex } = await loadHooks()
-    codex.install(19473)
+    await codex.install(19473)
 
     expect(readFileSync(file, 'utf-8')).toBe('{not-json')
     expect(existsSync(`${file}.${process.pid}.tmp`)).toBe(false)
@@ -127,7 +127,7 @@ describe('Codex hook installation', () => {
       hooks: { preToolUse: [{ command: 'foreign-task', failClosed: true }] },
     }))
     const { installCursorHooks } = await loadHooks()
-    installCursorHooks(19473)
+    await installCursorHooks(19473)
     const first = readFileSync(file, 'utf8')
     const parsed = JSON.parse(first)
     expect(parsed.version).toBe(7)
@@ -139,7 +139,7 @@ describe('Codex hook installation', () => {
       'preToolUse', 'sessionStart', 'beforeSubmitPrompt', 'stop', 'sessionEnd',
     ])
 
-    installCursorHooks(19473)
+    await installCursorHooks(19473)
     expect(readFileSync(file, 'utf8')).toBe(first)
   })
 
@@ -150,7 +150,7 @@ describe('Codex hook installation', () => {
     vi.stubEnv('CURSOR_DATA_DIR', data)
     try {
       const { installCursorHooks } = await loadHooks()
-      installCursorHooks(19473)
+      await installCursorHooks(19473)
       const hooks = JSON.parse(readFileSync(join(config, 'hooks.json'), 'utf8'))
       expect(hooks.hooks.sessionStart[0].command).toContain(`--cursor-home '${data}'`)
       expect(existsSync(join(data, 'hooks.json'))).toBe(false)
@@ -170,7 +170,7 @@ describe('Grok hook installation', () => {
 
   it('installs camelCase lifecycle hooks without the early Stop signal', async () => {
     const { installGrokHooks } = await loadHooks()
-    installGrokHooks(18473)
+    await installGrokHooks(18473)
     const file = join(grokHome, 'hooks', 'harness.json')
     const first = readFileSync(file, 'utf8')
     const out = JSON.parse(first) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
@@ -179,7 +179,7 @@ describe('Grok hook installation', () => {
     expect(out.hooks.SessionStart[0].hooks[0].command).toContain('--engine grok')
     expect(out.hooks.SessionStart[0].hooks[0].command).toContain(`--grok-home '${grokHome}'`)
 
-    installGrokHooks(18473)
+    await installGrokHooks(18473)
     expect(readFileSync(file, 'utf8')).toBe(first)
   })
 
@@ -188,7 +188,7 @@ describe('Grok hook installation', () => {
     mkdirSync(join(grokHome, 'hooks'), { recursive: true })
     writeFileSync(file, '{not-json')
     const { installGrokHooks } = await loadHooks()
-    installGrokHooks(18473)
+    await installGrokHooks(18473)
     expect(readFileSync(file, 'utf8')).toBe('{not-json')
   })
 })
@@ -213,7 +213,7 @@ describe('Command Code hook installation', () => {
     }))
 
     const { installCommandCodeHooks } = await loadHooks()
-    installCommandCodeHooks(18473)
+    await installCommandCodeHooks(18473)
 
     const out = JSON.parse(readFileSync(file, 'utf8')) as {
       model: string
@@ -229,16 +229,16 @@ describe('Command Code hook installation', () => {
     expect(out.hooks.PreToolUse[0].hooks[0].command).toContain('--engine commandcode')
 
     const first = readFileSync(file, 'utf8')
-    installCommandCodeHooks(18473)
+    await installCommandCodeHooks(18473)
     expect(readFileSync(file, 'utf8')).toBe(first)
   })
 
   it('collapses duplicate machine blocks left by an older path/port', async () => {
-    const stale = (port: number) => ({ hooks: [{ type: 'command', command: `node '/old/notify.mjs' --port ${port} --engine commandcode` }] })
+    const stale = (port: number) => ({ hooks: [{ type: 'command', command: `node '/old/notify.mjs' --data-dir '/fixture/old-harness' --port ${port} --engine commandcode` }] })
     writeFileSync(file, JSON.stringify({ hooks: { SessionStart: [stale(19918), stale(19919)], Stop: [stale(19918)] } }))
 
     const { installCommandCodeHooks } = await loadHooks()
-    installCommandCodeHooks(18473)
+    await installCommandCodeHooks(18473)
 
     const out = JSON.parse(readFileSync(file, 'utf8')) as { hooks: Record<string, unknown[]> }
     expect(out.hooks.SessionStart).toHaveLength(1) // both stale entries collapsed into the canonical one
@@ -249,7 +249,7 @@ describe('Command Code hook installation', () => {
   it('leaves a malformed settings file untouched', async () => {
     writeFileSync(file, '{ not json')
     const { installCommandCodeHooks } = await loadHooks()
-    installCommandCodeHooks(18473)
+    await installCommandCodeHooks(18473)
     expect(readFileSync(file, 'utf8')).toBe('{ not json')
   })
 })
@@ -281,7 +281,7 @@ describe('Devin hook installation', () => {
     }))
 
     const { installDevinHooks } = await loadHooks()
-    installDevinHooks(18473)
+    await installDevinHooks(18473)
 
     const out = JSON.parse(readFileSync(devinConfigPath, 'utf8')) as {
       version: number
@@ -298,16 +298,16 @@ describe('Devin hook installation', () => {
     expect(out.hooks.Stop[0].hooks[0].command).toContain('notify.mjs')
 
     const first = readFileSync(devinConfigPath, 'utf8')
-    installDevinHooks(18473)
+    await installDevinHooks(18473)
     expect(readFileSync(devinConfigPath, 'utf8')).toBe(first)
   })
 
   it('collapses duplicate machine blocks left by an older path/port', async () => {
-    const stale = (port: number) => ({ hooks: [{ type: 'command', command: `node '/old/notify.mjs' --port ${port} --engine devin` }] })
+    const stale = (port: number) => ({ hooks: [{ type: 'command', command: `node '/old/notify.mjs' --data-dir '/fixture/old-harness' --port ${port} --engine devin` }] })
     writeFileSync(devinConfigPath, JSON.stringify({ hooks: { SessionStart: [stale(19918), stale(19919)], Stop: [stale(19918)] } }))
 
     const { installDevinHooks } = await loadHooks()
-    installDevinHooks(18473)
+    await installDevinHooks(18473)
 
     const out = JSON.parse(readFileSync(devinConfigPath, 'utf8')) as { hooks: Record<string, unknown[]> }
     expect(out.hooks.SessionStart).toHaveLength(1)
@@ -317,12 +317,12 @@ describe('Devin hook installation', () => {
 
   it('creates the config when the user has none, and leaves a malformed one untouched', async () => {
     const { installDevinHooks } = await loadHooks()
-    installDevinHooks(18473)
+    await installDevinHooks(18473)
     expect(JSON.parse(readFileSync(devinConfigPath, 'utf8')).hooks.SessionStart).toHaveLength(1)
 
     writeFileSync(devinConfigPath, '{ not json')
     const again = await loadHooks()
-    again.installDevinHooks(18473)
+    await again.installDevinHooks(18473)
     expect(readFileSync(devinConfigPath, 'utf8')).toBe('{ not json')
   })
 })
@@ -353,7 +353,7 @@ describe('Hermes hook installation', () => {
 
   it('appends one managed block, preserves the user config, and allowlists the command', async () => {
     const { installHermesHooks } = await loadHooks()
-    installHermesHooks(18473)
+    await installHermesHooks(18473)
 
     const out = readFileSync(file, 'utf8')
     expect(blockCount(out)).toBe(1)
@@ -372,8 +372,8 @@ describe('Hermes hook installation', () => {
 
   it('collapses to a SINGLE block when the port changes (no duplicate hooks: key)', async () => {
     const { installHermesHooks } = await loadHooks()
-    installHermesHooks(18473)
-    installHermesHooks(19999)
+    await installHermesHooks(18473)
+    await installHermesHooks(19999)
 
     const out = readFileSync(file, 'utf8')
     expect(blockCount(out)).toBe(1)
@@ -382,11 +382,11 @@ describe('Hermes hook installation', () => {
 
   it('absorbs an orphaned block left by an earlier buggy install', async () => {
     // Shape produced by the old marker-only rewrite: a bare `hooks:` mapping with our command.
-    const orphan = "\nhooks:\n  pre_llm_call:\n    - command: \"node '/old/notify.mjs' --port 19918 --engine hermes\"\n      timeout: 10\n"
+    const orphan = "\nhooks:\n  pre_llm_call:\n    - command: \"node '/old/notify.mjs' --data-dir '/fixture/old-harness' --port 19918 --engine hermes\"\n      timeout: 10\n"
     writeFileSync(file, `${USER_CONFIG}${orphan}`)
 
     const { installHermesHooks } = await loadHooks()
-    installHermesHooks(18473)
+    await installHermesHooks(18473)
 
     const out = readFileSync(file, 'utf8')
     expect(blockCount(out)).toBe(1)
@@ -396,9 +396,9 @@ describe('Hermes hook installation', () => {
 
   it('is idempotent', async () => {
     const { installHermesHooks } = await loadHooks()
-    installHermesHooks(18473)
+    await installHermesHooks(18473)
     const first = readFileSync(file, 'utf8')
-    installHermesHooks(18473)
+    await installHermesHooks(18473)
     expect(readFileSync(file, 'utf8')).toBe(first)
   })
 
@@ -407,7 +407,7 @@ describe('Hermes hook installation', () => {
     writeFileSync(file, mine)
 
     const { installHermesHooks } = await loadHooks()
-    installHermesHooks(18473)
+    await installHermesHooks(18473)
 
     expect(readFileSync(file, 'utf8')).toBe(mine)
     expect(existsSync(join(hermesHome, 'shell-hooks-allowlist.json'))).toBe(false)
@@ -429,7 +429,7 @@ describe('Hermes hook installation', () => {
     it('installs into every profile, each naming ITS OWN home', async () => {
       const demo = profileConfig('demo')
       const { installHermesHooks } = await loadHooks()
-      installHermesHooks(18473)
+      await installHermesHooks(18473)
 
       const out = readFileSync(demo, 'utf8')
       expect(blockCount(out)).toBe(1)
@@ -450,13 +450,13 @@ describe('Hermes hook installation', () => {
       // What `hermes profile create` leaves behind: our own block, frozen at the version that was
       // current when the ROOT config was last written — old port, old path, default home.
       const stale = "\n# machine-adapter: session discovery (managed block — safe to delete)\nhooks:\n"
-        + "  on_session_start:\n    - command: \"node '/old/notify.mjs' --port 19918 --hermes-home '/home/u/.hermes' --engine hermes\"\n      timeout: 10\n"
+        + "  on_session_start:\n    - command: \"node '/old/notify.mjs' --data-dir '/fixture/old-harness' --port 19918 --hermes-home '/home/u/.hermes' --engine hermes\"\n      timeout: 10\n"
         + '# machine-adapter: end\n'
       const demo = profileConfig('demo')
       writeFileSync(demo, `${USER_CONFIG}${stale}`)
 
       const { installHermesHooks } = await loadHooks()
-      installHermesHooks(18473)
+      await installHermesHooks(18473)
 
       const out = readFileSync(demo, 'utf8')
       expect(blockCount(out)).toBe(1)
@@ -468,7 +468,7 @@ describe('Hermes hook installation', () => {
     it('a profile with no config of its own is not written to', async () => {
       mkdirSync(join(hermesHome, 'profiles', 'fresh'), { recursive: true })
       const { installHermesHooks } = await loadHooks()
-      installHermesHooks(18473)
+      await installHermesHooks(18473)
       expect(existsSync(join(hermesHome, 'profiles', 'fresh', 'config.yaml'))).toBe(false)
     })
   })
@@ -505,7 +505,7 @@ describe('the Node interpreter baked into hook commands', () => {
   it('names an absolute, runnable interpreter and never the bare word node', async () => {
     const file = join(codexHome, 'hooks.json')
     const { codex } = await loadHooks()
-    codex.install(18473)
+    await codex.install(18473)
 
     const out = JSON.parse(readFileSync(file, 'utf8')) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
     const command = out.hooks.SessionStart[0].hooks[0].command
@@ -527,7 +527,7 @@ describe('the Node interpreter baked into hook commands', () => {
 
     const file = join(codexHome, 'hooks.json')
     const { codex } = await loadHooks()
-    codex.install(18473)
+    await codex.install(18473)
 
     const out = JSON.parse(readFileSync(file, 'utf8')) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
     expect(interpreterOf(out.hooks.SessionStart[0].hooks[0].command)).toBe(upgraded)
@@ -539,7 +539,7 @@ describe('the Node interpreter baked into hook commands', () => {
 
     const file = join(codexHome, 'hooks.json')
     const { codex } = await loadHooks()
-    codex.install(18473)
+    await codex.install(18473)
 
     const out = JSON.parse(readFileSync(file, 'utf8')) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
     // A hook naming an interpreter that cannot run is strictly worse than one naming the interpreter
@@ -553,7 +553,7 @@ describe('the Node interpreter baked into hook commands', () => {
 
     const file = join(codexHome, 'hooks.json')
     const { codex } = await loadHooks()
-    codex.install(18473)
+    await codex.install(18473)
 
     const out = JSON.parse(readFileSync(file, 'utf8')) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
     expect(interpreterOf(out.hooks.SessionStart[0].hooks[0].command)).toBe(process.execPath)
@@ -566,12 +566,12 @@ describe('the Node interpreter baked into hook commands', () => {
     const file = join(codexHome, 'hooks.json')
     writeFileSync(file, JSON.stringify({
       hooks: {
-        SessionStart: [{ hooks: [{ type: 'command', command: "node '/Users/someone/.harness/cli/notify.mjs' --port 18473 --engine codex" }] }],
+        SessionStart: [{ hooks: [{ type: 'command', command: "node '/fixture/home/.harness/cli/notify.mjs' --data-dir '/fixture/old-harness' --port 18473 --engine codex" }] }],
       },
     }))
 
     const { codex } = await loadHooks()
-    codex.install(18473)
+    await codex.install(18473)
 
     const out = JSON.parse(readFileSync(file, 'utf8')) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
     const commands = out.hooks.SessionStart.flatMap((block) => block.hooks.map((h) => h.command))
@@ -601,14 +601,14 @@ describe('Hermes hook allowlist', () => {
     const allowlist = join(hermesHome, 'shell-hooks-allowlist.json')
     writeFileSync(allowlist, JSON.stringify({
       approvals: [
-        { event: 'on_session_start', command: "node '/old/notify.mjs' --port 19918 --engine hermes" },
-        { event: 'pre_llm_call', command: "node '/old/notify.mjs' --port 19918 --engine hermes" },
+        { event: 'on_session_start', command: "node '/old/notify.mjs' --data-dir '/fixture/old-harness' --port 19918 --engine hermes" },
+        { event: 'pre_llm_call', command: "node '/old/notify.mjs' --data-dir '/fixture/old-harness' --port 19918 --engine hermes" },
         { event: 'on_session_start', command: '/usr/local/bin/somebody-elses-hook.sh' },
       ],
     }))
 
     const { installHermesHooks } = await loadHooks()
-    installHermesHooks(18473)
+    await installHermesHooks(18473)
 
     const out = JSON.parse(readFileSync(allowlist, 'utf8')) as { approvals: Array<{ event: string; command: string }> }
     expect(out.approvals.some((a) => a.command.includes('/old/notify.mjs'))).toBe(false)
@@ -634,13 +634,13 @@ describe('Claude Code hooks in a moved home', () => {
     mkdirSync(join(home, 'work'), { recursive: true })
     writeFileSync(file, JSON.stringify({ model: 'opus', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'say done' }] }] } }))
     const { claude } = await loadHooks()
-    claude.installIn(19473, join(home, 'work'))
+    await claude.installIn(19473, join(home, 'work'))
     const first = readFileSync(file, 'utf-8')
     const settings = JSON.parse(first)
     expect(settings.model).toBe('opus')
     expect(settings.hooks.SessionStart[0].hooks[0].command).toContain('notify.mjs')
     expect(settings.hooks.Stop.map((block: { hooks: Array<{ command: string }> }) => block.hooks[0].command)).toEqual(['say done', expect.stringContaining('notify.mjs')])
-    claude.installIn(19473, join(home, 'work'))
+    await claude.installIn(19473, join(home, 'work'))
     expect(readFileSync(file, 'utf-8')).toBe(first)
   })
 })

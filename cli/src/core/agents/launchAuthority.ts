@@ -14,10 +14,10 @@ export function createLaunchAuthority(deps: {
   revision(id: string): number
   cancelled(id: string): boolean
 }) {
-  return (id: string): (() => boolean) => {
+  return (id: string, expected?: RegisteredSession): (() => boolean) => {
     // The requested launch may be a stopped row or a projected terminal fallback. Its owner's
     // predicate grants that operation; this extra fence watches the live table as dispatch found it.
-    const target = identity(deps.byAgent(id)), revision = deps.revision(id)
+    const target = identity(expected ?? deps.byAgent(id)), revision = deps.revision(id)
     return () => !deps.cancelled(id) && deps.revision(id) === revision && identity(deps.byAgent(id)) === target
   }
 }

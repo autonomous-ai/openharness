@@ -56,6 +56,17 @@ export function otaKeyForBoard(hw: string | undefined | null): string | null {
 }
 
 /**
+ * The manifest entry for a device by its whole hello. The Pro takes an image only when it says it can
+ * (`board: "pro"` and `ota: "v1"`); any other Pro is offered nothing. The old Player-1 Pro build also says
+ * hw "harness-pro" but has no board, and is never offered an image.
+ */
+export function otaKeyFor(hw: string | undefined, board: string | undefined, ota: string | undefined): string | null {
+  if (board === 'pro') return ota === 'v1' ? PRO_OTA_KEY : null
+  const key = otaKeyForBoard(hw)
+  return key === PRO_OTA_KEY ? null : key
+}
+
+/**
  * Whether `published` should be offered to a dial running `running`.
  *
  * Two rules, both learned from the sibling firmware:
@@ -105,8 +116,8 @@ export async function fetchRelease(manifestUrl: string, key = CIRCLE_OTA_KEY): P
  * slept mid-download) would otherwise be pushed to the dial, which would then reject it after spending
  * three minutes and an erase cycle receiving it.
  */
-export async function loadImage(release: FirmwareRelease, cacheDir: string): Promise<Buffer | null> {
-  const path = join(cacheDir, `${release.version}.bin`)
+export async function loadImage(release: FirmwareRelease, cacheDir: string, key = CIRCLE_OTA_KEY): Promise<Buffer | null> {
+  const path = join(cacheDir, `${key}-${release.version}.bin`)
   const verify = (buf: Buffer) =>
     buf.length === release.size && createHash('sha256').update(buf).digest('hex') === release.sha256
 
@@ -137,19 +148,29 @@ export async function loadImage(release: FirmwareRelease, cacheDir: string): Pro
  */
 export const FW_SLICE_BYTES = 8192
 export const FW_WINDOW_BYTES = 16 * 1024
+/** Data bytes per slice when each frame leads with a u32 LE offset (Pro): the frame still fits CABLE_MAX_PAYLOAD. */
+export const FW_SLICE_DATA_WITH_OFFSET = FW_SLICE_BYTES - 4
+/** Rewinds one transfer may ask for before it is abandoned. */
+export const FW_MAX_RESENDS = 200
 
 export class FirmwareTransfer {
   private acked = 0
   private offset = 0
   private done = false
   private pumping = false
+  private resends = 0
+  private readonly sliceBytes: number
 
   constructor(
     private readonly image: Buffer,
     readonly version: string,
     private readonly sendSlice: (slice: Buffer) => Promise<void>,
     private readonly log: (line: string) => void,
-  ) {}
+    /** `offsets`: every slice is `u32 LE offset + data` so the device can ask for a resend (Pro, ota v1). */
+    private readonly opts: { offsets?: boolean } = {},
+  ) {
+    this.sliceBytes = opts.offsets ? FW_SLICE_DATA_WITH_OFFSET : FW_SLICE_BYTES
+  }
 
   get isDone(): boolean {
     return this.done
@@ -182,10 +203,18 @@ export class FirmwareTransfer {
     this.pumping = true
     try {
       while (!this.done && this.offset < this.image.length && this.offset - this.acked < FW_WINDOW_BYTES) {
-        const end = Math.min(this.offset + FW_SLICE_BYTES, this.image.length)
-        const slice = this.image.subarray(this.offset, end)
+        const start = this.offset
+        const end = Math.min(start + this.sliceBytes, this.image.length)
+        const data = this.image.subarray(start, end)
         this.offset = end
-        await this.sendSlice(slice)
+        // A rewind during the write below just moves `offset`; this loop picks it up on its next turn.
+        if (this.opts.offsets) {
+          const head = Buffer.alloc(4)
+          head.writeUInt32LE(start)
+          await this.sendSlice(Buffer.concat([head, data]))
+        } else {
+          await this.sendSlice(data)
+        }
       }
     } finally {
       this.pumping = false
@@ -194,6 +223,22 @@ export class FirmwareTransfer {
 
   /** The dial acknowledged `written` bytes in flash. That ack IS the credit. */
   async onProgress(written: number): Promise<void> {
+    this.acked = written
+    await this.pump()
+  }
+
+  /**
+   * The device dropped a slice and wants the stream again from `written`. Stale asks (beyond what was sent,
+   * or behind what is already acked) are ignored. Re-entrancy as in pump(): a running loop is not
+   * duplicated, it reads the rewound offset after its current write.
+   */
+  async onResend(written: number): Promise<void> {
+    if (this.done || written >= this.offset || written < this.acked) return
+    if (++this.resends > FW_MAX_RESENDS) {
+      this.finish('too many resends')
+      return
+    }
+    this.offset = written
     this.acked = written
     await this.pump()
   }

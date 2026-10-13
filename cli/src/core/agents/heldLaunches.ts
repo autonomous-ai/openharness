@@ -4,14 +4,14 @@
  * A launch that asks a service for its part (a grid's or a saved API's, from models) is never waited on before the
  * core is ready: the boot's restore holds the agent in a pane that says what it waits for (lib/restoreAgents.ts
  * `defer`), and the pass here launches it into that pane once the core is up. A service that cannot be asked then
- * keeps it held, and the rest of that pass after it unasked. Held is never failed and never retired: discovery sees
+ * keeps it held while sibling agents continue. Held is never failed and never retired: discovery sees
  * its pane alive, and every later pass tries again. A pass runs:
  *
  * - once the core is ready, for every held agent;
  * - each time a service connects (a restarted one too), for the agents held for it;
  * - when a person restarts a held agent, for that one.
  *
- * One pass at a time, in order, each after the boot's: two passes over one agent would launch it twice. An agent
+ * A separate flight for each agent, after the boot: two passes never dispatch the same agent twice. An agent
  * the person stopped or closed meanwhile is no longer held, and is left alone.
  */
 import { sid } from '../../lib/log.js'
@@ -26,7 +26,7 @@ export function heldFor(row: Pick<RegisteredSession, 'launch'> | undefined): str
 export interface HeldLaunchesDeps {
   registry: Pick<typeof registry, 'list' | 'byAgent'>
   /** The boot's restore, of exactly these agents, outside the registry's transaction (lib/restoreAgents.ts `only`). */
-  restore: (only: ReadonlySet<string>) => Promise<RestoreSummary>
+  restore: (only: ReadonlySet<string>, current: () => boolean) => Promise<RestoreSummary>
   log: (line: string) => void
 }
 
@@ -35,50 +35,87 @@ export type HeldRestart =
   | { ok: false; error: string; detail?: string }
 
 export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps) {
-  // Closed until the boot's restore has run: an agent held since the last daemon is that pass's to look at first.
   let opened!: () => void
-  let queue: Promise<unknown> = new Promise<void>((done) => { opened = done })
-  /** One pass at a time, in the order asked: a pass that fails does not stop the next. */
-  const serial = <T>(run: () => Promise<T>): Promise<T> => {
-    const next = queue.then(run)
-    queue = next.catch(() => {})
-    return next
-  }
-
+  const ready = new Promise<void>(done => { opened = done })
+  let closed = false
+  // Closing revokes preparations already waiting on hooks or a service, too.
+  const current = () => !closed
   let retryTimer: ReturnType<typeof setTimeout> | undefined
+  const active = new Map<string, Promise<RestoreSummary>>()
+  let nextAgent = 0
+  const empty = (): RestoreSummary => ({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] })
   const retryContention = (summary: RestoreSummary): void => {
-    if (!summary.retry || retryTimer) return
+    if (closed || retryTimer || (!summary.retry && !summary.held.length)) return
     retryTimer = setTimeout(() => {
       retryTimer = undefined
-      void restoreHeld().catch(error => log(`[restore] core contention retry failed: ${String(error)}`))
-    }, 500)
+      void restoreHeld(undefined, false).catch(error => {
+        log(`[restore] core contention retry failed: ${String(error)}`)
+        retryContention({ ...empty(), retry: true })
+      })
+    }, summary.retry ? 500 : 2_000)
     retryTimer.unref?.()
   }
-
-  /** The agents held (for `service`, or for any), launched now. */
-  const restoreHeld = (service?: string): Promise<RestoreSummary | null> => serial(async () => {
-    const held = new Set(registry.list().filter((row) => {
+  // One flight per agent, four across the core. A stalled native home or service
+  // cannot serialize every sibling behind it. Additional callers join the same
+  // observation; a later timer retries failures with fresh registry ownership.
+  const restoreOne = (agentId: string): Promise<RestoreSummary> => {
+    const existing = active.get(agentId)
+    if (existing) return existing
+    if (closed || !heldFor(registry.byAgent(agentId))) return Promise.resolve(empty())
+    if (active.size >= 4) {
+      const summary: RestoreSummary = { ...empty(), held: [agentId], retry: true }
+      retryContention(summary)
+      return Promise.resolve(summary)
+    }
+    const flight = Promise.resolve().then(() => closed ? empty() : restore(new Set([agentId]), current)).then(summary => {
+      active.delete(agentId)
+      retryContention(summary)
+      return summary
+    }, error => {
+      active.delete(agentId)
+      retryContention({ ...empty(), retry: true })
+      throw error
+    })
+    active.set(agentId, flight)
+    return flight
+  }
+  const restoreHeld = async (service?: string, joinRunning = true): Promise<RestoreSummary | null> => {
+    await ready
+    if (closed) return null
+    const held = registry.list().filter(row => {
       const holder = heldFor(row)
-      return holder !== null && (service === undefined || holder === service)
-    }).map((row) => row.agentId))
-    if (!held.size) return null
-    const summary = await restore(held)
+      return holder !== null && (service === undefined || holder === service) && (joinRunning || !active.has(row.agentId))
+    }).map(row => row.agentId)
+    if (!held.length) return null
+    const offset = nextAgent % held.length
+    const ordered = [...held.slice(offset), ...held.slice(0, offset)]
+    nextAgent = (offset + 4) % held.length
+    const summary = empty()
+    const outcomes = await Promise.allSettled(ordered.map(restoreOne))
+    let failure: unknown, rejected = false
+    for (const outcome of outcomes) {
+      if (outcome.status === 'rejected') { failure = outcome.reason; rejected = true; summary.retry = true; continue }
+      const result = outcome.value
+      for (const key of ['restored', 'skipped', 'failed', 'held', 'unsurveyed'] as const) (summary[key] as unknown[]).push(...result[key])
+      if (result.retry) summary.retry = true
+    }
     retryContention(summary)
-    log(`[restore] held · ${service ?? 'every service'} · launched ${summary.restored.length} of ${held.size}`
+    if (rejected) throw failure
+    log(`[restore] held · ${service ?? 'every service'} · launched ${summary.restored.length} of ${held.length}`
       + (summary.held.length ? ` · ${summary.held.length} still waiting` : ''))
     return summary
-  })
+  }
 
   /** A person's restart of a held agent: launched as a pass would, or why not. Null for an agent that is not held,
    *  which a restart handles as it always has. */
   const restartHeld = (agentId: string): Promise<HeldRestart> | null => {
     if (!heldFor(registry.byAgent(agentId))) return null
-    return serial(async () => {
+    return ready.then(async () => {
       // Asked again in turn: a pass before this one may have launched it, or the person closed it.
       const before = registry.byAgent(agentId)
-      if (!before) return { ok: false, error: 'AGENT_NOT_FOUND' }
+      if (!before || closed) return { ok: false, error: 'AGENT_NOT_FOUND' }
       if (!heldFor(before)) return { ok: true, session: before, resumed: !!before.sessionId }
-      const summary = await restore(new Set([agentId]))
+      const summary = await restoreOne(agentId)
       retryContention(summary)
       const now = registry.byAgent(agentId)
       if (!now) return { ok: false, error: 'AGENT_NOT_FOUND' }
@@ -95,11 +132,12 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
 
   return {
     /** The boot's restore, before any pass here: they wait for it, whether it restores, fails or has nothing to do. */
-    boot: async <T>(run: () => Promise<T>): Promise<T> => {
-      try { return await run() } finally { opened() }
+    boot: async <T>(run: (current: () => boolean) => Promise<T>): Promise<T> => {
+      try { return await run(current) } finally { opened() }
     },
     restoreHeld,
     restartHeld,
+    close: () => { closed = true; clearTimeout(retryTimer); opened() },
   }
 }
 

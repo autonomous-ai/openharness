@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Switchboard</title>
+<style>
+  :root {
+    --bg: #0d0907; --text: #efe6d4; --muted: #9b8e7a; --faint: #5e5446; --line: #2a2018;
+    --brass: #c9a46a; --amber: #ffb547; --green: #7ee08f; --white: #fff6e3; --red: #ff5a4f;
+    --paper: #e9e0cb; --ink: #241c14;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 12px/1.45 var(--mono); }
+  #board { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #top { position: fixed; left: 18px; right: 18px; top: 12px; display: flex; align-items: baseline; gap: 18px; white-space: nowrap; overflow: hidden; pointer-events: none; }
+  #top .brand { color: var(--brass); letter-spacing: .36em; font-size: 12px; font-weight: 600; }
+  #top .lamps { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  #top .lamps b { font-weight: 600; }
+  #top .lamps i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 5px 0 12px; transform: translateY(-1px); }
+  #top .clock { margin-left: auto; color: var(--faint); }
+
+  /* the toll ticket: the selected call, as the operator logged it */
+  #ticket { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); width: min(880px, calc(100% - 32px)); background: var(--paper); color: var(--ink);
+    padding: 12px 16px 12px 18px; box-shadow: 0 18px 40px rgba(0,0,0,.6); display: none; font-size: 11.5px; line-height: 1.45;
+    background-image: repeating-linear-gradient(transparent 0 18px, rgba(80,60,30,.08) 18px 19px); }
+  #ticket.on { display: grid; grid-template-columns: 118px 1fr 168px; gap: 0 16px; }
+  #ticket::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; background: var(--edge, #8a7a5a); }
+  #ticket .no { border-right: 1px dashed #a89878; padding-right: 12px; }
+  #ticket .no .t { font-size: 9.5px; letter-spacing: .2em; color: #6e604a; }
+  #ticket .no .n { font-size: 26px; font-weight: 700; letter-spacing: .02em; line-height: 1.1; }
+  #ticket .no .s { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--edge-ink, #6e604a); font-weight: 700; margin-top: 4px; }
+  #ticket .body { min-width: 0; }
+  #ticket .said { font-weight: 700; font-size: 13px; overflow-wrap: anywhere; }
+  #ticket .row { display: grid; grid-template-columns: 76px 1fr; gap: 8px; margin-top: 3px; }
+  #ticket .row b { color: #6e604a; font-weight: 600; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; padding-top: 1px; }
+  #ticket .row span { overflow-wrap: anywhere; }
+  #ticket .line { margin-top: 7px; padding: 6px 9px; background: rgba(255,255,255,.45); border-left: 3px solid var(--edge, #8a7a5a); font-style: italic; overflow-wrap: anywhere; }
+  #ticket .stamp { border-left: 1px dashed #a89878; padding-left: 12px; font-size: 10.5px; color: #4b3f30; }
+  #ticket .stamp div { display: flex; justify-content: space-between; border-bottom: 1px dotted #b9ab8c; padding: 2px 0; }
+  #ticket .stamp div b { font-weight: 700; color: var(--ink); }
+  #ticket .stamp .keys { display: block; border: 0; margin-top: 8px; color: #6e604a; line-height: 1.6; }
+  #ticket .stamp .keys kbd { font: inherit; font-weight: 700; color: var(--ink); }
+  #ticket .wave { display: block; width: 100%; height: 30px; margin-top: 8px; background: rgba(255,255,255,.3); }
+
+  #dial { position: fixed; right: 18px; top: 40px; color: var(--amber); font-size: 18px; letter-spacing: .2em; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #dial.on { opacity: 1; }
+  #find { position: fixed; left: 50%; top: 44px; transform: translateX(-50%); padding: 5px 12px; background: rgba(20,14,10,.92); border: 1px solid #3a2c20; font-size: 13px; display: none; white-space: nowrap; }
+  #find.on { display: block; }
+  #find .c { color: var(--brass); }
+  #find i { display: inline-block; width: .6em; height: 1.05em; background: var(--text); transform: translateY(2px); animation: blink 1.05s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  #toast { position: fixed; left: 50%; top: 44px; transform: translateX(-50%); color: var(--white); background: rgba(20,14,10,.92); border: 1px solid #3a2c20; padding: 5px 12px; opacity: 0; transition: opacity .3s; pointer-events: none; white-space: nowrap; }
+  #toast.on { opacity: 1; }
+  #keys { position: fixed; left: 0; right: 0; bottom: 12px; text-align: center; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 12px; pointer-events: none; }
+  #keys kbd { font: inherit; color: var(--muted); }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); letter-spacing: .3em; pointer-events: none; }
+  @media (max-width: 860px) {
+    #ticket.on { grid-template-columns: 90px 1fr; }
+    #ticket .stamp { display: none; }
+    #top .clock { display: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="board" aria-label="A switchboard: every harness is a line, every task you handed off is a cord plugged into the line that took it"></canvas>
+<header id="top"><span class="brand">SWITCHBOARD</span><span class="lamps" id="lamps"></span><span class="clock" id="clock"></span></header>
+<div id="dial"></div>
+<div id="find"><span class="c">/</span> <span id="q"></span><i></i></div>
+<div id="toast"></div>
+<section id="ticket" aria-live="polite"></section>
+<footer id="keys"></footer>
+<div id="loading">ringing</div>
+<script src="boss-data.js"></script>
+<script src="switchboard.js"></script>
+</body>
+</html>

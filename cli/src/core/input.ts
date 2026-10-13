@@ -1,11 +1,11 @@
 /**
- * Input: everything the core writes into an agent's pane. Messages, team turns and keys go through one
+ * Input: everything the core writes into an agent's pane. Messages, delivered turns and keys go through one
  * controller (`SessionInputController`, a per-pane queue while a turn is busy); the Harness device's own
  * route (`AutonomousDeviceInput`) owns the pane writer lock, and every write from the controller takes it
  * first (`legacyWrite`), so a person answering on a device and the core never interleave in one pane.
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 5: docs/design/2026-10-03-harnessd.md);
- * what it reaches in the registry, the terminal, the teams and device features and the clients is passed
+ * what it reaches in the registry, the terminal, the deliveries and device features and the clients is passed
  * in. The two controllers' dependencies are built by `sessionInputDeps` and `deviceInputDeps`, each given
  * the other controller lazily: each one calls into the other.
  */
@@ -35,13 +35,11 @@ export interface InputDeps {
   resolve: (id: string) => RegisteredSession | undefined
   byAgent: (agentId: string) => RegisteredSession | undefined
   terminal: Pick<TerminalControl, 'captureTerminal' | 'validateTerminal' | 'submitTerminalAction' | 'keyTerminalAction' | 'pinTerminalControl'>
-  /** The teams and orchestrator features. */
-  teams: {
-    /** Before a paste: record where the prompt came from (the teams' prompt scopes, `ports.teams`). */
-    prepare: (agentId: string, content: string, tabId?: string, deliveryId?: string) => () => void
-    /** A delivery settled: the orchestrator hears of it, then the team. */
-    delivery: (event: SessionInputDelivery) => void
-    /** Whether a team delivery still holds control of its pane. */
+  /** The turns delivered under a caller's own id (core/deliveries.ts): the Wi-Fi device's, Agent Messages', the orchestrator's. */
+  deliveries: {
+    /** A delivery settled: its caller hears of it. */
+    settled: (event: SessionInputDelivery) => void
+    /** Whether Agent Messages still wants one of its typed (`team:`) deliveries written. */
     canWrite: (deliveryId: string) => boolean
   }
   /** The Wi-Fi device's service, wherever it runs (core/wifi.ts). */
@@ -59,11 +57,11 @@ export interface InputDeps {
 
 /**
  * The one way a message reaches an agent's pane: a person's from the app or the phone (the relay hands
- * the phone's over as the same `message` frame), the orchestrator's, a team's, and the Device's alike.
+ * the phone's over as the same `message` frame), the orchestrator's, Agent Messages', and the Device's alike.
  * The pane is read right before the paste, by the caller that holds the pane's write lock, and nothing
  * is typed into a dialog, a menu or a view a message does not belong in (messageHold.ts): the reason
  * comes back instead, with nothing written. `hold` adds a caller's own check of the same reading (a
- * team's, which waits for a draft too). The pane is read again once the text is in, right before its
+ * delivery from Agent Messages, which waits for a draft too). The pane is read again once the text is in, right before its
  * Enter: a dialog opened in between (a long or multi-line paste waits up to 1.5 s for the engine to take
  * it, mid-turn) keeps the Enter from being pressed, which would answer it, and the text waits in the
  * composer, unsent (sessionInput.ts says so). A list of suggestions opened by the message itself is no
@@ -115,17 +113,16 @@ export function sessionInputDeps(
   deps: InputDeps,
   deviceInput: () => Pick<AutonomousDeviceInput, 'legacyWrite'>,
 ): SessionInputDeps {
-  const { resolve, terminal, teams, device, clients, agentIdFor, commandcode, emit } = deps
+  const { resolve, terminal, deliveries, device, clients, agentIdFor, commandcode, emit } = deps
   const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
   const writeMessage = messageWriter(deps)
   return {
-    beforeSubmit: (id, text, tabId, deliveryId) => teams.prepare(id, text, tabId, deliveryId),
     readScreen: deps.readScreen,
     submission: deps.submission,
     getSession: (id) => resolve(id),
     onDelivery: (event) => {
       device()?.delivery(event)
-      teams.delivery(event)
+      deliveries.settled(event)
     },
     beforeTeamWrite: async session => {
       const capture = await captureTerminal(session.agentId)
@@ -135,11 +132,11 @@ export function sessionInputDeps(
     validateRuntime: validateTerminal,
     // Typed into the pane as it stands, a draft or a running turn included, under the pane's write lock.
     inject: (id, text) => deviceInput().legacyWrite(id, () => writeMessage(id, text)),
-    // A team's turn waits for a ready composer, and for its delivery to still hold the pane.
+    // An Agent Messages turn waits for a ready composer, and for its mailbox to still want it written.
     injectTeam: (id, text, deliveryId) => deviceInput().legacyWrite(id, async () => {
       if (!resolve(id)) return terminalActionNotStarted('team_waiting_unavailable')
       return writeMessage(id, text, (session, screen) => (screen ? screen.teamHold : 'team_waiting_unavailable')
-        ?? (teams.canWrite(deliveryId) ? null : 'team_waiting_control'))
+        ?? (deliveries.canWrite(deliveryId) ? null : 'team_waiting_control'))
     }),
     sendKey: (id, key) => deviceInput().legacyWrite(id, () => keyTerminalAction(id, key)),
     capture: captureTerminal,
@@ -213,7 +210,7 @@ export function createInput(deps: InputDeps) {
       releaseInput()
     }
   }
-  const submitAgent = (id: string, content: string, deliveryId?: string, tabId?: string): void => {
+  const submitAgent = (id: string, content: string, deliveryId?: string): void => {
     const record = resolve(id)
     const sessionId = record?.sessionId ?? id
     const engine = record?.engine ?? 'claude'
@@ -226,31 +223,27 @@ export function createInput(deps: InputDeps) {
       console.log(`[msg] ${sid(sessionId)} slash-command adapted for engine=${engine}`)
     }
     console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
-    input.submit(record?.agentId ?? sessionId, adapted, deliveryId, tabId)
+    input.submit(record?.agentId ?? sessionId, adapted, deliveryId)
   }
   const messageRequest = createMessageRequest(submitAgent)
   return { input, deviceInput, acquireTerminalControl, submitAgent, messageRequest }
 }
 
 /**
- * Takes a `message` frame: text a person typed for an agent, into its pane, in the tab's scope when the
- * frame names one. Nothing is answered: the transcript lines the text produces drive the turn back to
- * every window (mirror-all), with no synthetic events here.
+ * Takes a `message` frame: text a person typed for an agent, into its pane. Nothing is answered: the
+ * transcript lines the text produces drive the turn back to every window (mirror-all), with no synthetic
+ * events here. A `tabId` an older window still sends is not read.
  *
  * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
  */
-/** A tab's id as Tab collaboration takes it (teams/model.ts `Id`): a message from a tab is in its swarm's scope. */
-const TAB_ID = /^[A-Za-z0-9_-]{1,128}$/
-
-export function createMessageRequest(submit: (id: string, content: string, deliveryId?: string, tabId?: string) => void) {
+export function createMessageRequest(submit: (id: string, content: string) => void) {
   return (payload: Record<string, unknown>): void => {
     const content = payload.content as string | undefined
     const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
     if (!content || !target) return
     // From the relay this is only reached sealed: text typed into an agent is never taken from the relay
     // in the clear.
-    if (typeof payload.tabId === 'string' && TAB_ID.test(payload.tabId)) submit(target, content, undefined, payload.tabId)
-    else submit(target, content)
+    submit(target, content)
   }
 }
 

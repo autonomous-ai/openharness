@@ -1,0 +1,17 @@
+{
+  "name": "openharness",
+  "description": "Harness for agents: run Claude Code, Codex and other coding agents in parallel, wait for them and read their answers, while the person watches every one.",
+  "owner": {
+    "name": "Autonomous",
+    "url": "https://harness.autonomous.ai"
+  },
+  "plugins": [
+    {
+      "name": "harness",
+      "source": "./plugins/harness",
+      "description": "Start, wait for, read, message and close other coding agents through Harness: the harness skill and Harness's MCP server.",
+      "category": "development",
+      "tags": ["agents", "parallel", "codex", "claude-code", "orchestration"]
+    }
+  ]
+}

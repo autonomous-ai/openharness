@@ -59,7 +59,7 @@ that process. A process per risk, not per feature (`SERVICE_HOSTS` in `src/harne
 | `models` | models | grid's installs, downloads and commands | on demand |
 | `devices` | devices, wifi | the dials' serial ports, the fleet's lane, the voice router's worker, the Wi-Fi device | on demand |
 | `orchestrator` | orchestrator | an experiment | on demand |
-| `teams` | teams, collaboration | an experiment: Tab collaboration beside the prompt scopes | on demand |
+| `messages` | messages | an experiment: Agent Messages | on demand |
 | `sharing` | sharing | an experiment: Share | on demand |
 | `memory` | memory | an experiment: Memories across machines | on demand |
 | `router` | router | an experiment: where ⌘B sends a task, decided by Jev | on demand |
@@ -172,12 +172,6 @@ master too old to run it starts it beside itself, still in its own process (`src
   what the core reads back in line it reads from what they last said of each session.
   `e2e/recapsProcess.e2e.ts` proves turns end on time with them killed, hung or slow, and
   `e2e/recapsCompat.e2e.ts` that the dial and the windows hear the same cards and recaps as before.
-- State built from every change must get every change exactly once. The teams show how
-  (`src/services/teamsProcess.ts`, `src/core/teamsLink.ts`): the core numbers each change and keeps it
-  until the process acknowledges it; on each connection the process says what it applied and gets
-  what it lacks, or starts over. A value the core reads back synchronously is answered from what the
-  process last reported, and is "unknown" (the fallback) while a change to it is on its way.
-  `e2e/teamsProcess.e2e.ts` proves it.
 
 ## On demand
 
@@ -207,7 +201,7 @@ like any other. Named in `HARNESSD_SERVICES`, it starts with the others.
 
 ## Experiments
 
-An experiment (the orchestrator, Tab collaboration, Share, memory, the router) is a service that costs nothing until it is
+An experiment (the orchestrator, Agent Messages, Share, memory, the router) is a service that costs nothing until it is
 on: its own process, which the master starts only when the core asks for it (`want`), when one of
 its requests arrives or, as the core starts, when its saved state is in the data folder. Off, nothing of it runs or
 is loaded anywhere; one failing costs its own process and nothing else. `e2e/experiments.e2e.ts` proves it:
@@ -231,12 +225,10 @@ To add one:
    it there when `HARNESSD_SERVICES` keeps it in (`serviceHost.serve`, or `start` with a port).
 
 Removing one is deleting those. A port the core calls in line (the orchestrator's `roleOf`) is answered
-from what the process last reported (`src/core/orchestratorLink.ts`), as the viewers' are. Tab collaboration
-(`src/services/collaboration.ts`, beside the prompt scopes in the teams' process) shows the rest: whether a
-team's turn may still be written, which the core asks as it writes it, is reported for a few seconds at a
-time, so a process that stops reporting leaves none writable (`collaborationProcess.ts`, `core/teamsLink.ts`);
-a cancel its mailbox reads in line is asked of the core first (`takingBack`); and the core keeps nothing for
-the scopes until the experiment is on.
+from what the process last reported (`src/core/orchestratorLink.ts`), as the viewers' are. Agent Messages
+(`src/services/messages.ts`) shows the rest: whether one of its typed deliveries may still be written, which
+the core asks as it writes it, is reported for a few seconds at a time, so a process that stops reporting
+leaves none writable (`messagesProcess.ts`, `core/messagesLink.ts`).
 
 ## Do not
 

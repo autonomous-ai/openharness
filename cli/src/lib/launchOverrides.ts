@@ -13,6 +13,7 @@
  */
 
 import { join } from 'node:path'
+import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../engines/nativeLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { subscriptionModelLaunch } from './subscriptionModel.js'
 import { ownLoginProviderArgs } from '../engines/launches.js'
@@ -32,8 +33,12 @@ import { harnessEnvToClear } from '../dsh/launch.js'
 import type { DshLaunchAnswer } from '../dsh/launchWire.js'
 import { scmLaunchEnv } from '../scm/scmProjects.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
+import type { CreationAuthority } from './agentCreationReceipt.js'
+import type { publishGridConfigDir } from './publishedGridConfig.js'
+import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
 
 export interface LaunchOverrides {
+  native?: NativeLaunch
   /** Layered over the pane's inherited environment. The grid key lives here, and only here. */
   env: Record<string, string>
   /** Appended to the engine's argv (`-c model_providers…`, `-m …`, `--mcp-config …`). */
@@ -67,8 +72,9 @@ export type LaunchPreparationResult =
   | Extract<LaunchOverridesResult, { ok: false }>
 
 export interface LaunchOverridesDeps {
+  publishConfig?: typeof publishGridConfigDir
   /** The facts about THIS machine a contract needs and cannot read for itself — see `GridLaunchMachine`. */
-  machine: (engine: AgentEngine) => GridLaunchMachine
+  machine: (engine: AgentEngine, native?: NativeLaunch) => GridLaunchMachine | Promise<GridLaunchMachine>
   /** A grid or saved-API launch, built by the models service (core/agents/launch.ts `gridLaunchThrough`): the core
    *  builds none itself. */
   gridLaunch: (request: GridLaunchRequest) => Promise<GridLaunchAnswer>
@@ -80,7 +86,10 @@ export interface LaunchOverridesDeps {
   tmuxSupportsSessionEnv: () => Promise<boolean>
   /** Install the daemon's hooks into a non-default Codex profile. The caller decides whether hook
    *  installation is enabled at all. */
-  installCodexHooks: (codexHome: string) => void
+  installCodexHooks: (codexHome: string) => boolean | Promise<boolean>
+  /** Core composes eager native preparation; absent only for legacy/golden callers. */
+  native?: (engine: AgentEngine, source: NativeLaunchSource, authority: Pick<CreationAuthority, 'id' | 'current'>) => Promise<NativeLaunchResult>
+  prepareNative?: (native: NativeLaunch, current: () => boolean, environment?: Readonly<Record<string, string>>, clear?: readonly string[]) => Promise<boolean>
   /**
    * Read a Codex `config.toml`, for the provider an agent goes back to when it leaves a grid.
    *
@@ -96,7 +105,7 @@ export interface LaunchOverridesDeps {
 }
 
 /** Where the agent should come back: the registry row, or an override the desktop just sent. */
-export interface LaunchSource {
+export interface LaunchSource extends NativeLaunchSource {
   gridLaunch?: GridLaunchOverride | null
   codexHome?: string | null
   /**
@@ -146,9 +155,10 @@ export async function validateLaunchOverrides(
   deps: Pick<LaunchOverridesDeps, 'tmuxSupportsSessionEnv' | 'machine' | 'gridLaunch'>,
   engine: AgentEngine,
   source: LaunchSource,
+  native?: NativeLaunch,
 ): Promise<{ ok: true } | { ok: false; error: string; detail: string; unavailable?: string }> {
   if (!source.gridLaunch) return { ok: true }
-  const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: deps.machine(engine) })
+  const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: await deps.machine(engine, native) })
   if (!built.ok) return { ok: false, error: built.error, detail: built.detail, ...(built.unavailable ? { unavailable: built.unavailable } : {}) }
   return tmuxRefusal(deps, engine, source.gridLaunch)
 }
@@ -173,8 +183,9 @@ export async function buildLaunchOverrides(
   source: LaunchSource,
   configKey: string,
   current: () => boolean = () => true,
+  capturedNative?: NativeLaunch,
 ): Promise<LaunchOverridesResult> {
-  const prepared = await prepareLaunchOverrides(deps, engine, source, configKey, current)
+  const prepared = await prepareLaunchOverrides(deps, engine, source, configKey, current, capturedNative)
   return prepared.ok ? prepared.commit() : prepared
 }
 
@@ -186,12 +197,27 @@ export async function prepareLaunchOverrides(
   source: LaunchSource,
   configKey: string,
   current: () => boolean = () => true,
+  capturedNative?: NativeLaunch,
 ): Promise<LaunchPreparationResult> {
   const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during launch preparation.' } as const
   if (!current()) return changed
+  const owner = current
   source = structuredClone(source)
-  const machine = { ...deps.machine(engine) }
-  const base = await prepareBaseLaunchOverrides({ ...deps, machine: () => machine }, engine, source, configKey)
+  const inspected = capturedNative ? { ok: true as const, launch: capturedNative } : await deps.native?.(engine, source, { id: configKey, current: owner })
+  if (!current()) return changed
+  if (inspected && !inspected.ok) return inspected
+  const native = inspected?.ok ? inspected.launch : undefined
+  if (engine === 'codex' && native) source.codexHome = nativeHookLocations(native.environment).CODEX_HOME
+  current = () => owner() && native?.current() !== false
+  if (!current()) return changed
+  const machine = { ...await deps.machine(engine, native) }
+  const base = await prepareBaseLaunchOverrides({ ...deps, machine: () => machine,
+    ...(native && deps.publishConfig ? { writeGridConfigDir: async (key, files, links) => {
+      const published = await deps.publishConfig!(key, files, links, current)
+      if (!native.retain?.(published.proof)) throw Error('Generated configuration authority changed')
+      return published.directory
+    } } : {}),
+  }, engine, source, configKey)
   if (!current()) return changed
   if (!base.ok) return base
   if (source.dsh && !source.cwd) return { ok: false, error: 'DSH_WORKSPACE_MISSING', detail: `${source.dsh} has no saved workspace` }
@@ -215,6 +241,7 @@ export async function prepareLaunchOverrides(
     if (!current()) return changed
     if (committed) return { ok: false, error: 'LAUNCH_PREPARATION_USED', detail: 'Launch preparation must be requested again before another attempt.' }
     committed = true
+    if (!current()) return changed
     const written = await base.commit()
     if (!current()) return changed
     if (!written.ok) return written
@@ -226,6 +253,12 @@ export async function prepareLaunchOverrides(
     // The workspace's own SCM binding layers last: it is the daemon's, like `HARNESS_*`, and neither a
     // grid nor a DSH has a say in which workspace the pane is bound to. Nothing for git, so a git row's
     // overrides are exactly what they were.
+    // File-configured engines can move their native home. Prepare hooks after
+    // those operation-owned locations are known, before any native dispatch.
+    if (native && deps.prepareNative && !await deps.prepareNative(native, owner, overrides.env, overrides.clearEnv)) {
+      return { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting to confirm the engine’s native hook preparation.' }
+    }
+    if (!current()) return changed
     const scmEnv = scmLaunchEnv(source.scmLaunch)
     if (scmEnv) overrides = { ...overrides, env: { ...overrides.env, ...scmEnv } }
     // The named agent rides every relaunch, in the same argv slot `agent_create` put it in. Only an
@@ -238,7 +271,7 @@ export async function prepareLaunchOverrides(
     if (source.agent && supportsNamedAgent(engine, opencodeMajor)) {
       overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent, opencodeMajor)] }
     }
-    return { ok: true, overrides: { ...overrides, clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
+    return { ok: true, overrides: { ...overrides, ...(native ? { native, env: { ...overrides.env, ...native.environment } } : {}), clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
   } }
 }
 
@@ -263,7 +296,7 @@ async function prepareBaseLaunchOverrides(
   // back on the DEFAULT profile, reading hooks from a folder that was not the one it writes to.
   let ownLogin: LaunchOverrides | null = null
   if (!source.gridLaunch) {
-    const restored = subscriptionModelLaunch(engine, source.subscriptionModel, deps.machine(engine).opencodeMajor ?? null)
+    const restored = subscriptionModelLaunch(engine, source.subscriptionModel, (await deps.machine(engine)).opencodeMajor ?? null)
     // Ahead of the model on the command line: `-c` configures, `-m` selects, and Codex resolves the
     // model against the provider it has been given.
     const provider = ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
@@ -279,7 +312,7 @@ async function prepareBaseLaunchOverrides(
   if (source.gridLaunch) {
     // Built once, by the models service, with a saved API's endpoint and key as saved now: a removed API is
     // refused first, then an engine that cannot be pointed there, then a tmux that cannot set the variables.
-    const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: deps.machine(engine), refresh: true })
+    const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: await deps.machine(engine), refresh: true })
     if (!built.ok) return { ok: false, error: built.error, detail: built.detail, ...(built.unavailable ? { unavailable: built.unavailable } : {}) }
     const tmux = await tmuxRefusal(deps, engine, built.override)
     if (!tmux.ok) return tmux
@@ -293,7 +326,7 @@ async function prepareBaseLaunchOverrides(
           env[envVar] = pointAt ? join(dir, pointAt) : dir
         } catch (error) {
           const detail = `could not write ${engine}'s grid configuration · ${error instanceof Error ? error.message : error}`
-          return { ok: false, error: 'GRID_CONFIG_FAILED', detail }
+          return { ok: false, error: 'GRID_CONFIG_FAILED', detail, ...(deps.native ? { unavailable: 'native' } : {}) }
         }
       }
       // Derived from what this launch actually provides (the config-dir variable included), so an
@@ -315,7 +348,11 @@ async function prepareBaseLaunchOverrides(
     // not the one `harness login` installed into — without this it fires no hook at all. Idempotent.
     const home = source.codexHome
     return { ok: true, commit: async () => {
-      deps.installCodexHooks(home)
+      // A production native preparation covers the selected profile before any
+      // grid/configuration commit. Legacy callers must also await and check it.
+      if (!deps.native && !await deps.installCodexHooks(home)) return {
+        ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Waiting to confirm Codex’s hooks in the selected profile.',
+      }
       return {
         ok: true,
         overrides: {

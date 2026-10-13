@@ -41,6 +41,8 @@ export type SelectResult = { ok: true } | { ok: false; code: string; message: st
 export interface FleetRouting {
   listMachines(): Promise<{ machines: CableMachine[]; source: CableMachineSource }>
   listAgentsFlat(): Promise<CableAgent[]>
+  /** When each of this computer's agents last did something, by id (the app's "last used"). */
+  activityTimes(): Promise<Map<string, number>>
   agentTotal(): number
   describe(agentId: string): { name: string; engine: string; machine: string } | undefined
   noteAgent(machineId: string, agentId: string): void
@@ -54,7 +56,7 @@ export interface FleetRouting {
   answerReviewed(answer: ReviewedAnswer): Promise<AnswerReceipt>
   answer(agentId: string, requestId: string, answers: Record<string, string>): void
   updateAgent(agentId: string, model?: string, effort?: string): void
-  recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string }>>
+  recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string; fullText?: string }>>
   recentAsks(agentId: string): Promise<string[]>
   listModels(agentId: string): Promise<string[]>
   forkAgent(agentId: string): Promise<ForkOutcome>
@@ -89,7 +91,7 @@ export const FLEET_FALLBACKS: PortFallbacks<Fleet> = {
   routeSend: { ok: false, machine: '', reason: FLEET_UNAVAILABLE },
   onEvent: () => {},
   stop: undefined,
-  listMachines: later(FAIL), listAgentsFlat: later(FAIL), agentTotal: FAIL, describe: FAIL, noteAgent: FAIL,
+  listMachines: later(FAIL), listAgentsFlat: later(FAIL), activityTimes: later(FAIL), agentTotal: FAIL, describe: FAIL, noteAgent: FAIL,
   machineOf: FAIL, knows: FAIL, isLocalAgent: FAIL, sendTurn: FAIL, lastRouted: FAIL, stopTurn: FAIL,
   canSpeakQuestion: FAIL, answerReviewed: later(FAIL), answer: FAIL, updateAgent: FAIL, recentSummaries: later(FAIL),
   recentAsks: later(FAIL), listModels: later(FAIL), forkAgent: later(FAIL), hasLane: FAIL, online: later(FAIL),
@@ -193,6 +195,7 @@ export function startFleet(core: CoreApi, deps: FleetDeps): { fleet: Fleet; rout
     // What the dial asks: the router's own answers.
     listMachines: () => router.listMachines(),
     listAgentsFlat: () => router.listAgentsFlat(),
+    activityTimes: () => router.activityTimes(),
     agentTotal: () => router.agentTotal(),
     describe: (agentId) => router.describe(agentId),
     noteAgent: (machineId, agentId) => router.noteAgent(machineId, agentId),

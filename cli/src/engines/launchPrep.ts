@@ -25,10 +25,10 @@ export interface FolderTrust {
  * one; null for an engine that asks no such question. The home is found at each call, as the person's shell
  * may have moved it since.
  */
-export function folderTrust(engine: AgentEngine, profile?: string | null): FolderTrust | null {
+export function folderTrust(engine: AgentEngine, profile?: string | null, environment?: NodeJS.ProcessEnv): FolderTrust | null {
   const trust = launchContract(engine)?.trust
   if (!trust) return null
-  const file = (): string => join(launchHomeOf(trust.home, profile), trust.file)
+  const file = (): string => join(launchHomeOf(trust.home, profile, environment), trust.file)
   return { trusts: (path) => trustsIn(trust, file(), path), record: (path) => recordTrustIn(trust, file(), path) }
 }
 

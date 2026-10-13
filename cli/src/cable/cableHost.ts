@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 
 import type { RegisteredSession } from '../lib/registry.js'
-import { fetchRelease, loadImage, otaKeyForBoard, shouldOffer } from './fwPush.js'
+import { fetchRelease, loadImage, shouldOffer } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
 import { FleetRouter } from '../services/fleetRouter.js'
@@ -27,7 +27,8 @@ import type { ForkResult } from '../core/api.js'
 import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
-import type { AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
+import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
+import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
@@ -43,6 +44,8 @@ export interface RecentTurn {
   text?: string
   /** What the USER asked on that turn. The topic lives here; the recap holds the answer. */
   ask?: string
+  /** The turn's whole answer when the mirror still holds it: what a `recap: 'long-v1'` device reads. */
+  fullText?: string
 }
 
 export interface CableHostWiring {
@@ -52,6 +55,8 @@ export interface CableHostWiring {
   displayName: (session: RegisteredSession) => string
   /** Exact live terminal footer for a local agent; absent when no footer is visible. */
   activityText?: (agentId: string) => Promise<string | null>
+  /** `activityText` plus the footer's timer and the assistant's latest paragraph. */
+  activitySnapshot?: (agentId: string) => Promise<ActivitySnapshot | null>
   /** The person's own last questions to a LOCAL agent, newest first. */
   recentAsks: (agentId: string) => string[] | Promise<string[]>
   /** Read the agents again before a list is built from them (see FleetLocal.refresh). */
@@ -386,7 +391,7 @@ export class DaemonCableHost implements CableHost {
     if (!app) return { selected: '', swarms: [], tiles: [] }
     return {
       selected: app.active,
-      swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.length, panes: s.panes })),
+      swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.length, agentIds: s.agentIds, panes: s.panes })),
       tiles: app.tiles,
     }
   }
@@ -464,7 +469,26 @@ export class DaemonCableHost implements CableHost {
 
   async activityText(agentId: string): Promise<string | null> {
     if (!this.viaFleet((r) => r.isLocalAgent(agentId))) return null
-    return await this.wiring.activityText?.(agentId) ?? null
+    if (this.wiring.activityText) return await this.wiring.activityText(agentId) ?? null
+    return (await this.wiring.activitySnapshot?.(agentId))?.text ?? null
+  }
+
+  async activitySnapshot(agentId: string): Promise<ActivitySnapshot | null> {
+    if (!this.viaFleet((r) => r.isLocalAgent(agentId))) return null
+    if (this.wiring.activitySnapshot) return await this.wiring.activitySnapshot(agentId)
+    const text = await this.wiring.activityText?.(agentId)
+    return text ? { text } : null
+  }
+
+  /**
+   * Every agent the router knows, as the library pages it. The desktop's closed sessions and per-session
+   * status are not ported (cable.md, open point 1): each is `idle`. A local agent's age is its last activity, which
+   * the Pro's Recent list is ordered by; another machine's is unknown.
+   */
+  async playerLibrary(): Promise<PlayerSession[]> {
+    const [agents, times] = await Promise.all([this.listAgentsFlat(), this.viaFleet((r) => r.activityTimes())])
+    return agents.map((a) => ({ id: a.id, name: a.name, engine: a.engine ?? '', machineId: a.machineId ?? '',
+      status: PLAYER_STATES[5], lastActivityAt: times?.get(a.id) ?? null }))
   }
 
   /** A card arrived from a machine for an agent — see the router's noteAgent. */
@@ -624,7 +648,7 @@ export class DaemonCableHost implements CableHost {
   }
 
   /** The last few turns, newest first, in the shape the dial's tile draws — from the agent's own machine. */
-  recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string }>> {
+  recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string; fullText?: string }>> {
     return this.viaFleet((r) => r.recentSummaries(agentId))
   }
 
@@ -650,16 +674,11 @@ export class DaemonCableHost implements CableHost {
    * only thing that could plug in, and a brick the moment a Pro could: its ESP32-P4 cannot run an
    * ESP32-S3 image, and the cable that would let us put it right is the firmware that just stopped.
    */
-  async firmwareFor(runningVersion: string, hw?: string): Promise<{ version: string; image: Buffer; sha256: string } | null> {
+  async firmwareFor(runningVersion: string, key: string): Promise<{ version: string; image: Buffer; sha256: string } | null> {
     if (env.CABLE_FW_DISABLE) return null
-    const key = otaKeyForBoard(hw)
-    if (!key) {
-      this.log(`cable: not offering firmware — unknown board "${hw}"`)
-      return null
-    }
     const release = await fetchRelease(env.CABLE_FW_MANIFEST_URL, key)
     if (!release || !shouldOffer(runningVersion, release.version)) return null
-    const image = await loadImage(release, join(env.ADAPTER_DATA_DIR, 'firmware'))
+    const image = await loadImage(release, join(env.ADAPTER_DATA_DIR, 'firmware'), key)
     if (!image) return null
     return { version: release.version, image, sha256: release.sha256 }
   }
@@ -858,21 +877,43 @@ export function multipart(file: Buffer, filename: string, mimeType: string, boun
 }
 
 /**
+ * A tool card as one short step line ("Read · cableSession.ts") for a `steps-v1` device's working screen, or null.
+ *
+ * The working screen otherwise has only the assistant's prose to show, and a turn that is all tool calls
+ * has none. A path argument keeps its last segment.
+ */
+export function cableStepFor(
+  frame: { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string } },
+): { agentId: string; step: string } | null {
+  if (frame.type !== 'commander_event' || !frame.agentId || frame.payload?.kind !== 'tool') return null
+  const tool = (frame.payload.text ?? '').trim()
+  if (!tool) return null
+  let arg = (frame.payload.recap ?? '').replace(/[\r\n\t]+/g, ' ').trim()
+  if (/^[~.]?\/\S+$/.test(arg)) arg = arg.replace(/\/+$/, '').split('/').at(-1) ?? arg
+  const step = arg ? `${tool} \u00b7 ${arg}` : tool
+  return { agentId: frame.agentId, step: [...step].slice(0, 120).join('') }
+}
+
+/**
  * Translate one device-bound `commander_event` into the cable's vocabulary.
  *
  * Returns null for cards the dial has no use for. The kinds are the WiFi device's own, unchanged: a new
  * kind reaches the cable the day it reaches the socket.
  */
 export function cableEventFor(
-  frame: { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string; subagent?: unknown; restored?: unknown } },
-): { kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent: boolean } | null {
+  frame: { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string; subagent?: unknown; restored?: unknown; update?: unknown; fullText?: unknown } },
+): { kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent: boolean; update?: string; fullText?: string } | null {
   if (frame.type !== 'commander_event' || !frame.agentId) return null
   const kind = frame.payload?.kind
   if (kind !== 'processing' && kind !== 'done' && kind !== 'summary' && kind !== 'error') return null
   // `subagent`: a sub-agent's turn end — the tile redraws, nobody is told (CommanderMirrorOpts.isSubagent). A
   // `restored` recap (a turn that ended unseen, CommanderMirror.catchUp) is drawn the same way: history, not news.
   const silent = frame.payload?.subagent === true || frame.payload?.restored === true
-  return { kind, agentId: frame.agentId, text: frame.payload?.text ?? '', recap: frame.payload?.recap ?? '', subagent: silent }
+  const update = frame.payload?.update
+  const fullText = frame.payload?.fullText
+  return { kind, agentId: frame.agentId, text: frame.payload?.text ?? '', recap: frame.payload?.recap ?? '', subagent: silent,
+    ...(kind === 'processing' && typeof update === 'string' ? { update } : {}),
+    ...(kind === 'summary' && typeof fullText === 'string' && fullText ? { fullText } : {}) }
 }
 
 /**

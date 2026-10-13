@@ -30,7 +30,7 @@ function deps(): LaunchOverridesDeps {
     machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
     writeGridConfigDir: async (key) => `/state/grid-engine-config/${key}`,
     tmuxSupportsSessionEnv: async () => true,
-    installCodexHooks: () => {},
+    installCodexHooks: () => true,
     readCodexConfig: () => null,
   }
 }

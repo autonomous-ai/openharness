@@ -166,6 +166,7 @@ class DialStatus {
     this.devices = const [],
     this.fw,
     this.hw,
+    this.board,
     this.updating,
   });
 
@@ -196,6 +197,13 @@ class DialStatus {
   /// at boot. Null from a firmware that predates the field. Shown only in the row's detail: a person
   /// does not choose it, support reads it.
   final String? hw;
+
+  /// `hello.board` — `pro` for the square Harness Pro. Null (a round dial) from older daemons.
+  final String? board;
+
+  /// The Harness Pro: only brightness, sound and voice language are its to change. The old Player-1
+  /// build says `hw: harness-pro` without a board.
+  bool get isPro => board == 'pro' || hw == 'harness-pro';
 
   /// The version on its way over the cable, or null. The one state that deserves its own word in the
   /// window, because it is the minute in which people unplug the thing.
@@ -229,6 +237,9 @@ class DialStatus {
         : null,
     hw: json['hw'] is String && (json['hw'] as String).isNotEmpty
         ? json['hw'] as String
+        : null,
+    board: json['board'] is String && (json['board'] as String).isNotEmpty
+        ? json['board'] as String
         : null,
     updating:
         json['updating'] is String && (json['updating'] as String).isNotEmpty
@@ -300,6 +311,7 @@ class DialState extends ChangeNotifier {
               mac: device.mac,
               fw: device.fw,
               hw: device.hw,
+              board: device.board,
               settings: device.settings,
             ),
         ],

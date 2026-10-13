@@ -1,0 +1,286 @@
+{
+  "linux:catalog=false:variant=false": {
+    "result": {
+      "ok": true
+    },
+    "calls": [
+      {
+        "args": [
+          "api",
+          "session.switchModel",
+          "--param",
+          "sessionID=ses_fixture",
+          "-d",
+          "{\"model\":{\"id\":\"model\",\"providerID\":\"fixture\"}}"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      },
+      {
+        "args": [
+          "api",
+          "session.get",
+          "--param",
+          "sessionID=ses_fixture"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      }
+    ]
+  },
+  "linux:catalog=false:variant=true": {
+    "result": {
+      "ok": true
+    },
+    "calls": [
+      {
+        "args": [
+          "api",
+          "session.switchModel",
+          "--param",
+          "sessionID=ses_fixture",
+          "-d",
+          "{\"model\":{\"id\":\"model\",\"providerID\":\"fixture\",\"variant\":\"high\"}}"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      },
+      {
+        "args": [
+          "api",
+          "session.get",
+          "--param",
+          "sessionID=ses_fixture"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      }
+    ]
+  },
+  "linux:catalog=true:variant=false": {
+    "result": {
+      "ok": true
+    },
+    "calls": [
+      {
+        "args": [
+          "api",
+          "model.list"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      },
+      {
+        "args": [
+          "api",
+          "session.switchModel",
+          "--param",
+          "sessionID=ses_fixture",
+          "-d",
+          "{\"model\":{\"id\":\"model\",\"providerID\":\"fixture\"}}"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      },
+      {
+        "args": [
+          "api",
+          "session.get",
+          "--param",
+          "sessionID=ses_fixture"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      }
+    ]
+  },
+  "linux:catalog=true:variant=true": {
+    "result": {
+      "ok": true
+    },
+    "calls": [
+      {
+        "args": [
+          "api",
+          "model.list"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      },
+      {
+        "args": [
+          "api",
+          "session.switchModel",
+          "--param",
+          "sessionID=ses_fixture",
+          "-d",
+          "{\"model\":{\"id\":\"model\",\"providerID\":\"fixture\",\"variant\":\"high\"}}"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      },
+      {
+        "args": [
+          "api",
+          "session.get",
+          "--param",
+          "sessionID=ses_fixture"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      }
+    ]
+  },
+  "darwin:catalog=false:variant=false": {
+    "result": {
+      "ok": true
+    },
+    "calls": [
+      {
+        "args": [
+          "api",
+          "session.switchModel",
+          "--param",
+          "sessionID=ses_fixture",
+          "-d",
+          "{\"model\":{\"id\":\"model\",\"providerID\":\"fixture\"}}"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      },
+      {
+        "args": [
+          "api",
+          "session.get",
+          "--param",
+          "sessionID=ses_fixture"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      }
+    ]
+  },
+  "darwin:catalog=false:variant=true": {
+    "result": {
+      "ok": true
+    },
+    "calls": [
+      {
+        "args": [
+          "api",
+          "session.switchModel",
+          "--param",
+          "sessionID=ses_fixture",
+          "-d",
+          "{\"model\":{\"id\":\"model\",\"providerID\":\"fixture\",\"variant\":\"high\"}}"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      },
+      {
+        "args": [
+          "api",
+          "session.get",
+          "--param",
+          "sessionID=ses_fixture"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      }
+    ]
+  },
+  "darwin:catalog=true:variant=false": {
+    "result": {
+      "ok": true
+    },
+    "calls": [
+      {
+        "args": [
+          "api",
+          "model.list"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      },
+      {
+        "args": [
+          "api",
+          "session.switchModel",
+          "--param",
+          "sessionID=ses_fixture",
+          "-d",
+          "{\"model\":{\"id\":\"model\",\"providerID\":\"fixture\"}}"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      },
+      {
+        "args": [
+          "api",
+          "session.get",
+          "--param",
+          "sessionID=ses_fixture"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      }
+    ]
+  },
+  "darwin:catalog=true:variant=true": {
+    "result": {
+      "ok": true
+    },
+    "calls": [
+      {
+        "args": [
+          "api",
+          "model.list"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      },
+      {
+        "args": [
+          "api",
+          "session.switchModel",
+          "--param",
+          "sessionID=ses_fixture",
+          "-d",
+          "{\"model\":{\"id\":\"model\",\"providerID\":\"fixture\",\"variant\":\"high\"}}"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      },
+      {
+        "args": [
+          "api",
+          "session.get",
+          "--param",
+          "sessionID=ses_fixture"
+        ],
+        "options": {
+          "cwd": "/fixture/work"
+        }
+      }
+    ]
+  }
+}

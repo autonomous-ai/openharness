@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { createExternalSessions, type ExternalReaderOptions } from './externalSessions.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
+import type { RegisteredSession } from '../lib/registry.js'
 import { SessionSearchIndex, folderWords, type SearchSource } from '../lib/sessionSearch/indexer.js'
 import { SESSION_SEARCH_FILE, SessionSearchStore, type ExternalHit } from '../lib/sessionSearch/store.js'
 
@@ -68,13 +69,16 @@ function openIndex(core: CoreApi, readers: ReturnType<typeof createExternalSessi
       console.warn('[search] node:sqlite is not available on this Node — session search is off')
       return null
     }
+    // A harness with no title of its own goes by the name the apps show for it, in the catalog and on
+    // its index row alike.
+    const titleOf = (s: RegisteredSession) => s.title || core.agents.displayName(s)
     const index = new SessionSearchIndex({
       store,
       catalogMetadata: () => {
         const entries = new Map<string, ExternalHit>(readers.sessions.list().flatMap(s =>
           [s.sessionId, ...(s.aliases ?? [])].map(id => [id, { title: s.title, cwd: s.cwd, origin: s.origin }] as const)))
         for (const s of core.agents.all()) if (s.sessionId) entries.set(s.sessionId,
-          { title: s.title || core.agents.displayName(s), cwd: s.cwd || '', origin: 'harness' })
+          { title: titleOf(s), cwd: s.cwd || '', origin: 'harness' })
         return entries
       },
       sources: () => {
@@ -91,6 +95,9 @@ function openIndex(core: CoreApi, readers: ReturnType<typeof createExternalSessi
             // Conversation stamps only: the row's `touchedAt` includes discovery bookkeeping.
             changedAt: Math.max(s.lastTranscriptAt || 0, s.lastHookAt || 0) || s.boundAt || s.registeredAt || 0,
             readHistory,
+            // On its row for what reads the index directly (the Memories package), which has no
+            // harness records to join: a pass writes them again whenever they change.
+            harness: { cwd: s.cwd || '', title: titleOf(s) },
           }]
         })
         // Conversations Harness did not start — any Harness agent's, earlier ones included, are not.

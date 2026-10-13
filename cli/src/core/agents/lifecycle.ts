@@ -11,6 +11,7 @@ import { createResumeAgentService, type ResumeAgentServiceDeps } from '../../lib
 import type { SessionCheckpointStore } from '../../lib/sessionCheckpoint.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import { AgentStopError, createStopAgentService, type StopAgentServiceDeps } from '../../lib/stopAgentService.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 
 import type { ResumeAgent } from './launches.js'
 
@@ -104,6 +105,7 @@ export function createStopRequest({ byAgent, stop }: {
     }
     try { await stop(target) }
     catch (error) {
+      if (error instanceof IdentityReadUnavailable) return { error: error.code, detail: error.message, held: true, retryable: true }
       if (!(error instanceof AgentStopError)) throw error
       return { error: error.code, detail: error.message }
     }

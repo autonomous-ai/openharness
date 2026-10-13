@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { terminalActivity } from './terminalActivity.js'
+import { terminalActivity, terminalActivityReading } from './terminalActivity.js'
+import { elapsedSecondsOf } from './footerTimer.js'
 
 describe('terminalActivity', () => {
   it.each([
@@ -41,5 +42,20 @@ describe('terminalActivity', () => {
   it('ignores history above the live footer and prefers its last matching row', () => {
     expect(terminalActivity('claude', '✻ Coalescing…\n' + '\n'.repeat(17))).toBeNull()
     expect(terminalActivity('codex', '• Thinking (1s • esc to interrupt)\n◦ Working (2s • esc to interrupt)')).toBe('Working')
+  })
+})
+
+describe('elapsedSecondsOf', () => {
+  it.each([
+    ['codex', '• Working (15m 31s • esc to interrupt)', 931],
+    ['claude', '✻ Coalescing… (1h 11m 34s · ↓ 31.2k tokens)', 4294],
+    ['codex', '• Working (0s • esc to interrupt)', 0],
+  ])('reads the native %s timer: %s', (engine, screen, seconds) => {
+    expect(elapsedSecondsOf(terminalActivityReading(engine, screen)?.indicator)).toBe(seconds)
+  })
+  it('says nothing for a footer without a timer, or one outside 0..30 days', () => {
+    expect(elapsedSecondsOf(terminalActivityReading('claude', '✳ Boogieing...')?.indicator)).toBeUndefined()
+    expect(elapsedSecondsOf('✻ Working… (721h 0m 1s · x)')).toBeUndefined()
+    expect(elapsedSecondsOf(undefined)).toBeUndefined()
   })
 })

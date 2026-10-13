@@ -22,8 +22,8 @@ import { projectDisplayName, type registry, type RegisteredSession } from '../..
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import { findCorroboratedResumeSession, findLiveSession, findResumedTranscript } from '../../lib/sessionRepair.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
+import { conversationKey, type ConversationOwners } from './conversationOwners.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
-import type { SwarmPromptScopes } from '../../teams/promptScope.js'
 
 /** Between session-binding attempts for a process whose engine store is not resolvable yet. */
 const REPAIR_RETRY_MS = 60_000
@@ -64,16 +64,17 @@ export interface BindDeps {
   announceSession: (session: RegisteredSession) => void
   stoppedAgents: Pick<StoppedAgentStore, 'save' | 'finishResume' | 'get'>
   syncRecapPool: () => void
-  teams: Pick<SwarmPromptScopes, 'forget'>
   input: Pick<SessionInputController, 'forget'>
   deviceInput: Pick<AutonomousDeviceInput, 'forget'>
   /** Where Copilot, Grok and agy keep their sessions. */
   homes: { copilot: string; grok: string; agy: string }
+  /** One owner per conversation, stopped harnesses included (conversationOwners.ts). */
+  owners?: Pick<ConversationOwners, 'settle'>
 }
 
 export function createBinding({
-  registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool, teams,
-  input, deviceInput, homes,
+  registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
+  input, deviceInput, homes, owners,
 }: BindDeps) {
   /**
    * Forks whose engine session has not reported in yet, agentId → the SOURCE's sessionId. A fork's tile
@@ -128,6 +129,12 @@ export function createBinding({
       console.error(`[agent] ${sid(entry.agentId)} could not save the record it resumes from: ${error instanceof Error ? error.message : error}`)
     }
     if (entry.resumeOnly) stoppedAgents.finishResume(entry.agentId)
+    // A conversation new to this harness has one owner from now on: a stopped harness it came from (a
+    // `/resume`, `claude --resume` in a terminal, a compaction) lets it go, as a running one already has.
+    if (meta.isNew) {
+      try { owners?.settle([conversationKey(entry)]) }
+      catch (error) { console.warn(`[agent] ${sid(entry.agentId)} could not settle who owns ${sid(entry.sessionId)}: ${error instanceof Error ? error.message : error}`) }
+    }
     syncRecapPool()
     if (meta.isNew) {
       registry.inheritName(entry.agentId, entry.sessionId)
@@ -399,6 +406,7 @@ export function createBinding({
       //
       const located = await read(() => findLiveSession(observed.engine, observed.cwd, startedAtMs, {
         bornOnly: true,
+        ...(agent.forkedFrom?.sessionId ? { excludedSessionId: agent.forkedFrom.sessionId } : {}),
         pid: observed.processIdentity.pid,
         expectedProcess: observed.processIdentity,
         codexHome: agent.codexHome ?? undefined,
@@ -431,7 +439,6 @@ export function createBinding({
     })
     if (!result || !result.isNew) return
     if (previousOwner && previousOwner.agentId !== result.entry.agentId) {
-      teams.forget(previousOwner.agentId)
       input.forget(previousOwner.agentId)
       deviceInput.forget(previousOwner.agentId)
       announceSession(previousOwner)

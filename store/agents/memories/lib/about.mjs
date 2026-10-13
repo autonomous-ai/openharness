@@ -76,6 +76,26 @@ export function parseAbout(text) {
   return { intro: intro.join(' '), lines }
 }
 
+/**
+ * A conversation cited by its agent's name (`codex:<id>`) instead of `session:<id>` is put right when the
+ * index knows the id. A free model building About You on 2026-10-11 wrote 59 of its 75 sources that way,
+ * copying the agent name from `mem asks`' headings, and the pane could not find one of them. A memory is
+ * cited by its file name, which has a dot; a conversation's id never does.
+ */
+export function citeSessions(text, known) {
+  return String(text ?? '').split('\n').map((line) => {
+    const end = line.trimEnd()
+    if (!/^\s*[-*][ \t]/.test(end) || !end.endsWith(']')) return line
+    const open = end.lastIndexOf('[')
+    const refs = end.slice(open + 1, -1).split(',').map((ref) => ref.trim())
+    const fixed = refs.map((ref) => {
+      const cited = /^([a-z][a-z-]*):([^\s.,\]]+)$/.exec(ref)
+      return cited && cited[1] !== 'asks' && cited[1] !== 'session' && known(cited[2]) ? `session:${cited[2]}` : ref
+    })
+    return fixed.every((ref, i) => ref === refs[i]) ? line : `${end.slice(0, open)}[${fixed.join(', ')}]`
+  }).join('\n')
+}
+
 /** The profile on disk, parsed, or `null` when none has been built yet. */
 export function readAbout(dir) {
   const path = join(dir, ABOUT_FILE)

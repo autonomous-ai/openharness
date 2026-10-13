@@ -1,3 +1,5 @@
+import { HandoffError, type PreparedHandoff } from '../lib/handoffAuthority.js'
+import type { ServiceQueryAuthority } from './serviceLinks.js'
 /** The handoff's read-only queries. The core owns these facts; all file rendering and git work stays
  * in the edge host (quiet-machine QA, handoff extraction). No service receives the registry itself. */
 import { ENGINES, type AgentEngine } from '../engines/types.js'
@@ -6,6 +8,10 @@ import { CONVERSATIONS_OFF, type ConversationReads, type CoreApi } from './api.j
 
 export function conversationReads(deps: HandoffDeps): ConversationReads {
   return {
+    publish: async (prepared, permit) => {
+      if (!deps.publish) throw new HandoffError('HANDOFF_UNAVAILABLE')
+      return deps.publish(prepared, permit)
+    },
     resolve: async (id) => (await deps.resolve(id)) ?? null,
     recentAsks: async (id, n) => deps.recentAsks(id, n),
     lastFullText: async (id) => (await deps.lastFullText(id)) ?? null,
@@ -23,8 +29,19 @@ export function conversationReads(deps: HandoffDeps): ConversationReads {
 const text = (value: unknown): value is string => typeof value === 'string' && value.length > 0
 const count = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 20
 
-export async function answerConversationQuery(core: Pick<CoreApi, 'conversations'>, query: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function answerConversationQuery(core: Pick<CoreApi, 'conversations'>, query: string, payload: Record<string, unknown>, authority?: ServiceQueryAuthority): Promise<Record<string, unknown>> {
   const reads = core.conversations
+  if (query === 'publish') {
+    const prepared = payload.prepared as PreparedHandoff
+    const requestId = payload.originRequestId
+    if (!prepared || !text(requestId) || !authority) return { error: 'HANDOFF_UNAVAILABLE', held: true, retryable: true }
+    try {
+      return { value: await reads.publish(prepared, { requestId,
+        current: request => authority.ownsRequest(requestId, 'agent_handoff_prepare', { ...request }) }) }
+    } catch (error) {
+      return { error: error instanceof HandoffError ? error.code : 'HANDOFF_UNAVAILABLE', held: true, retryable: true }
+    }
+  }
   const id = payload.id
   if (query === 'resolve' || query === 'discover' || query === 'lastFullText') {
     if (!text(id)) return { error: 'BAD_QUERY' }

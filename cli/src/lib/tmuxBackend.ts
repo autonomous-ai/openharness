@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { shellSingleQuote } from './shellQuote.js'
+import { heldPaneFormat } from './nativePaneHold.js'
 import { patientExec } from './patientExec.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import {
@@ -107,6 +108,19 @@ export function clearEnvArgs(sessionId: string, names: readonly string[]): strin
     args.push('set-environment', '-t', sessionId, '-u', name)
   }
   return args
+}
+
+/**
+ * The names `tmux show-environment -g` lists [listing] with a value that [matches] names. A `-NAME` line
+ * is one already marked for removal, which tmux keeps out of every new pane itself.
+ */
+export function serverVariables(listing: string, matches: (name: string) => boolean): string[] {
+  return [...new Set(listing.split('\n').map((line) => /^([^-=\s][^=\s]*)=/.exec(line)?.[1]).filter((name): name is string => !!name && matches(name)))]
+}
+
+/** The argv for removing [names] from the tmux server's global environment, which every new pane starts from. */
+export function unsetServerEnvArgs(names: readonly string[]): string[] {
+  return names.flatMap((name, i) => [...(i ? [';'] : []), 'set-environment', '-g', '-u', name])
 }
 
 export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
@@ -262,7 +276,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     const commands = [...setup, args]
     if (request.expectedHeldToken && !/^[a-f0-9-]{36}$/.test(request.expectedHeldToken)) return terminalActionNotStarted('invalid waiting pane identity')
     const command = request.expectedHeldToken
-      ? ['if-shell', '-F', '-t', runtime.paneId, `#{&&:#{m:*harness-held*,#{pane_start_command}},#{m:*${request.expectedHeldToken}*,#{pane_start_command}}}`,
+      ? ['if-shell', '-F', '-t', runtime.paneId, heldPaneFormat(request.expectedHeldToken),
         commands.map(parts => parts.map(shellSingleQuote).join(' ')).join('; '), 'display-message -p adoption-mismatch']
       : commands.flatMap((parts, index) => index ? [';', ...parts] : parts)
     const result = await new Promise<{ error: NodeJS.ErrnoException | null; stderr: string }>((resolve) => {
@@ -286,7 +300,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
   async isHeld(runtime: TmuxRuntimeRef, token: string): Promise<boolean | 'unknown'> {
     if (!/^%\d+$/.test(runtime.paneId) || !/^[a-f0-9-]{36}$/.test(token)) return 'unknown'
     return new Promise(resolve => run('tmux', ['display-message', '-p', '-t', runtime.paneId,
-      `#{&&:#{m:*harness-held*,#{pane_start_command}},#{m:*${token}*,#{pane_start_command}}}`], { timeout: 2_000 }, (error, stdout) => {
+      heldPaneFormat(token)], { timeout: 2_000 }, (error, stdout) => {
       if (error) { resolve(isNoTmuxServerError(error.message) || /can't find pane: %\d+/.test(error.message) ? false : 'unknown'); return }
       resolve(stdout.trim() === '1' ? true : stdout.trim() === '0' ? false : 'unknown')
     }))
@@ -298,7 +312,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     const result = await inTmuxRoom('notify', () => new Promise<{ error: Error | null; stdout: string }>(resolve => {
       if (!current()) { resolve({ error: new Error('Adoption changed before pane close'), stdout: '' }); return }
       // Evaluated inside the tmux server, in the same command that kills: no check/use gap for %N.
-      run('tmux', ['if-shell', '-F', '-t', runtime.paneId, `#{&&:#{m:*harness-held*,#{pane_start_command}},#{m:*${token}*,#{pane_start_command}}}`,
+      run('tmux', ['if-shell', '-F', '-t', runtime.paneId, heldPaneFormat(token),
         `kill-pane -t ${runtime.paneId}`, 'display-message -p adoption-mismatch'], { timeout: 5_000 },
       (error, stdout) => resolve({ error, stdout }))
     }))
@@ -345,9 +359,10 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * `respawn-pane` inherits it — so respawning with no `-e` flags would leave the old grid in place
    * while reporting a clean swap. This is what makes "back to your own login" actually true.
    */
-  async clearEnv(runtime: TmuxRuntimeRef, names: readonly string[]): Promise<TerminalActionResult> {
+  async clearEnv(runtime: TmuxRuntimeRef, names: readonly string[], current?: () => boolean): Promise<TerminalActionResult> {
     if (!names.length) return legacyActionResult(true, 'tmux clear environment')
     const sessionId = await this.resolveSessionId(runtime.paneId)
+    if (current?.() === false) return terminalActionNotStarted('The harness changed before clearing its environment')
     if (!sessionId) return terminalActionNotStarted('tmux session could not be resolved from pane')
     const ok = await new Promise<boolean>((resolve) => {
       run('tmux', clearEnvArgs(sessionId, names), { timeout: 5_000 }, (error) => resolve(!error))
@@ -373,8 +388,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    * re-arming it here tmux destroys the pane — and, being its only pane, the whole session — the
    * instant the old process exits.
    */
-  async holdOpen(runtime: TmuxRuntimeRef): Promise<TerminalActionResult> {
+  async holdOpen(runtime: TmuxRuntimeRef, current?: () => boolean): Promise<TerminalActionResult> {
     const scope = paneOptionScope(await this.features())
+    if (current?.() === false) return terminalActionNotStarted('The harness changed before retaining its pane')
     const ok = await new Promise<boolean>((resolve) => {
       run('tmux', ['set-option', scope, '-t', runtime.paneId, 'remain-on-exit', 'on'], { timeout: 2_000 }, (error) => {
         resolve(!error)
@@ -389,6 +405,25 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
       state: 'succeeded',
       value: new Map([...titles].map(([paneId, title]) => [terminalRouteKey({ backend: 'tmux', paneId }), title])),
     }
+  }
+
+  /**
+   * Remove every variable [matches] names from the tmux server's global environment, and say which.
+   *
+   * A tmux server keeps the environment it was started with as its global environment, and builds every
+   * new pane's from it (with the session's own on top). A server a core started before that core held
+   * harnessd's variables back (lib/harnessdEnv.ts), an earlier boot's or an older build's, hands them to
+   * every pane it makes until it is told to forget them, and it outlives the core. Nothing to do with no
+   * server: the next one starts from this core's environment, which no longer has them. Asked once, as
+   * the core takes the server over at start; a failure costs only this, never the start.
+   */
+  async unsetServerEnvironment(matches: (name: string) => boolean): Promise<string[]> {
+    const ask = (args: string[]) => new Promise<string | null>((resolve) => {
+      run('tmux', args, { timeout: 5_000 }, (error, stdout) => resolve(error ? null : stdout))
+    })
+    const names = serverVariables(await ask(['show-environment', '-g']) ?? '', matches)
+    if (!names.length) return []
+    return await ask(unsetServerEnvArgs(names)) === null ? [] : names
   }
 
   async inventory(): Promise<TerminalInventoryResult> {

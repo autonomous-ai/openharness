@@ -1,3 +1,4 @@
+import './testIsolation.js'
 import './loadEnv.js'
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'fs'
 import { homedir } from 'os'
@@ -223,6 +224,10 @@ const fields = {
   // panes, so an engine's hook reaches the daemon that made its pane whichever daemon installed the hook
   // (lib/hookRoutes.ts). Product-root state, shared by every daemon of this user: not in a data folder.
   HARNESS_HOOK_ROUTES_DIR: text(join(adapterRootDir, 'hook-routes')),
+  // Agent Messages' pane inboxes (messages/inbox.ts): what an engine's messages hook (hook/messages.mjs)
+  // reads at a tool call. Product-root state like the hook routes: the hook is installed once per computer,
+  // whichever daemon installed it, and a pane's message is its own whichever daemon wrote it.
+  HARNESS_AGENT_MESSAGES_DIR: text(join(adapterRootDir, 'agent-messages')),
   // Where domain-specific harnesses are installed (`harness dsh install`): one directory per
   // `<owner>/<name>` plus `installed.json`. Product-root state like the SSO session, not daemon data.
   DSH_DIR: text(join(adapterRootDir, 'dsh')),

@@ -1,7 +1,7 @@
 import { usageTargetKey, usageTarget, validUsageTarget } from '../lib/agentUsageWire.js'
 /**
  * What a service in its own process may ask the core of the agents (`service_query`, core/serviceLinks.ts)
- * when it has no link module of its own to answer it (the viewers, workspaces and the teams do):
+ * when it has no link module of its own to answer it (the viewers and workspaces do):
  * - `agents`: every agent, live then stopped, with the name the apps show for it (search indexes them);
  * - `live`: the live agents, as `CoreApi.agents.live` answers in the core's process (the project readers);
  * - `advertised`: the live agents the apps are shown (the monitor samples them).

@@ -69,7 +69,10 @@ void main() {
       ...namesIn(relay, 'PAIR_REQUESTS'),
       plateRequest(relay),
       ...namesIn(cli('sharing/protocol.ts'), 'SHARE_REQUEST_TYPES'),
-      ...namesIn(cli('teams/wire.ts'), 'TEAM_REQUEST_TYPES'),
+      ...namesIn(
+        cli('messages/wire.ts'),
+        'AGENT_MESSAGES_REQUEST_TYPES',
+      ),
       ...namesIn(cli('lib/viewerFrames.ts'), 'VIEWER_DOWN_TYPES'),
     };
   });
@@ -99,7 +102,7 @@ void main() {
       'VIEWER_DOWN_TYPES',
       'PAIR_REQUESTS',
       'PLATE_REQUEST',
-      'TEAM_REQUEST_TYPES',
+      'AGENT_MESSAGES_REQUEST_TYPES',
     });
     expect(body, contains('isEncryptedDownType(type)'));
   });

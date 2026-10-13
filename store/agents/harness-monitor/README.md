@@ -97,7 +97,7 @@ The hps CLI offers explicit stop/open and reviewed cleanup commands; old pause/r
 Rules/pins live in ~/.config/harness/policy.jsonc; receipts live under ~/.harness/monitor/.
 Nothing automatically stops sessions. The assistant keeps its saved configuration, and its header offers the shared agent and model controls.
 
-New OpenCode sessions use `opencode/muse-spark-1.3-contributor-free` with automatic approvals and xhigh effort. **Contributor permits Meta to train on prompts and responses.** The Assistant model disclosure keeps this visible. There is no automatic paid fallback, and existing sessions retain their saved agent/model settings.
+New monitors run on OpenCode with `opencode/space-bunny-free` and automatic approvals. OpenCode Zen lists its provider as keeping no data and training on none. There is no automatic paid fallback, and existing sessions retain their saved agent/model settings; switch agents from the pane header or models with OpenCode's `/models`.
 
 ## Credit and stewardship
 

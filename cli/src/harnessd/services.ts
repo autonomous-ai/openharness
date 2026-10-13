@@ -393,10 +393,9 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // The router (services/routerProcess.ts), an experiment: started at its first request. A few decisions in
   // flight, each one bounded Jev answer.
   router: { services: ['router'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
-  // Tab collaboration and teams, an experiment: the prompt scopes, a few drafts and fingerprints per agent, and
-  // beside them the teams, their mailbox and the tab channels (services/collaborationProcess.ts), each on its
-  // own link to the core. Started only once it is on (core/api.ts `EXPERIMENTS`).
-  teams: { services: ['teams', 'collaboration'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true },
+  // Agent Messages (services/messagesProcess.ts), an experiment: its mailbox, history and the account's tabs
+  // with Agent Messages on. Started only once it is on (core/api.ts `EXPERIMENTS`).
+  messages: { services: ['messages'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true },
   // Share, an experiment (services/sharingProcess.ts): its invitations, its observers' sessions and their
   // ciphers; the headless Chrome it captures a shared viewer in is a process of its own, outside this budget.
   sharing: { services: ['sharing'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true },
@@ -498,7 +497,7 @@ export function masterRunsEngineRuntime(env: NodeJS.ProcessEnv, parentPid: numbe
  * run itself: what the master says it runs (`serviceProcessesEnv`), never what this build would choose.
  * A master too old to say runs exactly the services `HARNESSD_SERVICES` names, as every master did; a
  * core that worked it out from its own default instead took every service for out of process under a
- * released master that ran none, and answered search, the viewers, workspaces and the teams
+ * released master that ran none, and answered search, the viewers, workspaces and the experiments
  * SERVICE_UNAVAILABLE until the master restarted (e2e/releaseRehearsal.e2e.ts). None without a master.
  */
 export function servicesTheMasterRuns(env: NodeJS.ProcessEnv, known: readonly string[]): Set<string> {

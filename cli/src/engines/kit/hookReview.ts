@@ -14,12 +14,16 @@
  * Only Harness's own blocks, never another hook in the same file. The config file is edited the way
  * folderTrust.ts edits it: through a symlink, atomically, and only where the table cannot end up defined twice.
  */
+import { parse as parseToml } from 'smol-toml'
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { HookReviewRecord } from '../facets/hooks.js'
-import { replaceConfigFile } from './folderTrust.js'
-import { isOurs, type Settings } from './notifyHooks.js'
+import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
+import { isMessagesBlock } from './messagesHook.js'
+import { isOurs, type HookBlock, type Settings } from './notifyHooks.js'
+
+/** Harness's own: notify.mjs's blocks, and Agent Messages' (kit/messagesHook.ts). */
+const harnessOwn = (block: HookBlock): boolean => isOurs(block) || isMessagesBlock(block)
 
 /** Every object's keys sorted, as the engine sorts them before it hashes. */
 function sortedKeys(value: unknown): unknown {
@@ -46,15 +50,17 @@ export function reviewRecords(record: HookReviewRecord, settingsFile: string, se
   for (const [event, label] of Object.entries(record.events)) {
     const blocks = settings.hooks?.[event]
     if (!Array.isArray(blocks)) continue
-    const blockIndex = blocks.findIndex(isOurs)
-    if (blockIndex < 0) continue
-    const block = blocks[blockIndex]
-    const hookIndex = block.hooks.findIndex((hook) => isOurs({ hooks: [hook] }))
-    const hook = block.hooks[hookIndex]
-    if (hook.type !== 'command' || typeof hook.command !== 'string') continue
-    // A hook edited into a shape Harness does not write is one the engine reads its own way: it asks.
-    if ((hook.timeout !== undefined && typeof hook.timeout !== 'number') || (block.matcher !== undefined && typeof block.matcher !== 'string')) continue
-    records.set(`${settingsFile}:${label}:${blockIndex}:${hookIndex}`, reviewHash(record, event, block.matcher, hook))
+    // An optional Messages block can precede a required notify block. Approving
+    // only the first would report a prepared launch with SessionStart disabled.
+    for (const [blockIndex, block] of blocks.entries()) {
+      if (!harnessOwn(block)) continue
+      for (const [hookIndex, hook] of block.hooks.entries()) {
+        if (!harnessOwn({ hooks: [hook] }) || hook.type !== 'command' || typeof hook.command !== 'string') continue
+        // A hook edited into a shape Harness does not write is one the engine reads its own way: it asks.
+        if ((hook.timeout !== undefined && typeof hook.timeout !== 'number') || (block.matcher !== undefined && typeof block.matcher !== 'string')) continue
+        records.set(`${settingsFile}:${label}:${blockIndex}:${hookIndex}`, reviewHash(record, event, block.matcher, hook))
+      }
+    }
   }
   return records
 }
@@ -167,33 +173,47 @@ export function withReviewRecords(text: string, record: HookReviewRecord, record
   return next === text ? 'unchanged' : next
 }
 
-/**
- * Record Harness's own blocks in the engine's settings file, as the file is on disk now, as reviewed in the
- * engine's config file: the engine keys and hashes what it reads, so an order or a timeout Harness did not
- * write itself is recorded as it is. Created when the engine has not written one yet: a new person's first
- * Codex pane is the one that asks. Never throws: a hook that is not recorded is asked about, as before.
- */
-export function recordReviewed(record: HookReviewRecord, home: string, settingsFile: string): void {
+/** Inspect approvals before publishing hooks. An unreadable or conflicting
+ * config cannot authorize even the first write of the installation. */
+export function prepareReviewed(record: HookReviewRecord, home: string, settingsFile: string, settings: Settings) {
+  const config = join(home, record.file), observed = inspectHookFile(config, 0o600)
+  // Codex uses the real home plus the literal hooks filename, even when that
+  // leaf is an alias. The config's own leaf alias does not change that home.
+  const records = reviewRecords(record, join(observed.directory, basename(settingsFile)), settings)
+  if (records.size === 0) throw new HookPreparationHeld('the hooks have no verifiable approval records')
+  const text = observed.content ?? ''
+  try { parseToml(text, { integersAsBigInt: true, maxDepth: 64 }) }
+  catch { throw new HookPreparationHeld('the hook review configuration is not complete TOML') }
+  const next = withReviewRecords(text, record, records)
+  if (next === 'unsafe') throw new HookPreparationHeld('the hook review configuration cannot be safely updated')
+  const output = next === 'unchanged' ? text : next
+  try { parseToml(output, { integersAsBigInt: true, maxDepth: 64 }) }
+  catch { throw new HookPreparationHeld('the prepared hook reviews are not complete TOML') }
+  observed.prepare(output)
+  return {
+    verify: observed.verify,
+    commit: async (attempt: HookPreparationAttempt) => {
+      const published = await observed.replace(next === 'unchanged' ? text : next, attempt)
+      if (next !== 'unchanged') console.log(record.messages.recorded.replace('{config}', config))
+      return published
+    },
+  }
+}
+
+/** Record the exact settings already on disk. Failure is explicit so launch
+ * remains held until both the hook and its approval are confirmed durable. */
+export async function recordReviewed(record: HookReviewRecord, home: string, settingsFile: string): Promise<boolean> {
   const config = join(home, record.file)
-  const say = (line: string): string => line.replace('{config}', config)
-  try {
-    const settings = JSON.parse(readFileSync(settingsFile, 'utf8')) as Settings
-    if (!settings || typeof settings !== 'object' || Array.isArray(settings) || !settings.hooks || typeof settings.hooks !== 'object') return
-    // Codex keys a hook by the real path of CODEX_HOME joined with the file's name (codex-cli 0.162.0): a
-    // symlinked home names its target, a symlinked hooks.json in it keeps its own name.
-    const records = reviewRecords(record, join(realpathSync(dirname(settingsFile)), basename(settingsFile)), settings)
-    if (records.size === 0) return
-    const text = existsSync(config) ? readFileSync(config, 'utf8') : ''
-    const next = withReviewRecords(text, record, records)
-    if (next === 'unchanged') return
-    if (next === 'unsafe') {
-      console.log(say(record.messages.skipped))
-      return
-    }
-    if (existsSync(config)) replaceConfigFile(config, next)
-    else writeFileSync(config, next, { mode: 0o600 })
-    console.log(say(record.messages.recorded))
-  } catch (err) {
-    console.error(say(record.messages.skipped), err)
+  try { return await runHookPreparation([settingsFile, config], async attempt => {
+    const source = inspectHookFile(settingsFile)
+    const settings = JSON.parse(source.content ?? 'null') as Settings
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings) || !settings.hooks || typeof settings.hooks !== 'object') return false
+    const prepared = prepareReviewed(record, home, settingsFile, settings)
+    source.verify(); const published = await prepared.commit(attempt)
+    source.verify(); published.verify()
+    return true
+  }) } catch (err) {
+    console.error(record.messages.skipped.replace('{config}', config), err)
+    return false
   }
 }

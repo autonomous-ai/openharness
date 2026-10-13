@@ -16,7 +16,7 @@ task goes and does it, without a list and without a question:
   permission mode last chosen for that agent), in the project and with the agent
   the router chose. A line says which. A project that cannot be read opens New
   Harness on the task instead of guessing.
-- **Nothing decided** — Jev cannot be reached (no key, offline, no credit) or the
+- **Nothing decided** — Jev cannot be reached (signed out, offline, out of credit) or the
   router fails: the box says so and sends nothing.
 
 There is no undo; the owner chose instant sends. Esc while the session's pane comes
@@ -75,9 +75,20 @@ elsewhere), so the bar stands. The log
 records the runner-up with every decision, to set these numbers from real use. The session the person last sent
 to (within ten minutes) is told to Jev, so a short follow-up finds it.
 
-The key is the person's OpenRouter key (`OPENROUTER_API_KEY`, `ori login`, or
-`~/.config/typesafe/credentials`). The router logs OpenRouter's reported cost of
-every answer.
+**Harness pays** (owner, 2026-10-11): at about $0.00017 a decision, a person who presses ⌘B a hundred
+times a day costs about $0.50 a month. A computer with no OpenRouter key of its own asks the backend's
+`POST /api/route/jev` (`backend/src/routes/jevRoute.ts`) through `core.account.backend`, so the core signs
+it and the router holds no credential. The backend asks Jev with Harness's key (`JEV_OPENROUTER_API_KEY`).
+The key never ships in the CLI, because this repository is public. The backend fixes the model, bounds a
+decision just above the largest the router builds (about 73 KB, 4 questions of 41 options), caps each
+account at 30 a minute and 1,000 a day and everyone at `JEV_DAILY_DECISIONS` a day (counted in Redis,
+shared by every process and pod), and logs the cost but never the words. The budget is the key's credit
+limit on OpenRouter; the OpenRouter account should keep prompt logging and training off, since every
+person's message and session descriptions now go out under it.
+
+A person with a key of their own (`OPENROUTER_API_KEY`, `ori login`, or
+`~/.config/typesafe/credentials`) still asks Jev directly with it, one hop shorter. The router logs
+OpenRouter's reported cost of every answer on that key.
 
 ## What was measured
 
@@ -93,6 +104,53 @@ every answer.
 - **Cost**: $0.000167 per decision on that desk (about 4,000 tokens), as OpenRouter
   reported it; about 6,000 decisions per dollar.
 - **Time**: about 0.6 s per decision.
+
+## Hill-climbed on the owner's desk (2026-10-10)
+
+The first version was hit and miss on the owner's real desk, so it was measured there and climbed:
+- **The desk:** 80 sessions on three machines, half of them stopped, with duplicates, QA panes and
+  sessions left over from earlier wrong routes.
+- **390 labelled English messages:**
+  - 41 by hand, including every message the owner reported misrouted;
+  - 60 written blind;
+  - 116 from a red team whose job was to break it (typos, "merge it", pasted logs, "the one on tropic",
+    same-kind traps);
+  - 50 held out until the end.
+- **Runs:** each message 2 or 3 times; deciding only, nothing sent (`cli/scripts/route-eval/`).
+
+| Set | Before | After |
+|---|---|---|
+| By hand + blind (101) | 63% right, 25 wrong sends in 123 (by hand alone) | 90% right, 0 wrong sends in 202 |
+| Red team (116) | 51% right, 66 wrong sends in 232 | 72% right, 6 in 232 |
+| Held out (50) | 81% right, 7 wrong sends in 150 | 83% right, 4 in 100 |
+
+What moved it, in order:
+1. **What Jev is shown** (`offered`). Live sessions come first, then stopped ones:
+   - A conversation listed twice is shown once.
+   - A stopped session is dropped when a live one has its name, or when it has nothing to read.
+   - Pasted-text tags, other agents' messages, and prompts that name nothing ("ok merge it", "cont") are
+     left out of descriptions. Each session says its machine.
+
+   On the owner's desk, the live "X Posts" shared Jev's vote with three stopped copies of itself, and
+   stopped leftovers took live sessions' places among the forty.
+2. **The question** asks for "the same kind of work on the same subject", not continuity or shared
+   words. "Continue their work" let "merge it" follow the words "ok merge it"; "whose job is this kind of
+   work" sent the lamp's retention to Harness's usage session.
+3. **A message that names nothing of its own** ("merge it", "post it as is"; Jev is asked in the same
+   call) goes where the last task went, or is new work. "A single word is enough" keeps "also check
+   retention" from counting as one.
+4. **Smaller rules:**
+   - A message asking for a new session is new work.
+   - A running pick is not held back by a stopped copy or a same-named twin (1.75× the rest).
+   - No more stopped sessions than forty in all: at fifty, old leftovers took new work.
+
+Every wrong send left in these runs is a judgement call a person could make either way:
+- a job post about the lamp firmware went to the lamp firmware session;
+- "rotate the leaked OpenRouter key" went to the session that checked it;
+- "why is the dial showing the wrong pane" went to the ⌘B session.
+
+Most misses split two right answers (two sessions that both flashed the round unit) or are stopped
+sessions beyond the forty. They become new work, which costs a harness.
 
 ## Not done
 

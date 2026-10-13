@@ -543,7 +543,7 @@ const GRID_ENGINE_CONTRACTS: Partial<Record<AgentEngine, GridEngineContract>> = 
     // the default the New Agent dialog shows, into a refusal at the moment of clicking Create —
     // trading a 401 the user could not diagnose for a wall they could not get past. Same trade
     // OpenCode faced, same answer (see `GRID_ROUTER_MODEL` in its contract above).
-    build: (override) => {
+    build: (override, machine) => {
       // One name, used in three places that must agree: argv, the config block's header, and the
       // `model` field inside it. A mismatch would declare a credential for a model Grok never asks for.
       const model = override.model ?? GRID_ROUTER_MODEL
@@ -574,7 +574,7 @@ const GRID_ENGINE_CONTRACTS: Partial<Record<AgentEngine, GridEngineContract>> = 
               relayBaseUrl(override.baseUrl),
             ),
           }],
-          links: GROK_GRID_HOME_LINKS.map((name) => ({ name, target: join(userGrokHome(), name) })),
+          links: GROK_GRID_HOME_LINKS.map((name) => ({ name, target: join(machine.grokHome ?? userGrokHome(), name) })),
         },
         webSearch: webSearchWhenWired(override),
       }
@@ -594,7 +594,7 @@ const GRID_ENGINE_CONTRACTS: Partial<Record<AgentEngine, GridEngineContract>> = 
   // always creates on Auto and no longer offers a model field — a dead end, not a prompt to go and
   // pick something.
   pi: {
-    build: (override) => {
+    build: (override, machine) => {
       const model = override.model ?? GRID_ROUTER_MODEL
       return {
         env: { [GRID_KEY_VAR]: override.apiKey },
@@ -603,7 +603,7 @@ const GRID_ENGINE_CONTRACTS: Partial<Record<AgentEngine, GridEngineContract>> = 
           envVar: 'PI_CODING_AGENT_DIR',
           files: [
             { name: 'models.json', content: piModelsJson(relayBaseUrl(override.baseUrl), model, override.contextWindow) },
-            { name: 'settings.json', content: piSettingsJson(userPiSkillsDir()) },
+            { name: 'settings.json', content: piSettingsJson(machine.piSkillsDir ?? userPiSkillsDir()) },
           ],
         },
         // Pi has no MCP client, so there is nothing to hand the server to — with or without a url.

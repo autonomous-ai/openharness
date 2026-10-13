@@ -1,0 +1,477 @@
+{
+  "startedAt": "2026-10-10T12:43:24Z",
+  "former": "a61cba5bc967cbfd8e888995987cc42cbf6556ee",
+  "candidateHead": "90b5049c6e68705bee8d1fe7a5d7bd103f08b11d",
+  "candidateRuntimeDiffSha256": "03fbf232fde075cda6cef27ae23488d803e39f8f9efeb64243c8d7bea909069d",
+  "samples": [
+    {
+      "sample": 1,
+      "revision": "former",
+      "workload": "own",
+      "iterations": 3,
+      "latenciesMs": [
+        15.521829999999966,
+        8.673655000000053,
+        8.194549999999992
+      ],
+      "callbackDelaysMs": [
+        9.034093999999982,
+        5.04057499999999,
+        4.805285000000026
+      ],
+      "cpuMs": 48.022999999999996,
+      "sourceBytes": 45151,
+      "peakRssMiB": 96.6796875,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 1,
+      "revision": "candidate",
+      "workload": "own",
+      "iterations": 3,
+      "latenciesMs": [
+        602.755788,
+        436.46901100000014,
+        428.16203100000007
+      ],
+      "callbackDelaysMs": [
+        218.55045399999995,
+        123.51947900000005,
+        117.25986199999988
+      ],
+      "cpuMs": 331.61699999999996,
+      "sourceBytes": 45151,
+      "peakRssMiB": 116.63671875,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 1,
+      "revision": "former",
+      "workload": "fork",
+      "iterations": 3,
+      "latenciesMs": [
+        17.19474600000001,
+        9.132738000000018,
+        9.126177000000041
+      ],
+      "callbackDelaysMs": [
+        9.029627000000005,
+        5.125856999999996,
+        5.17470000000003
+      ],
+      "cpuMs": 49.785,
+      "sourceBytes": 45151,
+      "peakRssMiB": 98.74609375,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 1,
+      "revision": "candidate",
+      "workload": "fork",
+      "iterations": 3,
+      "latenciesMs": [
+        593.932112,
+        437.10593700000004,
+        429.75345400000015
+      ],
+      "callbackDelaysMs": [
+        173.801351,
+        92.75583600000004,
+        101.32362499999999
+      ],
+      "cpuMs": 407.021,
+      "sourceBytes": 45151,
+      "peakRssMiB": 117.16015625,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 1,
+      "revision": "former",
+      "workload": "retry",
+      "iterations": 3,
+      "latenciesMs": [
+        1.356757000000016,
+        1.2932109999999852,
+        1.4236769999999979
+      ],
+      "callbackDelaysMs": [
+        1.3727599999999711,
+        1.2914319999999861,
+        1.4373359999999593
+      ],
+      "cpuMs": 6.2509999999999994,
+      "sourceBytes": 45151,
+      "peakRssMiB": 97.7109375,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 1,
+      "revision": "candidate",
+      "workload": "retry",
+      "iterations": 3,
+      "latenciesMs": [
+        65.07726300000002,
+        124.01322400000004,
+        27.50956199999996
+      ],
+      "callbackDelaysMs": [
+        44.47359599999993,
+        110.72751400000004,
+        14.905562000000145
+      ],
+      "cpuMs": 102.93299999999999,
+      "sourceBytes": 45151,
+      "peakRssMiB": 116.20703125,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 2,
+      "revision": "former",
+      "workload": "own",
+      "iterations": 3,
+      "latenciesMs": [
+        15.474949999999978,
+        8.019564000000003,
+        7.793491000000017
+      ],
+      "callbackDelaysMs": [
+        8.765100999999959,
+        4.519528000000037,
+        4.2749580000000265
+      ],
+      "cpuMs": 48.423,
+      "sourceBytes": 45151,
+      "peakRssMiB": 95.16796875,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 2,
+      "revision": "candidate",
+      "workload": "own",
+      "iterations": 3,
+      "latenciesMs": [
+        563.4937,
+        441.3507320000001,
+        419.4487100000001
+      ],
+      "callbackDelaysMs": [
+        192.69660299999998,
+        107.00348200000008,
+        95.11457499999983
+      ],
+      "cpuMs": 357.38300000000004,
+      "sourceBytes": 45151,
+      "peakRssMiB": 113.6328125,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 2,
+      "revision": "former",
+      "workload": "fork",
+      "iterations": 3,
+      "latenciesMs": [
+        17.06872000000004,
+        8.691290999999978,
+        8.52021099999996
+      ],
+      "callbackDelaysMs": [
+        9.057450000000017,
+        4.605459999999994,
+        4.616852999999992
+      ],
+      "cpuMs": 52.112,
+      "sourceBytes": 45151,
+      "peakRssMiB": 99.60546875,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 2,
+      "revision": "candidate",
+      "workload": "fork",
+      "iterations": 3,
+      "latenciesMs": [
+        608.066877,
+        433.72323500000005,
+        449.742665
+      ],
+      "callbackDelaysMs": [
+        189.298882,
+        100.46399500000007,
+        121.2717990000001
+      ],
+      "cpuMs": 409.063,
+      "sourceBytes": 45151,
+      "peakRssMiB": 116.8828125,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 2,
+      "revision": "former",
+      "workload": "retry",
+      "iterations": 3,
+      "latenciesMs": [
+        1.315070999999989,
+        1.2847879999999918,
+        1.6058719999999767
+      ],
+      "callbackDelaysMs": [
+        1.3267640000000256,
+        0.3511329999999475,
+        1.623170000000016
+      ],
+      "cpuMs": 6.023,
+      "sourceBytes": 45151,
+      "peakRssMiB": 98.93359375,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 2,
+      "revision": "candidate",
+      "workload": "retry",
+      "iterations": 3,
+      "latenciesMs": [
+        28.537488000000053,
+        28.78537199999994,
+        29.904213000000027
+      ],
+      "callbackDelaysMs": [
+        15.545209999999997,
+        16.30250699999999,
+        16.11777500000005
+      ],
+      "cpuMs": 104.30199999999999,
+      "sourceBytes": 45151,
+      "peakRssMiB": 117.24609375,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 3,
+      "revision": "former",
+      "workload": "own",
+      "iterations": 3,
+      "latenciesMs": [
+        15.460402999999985,
+        8.03602600000005,
+        7.710496999999975
+      ],
+      "callbackDelaysMs": [
+        8.796840999999972,
+        4.483384999999998,
+        4.3558909999999855
+      ],
+      "cpuMs": 48.179,
+      "sourceBytes": 45151,
+      "peakRssMiB": 95.2109375,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 3,
+      "revision": "candidate",
+      "workload": "own",
+      "iterations": 3,
+      "latenciesMs": [
+        710.233463,
+        478.563136,
+        441.58157499999993
+      ],
+      "callbackDelaysMs": [
+        275.07956900000005,
+        125.81967800000007,
+        102.171832
+      ],
+      "cpuMs": 349.835,
+      "sourceBytes": 45151,
+      "peakRssMiB": 115.546875,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 3,
+      "revision": "former",
+      "workload": "fork",
+      "iterations": 3,
+      "latenciesMs": [
+        17.286572000000035,
+        8.853880000000004,
+        7.994613000000015
+      ],
+      "callbackDelaysMs": [
+        8.809897000000035,
+        4.76270599999998,
+        4.427340000000015
+      ],
+      "cpuMs": 51.67099999999999,
+      "sourceBytes": 45151,
+      "peakRssMiB": 100.2109375,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 3,
+      "revision": "candidate",
+      "workload": "fork",
+      "iterations": 3,
+      "latenciesMs": [
+        570.82898,
+        453.3478090000001,
+        485.6630550000002
+      ],
+      "callbackDelaysMs": [
+        189.669105,
+        124.54987799999992,
+        122.58621700000003
+      ],
+      "cpuMs": 409.64,
+      "sourceBytes": 45151,
+      "peakRssMiB": 118.15625,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 3,
+      "revision": "former",
+      "workload": "retry",
+      "iterations": 3,
+      "latenciesMs": [
+        2.5479550000000017,
+        0.4580949999999575,
+        1.6555979999999977
+      ],
+      "callbackDelaysMs": [
+        0.6565969999999766,
+        0.4652839999999969,
+        1.670219999999972
+      ],
+      "cpuMs": 6.723999999999999,
+      "sourceBytes": 45151,
+      "peakRssMiB": 99.08984375,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    },
+    {
+      "sample": 3,
+      "revision": "candidate",
+      "workload": "retry",
+      "iterations": 3,
+      "latenciesMs": [
+        33.46425799999997,
+        33.831053999999995,
+        26.853664999999978
+      ],
+      "callbackDelaysMs": [
+        17.944024000000013,
+        19.15587199999993,
+        14.544742000000042
+      ],
+      "cpuMs": 104.875,
+      "sourceBytes": 45151,
+      "peakRssMiB": 118.60546875,
+      "node": "v22.23.2",
+      "hostPlatform": "darwin",
+      "evidencePlatform": "linux",
+      "arch": "x64",
+      "outcomes": {
+        "confirmed": 3
+      }
+    }
+  ],
+  "finishedAt": "2026-10-10T12:43:41Z"
+}

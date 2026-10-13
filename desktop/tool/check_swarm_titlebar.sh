@@ -40,6 +40,9 @@ fi
 if [[ "${2:-}" == "--status-menu-preview" ]]; then
   check_source="$desktop_dir/tool/status_menu_preview.swift"
 fi
+if [[ "${2:-}" == "--agent-messages-preview" ]]; then
+  check_source="$desktop_dir/tool/agent_messages_preview.swift"
+fi
 cat "$desktop_dir/macos/Runner/HarnessKeymap.swift" > "$check_dir/main.swift"
 # The title bar shares menu ordering with the window. Include that production
 # helper without booting the Flutter window or its account/runtime services.

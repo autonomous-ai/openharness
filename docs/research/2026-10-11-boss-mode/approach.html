@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Approach</title>
+<style>
+  :root {
+    --bg: #020604; --text: #cfe9da; --muted: #7c9a8a; --faint: #44594d; --line: #13231b;
+    --green: #6fdc9c; --amber: #ffb547; --red: #ff5a4f; --ice: #bfe8ff; --grey: #5d6b64;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 12px/1.45 var(--mono); }
+  #app { position: fixed; inset: 0; display: grid; grid-template-columns: 1fr 352px; }
+  body.nostrips #app { grid-template-columns: 1fr 0; }
+  body.nostrips #bay { display: none; }
+  #scope { position: relative; min-width: 0; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  #atis { position: absolute; left: 18px; top: 14px; right: 18px; pointer-events: none; white-space: nowrap; overflow: hidden; }
+  #atis .t { color: var(--green); letter-spacing: .38em; font-weight: 600; font-size: 13px; }
+  #atis .l { color: var(--muted); margin-top: 3px; letter-spacing: .06em; overflow: hidden; text-overflow: ellipsis; }
+  #atis .l b { color: var(--text); font-weight: 500; }
+  #atis .l .hot { color: var(--amber); }
+  #atis .l .em { color: var(--red); }
+  #atis .l .fin { color: var(--ice); }
+  #clock { position: absolute; right: 18px; top: 14px; color: var(--muted); letter-spacing: .12em; text-align: right; pointer-events: none; }
+  #clock .s { color: var(--faint); margin-top: 3px; letter-spacing: .06em; }
+
+  #filter { position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); padding: 6px 12px; border: 1px solid #1f3a2c; background: rgba(2,8,5,.85);
+    color: var(--text); font-size: 13px; display: none; white-space: nowrap; border-radius: 3px; }
+  #filter.on { display: block; }
+  #filter .c { color: var(--green); }
+  #filter i { display: inline-block; width: .6em; height: 1.05em; background: var(--text); transform: translateY(2px); animation: blink 1.05s steps(1) infinite; }
+  #filter .n { color: var(--faint); margin-left: 10px; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  #keys { position: absolute; left: 0; right: 0; bottom: 12px; text-align: center; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 12px; pointer-events: none; }
+  #keys kbd { font: inherit; color: var(--muted); }
+  #toast { position: absolute; left: 50%; top: 64px; transform: translateX(-50%); color: var(--ice); letter-spacing: .08em; opacity: 0; transition: opacity .4s; pointer-events: none; white-space: nowrap; }
+  #toast.on { opacity: 1; }
+
+  /* the strip bay: flight progress strips, most urgent on top */
+  #bay { border-left: 1px solid var(--line); background: linear-gradient(#030a07, #020604); overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+  #bay header { padding: 14px 14px 8px; color: var(--muted); letter-spacing: .3em; font-size: 11px; display: flex; justify-content: space-between; }
+  #bay header span:last-child { letter-spacing: .06em; color: var(--faint); }
+  #strips { flex: 1; overflow-y: auto; padding: 0 10px 40px; scrollbar-width: thin; scrollbar-color: #1d3328 transparent; }
+  .group { margin: 12px 0 6px; color: var(--faint); letter-spacing: .24em; font-size: 10px; display: flex; gap: 8px; align-items: center; }
+  .group::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+  .group b { color: var(--muted); font-weight: 500; }
+  .strip { display: grid; grid-template-columns: 84px 1fr 54px; border: 1px solid #16271e; border-left: 3px solid var(--edge, #2b4a3a); margin: 0 0 5px; background: #06100b; cursor: pointer; }
+  .strip > div { padding: 4px 7px; min-width: 0; }
+  .strip > div + div { border-left: 1px solid #13231b; }
+  .strip .cs { color: var(--text); font-weight: 600; letter-spacing: .04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .strip .ty { color: var(--faint); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .strip .rt { color: var(--muted); font-size: 10.5px; letter-spacing: .04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .strip .tx { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .strip .tm { text-align: right; color: var(--muted); font-size: 10.5px; }
+  .strip .tm b { display: block; color: var(--edge, var(--text)); font-weight: 600; font-size: 11px; letter-spacing: .06em; }
+  .strip .more { grid-column: 1 / -1; border-left: 0 !important; border-top: 1px solid #13231b; display: none; padding: 8px 9px 9px; color: var(--text); white-space: normal; }
+  .strip.sel { background: #0b1d14; border-color: #24402f; outline: 1px solid var(--edge); }
+  .strip.sel .more { display: block; }
+  .strip.sel .tx { white-space: normal; }
+  .strip.dim { opacity: .28; }
+  .more .said { color: var(--edge); margin-bottom: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .more .row { color: var(--muted); font-size: 11px; margin-top: 3px; overflow-wrap: anywhere; }
+  .more .row b { color: var(--text); font-weight: 500; }
+  .more .act { color: var(--faint); margin-top: 8px; font-size: 11px; }
+  .more .act kbd { font: inherit; color: var(--text); }
+  .strip.hold { --edge: var(--amber); }
+  .strip.em { --edge: var(--red); }
+  .strip.fin { --edge: var(--ice); }
+  .strip.enr { --edge: var(--green); }
+  .strip.cst { --edge: var(--grey); }
+  .strip.gnd { --edge: #34463c; opacity: .62; }
+  .strip.hold.flash { animation: stripflash 1.1s steps(1) infinite; }
+  @keyframes stripflash { 50% { background: #1a1205; } }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); letter-spacing: .3em; pointer-events: none; }
+
+  @media (max-width: 980px) {
+    #clock { display: none; }
+    #app { grid-template-columns: 1fr; grid-template-rows: 1fr 38%; }
+    body.nostrips #app { grid-template-rows: 1fr 0; }
+    #bay { border-left: 0; border-top: 1px solid var(--line); }
+  }
+  @media (prefers-reduced-motion: reduce) { .strip.hold.flash, #filter i { animation: none; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <section id="scope" aria-label="Approach radar: every task you handed off, nearer the centre the more it needs you">
+    <canvas id="radar"></canvas>
+    <div id="atis"><div class="t">APPROACH</div><div class="l" id="atisline"></div></div>
+    <div id="clock"></div>
+    <div id="toast"></div>
+    <div id="filter"><span class="c">/</span> <span id="q"></span><i></i><span class="n" id="qn"></span></div>
+    <footer id="keys"></footer>
+  </section>
+  <aside id="bay" aria-label="Flight strips">
+    <header><span>STRIPS</span><span id="baycount"></span></header>
+    <div id="strips"></div>
+  </aside>
+</div>
+<div id="loading">acquiring targets</div>
+<script src="boss-data.js"></script>
+<script src="approach.js"></script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deriveTurnSummary, extendShortRecap } from './deviceRecap.js'
+import { deriveLongRecap, deriveTurnSummary, extendShortRecap, LONG_RECAP_MAX_BYTES } from './deviceRecap.js'
 
 describe('device recap minimum', () => {
   it.each(['Yes.', 'No.', 'Done.', 'Tests pass.', "It isn't external."])(
@@ -29,5 +29,28 @@ describe('device recap minimum', () => {
     expect(extendShortRecap('Yes.', 'Yes. The fix is installed.')).toBe('Yes. The fix is installed.')
     expect(extendShortRecap('No.', 'Yes. The fix is installed.')).toBe('No.')
     expect(extendShortRecap('The fix is installed.', 'The fix is installed. All checks passed.')).toBe('The fix is installed. All checks passed.')
+  })
+})
+
+describe('deriveLongRecap', () => {
+  it('strips markdown and collapses whitespace', () => {
+    expect(deriveLongRecap('## Kết quả\n\n- **SJC**: 149 triệu\n\n```sh\nls\n```\nDone.')).toBe('Kết quả SJC: 149 triệu Done.')
+  })
+  it('clips long text at a word boundary with an ellipsis, within the char and byte caps', () => {
+    const long = Array.from({ length: 600 }, (_, i) => `từ${i}`).join(' ')
+    const out = deriveLongRecap(long)!
+    expect(out.length).toBeLessThanOrEqual(1200)
+    expect(out.endsWith('…')).toBe(true)
+    expect(out.slice(0, -1).endsWith(' ')).toBe(false)
+    expect(Buffer.byteLength(out)).toBeLessThanOrEqual(LONG_RECAP_MAX_BYTES)
+  })
+  it('drops control characters and lone surrogates, which JSON writes as six bytes each', () => {
+    expect(deriveLongRecap('a\x00\x1b\x07b \ud800c\x7f d')).toBe('ab c d')
+    expect(deriveLongRecap('\x00\x01')).toBeNull()
+    expect(deriveLongRecap('ok 😀 fine')).toBe('ok 😀 fine')
+  })
+  it('keeps short text whole and returns null for nothing', () => {
+    expect(deriveLongRecap('All good.')).toBe('All good.')
+    expect(deriveLongRecap('  ')).toBeNull()
   })
 })

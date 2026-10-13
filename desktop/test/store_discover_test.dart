@@ -18,6 +18,7 @@ import 'package:harness/shortcuts/keymap_host.dart';
 import 'package:harness/widgets/agent_picker.dart';
 import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/essential_harness_controller.dart';
 import 'package:harness/store/store_controller.dart';
 import 'package:harness/store/store_demo_dialog.dart';
 import 'package:harness/store/store_cover_art.dart';
@@ -144,7 +145,40 @@ class _App extends AppNotifier {
     localMachineState!.dsh.replace(entries);
     notifyListeners();
   }
+
+  final essentials = <String, _Essential>{};
+  @override
+  EssentialHarnessController? essential(String id) {
+    final known = essentialFor(id);
+    return known == null ? null : essentials[id] ??= _Essential(this, known);
+  }
 }
+
+/// Records each click instead of creating: what an Essential creates is essential_harness_test.dart's.
+class _Essential extends EssentialHarnessController {
+  _Essential(super.app, super.essential);
+  int opens = 0;
+  bool made = false;
+  @override
+  bool get exists => made;
+  @override
+  Future<String?> open() async {
+    opens++;
+    made = true;
+    return null;
+  }
+}
+
+final _essentialEntries = [
+  for (final essential in storeEssentials)
+    DshEntry(
+      id: essential.id,
+      name: essential.name,
+      engine: 'opencode',
+      category: 'Essentials',
+      installed: true,
+    ),
+];
 
 class _Api implements StoreApi {
   _Api({this.unavailable = false, this.items = const []});
@@ -1462,6 +1496,79 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
       expect(app.swarms.length, count);
+    },
+  );
+
+  testWidgets(
+    'Essentials lead the Store and act in one click, never through New Harness',
+    (tester) async {
+      final (app, key) = await _open(
+        tester,
+        entries: [..._catalog, ..._essentialEntries],
+      );
+      expect(
+        find.byKey(const ValueKey('store-essentials-collection')),
+        findsOneWidget,
+      );
+      await _capture(tester, key, 'essentials-discover');
+      // A section of their own, not a discipline.
+      expect(
+        find.byKey(const ValueKey('store-category:Essentials')),
+        findsNothing,
+      );
+      final create = find.byKey(
+        const ValueKey('store-essential-action:autonomous/memories'),
+      );
+      expect(
+        find.descendant(of: create, matching: find.text('Create')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const ValueKey('store-essential-action:autonomous/harness-monitor'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(create);
+      await tester.pumpAndSettle();
+      expect(app.essentials['autonomous/memories']!.opens, 1);
+      expect(find.byKey(const ValueKey('create-agent-submit')), findsNothing);
+      app.publishCatalog([..._catalog, ..._essentialEntries]);
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(of: create, matching: find.text('Open')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    "an Essential's page has one button, Create then Open, and no New Harness",
+    (tester) async {
+      final (app, key) = await _open(
+        tester,
+        entries: [..._catalog, ..._essentialEntries],
+        initialHarness: 'autonomous/memories',
+      );
+      await _capture(tester, key, 'essentials-page');
+      final action = find.byKey(const ValueKey('store-primary-action'));
+      expect(
+        find.descendant(of: action, matching: find.text('Create')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('store-essential-note')),
+        findsOneWidget,
+      );
+      expect(find.text('New Harness'), findsNothing);
+      await tester.tap(action);
+      await tester.pumpAndSettle();
+      expect(app.essentials['autonomous/memories']!.opens, 1);
+      expect(find.byKey(const ValueKey('create-agent-submit')), findsNothing);
+      expect(
+        find.descendant(of: action, matching: find.text('Open')),
+        findsOneWidget,
+      );
     },
   );
 }

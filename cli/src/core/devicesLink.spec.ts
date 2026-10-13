@@ -127,6 +127,10 @@ describe('what the devices ask of the core', () => {
     vi.mocked(core.agents.runtimeModels).mockResolvedValue([{ id: 'opus' } as never])
     vi.mocked(core.agents.fork).mockResolvedValue({ ok: true, agentId: 'a2' })
     expect(await devices.answer('activityText', { agentId: 'a1' })).toEqual({ text: 'Reading' })
+    // A core that cannot read the timer answers with none, and the devices fall back to the footer alone.
+    expect(await devices.answer('activitySnapshot', { agentId: 'a1' })).toEqual({ activity: null })
+    core.agents.activitySnapshot = vi.fn(async () => ({ text: 'Working', elapsedSeconds: 931 }))
+    expect(await devices.answer('activitySnapshot', { agentId: 'a1' })).toEqual({ activity: { text: 'Working', elapsedSeconds: 931 } })
     expect(await devices.answer('recent', { agentId: 'a1', n: 2 })).toEqual({ turns: [{ recap: 'done' }] })
     expect(core.turns.recent).toHaveBeenLastCalledWith('a1', 2)
     await devices.answer('recent', { agentId: 7 })

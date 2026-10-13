@@ -229,11 +229,13 @@ it('retains an unreadable competing directory even after the parent was found', 
 it('does not infer an empty directory from an iterator acquired during an ancestor round trip', () => {
   const path = child(), sessions = join(home, 'sessions'), elsewhere = join(root, 'empty')
   fs.mkdirSync(elsewhere)
+  // Every look makes its own round trip, so the route never holds still.
+  let trips = 0
   vi.mocked(fs.opendirSync).mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
     if (String(path) !== sessions) return Reflect.apply(actual.opendirSync, actual, [path, ...args])
     fs.renameSync(home, home + '-aside'); fs.mkdirSync(home); fs.mkdirSync(sessions)
     const result = Reflect.apply(actual.opendirSync, actual, [sessions, ...args])
-    fs.renameSync(home, home + '-temporary'); fs.renameSync(home + '-aside', home)
+    fs.renameSync(home, `${home}-temporary-${++trips}`); fs.renameSync(home + '-aside', home)
     return result
   }) as typeof fs.opendirSync)
   expect(() => bindings.savedTranscriptEvidence('codex', A, path)).toThrow('ancestor changed')

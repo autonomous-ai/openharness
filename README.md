@@ -79,8 +79,8 @@ for workloads, slow tails, connection failures and raw data.
 In the workspace, a **harness** is one running session of an agent such as Codex
 or Claude Code, with its own conversation and working context. A **tab** groups
 harnesses. Use **New Harness** to start one and **New Tab** to group work.
-Enable **Settings → Experimental → Tab collaboration** to let their agents
-consult peers in the same tab; it is off by default.
+Turn on **Agent Messages** for a tab (its chat icon, or right-click the tab) to let its
+agents message each other with `harness send`; it is off by default.
 
 The Store offers **harnesses** with instructions, tools, and optional viewers for
 specific crafts. Install a harness, then start it in your workspace. See the
@@ -143,6 +143,14 @@ computer:
 ```bash
 curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
 hn
+```
+
+**For agents:** Claude Code and Codex can start, wait for and read other harnesses with the `harness` skill
+([harness.autonomous.ai/agents](https://harness.autonomous.ai/agents), which has the Codex lines too):
+
+```bash
+claude plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins
+claude plugin install harness@openharness
 ```
 
 <details>
@@ -233,7 +241,8 @@ The agent does the reasoning. The harness supplies the tools and the view. It's 
 
 | Category | Agents and harnesses |
 |---|---|
-| **Coding** | [Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build, Kilo Code](docs/engines.md), [Harness Monitor](store/agents/harness-monitor/), [Machine Monitor](store/agents/machine-monitor/), [Memories](store/agents/memories/), [Trail of Bits Skills](store/agents/trailofbits-skills/) |
+| **Coding** | [Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build, Kilo Code](docs/engines.md), [Machine Monitor](store/agents/machine-monitor/), [Trail of Bits Skills](store/agents/trailofbits-skills/) |
+| Essentials | [Harness Monitor](store/agents/harness-monitor/), [Memories](store/agents/memories/) |
 | Design | [Autonomous Workshop](store/agents/autonomous-workshop/), [Blender](store/agents/blender/), [Bonsai MCP](store/agents/bonsai-mcp/), [Creative Direction](store/agents/creative-direction/), [Excalidraw](store/agents/excalidraw/), [FreeCAD](store/agents/freecad/), [Generative Art](store/agents/generative-art/), [OpenSCAD](store/agents/openscad/), [text-to-cad](store/agents/text-to-cad/) |
 | Engineering | [Autonomous Circuit](store/agents/autonomous-circuit/), [CircuitJS](store/agents/circuitjs/), [Home Assistant](store/agents/home-assistant/), [KiCad](store/agents/kicad/), [Orca Slicer](store/agents/orca-slicer/), [Yosys](store/agents/yosys/) |
 | Media | [Comfy MCP](store/agents/comfy-mcp/), [Manim](store/agents/manim/), [OpenMontage](store/agents/openmontage/), [Remotion](store/agents/remotion/) |

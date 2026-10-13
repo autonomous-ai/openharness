@@ -159,12 +159,12 @@ export function npmEnginePrefix(): string {
 }
 
 /** The same candidates are used by launch, availability checks, and process discovery. */
-export function engineInstallPaths(recipe: EngineInstallRecipe): string[] {
+export function engineInstallPaths(recipe: EngineInstallRecipe, home = homedir()): string[] {
   return [...new Set([
-    ...(recipe.executable.homeRelativePaths ?? []).map((path) => join(homedir(), path)),
+    ...(recipe.executable.homeRelativePaths ?? []).map((path) => join(home, path)),
     ...(recipe.executable.absolutePaths ?? []),
     ...(recipe.executable.npmGlobal
-      ? recipe.executable.names.map((name) => join(npmEnginePrefix(), 'bin', name))
+      ? recipe.executable.names.map((name) => join(home, '.local', 'bin', name))
       : []),
   ])]
 }

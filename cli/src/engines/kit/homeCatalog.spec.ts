@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readHomeCatalog } from './homeCatalog.js'
+import { NATIVE_EVIDENCE_MS } from './nativeEvidence.js'
 
 const clock = vi.hoisted(() => ({ now: 0 }))
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => clock.now } }))
@@ -213,7 +214,7 @@ describe('fresh complete native home evidence', () => {
   it.each(['operations', 'deadline'])('bounds an unfinished read by %s', limit => {
     write({ codex: [path('a'.repeat(200))] })
     vi.mocked(fs.readSync).mockImplementation((fd, buffer, options = {}) => {
-      if (limit === 'deadline') clock.now = 251
+      if (limit === 'deadline') clock.now = NATIVE_EVIDENCE_MS + 1
       return actual.readSync(fd, buffer, limit === 'deadline' ? options : { ...options, length: 1 })
     })
     expect(() => readHomeCatalog(catalog())).toThrow(limit === 'deadline' ? 'read deadline' : 'read-operation limit')

@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="canonical" href="https://harness.autonomous.ai/agents">
+  <link rel="alternate" type="text/plain" href="https://harness.autonomous.ai/llms.txt" title="llms.txt">
+  <meta name="theme-color" content="#11110f">
+  <meta name="description" content="How a coding agent uses Harness to run Claude Code, Codex and other agents in parallel, wait for them, read their answers and close them: install, commands, exit codes and examples.">
+  <meta property="og:title" content="Harness for agents">
+  <meta property="og:description" content="Run Claude Code, Codex and other agents in parallel from your shell, wait for them and read their answers, while the person watches every one.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://harness.autonomous.ai/agents">
+  <title>Harness for agents</title>
+  <link rel="icon" href="/icon.svg?v=5" type="image/svg+xml">
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 400 16px/1.6 ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+      --paper: #11110f;
+      --ink: #eeede8;
+      --muted: #a9a79f;
+      --line: #2e2d29;
+      --code: #1b1b18;
+      --accent: #e0ce41;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--paper); color: var(--ink); }
+    main { width: min(84ch, calc(100% - 4ch)); margin: 0 auto; padding: 3rem 0 4rem; }
+    h1 { font-size: 1.5rem; margin: 0 0 1rem; }
+    h2 { font-size: 1.15rem; margin: 2.5rem 0 0.75rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+    h3 { font-size: 1rem; margin: 1.5rem 0 0.5rem; }
+    p, ul, ol, table, pre { margin: 0 0 1rem; }
+    ul, ol { padding-left: 2ch; }
+    li { margin-bottom: 0.35rem; }
+    p, li, td { overflow-wrap: break-word; }
+    a { color: var(--accent); }
+    a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    code { background: var(--code); padding: 0 0.3ch; border-radius: 3px; }
+    pre { background: var(--code); border: 1px solid var(--line); border-radius: 4px; padding: 0.75rem 1ch; overflow-x: auto; }
+    pre code { padding: 0; background: none; }
+    .table { overflow-x: auto; margin-bottom: 1rem; }
+    table { border-collapse: collapse; width: 100%; margin: 0; }
+    th, td { text-align: left; vertical-align: top; padding: 0.4rem 1ch; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 400; }
+    td:first-child { white-space: nowrap; }
+    .lead { color: var(--ink); }
+    .note { color: var(--muted); }
+    ::selection { color: var(--paper); background: var(--accent); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Harness for agents</h1>
+  <p class="lead">This page is for coding agents, and for the people who set them up. Harness runs coding agents
+    (Claude Code, Codex and others) in terminal sessions called harnesses. From its own shell, an agent can start
+    harnesses, wait for them, read their answers, message them and close them. The person sees every harness in
+    the Harness app on their desktop, on the web and on their phone, and can watch it, answer it or stop it.</p>
+  <p class="note">A shorter, plain-text version is at <a href="/llms.txt">/llms.txt</a>.</p>
+
+  <h2 id="what">What Harness gives an agent</h2>
+  <ul>
+    <li><strong>Parallel harnesses.</strong> Start several agents on separate tasks, each in its own terminal, and
+      wait for all of them or for the first to finish.</li>
+    <li><strong>Another model.</strong> Claude Code can hand a task to Codex, and Codex to Claude Code.</li>
+    <li><strong>Another machine.</strong> Start a harness on the person's other computers, such as a Mac mini or a
+      GPU box, once they are signed in to Harness.</li>
+    <li><strong>Work that outlives the turn.</strong> A harness keeps running after your turn or your context ends,
+      and its conversation is kept when it is closed.</li>
+    <li><strong>The person's view.</strong> Everything you start appears in Harness, where the person can watch it,
+      answer its questions or stop it. Your own sub-agents are invisible to them.</li>
+  </ul>
+  <p>Start a harness for work that can run beside yours, needs another agent's view (a review, a second opinion
+    from Codex), takes long, or belongs in its own folder. Do small, quick work yourself, and a quick parallel
+    search or edit inside one task with your own sub-agents (Claude Code's Agent tool, Codex sub-agents): they are
+    cheaper and faster.</p>
+
+  <h2 id="install">Install</h2>
+  <pre><code>curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
+harness start</code></pre>
+  <p>macOS and Linux. <code>harness start</code> starts Harness on this computer. No account is needed for
+    harnesses on this computer; <code>harness login</code> signs in, which the person needs only for their other
+    machines and the phone app. The agents you start must be installed and signed in to their own providers:
+    <code>claude</code> for Claude Code, <code>codex</code> for Codex.</p>
+  <p>Ask the person before you install software on their computer. To check whether Harness is already there:
+    <code>harness version</code>. The agent commands below are new: if <code>harness ps</code> is an unknown command,
+    run <code>harness update</code>.</p>
+
+  <h2 id="skill">Add the skill</h2>
+  <p>The <code>harness</code> skill tells an agent when to use Harness and how. It comes as a plugin for Claude Code
+    and Codex, which also registers Harness's MCP server (<code>harness mcp</code>, over stdio).</p>
+  <h3>Claude Code</h3>
+  <pre><code>claude plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins
+claude plugin install harness@openharness</code></pre>
+  <p>Inside a session, the same is <code>/plugin marketplace add autonomous-ai/openharness</code>, then
+    <code>/plugin install harness@openharness</code>. Without <code>--sparse</code> the whole repository is cloned,
+    several hundred megabytes, which takes a minute or more. Run <code>/reload-plugins</code> or start a new session
+    to load it.</p>
+  <h3>Codex</h3>
+  <pre><code>codex plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin --sparse plugins
+codex plugin add harness@openharness</code></pre>
+  <p>Start a new Codex session to load it. Inside Codex, <code>/plugins</code> opens the plugin browser, where the
+    marketplace's plugins are listed once it is added.</p>
+  <h3>Any agent that reads SKILL.md</h3>
+  <pre><code>mkdir -p ~/.agents/skills/harness
+curl -fsSL https://raw.githubusercontent.com/autonomous-ai/openharness/main/plugins/harness/skills/harness/SKILL.md \
+  -o ~/.agents/skills/harness/SKILL.md</code></pre>
+  <p>Codex reads skills from <code>~/.agents/skills</code>; Claude Code reads them from
+    <code>~/.claude/skills</code>.</p>
+
+  <h2 id="commands">The commands</h2>
+  <div class="table">
+  <table>
+    <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>harness ps [--all]</code></td><td>The harnesses on this machine: name, agent, state, who started it,
+        when it was last active, its folder and what it is about. <code>--all</code> adds the ones stopped in the
+        last week.</td></tr>
+      <tr><td><code>harness new [agent] [@machine] [folder] --name NAME -- TASK</code></td><td>Start a harness and give
+        it a task. <code>agent</code> is <code>claude</code> (the default), <code>codex</code>, or another agent
+        installed there. The folder is the current directory when left out.</td></tr>
+      <tr><td><code>harness wait NAME[,NAME…] [--any] [--timeout 30m]</code></td><td>Wait until each harness stops
+        working. <code>--any</code> returns when the first one does. The timeout takes <code>90s</code>,
+        <code>30m</code> or <code>2h</code> (30 minutes by default); <code>0</code> waits as long as it
+        takes.</td></tr>
+      <tr><td><code>harness show NAME [--chars N]</code></td><td>Its state, the last thing it was asked, and its answer:
+        the text after its last tool call, the first 4,000 characters by default.</td></tr>
+      <tr><td><code>harness send NAME "text"</code></td><td>A follow-up message to a harness you started. Works from
+        inside a harness.</td></tr>
+      <tr><td><code>harness close NAME [--now]</code></td><td>Save its screen and stop it. Its conversation is kept, and
+        the person can resume it. Refused while it is working, unless <code>--now</code>.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Name every harness you start with <code>--name</code>: an unnamed one takes its session's title, which changes.
+    Every command also takes the start of a harness's id, takes <code>--json</code> for JSON, and prints its usage
+    with <code>--help</code>. Every error says what to run next.</p>
+
+  <h3 id="exit-codes">Exit codes</h3>
+  <div class="table">
+  <table>
+    <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>0</code></td><td>Done. For <code>wait</code>: every harness is idle; read it with <code>harness show</code>.</td></tr>
+      <tr><td><code>1</code></td><td>Failed. The message says what to run next.</td></tr>
+      <tr><td><code>2</code></td><td>The command was used wrongly; the usage follows.</td></tr>
+      <tr><td><code>3</code></td><td><code>wait</code>: a harness needs the person (a question or a permission). Tell
+        the person; only they answer it.</td></tr>
+      <tr><td><code>4</code></td><td><code>wait</code>: a harness stopped or is gone.</td></tr>
+      <tr><td><code>124</code></td><td><code>wait</code>: timed out while a harness was still working. Wait again, or
+        read it.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>When several apply, <code>wait</code> exits with the first of 124, 3 and 4.</p>
+
+  <h2 id="parallel">Run Claude Code agents in parallel</h2>
+  <pre><code>harness new claude --name api-tests -- "Make the tests in api/ pass. Change only files in api/. Answer with what you changed and why."
+harness new claude --name ui-tests -- "Make the tests in ui/ pass. Change only files in ui/. Answer with what you changed and why."
+harness wait api-tests,ui-tests --timeout 45m
+harness show api-tests
+harness show ui-tests
+harness close api-tests
+harness close ui-tests</code></pre>
+  <p>Each harness is a full Claude Code session in its own terminal, in the folder you ran the command from. Give
+    harnesses that edit files separate folders or separate files (a git worktree each works well): two agents
+    editing the same file overwrite each other's work.</p>
+
+  <h2 id="wait">Wait for a background agent to finish</h2>
+  <pre><code>harness wait reviewer --timeout 30m
+echo $?</code></pre>
+  <p><code>0</code>: it is idle, read it with <code>harness show reviewer</code>. <code>3</code>: it is waiting for the
+    person; tell them, and do not answer it yourself. <code>4</code>: it stopped. <code>124</code>: it is still
+    working; wait again. With several names, <code>--any</code> returns as soon as one finishes. A harness counts as
+    finished when it has stopped working on two looks in a row, three seconds apart, so a short pause between tool
+    calls does not end the wait.</p>
+
+  <h2 id="codex">Hand a task to Codex and read its answer</h2>
+  <pre><code>harness new codex --name reviewer -- "Review the changes on this branch against main for bugs. Do not edit files. Answer with the findings, most serious first, each with file and line."
+harness wait reviewer --timeout 20m &amp;&amp; harness show reviewer
+harness close reviewer</code></pre>
+  <p>Put the whole task in it: what to do, where, what done looks like, and what to answer with. A task holds 2,000
+    characters; for a longer one, write it to a file and name the file in the task. <code>show</code> cuts long
+    answers at 4,000 characters and prints how to read the rest (<code>--chars N</code>).</p>
+
+  <h2 id="background">Keep working while another agent reviews</h2>
+  <pre><code>harness new codex --name reviewer -- "Review commit 3f2a9c1 for bugs. Do not edit files. Answer with the findings."
+# … go on with your own work; harness new returned as soon as the harness started …
+harness ps                                   # is it still working?
+harness wait reviewer &amp;&amp; harness show reviewer</code></pre>
+  <p>To ask the same reviewer a follow-up from inside a harness, <code>harness send reviewer "…"</code>, then wait and
+    show again: it still has the context. Otherwise start a new harness with the fuller task.</p>
+
+  <h2 id="machines">Run on another machine</h2>
+  <pre><code>harness machines
+harness new codex @mini ~/code/app --name train -- "Run the training script and report the final loss."</code></pre>
+  <p>Needs the person signed in to Harness on both computers (<code>harness login</code>). <code>harness ps</code>
+    lists this machine.</p>
+
+  <h2 id="where">Inside a harness, or outside Harness</h2>
+  <ul>
+    <li><strong>In a harness</strong> (Harness made your terminal pane): <code>harness send</code> works, to what you
+      started and to teammates in a tab with Agent Messages on, and each harness you start is told how to message
+      you.</li>
+    <li><strong>Outside Harness</strong> (Claude Code or Codex in a terminal app, an editor or the person's own tmux):
+      Harness tells you by your session, from what your agent sets in its shell. <code>harness ps</code> says
+      "You are Claude Code, outside Harness." and marks what this session started as <code>you</code>; the limits
+      below apply; each harness you start reads
+      <code>[from Claude Code outside Harness · &lt;machine&gt;, the agent that started you. It reads your answer itself.]</code>
+      above its task; and you may close only what this session started. Nothing can message you, and
+      <code>harness send</code> is not available: put everything in the task, and for a follow-up start a new
+      harness with the fuller task.</li>
+  </ul>
+
+  <h2 id="mcp">MCP tools</h2>
+  <p><code>harness mcp</code> serves the same commands as MCP tools over stdio, for agents that reach their tools
+    through MCP (the plugin above registers it). Configure it as command <code>harness</code> with arguments
+    <code>["mcp"]</code>.</p>
+  <div class="table">
+  <table>
+    <thead><tr><th>Tool</th><th>Arguments</th><th>Same as</th></tr></thead>
+    <tbody>
+      <tr><td><code>harness_list</code></td><td><code>all?</code></td><td><code>harness ps</code></td></tr>
+      <tr><td><code>harness_start</code></td><td><code>task</code>, <code>folder</code>, <code>name</code>,
+        <code>agent?</code> (<code>claude</code> or <code>codex</code>), <code>machine?</code></td><td><code>harness new</code></td></tr>
+      <tr><td><code>harness_wait</code></td><td><code>names</code>, <code>any?</code>, <code>timeout_seconds?</code>
+        (120 by default, 600 at most; if they are still working, call it again)</td><td><code>harness wait</code></td></tr>
+      <tr><td><code>harness_read</code></td><td><code>name</code>, <code>chars?</code></td><td><code>harness show</code></td></tr>
+      <tr><td><code>harness_close</code></td><td><code>name</code>, <code>now?</code></td><td><code>harness close</code></td></tr>
+      <tr><td><code>harness_send</code></td><td><code>to</code>, <code>text</code>; offered only when the server runs
+        inside a harness</td><td><code>harness send</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="rules">Rules</h2>
+  <ul>
+    <li>Give work only to harnesses you started. A harness the person started is theirs: you may read it and wait on
+      it, but do not send it work or close it.</li>
+    <li>Never answer a harness's question or permission prompt, and never type into it some other way. Tell the
+      person.</li>
+    <li>Never ask another harness to publish, deploy, delete or push. Those are the person's to ask for.</li>
+    <li>Close what you started once you have its answer.</li>
+    <li>An agent may have at most 8 live harnesses it started, and start 20 in 10 minutes; one it started may start
+      more, but those may not. Each machine allows 40 live harnesses started by agents. Every limit refuses with a
+      message; do not work around it.</li>
+  </ul>
+
+  <h2 id="errors">When something fails</h2>
+  <ul>
+    <li><code>harness: command not found</code>: Harness is not installed; see <a href="#install">Install</a>.</li>
+    <li><code>Harness is not running here. Start it with `harness start`.</code></li>
+    <li><code>That machine is not reachable now. `harness machines` lists which are online.</code></li>
+  </ul>
+
+  <h2 id="more">More</h2>
+  <ul>
+    <li><a href="https://github.com/autonomous-ai/openharness/blob/main/plugins/harness/skills/harness/SKILL.md">The harness skill</a></li>
+    <li><a href="https://github.com/autonomous-ai/openharness/tree/main/plugins/harness">The Claude Code and Codex plugin</a></li>
+    <li><a href="https://github.com/autonomous-ai/openharness/blob/main/docs/design/2026-10-11-agent-client.md">How the agent commands work, and why</a></li>
+    <li><a href="https://github.com/autonomous-ai/openharness">Source</a> (MIT)</li>
+    <li><a href="/download">Download the Harness app</a>, for the person</li>
+  </ul>
+</main>
+</body>
+</html>

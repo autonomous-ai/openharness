@@ -88,7 +88,7 @@ describe('the core API a light service runs on in its own process', () => {
     expect(api.turns.cancelDelivery('d1')).toBe(false)
     expect(api.daemon).toMatchObject({ command: 'harness', port: 0 })
     expect(api.daemon.machineId()).toBe('')
-    expect(await api.account.backend('GET', '/api/tab-channels')).toEqual({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } })
+    expect(await api.account.backend('GET', '/api/agent-messages')).toEqual({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } })
     expect(api.account.onNotice(() => {})()).toBeUndefined()
   })
 
@@ -96,11 +96,11 @@ describe('the core API a light service runs on in its own process', () => {
     let answer: Record<string, unknown> | Error = { status: 200, body: { success: true } }
     const ask = vi.fn(async () => { if (answer instanceof Error) throw answer; return answer })
     const listeners: Array<(notice: never) => void> = []
-    const api = processCoreApi('/data', 'collaboration', { ask, onNotice: (listener) => { listeners.push(listener as never); return () => {} } })
-    expect(await api.account.backend('PATCH', '/api/tab-channels/settings', { enabled: true })).toEqual({ status: 200, body: { success: true } })
-    expect(ask).toHaveBeenLastCalledWith('backend', { method: 'PATCH', path: '/api/tab-channels/settings', body: { enabled: true } })
-    await api.account.backend('GET', '/api/tab-channels')
-    expect(ask).toHaveBeenLastCalledWith('backend', { method: 'GET', path: '/api/tab-channels' })
+    const api = processCoreApi('/data', 'messages', { ask, onNotice: (listener) => { listeners.push(listener as never); return () => {} } })
+    expect(await api.account.backend('PATCH', '/api/agent-messages/tabs/t1', { enabled: true })).toEqual({ status: 200, body: { success: true } })
+    expect(ask).toHaveBeenLastCalledWith('backend', { method: 'PATCH', path: '/api/agent-messages/tabs/t1', body: { enabled: true } })
+    await api.account.backend('GET', '/api/agent-messages')
+    expect(ask).toHaveBeenLastCalledWith('backend', { method: 'GET', path: '/api/agent-messages' })
     answer = { error: 'INVALID_REQUEST' }
     expect(await api.account.backend('GET', '/nope')).toEqual({ status: 502, body: { error: 'INVALID_REQUEST' } })
     answer = { status: 200 }

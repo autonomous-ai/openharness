@@ -22,14 +22,15 @@ import { readCompanionIdentity, type CompanionIdentity } from './companionProtoc
 //   3. SAY NOTHING WHEN NOTHING CHANGED. That is what keeps the link idle during a long turn, and it is
 //      why rule 2 has to exist at all.
 
-import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
+import { CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
-import { FirmwareTransfer } from './fwPush.js'
+import { FirmwareTransfer, otaKeyFor } from './fwPush.js'
 import { PACK_VERSION } from './pets/pack.js'
 import { planPetSync } from './pets/sync.js'
 import type { PetStore } from './pets/store.js'
 import type { PetDialState } from './pets/sync.js'
 import { SerialLink, findDialPort } from './serial.js'
+import { PLAYER_PAGE_SIZE, playerPage, type PlayerSession } from './playerLibrary.js'
 import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry.js'
 import { VoiceDraft, type DraftPin } from './voiceDraft.js'
 import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
@@ -131,6 +132,40 @@ const DEFAULT_VOICE_RATE = 16_000
 /** A voice turn longer than this is a stuck dial, not a person talking. 16 kHz mono 16-bit ≈ 32 KB/s. */
 const VOICE_MAX_BYTES = 10 * 60 * 32_000
 
+/** What a `swarms` item's `members` says about one member id (see CableSession.memberMeta). */
+export interface SwarmMemberMeta { id: string; name: string; engine: string; machine: string; online: boolean }
+
+/** The live footer of an agent's pane, and what a `activity: 'steps-v1'` device is told beside it. */
+export interface ActivitySnapshot {
+  text: string
+  /** The footer's own timer, in seconds. */
+  elapsedSeconds?: number
+  /** The latest paragraph the assistant wrote; independent of the footer. */
+  action?: string
+}
+
+/** The device keeps 192 B of the agent's latest sentence (cable.md); a longer one is cut on a character boundary. */
+const ACTION_MAX_BYTES = 188
+
+/** What the Pro's firmware holds of a swarms frame: 24 tabs, 24 ids each, and 512 JSON tokens (480 here). */
+const SWARMS_MAX = 24
+const SWARM_IDS_MAX = 24
+const SWARM_TOKENS_MAX = 480
+
+/** Tokens as `cable_json_guard.c` counts them: every object, array, string (keys too) and bare value. */
+function jsonTokens(value: unknown): number {
+  if (Array.isArray(value)) return 1 + value.reduce((n: number, v) => n + jsonTokens(v), 0)
+  if (value && typeof value === 'object') return 1 + Object.entries(value).reduce((n, [, v]) => n + 1 + jsonTokens(v), 0)
+  return 1
+}
+
+function clipUtf8(text: string, max: number): string {
+  const flat = text.replace(/[\r\n\t]+/g, ' ')
+  if (Buffer.byteLength(flat, 'utf8') <= max) return flat
+  const decoded = new TextDecoder('utf-8').decode(Buffer.from(flat, 'utf8').subarray(0, max - 3))
+  return `${decoded.replace(/\uFFFD+$/, '')}\u2026`
+}
+
 export interface CableAgent {
   id: string
   name: string
@@ -174,6 +209,8 @@ export interface CableSwarm {
   name: string
   /** How many agents it holds — the dial draws the count, never the members. */
   agents: number
+  /** The agents it holds, in the window's own order. Sent only to a device that named `swarms: 'members-v1'`. */
+  agentIds?: string[]
   /**
    * How many TILES it holds, of any kind — agents, shells, viewers.
    *
@@ -223,7 +260,7 @@ import type { WindowRoute } from './windowRoute.js'
 import { withSelectedPassage, type SelectionCommand, type SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
 import type { FormCommand, FormResult } from './windowForm.js'
-import { extendShortRecap } from '../lib/deviceRecap.js'
+import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 
 export interface RouteDecision {
   agentId: string
@@ -268,6 +305,10 @@ export interface CableHost {
   /** Who an agent is, for a card about one the dial does not hold. Undefined for an id never listed. */
   describe(agentId: string): { name: string; engine: string; machine: string } | undefined
   activityText?(agentId: string): Promise<string | null>
+  /** `activityText` plus the timer and the assistant's latest paragraph. Preferred when present. */
+  activitySnapshot?(agentId: string): Promise<ActivitySnapshot | null>
+  /** Every session the library can page through, in the order to show them. Absent: no library. */
+  playerLibrary?(): Promise<PlayerSession[]>
   sendTurn(agentId: string, text: string): void | { ok: true } | { ok: false; machine?: string; reason?: string }
   stopTurn(agentId: string): void
   /**
@@ -326,7 +367,7 @@ export interface CableHost {
   /** The runtime model/effort catalog for one agent, as opaque profile ids the dial groups and shows. */
   listModels(agentId: string): Promise<string[]>
   /** One agent's last turn summaries, newest first — what a reattached dial needs to redraw its tiles. */
-  recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string }>>
+  recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; fullText?: string }>>
   /** What the window still has unread, newest first — replayed to a dial that has just attached. */
   listUnread(): UnreadNotification[]
   /**
@@ -338,7 +379,7 @@ export interface CableHost {
    * The image to offer a dial running `runningVersion`, or null for "nothing to do" — which covers a
    * dial that is current, a dev build that must not be touched, and an unreachable manifest.
    */
-  firmwareFor?(runningVersion: string, hw?: string): Promise<{ version: string; image: Buffer; sha256: string } | null>
+  firmwareFor?(runningVersion: string, key: string): Promise<{ version: string; image: Buffer; sha256: string } | null>
   /**
    * A dial greeted us, or the port went away.
    *
@@ -423,6 +464,8 @@ export interface DialStatus {
   /** Which of the two dials this is — `cst9217+axp2101`, `cst816s`, … — as the firmware detected itself
    *  at boot (device: board.h). Absent from a firmware that predates the field. Informational. */
   hw?: string
+  /** `hello.board`; "pro" is the square Harness Pro. Absent = a round dial. */
+  board?: string
   updating?: string
   /**
    * Every device on this computer, when a fleet is reporting. Present only on the primary status, and
@@ -501,6 +544,8 @@ function readSettings(value: unknown): DeviceSettings | undefined {
 
 /** A pet transfer with no pet.accept / pet.progress for this long is abandoned for the rest of the link. */
 const PET_STALL_MS = 10_000
+/** A firmware transfer whose acked byte count has not advanced for this long is over (the dial aborts at 10 s itself). */
+const FW_STALL_MS = 30_000
 /** How long a pet.done outranks a greeting that does not list the pack (see petDoneAt). */
 const PET_DONE_TRUST_MS = 3_000
 /** A dial that refused a pack for memory right after we dropped another is given the room a moment to free. */
@@ -518,6 +563,9 @@ export class CableSession {
   private everGreeted = false
   /** The board this device says it is (`hello.hw`). Decides which firmware it may be offered. */
   private greetedHw: string | undefined
+  /** `hello.board` (absent on rounds and the old Player-1 Pro build). "pro" is the standalone Pod firmware. */
+  private greetedBoard: string | undefined
+  private greetedOta: string | undefined
   /** What the device last SAID its settings are. Never what this computer last asked for. */
   private greetedSettings: DeviceSettings | undefined
   private greetedFw: string | null = null
@@ -526,6 +574,35 @@ export class CableSession {
 
   /** What the dial was last told the agent list is. Empty = it has been told nothing. */
   private lastAgentsKey = ''
+  // What the hello NAMED. Each switches on only its own fields; a hello that names none gets the frames it
+  // always got. A positive string match, per session (see hello).
+  /** `swarms: 'members-v1'`: `agentIds` and `members` on the swarms items. */
+  private swarmMembers = false
+  /** `recap: 'long-v1'`: `full` on a summary. */
+  private longRecap = false
+  /** `activity: 'steps-v1'`: `action`, `elapsedSeconds` and `step` on turn.activity. */
+  private stepsActivity = false
+  /** `player: 'library-v1'`: the paged `player.library`. */
+  private playerCapable = false
+  private playerOffset = 0
+  private playerRequest = 0
+  private playerLibraryKey = ''
+  private playerLibraryAt = 0
+  private swarmsTrimmedKey = ''
+
+  /** For the greeting's log line: which capabilities this hello named, or nothing. */
+  private capabilitiesNamed(): string {
+    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.playerCapable && 'player']
+      .filter(Boolean)
+    return named.length ? ` caps ${named.join(',')}` : ''
+  }
+
+  private resetCapabilities(): void {
+    this.swarmMembers = this.longRecap = this.stepsActivity = this.playerCapable = false
+    this.playerOffset = this.playerRequest = 0
+    this.playerLibraryKey = ''
+    this.playerLibraryAt = 0
+  }
   /** Bytes and frames seen since this port opened — the evidence for the foreign-dial verdict. */
   private bytesSinceOpen = 0
   private framesSinceOpen = 0
@@ -622,6 +699,13 @@ export class CableSession {
   private petStall: ReturnType<typeof setTimeout> | null = null
   /** `<mac>:<version>` already offered on this port. The durable, cross-port guard is `mayOffer`. */
   private offered = new Set<string>()
+  /** `<mac>:<version>` of the firmware transfer in flight, so fw.done can record it and a failure can free it. */
+  private offeringKey = ''
+  /** The last acked byte count of that transfer, and the timer that fires when it stops advancing. */
+  private fwAcked = 0
+  private fwStall: ReturnType<typeof setTimeout> | null = null
+  /** Devices already logged as having no image channel this session (the hello repeats every ~15 s). */
+  private noChannelLogged = new Set<string>()
 
   /** Voice capture in flight: PCM chunks as they arrive, plus what `voice.begin` said about them. */
   private voice: { agentId?: string; cmd?: string; lang: string; rate: number; chunks: Buffer[]; bytes: number;
@@ -761,6 +845,7 @@ export class CableSession {
       // the tab should not lag the tiles that belong to it.
       await this.syncSwarms()
       await this.syncAgents()
+      await this.syncPlayerLibrary()
       void this.refreshFocusedActivity()
     }
   }
@@ -857,6 +942,7 @@ export class CableSession {
     // A new port is a new dial until proven otherwise; tell it everything.
     this.lastAgentsKey = ''
     this.lastMachinesKey = ''
+    this.resetCapabilities()
     // INCLUDING which images it has been offered. `offered` holds bare version strings and named no dial,
     // so without this it outlived the session its comment claims it belongs to and became per-DAEMON:
     // offer 0.0.42 to one dial, unplug it, plug in a second still on 0.0.41, and the second is refused
@@ -899,11 +985,11 @@ export class CableSession {
     this.expectedAppFocusEchoUntil = 0
     this.lastAgentsKey = ''
     this.lastMachinesKey = ''
+    this.resetCapabilities()
     this.voice = null
     this.voiceGeneration++
     // The dial keeps its running image; the half-written slot is erased again by the next accepted offer.
-    this.transfer?.finish('interrupted by the port closing')
-    this.transfer = null
+    this.endFirmware('interrupted by the port closing')
     // The dial discards a half-received pack when the link drops (it keeps showing the old pet), so there
     // is nothing to resume: the next hello says what it holds and the missing pack is offered from byte 0.
     this.petTransfer?.xfer.finish('interrupted by the port closing')
@@ -1016,6 +1102,11 @@ export class CableSession {
           this.link = null
           return
         }
+        // Named before the welcome, which advertises the library only to a device that asked for it.
+        this.swarmMembers = str('swarms') === 'members-v1'
+        this.longRecap = str('recap') === 'long-v1'
+        this.stepsActivity = str('activity') === 'steps-v1'
+        this.playerCapable = str('player') === 'library-v1'
         const mac = str('mac') ?? ''
         // Rule 1: every greeting is answered, but only an unfamiliar dial gets the full state.
         await this.send({
@@ -1034,6 +1125,7 @@ export class CableSession {
           features: [
             'voice.draft',
             'agents.refresh',
+            ...(this.playerCapable && this.host.playerLibrary ? ['player.library'] : []),
             ...(this.host.form ? ['form'] : []),
             ...(this.host.selectPassage ? ['selection'] : []),
             ...(this.host.visit ? ['visit'] : []),
@@ -1050,7 +1142,10 @@ export class CableSession {
         // from the log on 2026-08-24.
         const fw = str('fw') ?? '?'
         const hw = str('hw')
+        const board = str('board')
         this.greetedHw = hw || undefined
+        this.greetedBoard = board || undefined
+        this.greetedOta = str('ota') || undefined
         // Read before the change test below, so a device that only changed a setting still corrects the
         // pane: its fw and mac are the same, and without this the greeting would be treated as a keepalive.
         const settings = readSettings(msg.settings)
@@ -1058,11 +1153,13 @@ export class CableSession {
         this.greetedSettings = settings
         if (settingsChanged && mac === this.greetedMac && fw === this.greetedFw) this.report()
         if (mac !== this.greetedMac || fw !== this.greetedFw) {
+          this.playerOffset = this.playerRequest = 0
+          this.playerLibraryKey = ''
           const returning = mac === this.greetedMac
           this.greetedMac = mac
           this.everGreeted = true
           this.greetedFw = fw
-          this.log(`cable: dial ${mac} ${returning ? 'back ' : ''}on fw ${fw} proto ${msg.proto}${hw ? ` hw ${hw}` : ''}`)
+          this.log(`cable: dial ${mac} ${returning ? 'back ' : ''}on fw ${fw} proto ${msg.proto}${hw ? ` hw ${hw}` : ''}${board ? ` board ${board}` : ''}${this.capabilitiesNamed()}`)
           this.dialLog.greeted()
           this.report({ fw })
           // BEFORE the state push, not after: the push reads the selected machine, and for a remote one
@@ -1178,6 +1275,15 @@ export class CableSession {
         const agentId = str('agentId')
         const token = notificationReadToken(msg.readToken)
         if (agentId && token) this.host.readNotification?.(agentId, token)
+        return
+      }
+      case 'player.library.get': {
+        if (!this.playerCapable || !Number.isSafeInteger(msg.offset) || (msg.offset as number) < 0 ||
+            (msg.offset as number) > 1_000_000 || !Number.isSafeInteger(msg.request) ||
+            (msg.request as number) < 0 || (msg.request as number) > 0xffffffff) return
+        this.playerOffset = msg.offset as number
+        this.playerRequest = msg.request as number
+        await this.syncPlayerLibrary(true)
         return
       }
       case 'agent.open':
@@ -1442,19 +1548,32 @@ export class CableSession {
         // The window is told NOW rather than at the offer: an offer the dial refuses is nothing to
         // show, and the minute that matters — do not unplug it — starts here.
         this.report({ updating: this.offeringTo })
+        this.armFwStall()
         await this.transfer?.pump()
         return
       case 'fw.progress':
         // Not only a progress bar: this ack IS the credit that lets the next slices go.
-        if (typeof msg.written === 'number') await this.transfer?.onProgress(msg.written)
+        if (typeof msg.written === 'number') {
+          if (msg.written > this.fwAcked) {
+            this.fwAcked = msg.written
+            this.armFwStall()
+          }
+          if (msg.resend === true && this.transfer) {
+            // The device dropped a slice (CRC) and wants the image again from `written`.
+            await this.transfer.onResend(msg.written)
+            if (this.transfer.isDone) {
+              this.endFirmware('too many resends')
+              this.report()
+              void this.syncPets()
+            }
+          } else await this.transfer?.onProgress(msg.written)
+        }
         return
       case 'fw.done':
         // WHETHER AN UPDATE LANDS is not something the release process can see:
         // a version is published, and after that the only evidence is the next
         // `hello` from a dial that may never have taken it.
-        this.transfer?.finish('installed — the dial is rebooting')
-        this.transfer = null
-        this.offeringTo = ''
+        this.endFirmware('installed — the dial is rebooting', true)
         // Still attached from the window's side: the reboot re-greets within seconds and the fw
         // field corrects itself then. Clearing `updating` is what matters.
         this.report()
@@ -1462,9 +1581,7 @@ export class CableSession {
       case 'fw.error':
         // The outcome is `refused`, not the dial's message: that string is the
         // firmware's own text and this stream carries short codes.
-        this.transfer?.finish(`refused: ${str('message') ?? 'no reason given'}`)
-        this.transfer = null
-        this.offeringTo = ''
+        this.endFirmware(`refused: ${str('message') ?? 'no reason given'}`)
         this.report()
         // Pets that waited behind the image go now.
         await this.syncPets()
@@ -1546,6 +1663,8 @@ export class CableSession {
    */
   private mayOffer(mac: string, version: string): boolean {
     const key = `${mac}:${version}`
+    // `written` means INSTALLED (fw.done). A refused, interrupted or stalled offer is not in it and is offered
+    // again at the next hello, but every attempt is in `writeLog`, so the hourly cap still bounds the retries.
     if (this.written.has(key)) {
       this.log(`cable: firmware ${version} already written to ${mac} — not offering it again`)
       return false
@@ -1556,18 +1675,57 @@ export class CableSession {
       this.log(`cable: ${mac} has taken ${recent.length} firmware writes this hour — holding off`)
       return false
     }
-    this.written.add(key)
     this.writeLog.set(mac, [...recent, now])
     return true
+  }
+
+  /** Close the firmware transfer. Only `installed` makes the version final; anything else may be offered again. */
+  private endFirmware(reason: string, installed = false): void {
+    this.transfer?.finish(reason)
+    this.transfer = null
+    this.offeringTo = ''
+    if (this.fwStall) clearTimeout(this.fwStall)
+    this.fwStall = null
+    if (this.offeringKey) {
+      if (installed) this.written.add(this.offeringKey)
+      else this.offered.delete(this.offeringKey)
+    }
+    this.offeringKey = ''
+  }
+
+  /** (Re)start the no-progress timer for the image in flight; a silently aborted one would block offers and pets forever. */
+  private armFwStall(): void {
+    if (this.fwStall) clearTimeout(this.fwStall)
+    this.fwStall = null
+    const t = this.transfer
+    if (!t) return
+    this.fwStall = setTimeout(() => {
+      this.fwStall = null
+      if (this.transfer !== t) return
+      this.log(`cable: firmware ${t.version} stalled for ${FW_STALL_MS / 1000} s, giving up on this transfer`)
+      this.endFirmware('timed out')
+      this.report()
+      void this.syncPets()
+    }, FW_STALL_MS)
+    this.fwStall.unref?.()
   }
 
   private async maybeOfferFirmware(runningVersion: string): Promise<void> {
     // A pack in flight also holds it back: the reader task that writes flash is busy with the pack, and the
     // next hello (every fifteen seconds) asks again.
     if (!this.host.firmwareFor || this.transfer || this.petTransfer || !runningVersion) return
-    // The BOARD goes with the version. Which manifest entry this device's image comes from is decided
-    // from its own hello, never defaulted — see otaKeyForBoard.
-    const candidate = await this.host.firmwareFor(runningVersion, this.greetedHw).catch(() => null)
+    // Which manifest entry this device's image comes from is decided from its own hello, never defaulted —
+    // see otaKeyFor. An unknown board, a Pro that does not say `ota: "v1"` and an old Player-1 Pro get none.
+    const key = otaKeyFor(this.greetedHw, this.greetedBoard, this.greetedOta)
+    if (!key) {
+      const who = this.greetedMac ?? 'unknown'
+      if (!this.noChannelLogged.has(who)) {
+        this.noChannelLogged.add(who)
+        this.log(`cable: not offering firmware — board "${this.greetedBoard ?? this.greetedHw}" has no image channel`)
+      }
+      return
+    }
+    const candidate = await this.host.firmwareFor(runningVersion, key).catch(() => null)
     // A pet transfer may have started while that await was parked (petsChanged); never start an image beside it.
     if (this.petTransfer || this.transfer) return
     // Keyed by DIAL as well as version. Holding bare version strings made this a statement about the
@@ -1583,6 +1741,8 @@ export class CableSession {
 
     this.log(`cable: offering firmware ${candidate.version} (${candidate.image.length} B)`)
     this.offeringTo = candidate.version
+    this.offeringKey = offerKey
+    this.fwAcked = 0
     this.transfer = new FirmwareTransfer(
       candidate.image,
       candidate.version,
@@ -1591,7 +1751,9 @@ export class CableSession {
         await this.link.write(encodeCableFrame(CableType.Fw, slice))
       },
       (line) => this.log(line),
+      { offsets: this.greetedBoard === 'pro' && this.greetedOta === 'v1' },
     )
+    this.armFwStall()
     await this.send({ t: 'fw.offer', version: candidate.version, size: candidate.image.length, sha256: candidate.sha256 })
   }
 
@@ -1990,6 +2152,7 @@ export class CableSession {
       attached: true,
       fw: this.greetedFw ?? undefined,
       ...(this.greetedHw ? { hw: this.greetedHw } : {}),
+      ...(this.greetedBoard ? { board: this.greetedBoard } : {}),
       ...(this.greetedMac ? { mac: this.greetedMac } : {}),
       ...(this.greetedSettings ? { settings: this.greetedSettings } : {}),
       ...extra,
@@ -2049,6 +2212,36 @@ export class CableSession {
    */
   async syncAgents(force = false): Promise<void> {
     return this.queued(() => this.syncAgentsNow(force))
+  }
+
+  /** `{ full }` for a `recap: 'long-v1'` device and an answer with something to say; nothing otherwise. */
+  private fullField(fullText?: string): { full?: string } {
+    const full = this.longRecap && fullText ? deriveLongRecap(fullText) : null
+    return full ? { full } : {}
+  }
+
+  /** One page of the library for a `player: 'library-v1'` device, when it differs or ten seconds have passed. */
+  async syncPlayerLibrary(force = false): Promise<void> {
+    return this.queued(async () => {
+      if (!this.playerCapable || !this.host.playerLibrary) return
+      const offset = this.playerOffset, request = this.playerRequest
+      const sessions = (await this.host.playerLibrary()).map((row) => {
+        const live = this.liveTurns.get(row.id)
+        return live ? { ...row, status: live } : row
+      })
+      // The device has asked for another page while this one was being read; its reply is the one that counts.
+      if (request !== this.playerRequest) return
+      const page = playerPage(sessions, offset)
+      const machines = new Set(sessions.map((row) => row.machineId)).size
+      // The age advances on the device, so an unchanged page is refreshed at most every 10 s.
+      const key = JSON.stringify([page.offset, page.total, machines, sessions.slice(page.offset, page.offset + PLAYER_PAGE_SIZE)])
+      if (!force && key === this.playerLibraryKey && Date.now() - this.playerLibraryAt < 10_000) return
+      if (await this.send({ t: 'player.library', request, ...page, machines })) {
+        this.playerOffset = page.offset
+        this.playerLibraryKey = key
+        this.playerLibraryAt = Date.now()
+      }
+    })
   }
 
   private async syncAgentsNow(force: boolean): Promise<void> {
@@ -2143,7 +2336,7 @@ export class CableSession {
     // behind them — including the `focus` the person who just clicked is waiting for. Measured on the
     // desk: a click from a local agent to a remote one took 1.5 s, of which 0.7 s was this loop waiting
     // on the first `agent_recent` while the dial sat on the old tile.
-    const rows: Array<{ id: string; past: Array<{ recap: string; text: string }> }> = []
+    const rows: Array<{ id: string; past: Array<{ recap: string; text: string; fullText?: string }> }> = []
     for (const a of await this.host.listAgents()) {
       // Marked as it is ASKED FOR, not as it is sent: the answer is a cloud round trip, and a tick
       // arriving mid-loop would otherwise start a second walk over the same agents.
@@ -2157,7 +2350,7 @@ export class CableSession {
         // Oldest first, so the newest ends up on top of the tile's stack.
         for (const s of [...row.past].reverse()) {
           if (!s.recap && !s.text) continue
-          await this.send({ t: 'summary', agentId: row.id, recap: s.recap, text: s.text, restore: true })
+          await this.send(this.withinCap({ t: 'summary', agentId: row.id, recap: s.recap, text: s.text, ...this.fullField(s.fullText), restore: true }))
         }
       }
     })
@@ -2190,6 +2383,7 @@ export class CableSession {
       await this.syncMachines(true)
       await this.syncSwarms(true)
       await this.syncAgents(true)
+      await this.syncPlayerLibrary(true)
     } finally {
       this.restoring = false
     }
@@ -2211,6 +2405,7 @@ export class CableSession {
 
   private async syncSwarmsNow(force: boolean): Promise<void> {
     const { selected, swarms, tiles } = this.host.listSwarms()
+    const meta = await this.memberMeta(swarms)
     // `panes` belongs in the key as much as `agents` does. Opening a terminal on a tab that holds no
     // agent moves only the tile count, and a key blind to it would swallow that push and leave the
     // dial showing a tab it still believes is empty — the very row this field exists to keep.
@@ -2219,19 +2414,93 @@ export class CableSession {
     // exactly where they were, which a key blind to it would swallow — leaving the device drawing the
     // shape the tab used to have.
     const shape = tiles.map((t) => `${t.x1},${t.y1},${t.x2},${t.y2},${t.agentId}`).join(';')
-    const key = `${selected}|${swarms.map((s) => `${s.id}:${s.name}:${s.agents}:${s.panes}`).join('|')}|${shape}`
+    // A device that asked for members is also told when WHO sits in a tab changes (a reorder moves no count),
+    // and when a member's machine goes offline. One that did not keeps the key it always had.
+    const members = this.swarmMembers
+      ? `|${swarms.map((s) => (s.agentIds ?? []).join(',')).join(';')}|${[...meta].map(([id, m]) => `${id}=${m.name}/${m.engine}/${m.machine}/${m.online ? 1 : 0}`).join(',')}`
+      : ''
+    const key = `${selected}|${swarms.map((s) => `${s.id}:${s.name}:${s.agents}:${s.panes}`).join('|')}|${shape}${members}`
     if (!force && key === this.lastSwarmsKey) return
     this.lastSwarmsKey = key
     this.log(`cable: swarms → ${swarms.length}${selected ? ` (on ${selected})` : ''}${force ? ' [push]' : ''}`)
     // ONE frame, not a begin/row/end stream: two dozen rows of an id, a name and a count fit in a
     // kilobyte, and the dial replaces the whole list on arrival either way.
-    await this.send({
+    await this.send(this.swarmsMessage(selected, swarms, tiles, key, meta))
+  }
+
+  /**
+   * What the daemon knows about every member of every tab: name, engine, machine and whether that machine
+   * is online. A tab can hold an agent of a machine that is offline: it is in the window's `agentIds` but in
+   * nobody's roster, so the device had only an id to draw. Empty for a device that did not ask for members,
+   * and an id the daemon has never heard of simply has no entry.
+   */
+  private async memberMeta(swarms: CableSwarm[]): Promise<Map<string, SwarmMemberMeta>> {
+    const out = new Map<string, SwarmMemberMeta>()
+    if (!this.swarmMembers) return out
+    let machines: CableMachine[] = []
+    try { machines = (await this.host.listMachines()).machines } catch { /* unknown liveness reads as online */ }
+    for (const sw of swarms) {
+      for (const id of sw.agentIds ?? []) {
+        if (out.has(id)) continue
+        const who = this.host.describe(id)
+        if (!who || (!who.name && !who.machine)) continue
+        const m = who.machine ? machines.find((x) => x.name === who.machine) : undefined
+        out.set(id, { id, name: who.name, engine: who.engine, machine: who.machine, online: !m || m.state !== 'offline' })
+      }
+    }
+    return out
+  }
+
+  /**
+   * Build the swarms frame, member ids only for a device that asked for them and only as many as fit.
+   * `encodeCableFrame` throws over 8192 bytes, `send` treats that as a dead link and closes it, and the
+   * reconnect would send the same frame again: one oversized frame is a loop.
+   */
+  private swarmsMessage(selected: string, swarms: CableSwarm[], tiles: CableTile[], key: string,
+                        meta: Map<string, SwarmMemberMeta>): Message {
+    // Flat quads plus an id, rather than objects: this is read by a C parser on a device, and four
+    // numbers in a row cost it nothing to walk.
+    const flatTiles = tiles.map((t) => ({ x1: t.x1, y1: t.y1, x2: t.x2, y2: t.y2, a: t.agentId }))
+    const build = (list: CableSwarm[], withIds: (s: CableSwarm) => boolean, withMeta = false, withTiles = true): Message => ({
       t: 'swarms', selected,
-      items: swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agents, panes: s.panes })),
-      // Flat quads plus an id, rather than objects: this is read by a C parser on a device, and four
-      // numbers in a row cost it nothing to walk.
-      tiles: tiles.map((t) => ({ x1: t.x1, y1: t.y1, x2: t.x2, y2: t.y2, a: t.agentId })),
+      items: list.map((s) => {
+        const ids = (s.agentIds ?? []).slice(0, SWARM_IDS_MAX)
+        const members = withMeta && withIds(s) ? ids.flatMap((id) => meta.get(id) ?? []) : []
+        return {
+          id: s.id, name: s.name, agents: s.agents, ...(withIds(s) ? { agentIds: ids } : {}),
+          ...(members.length ? { members } : {}), panes: s.panes,
+        }
+      }),
+      tiles: withTiles ? flatTiles : [],
     })
+    if (!this.swarmMembers) return build(swarms, () => false)
+    // Two limits, both the device's: the cable's payload cap (with a margin for anything the frame carries
+    // beyond this JSON) and the firmware's JSON guard, which refuses a frame of more than 512 tokens WHOLE,
+    // leaving the Tabs screen empty. Count with room to spare.
+    const fits = (m: Message) => Buffer.byteLength(JSON.stringify(m), 'utf8') <= CABLE_MAX_PAYLOAD - 256 && jsonTokens(m) <= SWARM_TOKENS_MAX
+    const selectedRow = swarms.find((s) => s.id === selected)
+    const capped = swarms.length <= SWARMS_MAX ? swarms
+      : swarms.slice(0, SWARMS_MAX).some((s) => s === selectedRow) || !selectedRow ? swarms.slice(0, SWARMS_MAX)
+      : [...swarms.slice(0, SWARMS_MAX - 1), selectedRow]
+    // Fewer tabs only once nothing smaller per tab fits. Names go first: ids are what the device lists,
+    // names only cover the ones it cannot find elsewhere.
+    for (let n = capped.length; n >= 1; n--) {
+      const others = capped.filter((s) => s !== selectedRow).slice(0, selectedRow ? n - 1 : n)
+      const list = capped.filter((s) => s === selectedRow || others.includes(s))
+      const attempts = [build(list, () => true, true), build(list, () => true), build(list, (s) => s.id === selected), build(list, () => false)]
+      const at = attempts.findIndex(fits)
+      if (at < 0) continue
+      if (at > 0 || n < capped.length) this.noteTrimmed(key, `${at === 1 ? 'member names' : at === 2 ? 'ids of the other tabs' : at === 3 ? 'member ids' : ''} dropped${n < capped.length ? `, ${capped.length - n} tab(s) left out` : ''}`)
+      return attempts[at]
+    }
+    this.noteTrimmed(key, 'tiles dropped, selected tab only')
+    return build(selectedRow ? [selectedRow] : capped.slice(0, 1), () => false, false, false)
+  }
+
+  private noteTrimmed(key: string, what: string): void {
+    if (this.swarmsTrimmedKey === key) return
+    this.swarmsTrimmedKey = key
+    this.log(`cable: swarms too large for one frame — ${what}`)
   }
 
   // ── machines ──────────────────────────────────────────────────────────────────────────────────────
@@ -2325,20 +2594,55 @@ export class CableSession {
    * It travels because without it the dial gets a card with a state and nothing to render: the tile knows
    * a turn is live and shows the user nothing that says so.
    */
-  async turnStarted(agentId: string, text = ''): Promise<void> {
+  async turnStarted(agentId: string, text = '', update?: string): Promise<void> {
     this.activityEndedAt.delete(agentId)
+    this.markLive(agentId)
     const read = {}
     this.activityReads.set(agentId, read)
     await this.send({ t: 'turn.started', agentId, text })
-    if (!this.link?.isOpen || !this.host.activityText) { this.activityReads.delete(agentId); return }
-    let activity: string | null = null
-    try { activity = await this.host.activityText(agentId) } catch { /* unavailable is not a status */ }
+    // The paragraph the agent last wrote, so the working screen has a sentence before the footer is read.
+    if (this.stepsActivity && update) await this.send({ t: 'turn.activity', agentId, text, action: clipUtf8(update, ACTION_MAX_BYTES) })
+    if (!this.link?.isOpen || !this.canReadActivity()) { this.activityReads.delete(agentId); return }
+    let activity: ActivitySnapshot | null = null
+    try { activity = await this.readActivity(agentId) } catch { /* unavailable is not a status */ }
     // A terminal capture must never revive a completed turn or overwrite a newer heartbeat.
     if (this.activityReads.get(agentId) !== read) return
     this.activityReads.delete(agentId)
-    await this.send({ t: 'turn.activity', agentId, text: activity ?? '' })
+    await this.sendActivity(agentId, activity)
+  }
+  /** Whether there is any footer to read for this device: a round dial reads `activityText`, as it always did. */
+  private canReadActivity(): boolean {
+    return !!this.host.activityText || (this.stepsActivity && !!this.host.activitySnapshot)
+  }
+  private async readActivity(agentId: string): Promise<ActivitySnapshot | null> {
+    // The snapshot is a newer door than the footer; only the device that asks for its extras depends on it,
+    // and if it fails (an older core) that device still gets the footer.
+    if (this.stepsActivity && this.host.activitySnapshot) {
+      try { return await this.host.activitySnapshot(agentId) } catch { if (!this.host.activityText) throw new Error('no activity') }
+    }
+    const text = await this.host.activityText?.(agentId)
+    return text ? { text } : null
+  }
+  /** The footer, and for a `steps-v1` device the agent's own sentence and the footer's timer beside it. */
+  private async sendActivity(agentId: string, activity: ActivitySnapshot | null): Promise<void> {
+    const steps = this.stepsActivity
+    const seconds = activity?.elapsedSeconds
+    await this.send({ t: 'turn.activity', agentId, text: activity?.text ?? '',
+      ...(steps && activity?.action ? { action: clipUtf8(activity.action, ACTION_MAX_BYTES) } : {}),
+      ...(steps && Number.isSafeInteger(seconds) && seconds! >= 0 && seconds! <= 2_592_000 ? { elapsedSeconds: seconds } : {}) })
   }
   private readonly activityReads = new Map<string, object>()
+  /**
+   * The turns this daemon has seen start and not end, and the questions still open: the library's status for a
+   * `player: 'library-v1'` device. The host's rows carry no status of their own (`idle` for every one), and a page
+   * that said `idle` every ten seconds put a working agent to rest on the device until its next event.
+   */
+  private readonly liveTurns = new Map<string, 'working' | 'question'>()
+  private markLive(agentId: string): void {
+    if (this.liveTurns.get(agentId) === 'question') return
+    if (!this.liveTurns.has(agentId) && this.liveTurns.size >= 256) this.liveTurns.delete(this.liveTurns.keys().next().value!)
+    this.liveTurns.set(agentId, 'working')
+  }
   private readonly activityEndedAt = new Map<string, number>()
   private readonly activityLabels = new Map<string, string>()
   private activityRefreshAt = 0
@@ -2350,7 +2654,7 @@ export class CableSession {
     const agentId = this.desiredFocus
     const link = this.link
     const now = Date.now()
-    if (this.stopped || !this.isConnected || !agentId || !this.host.activityText
+    if (this.stopped || !this.isConnected || !agentId || !this.canReadActivity()
         || this.activityRefreshPending || this.activityReads.has(agentId)
         || now - (this.activityEndedAt.get(agentId) ?? -Infinity) < 3_000
         || (this.activityRefreshAgent === agentId && now - this.activityRefreshAt < 3_000)) return
@@ -2362,16 +2666,17 @@ export class CableSession {
     const current = () => !this.stopped && this.isConnected && this.link === link
       && this.desiredFocus === agentId && this.activityReads.get(agentId) === read
     try {
-      const activity = await this.host.activityText(agentId)
+      const activity = await this.readActivity(agentId)
       if (!current()) return
       // A visible engine footer is direct evidence of work. Recover liveness even
       // when the transcript's turn.started happened before we attached.
-      if (activity) await this.send({ t: 'turn.started', agentId, text: activity })
+      if (activity) this.markLive(agentId)
+      if (activity) await this.send({ t: 'turn.started', agentId, text: activity.text })
       if (!current()) return
-      await this.send({ t: 'turn.activity', agentId, text: activity ?? '' })
-      if (this.activityLabels.get(agentId) !== (activity ?? '')) {
-        this.activityLabels.set(agentId, activity ?? '')
-        this.log(`cable: terminal activity ${agentId}: ${activity || '(no live footer)'}`)
+      await this.sendActivity(agentId, activity)
+      if (this.activityLabels.get(agentId) !== (activity?.text ?? '')) {
+        this.activityLabels.set(agentId, activity?.text ?? '')
+        this.log(`cable: terminal activity ${agentId}: ${activity?.text || '(no live footer)'}`)
       }
     } catch { /* A capture failure says nothing about whether the turn ended. */ }
     finally {
@@ -2379,7 +2684,14 @@ export class CableSession {
       this.activityRefreshPending = false
     }
   }
+  /** The tool the turn just started, as one line for a `steps-v1` device's working screen. Nobody else is told. */
+  async turnStep(agentId: string, step: string): Promise<void> {
+    this.markLive(agentId)
+    if (!this.stepsActivity) return
+    await this.send({ t: 'turn.activity', agentId, text: '', step })
+  }
   async turnDone(agentId: string): Promise<void> {
+    this.liveTurns.delete(agentId)
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     await this.send({ t: 'turn.done', agentId })
@@ -2394,12 +2706,35 @@ export class CableSession {
    * rather than different frames, so firmware that predates them simply
    * notifies as it always did instead of losing the recap.
    */
-  async summary(agentId: string, recap: string, text: string, quiet = false, silent = false): Promise<void> {
+  async summary(agentId: string, recap: string, text: string, quiet = false, silent = false, fullText?: string): Promise<void> {
+    if (!silent) this.liveTurns.delete(agentId)   // a sub-agent's end is not its main agent's
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     recap = extendShortRecap(recap, text)
     const who = this.whoIs(agentId)
-    await this.send({ t: 'summary', agentId, ...who, recap, text, ...(quiet ? { quiet: true } : {}), ...(silent ? { silent: true } : {}) })
+    // The card carries the answer; the host is asked only when it did not, and not for long.
+    const full = this.fullField(this.longRecap ? fullText ?? await this.storedFullText(agentId, text) : undefined)
+    await this.send(this.withinCap({ t: 'summary', agentId, ...who, recap, text, ...full, ...(quiet ? { quiet: true } : {}), ...(silent ? { silent: true } : {}) }))
+  }
+
+  /**
+   * A frame over the cap makes `encodeCableFrame` throw, `send` closes the link, and the reconnect sends the
+   * same frame again. `full` is the one optional part of a summary, so it is what goes.
+   */
+  private withinCap(msg: Message): Message {
+    if (!('full' in msg) || Buffer.byteLength(JSON.stringify(msg), 'utf8') <= CABLE_MAX_PAYLOAD - 256) return msg
+    const { full: _full, ...rest } = msg as Message & { full?: string }
+    return rest
+  }
+
+  /** The whole answer behind a card, from the host's newest stored turn, if that turn IS this card's. */
+  private async storedFullText(agentId: string, text: string): Promise<string | undefined> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const wait = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 750) })
+      const newest = (await Promise.race([this.host.recentSummaries(agentId), wait]))?.[0]
+      return newest && newest.text === text ? newest.fullText : undefined
+    } catch { return undefined } finally { clearTimeout(timer) }
   }
 
   /**
@@ -2471,6 +2806,7 @@ export class CableSession {
     await this.send({ t: 'notif.seen', agentId, ...(readToken ? { readToken } : {}) })
   }
   async turnError(agentId: string, message: string): Promise<void> {
+    this.liveTurns.delete(agentId)
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     await this.send({ t: 'turn.error', agentId, message })
@@ -2489,6 +2825,7 @@ export class CableSession {
    */
   async question(agentId: string, id: string, questions: unknown): Promise<void> {
     this.questionInbox.set(agentId, id, questions)
+    this.liveTurns.set(agentId, 'question')
     await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
   }
 
@@ -2501,6 +2838,8 @@ export class CableSession {
    */
   async questionClose(agentId: string, id: string): Promise<void> {
     if (!this.questionInbox.close(agentId, id)) return
+    // Answered: the turn goes on (its end clears it).
+    if (this.liveTurns.get(agentId) === 'question') this.liveTurns.set(agentId, 'working')
     await this.send({ t: 'question.close', agentId, id })
   }
 

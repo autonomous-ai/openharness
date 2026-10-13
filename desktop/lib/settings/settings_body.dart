@@ -47,7 +47,6 @@ class SettingsBody extends StatelessWidget {
       SettingsSection.notifications => const NotificationsSection(),
       SettingsSection.experimental => ExperimentalSection(
         store: experimentalFeatures ?? notifier.experimentalFeatures,
-        controller: notifier.swarmSettings,
         openCodingMemory: notifier.openCodingMemoryConnection,
       ),
       SettingsSection.devices => ListenableBuilder(

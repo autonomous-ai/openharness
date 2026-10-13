@@ -51,3 +51,21 @@ describe('the change-agent handoff service', () => {
     expect(core.conversations.transcriptOk).toHaveBeenCalledWith('claude', '/s.jsonl', null)
   })
 })
+
+it('retains the exact owner request and revokes publication when its connection closes', async () => {
+  const result = { file: null, cwd: '/work', gitRepo: false, degraded: [] }
+  const publish = vi.fn(async () => result), core = fakeCore({ conversations: { publish } })
+  let deps!: HandoffDeps
+  const prepare = vi.fn(async (given: HandoffDeps) => { deps = given; return result })
+  const closed = new AbortController()
+  await startHandoff(core, undefined, prepare).agent_handoff_prepare!({ ...request, requestId: 'routed' }, owner, closed.signal)
+  expect(deps.permit!.requestId).toBe('routed')
+  expect(deps.permit!.current(request)).toBe(true)
+  for (const other of [{ ...request, agentId: 'other' }, { ...request, changeId: '2'.repeat(32) }, { ...request, targetEngine: 'claude' }]) {
+    expect(deps.permit!.current(other)).toBe(false)
+  }
+  const prepared = { request } as never
+  expect(await deps.publish!(prepared, { current: () => false })).toEqual(result)
+  expect(publish).toHaveBeenCalledWith(prepared, deps.permit)
+  closed.abort(); expect(deps.permit!.current(request)).toBe(false)
+})

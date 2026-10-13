@@ -10,13 +10,29 @@ Follow the [desktop design system](desktop-design-system.md) and
 illustrate data and interaction rules, not the current tab geometry.
 
 ```text
-api ?    web ⠹    blender ✓  +                   Search  Bell  (✿ Harness Store)
+api ?    web ⠹    blender ✓  +             Search  Bell  Devices  Store  (Sign in)
 
                                  panes
 
 Harnesses 118   Machines 3   Models 4   [Claude icon] 68%   [Codex icon] 18%
                                                      M2 > project > branch > #439
 ```
+
+The top row's right end reads like a browser's toolbar (owner, 2026-10-11):
+Search, the bell (where this app draws the row; on a Mac it is in the menu
+bar), Devices and Harness Store are icons side by side, each named by its
+tooltip, and the row's last control is the account's. While this computer
+holds no account that is **Sign in**, the only control in the row with a word
+and a fill; it opens the sign-in over the workspace. Signed in, the same place
+is the account's initial in a circle, and a click opens a short menu: who is
+signed in, then Add Phone (until the account has a phone), Customize Harness,
+Notifications, Settings and Sign out, each opening what the app already has.
+Nothing is drawn between the icons and the account control; `controlGap`
+separates them. A narrow window drops Devices first; the account control
+always stays. A viewer build (the browser) draws none of this. Flutter draws it
+with `WorkspaceStoreButton`, `WorkspaceSignInButton` and `WorkspaceAvatarButton`,
+AppKit with `SwarmStoreButton` and `SwarmAccountButton`; the menu is
+`widgets/account_menu.dart` on both. Run `workspace_account_test.dart`.
 
 The context follows the focused pane. The branch stays clickable in the
 footer; pane headers do not repeat it. An empty New Tab and the first welcome
@@ -96,7 +112,7 @@ Ties within one trait use pane order. Focus does not affect the name.
 This keeps `blender` useful beside coding tabs, uses project names when all work
 is code, and uses machine names for the same project on different computers.
 Tabs with identical contents can still share a name; their positions distinguish
-them, and holding Command reveals their actual shortcut hints. Preserve the full name for inspection when its visible label is truncated.
+them. Preserve the full name for inspection when its visible label is truncated.
 
 Center each name and its adjacent status as one group in compact, content-sized
 tabs, capped at 240 points. An idle name centers on its own. Use the
@@ -107,10 +123,26 @@ smaller tabs while preserving their controls.
 Windows tabs reserve three cells for a visible `x` close control because the OS
 uses Meta-W for Widgets. It closes the tab's views and keeps its harnesses running.
 Other targets keep no reserved close-button space; the right accessory reveals ×
-on hover. While Command is held, the actual
-shortcut replaces the status beside the name without changing the tab width.
-Hover never moves the title. Cmd-W, remapped shortcuts, native menu access,
-and middle-click closing remain available.
+on hover. Hovering a tab reveals Agent Messages' 💬 and × at its right, 💬 just
+left of × ([Agent Messages](../../docs/design/2026-10-10-agent-messages.md)); its
+status stays. Tabs show no shortcut hint, and holding Command changes nothing on
+them. At rest a tab shows only its name and status. While its agents message each
+other, the status slot shows 💬 in Agent Messages' color (the accent blue,
+`AppPalette.accentOnSurface`), mirrored every half second, for 10 seconds after
+the last message, then the tab's status again. The hover 💬 is grey while off and
+in that color while on; its tooltip says what a click does ("Agent messages off ·
+click to turn on", "Agent messages on · click to turn off", "Agents messaging ·
+click to turn off"), and a click toggles that tab's flag at once, going back —
+with a notice — if the backend refuses. Only a tab the desk holds has a 💬 (not
+the Store, Devices, Companions, an orchestrator or a draft tab), and only once the
+daemon and backend have answered for Agent Messages; an older CLI or backend shows
+none. Hovering never changes the tab width. At rest the name and status have the
+whole tab, so a 128-point tab shows an ordinary name whole beside its status;
+hovered, a name that would run into 💬 and × moves left only as far as they need,
+then gives up its tail. × and 💬 are 16-point-wide, 32-point-tall targets with a
+3-point dead gap between them. The tab's menu and File carry Agent Messages (a
+checkmark) and Show Agent Messages beside Rename Tab and Close Tab. Cmd-W,
+remapped shortcuts, native menu access, and middle-click closing remain available.
 Preserve reorder, rename, keyboard focus, and terminal sessions. Cmd-T opens a
 tab. Cmd-O opens the shared picker with `#` for projects; Cmd-P opens it directly
 on harnesses. Cmd-Shift-P opens commands (`>`). The projects list has
@@ -144,6 +176,12 @@ utility tabs have no harness activity mark. Keep the existing engine icon.
 The mark replaces the native tab's old orange attention indicator; it adds no
 new bar, counter, badge, or permanent legend. Hover and accessibility descriptions
 explain each symbol.
+
+Right after the activity mark, a pane header briefly says Agent Messages traffic:
+`→ api` on the sender's pane and `← lead` on each recipient's, in quieter title
+ink, for about five seconds or until that pane is focused (`PaneMessageMarkView`,
+which listens to `AgentMessagesController` itself so the cached header never
+rebuilds). A sender the rate limit stopped shows `→ rate limited` in warning ink.
 
 ![Activity marks in existing tabs and pane headers, rendered with synthetic state at 640 px](images/workspace-activity.png)
 

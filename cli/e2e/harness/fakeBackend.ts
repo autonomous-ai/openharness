@@ -4,6 +4,7 @@
  * that leaves this machine.
  *
  * - `GET /api/machines`: the account's machines, each `running` or `offline` as the test says.
+ * - `GET /api/agent-messages`: the account's tabs and their Agent Messages flag, as the test sets them.
  * - `/api/adapter-ws`: each daemon's own socket, as the node of its machine. Frames for it arrive as
  *   `{t:'down', connId, frame}`; what it sends comes back as `{t:'up', targetConnId?, commanderEligible?, frame}`.
  * - `/api/device-ws`: a daemon's lane to its owner's other machines, as a device holding a commander
@@ -67,6 +68,8 @@ const bytes = (raw: RawData): Uint8Array => new Uint8Array(Array.isArray(raw) ? 
 
 export class FakeBackend {
   readonly seen: string[] = []
+  /** What `GET /api/agent-messages` answers: the account's tabs with Agent Messages on or off; null, a 404. */
+  agentMessages: Record<string, unknown> | null = null
   private readonly machines = new Map<string, FakeMachine>()
   private readonly online = new Map<string, boolean>()
   private readonly nodes = new Map<string, WebSocket>()
@@ -106,6 +109,10 @@ export class FakeBackend {
       if (!machine) { res.statusCode = 401; res.end(json({ success: false, error: { code: 'UNAUTHORIZED' } })); return }
       if (req.method === 'GET' && req.url?.split('?')[0] === '/api/machines') {
         res.end(json({ success: true, data: { machines: backend.rows() } }))
+        return
+      }
+      if (req.method === 'GET' && req.url?.split('?')[0] === '/api/agent-messages' && backend.agentMessages) {
+        res.end(json({ success: true, data: backend.agentMessages }))
         return
       }
       if ((req.method === 'PUT' || req.method === 'DELETE') && /^\/api\/harness-(links|shares)\/[^/?]+$/.test(req.url?.split('?')[0] ?? '')) {

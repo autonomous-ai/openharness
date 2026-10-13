@@ -326,7 +326,7 @@ its clone action and an invalid submission reveals inline validation. Do not
 add a duplicate example line or an empty results area beneath an empty field.
 
 **Workspace tabs and pane frames** — tabs share one width, independent of label
-length, selection, activity and shortcut hints. Divide the available tab area
+length, selection and activity. Divide the available tab area
 equally, capped at 256 points; shrink together down to 128 points, then scroll.
 A tab area narrower than 128 points can show one clipped tab. Mirror these limits
 in Flutter and AppKit. Tabs use the 13-point system control face, independent of
@@ -334,13 +334,14 @@ the status bar and terminal font. Center the name and its adjacent
 status as one compact group, without permanent number prefixes. Navigation ink
 follows the tab-bar surface, including beside light app content. The default label
 is New Tab. A small right-hand close icon appears on hover, with its 32-point
-target inset 8 points from the outer tab bounds. This puts the cross's center
-16 points inside the curved body edge. Reserve that space before truncating
-the title so hover never crowds the name or status. Holding Command
-temporarily replaces the status with the actual remapped shortcut beside the
-name. An idle tab has no empty status slot; its name centers on its own. Hover
-never moves the name, and Command never changes tab width. Long names truncate
-and retain a full-name tooltip. Selection, dragging, middle-click close and the
+target inset 8 points from the outer tab bounds, and Agent Messages' 💬 just left
+of it. This puts the cross's center 16 points inside the curved body edge. At
+rest the name and status have the whole tab; on hover a name that would run into
+💬 and × moves left only as far as they need, then truncates, so hover never
+crowds the name or status. Tabs show no shortcut hint, and holding Command
+changes nothing on them. An idle tab has no empty status slot; its name centers
+on its own. Hover never changes tab width. Long names truncate and retain a
+full-name tooltip. Selection, dragging, middle-click close and the
 existing keyboard commands keep their meaning.
 
 Devices and Harness Store use compact 28-point capsules, centered in the

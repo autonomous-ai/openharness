@@ -8,12 +8,20 @@ import { IdentityReadUnavailable } from './identityScan.js'
 
 export const nativeUnavailable = (reason: string): never => { throw new IdentityReadUnavailable(reason) }
 
+/**
+ * How long one native lookup may take on the wall clock: 3 s, for every lookup. It caps a stuck disk, not a
+ * healthy one, which answers in milliseconds. Path, hook-file, installation and engine-home lookups had
+ * 250 ms, and on a loaded machine the event loop alone took longer: CI runners and a Mac at load 40 held
+ * healthy installations and handoffs as unavailable (2026-10-11).
+ */
+export const NATIVE_EVIDENCE_MS = 3_000
+
 export class NativeEvidenceBudget {
   private readonly deadline: number
   private operations = 32_768
   private bytes = 16 * 1024 * 1024
   private probes = 64
-  constructor(timeoutMs = 3_000) { this.deadline = performance.now() + timeoutMs }
+  constructor(timeoutMs = NATIVE_EVIDENCE_MS) { this.deadline = performance.now() + timeoutMs }
   remaining(): number {
     const left = Math.floor(this.deadline - performance.now())
     if (left <= 0) nativeUnavailable('the native process evidence deadline was reached')

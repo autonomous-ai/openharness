@@ -22,6 +22,7 @@ import '../shared/widgets/app_icon_button.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../state/app_state.dart';
+import '../state/essential_harness_controller.dart';
 import '../widgets/dsh_install_panel.dart' show describeInstallFailure;
 import '../widgets/engine_identity.dart';
 import '../widgets/new_agent_dialog.dart';
@@ -386,6 +387,15 @@ class _StoreTabState extends State<StoreTab> {
     _navigate(_StoreVisit(_shelf, id, _search.text));
   }
 
+  /// An Essential opens the one that exists or creates it, in one click and with no New Harness form.
+  Future<void> _openEssential(String id) async {
+    final error = await widget.notifier.essential(id)?.open();
+    if (error != null && mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error)));
+    }
+  }
+
   void _searchChanged(String query) {
     if (query.trim().isEmpty) {
       _clearSearch();
@@ -557,6 +567,15 @@ class _StoreTabState extends State<StoreTab> {
                                       onAll: () => _show(const _All()),
                                       onEngines: () =>
                                           _show(const _Category('Coding')),
+                                      essentialLabel: (id) =>
+                                          widget.notifier
+                                                  .essential(id)
+                                                  ?.exists ==
+                                              true
+                                          ? 'Open'
+                                          : 'Create',
+                                      onEssential: (id) =>
+                                          unawaited(_openEssential(id)),
                                     )
                                   : _Shelf$View(
                                       shelf: _shelf as _Listed,
@@ -1015,6 +1034,14 @@ class _ProductPageState extends State<_ProductPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  Future<void> _openEssential(EssentialHarnessController essential) async {
+    setState(() {});
+    final error = await essential.open();
+    if (!mounted) return;
+    setState(() {});
+    if (error != null) _say(error);
+  }
+
   Future<void> _get(String machineId) async {
     final local = widget.notifier.localMachineState;
     if (local == null ||
@@ -1200,14 +1227,19 @@ class _ProductPageState extends State<_ProductPage> {
     final busy = local != null && _busy.contains(local.machine.machineId);
     // New Harness installs a harness the machine lacks before it creates, so
     // an example can be tried from here whether or not Get was pressed.
+    // An Essential's examples are read, not tried: trying one opens the New Harness form.
     final canTry =
+        widget.notifier.essential(entry.id) == null &&
         workspace == null &&
         !entry.isViewerPackage &&
         local != null &&
         !busy &&
         !installing &&
         (localInstalled || _canGetOnMachine(local, entry));
+    // An Essential has one button, Create or Open, and never the New Harness form.
+    final essential = hasUpdate ? null : widget.notifier.essential(entry.id);
     final showLaunch =
+        essential == null &&
         workspace == null &&
         !entry.isViewerPackage &&
         !hasUpdate &&
@@ -1351,7 +1383,36 @@ class _ProductPageState extends State<_ProductPage> {
                       ],
                     ),
                     const SizedBox(height: 34),
-                    if (showAction && !showLaunch)
+                    if (essential != null) ...[
+                      Center(
+                        child: FilledButton(
+                          key: const ValueKey('store-primary-action'),
+                          onPressed: local == null || essential.opening
+                              ? null
+                              : () => unawaited(_openEssential(essential)),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: grid.AppPalette.textPrimary,
+                            foregroundColor: grid.AppPalette.windowBg,
+                            minimumSize: const Size(148, 50),
+                            padding: const EdgeInsets.symmetric(horizontal: 30),
+                            textStyle: grid.AppType.label(
+                              fontWeight: grid.AppFont.semibold,
+                            ),
+                            shape: const StadiumBorder(),
+                          ),
+                          child: Text(essential.exists ? 'Open' : 'Create'),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Free on OpenCode. Switch to any agent from the pane.',
+                        key: const ValueKey('store-essential-note'),
+                        textAlign: TextAlign.center,
+                        style: grid.AppType.body(
+                          color: grid.AppPalette.textSecondary,
+                        ),
+                      ),
+                    ] else if (showAction && !showLaunch)
                       Center(
                         child: FilledButton(
                           key: const ValueKey('store-primary-action'),

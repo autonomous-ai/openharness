@@ -84,8 +84,7 @@ Future<_Connection> _routeNewWork(
 
 final _taskField = find.byWidgetPredicate(
   (widget) =>
-      widget is TextField &&
-      widget.decoration?.hintText == 'Describe the work…',
+      widget is TextField && widget.decoration?.hintText == "What's up?",
 );
 
 void main() {
@@ -179,4 +178,37 @@ void main() {
       await tester.pump(const Duration(minutes: 1));
     },
   );
+
+  testWidgets('the pane a task lands in lights once, then goes quiet', (
+    tester,
+  ) async {
+    final app = createApp(connectionForTest: (_) => _Connection());
+    app.machineStates['m']!
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected;
+    app.adoptSessionForTest(terminal('a0', []));
+    final other = app.adoptSessionForTest(terminal('a1', []));
+    await mount(tester, app);
+    final lit = app.allPanes.firstWhere((p) => p.agentId == 'a0');
+
+    app.markLanding('m', 'a0');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.byKey(ValueKey('pane-landing:${lit.id}')), findsOneWidget);
+    // Only where it landed.
+    expect(find.byKey(ValueKey('pane-landing:${other.id}')), findsNothing);
+
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.byKey(ValueKey('pane-landing:${lit.id}')), findsNothing);
+    // Over: a pane of it opened later does not light for words that landed long ago.
+    expect(app.paneLanding.value, isNull);
+    app.paneLanding.value = (
+      machineId: 'm',
+      agentId: 'a0',
+      seq: 99,
+      at: DateTime.now().subtract(const Duration(seconds: 5)),
+    );
+    await tester.pump();
+    expect(find.byKey(ValueKey('pane-landing:${lit.id}')), findsNothing);
+  });
 }

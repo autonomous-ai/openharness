@@ -25,6 +25,7 @@ class SelectionTests(unittest.TestCase):
             "backend/src/app.ts": {"backend"}, "companions/src/a.ts": {"companions"},
             "website/app/page.tsx": {"website"}, "os/root/usr/lib/session": {"os"},
             "provider/spec.md": {"provider"}, "devices/harness-device/firmware/main/main.c": {"firmware"},
+            "devices/harness-pro/firmware/main/app/pro_app.c": {"firmware"},
             "mobile/pubspec.lock": {"mobile"}, "daemons/tools/card.mjs": {"daemons"},
         }.items():
             with self.subTest(path=path):

@@ -3,7 +3,7 @@ import { createServer } from 'http'
 import { createServer as createNetServer } from 'net'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ENGINES } from './engines/types.js'
@@ -49,6 +49,9 @@ interface RunHookOpts {
   /** Override the fixture's ps `comm` and full argv to exercise install-root-independent matching. */
   processExecutable?: string
   processArgs?: string
+  /** Kernel birth evidence for the synthetic process; never read an unrelated host pid. */
+  nativeProcess?: 'linux' | 'missing' | 'changed' | 'lock-replaced' | 'boot-replaced' | 'registry-replaced'
+    | 'zombie' | 'registry-zombie' | 'registry-command' | 'registry-reparented' | 'short' | 'wrong-pid'
   engine?: 'claude' | 'codex' | 'cursor' | 'hermes' | 'devin' | 'commandcode' | 'grok'
   env?: Record<string, string>
   dataDir?: string
@@ -105,6 +108,32 @@ function runHook(opts: RunHookOpts): Promise<string> {
       const processArgs = opts.processArgs ?? executable
       const shellQuote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'"
       writeFileSync(join(binDir, 'ps'), `#!/bin/sh\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)} '${process.pid} 7001 node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
+      const nativeFixture = join(binDir, 'native-process.mjs')
+      writeFileSync(nativeFixture, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
+${opts.nativeProcess ? "Object.defineProperty(process, 'platform', { value: 'linux' });" : ''}
+const original = fs.readFileSync, open = fs.openSync, close = fs.closeSync, sync = fs.fsyncSync;
+const opened = new Map(), fault = ${JSON.stringify(opts.nativeProcess ?? '')}; let reads = 0, replaced = false;
+fs.openSync = (path, ...args) => { const fd = open(path, ...args); opened.set(fd, String(path)); return fd; };
+fs.closeSync = (fd, ...args) => { opened.delete(fd); return close(fd, ...args); };
+fs.fsyncSync = (fd, ...args) => {
+  const result = sync(fd, ...args), path = opened.get(fd) || '';
+  if (fault === 'lock-replaced' && path.endsWith('/registry.json.lock/owner.json')
+    || fault === 'boot-replaced' && path.includes('/registry-boot.') && path.endsWith('.tmp')
+    || fault.startsWith('registry-') && path.includes('/registry.json.') && path.endsWith('.tmp')) replaced = true;
+  return result;
+};
+fs.readFileSync = (path, ...args) => {
+  if (String(path) !== '/proc/7001/stat') return original(path, ...args);
+  if (fault === 'missing') throw Object.assign(Error('fixture process unavailable'), { code: 'ENOENT' });
+  if (fault === 'short') return '7001 (claude) S 7000\\n';
+  const ticks = fault === 'changed' && reads++ > 0 || replaced && fault.endsWith('-replaced') ? 12346 : 12345;
+  const state = fault === 'zombie' || fault === 'registry-zombie' && replaced ? 'Z' : 'S';
+  const command = fault === 'registry-command' && replaced ? 'replacement' : ${JSON.stringify(executable)};
+  const parent = fault === 'registry-reparented' && replaced ? 1 : 7000;
+  return (fault === 'wrong-pid' ? '7002' : '7001') + ' (' + command + ') ' + state
+    + ' ' + parent + ' ' + Array(17).fill(0).join(' ') + ' ' + ticks + ' ' + Array(30).fill(0).join(' ') + '\\n';
+}; syncBuiltinESMExports();\n`)
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} --import ${nativeFixture}`.trim()
       if (opts.processEngine === 'cursor') {
         const target = join(binDir, 'cursor-agent-target')
         writeFileSync(target, '#!/bin/sh\n', { mode: 0o755 })
@@ -509,6 +538,71 @@ describe('hook notify terminal scope', () => {
         callerPid: expect.any(Number),
       },
     }])
+  })
+
+  it.each(['linux', 'missing', 'changed', 'lock-replaced', 'boot-replaced', 'registry-replaced',
+    'zombie', 'registry-zombie', 'registry-command', 'registry-reparented', 'short', 'wrong-pid'] as const)('retains exact offline process birth evidence: %s', async nativeProcess => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-native-birth-')); tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects'), dataDir = join(dir, 'data')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-birth.jsonl')
+    mkdirSync(dirname(transcriptPath), { recursive: true }); mkdirSync(dataDir)
+    writeLegacyStateFile(join(dataDir, 'registry.json'), '[]'); writeFileSync(transcriptPath, '{}\n')
+    await runHook({ port: 9, tmuxPane: '%7', processEngine: 'claude', nativeProcess, dataDir, claudeProjectsDir,
+      input: { hook_event_name: 'SessionStart', session_id: 'session-birth', transcript_path: transcriptPath, cwd: '/tmp/demo' } })
+    const rows = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
+    // Boot confirmation follows the registry's durable commit; a later native change cannot
+    // retroactively invalidate the already-published snapshot of that process.
+    if (nativeProcess === 'linux' || nativeProcess === 'boot-replaced') expect(rows).toMatchObject([{ sessionId: 'session-birth', processIdentity: { pid: 7001, startTicks: 12345 } }])
+    else expect(readFileSync(join(dataDir, 'registry.json'), 'utf8')).toBe('[]')
+  })
+
+  it('keeps old boot authority unchanged when native ownership expires during registry staging', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-native-boot-')); tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects'), dataDir = join(dir, 'data')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-current.jsonl')
+    mkdirSync(dirname(transcriptPath), { recursive: true }); mkdirSync(dataDir)
+    const registryFile = join(dataDir, 'registry.json'), bootFile = join(dataDir, 'registry-boot')
+    const oldBoot = 'linux:00000000-0000-0000-0000-000000000000'
+    const oldRows = JSON.stringify([{ agentId: 'old-boot-agent', sessionId: 'old-boot-session', engine: 'claude', tmuxPane: '%7',
+      processIdentity: { pid: 7001, executable: 'claude', startMarker: 'Mon Aug 10 10:00:01 2026', startTicks: 12345 } }])
+    writeLegacyStateFile(registryFile, oldRows); writeLegacyStateFile(bootFile, oldBoot); writeFileSync(transcriptPath, '{}\n')
+    const input = { hook_event_name: 'SessionStart', session_id: 'session-current', transcript_path: transcriptPath, cwd: '/tmp/demo' }
+    await runHook({ port: 9, tmuxPane: '%7', processEngine: 'claude', nativeProcess: 'registry-replaced', dataDir, claudeProjectsDir, input })
+    expect(readFileSync(registryFile, 'utf8')).toBe(oldRows)
+    expect(readFileSync(bootFile, 'utf8')).toBe(oldBoot)
+    await runHook({ port: 9, tmuxPane: '%7', processEngine: 'claude', nativeProcess: 'linux', dataDir, claudeProjectsDir, input })
+    const rows = JSON.parse(readFileSync(registryFile, 'utf8'))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ sessionId: 'session-current', processIdentity: { startTicks: 12345 } })
+    expect(rows[0].agentId).not.toBe('old-boot-agent')
+    expect(readFileSync(bootFile, 'utf8')).not.toBe(oldBoot)
+  })
+
+  it('retains the offline agent and launch choices when precise birth ticks survive a clock adjustment', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-native-clock-')); tmpDirs.push(dir)
+    const claudeProjectsDir = join(dir, 'claude-projects'), dataDir = join(dir, 'data')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-clock.jsonl')
+    mkdirSync(dirname(transcriptPath), { recursive: true }); mkdirSync(dataDir)
+    writeLegacyStateFile(join(dataDir, 'registry.json'), JSON.stringify([{
+      agentId: 'kept-agent', engine: 'claude', sessionId: 'session-before', tmuxPane: '%7',
+      processIdentity: { pid: 7001, executable: 'claude', startMarker: 'Mon Aug 10 09:00:01 2026', startTicks: 12345 },
+      dsh: 'fixture-harness', defaultName: 'Kept name', permissionMode: 'plan',
+    }]))
+    writeFileSync(transcriptPath, '{}\n')
+    await runHook({ port: 9, tmuxPane: '%7', processEngine: 'claude', nativeProcess: 'linux', dataDir, claudeProjectsDir,
+      input: { hook_event_name: 'SessionStart', session_id: 'session-clock', transcript_path: transcriptPath, cwd: '/tmp/demo' } })
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))).toMatchObject([{
+      agentId: 'kept-agent', sessionId: 'session-clock', dsh: 'fixture-harness', defaultName: 'Kept name', permissionMode: 'plan',
+      processIdentity: { pid: 7001, startTicks: 12345, startMarker: 'Mon Aug 10 10:00:01 2026' },
+    }])
+    // Invalid saved birth evidence is recovery data, not permission to replace the existing row.
+    const rows = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
+    rows[0].processIdentity.startTicks = 'unreadable'
+    const invalid = JSON.stringify(rows)
+    writeFileSync(join(dataDir, 'registry.json'), invalid)
+    await runHook({ port: 9, tmuxPane: '%7', processEngine: 'claude', nativeProcess: 'linux', dataDir, claudeProjectsDir,
+      input: { hook_event_name: 'SessionStart', session_id: 'session-clock', transcript_path: transcriptPath, cwd: '/tmp/demo' } })
+    expect(readFileSync(join(dataDir, 'registry.json'), 'utf8')).toBe(invalid)
   })
 
   it('falls back to registry.json when SessionStart cannot reach the adapter', async () => {
