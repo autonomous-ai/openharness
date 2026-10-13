@@ -95,7 +95,7 @@ Hosted Linux CI on `0d284b491` failed three jobs; all three were merge-resolutio
 - `desktop-tests (ubuntu-22.04, 2)`: a fork-only boot-flow test expected no "Sign in" text, which upstream now renders in the tab row. The assertion now rules out the browser sign-in wall and requires the tab-row button. Fixed in `71fefd593`.
 - `4b85d0265` merges `origin/main` (PR #49, test-home isolation) with no conflicts.
 
-CI run 38433831314 on `4b85d0265` passed every job including `ci/required`.
+CI run 38433831314 on `4b85d0265`, the last code change: every executed job passed (17 jobs, including `ci/required`); `provider-checks`, `os-checks`, `companion-subsystems` and `daemons-checks` were skipped by the path classifier. Later commits on this branch change only this receipt.
 
 ## Independent review and remaining gates
 
@@ -106,4 +106,4 @@ Review round 2 (Codex gpt-6.1-sol, read-only, 2026-10-13, head `4b85d0265`): all
 - Upstream CI toolchain confirmation, hosted component CI, Windows packaging, isolated packaged smoke, real-account compatibility and rollback qualification.
 - Existing `cline` gaps in Grid/subscription maps are not repaired in this integration.
 
-Scoped review approval, hosted CI on the final head and the focused checks justify merging the source sync; they are not an installed-version claim. The open validation gates above remain for the next installed-version qualification.
+Scoped review approval, hosted CI on the last code change (`4b85d0265`) and the focused checks justify merging the source sync; they are not an installed-version claim. The PR records the hosted result for the receipt-only commits. The open validation gates above remain for the next installed-version qualification.
