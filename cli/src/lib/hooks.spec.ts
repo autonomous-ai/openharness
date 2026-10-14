@@ -9,6 +9,8 @@ let grokHome = ''
 let hermesHome = ''
 let commandcodeHome = ''
 let devinConfigPath = ''
+let hookEntry = ''
+let hookArtifact = ''
 
 async function loadHooks() {
   vi.resetModules()
@@ -32,6 +34,11 @@ describe('Codex hook installation', () => {
     vi.stubEnv('CURSOR_CONFIG_DIR', '')
     vi.stubEnv('CURSOR_DATA_DIR', '')
     vi.stubEnv('XDG_CONFIG_HOME', '')
+    hookEntry = process.argv[1]
+    hookArtifact = join(cursorHome, 'package')
+    mkdirSync(hookArtifact)
+    writeFileSync(join(hookArtifact, 'notify.mjs'), '#!/usr/bin/env node\n// harness-native-hook-protocol:1\n// harness-native-hook-darwin:1\n', { mode: 0o600 })
+    process.argv[1] = join(hookArtifact, 'cli.js')
   })
 
   afterEach(() => {
@@ -40,6 +47,7 @@ describe('Codex hook installation', () => {
     delete process.env.CODEX_HOME
     delete process.env.CURSOR_HOME
     vi.unstubAllEnvs()
+    process.argv[1] = hookEntry
   })
 
   it('runs the notify.mjs beside the CLI a core started from the lean bundle runs for, never one beside its own file', async () => {
@@ -136,7 +144,7 @@ describe('Codex hook installation', () => {
     expect(parsed.hooks.preToolUse[1]).toMatchObject({ failClosed: false })
     expect(parsed.hooks.preToolUse[1].command).toContain('--engine cursor')
     expect(Object.keys(parsed.hooks)).toEqual([
-      'preToolUse', 'sessionStart', 'beforeSubmitPrompt', 'stop', 'sessionEnd',
+      'preToolUse', 'sessionStart', 'beforeSubmitPrompt', 'afterAgentResponse', 'stop', 'sessionEnd',
     ])
 
     await installCursorHooks(19473)

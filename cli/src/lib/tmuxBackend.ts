@@ -8,6 +8,7 @@ import {
   terminalActionNotStarted,
   terminalActionPossiblyExecuted,
   terminalEnterWithheld,
+  TerminalWriteHeld,
   type SubmitOptions,
   type TerminalActionResult,
   type TerminalCaptureOptions,
@@ -23,6 +24,7 @@ import {
   type TerminalStreamSize,
   type TmuxRuntimeRef,
   type RuntimeValidation,
+  type TerminalWrite,
 } from './terminalTypes.js'
 import { inTmuxRoom } from './tmuxControlGate.js'
 import { TmuxControlStream } from './tmuxStream.js'
@@ -513,17 +515,25 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
       : { state: 'succeeded', value: captured }
   }
 
-  async typeLiteral(runtime: TmuxRuntimeRef, text: string): Promise<TerminalActionResult> {
-    return legacyActionResult(await sendLiteralToTmux(runtime.paneId, text), 'tmux literal input')
+  async typeLiteral(runtime: TmuxRuntimeRef, text: string, write?: TerminalWrite): Promise<TerminalActionResult> {
+    let started = false
+    const physical: TerminalWrite | undefined = write && { allowed: write.allowed,
+      dispatch: operation => write.dispatch(() => { started = true; return operation() }) }
+    try {
+      const sent = await sendLiteralToTmux(runtime.paneId, text, physical)
+      return write && !started ? terminalActionNotStarted('terminal control revoked') : legacyActionResult(sent, 'tmux literal input')
+    } catch (error) { if (error instanceof TerminalWriteHeld) return terminalActionNotStarted('terminal control revoked'); throw error }
   }
 
   async submitText(runtime: TmuxRuntimeRef, text: string, options?: SubmitOptions): Promise<TerminalActionResult> {
-    const sent = await sendToTmux(runtime.paneId, text, options?.beforeEnter, options?.allowed)
-    return typeof sent === 'boolean' ? legacyActionResult(sent, 'tmux submission') : terminalEnterWithheld(sent.withheld)
+    const sent = await sendToTmux(runtime.paneId, text, options?.beforeEnter, options?.allowed, options?.dispatch)
+    return typeof sent === 'boolean' ? legacyActionResult(sent, 'tmux submission')
+      : 'notStarted' in sent ? terminalActionNotStarted('terminal control revoked') : terminalEnterWithheld(sent.withheld)
   }
 
-  async sendKey(runtime: TmuxRuntimeRef, key: TerminalLogicalKey): Promise<TerminalActionResult> {
-    return legacyActionResult(await sendKeyToTmux(runtime.paneId, TMUX_KEYS[key]), 'tmux key input')
+  async sendKey(runtime: TmuxRuntimeRef, key: TerminalLogicalKey, write?: TerminalWrite): Promise<TerminalActionResult> {
+    const sent = await sendKeyToTmux(runtime.paneId, TMUX_KEYS[key], write)
+    return typeof sent === 'boolean' ? legacyActionResult(sent, 'tmux key input') : terminalActionNotStarted('terminal control revoked')
   }
 
   async setTitle(runtime: TmuxRuntimeRef, title: string): Promise<TerminalActionResult> {

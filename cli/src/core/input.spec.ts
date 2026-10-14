@@ -8,12 +8,14 @@ import type { AutonomousDeviceInput } from './deviceInput.js'
 import { deviceErrorText } from './cardText.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
-import { TERMINAL_LEASE_REFUSED, type ProcessIdentity, type TerminalActionResult } from '../lib/terminalTypes.js'
+import { TERMINAL_LEASE_REFUSED, type ProcessIdentity, type TerminalActionResult, type TerminalWrite, type SubmitOptions } from '../lib/terminalTypes.js'
 import { CLAUDE_REWIND_LIST, CODEX_BROWSING_SCROLLBACK } from '../lib/__fixtures__/rewindPickers.js'
 import { createInput, createMessageRequest, deviceInputDeps, messageWriter, sessionInputDeps, type InputDeps } from './input.js'
 import { createScreens } from './engines/screens.js'
 import { screenFor } from '../engines/screens.js'
 import { readerEngine } from '../engines/worker/protocol.js'
+import { createTerminalWriter } from './terminals/writer.js'
+import type { NativeInputAdmission } from './turns/nativeInput.js'
 
 const ok: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
 const fixture = (name: string) => readFileSync(new URL(`../lib/__fixtures__/${name}`, import.meta.url), 'utf8')
@@ -50,7 +52,10 @@ function deps(over: Partial<InputDeps> = {}) {
     terminal: {
       captureTerminal: vi.fn(async () => pane),
       validateTerminal: vi.fn(async () => true),
-      submitTerminalAction: vi.fn(async (id: string, text: string) => { calls.push(`submit ${id} ${text}`); return ok }),
+      submitTerminalAction: vi.fn(async (id: string, text: string, options?: SubmitOptions) => {
+        const paste = async () => { calls.push(`submit ${id} ${text}`); return ok }
+        return options?.dispatch ? options.dispatch(paste) : paste()
+      }),
       keyTerminalAction: vi.fn(async (id: string, key: string) => { calls.push(`key ${id} ${key}`); return ok }),
       pinTerminalControl: vi.fn(() => () => { calls.push('unpin') }),
     },
@@ -70,16 +75,250 @@ function deps(over: Partial<InputDeps> = {}) {
 
 /** A device pane lock that runs each write at once and remembers whose pane it was. */
 const lock = (calls: string[]): Pick<AutonomousDeviceInput, 'legacyWrite'> => ({
-  legacyWrite: <T,>(id: string, write: () => Promise<T>): Promise<T> => {
+  legacyWrite: <T,>(id: string, write: (ticket: TerminalWrite) => Promise<T>): Promise<T> => {
     calls.push(`lock ${id}`)
-    return write()
+    return write({ allowed: () => true, dispatch: operation => operation() })
   },
 })
 
 const delivery = (deliveryId: string) => ({ deliveryId }) as unknown as SessionInputDelivery
 
+describe('native input through the shared pane writer', () => {
+  const opened: ReturnType<typeof createInput>[] = []
+  afterEach(() => { opened.splice(0).forEach(input => input.nativeInput?.close()); vi.useRealTimers(); vi.restoreAllMocks() })
+  function native(over: Partial<InputDeps> = {}) {
+    const row = { agentId: 'native-agent', sessionId: 'native-session', engine: 'cursor' } as RegisteredSession
+    const admission: NativeInputAdmission = { owns: id => id === row.agentId || id === row.sessionId,
+      prepare: vi.fn(async () => ({ verify: vi.fn() })), blocksControl: () => false, held: vi.fn() }
+    const run = deps({ native: admission, resolve: () => row, byAgent: () => row, ...over })
+    run.setPane('→\n')
+    const inputs = createInput(run.deps)
+    opened.push(inputs)
+    return { ...run, inputs, admission, row }
+  }
+  const flush = async () => { for (let index = 0; index < 50; index++) await Promise.resolve() }
+
+  it.each([false, true])('pins a copied native owner for asynchronous control admission (answer: %s)', async forAnswer => {
+    const run = native(), original = structuredClone(run.row)
+    const release = run.inputs.acquireTerminalControl('native-session', { forAnswer, original })!
+    const admission = vi.mocked(run.deps.terminal.pinTerminalControl).mock.calls[0][1]!
+    expect(admission).toBeDefined()
+    run.row.sessionId = 'replacement'
+    await admission.prepare()
+    expect(run.admission.prepare).toHaveBeenCalledExactlyOnceWith(original, forAnswer ? 'answer' : 'control')
+    expect(run.inputs.acquireTerminalControl('native-agent', { original })).toBeNull()
+    release()
+  })
+
+  it.each([Error('native proof unavailable'), 'native proof unavailable'])('shows failed native control admission without dropping its reservation', async error => {
+    const run = native()
+    const release = run.inputs.acquireTerminalControl('native-agent')!
+    const admission = vi.mocked(run.deps.terminal.pinTerminalControl).mock.calls[0][1]!
+    vi.mocked(run.admission.prepare).mockRejectedValue(error)
+    await expect(admission.prepare()).rejects.toBe(error)
+    expect(run.admission.held).toHaveBeenLastCalledWith('native-agent', 'native proof unavailable')
+    expect(run.inputs.input.controlHeld('native-agent')).toBe(true)
+    release()
+  })
+
+  it('does not acquire native terminal control for a missing original row', () => {
+    const run = native({ resolve: () => undefined })
+    const release = vi.fn()
+    vi.spyOn(run.inputs.input, 'acquireControl').mockReturnValue(release)
+    expect(run.inputs.acquireTerminalControl('native-agent')).toBeNull()
+    expect(release).toHaveBeenCalledOnce()
+    expect(run.deps.terminal.pinTerminalControl).not.toHaveBeenCalled()
+  })
+
+  it.each(['app', 'device'] as const)('%s delivery never enters legacy prompt acknowledgement or composer clearing', async route => {
+    vi.useFakeTimers()
+    const run = native()
+    if (route === 'app') run.inputs.submitAgent('native-session', 'hello', 'delivery-one')
+    else run.inputs.deviceInput.submit('native-agent', 'hello', 'delivery-one')
+    await flush()
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledOnce()
+    expect(run.deps.deliveries.settled).toHaveBeenLastCalledWith({ sessionId: 'native-agent', deliveryId: 'delivery-one', state: 'delivered' })
+    run.inputs.input.setTurnOpen('native-agent', true)
+    run.inputs.input.onTurnStarted('native-agent', 'hello')
+    run.inputs.input.onTurnEnded('native-agent')
+    run.inputs.input.cancel('native-agent')
+    expect(await run.inputs.input.cancelConfirmed('native-agent')).toBe(false)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(run.deps.terminal.keyTerminalAction).not.toHaveBeenCalled()
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledOnce()
+    expect(vi.mocked(run.deps.deliveries.settled).mock.calls.map(([event]) => event.state)).toEqual(['queued', 'delivered'])
+    const release = run.inputs.acquireTerminalControl('native-agent')
+    expect(release).toBeTypeOf('function')
+    expect(run.inputs.input.controlHeld('native-agent')).toBe(true)
+    release!()
+    expect(run.inputs.input.controlHeld('native-agent')).toBe(false)
+  })
+
+  it('keeps input while a question owns control and prepares a new proof after the answer releases it', async () => {
+    vi.useFakeTimers()
+    const run = native()
+    const release = run.inputs.acquireTerminalControl('native-session', { forAnswer: true })
+    expect(release).toBeTypeOf('function')
+    run.inputs.submitAgent('native-agent', 'held', 'delivery-one'); await flush()
+    expect(run.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+    expect(run.admission.prepare).not.toHaveBeenCalled()
+    expect(run.admission.held).toHaveBeenLastCalledWith('native-agent', 'Waiting for the current terminal control interaction.')
+    release!()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledOnce()
+  })
+
+  it('refuses a concurrent control reservation while native input is preparing', async () => {
+    const run = native()
+    let resume!: () => void
+    vi.mocked(run.admission.prepare).mockImplementationOnce(async () => {
+      await new Promise<void>(resolve => { resume = resolve }); return { verify() {} }
+    })
+    run.inputs.submitAgent('native-agent', 'held', 'delivery-one'); await flush()
+    expect(run.inputs.acquireTerminalControl('native-agent')).toBeNull()
+    expect(run.inputs.acquireTerminalControl('native-agent', { forAnswer: true })).toBeNull()
+    resume(); await flush()
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledOnce()
+  })
+
+  it.each(['unreadable', 'draft', 'dialog'] as const)('retains accepted input through a %s screen without typing or expiring it', async reason => {
+    vi.useFakeTimers()
+    const run = native()
+    if (reason === 'unreadable') run.deps.readScreen = vi.fn(async () => null)
+    else {
+      const read = run.deps.readScreen
+      // The composition reads this real screen shape through its injected reader.
+      const screen = await read(run.row, '→\n')
+      const reading = { ...screen!, pane: { ...screen!.pane, draft: reason === 'draft' },
+        messageHold: reason === 'dialog' ? 'question_open' as const : null }
+      run.deps.readScreen = vi.fn(async () => reading)
+    }
+    // createInput captures its reader at construction, so give this fixture the
+    // same reader through a fresh composition before any message is accepted.
+    run.inputs.nativeInput!.close()
+    const inputs = createInput(run.deps); opened.push(inputs)
+    inputs.submitAgent('native-agent', 'held', 'delivery-one'); await flush()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(run.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+    expect(run.deps.deliveries.settled).toHaveBeenCalledExactlyOnceWith({ sessionId: 'native-agent', deliveryId: 'delivery-one', state: 'queued' })
+    expect(run.admission.held).toHaveBeenCalledWith('native-agent', expect.any(String))
+    expect(inputs.input.cancelDelivery('delivery-one')).toBe(true)
+    expect(inputs.input.cancelDelivery('delivery-one')).toBe(false)
+    inputs.input.forget('native-agent')
+  })
+
+  it('delivers without an optional device service', async () => {
+    const run = native({ device: () => undefined })
+    run.inputs.submitAgent('native-agent', 'hello', 'delivery-one'); await flush()
+    expect(run.deps.deliveries.settled).toHaveBeenLastCalledWith({ sessionId: 'native-agent', deliveryId: 'delivery-one', state: 'delivered' })
+    run.inputs.input.forget('native-agent')
+  })
+
+  it('rechecks a teammate\'s authority after a delayed screen read and holds instead of typing revoked text', async () => {
+    vi.useFakeTimers()
+    const run = native()
+    let resume!: (capture: string) => void
+    vi.mocked(run.deps.terminal.captureTerminal).mockImplementationOnce(() => new Promise(resolve => { resume = resolve }))
+    run.inputs.submitAgent('native-agent', 'revocable message', 'team:one'); await flush()
+    vi.mocked(run.deps.deliveries.canWrite).mockReturnValue(false)
+    resume('→\n'); await flush()
+    expect(run.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(run.deps.deliveries.settled).toHaveBeenCalledExactlyOnceWith({ sessionId: 'native-agent', deliveryId: 'team:one', state: 'queued' })
+    expect(run.admission.held).toHaveBeenLastCalledWith('native-agent', 'Waiting for the sender to confirm this queued message.')
+    vi.mocked(run.deps.deliveries.canWrite).mockReturnValue(true)
+    run.inputs.nativeInput!.wake('native-agent'); await flush()
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledOnce()
+  })
+
+  it('holds a team message for an idle composer and preserves delivery receipts when the device service throws', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const run = native()
+    run.device.delivery.mockImplementation(() => { throw Error('device disconnected') })
+    run.setPane('→\nEsc to interrupt')
+    run.inputs.submitAgent('native-agent', 'teammate', 'team:one'); await flush()
+    expect(run.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+    expect(run.deps.deliveries.settled).toHaveBeenCalledExactlyOnceWith({ sessionId: 'native-agent', deliveryId: 'team:one', state: 'queued' })
+    run.setPane('→\n')
+    run.inputs.nativeInput!.wake('native-agent'); await flush()
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledOnce()
+    expect(run.deps.deliveries.settled).toHaveBeenLastCalledWith({ sessionId: 'native-agent', deliveryId: 'team:one', state: 'delivered' })
+  })
+
+  it.each([null, '', 'Loading…'])('keeps a message when the actual Cursor screen reader cannot see a composer: %s', async capture => {
+    const run = native()
+    run.setPane(capture)
+    run.inputs.submitAgent('native-agent', 'keep this', 'delivery-one'); await flush()
+    expect(run.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+    expect(run.deps.deliveries.settled).toHaveBeenCalledExactlyOnceWith({ sessionId: 'native-agent', deliveryId: 'delivery-one', state: 'queued' })
+    expect(run.admission.held).toHaveBeenLastCalledWith('native-agent', expect.stringContaining('composer'))
+  })
+
+  it('preserves a human multiline draft whose first composer line is empty', async () => {
+    const run = native()
+    run.setPane('→\na human draft on the second line\n────────────')
+    run.inputs.submitAgent('native-agent', 'keep this', 'delivery-one'); await flush()
+    expect(run.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+    expect(run.admission.held).toHaveBeenLastCalledWith('native-agent', 'team_waiting_draft')
+  })
+
+  it.each([null, ''] as const)('never sends Enter or retries the paste when its composer becomes unreadable after paste: %s', async after => {
+    vi.useFakeTimers()
+    const run = native(), entered = vi.fn()
+    vi.mocked(run.deps.terminal.submitTerminalAction).mockImplementationOnce(async (_id, _text, options) => {
+      await options!.dispatch!(async () => {})
+      run.setPane(after)
+      const hold = await options!.beforeEnter!()
+      if (hold) return { state: 'unknown', dispatch: 'possibly_executed', reason: `enter_withheld:${hold}` }
+      await options!.dispatch!(async () => entered())
+      return ok
+    })
+    run.inputs.submitAgent('native-agent', 'hello', 'delivery-one'); await flush()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(entered).not.toHaveBeenCalled()
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledOnce()
+    expect(run.deps.deliveries.settled).toHaveBeenLastCalledWith({ sessionId: 'native-agent', deliveryId: 'delivery-one', state: 'unknown', reason: 'dispatch_ambiguous' })
+  })
+
+  it('cancels input stalled in a screen reader and admits an answer and successor before that reader settles', async () => {
+    const run = native()
+    let resume!: (capture: string) => void
+    vi.mocked(run.deps.terminal.captureTerminal).mockImplementationOnce(() => new Promise(resolve => { resume = resolve }))
+    run.inputs.submitAgent('native-agent', 'cancelled', 'delivery-one'); await flush()
+    expect(run.inputs.input.cancelDelivery('delivery-one')).toBe(true)
+    await flush()
+    const answer = run.inputs.acquireTerminalControl('native-agent', { forAnswer: true })
+    expect(answer).toBeTypeOf('function'); answer!()
+    run.inputs.submitAgent('native-agent', 'successor', 'delivery-two'); await flush()
+    expect(vi.mocked(run.deps.terminal.submitTerminalAction).mock.calls.map(call => call[1])).toEqual(['successor'])
+    resume('→\n'); await flush()
+    expect(run.deps.terminal.submitTerminalAction).toHaveBeenCalledOnce()
+  })
+})
+
 describe('the session input controller\'s dependencies', () => {
   afterEach(() => vi.restoreAllMocks())
+
+  it('refuses a missing owner or a revoked ticket before asking any optional reader', async () => {
+    const run = deps(), writer = createTerminalWriter(), ticket = writer.ticket('a1')
+    await writer.interrupt('a1', async () => {})
+    await expect(messageWriter(run.deps)('nobody', 'hi')).resolves.toMatchObject({ dispatch: 'not_started' })
+    await expect(messageWriter(run.deps)('a1', 'hi', undefined, ticket)).resolves.toMatchObject({ reason: 'terminal control revoked' })
+    expect(run.deps.readScreen).toBe(readInlineScreen)
+    expect(run.deps.terminal.captureTerminal).not.toHaveBeenCalled()
+    const ticketFor = vi.spyOn(writer, 'ticket')
+    const wired = sessionInputDeps(run.deps, () => ({ ...lock([]), writes: writer }))
+    wired.write!('s1'); wired.write!('unresolved')
+    expect(ticketFor.mock.calls).toEqual([['a1'], ['unresolved']])
+    const fresh = writer.ticket('a1')
+    vi.mocked(run.deps.terminal.validateTerminal).mockImplementationOnce(async () => {
+      await writer.interrupt('a1', async () => {})
+      return true
+    })
+    await expect(messageWriter(run.deps)('a1', 'hi', undefined, fresh)).resolves.toMatchObject({ reason: 'terminal control revoked' })
+    expect(run.deps.terminal.captureTerminal).not.toHaveBeenCalled()
+  })
 
   it('finds a session and checks its pane through what it was given', async () => {
     const { deps: given } = deps()
@@ -328,7 +567,9 @@ describe('the device input\'s dependencies', () => {
     const wired = deviceInputDeps(given, () => ({ acquireControl: vi.fn(), submit: vi.fn(), cancelDelivery: vi.fn() }))
     expect(wired.getSession('a1')?.sessionId).toBe('s1')
     expect(wired.validateRuntime).toBe(given.terminal.validateTerminal)
-    expect(wired.sendKey).toBe(given.terminal.keyTerminalAction)
+    const write: TerminalWrite = { allowed: () => true, dispatch: operation => operation() }
+    await wired.sendKey('a1', 'Enter', write)
+    expect(given.terminal.keyTerminalAction).toHaveBeenCalledWith('a1', 'Enter', write.allowed, write)
     expect(wired.capture).toBe(given.terminal.captureTerminal)
     // Its writes are read first, as every message's is.
     expect(await wired.inject('a1', 'hello')).toBe(ok)
@@ -401,7 +642,7 @@ describe('createInput', () => {
     // What each controller was given (its constructor's dependencies) reaches the other one.
     const given = (controller: object) => (controller as unknown as { deps: Record<string, (...args: unknown[]) => unknown> }).deps
     expect(await given(inputs.input).inject('a1', 'hello')).toBe(ok)
-    expect(lockWrite).toHaveBeenCalledWith('a1', expect.any(Function))
+    expect(lockWrite).toHaveBeenCalledWith('a1', expect.any(Function), undefined)
     const release = given(inputs.deviceInput).acquireControl('a1') as (() => void) | null
     expect(acquire).toHaveBeenCalledWith('a1', { forAnswer: true })
     expect(release).toBeTypeOf('function')

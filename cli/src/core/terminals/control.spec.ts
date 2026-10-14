@@ -48,6 +48,127 @@ const session = { agentId: 'agent-1', sessionId: 'session-1' } as RegisteredSess
 const resolve = (target: string): RegisteredSession | undefined =>
   target === 'agent-1' || target === 'session-1' ? session : undefined
 
+const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve() }
+
+it.each(['acquire', 'validate'] as const)('revokes a retained pin while %s is pending, without unpinning the old driver', async phase => {
+  const { terminals } = backend(), control = createTerminalControl({ resolve, terminals })
+  const release = control.pinTerminalControl('agent-1')!
+  if (phase === 'validate') await control.keyTerminal('agent-1', 'Down')
+  let finish!: () => void
+  if (phase === 'validate') vi.mocked(terminals.validateLease).mockImplementationOnce(() => new Promise(done => { finish = () => done(true) }))
+  else vi.mocked(terminals.acquireLease).mockImplementationOnce(() => new Promise(done => {
+    finish = () => done({ state: 'succeeded', value: { id: 1 } } as never)
+  }))
+  const writes = vi.mocked(terminals.sendLegacyKeyLease).mock.calls.length
+  const sending = control.keyTerminal('agent-1', 'Enter')
+  control.invalidateTerminalControl('agent-1')
+  finish()
+  await expect(sending).resolves.toBe(false)
+  await expect(control.keyTerminal('agent-1', 'Escape')).resolves.toBe(false)
+  expect(terminals.sendLegacyKeyLease).toHaveBeenCalledTimes(writes)
+  expect(control.pinnedControls.has('agent-1')).toBe(true)
+  expect(control.pinTerminalControl('agent-1')).toBeNull()
+  release()
+})
+
+it('holds a control pin through native admission and fences every later invocation to its original proof', async () => {
+  const { terminals } = backend(), control = createTerminalControl({ resolve, terminals })
+  let finish!: (value: { verify(): void }) => void, valid = true
+  const verify = vi.fn(() => { if (!valid) throw Error('original generation changed') })
+  const release = control.pinTerminalControl('agent-1', { prepare: () => new Promise(done => { finish = done }) })!
+  const reading = control.captureTerminal('agent-1')
+  const sending = control.keyTerminal('agent-1', 'Enter')
+  await flush()
+  expect(terminals.acquireLease).not.toHaveBeenCalled()
+  expect(control.writeTicket('agent-1').allowed()).toBe(false)
+  finish({ verify }); await expect(reading).resolves.toBe('screen'); await expect(sending).resolves.toBe(true)
+  const retained = vi.mocked(terminals.sendLegacyKeyLease).mock.calls[0][2]!
+  valid = false
+  const effect = vi.fn(async () => ok)
+  await expect(retained.dispatch(effect)).rejects.toThrow('terminal control revoked')
+  expect(effect).not.toHaveBeenCalled()
+  await expect(control.captureTerminal('agent-1')).resolves.toBeNull()
+  await expect(control.submitTerminal('agent-1', '/model next')).resolves.toBe(false)
+  await expect(control.typeTerminal('agent-1', 'filter')).resolves.toBe(false)
+  await expect(control.keyTerminal('agent-1', 'Escape')).resolves.toBe(false)
+  expect(control.pinnedControls.has('agent-1')).toBe(true)
+  release()
+})
+
+it.each(['invalidate', 'release'] as const)('settles an admission waiter on %s while retaining the actual read and refusing a late result', async action => {
+  const { terminals } = backend(), control = createTerminalControl({ resolve, terminals })
+  let finish!: (value: { verify(): void }) => void
+  const release = control.pinTerminalControl('agent-1', { prepare: () => new Promise(done => { finish = done }) })!
+  const key = control.keyTerminal('agent-1', 'Enter')
+  await flush()
+  if (action === 'invalidate') control.invalidateTerminalControl('agent-1')
+  else release()
+  await expect(key).resolves.toBe(false)
+  release()
+  const replacement = control.pinTerminalControl('agent-1')!
+  const oldVerify = vi.fn()
+  finish({ verify: oldVerify }); await flush()
+  expect(oldVerify).not.toHaveBeenCalled()
+  await expect(control.keyTerminal('agent-1', 'Down')).resolves.toBe(true)
+  expect(terminals.sendLegacyKeyLease).toHaveBeenCalledOnce()
+  replacement()
+})
+
+it.each(['pending', 'replaced'] as const)('refuses failed native admission without falling back to a lease (%s)', async phase => {
+  const { terminals } = backend(), control = createTerminalControl({ resolve, terminals })
+  let fail!: (error: Error) => void
+  const release = control.pinTerminalControl('agent-1', { prepare: () => new Promise((_done, reject) => { fail = reject }) })!
+  const key = control.keyTerminal('agent-1', 'Enter'); await flush()
+  if (phase === 'replaced') release()
+  fail(Error('native evidence unavailable')); await flush()
+  await expect(key).resolves.toBe(false)
+  expect(terminals.acquireLease).not.toHaveBeenCalled()
+  if (phase === 'pending') expect(control.pinnedControls.has('agent-1')).toBe(true)
+  release()
+})
+
+it('does not start admission for a pin released in the same tick or install authority revoked by its verifier', async () => {
+  const { terminals } = backend(), control = createTerminalControl({ resolve, terminals })
+  const prepare = vi.fn(async () => ({ verify() {} }))
+  control.pinTerminalControl('agent-1', { prepare })!()
+  await flush(); expect(prepare).not.toHaveBeenCalled()
+  const release = control.pinTerminalControl('agent-1', { prepare: async () => ({
+    verify: () => control.invalidateTerminalControl('agent-1'),
+  }) })!
+  await expect(control.keyTerminal('agent-1', 'Enter')).resolves.toBe(false)
+  expect(terminals.acquireLease).not.toHaveBeenCalled()
+  release()
+})
+
+it('rechecks the same pin after its full verifier and never borrows a replacement conversation', async () => {
+  const { terminals } = backend(), row = { ...session }
+  const control = createTerminalControl({ resolve: () => row, terminals })
+  let revoke = false
+  const release = control.pinTerminalControl('agent-1', { prepare: async () => ({ verify: () => {
+    if (revoke) control.invalidateTerminalControl('agent-1')
+  } }) })!
+  await expect(control.keyTerminal('agent-1', 'Down')).resolves.toBe(true)
+  revoke = true
+  expect(control.writeTicket('agent-1').allowed()).toBe(false)
+  release()
+  const next = control.pinTerminalControl('agent-1')!
+  row.sessionId = 'replacement'
+  await expect(control.keyTerminal('agent-1', 'Enter')).resolves.toBe(false)
+  expect(terminals.sendLegacyKeyLease).toHaveBeenCalledOnce()
+  next()
+})
+
+it('does not interrupt without its own fresh terminal lease, even while an old driver retains a pin', async () => {
+  const { terminals, fake } = backend(), control = createTerminalControl({ resolve, terminals })
+  const release = control.pinTerminalControl('agent-1')!
+  fake.acquire = false
+  const result = await control.writer.interrupt('agent-1', write => control.interruptTerminalAction('agent-1', write.allowed, write))
+  expect(result).toMatchObject({ dispatch: 'not_started', reason: 'terminal control lease is unavailable or changed' })
+  expect(control.pinnedControls.has('agent-1')).toBe(true)
+  expect(terminals.sendLegacyKeyLease).not.toHaveBeenCalled()
+  release()
+})
+
 describe('terminal control', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
@@ -281,6 +402,61 @@ it.each(['key', 'submit'] as const)('checks revoked %s authority after awaited t
 it('passes a live submission guard through to paste/Enter, and permits a guarded key', async () => {
   const { terminals } = backend(), control = createTerminalControl({ resolve, terminals }), allowed = () => true
   expect(await control.submitTerminal('agent-1', '/model next', { allowed })).toBe(true)
-  expect(terminals.submitTextForLease).toHaveBeenCalledWith(session, expect.anything(), '/model next', { allowed })
+  expect(terminals.submitTextForLease).toHaveBeenCalledWith(session, expect.anything(), '/model next', {
+    allowed: expect.any(Function), dispatch: expect.any(Function),
+  })
+  const write = vi.mocked(terminals.submitTextForLease).mock.calls[0][3]!
+  expect(write.allowed!()).toBe(true)
+  await control.writer.interrupt('agent-1', async () => {})
+  expect(write.allowed!()).toBe(false)
   expect(await control.keyTerminal('agent-1', 'Enter', allowed)).toBe(true)
+  expect(terminals.sendLegacyKeyLease).toHaveBeenCalledWith(expect.anything(), 'Enter', expect.objectContaining({ allowed: expect.any(Function), dispatch: expect.any(Function) }))
+})
+
+it.each(['binding', 'native proof'] as const)('preserves the original %s through a deferred key backend', async change => {
+  const { terminals } = backend(), current = { ...session }
+  const control = createTerminalControl({ resolve: () => current, terminals })
+  let finish!: () => void, native = true
+  const key = vi.mocked(terminals.sendLegacyKeyLease).mockImplementation(async (_lease, _key, allowed) => {
+    await new Promise<void>(done => { finish = done })
+    return allowed!.allowed() ? ok : { state: 'failed', dispatch: 'not_started', reason: 'revoked' }
+  })
+  const sending = control.keyTerminalAction('agent-1', 'C-c', () => native)
+  await vi.waitFor(() => expect(key).toHaveBeenCalled())
+  if (change === 'binding') current.sessionId = 'replacement'
+  else native = false
+  finish()
+  await expect(sending).resolves.toMatchObject({ dispatch: 'not_started' })
+})
+
+it('retains refusal for an unknown owner and for a released pin at actual dispatch', async () => {
+  const { terminals } = backend(), control = createTerminalControl({ resolve, terminals }), operation = vi.fn(async () => {})
+  const unknown = control.writeTicket('nobody')
+  expect(unknown.allowed()).toBe(false)
+  await expect(unknown.dispatch(operation)).rejects.toThrow('terminal control revoked')
+  const release = control.pinTerminalControl('agent-1')!
+  await control.keyTerminal('agent-1', 'Enter')
+  const retained = vi.mocked(terminals.sendLegacyKeyLease).mock.calls[0][2]!
+  release()
+  await expect(retained.dispatch(operation)).rejects.toThrow('terminal control revoked')
+  expect(operation).not.toHaveBeenCalled()
+})
+
+it.each(['acquire', 'validate'] as const)('a late %s cannot replace or invalidate the next pin\'s lease', async phase => {
+  const { terminals } = backend(), control = createTerminalControl({ resolve, terminals })
+  const releaseA = control.pinTerminalControl('agent-1')!
+  const oldLease = await terminals.acquireLease(session)
+  let finish!: () => void
+  if (phase === 'validate') {
+    await control.keyTerminal('agent-1', 'Enter')
+    vi.mocked(terminals.validateLease).mockImplementationOnce(() => new Promise(done => { finish = () => done(false) }))
+  } else vi.mocked(terminals.acquireLease).mockImplementationOnce(() => new Promise(done => { finish = () => done(oldLease) }))
+  const old = control.typeTerminal('agent-1', 'filter')
+  releaseA(); const releaseB = control.pinTerminalControl('agent-1')!
+  await expect(control.keyTerminal('agent-1', 'Enter')).resolves.toBe(true)
+  const count = vi.mocked(terminals.acquireLease).mock.calls.length
+  finish(); await expect(old).resolves.toBe(false)
+  await expect(control.keyTerminal('agent-1', 'Enter')).resolves.toBe(true)
+  expect(terminals.acquireLease).toHaveBeenCalledTimes(count)
+  releaseB()
 })

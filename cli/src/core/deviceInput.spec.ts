@@ -8,14 +8,18 @@ import { AutonomousDeviceInput, isDeviceInputBoundary, type DeviceInputDeps } fr
 import { SessionInputController } from '../lib/sessionInput.js'
 import { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import type { TerminalActionResult } from '../lib/terminalTypes.js'
+import type { TerminalActionResult, TerminalWrite } from '../lib/terminalTypes.js'
 
 function makeDevice(overrides: Partial<DeviceInputDeps>): AutonomousDeviceInput {
-  return new AutonomousDeviceInput({
-    getSession: () => ({ agentId: 'agent', engine: 'claude' }) as RegisteredSession,
+  const deps: DeviceInputDeps = {
+    getSession: id => ({ agentId: id, engine: 'claude' }) as RegisteredSession,
     validateRuntime: async () => true, inject: async () => true, sendKey: async () => true,
     capture: async () => '› ', submission: inlineSubmission, acquireControl: () => () => {}, legacySubmit: vi.fn(), legacyCancel: () => false,
     onDelivery: vi.fn(), onInputStatus: vi.fn(), ...overrides,
+  }
+  return new AutonomousDeviceInput({ ...deps,
+    inject: (id, text, write) => write ? write.dispatch(() => deps.inject(id, text)) : deps.inject(id, text),
+    sendKey: (id, key, write) => write ? write.dispatch(() => deps.sendKey(id, key)) : deps.sendKey(id, key),
   })
 }
 
@@ -33,8 +37,9 @@ function fixture(engine: 'claude' | 'codex' | 'commandcode' = 'codex') {
   })
   const legacy: SessionInputController = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
     getSession: () => available ? session : undefined, validateRuntime: async () => available,
-    inject: (id, text) => controller.legacyWrite(id, () => inject(id, text)),
-    sendKey: (id, key) => controller.legacyWrite(id, () => sendKey(id, key)), capture, onError: vi.fn(),
+    write: id => controller.writes.ticket(id),
+    inject: (id, text, write) => controller.legacyWrite(id, ticket => ticket.dispatch(() => inject(id, text)), write),
+    sendKey: (id, key, write) => controller.legacyWrite(id, ticket => ticket.dispatch(() => sendKey(id, key)), write), capture, onError: vi.fn(),
     onDelivery: event => service.delivery(event),
   })
   const controller: AutonomousDeviceInput = new AutonomousDeviceInput({
@@ -43,7 +48,8 @@ function fixture(engine: 'claude' | 'codex' | 'commandcode' = 'codex') {
     legacyCancel: id => legacy.cancelDelivery(id),
     onForget: id => service.agentGone(id),
     getSession: () => available ? session : undefined, validateRuntime: async () => available,
-    inject, capture, sendKey, submission: inlineSubmission, onDelivery: event => service.delivery(event),
+    inject: (id, text, write) => write!.dispatch(() => inject(id, text)), capture,
+    sendKey: (id, key, write) => write!.dispatch(() => sendKey(id, key)), submission: inlineSubmission, onDelivery: event => service.delivery(event),
     onInputStatus: event => service.inputStatus(event),
   })
   const send = (key: string, text = key, focusRevision?: string) => service.request('device', {
@@ -57,6 +63,42 @@ function fixture(engine: 'claude' | 'codex' | 'commandcode' = 'codex') {
 }
 
 afterEach(() => vi.useRealTimers())
+
+it.each(['already aborted', 'waiting'] as const)('cancels a legacy write %s behind a device without waiting for the device owner', async phase => {
+  vi.useFakeTimers()
+  let finish!: () => void
+  const controller = makeDevice({ inject: () => new Promise<boolean>(resolve => { finish = () => resolve(true) }) })
+  controller.submit('agent', 'device', 'device-one')
+  await vi.advanceTimersByTimeAsync(0)
+  const abort = new AbortController(), effect = vi.fn(async () => {})
+  if (phase === 'already aborted') abort.abort()
+  const queued = controller.legacyWrite('agent', effect, undefined, abort.signal)
+  let settled = false
+  void queued.catch(() => { settled = true })
+  const refused = expect(queued).rejects.toThrow('cancelled before acquiring')
+  abort.abort(); await vi.advanceTimersByTimeAsync(0)
+  expect(settled).toBe(true)
+  await refused
+  expect(effect).not.toHaveBeenCalled()
+  finish(); await vi.advanceTimersByTimeAsync(0)
+  expect(effect).not.toHaveBeenCalled()
+  controller.forget('agent')
+})
+
+it('detaches request cancellation once a device waiter enters its own writer run', async () => {
+  vi.useFakeTimers()
+  let finish!: () => void
+  const controller = makeDevice({ inject: () => new Promise<boolean>(resolve => { finish = () => resolve(true) }) })
+  controller.submit('agent', 'device', 'device-one')
+  await vi.advanceTimersByTimeAsync(0)
+  const abort = new AbortController(), effect = vi.fn(async () => {})
+  const queued = controller.legacyWrite('agent', effect, undefined, abort.signal)
+  finish(); await vi.advanceTimersByTimeAsync(0)
+  await queued
+  abort.abort()
+  expect(effect).toHaveBeenCalledOnce()
+  controller.forget('agent')
+})
 
 describe('in-flight input through the Autonomous Device contract', () => {
   it.each(['harness-use', 'Harness-only voice'])('%s delivers B before A ends, preserving retry and focus guards', async caller => {
@@ -392,6 +434,194 @@ it('excludes legacy writes only during Device ownership of the same pane', async
   await local
   expect(writes).toEqual(['local-before', 'device', 'other-pane', 'local-after'])
   controller.forget('agent')
+})
+
+it('serializes legacy writers in one pane while another pane keeps working', async () => {
+  const controller = makeDevice({}), calls: string[] = []
+  let finish!: () => void
+  const first = controller.legacyWrite('agent', async () => { calls.push('first'); await new Promise<void>(done => { finish = done }) })
+  const second = controller.legacyWrite('agent', async () => { calls.push('second') })
+  await controller.legacyWrite('other', async () => { calls.push('other') })
+  expect(calls).toEqual(['first', 'other'])
+  finish(); await Promise.all([first, second])
+  expect(calls).toEqual(['first', 'other', 'second'])
+})
+
+it('interrupts by canonical agent while an aliased legacy writer is preparing, even if discovery later loses it', async () => {
+  vi.useFakeTimers()
+  let known = true, finish!: () => void
+  const controller = makeDevice({ getSession: () => known ? ({ agentId: 'agent', engine: 'claude' }) as RegisteredSession : undefined })
+  const old = controller.legacyWrite('session', () => new Promise<void>(done => { finish = done }))
+  const cancelled = expect(old).rejects.toThrow('cancelled before completion')
+  known = false
+  await controller.interruptWrite('agent', async () => {}); await cancelled
+  await expect(controller.legacyWrite('agent', async () => 'current')).resolves.toBe('current')
+  finish()
+})
+
+it('does not let a cancelled legacy read block a new device writer or release its ownership later', async () => {
+  vi.useFakeTimers()
+  let oldRead!: () => void, newWrite!: (value: boolean) => void
+  const inject = vi.fn(() => new Promise<boolean>(done => { newWrite = done }))
+  const controller = makeDevice({ inject })
+  const old = controller.legacyWrite('agent', () => new Promise<void>(done => { oldRead = done }))
+  const cancelled = expect(old).rejects.toThrow('cancelled before completion')
+  await controller.interruptWrite('agent', async () => {}); await cancelled
+  controller.submit('agent', 'new', 'new'); await vi.advanceTimersByTimeAsync(0)
+  expect(inject).toHaveBeenCalledOnce()
+  const next = vi.fn(async () => {}), queued = controller.legacyWrite('agent', next)
+  oldRead(); await vi.advanceTimersByTimeAsync(0)
+  expect(next).not.toHaveBeenCalled()
+  newWrite(true); await vi.advanceTimersByTimeAsync(0); await queued
+  expect(next).toHaveBeenCalledOnce()
+  controller.forget('agent')
+})
+
+it('clears a held queue\'s retry timer on interruption before any device write starts', async () => {
+  vi.useFakeTimers()
+  const controller = makeDevice({ acquireControl: () => null }), inject = vi.fn(async () => true)
+  controller.submit('agent', 'queued', 'queued')
+  await controller.interruptWrite('agent', inject)
+  await vi.advanceTimersByTimeAsync(1000)
+  expect(inject).toHaveBeenCalledOnce()
+})
+
+it('checks a delivery cancelled after preparation again inside the physical write', async () => {
+  vi.useFakeTimers()
+  const physical = vi.fn(async () => true), onDelivery = vi.fn()
+  const device = new AutonomousDeviceInput({ getSession: () => ({ agentId: 'agent', engine: 'claude' }) as RegisteredSession,
+    validateRuntime: async () => true, capture: async () => '› ', submission: inlineSubmission,
+    acquireControl: () => () => {}, legacySubmit: vi.fn(), legacyCancel: () => false,
+    sendKey: async () => true, onDelivery, onInputStatus: vi.fn(),
+    inject: async (_id, _text, write) => {
+      expect(write!.allowed()).toBe(true)
+      expect(device.cancelDelivery('delivery')).toBe(true)
+      return write!.dispatch(physical)
+    },
+  })
+  device.submit('agent', 'hello', 'delivery'); await vi.advanceTimersByTimeAsync(0)
+  expect(physical).not.toHaveBeenCalled()
+  expect(onDelivery.mock.calls.map(([event]) => event.state)).toEqual(['queued', 'rejected'])
+  await expect(device.legacyWrite('agent', async () => 'next')).resolves.toBe('next')
+  device.forget('agent')
+})
+
+it('reserves interrupt control immediately, revokes queued writes, and waits for the actual prior write', async () => {
+  const controller = makeDevice({}), calls: string[] = []
+  let finishWrite!: () => void, finishInterrupt!: () => void, allowed!: () => boolean
+  const first = controller.legacyWrite('agent', write => write.dispatch(async () => { calls.push('paste'); await new Promise<void>(done => { finishWrite = done }) }))
+  const stale = controller.legacyWrite('agent', async () => { calls.push('stale') })
+  const staleResult = expect(stale).rejects.toThrow('cancelled before completion')
+  const firstResult = expect(first).rejects.toThrow('cancelled before completion')
+  const interrupt = controller.interruptWrite('agent', async guard => {
+    allowed = guard.allowed; calls.push('interrupt'); await new Promise<void>(done => { finishInterrupt = done }); return 'sent'
+  })
+  const later = controller.legacyWrite('agent', async () => { calls.push('later') })
+  await expect(controller.interruptWrite('agent', async () => 'repeated')).rejects.toThrow('previous terminal interrupt')
+  expect(calls).toEqual(['paste'])
+  finishWrite(); await firstResult; await Promise.resolve()
+  expect(calls).toEqual(['paste', 'interrupt'])
+  expect(allowed()).toBe(true)
+  finishInterrupt(); expect(await interrupt).toBe('sent'); await later; await staleResult
+  expect(allowed()).toBe(false)
+  expect(calls).toEqual(['paste', 'interrupt', 'later'])
+})
+
+it('lets Cancel revoke an optional device acceptance read without waiting or freeing a newer write', async () => {
+  vi.useFakeTimers()
+  let finishRead!: (value: string) => void, finishNewWrite!: (value: boolean) => void
+  const capture = vi.fn(() => new Promise<string>(done => { finishRead = done }))
+  const inject = vi.fn(async () => true), controller = makeDevice({ capture, inject })
+  controller.submit('agent', 'first', 'first-delivery'); await vi.advanceTimersByTimeAsync(0)
+  expect(capture).toHaveBeenCalledOnce()
+  const interrupt = vi.fn(async (write: TerminalWrite) => write.allowed())
+  await expect(controller.interruptWrite('agent', interrupt)).resolves.toBe(true)
+  inject.mockImplementationOnce(() => new Promise(done => { finishNewWrite = done }))
+  controller.submit('agent', 'second', 'second-delivery'); await vi.advanceTimersByTimeAsync(0)
+  const local = vi.fn(async () => {})
+  const queued = controller.legacyWrite('agent', local)
+  finishRead('› '); await vi.advanceTimersByTimeAsync(0)
+  expect(local).not.toHaveBeenCalled()
+  controller.forget('agent')
+  expect(local).not.toHaveBeenCalled()
+  finishNewWrite(true); await queued
+  expect(local).toHaveBeenCalledOnce()
+})
+
+it('drains actual device input before interrupting and revokes its queued follow-up', async () => {
+  vi.useFakeTimers()
+  let finish!: (value: boolean) => void
+  const onDelivery = vi.fn(), inject = vi.fn(() => new Promise<boolean>(done => { finish = done }))
+  const controller = makeDevice({ inject, onDelivery }), interrupt = vi.fn(async () => true)
+  controller.submit('agent', 'first', 'first-delivery'); await vi.advanceTimersByTimeAsync(0)
+  controller.submit('agent', 'queued', 'queued-delivery')
+  const result = controller.interruptWrite('agent', interrupt)
+  expect(interrupt).not.toHaveBeenCalled()
+  expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'first-delivery', state: 'unknown', reason: 'cancelled' }))
+  expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'queued-delivery', state: 'rejected', reason: 'cancelled' }))
+  finish(true); await result
+  expect(interrupt).toHaveBeenCalledOnce()
+  expect(inject).toHaveBeenCalledOnce()
+})
+
+it('keeps the actual interrupt slot after its caller times out and never dispatches a late queued interrupt', async () => {
+  vi.useFakeTimers()
+  const controller = makeDevice({})
+  let finish!: () => void, allowed!: () => boolean
+  const first = controller.interruptWrite('agent', async guard => { allowed = guard.allowed; await new Promise<void>(done => { finish = done }) })
+  const outcome = expect(first).rejects.toThrow('deadline expired')
+  const later = vi.fn(async () => {}), queued = controller.legacyWrite('agent', later)
+  await vi.advanceTimersByTimeAsync(5000); await outcome
+  expect(allowed()).toBe(false)
+  expect(later).not.toHaveBeenCalled()
+  await expect(controller.interruptWrite('agent', async () => {})).rejects.toThrow('previous terminal interrupt')
+  finish(); await queued
+  expect(later).toHaveBeenCalledOnce()
+  let release!: () => void
+  const write = controller.legacyWrite('agent', ticket => ticket.dispatch(() => new Promise<void>(done => { release = done })))
+  const writeResult = expect(write).rejects.toThrow('cancelled before completion')
+  const abandoned = vi.fn(async () => {})
+  const waiting = expect(controller.interruptWrite('agent', abandoned)).rejects.toThrow('deadline expired')
+  await vi.advanceTimersByTimeAsync(5000); await waiting
+  release(); await writeResult
+  expect(abandoned).not.toHaveBeenCalled()
+})
+
+it.each(['queued', 'dispatched'] as const)('checks the absolute interrupt deadline for %s work before the timer callback runs', async phase => {
+  let clock = 0, finish!: () => void
+  const now = vi.spyOn(performance, 'now').mockImplementation(() => clock)
+  try {
+    const controller = makeDevice({}), interrupt = vi.fn(async () => { clock = 5000; return true })
+    const old = phase === 'queued' ? controller.legacyWrite('agent', ticket => ticket.dispatch(() => new Promise<void>(done => { finish = done }))) : Promise.resolve()
+    const oldResult = phase === 'queued' ? expect(old).rejects.toThrow('cancelled before completion') : old
+    const result = controller.interruptWrite('agent', interrupt)
+    const outcome = expect(result).rejects.toThrow('deadline expired')
+    if (phase === 'queued') { clock = 5000; finish() }
+    await oldResult; await outcome
+    expect(interrupt).toHaveBeenCalledTimes(phase === 'queued' ? 0 : 1)
+    await expect(controller.legacyWrite('agent', async () => 'next')).resolves.toBe('next')
+  } finally { now.mockRestore() }
+})
+
+it('releases an interrupt rejected before dispatch without repeating it', async () => {
+  const controller = makeDevice({}), interrupt = vi.fn(async () => { throw Error('original owner changed') })
+  await expect(controller.interruptWrite('agent', interrupt)).rejects.toThrow('original owner changed')
+  await expect(controller.legacyWrite('agent', async () => 'next')).resolves.toBe('next')
+  expect(interrupt).toHaveBeenCalledOnce()
+})
+
+it('revokes device preparation synchronously, including a dispatch notification that cancels reentrantly', async () => {
+  vi.useFakeTimers()
+  let ready!: (value: boolean) => void
+  const inject = vi.fn(async () => true), controller = makeDevice({ inject,
+    validateRuntime: () => new Promise<boolean>(done => { ready = done }) })
+  controller.submit('agent', 'first', 'delivery')
+  await controller.interruptWrite('agent', async () => true)
+  ready(true); await vi.advanceTimersByTimeAsync(0)
+  expect(inject).not.toHaveBeenCalled()
+  const other = makeDevice({ inject, onDispatch: () => { void other.interruptWrite('agent', async () => true) } })
+  other.submit('agent', 'second', 'another-delivery'); await vi.advanceTimersByTimeAsync(0)
+  expect(inject).not.toHaveBeenCalled()
 })
 
 it('says why a write the pane refused was not typed, when a dialog opened after the look for one', async () => {

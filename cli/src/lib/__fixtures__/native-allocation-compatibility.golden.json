@@ -1,0 +1,2466 @@
+{
+  "linux": {
+    "2:absent": {
+      "row": {
+        "schemaVersion": 2,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "agent": null
+      },
+      "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1"
+    },
+    "2:absent:saved": {
+      "schemaVersion": 2,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "agent": null,
+      "launch": {
+        "state": "ready"
+      }
+    },
+    "2:absent:loaded": {
+      "schemaVersion": 2,
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "2:absent:registered": {
+      "schemaVersion": 2,
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "2:ready": {
+      "row": {
+        "schemaVersion": 2,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "launch": {
+          "state": "ready"
+        },
+        "agent": null
+      },
+      "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1"
+    },
+    "2:ready:saved": {
+      "schemaVersion": 2,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "launch": {
+        "state": "ready"
+      },
+      "agent": null
+    },
+    "2:ready:loaded": {
+      "schemaVersion": 2,
+      "active": true,
+      "launch": {
+        "state": "ready"
+      },
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "2:ready:registered": {
+      "schemaVersion": 2,
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "2:held": {
+      "row": {
+        "schemaVersion": 2,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "launch": {
+          "state": "held",
+          "service": "native",
+          "detail": "Waiting."
+        },
+        "agent": null
+      },
+      "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1"
+    },
+    "2:held:saved": {
+      "schemaVersion": 2,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "launch": {
+        "state": "ready"
+      },
+      "agent": null
+    },
+    "2:held:loaded": {
+      "schemaVersion": 2,
+      "active": true,
+      "launch": {
+        "state": "held",
+        "service": "native",
+        "detail": "Waiting."
+      },
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "2:held:registered": {
+      "schemaVersion": 2,
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "3:absent": {
+      "row": {
+        "schemaVersion": 3,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "agent": null
+      },
+      "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1"
+    },
+    "3:absent:saved": {
+      "schemaVersion": 3,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "agent": null,
+      "launch": {
+        "state": "ready"
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      }
+    },
+    "3:absent:loaded": {
+      "schemaVersion": 3,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "3:absent:registered": {
+      "schemaVersion": 3,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "3:ready": {
+      "row": {
+        "schemaVersion": 3,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "launch": {
+          "state": "ready"
+        },
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "agent": null
+      },
+      "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1"
+    },
+    "3:ready:saved": {
+      "schemaVersion": 3,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "launch": {
+        "state": "ready"
+      },
+      "agent": null,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      }
+    },
+    "3:ready:loaded": {
+      "schemaVersion": 3,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "launch": {
+        "state": "ready"
+      },
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "3:ready:registered": {
+      "schemaVersion": 3,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "3:held": {
+      "row": {
+        "schemaVersion": 3,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "launch": {
+          "state": "held",
+          "service": "native",
+          "detail": "Waiting."
+        },
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "agent": null
+      },
+      "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1"
+    },
+    "3:held:saved": {
+      "schemaVersion": 3,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "launch": {
+        "state": "ready"
+      },
+      "agent": null,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      }
+    },
+    "3:held:loaded": {
+      "schemaVersion": 3,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "launch": {
+        "state": "held",
+        "service": "native",
+        "detail": "Waiting."
+      },
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "3:held:registered": {
+      "schemaVersion": 3,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "staleRename": [
+      {
+        "schemaVersion": 3,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": "Renamed",
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        }
+      }
+    ],
+    "invalid": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "darwin": {
+    "2:absent": {
+      "row": {
+        "schemaVersion": 2,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "agent": null
+      },
+      "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1"
+    },
+    "2:absent:saved": {
+      "schemaVersion": 2,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "agent": null,
+      "launch": {
+        "state": "ready"
+      }
+    },
+    "2:absent:loaded": {
+      "schemaVersion": 2,
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "2:absent:registered": {
+      "schemaVersion": 2,
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "2:ready": {
+      "row": {
+        "schemaVersion": 2,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "launch": {
+          "state": "ready"
+        },
+        "agent": null
+      },
+      "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1"
+    },
+    "2:ready:saved": {
+      "schemaVersion": 2,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "launch": {
+        "state": "ready"
+      },
+      "agent": null
+    },
+    "2:ready:loaded": {
+      "schemaVersion": 2,
+      "active": true,
+      "launch": {
+        "state": "ready"
+      },
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "2:ready:registered": {
+      "schemaVersion": 2,
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "2:held": {
+      "row": {
+        "schemaVersion": 2,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "launch": {
+          "state": "held",
+          "service": "native",
+          "detail": "Waiting."
+        },
+        "agent": null
+      },
+      "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1"
+    },
+    "2:held:saved": {
+      "schemaVersion": 2,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "launch": {
+        "state": "ready"
+      },
+      "agent": null
+    },
+    "2:held:loaded": {
+      "schemaVersion": 2,
+      "active": true,
+      "launch": {
+        "state": "held",
+        "service": "native",
+        "detail": "Waiting."
+      },
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "2:held:registered": {
+      "schemaVersion": 2,
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "3:absent": {
+      "row": {
+        "schemaVersion": 3,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "agent": null
+      },
+      "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1"
+    },
+    "3:absent:saved": {
+      "schemaVersion": 3,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "agent": null,
+      "launch": {
+        "state": "ready"
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      }
+    },
+    "3:absent:loaded": {
+      "schemaVersion": 3,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "3:absent:registered": {
+      "schemaVersion": 3,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "3:ready": {
+      "row": {
+        "schemaVersion": 3,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "launch": {
+          "state": "ready"
+        },
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "agent": null
+      },
+      "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1"
+    },
+    "3:ready:saved": {
+      "schemaVersion": 3,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "launch": {
+        "state": "ready"
+      },
+      "agent": null,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      }
+    },
+    "3:ready:loaded": {
+      "schemaVersion": 3,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "launch": {
+        "state": "ready"
+      },
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "3:ready:registered": {
+      "schemaVersion": 3,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "3:held": {
+      "row": {
+        "schemaVersion": 3,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "launch": {
+          "state": "held",
+          "service": "native",
+          "detail": "Waiting."
+        },
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "agent": null
+      },
+      "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1"
+    },
+    "3:held:saved": {
+      "schemaVersion": 3,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "launch": {
+        "state": "ready"
+      },
+      "agent": null,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      }
+    },
+    "3:held:loaded": {
+      "schemaVersion": 3,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "launch": {
+        "state": "held",
+        "service": "native",
+        "detail": "Waiting."
+      },
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "3:held:registered": {
+      "schemaVersion": 3,
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "staleRename": [
+      {
+        "schemaVersion": 3,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": "Renamed",
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        }
+      }
+    ],
+    "invalid": [
+      null,
+      null,
+      null,
+      null
+    ]
+  }
+}

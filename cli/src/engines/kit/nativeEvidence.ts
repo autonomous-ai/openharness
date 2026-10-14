@@ -20,8 +20,12 @@ export class NativeEvidenceBudget {
   private readonly deadline: number
   private operations = 32_768
   private bytes = 16 * 1024 * 1024
-  private probes = 64
-  constructor(timeoutMs = NATIVE_EVIDENCE_MS) { this.deadline = performance.now() + timeoutMs }
+  private probes: number
+  constructor(timeoutMs = NATIVE_EVIDENCE_MS, probeLimit = 64) {
+    if (!Number.isSafeInteger(probeLimit) || probeLimit < 1 || probeLimit > 320) nativeUnavailable('the native process probe budget is invalid')
+    this.probes = probeLimit
+    this.deadline = performance.now() + timeoutMs
+  }
   remaining(): number {
     const left = Math.floor(this.deadline - performance.now())
     if (left <= 0) nativeUnavailable('the native process evidence deadline was reached')

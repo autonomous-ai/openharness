@@ -25,6 +25,8 @@ export interface IngestDeps {
   liveFor: LiveFor
   has: (sessionId: string) => boolean
   bySession: (sessionId: string) => RegisteredSession | undefined
+  /** Native generation facts own lifecycle and delivery, including on first attach. */
+  historyOnly?: (session: RegisteredSession) => boolean
   tokenUsage: { changed(session: RegisteredSession): void }
   /** The Wi-Fi device's service, wherever it runs (core/wifi.ts): it proves its turns by the raw transcript. */
   device: () => Pick<WifiFeed, 'needsTranscript' | 'observeTranscript'> | undefined
@@ -36,7 +38,7 @@ export interface IngestDeps {
 }
 
 export function createIngest({
-  liveFor, has, bySession, tokenUsage, device, runtimeProfiles, normalizers, announceTurnAborted, emit, attachSession,
+  liveFor, has, bySession, historyOnly, tokenUsage, device, runtimeProfiles, normalizers, announceTurnAborted, emit, attachSession,
 }: IngestDeps) {
   const {
     liveParsers, cursorNormalizers, museNormalizers, ampNormalizers, grokNormalizers, agyNormalizers,
@@ -52,7 +54,7 @@ export function createIngest({
     const session = bySession(evt.sessionId)
     if (!session || session.identityHold || session.interpretationHold || session.engine !== evt.engine) return null
     tokenUsage.changed(session)
-    sideRead('device', evt.sessionId, () => {
+    if (!historyOnly?.(session)) sideRead('device', evt.sessionId, () => {
       const service = device()
       if (service?.needsTranscript(session.agentId, evt.sessionId, session.engine)) {
         service.observeTranscript(session.agentId, evt.sessionId, session.engine, evt.text)
@@ -71,7 +73,7 @@ export function createIngest({
       if (!parser || parser.engine !== session.engine || !('ingest' in parser)) { parser = adapter.create(session); liveParsers.set(evt.sessionId, parser) }
       const read = (parser as LiveParser).ingest(evt.text)
       events = read.events
-      if (read.failure !== undefined) announceTurnAborted(evt.sessionId, session.engine, read.failure)
+      if (read.failure !== undefined && !historyOnly?.(session)) announceTurnAborted(evt.sessionId, session.engine, read.failure)
     } else if (session.engine === 'cursor') {
       // Each engine's normalizer is its own code, loaded before its tail started (the attach awaited it). One
       // that could not load reads no events from its lines, as an engine with no normalizer does.
@@ -121,7 +123,7 @@ export function createIngest({
       // already closed the turn (its turn_ended is in `events`, emitted just below) — announce the
       // reason first so the web/device show the error ahead of the turn closing.
       const runError = commandcode?.commandCodeRunError(evt.text) ?? null
-      if (runError !== null) {
+      if (runError !== null && !historyOnly?.(session)) {
         announceTurnAborted(evt.sessionId, 'commandcode', runError, commandcode!.commandCodeRunErrorSummary(runError))
       }
     } else {
@@ -170,8 +172,9 @@ export function createIngest({
     })
   }
   const acceptFrame = (sessionId: string, engine: RegisteredSession['engine'], frame: LiveFrame, profileAccepted = false): void => {
-    if (!observeLine({ sessionId, engine, text: frame.raw }, profileAccepted)) return
-    if (frame.failure !== undefined) announceTurnAborted(sessionId, engine, frame.failure)
+    const session = observeLine({ sessionId, engine, text: frame.raw }, profileAccepted)
+    if (!session) return
+    if (frame.failure !== undefined && !historyOnly?.(session)) announceTurnAborted(sessionId, engine, frame.failure)
     emit(sessionId, frame.events, { replay: frame.replay })
   }
   return { ingestLine, wireWatcher, acceptFrame }

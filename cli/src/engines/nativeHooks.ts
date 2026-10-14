@@ -16,7 +16,7 @@ import { command } from './kit/notifyHooks.js'
 import { GROK_HOOK_SETTINGS } from './grok/contract.js'
 import { AGY_HOOK_SETTINGS } from './agy/contract.js'
 import { COPILOT_HOOK_SETTINGS } from './copilot/contract.js'
-import { CURSOR_HOOK_SETTINGS } from './cursor/contract.js'
+import { CURSOR_GENERATION_HOOK_SETTINGS } from './cursor/contract.js'
 import { COMMANDCODE_HOOK_SETTINGS } from './commandcode/contract.js'
 import { DEVIN_HOOK_SETTINGS } from './devin/contract.js'
 import { installNativeHookSettings } from './kit/nativeHookSettings.js'
@@ -24,7 +24,7 @@ import { installNativeHookSettings } from './kit/nativeHookSettings.js'
 export const installGrokHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeHookSettings(options?.environment ? { ...GROK_HOOK_SETTINGS, file: join(nativeHookLocations(options.environment).GROK_HOME, 'hooks', 'harness.json') } : GROK_HOOK_SETTINGS, port, options)
 export const installAgyHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeHookSettings(options?.environment ? { ...AGY_HOOK_SETTINGS, file: join(nativeHookLocations(options.environment).AGY_CONFIG_DIR, 'hooks.json') } : AGY_HOOK_SETTINGS, port, options)
 export const installCopilotHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeHookSettings(options?.environment ? { ...COPILOT_HOOK_SETTINGS, file: join(nativeHookLocations(options.environment).COPILOT_HOME, 'hooks', 'harness.json') } : COPILOT_HOOK_SETTINGS, port, options)
-export const installCursorHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeHookSettings(options?.environment ? { ...CURSOR_HOOK_SETTINGS, file: join(nativeHookLocations(options.environment).CURSOR_CONFIG_DIR, 'hooks.json') } : CURSOR_HOOK_SETTINGS, port, options)
+export const installCursorHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeHookSettings(options?.environment ? { ...CURSOR_GENERATION_HOOK_SETTINGS, file: join(nativeHookLocations(options.environment).CURSOR_CONFIG_DIR, 'hooks.json') } : CURSOR_GENERATION_HOOK_SETTINGS, port, options)
 export const installCommandCodeHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeHookSettings(options?.environment ? { ...COMMANDCODE_HOOK_SETTINGS, file: join(nativeHookLocations(options.environment).COMMANDCODE_HOME, 'settings.json') } : COMMANDCODE_HOOK_SETTINGS, port, options)
 export const installDevinHooks = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativeHookSettings(options?.environment ? { ...DEVIN_HOOK_SETTINGS, file: nativeHookLocations(options.environment).DEVIN_CONFIG_PATH } : DEVIN_HOOK_SETTINGS, port, options)
 

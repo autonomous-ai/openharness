@@ -21,6 +21,7 @@ import type { CoreApi, CorePorts, RecapSession, RecapsPort, RecapWatchers, TurnC
 import { AgentNotifications } from '../lib/agentNotifications.js'
 import { CommanderMirror, SUBAGENT_IDLE_MS } from '../lib/commander.js'
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
+import { copyNativeRecapCompletion, nativeRecapDigest, nativeRecapWaiting, NATIVE_RECAP_VERSION } from '../lib/nativeRecapWire.js'
 
 export interface RecapsOptions {
   /** What a session's recaps hold, or whether its card is busy, may have changed: the recaps' own process
@@ -131,6 +132,13 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
 
   return {
     port: {
+      nativeCompletion: async value => {
+        try {
+          const original = copyNativeRecapCompletion(value)
+          return Object.freeze({ state: 'ready', id: original.id, sourceDigest: nativeRecapDigest(original), version: NATIVE_RECAP_VERSION,
+            summary: deriveTurnSummary(original.responseText) })
+        } catch { return nativeRecapWaiting('Waiting for the original native answer.') }
+      },
       lifecycle,
       recaps: (sessionId) => mirror.snapshot(sessionId),
       liveCards: async () => mirror.liveCards() as TurnCardFrame[],

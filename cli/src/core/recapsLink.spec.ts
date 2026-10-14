@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createRecapsLink, RECAPS_BUFFER_LIMIT } from './recapsLink.js'
+import { nativeRecapDigest, nativeRecapId, NATIVE_RECAP_VERSION } from '../lib/nativeRecapWire.js'
 
 const watchers = { device: true, active: false }
 const s1 = { sessionId: 's1', agentId: 'a1' }
@@ -21,6 +22,45 @@ function setup() {
 }
 
 describe('the recaps in their own process, as the core sees them', () => {
+  it('retains the original native generation and answer across a service wait without touching live state', async () => {
+    const { deps, link } = setup()
+    const owner = { agentId: 'a1', sessionId: 's1', processKey: 'process-A' }
+    const completion = { owner, generationId: 'A', id: nativeRecapId(owner, 'A'), responseText: 'Original answer.' }
+    const original = structuredClone(completion)
+    let resolve!: (answer: Record<string, unknown>) => void
+    deps.call.mockImplementationOnce(() => new Promise(done => { resolve = done }))
+    link.notice({ kind: 'recaps', sessionId: 's1', recaps: { latest: 'B', fullTexts: ['B'], busy: true } })
+    const before = link.port.recaps('s1')
+    const pending = link.port.nativeCompletion(completion)
+    completion.responseText = 'Later answer.'
+    completion.owner.processKey = 'process-B'
+    completion.generationId = 'B'
+    const result = { state: 'ready', id: original.id, sourceDigest: nativeRecapDigest(original), version: NATIVE_RECAP_VERSION, summary: 'Original recap.' }
+    resolve({ result })
+    expect(await pending).toEqual(result)
+    expect(deps.call).toHaveBeenCalledWith('nativeCompletion', { completion: original })
+    expect(link.port.recaps('s1')).toEqual(before)
+    expect(deps.lastTurn).not.toHaveBeenCalled()
+    expect(deps.notify).not.toHaveBeenCalled()
+    expect(deps.clients.turnCard).not.toHaveBeenCalled()
+    expect(deps.clients.turnSummary).not.toHaveBeenCalled()
+  })
+
+  it('holds a native recap when its service or original answer is unavailable', async () => {
+    const { deps, link } = setup()
+    const owner = { agentId: 'a1', sessionId: 's1', processKey: 'process' }
+    const completion = { owner, generationId: 'A', id: nativeRecapId(owner, 'A'), responseText: 'Original answer.' }
+    deps.call.mockRejectedValueOnce(Error('disconnected'))
+    expect(await link.port.nativeCompletion(completion)).toEqual({ state: 'held', reason: 'Waiting for the recaps service.' })
+    deps.call.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE' })
+    expect(await link.port.nativeCompletion(completion)).toEqual({ state: 'held', reason: 'Waiting for the original native recap result.' })
+    deps.call.mockResolvedValueOnce({ result: { state: 'held', reason: 'Waiting for recap capacity.' } })
+    expect(await link.port.nativeCompletion(completion)).toEqual({ state: 'held', reason: 'Waiting for recap capacity.' })
+    deps.call.mockClear()
+    expect(await link.port.nativeCompletion({ ...completion, id: 'foreign' })).toMatchObject({ state: 'held' })
+    expect(deps.call).not.toHaveBeenCalled()
+  })
+
   it('tells each lifecycle event as a notification it never waits on, holding a purge and a rebound until heard', () => {
     const { deps, link } = setup()
     link.port.lifecycle({ kind: 'events', session: s1, events: [], replay: false }, watchers)

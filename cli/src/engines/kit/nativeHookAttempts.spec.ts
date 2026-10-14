@@ -190,3 +190,27 @@ it('retains the joining caller’s alias in its final launch proof', async () =>
   unlinkSync(alias); symlinkSync(other, alias)
   expect(proof.current()).toBe(false)
 })
+
+it.each(['producer', 'joining'] as const)('rechecks owner and elapsed time after the %s final dependency proof', async kind => {
+  for (const fault of ['deadline', 'owner']) {
+    const file = join(root, `final-${kind}-${fault}`); writeFileSync(file, 'ready')
+    let finish!: () => void, armed = false, current = true
+    const now = vi.spyOn(performance, 'now').mockReturnValue(0)
+    const work = new Promise<void>(done => { finish = done })
+    const confirmed = vi.fn()
+    const options = { identity: 'same', timeoutMs: 5, confirmed, current: () => current,
+      verify: () => { if (armed) { if (fault === 'deadline') now.mockReturnValue(10); else current = false } } }
+    try {
+      const original = runHookPreparation([file], async () => { await work; armed = true; return true },
+        kind === 'producer' ? options : { identity: 'same' }).catch(error => error)
+      await drain()
+      const joining = kind === 'joining' ? runHookPreparation([file], async () => true, options).catch(error => error) : undefined
+      finish()
+      const produced = await original, result = joining ? await joining : produced
+      if (joining) expect(produced).toBe(true)
+      expect(result).toEqual(expect.objectContaining({ message: expect.stringMatching(/expired|deadline|owner/) }))
+      expect(confirmed).not.toHaveBeenCalled()
+      expect(readFileSync(file, 'utf8')).toBe('ready')
+    } finally { now.mockRestore() }
+  }
+})

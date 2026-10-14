@@ -19,6 +19,7 @@ import type { ProcessRow } from '../../lib/tmux.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import type { TerminalRuntimeRef } from '../../lib/terminalTypes.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 
 type ResolveHookAgent = NonNullable<HookServerHandlers['resolveHookAgent']>
 
@@ -57,17 +58,23 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
    * `ancestry` is the hook's own process and those it descends from, read as the hook arrived
    * (`resolveHookAgent`); `table`, the process table to judge the recorded processes by, else a new read.
    */
-  const matchCaller = async (resolved: TerminalRuntimeRef[], engine: HookQuery['engine'], ancestry: ReadonlyMap<number, ProcessRow>, table?: ProcessRow[]) => {
+  const matchCaller = async (resolved: TerminalRuntimeRef[], engine: HookQuery['engine'], ancestry: ReadonlyMap<number, ProcessRow>, table?: ProcessRow[],
+    nativeCaller?: HookQuery['nativeCaller']) => {
     const rows = table ?? await processRows()
     if (!rows) return null
+    let unavailable: string | undefined
     const recordedAlive = (session: RegisteredSession): boolean => {
       const recorded = session.processIdentity
       return !!recorded && rows.some((row) => sameProcessIdentity(row, recorded))
     }
-    const callerBelongsTo = (session: RegisteredSession): boolean => {
+    const callerEvidence = (session: RegisteredSession): 'caller' | 'runtime' | undefined => {
+      if (nativeCaller) {
+        try { return nativeCaller.owner(session).source ?? 'caller' }
+        catch (error) { unavailable = String(error).slice(0, 1024); return undefined }
+      }
       const expectedPid = session.processIdentity?.pid
       const original = expectedPid && ancestry.get(expectedPid)
-      return !!original && sameProcessIdentity(original, session.processIdentity)
+      return original && sameProcessIdentity(original, session.processIdentity) ? 'caller' : undefined
     }
     const candidates = new Map<string, RegisteredSession>()
     /**
@@ -90,14 +97,15 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
       // The caller resumes after this async function returns. Capture at the
       // ancestry check, before that continuation can observe a replacement row.
       const candidate = structuredClone(live)
-      if (callerBelongsTo(candidate)) candidates.set(candidate.agentId, candidate)
+      const evidence = callerEvidence(candidate)
+      if (evidence === 'caller') candidates.set(candidate.agentId, candidate)
       else {
-        onHintedRuntime.set(candidate.agentId, candidate)
+        if (!nativeCaller || evidence === 'runtime') onHintedRuntime.set(candidate.agentId, candidate)
         // A reused PID is positive evidence of another process, not an unrecorded launch.
         if (!recordedAlive(candidate) && !ancestry.has(candidate.processIdentity?.pid ?? 0)) unrecorded.push(candidate)
       }
     }
-    return { candidates, onHintedRuntime, unrecorded }
+    return { candidates, onHintedRuntime, unrecorded, unavailable }
   }
 
   /** Resolves when the row on any of these panes records another process (or another agent takes the
@@ -113,8 +121,12 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
     }
   }
 
-  const resolveHookAgent: ResolveHookAgent = async ({ engine, runtimeHints, callerPid, onWait }) => {
+  const resolveHookAgent: ResolveHookAgent = async ({ engine, runtimeHints, callerPid, nativeCaller, onWait }) => {
     if (!callerPid) return null
+    const unavailable = (reason: string): null => {
+      if (nativeCaller) throw new IdentityReadUnavailable(reason)
+      return null
+    }
     // Who the hook came from, read as it arrives. On Linux dash keeps its `sh -c` as the hook's parent, a
     // shell that exits with the hook (its 500ms, or `onWait`'s answer); read after the reconcile pass or
     // the wait, the ancestry stopped at a pid already gone and a restart's new conversation was never
@@ -131,7 +143,7 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
     let table = await arrival
     // A `ps` already running (processRows shares it) may predate the hook's process; the next read has it.
     if (table && !table.some((row) => row.pid === callerPid)) table = await processRows()
-    if (!table) return null
+    if (!table) return unavailable('the native hook process table is unavailable')
     const parents = new Map(table.map(row => [row.pid, row]))
     const ancestry = new Map<number, ProcessRow>()
     for (let pid = callerPid; pid > 0 && !ancestry.has(pid);) {
@@ -141,7 +153,7 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
       pid = row.parentPid
     }
 
-    let found = (await matchCaller(resolved, engine, ancestry, table))!
+    let found = (await matchCaller(resolved, engine, ancestry, table, nativeCaller))!
     let choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
     // Every relaunch starts its engine before it records the new process — create, fork, resume, a
     // restart and the new conversation it falls back to, a retarget — so a SessionStart in between came
@@ -154,8 +166,8 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
     if (!choice.agent && choice.reason === 'none' && (found.unrecorded.length || overdue)) {
       onWait?.()
       await recordChanged(resolved, engine)
-      const again = await matchCaller(resolved, engine, ancestry)
-      if (!again) return null
+      const again = await matchCaller(resolved, engine, ancestry, undefined, nativeCaller)
+      if (!again) return unavailable('the native hook process table is unavailable after waiting for its process record')
       found = again
       choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
     }
@@ -166,9 +178,9 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
       const pending = choice.agent && panePending?.(choice.agent.agentId)
       if (!pending) break
       onWait?.()
-      try { await pending } catch { return null }
-      const again = await matchCaller(resolved, engine, ancestry)
-      if (!again) return null
+      try { await pending } catch { return unavailable('the native hook pane operation has no confirmed outcome') }
+      const again = await matchCaller(resolved, engine, ancestry, undefined, nativeCaller)
+      if (!again) return unavailable('the native hook process table is unavailable after its pane operation')
       found = again
       choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
     }
@@ -189,7 +201,7 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
       + ` · resolvedRuntimes=${resolved.length} · agentsOnRuntime=${onRuntime.length}`
       + ` · callerPid=${callerPid}${onRuntime.length && !candidates.size ? ' · caller is not a descendant of that engine process' : ''}`
       + `${candidates.size > 1 ? ` · ambiguous (${candidates.size} candidates)` : ''}`)
-    return null
+    return unavailable(found.unavailable ?? 'the original native hook process could not be selected unambiguously')
   }
 
   // SessionEnd describes the mutable engine session, never process lifetime. Reconcile now; discovery

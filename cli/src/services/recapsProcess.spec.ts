@@ -7,6 +7,8 @@ import type { LiveEvent } from '../lib/normalize.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
 import { createRecaps } from './recaps.js'
 import { recapsCoreApi, runRecapsService } from './recapsProcess.js'
+import { nativeRecapId, nativeRecapDigest, NATIVE_RECAP_VERSION } from '../lib/nativeRecapWire.js'
+import { deriveTurnSummary } from '../lib/deviceRecap.js'
 
 // The real default reaches a real socket and this process's own channel: never in a test.
 vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
@@ -50,7 +52,7 @@ describe('the recaps in their own process', () => {
   it('reaches the core as `recaps`, through the socket and token it was given, and answers the apps nothing', () => {
     const { options, handle, service } = setup()
     expect(options).toMatchObject({ name: 'recaps', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-    expect(Object.keys(options.requests)).toEqual(['liveCards'])
+    expect(Object.keys(options.requests)).toEqual(['liveCards', 'nativeCompletion'])
     expect(handle).toBe(service)
   })
 
@@ -71,6 +73,29 @@ describe('the recaps in their own process', () => {
     const before = core.said('recaps').length
     options.onEvent!(lifecycle({ kind: 'beat', session: s1, working: false }))
     expect(core.said('recaps')).toHaveLength(before)
+  })
+
+  it('derives an old native answer without reading or changing the successor, even across reconnect', async () => {
+    const { options } = setup()
+    const core = connection({ assistantText: 'The successor answer must stay separate.' })
+    options.onConnected!(core.core)
+    options.onEvent!(lifecycle({ kind: 'events', session: s1, events: [started], replay: false }))
+    const before = structuredClone(core.notice.mock.calls)
+    const owner = { agentId: 'a1', sessionId: 's1', processKey: ['boot', 'cursor', '42', 'birth'].join('\0') }
+    const completion = { id: nativeRecapId(owner, 'A'), owner, generationId: 'A', responseText: 'The original answer is retained.' }
+    const result = await options.requests.nativeCompletion({ completion }, { local: true, owner: true })
+    expect(result).toEqual({ result: { state: 'ready', id: completion.id, sourceDigest: nativeRecapDigest(completion), version: NATIVE_RECAP_VERSION,
+      summary: deriveTurnSummary(completion.responseText) } })
+    expect(core.query).not.toHaveBeenCalled()
+    expect(core.notice.mock.calls).toEqual(before)
+    options.onDisconnected!()
+    const next = connection()
+    options.onConnected!(next.core)
+    expect(next.said('recaps')).toMatchObject([{ sessionId: 's1', recaps: { busy: true, history: [], fullTexts: [], asks: ['what is the fix?'] } }])
+    expect(next.said('summary')).toEqual([])
+    expect(next.said('card')).toEqual([])
+    expect(await options.requests.nativeCompletion({ completion }, { local: true, owner: true })).toEqual(result)
+    expect(await options.requests.nativeCompletion({}, { local: true, owner: true })).toEqual({ result: { state: 'held', reason: 'Waiting for the original native answer.' } })
   })
 
   it('tells a core that connects everything it holds, and a new connection everything again', () => {

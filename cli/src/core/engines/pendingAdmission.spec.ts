@@ -11,6 +11,75 @@ function request(overrides: Partial<PendingAdmission<string>> = {}): PendingAdmi
 const flush = async () => { await Promise.resolve(); await Promise.resolve() }
 
 describe('pending hook admission', () => {
+  it('finishes an already-owned effect before inspecting a newer competing intent', async () => {
+    vi.useFakeTimers()
+    const queue = createPendingAdmissions({ retryMs: 20 })
+    let owned = false, writable = false
+    const first = request({ order: { scope: 'process', firedAt: 10, arrival: 1 }, ownsEffect: () => owned,
+      conclude: async decision => { owned = true; return writable ? decision : { kind: 'hold', reason: 'registry unavailable' } } })
+    const second = request({ order: { scope: 'process', firedAt: 20, arrival: 2 }, ownsEffect: () => false })
+    queue.submit('agent', 'first', first); await flush(); await flush()
+    queue.submit('agent', 'second', second); await flush(); await flush()
+    await vi.advanceTimersByTimeAsync(20)
+    expect(second.inspect).not.toHaveBeenCalled()
+    expect(first.held).toHaveBeenCalledExactlyOnceWith('registry unavailable')
+    writable = true
+    await vi.advanceTimersByTimeAsync(20)
+    expect(first.accept).toHaveBeenCalledOnce()
+    expect(second.accept).toHaveBeenCalledOnce()
+    queue.close()
+  })
+
+  it.each(['held', 'throws', 'throws a non-Error'] as const)('keeps ownership while its asynchronous outcome is %s', async failure => {
+    vi.useFakeTimers()
+    const queue = createPendingAdmissions({ retryMs: 20 })
+    let confirmed = false
+    const conclude = vi.fn(async (decision: { kind: 'accept'; value: string } | { kind: 'reject'; reason: string }): Promise<AdmissionDecision<string>> => {
+      if (confirmed) return decision
+      if (failure === 'throws') throw new Error('disk confirmation unavailable')
+      if (failure === 'throws a non-Error') throw 'unavailable'
+      return { kind: 'hold', reason: 'disk confirmation unavailable' }
+    })
+    const pending = request({ conclude })
+    queue.submit('agent', 'delivery', pending); await flush(); await flush()
+    expect(pending.accept).not.toHaveBeenCalled()
+    expect(pending.reject).not.toHaveBeenCalled()
+    expect(pending.held).toHaveBeenCalledOnce()
+    confirmed = true
+    await vi.advanceTimersByTimeAsync(20)
+    expect(conclude).toHaveBeenCalledTimes(2)
+    expect(pending.accept).toHaveBeenCalledExactlyOnceWith('home')
+    queue.close()
+  })
+
+  it.each(['closed', 'replaced'] as const)('revokes notifications when the owner is %s during asynchronous conclusion', async change => {
+    const queue = createPendingAdmissions()
+    let live = true, finish!: (decision: AdmissionDecision<string>) => void
+    const pending = request({ current: () => live, conclude: () => new Promise(resolve => { finish = resolve }) })
+    queue.submit('agent', 'delivery', pending); await flush()
+    if (change === 'closed') queue.close()
+    else live = false
+    finish({ kind: 'accept', value: 'late' }); await flush()
+    expect(pending.accept).not.toHaveBeenCalled()
+    expect(pending.reject).not.toHaveBeenCalled()
+    expect(pending.held).not.toHaveBeenCalled()
+    queue.close()
+  })
+
+  it('restores confirmed order before fresh work and never credits a refused conclusion', async () => {
+    const queue = createPendingAdmissions()
+    queue.restore('agent', 'previous', { scope: 'process', firedAt: 20, arrival: 1 })
+    expect(queue.status('agent', 'older', { scope: 'process', firedAt: 10, arrival: 2 })).toBe('older')
+    const refused = request({ order: { scope: 'process', firedAt: 30, arrival: 3 },
+      conclude: async () => ({ kind: 'reject', reason: 'confirmed-invalid' }) })
+    queue.submit('agent', 'invalid', refused); await flush(); await flush()
+    expect(refused.reject).toHaveBeenCalledExactlyOnceWith('confirmed-invalid')
+    expect(queue.status('agent', 'next', { scope: 'process', firedAt: 25, arrival: 4 })).toBe('current')
+    queue.close()
+    queue.restore('agent', 'late', { scope: 'process', firedAt: 100, arrival: 5 })
+    expect(queue.status('agent', 'next', { scope: 'process', firedAt: 25, arrival: 6 })).toBe('current')
+  })
+
   it.each(['held', 'throws', 'throws a non-Error'] as const)('retains the exact candidate until its %s durable commit succeeds', async failure => {
     vi.useFakeTimers()
     const queue = createPendingAdmissions({ retryMs: 20 })

@@ -13,6 +13,7 @@ import {
   type TerminalStreamHandle,
   type TerminalStreamSink,
   type TerminalStreamSize,
+  type TerminalWrite,
 } from './terminalTypes.js'
 
 export interface TerminalControlLease {
@@ -254,10 +255,10 @@ export class TerminalBackendCoordinator {
     return { state: 'failed', reason }
   }
 
-  typeLiteralLease(lease: TerminalControlLease, text: string): Promise<TerminalActionResult> {
+  typeLiteralLease(lease: TerminalControlLease, text: string, write?: TerminalWrite): Promise<TerminalActionResult> {
     const backend = this.backendFor(lease.runtime)
     return backend
-      ? backend.typeLiteral(lease.runtime, text)
+      ? backend.typeLiteral(lease.runtime, text, write)
       : Promise.resolve(terminalActionNotStarted('leased terminal backend is disabled'))
   }
 
@@ -301,11 +302,11 @@ export class TerminalBackendCoordinator {
     return last
   }
 
-  sendLegacyKeyLease(lease: TerminalControlLease, key: string): Promise<TerminalActionResult> {
+  sendLegacyKeyLease(lease: TerminalControlLease, key: string, write?: TerminalWrite): Promise<TerminalActionResult> {
     const backend = this.backendFor(lease.runtime)
     const logical = terminalLogicalKey(key)
     return backend && logical
-      ? backend.sendKey(lease.runtime, logical)
+      ? backend.sendKey(lease.runtime, logical, write)
       : Promise.resolve(terminalActionNotStarted(backend
         ? 'unsupported logical terminal key'
         : 'leased terminal backend is disabled'))

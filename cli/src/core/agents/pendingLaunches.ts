@@ -34,13 +34,19 @@ export function createPendingLaunches({ receipts, prepare }: {
     active++
     let expired = false
     const current = () => !stopped && !expired && authority.current()
-    const boundedAuthority: CreationAuthority = { id, current, hold: reason => { if (current()) authority.hold(reason) } }
+    let prepared!: () => void
+    const preparationSettled = new Promise<void>(resolve => { prepared = resolve })
+    const boundedAuthority: CreationAuthority = { id, current, hold: reason => { if (current()) authority.hold(reason) },
+      // Our preparation timeout can end runIntent while its dependency still
+      // runs. Forward actual settlement only after BOTH operations finish.
+      ...(authority.settled ? { settled: Promise.all([authority.settled, preparationSettled]).then(() => {}) } : {}),
+    }
     let deadline: ReturnType<typeof setTimeout> | undefined
     try {
       const ready = await Promise.race([
         // Retain a timed-out service's slot until its promise settles instead
         // of accumulating unlimited abandoned preparations during an outage.
-        Promise.resolve().then(() => prepare(request, boundedAuthority)).catch(() => null).finally(() => { active--; preparing.delete(id) }),
+        Promise.resolve().then(() => prepare(request, boundedAuthority)).catch(() => null).finally(() => { active--; preparing.delete(id); prepared() }),
         // launchTarget permits three minutes for credential preparation. The
         // receipt answers pending after five seconds without ending this work.
         new Promise<null>(resolve => { deadline = setTimeout(() => { expired = true; resolve(null) }, 185_000); deadline.unref?.() }),

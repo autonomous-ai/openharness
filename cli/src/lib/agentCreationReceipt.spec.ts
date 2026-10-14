@@ -3,7 +3,7 @@ import * as fs from 'node:fs'
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from './agentCreationReceipt.js'
+import { AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome, type CreationAuthority } from './agentCreationReceipt.js'
 
 const roots: string[] = []
 function fixture() {
@@ -132,6 +132,100 @@ describe('recoverable undispatched creation intents', () => {
   const request = { kind: 'model-create', local: false, choices: { engine: 'claude', cwd: '/fixture/work', model: 'fixture-model' } }
   const held = { service: 'models', detail: 'Waiting for the selected model.' }
   const created = { state: 'created' as const, agentId: 'fixture-agent' }
+
+  it('retains actual ownership after a bounded reply until preparation and its effect settle', async () => {
+    vi.useFakeTimers()
+    try {
+      const { receipts } = fixture()
+      let prepared!: () => void, completed!: (outcome: AgentCreationOutcome) => void
+      const ready = new Promise<void>(resolve => { prepared = resolve })
+      const outcome = new Promise<AgentCreationOutcome>(resolve => { completed = resolve })
+      const released = vi.fn()
+      let authority!: CreationAuthority
+      const effect = vi.fn(() => outcome)
+      const prepare = vi.fn(async (_request: Record<string, unknown>, value: CreationAuthority) => {
+        authority = value
+        expect(authority.settled).toBeInstanceOf(Promise)
+        void authority.settled!.then(released)
+        await ready
+        return effect
+      })
+      const reply = receipts.runIntent(id, fingerprint, request, held, prepare)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(await reply).toEqual({ state: 'pending', held })
+      expect(released).not.toHaveBeenCalled()
+      expect(await receipts.runIntent(id, fingerprint, request, held, prepare)).toEqual({ state: 'pending', held })
+      expect(prepare).toHaveBeenCalledOnce()
+      prepared()
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(effect).toHaveBeenCalledOnce()
+      expect(released).not.toHaveBeenCalled()
+      expect(authority.current()).toBe(true)
+      completed(created)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(authority.current()).toBe(false)
+      expect(released).toHaveBeenCalledOnce()
+      expect(await receipts.runIntent(id, fingerprint, request, held, prepare)).toEqual(created)
+      expect(prepare).toHaveBeenCalledOnce()
+    } finally { vi.useRealTimers() }
+  })
+
+  it.each(['held', 'rejected', 'cancelled', 'lost-claim', 'storage-error', 'effect-error'])('releases actual preparation on %s without granting dispatch', async kind => {
+    const { directory, receipts } = fixture()
+    const released = vi.fn()
+    let authority!: CreationAuthority
+    const effect = vi.fn(async () => {
+      if (kind === 'effect-error') throw Error('Uncertain physical effect')
+      return created
+    })
+    const reply = receipts.runIntent(id, fingerprint, request, held, async (_request, value) => {
+      authority = value
+      void authority.settled!.then(released)
+      if (kind === 'held') return null
+      if (kind === 'rejected') throw Error('Dependency unavailable')
+      if (kind === 'cancelled') receipts.cancelIntent(id)
+      if (kind === 'lost-claim') await new AgentCreationReceipts(directory).runIntent(id, fingerprint, request, held, async () => async () => created)
+      if (kind === 'storage-error') vi.mocked(fs.linkSync).mockImplementationOnce(() => { throw Error('Claim unavailable') })
+      return effect
+    })
+    if (kind === 'storage-error') await expect(reply).rejects.toThrow('CREATION_STORAGE_FAILED')
+    else await reply
+    expect(released).toHaveBeenCalledOnce()
+    expect(authority.current()).toBe(false)
+    expect(effect).toHaveBeenCalledTimes(kind === 'effect-error' ? 1 : 0)
+  })
+
+  it.each([false, true])('releases after directory cleanup before a subscriber retries (close failure: %s)', async closeFails => {
+    const { receipts } = fixture()
+    let retry!: Promise<unknown>, authority!: CreationAuthority
+    let closedDirectory = false, closeFailed = false
+    const next = vi.fn(async () => async () => created)
+    // Fault the retained directory's close, not a temporary descriptor opened
+    // by a later proof read. Every real descriptor is closed before throwing.
+    const owner = receipts as unknown as { holdDirectory(): { verify(): void; close(): void } }
+    const retain = owner.holdDirectory.bind(receipts)
+    vi.spyOn(owner, 'holdDirectory').mockImplementation(() => {
+      const directory = retain()
+      return { ...directory, close: () => {
+        directory.close(); closedDirectory = true
+        if (closeFails && !closeFailed) { closeFailed = true; throw Error('Directory close failed') }
+      } }
+    })
+    const first = receipts.runIntent(id, fingerprint, request, held, async (_request, value) => {
+      authority = value
+      void authority.settled!.then(() => {
+        expect(authority.current()).toBe(false)
+        expect(closedDirectory).toBe(true)
+        retry = receipts.runIntent(id, fingerprint, request, held, next)
+      })
+      return null
+    })
+    if (closeFails) await expect(first).rejects.toThrow('Directory close failed')
+    else expect(await first).toEqual({ state: 'pending', held })
+    expect(await retry).toEqual(created)
+    expect(next).toHaveBeenCalledOnce()
+    expect(receipts.status(id)).toEqual(created)
+  })
 
   it('persists the current hold reason independently of dispatch authority', async () => {
     const { directory, receipts } = fixture()

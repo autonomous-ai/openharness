@@ -1,5 +1,5 @@
 /** Eager mechanics for native JSON hook schemas; unreadable settings are never empty settings. */
-import { command, isOurs, isManagedHookCommand, foreignHookBlocks, type Settings, type HookBlock } from './notifyHooks.js'
+import { command, nativeHookCommand, isOurs, isManagedHookCommand, foreignHookBlocks, type Settings, type HookBlock } from './notifyHooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
 import type { NativeHookOptions } from './nativeLocations.js'
 
@@ -13,6 +13,7 @@ export interface NativeHookSettings {
   version?: number
   block?: string
   failClosed?: boolean
+  nativeProtocol?: 1
   messages: { current: string; installed: string; after?: string; failed: string; malformed?: readonly string[] }
 }
 type Entry = { type?: string; command: string; timeout?: number; failClosed?: boolean }
@@ -30,7 +31,17 @@ function entries(value: unknown): Entry[] {
 }
 
 export async function installNativeHookSettings(rule: NativeHookSettings, port: number, options: NativeHookOptions = {}): Promise<boolean> {
-  const cmd = command(port, rule.engine, undefined, undefined, options.environment)
+  const artifact = rule.nativeProtocol ? nativeHookCommand(port, rule.engine, options.environment) : undefined
+  const cmd = artifact?.command ?? command(port, rule.engine, undefined, undefined, options.environment)
+  const preparation = artifact ? { ...options,
+    verify: () => { options.verify?.(); artifact.verify() },
+    confirmed: (proof: import('./nativeHookFiles.js').HookPreparationProof) => {
+      // The preparation verifies this dependency before its final owner/time
+      // fence. Acknowledgement composes proofs without another filesystem read.
+      options.confirmed?.({ files: [...proof.files, ...artifact.proof.files],
+        current: () => proof.current() && artifact.proof.current() })
+    },
+  } : options
   try { return await runHookPreparation([rule.file], async attempt => {
     const observed = inspectHookFile(rule.file)
     const parsed: unknown = observed.content === null ? {} : JSON.parse(observed.content)
@@ -77,7 +88,7 @@ export async function installNativeHookSettings(rule: NativeHookSettings, port: 
     console.log(changed ? rule.messages.installed.replace('{file}', () => rule.file) : rule.messages.current)
     if (changed && rule.messages.after) console.log(rule.messages.after)
     return true
-  }, { ...options, identity: JSON.stringify([rule, port, cmd]) }) } catch (error) {
+  }, { ...preparation, identity: JSON.stringify([rule, port, cmd, artifact?.proof.files]) }) } catch (error) {
     console.error(rule.messages.failed, error)
     return false
   }

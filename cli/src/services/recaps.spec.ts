@@ -8,6 +8,7 @@ import { deriveTurnSummary } from '../lib/deviceRecap.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { createRecaps, startRecaps } from './recaps.js'
+import { nativeRecapDigest, nativeRecapId, NATIVE_RECAP_VERSION } from '../lib/nativeRecapWire.js'
 
 const dirs: string[] = []
 const temp = () => { const dir = mkdtempSync(join(tmpdir(), 'recaps-')); dirs.push(dir); return dir }
@@ -37,6 +38,25 @@ describe('the recaps', () => {
     const ports = emptyPorts()
     startRecaps(fakeCore({ dataDir: temp() }), ports)
     expect(ports.recaps?.recaps('nobody')).toBeNull()
+  })
+
+  it('derives only the retained native answer, with no session history or lifecycle effects', async () => {
+    const changed = vi.fn()
+    const { core, recaps } = setup({ changed })
+    const owner = { agentId: 'a1', sessionId: 's1', processKey: 'native' }
+    const completion = { owner, generationId: 'A', id: nativeRecapId(owner, 'A'), responseText: 'The original answer.' }
+    const result = await recaps.port.nativeCompletion(completion)
+    expect(result).toEqual({ state: 'ready', id: completion.id, sourceDigest: nativeRecapDigest(completion), version: NATIVE_RECAP_VERSION, summary: deriveTurnSummary(completion.responseText) })
+    expect(Object.isFrozen(result)).toBe(true)
+    expect(await recaps.port.nativeCompletion(completion)).toEqual(result)
+    expect(await recaps.port.nativeCompletion({ ...completion, responseText: '' })).toMatchObject({ state: 'ready', summary: null })
+    expect(await recaps.port.nativeCompletion({ ...completion, id: 'foreign' })).toEqual({ state: 'held', reason: 'Waiting for the original native answer.' })
+    expect(core.transcripts.lastTurn).not.toHaveBeenCalled()
+    expect(core.clients.turnCard).not.toHaveBeenCalled()
+    expect(core.clients.turnSummary).not.toHaveBeenCalled()
+    expect(changed).not.toHaveBeenCalled()
+    expect(recaps.mirror.sessions()).toEqual([])
+    expect(recaps.port.recaps('s1')).toBeNull()
   })
 
   it('cuts a turn\'s recap from its final answer, sends the card and the apps\' recap, and keeps it for the core to read', async () => {

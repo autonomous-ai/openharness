@@ -72,6 +72,16 @@ afterEach(async () => {
 })
 
 describe('TmuxBackend lifecycle', () => {
+  it('checks interrupt permission at tmux dispatch and reports refusal as unwritten', async () => {
+    const calls = recordingTmux(), backend = new TmuxBackend(), runtime = { backend: 'tmux' as const, paneId: '%4' }
+    const write = { allowed: () => true, dispatch: <T>(operation: () => Promise<T>) => operation() }
+    expect(await backend.sendKey(runtime, 'ctrl-c', { ...write, allowed: () => false })).toMatchObject({ dispatch: 'not_started' })
+    expect(calls()).toEqual([])
+    await expect(backend.sendKey(runtime, 'ctrl-c', { ...write, allowed: () => { throw Error('original native proof lost') } })).rejects.toThrow('proof lost')
+    expect(calls()).toEqual([])
+    expect(await backend.sendKey(runtime, 'ctrl-c', write)).toMatchObject({ dispatch: 'executed' })
+    expect(calls()).toEqual(['send-keys -t %4 C-c'])
+  })
   it('keeps environment writes out of a pane revoked during session lookup', async () => {
     const calls = recordingTmux('', '$4')
     let current = true

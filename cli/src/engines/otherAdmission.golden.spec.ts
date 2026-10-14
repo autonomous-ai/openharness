@@ -21,6 +21,17 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
+// Admission outcomes use deterministic healthy flushes. Production storage and
+// OS-process fixtures exercise real disk confirmation separately.
+vi.mock('node:fs', async original => ({ ...await original<object>(),
+  fsync: (_fd: number, done: (error: Error | null) => void) => queueMicrotask(() => done(null)),
+}))
+
+vi.mock('../lib/bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
+vi.mock('../lib/processLiveness.js', async original => ({ ...await original<object>(),
+  processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
+}))
+
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/other-admission.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_OTHER_ENGINES_GOLDEN === '1'
 const START = 'Thu Oct  8 10:00:00 2026'
@@ -130,12 +141,6 @@ describe('how the core admits a Hermes session and learns its home', () => {
     const log = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { logs.push(args.map(String).join(' ')) })
     let server: Server | null = null
     try {
-      const started = await m.hookServer.startHookServer(0, {
-        onRegistered: (entry) => { registered.push({ sessionId: entry.sessionId, engine: entry.engine, hermesHome: entry.hermesHome ?? null }) },
-        onSessionEnd: () => {},
-      })
-      server = started.server
-      const headers = { 'content-type': 'application/json', 'x-harness-hook-token': m.hookAuth.readHookCredential(join(root, 'data'))! }
       const results: unknown[] = []
       const cases = [
         ['the default home\'s CLI session', '20261008_100000_aaaaaa'],
@@ -161,6 +166,12 @@ describe('how the core admits a Hermes session and learns its home', () => {
         }
         const tmuxPane = `%${++pane}`
         m.registry.registry.openProcessAgent({ engine: 'hermes', tmuxPane, cwd: '/work/h', processIdentity: { pid: 20_000 + pane, startMarker: START, executable: 'python3' } })
+        const started = await m.hookServer.startHookServer(0, {
+          onRegistered: (entry) => { registered.push({ sessionId: entry.sessionId, engine: entry.engine, hermesHome: entry.hermesHome ?? null }) },
+          onSessionEnd: () => {},
+        }, { deferNativeRecovery: true })
+        server = started.server
+        const headers = { 'content-type': 'application/json', 'x-harness-hook-token': m.hookAuth.readHookCredential(join(root, 'data'))! }
         registered.length = 0
         logs.length = 0
         const response = await fetch(`http://127.0.0.1:${started.port}/api/hook/session-start`, {
@@ -171,6 +182,7 @@ describe('how the core admits a Hermes session and learns its home', () => {
         const deadline = Date.now() + 10_000
         while (!registered.length && !logs.some((line) => line.includes('ignored') || line.includes(' held ·')) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
         results.push([label, response.status, answer, [...registered], logs.filter((line) => line.startsWith('[hooks]'))])
+        await new Promise<void>(resolve => server!.close(() => resolve())); server = null
       }
       check('admission', results)
     } finally {
@@ -217,3 +229,8 @@ describe('how the core admits a Hermes session and learns its home', () => {
     expect(Object.keys(recorded).sort()).toEqual(Object.keys(golden).sort())
   })
 })
+
+vi.mock('./kit/nativeHookStorage.js', async original => ({
+  ...await original<object>(),
+  openNativeHookStorage: (await import('../testing/nativeHookAdmissionStorageFixture.js')).fixtureNativeHookAdmissionStorage,
+}))

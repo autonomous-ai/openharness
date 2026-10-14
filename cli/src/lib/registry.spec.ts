@@ -269,7 +269,7 @@ describe('registry remote display names', () => {
     })
   })
 
-  it('persists Codex engine metadata and moves a malformed v2 row aside for operator recovery', async () => {
+  it('persists Codex engine metadata and holds a malformed v2 row for operator recovery', async () => {
     const sessionsDir = join(dataDir, 'sessions')
     const transcriptPath = join(sessionsDir, 'codex-session.jsonl')
     mkdirSync(sessionsDir)
@@ -302,11 +302,10 @@ describe('registry remote display names', () => {
     registry.load()
     expect(registry.list()).toEqual([])
     expect(registry.get('invalid-session')).toBeUndefined()
-    // Kept byte for byte beside the registry, which starts empty and can be written again.
+    // Unknown saved control cannot be replaced with newly discovered agents.
     const aside = readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))
-    expect(aside).toHaveLength(1)
-    expect(readFileSync(join(dataDir, aside[0]), 'utf-8')).toBe(malformed)
-    expect(existsSync(join(dataDir, 'registry.json'))).toBe(false)
+    expect(aside).toHaveLength(0)
+    expect(readFileSync(join(dataDir, 'registry.json'), 'utf-8')).toBe(malformed)
     error.mockRestore()
   })
 
@@ -356,25 +355,25 @@ describe('registry remote display names', () => {
     ['empty legacy row', JSON.stringify([{}])],
     ['primitive legacy row', JSON.stringify([7])],
     ['legacy row without runtime', JSON.stringify([{ agentId: 'legacy-agent' }])],
-  ])('moves %s aside byte-for-byte, starts empty, and goes on starting agents', async (_label, bytes) => {
+  ])('preserves %s byte-for-byte and holds discovery', async (_label, bytes) => {
     const file = join(dataDir, 'registry.json')
     writeLegacyStateFile(file, bytes)
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { registry } = await loadRegistryModule()
     registry.load()
     const aside = readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))
-    expect(aside).toHaveLength(1)
-    expect(readFileSync(join(dataDir, aside[0]), 'utf8')).toBe(bytes)
-    expect(statSync(join(dataDir, aside[0])).mode & 0o777).toBe(0o600)
-    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry .*; moved it aside to .*registry\.json\.corrupt-.* and started empty$/))
+    expect(aside).toHaveLength(0)
+    expect(readFileSync(file, 'utf8')).toBe(bytes)
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry .*; preserving saved state and refusing to overwrite it$/))
     registry.openProcessAgent({
       agentId: 'after-the-move',
       engine: 'claude',
       tmuxPane: '%88',
       processIdentity: processIdentity(888),
     })
-    expect(registry.list().map((s) => s.agentId)).toEqual(['after-the-move'])
-    expect(JSON.parse(readFileSync(file, 'utf8')).map((row: { agentId: string }) => row.agentId)).toEqual(['after-the-move'])
+    expect(registry.list()).toEqual([])
+    expect(readFileSync(file, 'utf8')).toBe(bytes)
     error.mockRestore()
   })
 

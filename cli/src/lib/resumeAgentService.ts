@@ -65,6 +65,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
    * checks both the registry and the saved process before any of this runs.
    */
   const retakeStaleReservation = (agentId: string): string | null => {
+    if (stoppedAgents.get(agentId)?.nativeControl) return null
     const heldSince = stoppedAgents.resumeReservedAt(agentId)
     if (heldSince === null || Date.now() - heldSince <= RESUME_READINESS_BUDGET_MS) return null
     console.log(`[resume] ${sid(agentId)} taking over a reservation held since ${new Date(heldSince).toISOString()} · its owner is gone`)

@@ -54,6 +54,23 @@ const line = (sessionId: string, engine: string, text = '{}'): LineEvent => ({ s
 describe('ingesting a transcript line', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('keeps native history available for display and usage without proving device delivery or aborting live work', () => {
+    const run = setup({ s1: 'claude', s2: 'codex', s3: 'commandcode' }, { historyOnly: () => true })
+    run.service.needsTranscript.mockReturnValue(true)
+    expect(run.ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))?.map(event => event.type)).toContain('turn_started')
+    run.ingest.ingestLine(line('s2', 'codex', CODEX_FAILED))
+    run.ingest.ingestLine(line('s3', 'commandcode', COMMANDCODE_FAILED))
+    const events = [{ type: 'turn_ended' as const, payload: {} }]
+    run.ingest.acceptFrame('s1', 'claude', { raw: CLAUDE_PROMPT, events, failure: 'an old error',
+      profile: true, observe: true, replay: false, turn: { identity: 'old:turn', turnOpen: false, continued: false } })
+    expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith('s1', events, { replay: false })
+    expect(run.deps.tokenUsage.changed).toHaveBeenCalledTimes(4)
+    expect(run.deps.runtimeProfiles.ingest).toHaveBeenCalledTimes(4)
+    expect(run.service.needsTranscript).not.toHaveBeenCalled()
+    expect(run.service.observeTranscript).not.toHaveBeenCalled()
+    expect(run.deps.announceTurnAborted).not.toHaveBeenCalled()
+  })
+
   it('accepts worker events only for the bound engine, preserving replay and side reads without constructing a parser', () => {
     const p = setup({ s1: 'claude' }, { liveFor: () => { throw new Error('worker events are already normalized') } })
     const frame: LiveFrame = { raw: CLAUDE_PROMPT, events: [{ type: 'turn_started', payload: { userMessage: 'hello' } }],

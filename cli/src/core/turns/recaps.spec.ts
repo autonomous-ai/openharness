@@ -12,7 +12,7 @@ function setup(over: Partial<RecapDeps> = {}) {
   const sessions = new Map([['s1', live], ['s2', bare]])
   const held = new Map<string, SessionRecaps>()
   const card = { type: 'commander_event' as const, agentId: 'a1', dbSessionId: 's1', payload: { kind: 'processing' } }
-  const port = { lifecycle: vi.fn(), recaps: vi.fn((sessionId: string) => held.get(sessionId) ?? null), liveCards: vi.fn(async () => [card]) } satisfies RecapsPort
+  const port = { nativeCompletion: vi.fn(async () => ({ state: 'held' as const, reason: 'Waiting for the recaps service.' })), lifecycle: vi.fn(), recaps: vi.fn((sessionId: string) => held.get(sessionId) ?? null), liveCards: vi.fn(async () => [card]) } satisfies RecapsPort
   let on: RecapsPort | null = port
   const deps: RecapDeps = {
     port: () => on,

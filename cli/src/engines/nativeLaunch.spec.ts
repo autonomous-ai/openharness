@@ -32,6 +32,17 @@ it('needs no executable, hooks or probes for a terminal', async () => {
   expect(await prepared.launch.permission({ bypassPermission: true })).toBe('supported')
   expect(captureLaunchExecutable).not.toHaveBeenCalled()
 })
+it('keeps the reserved token through repeated native preparation', async () => {
+  const options = { launchToken: 'fixture-original-rearm-token' }
+  const first = inspectNativeLaunch('cursor', {}, options)
+  options.launchToken = 'fixture-unrelated-rearm-token'
+  expect(await first).toMatchObject({ ok: true, launch: { token: 'fixture-original-rearm-token' } })
+  expect(await inspectNativeLaunch('cursor', {}, { launchToken: 'fixture-original-rearm-token' }))
+    .toMatchObject({ ok: true, launch: { token: 'fixture-original-rearm-token' } })
+  vi.mocked(captureLaunchExecutable).mockClear()
+  expect(await inspectNativeLaunch('cursor', {}, { launchToken: 'bad token' })).toMatchObject({ ok: false, error: 'NATIVE_LAUNCH_HELD' })
+  expect(captureLaunchExecutable).not.toHaveBeenCalled()
+})
 it('retains one executable for version, permission and OpenCode hooks', async () => {
   const prepared = await inspectNativeLaunch('opencode', { bypassPermission: true })
   expect(prepared.ok).toBe(true)

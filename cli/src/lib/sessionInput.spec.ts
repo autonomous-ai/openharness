@@ -728,7 +728,7 @@ describe('SessionInputController', () => {
         capture: async () => codexComposer(''), onError: vi.fn() })
       controller.submit('s1', 'hello')
       await vi.advanceTimersByTimeAsync(1_600)
-      expect(sendKey).toHaveBeenCalledWith('h1', 'Enter')
+      expect(sendKey).toHaveBeenCalledWith('h1', 'Enter', undefined)
       controller.forget('s1')
     })
 

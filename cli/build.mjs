@@ -4,6 +4,8 @@ import { join } from 'path'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
 import { readBuiltinBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
 import { fileURLToPath } from 'node:url'
+import { readProcessImageBundle } from './scripts/lib/processImageBundle.mjs'
+import { buildNativeHook } from './scripts/lib/nativeHookBundle.mjs'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
 const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
 const harnessMonitorBundle = JSON.stringify(readHarnessMonitorBundle(fileURLToPath(new URL('../store/agents/harness-monitor', import.meta.url))))
@@ -12,6 +14,8 @@ const memoriesBundle = JSON.stringify(readMemoriesBundle(fileURLToPath(new URL('
 // Bake the version in so `node dist/cli.js version` works in the dev/per-file build too (parity with
 // build-bundle.mjs). The bundle build overrides this from ADAPTER_VERSION at release time.
 const version = JSON.parse(readFileSync('package.json', 'utf8')).version
+const processImages = readProcessImageBundle({ path: process.env.HARNESS_PROCESS_IMAGES_ARTIFACT,
+  required: process.env.HARNESS_REQUIRE_PROCESS_IMAGES === '1' })
 // The bundled registry (the store/ folders and store/registry at the repo root) — see src/dsh/registry.ts.
 const dshRegistry = JSON.stringify(readDshRegistry(join('..', 'store')))
 
@@ -30,7 +34,9 @@ function getAllTsFiles(dir, fileList = []) {
   return fileList
 }
 
-const entryPoints = getAllTsFiles('src')
+// The hook entry has a build-time guard on its raw compatibility module. It is
+// executable only as the standalone bundle, never as a second per-file entry.
+const entryPoints = getAllTsFiles('src').filter(path => path !== join('src', 'nativeHookEntry.ts'))
 
 try {
   await esbuild.build({
@@ -49,12 +55,18 @@ try {
       __DEVICES_BUNDLE__: JSON.stringify(devicesBundle),
       __HARNESS_MONITOR_BUNDLE__: JSON.stringify(harnessMonitorBundle),
       __MEMORIES_BUNDLE__: JSON.stringify(memoriesBundle),
+      __DARWIN_PROCESS_IMAGES__: processImages ? JSON.stringify(processImages) : 'undefined',
     },
     logLevel: 'info',
   })
+  await buildNativeHook({ outDir: 'dist', processImages, version })
 
   console.log('✓ Build completed successfully')
 } catch (error) {
   console.error('✗ Build failed:', error)
-  process.exit(1)
+  process.exitCode = 1
+} finally {
+  // Explicitly request build-service shutdown; validation separately checks
+  // that no child remains after the build process exits.
+  await esbuild.stop()
 }

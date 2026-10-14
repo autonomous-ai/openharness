@@ -1,7 +1,9 @@
 import { LAUNCH_LOCATION_VARIABLES } from '../engines/kit/nativeLocations.js'
 import type { NativeLaunch } from '../engines/nativeLaunch.js'
 import { nativeLaunchGuard } from '../engines/kit/nativeLaunchGuard.js'
+import { nativeRearmExecCommand } from '../engines/kit/nativeRearmWitness.js'
 import { nativePaneHold, NATIVE_LAUNCH_MARKER } from './nativePaneHold.js'
+import { nativePaneAllocationScript } from './nativePaneAllocation.js'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -554,7 +556,6 @@ export function buildEngineLaunchArgv(
   const interactive = interactiveEngineShell(shell)
     ?? (opts.native || startupNeedsScript(launchContract(engine)) ? { path: posixRunner(), args: ['-c'], label: 'shell' } : null)
   if (!interactive) return command
-  const enginePrelude = engineFallbackPrelude(engine, interactive.path, tmuxBinary)
   // The clear comes FIRST, before the install as well as before the engine. An installer is a child
   // of this shell and inherits what it inherits: `npm` is not going to spend someone's Anthropic key,
   // but an install script that probes for credentials to configure itself would, and the whole point
@@ -562,7 +563,6 @@ export function buildEngineLaunchArgv(
   // Then the grid's PATH entry at the FRONT (its dir holds only `grid`), and — for a DSH agent — Harness's
   // Node at the END, only when the shell found none. The two never meet: one prepends, one appends.
   const nativeEnv = Object.entries(opts.native?.environment ?? {}).map(([key, value]) => `export ${key}=${shellSingleQuote(value)}\n`).join('')
-  const prelude = enginePrelude + clearEnvPrelude(opts.clearEnv) + clearEnvPrelude(opts.native?.clearEnvironment) + nativeEnv + gridPanePrelude(gridBinary) + browserPrelude() + noDevtoolsPrelude() + (opts.harnessNode ? harnessNodePrelude(runtimeNode) : '')
   // rc files (notably nvm) call getcwd() before running this command. Start the shell in a safe
   // directory and enter the selected workspace only after those files have loaded: an IDE can replace
   // a workspace inode between the desktop picker resolving it and tmux spawning the pane.
@@ -583,7 +583,13 @@ export function buildEngineLaunchArgv(
   // same server-side predicate as every other held launch. No engine has run.
   const waiting = nativePaneHold(opts.native?.token ?? '', tmuxBinary, heldCommand, runtimeNode, harnessPaneOwner(env.ADAPTER_DATA_DIR))
   const guard = opts.native ? nativeLaunchGuard(opts.native, runtimeNode, waiting) : ''
-  const body = `${JOB_CONTROL}${SIGNAL_GUARD}${engineFound}shift\n${guard}${engineRunScript(engine, tmuxBinary)}`
+  const witness = opts.native?.rearmWitness
+  if (witness && (engine !== 'cursor' || witness.token !== opts.native!.token)) throw Error('The original native relaunch command changed.')
+  const allocation = (operation: 'claim' | 'release') => witness
+    ? nativePaneAllocationScript(operation, witness.token, tmuxBinary, runtimeNode, harnessPaneOwner(env.ADAPTER_DATA_DIR), waiting) : ''
+  const enginePrelude = engineFallbackPrelude(engine, interactive.path, tmuxBinary, allocation('release'))
+  const prelude = enginePrelude + clearEnvPrelude(opts.clearEnv) + clearEnvPrelude(opts.native?.clearEnvironment) + nativeEnv + gridPanePrelude(gridBinary) + browserPrelude() + noDevtoolsPrelude() + (opts.harnessNode ? harnessNodePrelude(runtimeNode) : '')
+  const body = `${JOB_CONTROL}${SIGNAL_GUARD}${engineFound}shift\n${guard}${allocation('claim')}${engineRunScript(engine, tmuxBinary, witness && nativeRearmExecCommand(witness, { binary: tmuxBinary, owner: harnessPaneOwner(env.ADAPTER_DATA_DIR) }))}`
   // The open-files raise goes ahead of everything, the installer included: a pane inherits the tmux
   // SERVER's soft limit, which is launchd's 256 whenever the desktop app started the daemon that
   // started the server, and an engine (Claude Code refuses outright) or an npm install under 256 is
@@ -673,7 +679,7 @@ export const ENGINE_INPUT_DRAIN_SH = '  if harness_tty=$(stty -g 2>/dev/null) &&
  * script's top level. An engine's declared startup adds its own functions here: Codex's probe for its
  * owned-process flag and its runs again after a failed startup (engines/kit/launchStartup.ts).
  */
-export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tmuxBinary: string | null): string {
+export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tmuxBinary: string | null, beforeFallback = ''): string {
   const loginArgs = basename(shellPath).toLowerCase() === 'zsh' ? ' -l' : ''
   // Named by the command a person would type (`cursor-agent`, `cmd`), not the engine id.
   const command = basename(engineBin(engine)) || engine
@@ -687,6 +693,7 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
     : ''
   return STOP_PROOF_FUNCTIONS
     + 'harness_after() {\n'
+    + beforeFallback
     + '  if [ "$harness_status" -eq 127 ]; then exit 127; fi\n'
     + mark
     // Only a pane — something with a terminal on stdin — gets a shell to type into. Run without one
@@ -796,8 +803,8 @@ const STOP_PROOF_FUNCTIONS = [
  * An engine's declared startup decides how it is run: Codex's with its probed flag, and once more after a
  * startup that never opened its conversation (engines/kit/launchStartup.ts).
  */
-function engineRunScript(engine: AgentEngine, tmuxBinary: string | null): string {
-  return startupRuns(engine, launchContract(engine), tmuxBinary)
+function engineRunScript(engine: AgentEngine, tmuxBinary: string | null, command?: string): string {
+  return startupRuns(engine, launchContract(engine), tmuxBinary, command)
 }
 
 /**

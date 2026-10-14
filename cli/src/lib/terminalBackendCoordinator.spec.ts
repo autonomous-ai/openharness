@@ -55,6 +55,15 @@ function submitBy(onFirst: Awaited<ReturnType<TerminalBackend['submitText']>>) {
 }
 
 describe('TerminalBackendCoordinator', () => {
+  it('carries the original interrupt verifier to actual backend dispatch', async () => {
+    const tmuxBackend = backend('tmux:default', vi.fn())
+    const coordinator = new TerminalBackendCoordinator([tmuxBackend], ['tmux'])
+    const lease = await coordinator.acquireLease(session())
+    if (lease.state !== 'succeeded') throw Error('fixture lease refused')
+    const allowed = { allowed: () => true, dispatch: <T>(operation: () => Promise<T>) => operation() }
+    await coordinator.sendLegacyKeyLease(lease.value, 'C-c', allowed)
+    expect(tmuxBackend.sendKey).toHaveBeenCalledWith(tmux, 'ctrl-c', allowed)
+  })
   it('opens a retained terminal runtime even when engine discovery marked the agent dormant', async () => {
     const tmuxBackend = backend('tmux:default', vi.fn())
     const handle = streamHandle()

@@ -1,0 +1,1816 @@
+{
+  "linux": {
+    "initial": {
+      "row": {
+        "schemaVersion": 5,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "nativeAllocation": {
+          "version": 2,
+          "receipts": [
+            {
+              "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+              "request": {
+                "kind": "native-create-v2",
+                "creationId": "fixture-initial-request",
+                "agentId": "fixture-agent",
+                "launchToken": "fixture-initial-launch",
+                "label": "harness-cursor-fixture",
+                "local": true,
+                "input": {
+                  "engine": "cursor",
+                  "cwd": "/fixture/project",
+                  "permissionMode": "ask",
+                  "prompt": "Original task"
+                },
+                "selection": null
+              }
+            }
+          ]
+        },
+        "agent": null
+      },
+      "target": "d22aa1cc9cf7d39662f0443ed2d302336ff04826a2994454f4f0269c76a5ea74",
+      "allocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "repeated": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "capacity": true
+    },
+    "initial:ordinary-save": "Waiting for the proven native allocation handoff before saving this visit.",
+    "initial:saved": {
+      "schemaVersion": 5,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "agent": null,
+      "launch": {
+        "state": "ready"
+      },
+      "nativeAllocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      }
+    },
+    "initial:loaded": {
+      "schemaVersion": 5,
+      "nativeAllocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "initial:notify": {
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "active": true,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1"
+    },
+    "initial:registered": {
+      "schemaVersion": 5,
+      "nativeAllocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "initial:stale": [
+      {
+        "schemaVersion": 5,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": "Renamed",
+        "model": null,
+        "cliVersion": null,
+        "nativeAllocation": {
+          "version": 2,
+          "receipts": [
+            {
+              "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+              "request": {
+                "kind": "native-create-v2",
+                "creationId": "fixture-initial-request",
+                "agentId": "fixture-agent",
+                "launchToken": "fixture-initial-launch",
+                "label": "harness-cursor-fixture",
+                "local": true,
+                "input": {
+                  "engine": "cursor",
+                  "cwd": "/fixture/project",
+                  "permissionMode": "ask",
+                  "prompt": "Original task"
+                },
+                "selection": null
+              }
+            }
+          ]
+        },
+        "agent": null
+      }
+    ],
+    "initial:invalid": [
+      null,
+      null,
+      null,
+      {
+        "schemaVersion": 5,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "agent": null,
+        "nativeAllocation": {
+          "version": 2,
+          "receipts": [
+            {
+              "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+              "request": {
+                "kind": "native-create-v2",
+                "creationId": "fixture-initial-request",
+                "agentId": "fixture-agent",
+                "launchToken": "fixture-initial-launch",
+                "label": "harness-cursor-fixture",
+                "local": true,
+                "input": {
+                  "engine": "cursor",
+                  "cwd": "/fixture/project",
+                  "permissionMode": "ask",
+                  "prompt": "Original task"
+                },
+                "selection": null
+              }
+            }
+          ]
+        }
+      },
+      null,
+      null,
+      null,
+      null
+    ],
+    "cancelled": {
+      "row": {
+        "schemaVersion": 4,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "nativeAllocation": {
+          "version": 2,
+          "receipts": [
+            {
+              "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+              "request": {
+                "kind": "native-create-v2",
+                "creationId": "fixture-initial-request",
+                "agentId": "fixture-agent",
+                "launchToken": "fixture-initial-launch",
+                "label": "harness-cursor-fixture",
+                "local": true,
+                "input": {
+                  "engine": "cursor",
+                  "cwd": "/fixture/project",
+                  "permissionMode": "ask",
+                  "prompt": "Original task"
+                },
+                "selection": null
+              }
+            }
+          ]
+        },
+        "agent": null
+      },
+      "target": "d22aa1cc9cf7d39662f0443ed2d302336ff04826a2994454f4f0269c76a5ea74",
+      "allocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "repeated": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "capacity": true
+    },
+    "cancelled:ordinary-save": "accepted",
+    "cancelled:saved": {
+      "schemaVersion": 4,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "agent": null,
+      "launch": {
+        "state": "ready"
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "nativeAllocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      }
+    },
+    "cancelled:loaded": {
+      "schemaVersion": 4,
+      "nativeAllocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "cancelled:notify": {
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "active": true,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1"
+    },
+    "cancelled:registered": {
+      "schemaVersion": 4,
+      "nativeAllocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "cancelled:stale": [
+      {
+        "schemaVersion": 4,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": "Renamed",
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "nativeAllocation": {
+          "version": 2,
+          "receipts": [
+            {
+              "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+              "request": {
+                "kind": "native-create-v2",
+                "creationId": "fixture-initial-request",
+                "agentId": "fixture-agent",
+                "launchToken": "fixture-initial-launch",
+                "label": "harness-cursor-fixture",
+                "local": true,
+                "input": {
+                  "engine": "cursor",
+                  "cwd": "/fixture/project",
+                  "permissionMode": "ask",
+                  "prompt": "Original task"
+                },
+                "selection": null
+              }
+            }
+          ]
+        },
+        "agent": null
+      }
+    ],
+    "cancelled:invalid": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "darwin": {
+    "initial": {
+      "row": {
+        "schemaVersion": 5,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "nativeAllocation": {
+          "version": 2,
+          "receipts": [
+            {
+              "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+              "request": {
+                "kind": "native-create-v2",
+                "creationId": "fixture-initial-request",
+                "agentId": "fixture-agent",
+                "launchToken": "fixture-initial-launch",
+                "label": "harness-cursor-fixture",
+                "local": true,
+                "input": {
+                  "engine": "cursor",
+                  "cwd": "/fixture/project",
+                  "permissionMode": "ask",
+                  "prompt": "Original task"
+                },
+                "selection": null
+              }
+            }
+          ]
+        },
+        "agent": null
+      },
+      "target": "d22aa1cc9cf7d39662f0443ed2d302336ff04826a2994454f4f0269c76a5ea74",
+      "allocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "repeated": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "capacity": true
+    },
+    "initial:ordinary-save": "Waiting for the proven native allocation handoff before saving this visit.",
+    "initial:saved": {
+      "schemaVersion": 5,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "agent": null,
+      "launch": {
+        "state": "ready"
+      },
+      "nativeAllocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      }
+    },
+    "initial:loaded": {
+      "schemaVersion": 5,
+      "nativeAllocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "initial:notify": {
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "active": true,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1"
+    },
+    "initial:registered": {
+      "schemaVersion": 5,
+      "nativeAllocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "initial:stale": [
+      {
+        "schemaVersion": 5,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": "Renamed",
+        "model": null,
+        "cliVersion": null,
+        "nativeAllocation": {
+          "version": 2,
+          "receipts": [
+            {
+              "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+              "request": {
+                "kind": "native-create-v2",
+                "creationId": "fixture-initial-request",
+                "agentId": "fixture-agent",
+                "launchToken": "fixture-initial-launch",
+                "label": "harness-cursor-fixture",
+                "local": true,
+                "input": {
+                  "engine": "cursor",
+                  "cwd": "/fixture/project",
+                  "permissionMode": "ask",
+                  "prompt": "Original task"
+                },
+                "selection": null
+              }
+            }
+          ]
+        },
+        "agent": null
+      }
+    ],
+    "initial:invalid": [
+      null,
+      null,
+      null,
+      {
+        "schemaVersion": 5,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "agent": null,
+        "nativeAllocation": {
+          "version": 2,
+          "receipts": [
+            {
+              "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+              "request": {
+                "kind": "native-create-v2",
+                "creationId": "fixture-initial-request",
+                "agentId": "fixture-agent",
+                "launchToken": "fixture-initial-launch",
+                "label": "harness-cursor-fixture",
+                "local": true,
+                "input": {
+                  "engine": "cursor",
+                  "cwd": "/fixture/project",
+                  "permissionMode": "ask",
+                  "prompt": "Original task"
+                },
+                "selection": null
+              }
+            }
+          ]
+        }
+      },
+      null,
+      null,
+      null,
+      null
+    ],
+    "cancelled": {
+      "row": {
+        "schemaVersion": 4,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "nativeAllocation": {
+          "version": 2,
+          "receipts": [
+            {
+              "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+              "request": {
+                "kind": "native-create-v2",
+                "creationId": "fixture-initial-request",
+                "agentId": "fixture-agent",
+                "launchToken": "fixture-initial-launch",
+                "label": "harness-cursor-fixture",
+                "local": true,
+                "input": {
+                  "engine": "cursor",
+                  "cwd": "/fixture/project",
+                  "permissionMode": "ask",
+                  "prompt": "Original task"
+                },
+                "selection": null
+              }
+            }
+          ]
+        },
+        "agent": null
+      },
+      "target": "d22aa1cc9cf7d39662f0443ed2d302336ff04826a2994454f4f0269c76a5ea74",
+      "allocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "repeated": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "capacity": true
+    },
+    "cancelled:ordinary-save": "accepted",
+    "cancelled:saved": {
+      "schemaVersion": 4,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "agent": null,
+      "launch": {
+        "state": "ready"
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "nativeAllocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      }
+    },
+    "cancelled:loaded": {
+      "schemaVersion": 4,
+      "nativeAllocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "cancelled:notify": {
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "active": true,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1"
+    },
+    "cancelled:registered": {
+      "schemaVersion": 4,
+      "nativeAllocation": {
+        "version": 2,
+        "receipts": [
+          {
+            "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+            "request": {
+              "kind": "native-create-v2",
+              "creationId": "fixture-initial-request",
+              "agentId": "fixture-agent",
+              "launchToken": "fixture-initial-launch",
+              "label": "harness-cursor-fixture",
+              "local": true,
+              "input": {
+                "engine": "cursor",
+                "cwd": "/fixture/project",
+                "permissionMode": "ask",
+                "prompt": "Original task"
+              },
+              "selection": null
+            }
+          }
+        ]
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "cancelled:stale": [
+      {
+        "schemaVersion": 4,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": "Renamed",
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "nativeAllocation": {
+          "version": 2,
+          "receipts": [
+            {
+              "fingerprint": "e231202201016a839969ca89bdb2b89362db2fa06abc695d9399055508de3f78",
+              "request": {
+                "kind": "native-create-v2",
+                "creationId": "fixture-initial-request",
+                "agentId": "fixture-agent",
+                "launchToken": "fixture-initial-launch",
+                "label": "harness-cursor-fixture",
+                "local": true,
+                "input": {
+                  "engine": "cursor",
+                  "cwd": "/fixture/project",
+                  "permissionMode": "ask",
+                  "prompt": "Original task"
+                },
+                "selection": null
+              }
+            }
+          ]
+        },
+        "agent": null
+      }
+    ],
+    "cancelled:invalid": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  }
+}

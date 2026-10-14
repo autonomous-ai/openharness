@@ -1,0 +1,682 @@
+{
+  "linux": {
+    "missing": {
+      "status": {
+        "value": {
+          "state": "missing"
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "tombstone": {
+      "status": {
+        "value": {
+          "state": "cancelled"
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "pending": {
+      "status": {
+        "value": {
+          "state": "pending",
+          "held": {
+            "service": "native",
+            "detail": "Waiting for the original allocation."
+          }
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "cancelled": {
+      "status": {
+        "value": {
+          "state": "cancelled"
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "value": {
+          "link": {
+            "version": 1,
+            "agentId": "fixture-agent",
+            "requestId": "native-cleanup-golden-request",
+            "launchToken": "native-cleanup-golden-token",
+            "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "request": {
+            "kind": "native-rearm",
+            "creationId": "native-cleanup-golden-request",
+            "agentId": "fixture-agent",
+            "operation": "resume",
+            "source": "saved",
+            "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "launchToken": "native-cleanup-golden-token",
+            "permissionMode": "full",
+            "sourceProcess": {
+              "processKey": "linux:aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\u0000cursor\u000042\u000012345",
+              "namespace": "linux:4:5"
+            }
+          },
+          "kind": "not-dispatched",
+          "outcome": {
+            "state": "cancelled"
+          }
+        }
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "cancelled:retained": {
+      "primary": {
+        "cleanup": {
+          "error": "IDENTITY_UNAVAILABLE"
+        },
+        "completion": null
+      },
+      "claim": {
+        "cleanup": {
+          "error": "IDENTITY_UNAVAILABLE"
+        },
+        "completion": null
+      },
+      "result": {
+        "cleanup": {
+          "error": "retained-evidence-changed"
+        },
+        "completion": null
+      },
+      "confirmation": {
+        "cleanup": {
+          "error": "retained-evidence-changed"
+        },
+        "completion": null
+      },
+      "process": {
+        "cleanup": {
+          "error": "retained-evidence-changed"
+        },
+        "completion": null
+      }
+    },
+    "uncertain": {
+      "status": {
+        "value": {
+          "state": "unconfirmed"
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "not-dispatched": {
+      "status": {
+        "value": {
+          "state": "failed",
+          "error": "NATIVE_REARM_NOT_DISPATCHED"
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "value": {
+          "link": {
+            "version": 1,
+            "agentId": "fixture-agent",
+            "requestId": "native-cleanup-golden-request",
+            "launchToken": "native-cleanup-golden-token",
+            "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "request": {
+            "kind": "native-rearm",
+            "creationId": "native-cleanup-golden-request",
+            "agentId": "fixture-agent",
+            "operation": "resume",
+            "source": "saved",
+            "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "launchToken": "native-cleanup-golden-token",
+            "permissionMode": "full",
+            "sourceProcess": {
+              "processKey": "linux:aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\u0000cursor\u000042\u000012345",
+              "namespace": "linux:4:5"
+            }
+          },
+          "kind": "not-dispatched",
+          "outcome": {
+            "state": "failed",
+            "error": "NATIVE_REARM_NOT_DISPATCHED"
+          }
+        }
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "failed": {
+      "status": {
+        "value": {
+          "state": "failed",
+          "error": "OTHER_FAILURE"
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "witness": {
+      "status": {
+        "value": {
+          "state": "unconfirmed"
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "created": {
+      "status": {
+        "value": {
+          "state": "created",
+          "agentId": "fixture-agent",
+          "resumed": true
+        }
+      },
+      "completion": {
+        "value": {
+          "state": "created",
+          "agentId": "fixture-agent",
+          "resumed": true
+        }
+      },
+      "cleanup": {
+        "value": {
+          "link": {
+            "version": 1,
+            "agentId": "fixture-agent",
+            "requestId": "native-cleanup-golden-request",
+            "launchToken": "native-cleanup-golden-token",
+            "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "request": {
+            "kind": "native-rearm",
+            "creationId": "native-cleanup-golden-request",
+            "agentId": "fixture-agent",
+            "operation": "resume",
+            "source": "saved",
+            "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "launchToken": "native-cleanup-golden-token",
+            "permissionMode": "full",
+            "sourceProcess": {
+              "processKey": "linux:aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\u0000cursor\u000042\u000012345",
+              "namespace": "linux:4:5"
+            }
+          },
+          "kind": "created",
+          "outcome": {
+            "state": "created",
+            "agentId": "fixture-agent",
+            "resumed": true
+          }
+        }
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "created:retained": {
+      "primary": {
+        "cleanup": {
+          "error": "IDENTITY_UNAVAILABLE"
+        },
+        "completion": {
+          "error": "IDENTITY_UNAVAILABLE"
+        }
+      },
+      "claim": {
+        "cleanup": {
+          "error": "IDENTITY_UNAVAILABLE"
+        },
+        "completion": {
+          "error": "IDENTITY_UNAVAILABLE"
+        }
+      },
+      "result": {
+        "cleanup": {
+          "error": "IDENTITY_UNAVAILABLE"
+        },
+        "completion": {
+          "error": "IDENTITY_UNAVAILABLE"
+        }
+      },
+      "confirmation": {
+        "cleanup": {
+          "error": "IDENTITY_UNAVAILABLE"
+        },
+        "completion": {
+          "error": "IDENTITY_UNAVAILABLE"
+        }
+      },
+      "process": {
+        "cleanup": {
+          "error": "IDENTITY_UNAVAILABLE"
+        },
+        "completion": {
+          "error": "IDENTITY_UNAVAILABLE"
+        }
+      }
+    }
+  },
+  "darwin": {
+    "missing": {
+      "status": {
+        "value": {
+          "state": "missing"
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "tombstone": {
+      "status": {
+        "value": {
+          "state": "cancelled"
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "pending": {
+      "status": {
+        "value": {
+          "state": "pending",
+          "held": {
+            "service": "native",
+            "detail": "Waiting for the original allocation."
+          }
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "cancelled": {
+      "status": {
+        "value": {
+          "state": "cancelled"
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "value": {
+          "link": {
+            "version": 1,
+            "agentId": "fixture-agent",
+            "requestId": "native-cleanup-golden-request",
+            "launchToken": "native-cleanup-golden-token",
+            "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "request": {
+            "kind": "native-rearm",
+            "creationId": "native-cleanup-golden-request",
+            "agentId": "fixture-agent",
+            "operation": "resume",
+            "source": "saved",
+            "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "launchToken": "native-cleanup-golden-token",
+            "permissionMode": "full",
+            "sourceProcess": {
+              "processKey": "linux:aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\u0000cursor\u000042\u000012345",
+              "namespace": "linux:4:5"
+            }
+          },
+          "kind": "not-dispatched",
+          "outcome": {
+            "state": "cancelled"
+          }
+        }
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "cancelled:retained": {
+      "primary": {
+        "cleanup": {
+          "error": "IDENTITY_UNAVAILABLE"
+        },
+        "completion": null
+      },
+      "claim": {
+        "cleanup": {
+          "error": "IDENTITY_UNAVAILABLE"
+        },
+        "completion": null
+      },
+      "result": {
+        "cleanup": {
+          "error": "retained-evidence-changed"
+        },
+        "completion": null
+      },
+      "confirmation": {
+        "cleanup": {
+          "error": "retained-evidence-changed"
+        },
+        "completion": null
+      },
+      "process": {
+        "cleanup": {
+          "error": "retained-evidence-changed"
+        },
+        "completion": null
+      }
+    },
+    "uncertain": {
+      "status": {
+        "value": {
+          "state": "unconfirmed"
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "not-dispatched": {
+      "status": {
+        "value": {
+          "state": "failed",
+          "error": "NATIVE_REARM_NOT_DISPATCHED"
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "value": {
+          "link": {
+            "version": 1,
+            "agentId": "fixture-agent",
+            "requestId": "native-cleanup-golden-request",
+            "launchToken": "native-cleanup-golden-token",
+            "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "request": {
+            "kind": "native-rearm",
+            "creationId": "native-cleanup-golden-request",
+            "agentId": "fixture-agent",
+            "operation": "resume",
+            "source": "saved",
+            "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "launchToken": "native-cleanup-golden-token",
+            "permissionMode": "full",
+            "sourceProcess": {
+              "processKey": "linux:aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\u0000cursor\u000042\u000012345",
+              "namespace": "linux:4:5"
+            }
+          },
+          "kind": "not-dispatched",
+          "outcome": {
+            "state": "failed",
+            "error": "NATIVE_REARM_NOT_DISPATCHED"
+          }
+        }
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "failed": {
+      "status": {
+        "value": {
+          "state": "failed",
+          "error": "OTHER_FAILURE"
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "witness": {
+      "status": {
+        "value": {
+          "state": "unconfirmed"
+        }
+      },
+      "completion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "cleanup": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "created": {
+      "status": {
+        "value": {
+          "state": "created",
+          "agentId": "fixture-agent",
+          "resumed": true
+        }
+      },
+      "completion": {
+        "value": {
+          "state": "created",
+          "agentId": "fixture-agent",
+          "resumed": true
+        }
+      },
+      "cleanup": {
+        "value": {
+          "link": {
+            "version": 1,
+            "agentId": "fixture-agent",
+            "requestId": "native-cleanup-golden-request",
+            "launchToken": "native-cleanup-golden-token",
+            "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "request": {
+            "kind": "native-rearm",
+            "creationId": "native-cleanup-golden-request",
+            "agentId": "fixture-agent",
+            "operation": "resume",
+            "source": "saved",
+            "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "launchToken": "native-cleanup-golden-token",
+            "permissionMode": "full",
+            "sourceProcess": {
+              "processKey": "linux:aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\u0000cursor\u000042\u000012345",
+              "namespace": "linux:4:5"
+            }
+          },
+          "kind": "created",
+          "outcome": {
+            "state": "created",
+            "agentId": "fixture-agent",
+            "resumed": true
+          }
+        }
+      },
+      "foreignRequest": {
+        "error": "CREATION_CONFLICT"
+      },
+      "foreignLink": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "created:retained": {
+      "primary": {
+        "cleanup": {
+          "error": "IDENTITY_UNAVAILABLE"
+        },
+        "completion": {
+          "error": "IDENTITY_UNAVAILABLE"
+        }
+      },
+      "claim": {
+        "cleanup": {
+          "error": "IDENTITY_UNAVAILABLE"
+        },
+        "completion": {
+          "error": "IDENTITY_UNAVAILABLE"
+        }
+      },
+      "result": {
+        "cleanup": {
+          "error": "IDENTITY_UNAVAILABLE"
+        },
+        "completion": {
+          "error": "IDENTITY_UNAVAILABLE"
+        }
+      },
+      "confirmation": {
+        "cleanup": {
+          "error": "IDENTITY_UNAVAILABLE"
+        },
+        "completion": {
+          "error": "IDENTITY_UNAVAILABLE"
+        }
+      },
+      "process": {
+        "cleanup": {
+          "error": "IDENTITY_UNAVAILABLE"
+        },
+        "completion": {
+          "error": "IDENTITY_UNAVAILABLE"
+        }
+      }
+    }
+  }
+}

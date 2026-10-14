@@ -11,6 +11,7 @@ import { engineHooks } from './hooks.js'
 import * as hooks from './nativeHooks.js'
 import { captureLaunchExecutable, LAUNCH_LOCATION_VARIABLES } from './kit/launchExecutable.js'
 import type { HookPreparationProof } from './kit/nativeHookFiles.js'
+import type { NativeRearmWitnessCommand } from './kit/nativeRearmWitness.js'
 import { nativeHookLocations, nativeProcessEnvironment, type NativeHookOptions } from './kit/nativeLocations.js'
 import { parseMajor, type NativeExecutableSnapshot } from './kit/nativeVersion.js'
 import { OPENCODE_VERSION } from './opencode/contract.js'
@@ -23,6 +24,7 @@ export interface NativeLaunchSource extends PermissionLaunchChoice {
 }
 export interface NativeLaunch {
   token?: string
+  rearmWitness?: NativeRearmWitnessCommand
   executable?: NativeExecutableSnapshot
   opencodeMajor: number | null
   /** Set again after the pane's rc files, before the exact prepared executable. */
@@ -96,8 +98,12 @@ async function read(executable: string, args: readonly string[], environment: Re
 
 /** Probe only. No settings, workspace, model or process mutation occurs here. */
 export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLaunchSource = {},
-  deps: { confirmHome?: (engine: 'claude' | 'codex', home: string) => void } = {},
+  deps: { confirmHome?: (engine: 'claude' | 'codex', home: string) => void; launchToken?: string } = {},
 ): Promise<NativeLaunchResult> {
+  // A recovered rearm owns its original token before any service or executable
+  // lookup. Repeating preparation must never turn it into another allocation.
+  const token = deps.launchToken
+  if (token !== undefined && !/^[a-zA-Z0-9_-]{16,96}$/.test(token)) return waiting('Waiting for the original launch token.')
   if (isTerminalEngine(engine)) return { ok: true, launch: { ...noNative, environment: {}, proofs: [] } }
   source = { ...source }
   const captured = await captureLaunchExecutable(engine)
@@ -135,7 +141,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   /** Why the latest help probe's executable failed, when it ran and exited non-zero. */
   let failed: string | null = null
   const launch: NativeLaunch = {
-    token: randomUUID(), executable, opencodeMajor, current, ready: () => prepared && current(),
+    token: token ?? randomUUID(), executable, opencodeMajor, current, ready: () => prepared && current(),
     get environment() { return selectedEnvironment },
     get proofs() { return [...dependencies, ...proofs] },
     retain(proof) {

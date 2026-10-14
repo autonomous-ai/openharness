@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { AgentCreationReceipts, creationFingerprint } from '../../lib/agentCreationReceipt.js'
+import { AgentCreationReceipts, creationFingerprint, type CreationAuthority } from '../../lib/agentCreationReceipt.js'
 import { createPendingLaunches, type IntentReceipts, type PreparedCreation } from './pendingLaunches.js'
 
 const roots: string[] = []
@@ -84,6 +84,31 @@ it('bounds stalled preparations and retains their slots instead of accumulating 
   prepare.mockResolvedValue(effect)
   expect(await pending.start(id(0), fingerprint, request, held)).toEqual(created)
   expect(store.status(id(1))).toEqual(created)
+})
+
+it.each(['preparation', 'effect'])('forwards settlement only after the actual %s finishes', async phase => {
+  vi.useFakeTimers()
+  let finish!: () => void, authority!: CreationAuthority
+  const gate = new Promise<void>(resolve => { finish = resolve })
+  const released = vi.fn()
+  const effect = vi.fn(async () => { if (phase === 'effect') await gate; return created })
+  const prepare = vi.fn(async (_request: Record<string, unknown>, value: CreationAuthority) => {
+    authority = value
+    expect(authority.settled).toBeInstanceOf(Promise)
+    void authority.settled!.then(released)
+    if (phase === 'preparation') await gate
+    return effect
+  })
+  const { pending, store } = setup(prepare)
+  const reply = pending.start(id(0), fingerprint, request, held)
+  await vi.advanceTimersByTimeAsync(185_000)
+  expect((await reply).state).toBe('pending')
+  expect(released).not.toHaveBeenCalled()
+  finish()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(released).toHaveBeenCalledOnce()
+  expect(effect).toHaveBeenCalledTimes(phase === 'effect' ? 1 : 0)
+  expect(store.status(id(0))).toEqual(phase === 'effect' ? created : { state: 'pending', held })
 })
 
 it('retries rejected dependencies on its timer and stops old preflight completions', async () => {

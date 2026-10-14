@@ -41,6 +41,35 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
 describe('the event funnel', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it.each([undefined, { replay: true }, { resumed: true }])('keeps native transcript history out of live control even with options %s', options => {
+    const { funnel, calls, deps } = setup('cursor', { historyOnly: () => true })
+    deps.turnStartedAt.set('s1', 123)
+    funnel('s1', [started('old generation'), text('old answer'), ended()], options)
+    expect(calls).toEqual(['search'])
+    expect(deps.turnActivity.observe).not.toHaveBeenCalled()
+    expect(deps.turnStartedAt.get('s1')).toBe(123)
+    expect(deps.input.onTurnStarted).not.toHaveBeenCalled()
+    expect(deps.input.onTurnEnded).not.toHaveBeenCalled()
+    expect(deps.deviceInput.onTurnStarted).not.toHaveBeenCalled()
+    expect(deps.deviceInput.onTurnEnded).not.toHaveBeenCalled()
+    expect(deps.mirror.ingest).not.toHaveBeenCalled()
+    expect(deps.clients.send).not.toHaveBeenCalled()
+  })
+
+  it('keeps the first attach queued before arm as history and isolates an unavailable search service', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const run = setup('cursor', { historyOnly: () => true, search: undefined })
+    const queued = createEventFunnel({ clients: { ...run.deps.clients, sendCommander: vi.fn() }, agentIdFor: run.deps.agentIdFor })
+    queued.emit('s1', [started('first attach')])
+    queued.arm(run.deps)
+    expect(run.calls).toEqual([])
+    expect(run.deps.clients.send).not.toHaveBeenCalled()
+    expect(run.deps.input.onTurnStarted).not.toHaveBeenCalled()
+    const failed = setup('cursor', { historyOnly: () => true, search: { touch: () => { throw Error('search unavailable') } } })
+    expect(() => failed.funnel('s1', [ended()])).not.toThrow()
+    expect(failed.deps.mirror.ingest).not.toHaveBeenCalled()
+  })
+
   it('sends the clients a shell result without its outputTail, and still feeds the commander mirror with it', () => {
     const sent: Array<{ payload: object }> = []
     const { funnel, deps } = setup('claude', { clients: { send: vi.fn((f: { payload: object }) => { sent.push(f) }) } as never })

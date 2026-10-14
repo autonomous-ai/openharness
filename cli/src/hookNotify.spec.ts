@@ -185,7 +185,7 @@ fs.readFileSync = (path, ...args) => {
 }
 
 /** A throwaway localhost adapter that records every hook POST. */
-async function collect(response: Record<string, unknown> = {}, credential?: string): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }>; firedAts: Array<string | undefined> }> {
+async function collect(response: Record<string, unknown> = { ok: true }, credential?: string): Promise<{ port: number; requests: Array<{ url: string; body: Record<string, unknown> }>; firedAts: Array<string | undefined> }> {
   const requests: Array<{ url: string; body: Record<string, unknown> }> = []
   const firedAts: Array<string | undefined> = []
   const server = createServer((req, res) => {
@@ -308,7 +308,7 @@ describe('hook notify terminal scope', () => {
     expect(statSync(credential).isFIFO()).toBe(true)
   })
 
-  it.each(['applied', 'pending', 'duplicate'])('forwards Cursor Task/stop hooks and retains tasks unless completion was applied: %s', async acknowledgement => {
+  it.each(['applied', 'pending', 'duplicate', 'ignored', 'contradictory', 'mistyped'])('forwards Cursor Task/stop hooks and retains tasks unless completion was applied: %s', async acknowledgement => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-cursor-'))
     tmpDirs.push(dir)
     const dataDir = join(dir, 'data')
@@ -322,8 +322,10 @@ describe('hook notify terminal scope', () => {
       req.on('end', () => {
         requests.push({ url: req.url ?? '', body: JSON.parse(raw) as Record<string, unknown> })
         deliveries.push([req.headers['x-harness-hook-delivery-id'], req.headers['x-harness-hook-fired-at']])
-        res.end(req.url === '/api/hook/turn-stop' && acknowledgement !== 'applied'
-          ? JSON.stringify({ [acknowledgement]: true }) : '{}')
+        const outcome = acknowledgement === 'contradictory' ? { ok: true, error: 'INTERNAL' }
+          : acknowledgement === 'mistyped' ? { ok: true, pending: 'true' }
+          : acknowledgement === 'applied' ? { ok: true } : { [acknowledgement]: true }
+        res.end(JSON.stringify(req.url === '/api/hook/turn-stop' ? outcome : { ok: true }))
       })
     })
     servers.push(server)
@@ -994,6 +996,30 @@ describe('hook notify terminal scope', () => {
 
     expect(received).toContain('/api/hook/session-start')
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf-8'))).toEqual([])
+  })
+
+  it('does not write the registry behind a daemon that resets a received hook connection', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-reset-'))
+    tmpDirs.push(dir)
+    const dataDir = join(dir, 'data'), claudeProjectsDir = join(dir, 'claude-projects')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-reset.jsonl')
+    mkdirSync(dirname(transcriptPath), { recursive: true }); mkdirSync(dataDir)
+    writeLegacyStateFile(join(dataDir, 'registry.json'), '[]')
+    writeFileSync(transcriptPath, '{}\n')
+    const received: string[] = []
+    const server = createServer(req => {
+      let text = ''
+      req.on('data', chunk => { text += chunk })
+      req.on('end', () => { received.push(text); req.socket.destroy() })
+    })
+    servers.push(server)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw Error('Fixture server did not bind')
+    await runHook({ port: address.port, tmuxPane: '%7', processEngine: 'claude', dataDir, claudeProjectsDir,
+      input: { hook_event_name: 'SessionStart', session_id: 'session-reset', transcript_path: transcriptPath, cwd: '/tmp/demo' } })
+    expect(received).toHaveLength(1)
+    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))).toEqual([])
   })
 
   it('does not write fallback registry entries outside tmux or outside the transcript root', async () => {

@@ -10,6 +10,12 @@ import { readHookCredential } from './lib/hookAuth.js'
 import { ENGINES } from './engines/types.js'
 import { engineHooks } from './engines/hooks.js'
 
+// Admission outcomes use deterministic healthy flushes. Production storage and
+// OS-process fixtures exercise real disk confirmation separately.
+vi.mock('node:fs', async original => ({ ...await original<object>(),
+  fsync: (_fd: number, done: (error: Error | null) => void) => queueMicrotask(() => done(null)),
+}))
+
 let server: Server | null = null
 
 afterEach(async () => {
@@ -42,7 +48,8 @@ describe('process-owned hook server', () => {
     const admit = vi.spyOn(engineHooks.codex, 'admit')
       .mockReturnValueOnce({ accepted: false, reason: 'codex_subagent' })
       .mockImplementation(() => { throw new Error('rollout unavailable') })
-    const agent = { engine: 'codex', agentId: 'parent', runtimes: [{ backend: 'tmux', paneId: '%41' }], primaryRuntimeKey: 'tmux\u0000%41', processIdentity: { pid: 4242, startMarker: 'fixture', executable: '<codex>' } } as RegisteredSession
+    const agent = { active: true, engine: 'codex', agentId: 'parent', runtimes: [{ backend: 'tmux', paneId: '%41' }], primaryRuntimeKey: 'tmux\u0000%41', processIdentity: { pid: 4242, startMarker: 'fixture', executable: '<codex>' } } as RegisteredSession
+    vi.spyOn(registry, 'list').mockReturnValue([agent])
     const byAgent = vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
     try {
       const onPromptSubmitted = vi.fn()
@@ -171,7 +178,8 @@ describe('process-owned hook server', () => {
 
   it('treats SessionEnd as a reconciliation hint and exposes no launcher websocket endpoint', async () => {
     const onSessionEnd = vi.fn()
-    const agent = { engine: 'claude', sessionId: 'session-1', agentId: 'agent-1', runtimes: [], processIdentity: null } as unknown as RegisteredSession
+    const agent = { active: true, engine: 'claude', sessionId: 'session-1', agentId: 'agent-1', runtimes: [], processIdentity: { pid: 4242, startMarker: 'fixture', executable: '<claude>' } } as unknown as RegisteredSession
+    vi.spyOn(registry, 'list').mockReturnValue([agent])
     vi.spyOn(registry, 'bySession').mockReturnValue(agent)
     vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
     const resolveHookAgent = vi.fn(async () => agent)
@@ -245,7 +253,8 @@ describe('process-owned hook server', () => {
 
   it('hands a Stop on with when its engine ran it, and holds it as long as a test asks', async () => {
     const onTurnStop = vi.fn()
-    const agent = { engine: 'claude', sessionId: 'real-session', agentId: 'agent-1', runtimes: [], processIdentity: null } as unknown as RegisteredSession
+    const agent = { active: true, engine: 'claude', sessionId: 'real-session', agentId: 'agent-1', runtimes: [], processIdentity: { pid: 4242, startMarker: 'fixture', executable: '<claude>' } } as unknown as RegisteredSession
+    vi.spyOn(registry, 'list').mockReturnValue([agent])
     vi.spyOn(registry, 'bySession').mockReturnValue(agent)
     vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
     const resolveHookAgent = vi.fn(async () => agent)
@@ -811,3 +820,8 @@ it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start'
     expect(mutation).not.toHaveBeenCalled()
   },
 )
+
+vi.mock('./engines/kit/nativeHookStorage.js', async original => ({
+  ...await original<object>(),
+  openNativeHookStorage: (await import('./testing/nativeHookAdmissionStorageFixture.js')).fixtureNativeHookAdmissionStorage,
+}))

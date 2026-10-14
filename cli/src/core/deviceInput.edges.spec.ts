@@ -18,11 +18,15 @@ const executed: TerminalActionResult = { state: 'succeeded', dispatch: 'executed
 function lock(overrides: Partial<DeviceInputDeps> = {}) {
   const onDelivery = vi.fn()
   const onInputStatus = vi.fn()
-  const device = new AutonomousDeviceInput({
+  const deps: DeviceInputDeps = {
     getSession: () => claude,
     validateRuntime: async () => true, inject: async () => executed, sendKey: async () => true,
     capture: async () => '› ', submission: inlineSubmission, acquireControl: () => () => {}, legacySubmit: vi.fn(), legacyCancel: () => false,
     onDelivery, onInputStatus, ...overrides,
+  }
+  const device = new AutonomousDeviceInput({ ...deps,
+    inject: (id, text, write) => write!.dispatch(() => deps.inject(id, text)),
+    sendKey: (id, key, write) => write!.dispatch(() => deps.sendKey(id, key)),
   })
   const states = (deliveryId: string) => onDelivery.mock.calls.map(([event]) => event).filter((event) => event.deliveryId === deliveryId)
     .map((event) => event.reason ? `${event.state}:${event.reason}` : event.state)

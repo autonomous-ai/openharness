@@ -5,10 +5,14 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { AgentEngine } from './types.js'
 
 let root = '', home = '', bin = ''
+let previousEntry = ''
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'native-launch-locations-'))
   home = join(root, 'shell-home'); bin = join(root, 'bin')
   mkdirSync(home); mkdirSync(bin)
+  const packageDir = join(root, 'package'); mkdirSync(packageDir)
+  writeFileSync(join(packageDir, 'notify.mjs'), '#!/usr/bin/env node\n// harness-native-hook-protocol:1\n// harness-native-hook-darwin:1\n', { mode: 0o600 })
+  previousEntry = process.argv[1]; process.argv[1] = join(packageDir, 'cli.js')
   for (const key of ['HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR']) {
     const value = key === 'HOME' ? home : join(root, key)
     mkdirSync(value, { recursive: true }); vi.stubEnv(key, value)
@@ -25,7 +29,7 @@ beforeEach(() => {
   }
   vi.resetModules()
 })
-afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { process.argv[1] = previousEntry; vi.unstubAllEnvs(); vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) })
 
 it.each([
   ['claude', '.claude/settings.json'], ['codex', '.codex/hooks.json'], ['cursor', '.cursor/hooks.json'],

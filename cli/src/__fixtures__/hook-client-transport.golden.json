@@ -1,0 +1,246 @@
+{
+  "linux": {
+    "acknowledgements": [
+      true,
+      true,
+      "held",
+      "held",
+      "held",
+      "duplicate"
+    ],
+    "callbacks": [
+      {
+        "ok": true
+      },
+      {
+        "pending": true
+      }
+    ],
+    "requests": [
+      {
+        "options": {
+          "host": "127.0.0.1",
+          "port": 19473,
+          "path": "/api/hook/session-start",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json",
+            "Content-Length": 93,
+            "X-Harness-Hook-Token": "<hook-credential>",
+            "X-Harness-Hook-Fired-At": "1791676800000",
+            "X-Harness-Hook-Delivery-Id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+          },
+          "timeout": 500
+        },
+        "body": "{\"engine\":\"codex\",\"sessionId\":\"<session>\",\"callerPid\":4100,\"tmuxPane\":\"%1\",\"prompt\":\"é📘\"}"
+      },
+      {
+        "options": {
+          "host": "127.0.0.1",
+          "port": 19473,
+          "path": "/api/hook/session-start",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json",
+            "Content-Length": 93,
+            "X-Harness-Hook-Token": "<hook-credential>",
+            "X-Harness-Hook-Fired-At": "1791676800000",
+            "X-Harness-Hook-Delivery-Id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+          },
+          "timeout": 500
+        },
+        "body": "{\"engine\":\"codex\",\"sessionId\":\"<session>\",\"callerPid\":4100,\"tmuxPane\":\"%1\",\"prompt\":\"é📘\"}"
+      },
+      {
+        "options": {
+          "host": "127.0.0.1",
+          "port": 19473,
+          "path": "/api/hook/session-start",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json",
+            "Content-Length": 93,
+            "X-Harness-Hook-Token": "<hook-credential>",
+            "X-Harness-Hook-Fired-At": "1791676800000",
+            "X-Harness-Hook-Delivery-Id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+          },
+          "timeout": 500
+        },
+        "body": "{\"engine\":\"codex\",\"sessionId\":\"<session>\",\"callerPid\":4100,\"tmuxPane\":\"%1\",\"prompt\":\"é📘\"}"
+      },
+      {
+        "options": {
+          "host": "127.0.0.1",
+          "port": 19473,
+          "path": "/api/hook/session-start",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json",
+            "Content-Length": 93,
+            "X-Harness-Hook-Token": "<hook-credential>",
+            "X-Harness-Hook-Fired-At": "1791676800000",
+            "X-Harness-Hook-Delivery-Id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+          },
+          "timeout": 500
+        },
+        "body": "{\"engine\":\"codex\",\"sessionId\":\"<session>\",\"callerPid\":4100,\"tmuxPane\":\"%1\",\"prompt\":\"é📘\"}"
+      },
+      {
+        "options": {
+          "host": "127.0.0.1",
+          "port": 19473,
+          "path": "/api/hook/turn-stop",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json",
+            "Content-Length": 93,
+            "X-Harness-Hook-Token": "<hook-credential>",
+            "X-Harness-Hook-Fired-At": "1791676800000",
+            "X-Harness-Hook-Delivery-Id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+          },
+          "timeout": 500
+        },
+        "body": "{\"engine\":\"codex\",\"sessionId\":\"<session>\",\"callerPid\":4100,\"tmuxPane\":\"%1\",\"prompt\":\"é📘\"}"
+      },
+      {
+        "options": {
+          "host": "127.0.0.1",
+          "port": 19473,
+          "path": "/api/hook/turn-stop",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json",
+            "Content-Length": 93,
+            "X-Harness-Hook-Token": "<hook-credential>",
+            "X-Harness-Hook-Fired-At": "1791676800000",
+            "X-Harness-Hook-Delivery-Id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+          },
+          "timeout": 500
+        },
+        "body": "{\"engine\":\"codex\",\"sessionId\":\"<session>\",\"callerPid\":4100,\"tmuxPane\":\"%1\",\"prompt\":\"é📘\"}"
+      }
+    ]
+  },
+  "darwin": {
+    "acknowledgements": [
+      true,
+      true,
+      "held",
+      "held",
+      "held",
+      "duplicate"
+    ],
+    "callbacks": [
+      {
+        "ok": true
+      },
+      {
+        "pending": true
+      }
+    ],
+    "requests": [
+      {
+        "options": {
+          "host": "127.0.0.1",
+          "port": 19473,
+          "path": "/api/hook/session-start",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json",
+            "Content-Length": 93,
+            "X-Harness-Hook-Token": "<hook-credential>",
+            "X-Harness-Hook-Fired-At": "1791676800000",
+            "X-Harness-Hook-Delivery-Id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+          },
+          "timeout": 500
+        },
+        "body": "{\"engine\":\"codex\",\"sessionId\":\"<session>\",\"callerPid\":4100,\"tmuxPane\":\"%1\",\"prompt\":\"é📘\"}"
+      },
+      {
+        "options": {
+          "host": "127.0.0.1",
+          "port": 19473,
+          "path": "/api/hook/session-start",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json",
+            "Content-Length": 93,
+            "X-Harness-Hook-Token": "<hook-credential>",
+            "X-Harness-Hook-Fired-At": "1791676800000",
+            "X-Harness-Hook-Delivery-Id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+          },
+          "timeout": 500
+        },
+        "body": "{\"engine\":\"codex\",\"sessionId\":\"<session>\",\"callerPid\":4100,\"tmuxPane\":\"%1\",\"prompt\":\"é📘\"}"
+      },
+      {
+        "options": {
+          "host": "127.0.0.1",
+          "port": 19473,
+          "path": "/api/hook/session-start",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json",
+            "Content-Length": 93,
+            "X-Harness-Hook-Token": "<hook-credential>",
+            "X-Harness-Hook-Fired-At": "1791676800000",
+            "X-Harness-Hook-Delivery-Id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+          },
+          "timeout": 500
+        },
+        "body": "{\"engine\":\"codex\",\"sessionId\":\"<session>\",\"callerPid\":4100,\"tmuxPane\":\"%1\",\"prompt\":\"é📘\"}"
+      },
+      {
+        "options": {
+          "host": "127.0.0.1",
+          "port": 19473,
+          "path": "/api/hook/session-start",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json",
+            "Content-Length": 93,
+            "X-Harness-Hook-Token": "<hook-credential>",
+            "X-Harness-Hook-Fired-At": "1791676800000",
+            "X-Harness-Hook-Delivery-Id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+          },
+          "timeout": 500
+        },
+        "body": "{\"engine\":\"codex\",\"sessionId\":\"<session>\",\"callerPid\":4100,\"tmuxPane\":\"%1\",\"prompt\":\"é📘\"}"
+      },
+      {
+        "options": {
+          "host": "127.0.0.1",
+          "port": 19473,
+          "path": "/api/hook/turn-stop",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json",
+            "Content-Length": 93,
+            "X-Harness-Hook-Token": "<hook-credential>",
+            "X-Harness-Hook-Fired-At": "1791676800000",
+            "X-Harness-Hook-Delivery-Id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+          },
+          "timeout": 500
+        },
+        "body": "{\"engine\":\"codex\",\"sessionId\":\"<session>\",\"callerPid\":4100,\"tmuxPane\":\"%1\",\"prompt\":\"é📘\"}"
+      },
+      {
+        "options": {
+          "host": "127.0.0.1",
+          "port": 19473,
+          "path": "/api/hook/turn-stop",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json",
+            "Content-Length": 93,
+            "X-Harness-Hook-Token": "<hook-credential>",
+            "X-Harness-Hook-Fired-At": "1791676800000",
+            "X-Harness-Hook-Delivery-Id": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+          },
+          "timeout": 500
+        },
+        "body": "{\"engine\":\"codex\",\"sessionId\":\"<session>\",\"callerPid\":4100,\"tmuxPane\":\"%1\",\"prompt\":\"é📘\"}"
+      }
+    ]
+  }
+}

@@ -223,7 +223,18 @@ export interface SubmitOptions {
   beforeEnter?: () => Promise<string | null>
   /** Synchronous authority fence, checked immediately before paste/Enter dispatch, including queues. */
   allowed?: () => boolean
+  /** A physical command only: enter immediately before spawn, leave when that
+   * command settles. Preparation, screen reads and paste settling stay outside. */
+  dispatch?: TerminalWrite['dispatch']
 }
+
+export interface TerminalWrite {
+  allowed(): boolean
+  dispatch<T>(operation: () => Promise<T>): Promise<T>
+}
+
+/** A revoked or occupied write never reached the terminal. */
+export class TerminalWriteHeld extends Error {}
 
 /** The text was typed and its Enter not pressed, for `reason`: it waits in the composer, unsent. */
 export function terminalEnterWithheld(reason: string): { state: 'unknown'; dispatch: 'possibly_executed'; reason: string } {

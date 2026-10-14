@@ -7,6 +7,12 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from './lib/registry.js'
 
+// Admission outcomes use deterministic healthy flushes. Production storage and
+// OS-process fixtures exercise real disk confirmation separately.
+vi.mock('node:fs', async original => ({ ...await original<object>(),
+  fsync: (_fd: number, done: (error: Error | null) => void) => queueMicrotask(() => done(null)),
+}))
+
 vi.mock('node:child_process', () => {
   const forbidden = () => { throw Error('Host binaries are forbidden in the hook admission golden') }
   return { exec: forbidden, execSync: forbidden, execFile: forbidden, execFileSync: forbidden,
@@ -118,3 +124,8 @@ afterAll(() => {
   if (RECORD) writeFileSync(GOLDEN, JSON.stringify(captured, null, 2) + '\n')
   else expect(Object.keys(captured).sort()).toEqual(Object.keys(expected).sort())
 })
+
+vi.mock('./engines/kit/nativeHookStorage.js', async original => ({
+  ...await original<object>(),
+  openNativeHookStorage: (await import('./testing/nativeHookAdmissionStorageFixture.js')).fixtureNativeHookAdmissionStorage,
+}))

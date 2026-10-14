@@ -214,6 +214,7 @@ describe('the core API services stand on', () => {
   it('tells the recaps nothing, and reads no recap, when they fail', () => {
     expect(RECAPS_FALLBACKS).toMatchObject({ lifecycle: undefined, recaps: null })
     expect(readFallback(RECAPS_FALLBACKS.liveCards)).toEqual({ deferred: true, value: [] })
+    expect(readFallback(RECAPS_FALLBACKS.nativeCompletion)).toEqual({ deferred: true, value: { state: 'held', reason: 'Waiting for the recaps service.' } })
   })
 
   it('lets the devices put their own frames in front of the windows, and no other', () => {

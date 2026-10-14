@@ -8,7 +8,7 @@ import type { NativeDescriptor } from '../engines/kit/nativeDescriptors.js'
 import { controlDescriptors, controlIdentity, linuxProcessStat, nativeProcessControl } from './nativeProcessControl.js'
 
 type GraphRow = { pid: number; parentPid: number; state: string; startMarker: string }
-export type NativeProcessRow = ProcessRow & { imagePath: string; evidence: string; controlIdentity?: string }
+export type NativeProcessRow = ProcessRow & { imagePath: string; evidence: string; controlIdentity?: string; nativeBirth?: string }
 export interface ProcessEvidence {
   parent: NativeProcessRow | null
   children: readonly NativeProcessRow[]
@@ -66,11 +66,11 @@ async function commandEvidence(row: GraphRow, budget: NativeEvidenceBudget): Pro
     if (linuxIdentity(before) !== linuxIdentity(after) || finalImage !== imagePath) return nativeUnavailable('the native process changed while its command was read')
     // ps trims the command column; Linux comm can retain padding from a process-title rewrite.
     // Match discovery's display name while keeping the exact bytes in both native fences below.
-    return { ...row, executable: before.command.trim(), args, startTicks: before.startTicks, imagePath,
+    return { ...row, executable: before.command.trim(), args, startTicks: before.startTicks, imagePath, nativeBirth: String(before.startTicks),
       nativeArgv: argv, evidence: JSON.stringify([imagePath, before.command, argv]),
       controlIdentity: controlIdentity({ pid: row.pid, parentPid: before.parentPid, command: before.command, imagePath, argv, birth: String(before.startTicks) }) }
   }
-  const native = (await nativeProcessControl([row.pid], 0, budget)).rows.get(row.pid)!
+  const native = (await nativeProcessControl([row.pid], 0, budget, false)).rows.get(row.pid)!
   if (native.parentPid !== row.parentPid || Number(native.birth.split(':')[0]) !== Date.parse(row.startMarker) / 1000) {
     return nativeUnavailable('the native process changed before inspection')
   }
@@ -83,9 +83,9 @@ async function commandEvidence(row: GraphRow, budget: NativeEvidenceBudget): Pro
   if (!match || pidValue(match[1]) !== row.parentPid || !alive(match[2]) || match[4] !== row.startMarker) return nativeUnavailable('the native process command has changed ownership')
   const executable = match[3].trim(), args = match[5].trim()
   if (!executable || !args) return nativeUnavailable('the native process command is ambiguous')
-  const after = (await nativeProcessControl([row.pid], 0, budget)).rows.get(row.pid)!
+  const after = (await nativeProcessControl([row.pid], 0, budget, false)).rows.get(row.pid)!
   if (controlIdentity(after) !== controlIdentity(native)) return nativeUnavailable('the native process changed while its command was read')
-  return { ...row, executable, args, imagePath: native.imagePath,
+  return { ...row, executable, args, imagePath: native.imagePath, nativeBirth: native.birth,
     evidence: controlIdentity(native), controlIdentity: controlIdentity(native) }
 }
 

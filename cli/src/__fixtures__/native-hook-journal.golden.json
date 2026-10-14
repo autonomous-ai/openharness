@@ -1,0 +1,160 @@
+{
+  "claim": {
+    "id": "fixture-delivery-0001",
+    "token": "00000000-0000-4000-8000-000000000009"
+  },
+  "contending": {
+    "name": "NativeHookJournalHeld",
+    "message": "Native hook delivery is held: an earlier native hook effect is unconfirmed"
+  },
+  "duplicate": {
+    "status": 200,
+    "reply": {
+      "ok": true
+    },
+    "promptAt": 1791676800000
+  },
+  "conflict": {
+    "name": "NativeHookJournalHeld",
+    "message": "Native hook delivery is held: HOOK_DELIVERY_CONFLICT"
+  },
+  "closed": {
+    "name": "NativeHookJournalHeld",
+    "message": "Native hook delivery is held: the original process owner changed"
+  },
+  "interrupted": {
+    "name": "NativeHookJournalHeld",
+    "message": "Native hook delivery is held: an earlier native hook effect is unconfirmed"
+  },
+  "recovered": {
+    "length": 5,
+    "active": {
+      "id": "fixture-delivery-0002",
+      "token": "00000000-0000-4000-8000-000000000014"
+    },
+    "deliveries": [
+      {
+        "id": "fixture-delivery-0001",
+        "intake": {
+          "id": "fixture-delivery-0001",
+          "fingerprint": "a7937b64b8caa58f03721bb6bacf5c78cb235febe0e70b1b84cd99541461a08e",
+          "agentId": "fixture-agent",
+          "conversationId": "fixture-conversation",
+          "firedAt": 1791676800000,
+          "payload": {
+            "hookEvent": "UserPromptSubmit",
+            "prompt": "fixture prompt"
+          }
+        },
+        "result": {
+          "status": 200,
+          "reply": {
+            "ok": true
+          },
+          "promptAt": 1791676800000
+        },
+        "token": "00000000-0000-4000-8000-000000000009"
+      },
+      {
+        "id": "fixture-delivery-0002",
+        "intake": {
+          "id": "fixture-delivery-0002",
+          "fingerprint": "16367aacb67a4a017c8da8ab95682ccb390863780f7114dda0a0e0c55644c7c4",
+          "agentId": "fixture-agent",
+          "conversationId": "fixture-conversation",
+          "firedAt": 1791676800000,
+          "payload": {
+            "hookEvent": "UserPromptSubmit",
+            "prompt": "fixture prompt"
+          }
+        }
+      }
+    ]
+  },
+  "records": [
+    {
+      "version": 1,
+      "processKey": "linux:fixture-boot\u0000codex\u0000123\u0000t:456",
+      "index": 0,
+      "previous": null,
+      "event": {
+        "kind": "intake",
+        "intake": {
+          "id": "fixture-delivery-0001",
+          "fingerprint": "a7937b64b8caa58f03721bb6bacf5c78cb235febe0e70b1b84cd99541461a08e",
+          "agentId": "fixture-agent",
+          "conversationId": "fixture-conversation",
+          "firedAt": 1791676800000,
+          "payload": {
+            "hookEvent": "UserPromptSubmit",
+            "prompt": "fixture prompt"
+          }
+        }
+      }
+    },
+    {
+      "version": 1,
+      "processKey": "linux:fixture-boot\u0000codex\u0000123\u0000t:456",
+      "index": 1,
+      "previous": "dc133bdc1954513013dee2ea5c5f109d1f8a4b1672c148d15f0706e2ff182332",
+      "event": {
+        "kind": "intake",
+        "intake": {
+          "id": "fixture-delivery-0002",
+          "fingerprint": "16367aacb67a4a017c8da8ab95682ccb390863780f7114dda0a0e0c55644c7c4",
+          "agentId": "fixture-agent",
+          "conversationId": "fixture-conversation",
+          "firedAt": 1791676800000,
+          "payload": {
+            "hookEvent": "UserPromptSubmit",
+            "prompt": "fixture prompt"
+          }
+        }
+      }
+    },
+    {
+      "version": 1,
+      "processKey": "linux:fixture-boot\u0000codex\u0000123\u0000t:456",
+      "index": 2,
+      "previous": "f238aee6f48388fd042240bcf82945cdd1e259b78498c16d9ed66b2591b8c6a5",
+      "event": {
+        "kind": "claim",
+        "id": "fixture-delivery-0001",
+        "agentId": "fixture-agent",
+        "token": "00000000-0000-4000-8000-000000000009",
+        "predecessor": null
+      }
+    },
+    {
+      "version": 1,
+      "processKey": "linux:fixture-boot\u0000codex\u0000123\u0000t:456",
+      "index": 3,
+      "previous": "e9e34f71a016a787fd71f1d3c417a02724c24be820335744543e1d445526011c",
+      "event": {
+        "kind": "result",
+        "id": "fixture-delivery-0001",
+        "token": "00000000-0000-4000-8000-000000000009",
+        "value": {
+          "status": 200,
+          "reply": {
+            "ok": true
+          },
+          "promptAt": 1791676800000
+        }
+      }
+    },
+    {
+      "version": 1,
+      "processKey": "linux:fixture-boot\u0000codex\u0000123\u0000t:456",
+      "index": 4,
+      "previous": "97119bf6c51ab83e9700ee0afc18ccbe0cf8d23605d4d5c7fe479b5ab58807d3",
+      "event": {
+        "kind": "claim",
+        "id": "fixture-delivery-0002",
+        "agentId": "fixture-agent",
+        "token": "00000000-0000-4000-8000-000000000014",
+        "predecessor": "97119bf6c51ab83e9700ee0afc18ccbe0cf8d23605d4d5c7fe479b5ab58807d3"
+      }
+    }
+  ]
+}

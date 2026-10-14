@@ -1,0 +1,223 @@
+{
+  "linux:helper": {
+    "path": "<root>/runtime/process-images/6cfeeb3aa25d3f411dae5eec17d7369ca7153e72dcf54bcf4c3daec0f5b21fc7",
+    "hash": "6cfeeb3aa25d3f411dae5eec17d7369ca7153e72dcf54bcf4c3daec0f5b21fc7",
+    "mode": 320,
+    "files": [
+      "6cfeeb3aa25d3f411dae5eec17d7369ca7153e72dcf54bcf4c3daec0f5b21fc7"
+    ],
+    "repeated": "<root>/runtime/process-images/6cfeeb3aa25d3f411dae5eec17d7369ca7153e72dcf54bcf4c3daec0f5b21fc7"
+  },
+  "linux:identity": {
+    "parent": 42,
+    "children": [
+      43
+    ],
+    "rows": [
+      {
+        "pid": 42,
+        "parentPid": 1,
+        "command": "codex",
+        "imagePath": "/fixture/codex",
+        "argv": [
+          "codex",
+          "--prompt",
+          "quote\ntext"
+        ],
+        "birth": "420",
+        "fds": [],
+        "identity": "[42,1,\"420\",\"codex\",\"/fixture/codex\",[\"codex\",\"--prompt\",\"quote\\ntext\"],null]"
+      },
+      {
+        "pid": 43,
+        "parentPid": 42,
+        "command": "codex",
+        "imagePath": "/fixture/codex",
+        "argv": [
+          "codex",
+          "--prompt",
+          "quote\ntext"
+        ],
+        "birth": "430",
+        "fds": [],
+        "identity": "[43,42,\"430\",\"codex\",\"/fixture/codex\",[\"codex\",\"--prompt\",\"quote\\ntext\"],null]"
+      }
+    ]
+  },
+  "linux:control": {
+    "parent": 42,
+    "children": [
+      43
+    ],
+    "rows": [
+      {
+        "pid": 42,
+        "parentPid": 1,
+        "command": "codex",
+        "imagePath": "/fixture/codex",
+        "argv": [
+          "codex",
+          "--prompt",
+          "quote\ntext"
+        ],
+        "birth": "420",
+        "fds": [
+          {
+            "fd": "3",
+            "path": "pipe:[17]",
+            "kind": "OTHER"
+          }
+        ],
+        "identity": "[42,1,\"420\",\"codex\",\"/fixture/codex\",[\"codex\",\"--prompt\",\"quote\\ntext\"],null]"
+      },
+      {
+        "pid": 43,
+        "parentPid": 42,
+        "command": "codex",
+        "imagePath": "/fixture/codex",
+        "argv": [
+          "codex",
+          "--prompt",
+          "quote\ntext"
+        ],
+        "birth": "430",
+        "fds": [
+          {
+            "fd": "3",
+            "path": "pipe:[17]",
+            "kind": "OTHER"
+          }
+        ],
+        "identity": "[43,42,\"430\",\"codex\",\"/fixture/codex\",[\"codex\",\"--prompt\",\"quote\\ntext\"],null]"
+      }
+    ]
+  },
+  "linux:requests": [],
+  "linux:unavailable": {
+    "code": "IDENTITY_UNAVAILABLE",
+    "message": "Conversation identity is held: the native control evidence could not be read completely."
+  },
+  "linux:corrupt-helper": {
+    "prepared": null,
+    "content": "foreign fixture bytes"
+  },
+  "darwin:helper": {
+    "path": "<root>/runtime/process-images/6cfeeb3aa25d3f411dae5eec17d7369ca7153e72dcf54bcf4c3daec0f5b21fc7",
+    "hash": "6cfeeb3aa25d3f411dae5eec17d7369ca7153e72dcf54bcf4c3daec0f5b21fc7",
+    "mode": 320,
+    "files": [
+      "6cfeeb3aa25d3f411dae5eec17d7369ca7153e72dcf54bcf4c3daec0f5b21fc7"
+    ],
+    "repeated": "<root>/runtime/process-images/6cfeeb3aa25d3f411dae5eec17d7369ca7153e72dcf54bcf4c3daec0f5b21fc7"
+  },
+  "darwin:identity": {
+    "parent": 42,
+    "children": [
+      43
+    ],
+    "rows": [
+      {
+        "pid": 42,
+        "parentPid": 1,
+        "command": "codex",
+        "imagePath": "/fixture/codex",
+        "commandDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "birth": "1790000000:42",
+        "fds": [],
+        "identity": "[42,1,\"1790000000:42\",\"codex\",\"/fixture/codex\",null,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]"
+      },
+      {
+        "pid": 43,
+        "parentPid": 42,
+        "command": "codex",
+        "imagePath": "/fixture/codex",
+        "commandDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "birth": "1790000000:43",
+        "fds": [],
+        "identity": "[43,42,\"1790000000:43\",\"codex\",\"/fixture/codex\",null,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]"
+      }
+    ]
+  },
+  "darwin:control": {
+    "parent": 42,
+    "children": [
+      43
+    ],
+    "rows": [
+      {
+        "pid": 42,
+        "parentPid": 1,
+        "command": "codex",
+        "imagePath": "/fixture/codex",
+        "commandDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "birth": "1790000000:42",
+        "fds": [
+          {
+            "fd": "3",
+            "path": "",
+            "kind": "REG",
+            "device": "17",
+            "inode": "9007199254740993"
+          }
+        ],
+        "identity": "[42,1,\"1790000000:42\",\"codex\",\"/fixture/codex\",null,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]"
+      },
+      {
+        "pid": 43,
+        "parentPid": 42,
+        "command": "codex",
+        "imagePath": "/fixture/codex",
+        "commandDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "birth": "1790000000:43",
+        "fds": [
+          {
+            "fd": "3",
+            "path": "",
+            "kind": "REG",
+            "device": "17",
+            "inode": "9007199254740993"
+          }
+        ],
+        "identity": "[43,42,\"1790000000:43\",\"codex\",\"/fixture/codex\",null,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]"
+      }
+    ]
+  },
+  "darwin:requests": [
+    {
+      "path": "<root>/runtime/process-images/6cfeeb3aa25d3f411dae5eec17d7369ca7153e72dcf54bcf4c3daec0f5b21fc7",
+      "args": [
+        "--identity",
+        "3000",
+        "42",
+        "42",
+        "43"
+      ],
+      "timeout": 3000,
+      "maxBuffer": 5242880,
+      "killSignal": "SIGKILL",
+      "locale": "C"
+    },
+    {
+      "path": "<root>/runtime/process-images/6cfeeb3aa25d3f411dae5eec17d7369ca7153e72dcf54bcf4c3daec0f5b21fc7",
+      "args": [
+        "--control",
+        "3000",
+        "42",
+        "42",
+        "43"
+      ],
+      "timeout": 3000,
+      "maxBuffer": 5242880,
+      "killSignal": "SIGKILL",
+      "locale": "C"
+    }
+  ],
+  "darwin:unavailable": {
+    "code": "IDENTITY_UNAVAILABLE",
+    "message": "Conversation identity is held: the native control probe did not complete."
+  },
+  "darwin:corrupt-helper": {
+    "prepared": null,
+    "content": "foreign fixture bytes"
+  }
+}

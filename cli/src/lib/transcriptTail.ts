@@ -43,6 +43,7 @@ export async function scanRecordsBackward(
   maxRecordBytes = MAX_RECORD_BYTES,
   passed?: (offset: number) => boolean | void,
   expectedFile?: TranscriptFileIdentity,
+  start = 0,
 ): Promise<boolean> {
   const handle = await open(filePath, 'r')
   try {
@@ -62,8 +63,8 @@ export async function scanRecordsBackward(
       if (isBlank(bytes)) return false
       return visit(bytes, offset) === true
     }
-    while (position > 0) {
-      const length = Math.min(position, CHUNK_BYTES)
+    while (position > start) {
+      const length = Math.min(position - start, CHUNK_BYTES)
       position -= length
       const chunk = Buffer.allocUnsafe(length)
       if (!await readFully(handle, chunk, position)) return false
@@ -85,7 +86,9 @@ export async function scanRecordsBackward(
         else fragments.push(chunk.subarray(0, segmentEnd))
       }
     }
-    if (fragments.length || oversized) take(Buffer.alloc(0), 0)
+    // A bounded suffix may start in the middle of a record. That prefix belongs
+    // to the omitted history, never to the caller's whole-record fold.
+    if (start === 0 && (fragments.length || oversized)) take(Buffer.alloc(0), 0)
     return true
   } finally { await handle.close() }
 }

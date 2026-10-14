@@ -21,6 +21,7 @@
 import type { CoreApi, RecapsPort, TurnCardFrame } from './api.js'
 import type { SessionRecaps } from '../lib/recapReads.js'
 import type { ServiceFrame } from './serviceLinks.js'
+import { copyNativeRecapCompletion, nativeRecapWaiting, readNativeRecapResult } from '../lib/nativeRecapWire.js'
 
 /** The most the core lets wait on the socket to a recaps process that reads nothing. */
 export const RECAPS_BUFFER_LIMIT = 4 * 1024 * 1024
@@ -62,6 +63,13 @@ export function createRecapsLink(deps: RecapsLinkDeps) {
   let saidAt = -Infinity
 
   const port: RecapsPort = {
+    nativeCompletion: async completion => {
+      try {
+        const original = copyNativeRecapCompletion(completion)
+        const answer = await deps.call('nativeCompletion', { completion: original })
+        return readNativeRecapResult(answer.result, original)
+      } catch { return nativeRecapWaiting() }
+    },
     lifecycle: (event, watchers) => {
       if (event.kind === 'purged') known.delete(event.sessionId)
       const held = event.kind === 'purged' || event.kind === 'rebound'

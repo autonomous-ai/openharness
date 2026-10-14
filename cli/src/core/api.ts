@@ -34,6 +34,7 @@ import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '..
 import type { NewAgentModel } from '../lib/newAgentModel.js'
 import type { LastTurnText, LiveEvent } from '../engines/kit/events.js'
 import type { SessionRecaps } from '../lib/recapReads.js'
+import type { NativeRecapCompletion, NativeRecapResult } from '../lib/nativeRecapWire.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import type { AgentCloseRequest, AgentCloseResult } from '../lib/closeAgentService.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
@@ -48,6 +49,7 @@ import type { DeviceInputStatus } from './deviceInput.js'
 import { FAIL, later, readFallback, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
 
 export type { RouteAnswer }
+export type { NativeRecapCompletion, NativeRecapResult }
 /** What a service guards its own parts with, as the core guards a service (core/serviceHost.ts): the
  *  devices keep a dial failing from costing ⌘K its routing (services/devices.ts). */
 export { FAIL, later, readFallback, ServiceUnavailableError, type PortFallbacks }
@@ -728,6 +730,9 @@ export type TurnLifecycle =
 
 /** The core's calls into the recaps: the lifecycle, and what they hold of a session, read in line. */
 export interface RecapsPort {
+  /** Derive only this generation's retained answer. A missing service holds its
+   * recap; parent turn closure never waits. No legacy lifecycle/cache mutation. */
+  nativeCompletion(completion: NativeRecapCompletion): Promise<NativeRecapResult>
   /** Something happened to a turn. A notice: the core never waits for it, and one the recaps miss costs
    *  that turn its recap, nothing else. */
   lifecycle(event: TurnLifecycle, watchers: RecapWatchers): void
@@ -739,7 +744,10 @@ export interface RecapsPort {
 }
 
 /** What the core gets when the recaps fail: nothing told, no recap, and no live card. */
-export const RECAPS_FALLBACKS: PortFallbacks<RecapsPort> = { lifecycle: undefined, recaps: null, liveCards: later([]) }
+export const RECAPS_FALLBACKS: PortFallbacks<RecapsPort> = {
+  nativeCompletion: later({ state: 'held', reason: 'Waiting for the recaps service.' }),
+  lifecycle: undefined, recaps: null, liveCards: later([]),
+}
 
 /**
  * The core's calls into the agent cleanup (services/agentCleanup.ts): what happens to the harnesses agents start.

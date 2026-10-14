@@ -34,7 +34,7 @@ import type { DshLaunchAnswer } from '../dsh/launchWire.js'
 import { scmLaunchEnv } from '../scm/scmProjects.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 import { agentLaunchArgs, joinedInstructions, type StartedBy } from './agentAttribution.js'
-import type { CreationAuthority } from './agentCreationReceipt.js'
+import type { NativeLaunchAuthority } from '../engines/prepareNativeLaunch.js'
 import type { publishGridConfigDir } from './publishedGridConfig.js'
 import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
 
@@ -89,7 +89,7 @@ export interface LaunchOverridesDeps {
    *  installation is enabled at all. */
   installCodexHooks: (codexHome: string) => boolean | Promise<boolean>
   /** Core composes eager native preparation; absent only for legacy/golden callers. */
-  native?: (engine: AgentEngine, source: NativeLaunchSource, authority: Pick<CreationAuthority, 'id' | 'current'>) => Promise<NativeLaunchResult>
+  native?: (engine: AgentEngine, source: NativeLaunchSource, authority: NativeLaunchAuthority) => Promise<NativeLaunchResult>
   prepareNative?: (native: NativeLaunch, current: () => boolean, environment?: Readonly<Record<string, string>>, clear?: readonly string[]) => Promise<boolean>
   /**
    * Read a Codex `config.toml`, for the provider an agent goes back to when it leaves a grid.

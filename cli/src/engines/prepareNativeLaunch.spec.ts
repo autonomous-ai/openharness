@@ -5,6 +5,16 @@ import type { NativeLaunch, NativeLaunchResult } from './nativeLaunch.js'
 const absent: NativeLaunchResult = { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Not installed',
   install: { command: 'fixture-installer', source: 'fixture', executable: { names: ['fixture'] } }, environment: { HOME: '/fixture/home', PATH: '/fixture/bin' } }
 const ready: NativeLaunchResult = { ok: true, launch: { current: () => true } as NativeLaunch }
+it('retains the original rearm token across installation and repeated executable inspection', async () => {
+  const authority = { id: 'fixture-request', current: () => true, launchToken: 'fixture-original-rearm-token' }
+  const inspect = vi.fn().mockResolvedValueOnce(absent).mockResolvedValue(ready)
+  const ensure = vi.fn(async () => { authority.launchToken = 'fixture-unrelated-rearm-token'; return { complete: true as const } })
+  const prepare = createNativeLaunchPreparer({ installations: { ensure, status: vi.fn(async () => null) }, inspect })
+  expect(await prepare('cursor', {}, authority)).toBe(ready)
+  expect(inspect.mock.calls.map(args => args[2])).toEqual([
+    { launchToken: 'fixture-original-rearm-token' }, { launchToken: 'fixture-original-rearm-token' },
+  ])
+})
 it('installs under the saved request and requires a fresh post-install snapshot', async () => {
   const ensure = vi.fn().mockResolvedValueOnce({ complete: false, detail: 'Installation in progress' }).mockResolvedValue({ complete: true })
   const inspect = vi.fn().mockResolvedValueOnce(absent).mockResolvedValueOnce(absent).mockResolvedValue(ready)

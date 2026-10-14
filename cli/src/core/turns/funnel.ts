@@ -39,6 +39,9 @@ export interface FunnelClients {
 /** What the funnel feeds, built by the time it is armed. */
 export interface FunnelDeps {
   bySession: (sessionId: string) => RegisteredSession | undefined
+  /** Native generation control owns lifecycle from first attach. Its transcript
+   * remains display history even when a tail delivers the bytes just now. */
+  historyOnly?: (sessionId: string) => boolean
   tokenUsage: { changed(target: RegisteredSession): void }
   agentIdFor: (sessionId: string) => string
   turnActivity: Pick<TurnActivity, 'observe' | 'snapshot'>
@@ -96,10 +99,17 @@ export function outsideConsumers(options: {
 /** The funnel itself, over what it feeds. */
 export function funnelFor({
   bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, input,
-  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(),
+  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, historyOnly, outside = outsideConsumers(),
 }: FunnelDeps) {
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
     if (!events.length || !bySession(sessionId)?.active) return
+    if (historyOnly?.(sessionId)) {
+      // Existing clients still treat replayed ends as live completion, and
+      // text/tool frames as live preview. Keep native JSONL on the history and
+      // search read ports; only native generation facts may publish live frames.
+      outside('search', () => search?.touch(sessionId))
+      return
+    }
     const usageSession = bySession(sessionId)
     if (usageSession?.engine === 'opencode') tokenUsage.changed(usageSession)
     for (const [eventIndex, event] of events.entries()) {

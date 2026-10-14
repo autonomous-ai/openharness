@@ -1,0 +1,488 @@
+{
+  "linux": {
+    "pending": {
+      "status": {
+        "state": "pending",
+        "held": {
+          "service": "launch",
+          "detail": "Waiting for the original launch."
+        }
+      },
+      "cold": {
+        "state": "pending",
+        "held": {
+          "service": "launch",
+          "detail": "Waiting for the original launch."
+        }
+      },
+      "retried": {
+        "state": "pending",
+        "held": {
+          "service": "launch",
+          "detail": "Waiting for the original launch."
+        }
+      },
+      "prepared": [
+        {
+          "saved": {
+            "kind": "native-create-v1",
+            "input": {
+              "engine": "cursor",
+              "cwd": "/fixture/project",
+              "prompt": "Fixture prompt",
+              "grid": null
+            },
+            "selection": null,
+            "label": "harness-cursor-original",
+            "local": true
+          },
+          "current": true
+        },
+        {
+          "saved": {
+            "kind": "native-create-v1",
+            "input": {
+              "engine": "cursor",
+              "cwd": "/fixture/project",
+              "prompt": "Fixture prompt",
+              "grid": null
+            },
+            "selection": null,
+            "label": "harness-cursor-original",
+            "local": true
+          }
+        }
+      ],
+      "dispatched": 0,
+      "conflict": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmWitness": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmCompletion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "notDispatched": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "cancelled": {
+      "status": {
+        "state": "pending",
+        "held": {
+          "service": "launch",
+          "detail": "Waiting for the original launch."
+        }
+      },
+      "cold": {
+        "state": "cancelled"
+      },
+      "retried": {
+        "state": "cancelled"
+      },
+      "prepared": [
+        {
+          "saved": {
+            "kind": "native-create-v1",
+            "input": {
+              "engine": "cursor",
+              "cwd": "/fixture/project",
+              "prompt": "Fixture prompt",
+              "grid": null
+            },
+            "selection": null,
+            "label": "harness-cursor-original",
+            "local": true
+          },
+          "current": true
+        }
+      ],
+      "dispatched": 0,
+      "conflict": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmWitness": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmCompletion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "notDispatched": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "unconfirmed": {
+      "status": {
+        "state": "unconfirmed"
+      },
+      "cold": {
+        "state": "unconfirmed"
+      },
+      "retried": {
+        "state": "unconfirmed"
+      },
+      "prepared": [
+        {
+          "saved": {
+            "kind": "native-create-v1",
+            "input": {
+              "engine": "cursor",
+              "cwd": "/fixture/project",
+              "prompt": "Fixture prompt",
+              "grid": null
+            },
+            "selection": null,
+            "label": "harness-cursor-original",
+            "local": true
+          },
+          "current": true
+        }
+      ],
+      "dispatched": 1,
+      "conflict": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmWitness": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmCompletion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "notDispatched": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "created": {
+      "status": {
+        "state": "created",
+        "agentId": "fixture-agent"
+      },
+      "cold": {
+        "state": "created",
+        "agentId": "fixture-agent"
+      },
+      "retried": {
+        "state": "created",
+        "agentId": "fixture-agent"
+      },
+      "prepared": [
+        {
+          "saved": {
+            "kind": "native-create-v1",
+            "input": {
+              "engine": "cursor",
+              "cwd": "/fixture/project",
+              "prompt": "Fixture prompt",
+              "grid": null
+            },
+            "selection": null,
+            "label": "harness-cursor-original",
+            "local": true
+          },
+          "current": true
+        }
+      ],
+      "dispatched": 1,
+      "conflict": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmWitness": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmCompletion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "notDispatched": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "failed": {
+      "status": {
+        "state": "failed",
+        "error": "FIXTURE_REFUSAL"
+      },
+      "cold": {
+        "state": "failed",
+        "error": "FIXTURE_REFUSAL"
+      },
+      "retried": {
+        "state": "failed",
+        "error": "FIXTURE_REFUSAL"
+      },
+      "prepared": [
+        {
+          "saved": {
+            "kind": "native-create-v1",
+            "input": {
+              "engine": "cursor",
+              "cwd": "/fixture/project",
+              "prompt": "Fixture prompt",
+              "grid": null
+            },
+            "selection": null,
+            "label": "harness-cursor-original",
+            "local": true
+          },
+          "current": true
+        }
+      ],
+      "dispatched": 1,
+      "conflict": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmWitness": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmCompletion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "notDispatched": {
+        "error": "CREATION_CONFLICT"
+      }
+    }
+  },
+  "darwin": {
+    "pending": {
+      "status": {
+        "state": "pending",
+        "held": {
+          "service": "launch",
+          "detail": "Waiting for the original launch."
+        }
+      },
+      "cold": {
+        "state": "pending",
+        "held": {
+          "service": "launch",
+          "detail": "Waiting for the original launch."
+        }
+      },
+      "retried": {
+        "state": "pending",
+        "held": {
+          "service": "launch",
+          "detail": "Waiting for the original launch."
+        }
+      },
+      "prepared": [
+        {
+          "saved": {
+            "kind": "native-create-v1",
+            "input": {
+              "engine": "cursor",
+              "cwd": "/fixture/project",
+              "prompt": "Fixture prompt",
+              "grid": null
+            },
+            "selection": null,
+            "label": "harness-cursor-original",
+            "local": true
+          },
+          "current": true
+        },
+        {
+          "saved": {
+            "kind": "native-create-v1",
+            "input": {
+              "engine": "cursor",
+              "cwd": "/fixture/project",
+              "prompt": "Fixture prompt",
+              "grid": null
+            },
+            "selection": null,
+            "label": "harness-cursor-original",
+            "local": true
+          }
+        }
+      ],
+      "dispatched": 0,
+      "conflict": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmWitness": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmCompletion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "notDispatched": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "cancelled": {
+      "status": {
+        "state": "pending",
+        "held": {
+          "service": "launch",
+          "detail": "Waiting for the original launch."
+        }
+      },
+      "cold": {
+        "state": "cancelled"
+      },
+      "retried": {
+        "state": "cancelled"
+      },
+      "prepared": [
+        {
+          "saved": {
+            "kind": "native-create-v1",
+            "input": {
+              "engine": "cursor",
+              "cwd": "/fixture/project",
+              "prompt": "Fixture prompt",
+              "grid": null
+            },
+            "selection": null,
+            "label": "harness-cursor-original",
+            "local": true
+          },
+          "current": true
+        }
+      ],
+      "dispatched": 0,
+      "conflict": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmWitness": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmCompletion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "notDispatched": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "unconfirmed": {
+      "status": {
+        "state": "unconfirmed"
+      },
+      "cold": {
+        "state": "unconfirmed"
+      },
+      "retried": {
+        "state": "unconfirmed"
+      },
+      "prepared": [
+        {
+          "saved": {
+            "kind": "native-create-v1",
+            "input": {
+              "engine": "cursor",
+              "cwd": "/fixture/project",
+              "prompt": "Fixture prompt",
+              "grid": null
+            },
+            "selection": null,
+            "label": "harness-cursor-original",
+            "local": true
+          },
+          "current": true
+        }
+      ],
+      "dispatched": 1,
+      "conflict": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmWitness": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmCompletion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "notDispatched": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "created": {
+      "status": {
+        "state": "created",
+        "agentId": "fixture-agent"
+      },
+      "cold": {
+        "state": "created",
+        "agentId": "fixture-agent"
+      },
+      "retried": {
+        "state": "created",
+        "agentId": "fixture-agent"
+      },
+      "prepared": [
+        {
+          "saved": {
+            "kind": "native-create-v1",
+            "input": {
+              "engine": "cursor",
+              "cwd": "/fixture/project",
+              "prompt": "Fixture prompt",
+              "grid": null
+            },
+            "selection": null,
+            "label": "harness-cursor-original",
+            "local": true
+          },
+          "current": true
+        }
+      ],
+      "dispatched": 1,
+      "conflict": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmWitness": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmCompletion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "notDispatched": {
+        "error": "CREATION_CONFLICT"
+      }
+    },
+    "failed": {
+      "status": {
+        "state": "failed",
+        "error": "FIXTURE_REFUSAL"
+      },
+      "cold": {
+        "state": "failed",
+        "error": "FIXTURE_REFUSAL"
+      },
+      "retried": {
+        "state": "failed",
+        "error": "FIXTURE_REFUSAL"
+      },
+      "prepared": [
+        {
+          "saved": {
+            "kind": "native-create-v1",
+            "input": {
+              "engine": "cursor",
+              "cwd": "/fixture/project",
+              "prompt": "Fixture prompt",
+              "grid": null
+            },
+            "selection": null,
+            "label": "harness-cursor-original",
+            "local": true
+          },
+          "current": true
+        }
+      ],
+      "dispatched": 1,
+      "conflict": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmWitness": {
+        "error": "CREATION_CONFLICT"
+      },
+      "rearmCompletion": {
+        "error": "CREATION_CONFLICT"
+      },
+      "notDispatched": {
+        "error": "CREATION_CONFLICT"
+      }
+    }
+  }
+}

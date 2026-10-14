@@ -13,7 +13,8 @@ import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import type { LiveEvent } from '../engines/kit/events.js'
 import { isMessageHold } from '../lib/messageHolds.js'
-import { enterWithheldReason, type TerminalActionResult } from '../lib/terminalTypes.js'
+import { enterWithheldReason, TerminalWriteHeld, type TerminalActionResult, type TerminalWrite } from '../lib/terminalTypes.js'
+import { createTerminalWriter, type TerminalWriter } from './terminals/writer.js'
 import type { SubmissionReader } from '../lib/submissionReader.js'
 import type { SubmissionPolicy } from '../engines/facets/submission.js'
 const VERIFY_MS = 1500
@@ -25,6 +26,7 @@ export interface DeviceInputStatus {
   phase: 'waiting_for_writer' | 'waiting_for_user' | 'waiting_for_turn' | 'submitted' | 'accepted' | 'unconfirmed'
 }
 interface Input {
+  write: TerminalWrite
   deliveryId: string
   content: string
   fingerprint: string
@@ -49,14 +51,16 @@ interface State {
 }
 interface Writer {
   held: boolean
-  legacy: number
+  legacy: Set<object>
   waiters: Array<() => void>
 }
 export interface DeviceInputDeps {
+  writer?: TerminalWriter
+  write?: (id: string) => TerminalWrite
   getSession: (id: string) => RegisteredSession | undefined
   validateRuntime: (session: RegisteredSession) => Promise<boolean>
-  inject: (id: string, text: string) => Promise<boolean | TerminalActionResult>
-  sendKey: (id: string, key: string) => Promise<boolean | TerminalActionResult>
+  inject: (id: string, text: string, write?: TerminalWrite) => Promise<boolean | TerminalActionResult>
+  sendKey: (id: string, key: string, write?: TerminalWrite) => Promise<boolean | TerminalActionResult>
   capture: (id: string) => Promise<string | null>
   /** The engine's reading of its composer after a paste, from its worker; core decides on it. */
   submission: Pick<SubmissionReader, 'read' | 'policy'>
@@ -88,7 +92,8 @@ const rejected = (result: boolean | TerminalActionResult) => result === false ||
 export class AutonomousDeviceInput {
   private states = new Map<string, State>()
   private writers = new Map<string, Writer>()
-  constructor(private readonly deps: DeviceInputDeps) {}
+  readonly writes: TerminalWriter
+  constructor(private readonly deps: DeviceInputDeps) { this.writes = deps.writer ?? createTerminalWriter() }
   /** The engines whose TUI takes a message typed mid-turn, which this route queues and verifies itself
    *  (Claude Code and Codex, as their submission policies declare); every other engine's goes the legacy way. */
   private native(engine: string): boolean {
@@ -101,21 +106,55 @@ export class AutonomousDeviceInput {
   }
   private writer(id: string): Writer {
     let writer = this.writers.get(id)
-    if (!writer) { writer = { held: false, legacy: 0, waiters: [] }; this.writers.set(id, writer) }
+    if (!writer) { writer = { held: false, legacy: new Set(), waiters: [] }; this.writers.set(id, writer) }
     return writer
   }
   /** Legacy writes run unchanged unless a Device write currently owns this same pane.
    * This also covers a local validation that began before Device acquired the existing control lock.
    */
-  legacyWrite<T>(id: string, operation: () => Promise<T>): Promise<T> {
+  legacyWrite<T>(id: string, operation: (write: TerminalWrite) => Promise<T>, authority?: TerminalWrite, signal?: AbortSignal): Promise<T> {
+    id = this.deps.getSession(id)?.agentId ?? id
+    const write = authority ?? this.deps.write?.(id) ?? this.writes.ticket(id)
     const writer = this.writer(id)
     const run = async () => {
-      writer.legacy++
-      try { return await operation() }
-      finally { writer.legacy-- }
+      const owner = {}
+      writer.legacy.add(owner)
+      try { return await this.writes.run(id, write, operation, signal) }
+      finally { writer.legacy.delete(owner) }
     }
     if (!writer.held) return run()
-    return new Promise<T>((resolve, reject) => writer.waiters.push(() => { void run().then(resolve, reject) }))
+    return new Promise<T>((resolve, reject) => {
+      const abort = () => {
+        const index = writer.waiters.indexOf(waiting)
+        if (index >= 0) writer.waiters.splice(index, 1)
+        reject(new TerminalWriteHeld('Terminal write cancelled before acquiring the device writer.'))
+      }
+      const waiting = () => {
+        signal?.removeEventListener('abort', abort)
+        void run().then(resolve, reject)
+      }
+      if (signal?.aborted) { abort(); return }
+      signal?.addEventListener('abort', abort, { once: true })
+      writer.waiters.push(waiting)
+    })
+  }
+  interruptWrite<T>(id: string, operation: (write: TerminalWrite) => Promise<T>): Promise<T> {
+    id = this.deps.getSession(id)?.agentId ?? id
+    const result = this.writes.interrupt(id, operation)
+    this.writers.get(id)?.legacy.clear()
+    const state = this.states.get(id)
+    this.states.delete(id)
+    if (state) {
+      if (state.timer) clearTimeout(state.timer)
+      for (const item of new Set([...state.queue, ...state.pending, ...(state.active ? [state.active] : [])])) {
+        item.cancelled = true
+        this.delivery(id, item, item.dispatched ? 'unknown' : 'rejected', 'cancelled')
+      }
+      // Optional acceptance reads cannot delay Cancel. The shared writer keeps
+      // actual pane I/O leased even after this logical control is released.
+      state.release?.(); state.release = undefined
+    }
+    return result
   }
   private delivery(id: string, item: Input, state: SessionInputDelivery['state'], reason?: string): void {
     this.deps.onDelivery({ sessionId: id, deliveryId: item.deliveryId, state, ...(reason ? { reason } : {}) })
@@ -133,7 +172,7 @@ export class AutonomousDeviceInput {
       return
     }
     this.expire(id, state)
-    const item: Input = { deliveryId, content, fingerprint: fingerprint(content), expires: Date.now() + TTL_MS,
+    const item: Input = { write: this.deps.write?.(id) ?? this.writes.ticket(id), deliveryId, content, fingerprint: fingerprint(content), expires: Date.now() + TTL_MS,
       started: false, dispatched: false, cancelled: false, mode: 'direct', retry: false, retries: 0, observes: 0 }
     if (state.pending.length >= 64 || state.queue.length >= 8 || state.queue.reduce((bytes, next) => bytes + Buffer.byteLength(next.content), Buffer.byteLength(content)) > 24 * 1024) {
       this.delivery(id, item, 'rejected', 'queue_full'); return
@@ -164,7 +203,7 @@ export class AutonomousDeviceInput {
     const session = this.deps.getSession(id)
     if (!session) { this.forget(id); return }
     const writer = this.writer(id)
-    if (writer.held || writer.legacy) { this.later(id, state, 100); return }
+    if (writer.held || writer.legacy.size) { this.later(id, state, 100); return }
     const release = this.deps.acquireControl(id)
     if (!release) { this.later(id, state, 100); return }
     writer.held = true
@@ -189,6 +228,19 @@ export class AutonomousDeviceInput {
     state.release = undefined
     this.pump(id, state)
   }
+  private inputWrite(id: string, state: State, item: Input): TerminalWrite {
+    const allowed = () => this.states.get(id) === state && state.active === item && !item.cancelled && item.write.allowed()
+    return { allowed, dispatch: operation => item.write.dispatch(async () => {
+      if (!allowed()) throw new TerminalWriteHeld('terminal control revoked')
+      if (!item.dispatched) {
+        this.deps.onDispatch?.(id, item.deliveryId, item.content)
+        if (!allowed()) throw new TerminalWriteHeld('terminal control revoked')
+        item.dispatched = true
+        state.pending.push(item)
+      }
+      return operation()
+    }) }
+  }
   private async dispatch(id: string, state: State, session: RegisteredSession, item: Input): Promise<void> {
     try {
       if (!await this.deps.validateRuntime(session)) { this.delivery(id, item, 'rejected', 'runtime_gone_pre_paste'); this.finishWrite(id, state, item); return }
@@ -205,11 +257,9 @@ export class AutonomousDeviceInput {
         return
       }
       item.mode = !state.busy ? 'direct' : busyMode(this.deps.submission.policy(session.engine), session)
-      this.deps.onDispatch?.(id, item.deliveryId, item.content)
-      item.dispatched = true
-      state.pending.push(item)
-      const result = await this.deps.inject(session.agentId, item.content)
-      if (this.states.get(id) !== state) return
+      const write = this.inputWrite(id, state, item)
+      const result = await this.writes.run(id, item.write, () => this.deps.inject(session.agentId, item.content, write))
+      if (this.states.get(id) !== state || item.cancelled) { this.finishWrite(id, state, item); return }
       if (item.started) { this.finishWrite(id, state, item); return }
       if (enterWithheldReason(result)) {
         // Typed, its Enter not pressed: something opened before it, and the Enter is never pressed later.
@@ -228,7 +278,7 @@ export class AutonomousDeviceInput {
       state.writing = false
       await this.verify(id, state, item, false)
     } catch {
-      if (this.states.get(id) !== state || item.cancelled) return
+      if (this.states.get(id) !== state || item.cancelled) { this.finishWrite(id, state, item); return }
       if (item.started) { this.finishWrite(id, state, item); return }
       this.delivery(id, item, item.dispatched ? 'unknown' : 'rejected', item.dispatched ? 'dispatch_ambiguous' : 'runtime_gone_pre_paste')
       state.writing = false
@@ -262,7 +312,7 @@ export class AutonomousDeviceInput {
         if (!blocked) {
           item.retry = false
           item.retries++
-          item.retry = executed(await this.deps.sendKey(id, 'Enter'))
+          item.retry = executed(await this.deps.sendKey(id, 'Enter', this.inputWrite(id, state, item)))
         }
       }
       if (++item.observes <= 7) this.later(id, state)

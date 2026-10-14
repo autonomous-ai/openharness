@@ -5,6 +5,12 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { Server } from 'node:http'
 
+// Admission outcomes use deterministic healthy flushes. Production storage and
+// OS-process fixtures exercise real disk confirmation separately.
+vi.mock('node:fs', async original => ({ ...await original<object>(),
+  fsync: (_fd: number, done: (error: Error | null) => void) => queueMicrotask(() => done(null)),
+}))
+
 const failures = vi.hoisted(() => new Map<string, string>())
 const inspection = vi.hoisted(() => ({ read: undefined as ((path: string) => void) | undefined }))
 vi.mock('node:fs/promises', async original => {
@@ -55,11 +61,13 @@ async function fixture(options: { waitOnResolution?: number } = {}) {
   const processIdentity = { pid: 4242, startMarker: 'Thu Oct 8 12:00:00 2026', executable: 'hermes' }
   const { entry: agent } = registry.openProcessAgent({ engine: 'hermes', tmuxPane: '%1', cwd: root, processIdentity })!
   const registered = vi.fn()
+  const reasons: Array<string | undefined> = []
   const logs: string[] = []
   vi.spyOn(console, 'log').mockImplementation((...args) => { logs.push(args.map(String).join(' ')) })
   let resume!: () => void
   let resolutions = 0
   const started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {},
+    onAdmissionHeld: (_id, reason) => { reasons.push(reason) },
     ...(options.waitOnResolution ? { resolveHookAgent: async ({ onWait }: { onWait?: () => void }) => {
       if (++resolutions === options.waitOnResolution) { onWait?.(); await new Promise<void>(resolve => { resume = resolve }) }
       return registry.byAgent(agent.agentId) ?? null
@@ -73,13 +81,13 @@ async function fixture(options: { waitOnResolution?: number } = {}) {
         'x-harness-hook-fired-at': String(fired) },
       body: JSON.stringify({ engine: 'hermes', tmuxPane: '%1', sessionId, cwd: root, hookEvent: 'SessionStart' }),
     })
-    expect(response.status).toBe(status)
     const body = await response.json()
+    expect(response.status, JSON.stringify(body)).toBe(status)
     if (status === 200) expect(body).toEqual({ pending: true })
     return body
   }
   const current = () => registry.byAgent(agent.agentId)!
-  return { home, store, hook, current, registered, logs, markDeleted, resume: () => resume(),
+  return { home, store, hook, current, registered, logs, reasons, markDeleted, resume: () => resume(),
     knownHome: (home: string) => registry.setHermesHome(agent.agentId, home),
     seed: (sessionId: string) => registry.register({ engine: 'hermes', sessionId, tmuxPane: '%1', cwd: root, processIdentity }),
   }
@@ -260,17 +268,20 @@ it('contains an asynchronous onRegistered rejection after publishing exactly onc
 it.each([false, true])('reports capacity backpressure without claiming the extra hook was queued (resolution waits: %s)', async waits => {
   const f = await fixture(waits ? { waitOnResolution: 65 } : {})
   f.store(f.home, [])
+  // This is the admission queue limit under injected storage; production byte
+  // capacity is covered by hookServer.storage.spec.ts.
   for (let i = 0; i < 64; i++) await f.hook(`20261009_120000_${i.toString(16).padStart(6, '0')}`)
   if (waits) {
     expect(await f.hook('20261009_120000_ffffff', 202)).toMatchObject({ pending: false, retry: true })
     f.resume()
-    await vi.waitFor(() => expect(f.logs.some(line => line.includes('this hook was not queued'))).toBe(true))
-  } else expect(await f.hook('20261009_120000_ffffff', 429)).toEqual({
-      pending: false, error: 'HOOK_ADMISSION_BUSY', detail: expect.stringContaining('was not queued'),
+    expect(await f.hook('20261009_120000_ffffff', 202)).toMatchObject({ pending: false, retry: true,
+      detail: expect.stringContaining('too many pending native hooks') })
+  } else expect(await f.hook('20261009_120000_ffffff', 202)).toEqual({
+      pending: false, retry: true, detail: expect.stringContaining('too many pending native hooks'),
     })
   expect(f.current().sessionId).toBe('')
   expect(f.registered).not.toHaveBeenCalled()
-})
+}, 40_000)
 
 it('cannot let the first default-home answer hide unavailable or conflicting profiles', async () => {
   const f = await fixture()
@@ -314,3 +325,8 @@ it('starts with the existing binding as authority when no hook watermark exists 
   await vi.waitFor(() => expect(f.current().sessionId).toBe(a))
   expect(f.registered).toHaveBeenCalledOnce()
 })
+
+vi.mock('./engines/kit/nativeHookStorage.js', async original => ({
+  ...await original<object>(),
+  openNativeHookStorage: (await import('./testing/nativeHookAdmissionStorageFixture.js')).fixtureNativeHookAdmissionStorage,
+}))

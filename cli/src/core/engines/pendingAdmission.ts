@@ -12,9 +12,13 @@ export interface PendingAdmission<T> {
   conversationId?: string
   binding?: { id: string; at: number | null } | (() => { id: string; at: number | null } | undefined)
   current: () => boolean
+  /** An exclusive durable effect already started; finish it before selecting a successor. */
+  ownsEffect?: () => boolean
   inspect: () => Promise<AdmissionDecision<T>>
   /** Synchronous durable publication. Uncertainty retains this candidate and its place. */
   commit?: (value: T) => AdmissionDecision<T>
+  /** Durably conclude an inspected decision before discarding its owned intake. */
+  conclude?: (decision: Exclude<AdmissionDecision<T>, { kind: 'hold' }>) => Promise<AdmissionDecision<T>>
   /** Optional notification after durable acceptance; never the publication itself. */
   accept: (value: T) => void | Promise<void>
   reject: (reason: string) => void | Promise<void>
@@ -33,6 +37,8 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
   const conversation = (job: Job) => job.request.conversationId ?? job.id
   const selected = (key: string) => {
     const queue = jobs.get(key)
+    const owned = queue?.find(job => job.request.ownsEffect?.())
+    if (owned) return owned
     const newest = queue?.at(-1)
     // Distinct prompts for one conversation retain delivery order. A newer
     // conversation still gets first chance to establish or refuse its ownership.
@@ -65,7 +71,7 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
       // One lookup owns the key. A group rotation or a new prompt may select an
       // already-held job; none of its old timers may start a concurrent lookup.
       for (const pending of jobs.get(key)!) clearTimer(pending)
-      if (retry && current(key, job)) {
+      if (retry && current(key, job) && !job.request.ownsEffect?.()) {
         const peer = leaders(key, job).find(other => conversation(other) !== conversation(job))
         if (peer) {
           const queue = jobs.get(key)!
@@ -97,9 +103,10 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
     // A newer unverified hook pauses this candidate; it does not erase it. Hermes
     // children use their parent's process, and a rejected child must leave the parent pending.
     if (selected(key) !== job && decision.kind !== 'reject') return
+    const owned = job.request.ownsEffect?.()
     const status = order.status(key, conversation(job), job.request.order)
-    if (status === 'older') decision = { kind: 'reject', reason: 'stale_hook' }
-    else if (decision.kind === 'accept') {
+    if (!owned && status === 'older') decision = { kind: 'reject', reason: 'stale_hook' }
+    else if (!owned && decision.kind === 'accept') {
       const unresolved = leaders(key, job).some(other => other !== job && conversation(other) !== conversation(job))
       if (status === 'ambiguous' || unresolved) decision = { kind: 'hold', reason:
         'Waiting for unambiguous native hook order; keeping the current conversation.'
@@ -109,6 +116,11 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
       try { decision = job.request.commit(decision.value) }
       catch (error) { decision = { kind: 'hold', reason: `Waiting for durable hook admission: ${error instanceof Error ? error.message : 'commit unavailable'}`.slice(0, 1024) } }
     }
+    if (decision.kind !== 'hold' && job.request.conclude) {
+      try { decision = await job.request.conclude(decision) }
+      catch (error) { decision = { kind: 'hold', reason: `Waiting for durable hook admission: ${error instanceof Error ? error.message : 'confirmation unavailable'}`.slice(0, 1024) } }
+    }
+    if (!current(key, job)) { discard(key, job); return }
     if (decision.kind === 'hold') {
       job.timer = setTimeout(() => { job.timer = null; void run(key, job, true) }, retryMs)
       job.timer.unref()
@@ -128,6 +140,13 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
     }
   }
   return {
+    /** Restored accepted native time precedes every fresh inspection after a restart. */
+    restore(key: string, id: string, restored: AdmissionOrder): void {
+      if (!closed) order.accept(key, id, restored)
+    },
+    status(key: string, id: string, candidate: AdmissionOrder): 'current' | 'older' | 'ambiguous' {
+      return order.status(key, id, candidate)
+    },
     /** False means backpressure: nothing was queued or evicted, so the sender must retry. */
     submit<T>(key: string, id: string, request: PendingAdmission<T>): boolean {
       if (closed) return false

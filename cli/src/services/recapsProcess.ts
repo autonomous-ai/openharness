@@ -13,7 +13,7 @@
  * from what this process last told it (`service_notice recaps`), whenever a session's changes, and all of
  * them each time it connects: a core that restarted holds nothing until then (core/recapsLink.ts).
  */
-import type { CoreApi, TurnCardFrame, TurnLifecycle, TurnSummaryFrame, RecapWatchers } from '../core/api.js'
+import type { CoreApi, TurnCardFrame, TurnLifecycle, TurnSummaryFrame, RecapWatchers, NativeRecapCompletion } from '../core/api.js'
 import type { LastTurnText } from '../lib/normalize.js'
 import { processCoreApi } from './processCoreApi.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
@@ -86,8 +86,12 @@ export function runRecapsService(options: RecapsServiceOptions): ServiceProcess 
     machineId: options.machineId,
     token: options.token,
     // The apps ask the recaps nothing: the core answers them from what this process tells it. The core
-    // itself asks one thing, when a dial attaches: the cards of every turn still at work.
-    requests: { liveCards: async () => ({ cards: await recaps.port.liveCards() }) },
+    // asks for live cards and for a pure recap of an exact retained native answer. The
+    // latter never enters the legacy mirror, session cache, notices or lastTurn reader.
+    requests: {
+      liveCards: async () => ({ cards: await recaps.port.liveCards() }),
+      nativeCompletion: async payload => ({ result: await recaps.port.nativeCompletion(payload.completion as NativeRecapCompletion) }),
+    },
     onEvent: (payload) => {
       if (payload.kind === 'lifecycle' && isLifecycle(payload)) recaps.port.lifecycle(payload.event, payload.watchers)
     },

@@ -54,9 +54,9 @@ export function startupFunctions(engine: string, launch: Launch, tmuxBinary: str
  * `... || harness_status=$?` rather than `...; harness_status=$?`: a rc file that turned on `set -e` would
  * end the script on the engine's non-zero exit before the fallback ran.
  */
-export function startupRuns(engine: string, launch: Launch, tmuxBinary: string | null): string {
+export function startupRuns(engine: string, launch: Launch, tmuxBinary: string | null, command?: string): string {
   const flag = probedFlag(launch)
-  const run = `"$harness_engine_bin"${flag ? ` \${${flagVariable(engine, flag)}:+${flag}}` : ''} "$@"`
+  const run = command ?? `"$harness_engine_bin"${flag ? ` \${${flagVariable(engine, flag)}:+${flag}}` : ''} "$@"`
   const retry = startupRetries(launch, tmuxBinary)
   if (!retry) {
     return [

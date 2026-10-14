@@ -1,5 +1,5 @@
 import { chmodSync } from 'fs'
-import { appendFile, mkdtemp, open, rm, writeFile } from 'fs/promises'
+import { appendFile, mkdtemp, open, rename, rm, stat, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -251,6 +251,37 @@ describe('Watcher.addSession fromOffset', () => {
     await watcher.pollSession('s1')
     expect(lines).toEqual(['{"n":2}'])
     await watcher.stop()
+  })
+
+  it('tails Cursor after its exact UTF-8 recovery prefix, leaving appended records live', async () => {
+    const { transcriptPath, watcher, lines } = await setup()
+    const before = '{"text":"é📘"}\r\n', after = '{"text":"later"}\n'
+    await writeFile(transcriptPath, before + after)
+    const file = await stat(transcriptPath)
+    await watcher.addSession({ sessionId: 's1', engine: 'cursor', transcriptPath }, {
+      fromOffset: Buffer.byteLength(before), cursorBaseline: { lines: [before.trim()], identity: { device: file.dev, inode: file.ino } },
+    })
+    await watcher.pollSession('s1'); await watcher.pollSession('s1')
+    expect(lines).toEqual([after.trim()])
+    await watcher.stop()
+  })
+
+  it.each(['shrunk', 'partial', 'over-budget', 'rewritten', 'replaced'] as const)('refuses a %s Cursor recovery prefix without installing a tail', async change => {
+    const { transcriptPath, watcher: unused } = await setup()
+    await unused.stop()
+    const watcher = new Watcher({ historyMaxBytes: change === 'over-budget' ? 4 : 64 })
+    await writeFile(transcriptPath, '{"n":1}\n')
+    const original = await stat(transcriptPath)
+    if (change === 'shrunk') await writeFile(transcriptPath, '')
+    if (change === 'rewritten') await writeFile(transcriptPath, '{"n":9}\n')
+    if (change === 'replaced') { await rename(transcriptPath, transcriptPath + '.old'); await writeFile(transcriptPath, '{"n":1}\n') }
+    try {
+      await expect(watcher.addSession({ sessionId: 's1', engine: 'cursor', transcriptPath }, {
+        fromOffset: change === 'partial' ? 3 : 8,
+        cursorBaseline: { lines: ['{"n":1}'], identity: { device: original.dev, inode: original.ino } },
+      })).rejects.toThrow(/Cursor/)
+      expect(watcher.tails('s1', transcriptPath)).toBe(false)
+    } finally { await watcher.stop() }
   })
 
   it('lets fromStart win, reading the existing content as history', async () => {

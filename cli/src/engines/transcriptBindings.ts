@@ -42,7 +42,11 @@ export function transcriptRootEvidence(engine: AgentEngine, profile?: string, sn
     if (!location.info.isDirectory()) return nativeUnavailable('a transcript root is not a directory')
     return [{ original: path, ...location }]
   })
-  return { directories, verify(): void { files.verify(); ownSnapshot?.verify() } }
+  return { directories, verify(): void { files.verify(); ownSnapshot?.verify() },
+    retain(): () => void {
+      const retained = files.retain()
+      return () => { retained(); ownSnapshot?.verify() }
+    } }
 }
 
 /** A deterministic engine locator can precede its directories. Retain the first
@@ -75,6 +79,10 @@ export function transcriptEvidence(engine: AgentEngine, path: string, profile?: 
 ) {
   const files = new NativeFiles(), root = transcriptRoot[engine]
   const scope = roots ?? transcriptRootEvidence(engine, profile, snapshot)
+  const retain = (selected = path): (() => void) => {
+    const retained = files.retain(selected), rootFacts = scope.retain()
+    return () => { retained(); rootFacts() }
+  }
   const location = root ? files.file(path, true) : null
   if (!location && allowMissing === 'derived') {
     if (typeof root !== 'function') return nativeUnavailable('the unwritten transcript has no deterministic root')
@@ -84,7 +92,7 @@ export function transcriptEvidence(engine: AgentEngine, path: string, profile?: 
       return nativeUnavailable('the announced transcript is not a proven absent leaf')
     }
     const member = relative(declared.path, actual)
-    return { valid: !!member && member !== '..' && !member.startsWith('../') && !isAbsolute(member), files,
+    return { valid: !!member && member !== '..' && !member.startsWith('../') && !isAbsolute(member), files, retain,
       matchingRoots: scope.directories,
       verify(selected = path): void { files.verify(selected); if (!roots) scope.verify() } }
   }
@@ -102,7 +110,7 @@ export function transcriptEvidence(engine: AgentEngine, path: string, profile?: 
     || (!!basename(actual).replace(/\.jsonl$/, '') && basename(dirname(actual)) === basename(actual).replace(/\.jsonl$/, '')
       && basename(dirname(dirname(actual))) === 'agent-transcripts'))
   return {
-    valid, files, matchingRoots,
+    valid, files, matchingRoots, retain,
     verify(selected = path): void { files.verify(selected); if (!roots) scope.verify() },
   }
 }

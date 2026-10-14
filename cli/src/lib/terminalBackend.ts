@@ -15,6 +15,7 @@ import type {
   TerminalStreamSink,
   TerminalStreamSize,
   RuntimeValidation,
+  TerminalWrite,
 } from './terminalTypes.js'
 
 /** Backend-specific terminal I/O. Process ownership and registry reconciliation deliberately live above it. */
@@ -30,9 +31,10 @@ export interface TerminalBackend<Ref extends TerminalRuntimeRef = TerminalRuntim
   titles(): Promise<TerminalReadResult<Map<string, string>>>
   validate(runtime: Ref, expected: TerminalProcessExpectation): Promise<RuntimeValidation>
   capture(runtime: Ref, options?: TerminalCaptureOptions): Promise<TerminalReadResult<string>>
-  typeLiteral(runtime: Ref, text: string): Promise<TerminalActionResult>
+  typeLiteral(runtime: Ref, text: string, write?: TerminalWrite): Promise<TerminalActionResult>
   submitText(runtime: Ref, text: string, options?: SubmitOptions): Promise<TerminalActionResult>
-  sendKey(runtime: Ref, key: TerminalLogicalKey): Promise<TerminalActionResult>
+  /** Recheck authority at actual dispatch, after any backend queue or wait. */
+  sendKey(runtime: Ref, key: TerminalLogicalKey, write?: TerminalWrite): Promise<TerminalActionResult>
   setTitle(runtime: Ref, title: string): Promise<TerminalActionResult>
   notify(runtime: Ref, title: string, body: string): Promise<TerminalActionResult>
 

@@ -7,6 +7,7 @@ import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { HookPreparationHeld } from './nativeHookFiles.js'
 import { cursorDataDir } from '../cursor/contract.js'
 import { nativeHookLocations } from './nativeLocations.js'
+import { prepareNativeHookArtifact } from './nativeHookArtifact.js'
 
 // notify.mjs location depends on the layout (import.meta.url is the REAL executing file at runtime):
 //  - packaged/bundled: cli.js at ~/.harness/cli/cli.js → notify.mjs is a SIBLING (dist/ bundle too).
@@ -45,6 +46,7 @@ export function command(
   // a store it was not in (openharness#191). See installHermesHooks.
   hermesHome: string = env.HERMES_HOME,
   environment?: Readonly<Record<string, string>>,
+  script: string = HOOK_SCRIPT,
 ): string {
   const homes = environment ? nativeHookLocations(environment) : { ...env, CURSOR_HOME: cursorDataDir() }
   return [
@@ -53,7 +55,7 @@ export function command(
     // no `node` on PATH is normal. See managedNodePath(); a changed interpreter is picked up by the
     // same drift comparison each installer already does for a changed path or port.
     shellQuote(managedNodePath()),
-    shellQuote(HOOK_SCRIPT),
+    shellQuote(script),
     '--port', String(port),
     '--data-dir', shellQuote(env.ADAPTER_DATA_DIR),
     '--claude-projects-dir', shellQuote(homes.CLAUDE_PROJECTS_DIR),
@@ -67,6 +69,13 @@ export function command(
     '--copilot-home', shellQuote(homes.COPILOT_HOME),
     ...(engine !== 'claude' ? ['--engine', engine] : []),
   ].join(' ')
+}
+
+/** The formatter above also describes already-installed legacy hooks. New
+ * Cursor launches must select the versioned artifact at preparation time. */
+export function nativeHookCommand(port: number, engine: Parameters<typeof command>[1], environment?: Readonly<Record<string, string>>) {
+  const artifact = prepareNativeHookArtifact(import.meta.url)
+  return { ...artifact, command: command(port, engine, undefined, undefined, environment, artifact.path) }
 }
 
 /** Accept only a literal Node invocation with Harness's protocol arguments.

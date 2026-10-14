@@ -25,6 +25,7 @@ import { patientDeadline, patientExec } from './patientExec.js'
 import { inTmuxRoom } from './tmuxControlGate.js'
 import { tmuxFeatures, type TmuxFeatures } from './tmuxVersion.js'
 import { processIdentityOf, sameProcessIdentity } from './terminalRuntime.js'
+import { TerminalWriteHeld, type TerminalWrite } from './terminalTypes.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
 // Every tmux and `ps` call here: a held event loop must not turn a timeout into an empty answer
@@ -1372,11 +1373,11 @@ function tmuxDeleteBuffer(name: string): Promise<void> {
  *
  *  A buffer set and deleted is a notification to every control client, which on a tmux before 3.7
  *  crashed the server while one was attaching: the paste waits for none to be (tmuxControlGate.ts). */
-function tmuxPasteText(pane: string, content: string, bracketed: boolean, allowed?: () => boolean): Promise<boolean> {
-  return inTmuxRoom('notify', () => pasteThroughBuffer(pane, content, bracketed, allowed))
+function tmuxPasteText(pane: string, content: string, bracketed: boolean, allowed?: () => boolean, dispatch?: TerminalWrite['dispatch']): Promise<boolean> {
+  return inTmuxRoom('notify', () => pasteThroughBuffer(pane, content, bracketed, allowed, dispatch))
 }
 
-async function pasteThroughBuffer(pane: string, content: string, bracketed: boolean, allowed?: () => boolean): Promise<boolean> {
+async function pasteThroughBuffer(pane: string, content: string, bracketed: boolean, allowed?: () => boolean, dispatch?: TerminalWrite['dispatch']): Promise<boolean> {
   if (allowed && !allowed()) return false
   const bufferName = `machinemsg-${process.pid}-${++injectBufferSequence}`
   if (!(await tmuxLoadBuffer(bufferName, bracketed ? neutralizePasteControls(content) : content))) {
@@ -1388,12 +1389,18 @@ async function pasteThroughBuffer(pane: string, content: string, bracketed: bool
   const args = ['paste-buffer', '-t', pane, '-b', bufferName]
   if (bracketed) args.push('-p')
   args.push('-d')
-  const pasted = await new Promise<boolean>((resolve) => {
-    run('tmux', args, { timeout: 2_000 }, (err) => {
-      if (err) console.error(`[tmux] paste-buffer to ${pane} failed:`, err.message)
-      resolve(!err)
+  const paste = () => {
+    if (allowed && !allowed()) throw new TerminalWriteHeld('terminal control revoked')
+    return new Promise<boolean>((resolve) => {
+      run('tmux', args, { timeout: 2_000 }, (err) => {
+        if (err) console.error(`[tmux] paste-buffer to ${pane} failed:`, err.message)
+        resolve(!err)
+      })
     })
-  })
+  }
+  let pasted: boolean
+  try { pasted = await (dispatch ? dispatch(paste) : paste()) }
+  catch (error) { await tmuxDeleteBuffer(bufferName); throw error }
   if (!pasted) await tmuxDeleteBuffer(bufferName)
   return pasted
 }
@@ -1412,16 +1419,28 @@ async function pasteThroughBuffer(pane: string, content: string, bracketed: bool
  * from being pressed, and comes back as `{ withheld }`, the text left typed. An engine can open a dialog
  * in that gap, mid-turn, and the Enter would answer it.
  */
-export function sendToTmux(pane: string, text: string, beforeEnter?: () => Promise<string | null>, allowed?: () => boolean): Promise<boolean | { withheld: string }> {
+export function sendToTmux(pane: string, text: string, beforeEnter?: () => Promise<string | null>, allowed?: () => boolean,
+  dispatch?: TerminalWrite['dispatch']): Promise<boolean | { withheld: string } | { notStarted: true }> {
   const content = text.replace(/[\r\n]+$/, '') // strip trailing newlines so the submit Enter isn't doubled
   return (async () => {
-    const needsSettle = content.length > INJECT_FASTPATH_MAXLEN || /[\r\n]/.test(content)
-    if (!(await tmuxPasteText(pane, content, true, allowed))) return false
-    if (needsSettle) await sleep(Math.min(1500, INJECT_PASTE_DELAY_BASE_MS + Math.floor(content.length / 60)))
-    const withheld = beforeEnter ? await beforeEnter() : null
-    if (withheld) return { withheld }
-    if (allowed && !allowed()) return { withheld: 'terminal control revoked' }
-    return tmuxEnter(pane)
+    let started = false
+    const physical: TerminalWrite['dispatch'] | undefined = dispatch && (operation => dispatch(() => { started = true; return operation() }))
+    try {
+      const needsSettle = content.length > INJECT_FASTPATH_MAXLEN || /[\r\n]/.test(content)
+      if (!(await tmuxPasteText(pane, content, true, allowed, physical))) return dispatch && !started ? { notStarted: true } : false
+      if (needsSettle) await sleep(Math.min(1500, INJECT_PASTE_DELAY_BASE_MS + Math.floor(content.length / 60)))
+      const withheld = beforeEnter ? await beforeEnter() : null
+      if (withheld) return { withheld }
+      if (allowed && !allowed()) return { withheld: 'terminal control revoked' }
+      const enter = () => {
+        if (allowed && !allowed()) throw new TerminalWriteHeld('terminal control revoked')
+        return tmuxEnter(pane)
+      }
+      return await (physical ? physical(enter) : enter())
+    } catch (error) {
+      if (!(error instanceof TerminalWriteHeld)) throw error
+      return started ? { withheld: 'terminal control revoked' } : { notStarted: true }
+    }
   })()
 }
 
@@ -1431,8 +1450,8 @@ export function sendToTmux(pane: string, text: string, beforeEnter?: () => Promi
  * settings list opens a row as soon as the filter narrows to one, so the Enter `sendToTmux` appends would
  * land on the row that just opened and pick whatever was already highlighted.
  */
-export function sendLiteralToTmux(pane: string, text: string): Promise<boolean> {
-  return tmuxPasteText(pane, text, false)
+export function sendLiteralToTmux(pane: string, text: string, write?: TerminalWrite): Promise<boolean> {
+  return tmuxPasteText(pane, text, false, write?.allowed, write?.dispatch)
 }
 
 /**
@@ -1451,8 +1470,14 @@ export function pasteRawIntoTmux(pane: string, text: string): Promise<boolean> {
   return tmuxPasteText(pane, text, true)
 }
 
-export function sendKeyToTmux(pane: string, key: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    run('tmux', ['send-keys', '-t', pane, key], { timeout: 2000 }, (err) => resolve(!err))
-  })
+export async function sendKeyToTmux(pane: string, key: string, write?: TerminalWrite): Promise<boolean | { notStarted: true }> {
+  if (write && !write.allowed()) return { notStarted: true }
+  const dispatch = () => {
+    if (write && !write.allowed()) throw new TerminalWriteHeld('terminal control revoked')
+    return new Promise<boolean>((resolve) => {
+      run('tmux', ['send-keys', '-t', pane, key], { timeout: 2000 }, (err) => resolve(!err))
+    })
+  }
+  try { return await (write ? write.dispatch(dispatch) : dispatch()) }
+  catch (error) { if (error instanceof TerminalWriteHeld) return { notStarted: true }; throw error }
 }

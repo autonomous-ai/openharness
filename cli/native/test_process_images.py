@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import select
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,12 +25,30 @@ STUB = r'''
 #include <sys/proc_info.h>
 #include <sys/proc.h>
 #include <sys/stat.h>
+#include <sys/mount.h>
 #include <sys/sysctl.h>
 
 static unsigned births, paths, commands, lists;
 static int scenario(const char *name) {
     const char *value = getenv("PROBE_FIXTURE_CASE");
     return value && strcmp(value, name) == 0;
+}
+static int entry_case(void) {
+    const char *value = getenv("PROBE_FIXTURE_CASE");
+    return value && !strncmp(value, "entry-", 6);
+}
+int fixture_fstatfs(int fd, struct statfs *value) {
+    (void)fd;
+    static unsigned reads;
+    reads++;
+    if (scenario("scope-denied")) { errno = EPERM; return -1; }
+    memset(value, 0, sizeof(*value));
+    value->f_flags = scenario("scope-remote") ? 0 : MNT_LOCAL;
+    value->f_type = 17;
+    value->f_fsid.val[0] = scenario("scope-changed") && reads > 1 ? 2 : 1;
+    strcpy(value->f_fstypename, scenario("scope-fuse") ? "fusefs"
+        : scenario("scope-network") ? "nfs" : "apfs");
+    return 0;
 }
 int fixture_proc_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, int size) {
     if (scenario("denied")) { errno = EPERM; return 0; }
@@ -49,6 +68,8 @@ int fixture_proc_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, int si
     info->pbi_start_tvsec = scenario("bad-start") ? 0 : 1770000000;
     info->pbi_start_tvusec = scenario("pid-reused") ? ++births : 123456;
     info->pbi_ppid = pid == 7 ? 1 : 7;
+    info->pbi_flags = scenario("entry-32") ? 0 : PROC_FLAG_LP64;
+    if (scenario("width-changed") && ++births > 1) info->pbi_flags = 0;
     info->pbi_status = pid == 8 && scenario("zombie-child") ? SZOMB : SRUN;
     if (info->pbi_status == SZOMB && !arg) { errno = ESRCH; return 0; }
     info->pbi_nfiles = scenario("fd-capacity-grew") && lists ? 64 : 32;
@@ -77,6 +98,38 @@ int fixture_sysctl(int *name, unsigned int count, void *buffer, size_t *size, vo
     if (scenario("command-denied")) { errno = EPERM; return -1; }
     if (scenario("command-full")) { memset(buffer, 0, *size); return 0; }
     unsigned char *out = buffer;
+    if (entry_case()) {
+        const char *entry = "/fixture/cursor-agent/versions/1/index.js";
+        const char *args[8] = { "node", entry, "argument" };
+        int argc = 3;
+        if (scenario("entry-empty-zero")) { args[0] = ""; args[1] = "node"; args[2] = entry; }
+        if (scenario("entry-spaced-zero")) args[0] = "node /fixture/node";
+        if (scenario("entry-rewritten-zero")) args[0] = "a rewritten process title";
+        if (scenario("entry-rewritten-gap")) args[1] = "";
+        if (scenario("entry-eval")) args[1] = "--eval";
+        if (scenario("entry-preload")) args[1] = "--require";
+        if (scenario("entry-alias")) args[0] = "/fixture/agent";
+        if (scenario("entry-options")) { args[1] = "--no-warnings"; args[2] = "--"; args[3] = entry; argc = 4; }
+        memset(out, 0, *size);
+        memcpy(out, &argc, sizeof(argc));
+        const char *length = getenv("PROBE_FIXTURE_PATH_LENGTH");
+        size_t path_length = length ? (size_t)atoi(length) : 13;
+        memset(out + sizeof(argc), 'x', path_length);
+        out[sizeof(argc)] = '/';
+        size_t align = scenario("entry-32") ? 4 : 8;
+        size_t at = sizeof(argc) + ((path_length + 1 + align - 1) / align) * align;
+        if (scenario("entry-bad-padding")) out[at - 1] = 'x';
+        for (int index = 0; index < argc; index++) {
+            size_t length = strlen(args[index]) + 1;
+            memcpy(out + at, args[index], length); at += length;
+        }
+        if (scenario("entry-truncated")) { *size = at - 1; return 0; }
+        /* Empty/missing argv cannot be replaced with these misleading bytes. */
+        const char environment[] = "node\0/fixture/cursor-agent/versions/1/index.js\0PRIVATE_FIXTURE_SECRET=never-output\0";
+        memcpy(out + at, environment, sizeof(environment));
+        *size = at + sizeof(environment);
+        return 0;
+    }
     int argc = 1;
     memcpy(out, &argc, sizeof(argc));
     const char data[] = "/fixture/probe\0\0fixture\0FIXTURE_SECRET=never-output\0";
@@ -92,7 +145,7 @@ int fixture_proc_pidpath(int pid, void *buffer, uint32_t size) {
     const char *value = scenario("relative-path") ? "relative"
         : scenario("exec-changed") && paths == 2 ? "/changed"
         : scenario("raw-path") ? "/raw/quote\" line\n slash\\ byte\xff"
-        : "/fixture/probe";
+        : entry_case() ? "/fixture/node" : "/fixture/probe";
     size_t length = strlen(value);
     if (length >= size) return 0;
     memcpy(buffer, value, length + 1);
@@ -127,7 +180,7 @@ class ProcessImagesTest(unittest.TestCase):
         command(['/usr/bin/xcrun', 'clang', '-std=c11', '-Wall', '-Wextra', '-Werror',
                  '-Dproc_pidinfo=fixture_proc_pidinfo', '-Dproc_pidpath=fixture_proc_pidpath',
                  '-Dproc_pidfdinfo=fixture_proc_pidfdinfo', '-Dproc_listchildpids=fixture_proc_listchildpids',
-                 '-Dsysctl=fixture_sysctl',
+                 '-Dsysctl=fixture_sysctl', '-Dfstatfs=fixture_fstatfs',
                  str(SOURCE), str(stub), '-o', str(cls.stub)])
         sleeper = cls.root / 'sleeper.c'
         sleeper.write_text('#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\n'
@@ -195,6 +248,29 @@ class ProcessImagesTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 64)
                 self.assertEqual(result.stdout, b'')
 
+    def test_scope_pins_a_real_private_local_directory(self):
+        result = command([str(self.probe), '--scope', '2000', str(self.root)])
+        row = json.loads(result.stdout)
+        info = self.root.stat()
+        self.assertEqual((row['schema'], row['mode']), (1, 'scope'))
+        self.assertEqual((row['device'], row['inode']), (str(info.st_dev), str(info.st_ino)))
+        self.assertIn(row['filesystem'], ['apfs', 'hfs'])
+        self.assertNotIn('hostHex', row)
+
+    def test_scope_holds_remote_unknown_changing_or_unreadable_volumes(self):
+        for case in ['scope-remote', 'scope-fuse', 'scope-network', 'scope-changed', 'scope-denied']:
+            with self.subTest(case=case):
+                result = subprocess.run([str(self.stub), '--scope', '2000', str(self.root)],
+                                        capture_output=True, timeout=5,
+                                        env={**os.environ, 'PROBE_FIXTURE_CASE': case})
+                self.assertEqual(result.returncode, 75)
+                self.assertEqual(result.stdout, b'')
+        alias = self.root / 'scope-alias'
+        alias.symlink_to(self.root, target_is_directory=True)
+        result = subprocess.run([str(self.probe), '--scope', '2000', str(alias)], capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 75)
+        self.assertEqual(result.stdout, b'')
+
     def test_unavailable_racing_or_incomplete_identities_are_not_reported_as_paths(self):
         for case in ['denied', 'short-info', 'pid-mismatch', 'pid-reused', 'exec-changed',
                      'missing-second-path', 'truncated-path', 'relative-path', 'bad-start']:
@@ -256,8 +332,9 @@ class ProcessImagesTest(unittest.TestCase):
                            env={**os.environ, 'LC_ALL': '', 'LC_TIME': 'C'}).stdout.decode().strip()
         self.assertEqual(row['startMarker'], expected)
 
-    def control(self, pids, parent=0, *, stub=False, case='stable', okay=True):
-        result = subprocess.run([str(self.stub if stub else self.probe), '--control', '2000', str(parent), *map(str, pids)],
+    def control(self, pids, parent=0, *, stub=False, case='stable', okay=True, descriptors=True):
+        mode = 'control' if descriptors else 'identity'
+        result = subprocess.run([str(self.stub if stub else self.probe), '--' + mode, '2000', str(parent), *map(str, pids)],
                                 capture_output=True, timeout=5, env={**os.environ, 'PROBE_FIXTURE_CASE': case})
         if not okay:
             self.assertEqual(result.returncode, 75)
@@ -265,7 +342,7 @@ class ProcessImagesTest(unittest.TestCase):
             return
         self.assertEqual(result.returncode, 0, result.stderr)
         records = [json.loads(line) for line in result.stdout.splitlines()]
-        self.assertEqual(records.pop(0), {'schema': 2, 'mode': 'control', 'parent': parent, 'children': []})
+        self.assertEqual(records.pop(0), {'schema': 2, 'mode': mode, 'parent': parent, 'children': []})
         self.assertEqual([row['pid'] for row in records], pids)
         return records
 
@@ -281,9 +358,78 @@ class ProcessImagesTest(unittest.TestCase):
         for case in ['denied', 'short-info', 'pid-mismatch', 'pid-reused', 'exec-changed',
                      'missing-second-path', 'truncated-path', 'relative-path', 'bad-start',
                      'short-fds', 'full-fds', 'fd-changed', 'fd-denied', 'fd-capacity-grew',
-                     'children-full', 'children-denied', 'command-denied', 'command-full', 'command-changed']:
+                     'children-full', 'children-denied', 'command-denied', 'command-full', 'command-changed', 'width-changed']:
             with self.subTest(case=case):
                 self.control([7], parent=7, stub=True, case=case, okay=False)
+
+    def test_entry_digest_uses_exact_padding_for_both_pointer_widths(self):
+        expected = hashlib.sha256(b'/fixture/cursor-agent/versions/1/index.js').hexdigest()
+        for case in ['entry-32', 'entry-64', 'entry-alias', 'entry-options']:
+            for length in range(8, 24):
+                with self.subTest(case=case, path_length=length):
+                    result = command([str(self.stub), '--identity', '2000', '0', '7'], env={
+                        **os.environ, 'PROBE_FIXTURE_CASE': case, 'PROBE_FIXTURE_PATH_LENGTH': str(length)})
+                    row = json.loads(result.stdout.splitlines()[1])
+                    self.assertEqual(row['directEntryDigest'], expected)
+                    self.assertNotIn('PRIVATE_FIXTURE_SECRET', result.stdout.decode())
+
+    def test_uncertain_entry_boundaries_never_shift_into_arguments_or_environment(self):
+        for case in ['entry-empty-zero', 'entry-spaced-zero', 'entry-rewritten-zero', 'entry-rewritten-gap',
+                     'entry-eval', 'entry-preload', 'entry-bad-padding', 'entry-truncated']:
+            with self.subTest(case=case):
+                [row] = self.control([7], stub=True, case=case, descriptors=False)
+                self.assertIsNone(row['directEntryDigest'])
+                self.assertNotIn('PRIVATE_FIXTURE_SECRET', json.dumps(row))
+
+    def test_real_node_entry_rejects_empty_spaced_or_rewritten_argv_zero(self):
+        node = shutil.which('node')
+        self.assertIsNotNone(node, 'The pinned Node toolchain is required')
+        vendor = self.root / 'cursor-agent/versions/1/index.js'
+        vendor.parent.mkdir(parents=True)
+        source = 'console.log("ready");process.stdin.resume();'
+        vendor.write_text(source)
+        unrelated = self.root / 'node'
+        unrelated.write_text(source)
+        rewritten = self.root / 'rewritten.js'
+        rewritten.write_text('process.title="node /fixture/cursor-agent/versions/1/index.js";' + source)
+        cases = [([node, str(vendor)], str(vendor)), (['agent', str(vendor)], str(vendor)),
+                 (['', 'node', str(vendor)], None), (['node ' + str(vendor), str(unrelated)], None),
+                 ([node, str(rewritten)], None)]
+        for argv, entry in cases:
+            with self.subTest(argv_zero=argv[0]):
+                child = self.launch(argv, executable=node, cwd=self.root, env={
+                    'HOME': str(self.root), 'PATH': '/usr/bin:/bin', 'PRIVATE_FIXTURE_SECRET': 'never-output'})
+                self.wait_ready(child)
+                [row] = self.control([child.pid], descriptors=False)
+                expected = hashlib.sha256(entry.encode()).hexdigest() if entry else None
+                self.assertEqual(row['directEntryDigest'], expected)
+                self.assertNotIn('PRIVATE_FIXTURE_SECRET', json.dumps(row))
+
+    def test_identity_does_not_require_descriptors_but_retains_every_process_fence(self):
+        for case in ['short-fds', 'full-fds', 'fd-changed', 'fd-denied', 'fd-capacity-grew']:
+            with self.subTest(case=case):
+                [row] = self.control([7], stub=True, case=case, descriptors=False)
+                self.assertEqual(row['fds'], [])
+        for case in ['denied', 'short-info', 'pid-reused', 'exec-changed', 'command-denied', 'command-changed']:
+            with self.subTest(case=case):
+                self.control([7], stub=True, case=case, descriptors=False, okay=False)
+
+    def test_identity_reads_an_active_private_process_while_its_descriptor_pool_changes(self):
+        script = ('import os, sys, threading\n'
+                  'def churn():\n'
+                  '  while True:\n'
+                  '    fds = [fd for _ in range(64) for fd in os.pipe()]\n'
+                  '    for fd in fds: os.close(fd)\n'
+                  'threading.Thread(target=churn, daemon=True).start()\n'
+                  'print("ready", flush=True)\n'
+                  'sys.stdin.read()\n')
+        child = self.launch([sys.executable, '-c', script])
+        self.wait_ready(child)
+        [before] = self.control([child.pid], descriptors=False)
+        for _ in range(20):
+            [after] = self.control([child.pid], descriptors=False)
+            self.assertEqual(after, before)
+            self.assertEqual(after['fds'], [])
 
     def test_control_excludes_a_proven_unreaped_zombie(self):
         self.control([7], parent=7, stub=True, case='zombie-child')

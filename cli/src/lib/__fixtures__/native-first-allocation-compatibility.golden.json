@@ -1,0 +1,2882 @@
+{
+  "linux": {
+    "legacy-omission": {
+      "row": {
+        "schemaVersion": 4,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "nativeAllocation": {
+          "version": 1,
+          "receipts": [
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-0",
+                "launchToken": "fixture-launch-token-0",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-1",
+                "launchToken": "fixture-launch-token-1",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-2",
+                "launchToken": "fixture-launch-token-2",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-3",
+                "launchToken": "fixture-launch-token-3",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            }
+          ]
+        },
+        "agent": null
+      },
+      "target": "ee11ba02151c4c83b29f1ab116fbfb85ef5f822732cd354e631b966a47a149b8",
+      "allocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        ]
+      },
+      "repeated": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        ]
+      },
+      "capacity": false
+    },
+    "legacy-omission:ordinary-save": "Waiting for the proven native allocation handoff before saving this visit.",
+    "legacy-omission:saved": {
+      "schemaVersion": 4,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "agent": null,
+      "launch": {
+        "state": "ready"
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "nativeAllocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        ]
+      }
+    },
+    "legacy-omission:loaded": {
+      "schemaVersion": 4,
+      "nativeAllocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        ]
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "legacy-omission:notify": {
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "active": true,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1"
+    },
+    "legacy-omission:registered": {
+      "schemaVersion": 4,
+      "nativeAllocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        ]
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "legacy-omission:stale": [
+      {
+        "schemaVersion": 4,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": "Renamed",
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "nativeAllocation": {
+          "version": 1,
+          "receipts": [
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-0",
+                "launchToken": "fixture-launch-token-0",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-1",
+                "launchToken": "fixture-launch-token-1",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-2",
+                "launchToken": "fixture-launch-token-2",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-3",
+                "launchToken": "fixture-launch-token-3",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            }
+          ]
+        },
+        "agent": null
+      }
+    ],
+    "legacy-omission:invalid": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "original-source": {
+      "row": {
+        "schemaVersion": 4,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "nativeAllocation": {
+          "version": 1,
+          "receipts": [
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-0",
+                "launchToken": "fixture-launch-token-0",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-1",
+                "launchToken": "fixture-launch-token-1",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-2",
+                "launchToken": "fixture-launch-token-2",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-3",
+                "launchToken": "fixture-launch-token-3",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            }
+          ]
+        },
+        "agent": null
+      },
+      "target": "8552b2d26d28c87ae2a8fcececb477bfc1154ef87ef32b8c3438151341b80966",
+      "allocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          }
+        ]
+      },
+      "repeated": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          }
+        ]
+      },
+      "capacity": false
+    },
+    "original-source:ordinary-save": "Waiting for the proven native allocation handoff before saving this visit.",
+    "original-source:saved": {
+      "schemaVersion": 4,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "agent": null,
+      "launch": {
+        "state": "ready"
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "nativeAllocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "original-source:loaded": {
+      "schemaVersion": 4,
+      "nativeAllocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          }
+        ]
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "original-source:notify": {
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "active": true,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1"
+    },
+    "original-source:registered": {
+      "schemaVersion": 4,
+      "nativeAllocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          }
+        ]
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "original-source:stale": [
+      {
+        "schemaVersion": 4,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": "Renamed",
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "nativeAllocation": {
+          "version": 1,
+          "receipts": [
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-0",
+                "launchToken": "fixture-launch-token-0",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-1",
+                "launchToken": "fixture-launch-token-1",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-2",
+                "launchToken": "fixture-launch-token-2",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-3",
+                "launchToken": "fixture-launch-token-3",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            }
+          ]
+        },
+        "agent": null
+      }
+    ],
+    "original-source:invalid": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "darwin": {
+    "legacy-omission": {
+      "row": {
+        "schemaVersion": 4,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "nativeAllocation": {
+          "version": 1,
+          "receipts": [
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-0",
+                "launchToken": "fixture-launch-token-0",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-1",
+                "launchToken": "fixture-launch-token-1",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-2",
+                "launchToken": "fixture-launch-token-2",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-3",
+                "launchToken": "fixture-launch-token-3",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            }
+          ]
+        },
+        "agent": null
+      },
+      "target": "ee11ba02151c4c83b29f1ab116fbfb85ef5f822732cd354e631b966a47a149b8",
+      "allocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        ]
+      },
+      "repeated": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        ]
+      },
+      "capacity": false
+    },
+    "legacy-omission:ordinary-save": "Waiting for the proven native allocation handoff before saving this visit.",
+    "legacy-omission:saved": {
+      "schemaVersion": 4,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "agent": null,
+      "launch": {
+        "state": "ready"
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "nativeAllocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        ]
+      }
+    },
+    "legacy-omission:loaded": {
+      "schemaVersion": 4,
+      "nativeAllocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        ]
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "legacy-omission:notify": {
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "active": true,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1"
+    },
+    "legacy-omission:registered": {
+      "schemaVersion": 4,
+      "nativeAllocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        ]
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "legacy-omission:stale": [
+      {
+        "schemaVersion": 4,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": "Renamed",
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "nativeAllocation": {
+          "version": 1,
+          "receipts": [
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-0",
+                "launchToken": "fixture-launch-token-0",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-1",
+                "launchToken": "fixture-launch-token-1",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-2",
+                "launchToken": "fixture-launch-token-2",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-3",
+                "launchToken": "fixture-launch-token-3",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            }
+          ]
+        },
+        "agent": null
+      }
+    ],
+    "legacy-omission:invalid": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "original-source": {
+      "row": {
+        "schemaVersion": 4,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": null,
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "nativeAllocation": {
+          "version": 1,
+          "receipts": [
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-0",
+                "launchToken": "fixture-launch-token-0",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-1",
+                "launchToken": "fixture-launch-token-1",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-2",
+                "launchToken": "fixture-launch-token-2",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-3",
+                "launchToken": "fixture-launch-token-3",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            }
+          ]
+        },
+        "agent": null
+      },
+      "target": "8552b2d26d28c87ae2a8fcececb477bfc1154ef87ef32b8c3438151341b80966",
+      "allocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          }
+        ]
+      },
+      "repeated": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          }
+        ]
+      },
+      "capacity": false
+    },
+    "original-source:ordinary-save": "Waiting for the proven native allocation handoff before saving this visit.",
+    "original-source:saved": {
+      "schemaVersion": 4,
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "sessionId": "fixture-session",
+      "active": false,
+      "projectDir": "/fixture/project",
+      "cwd": "/fixture/project",
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "tmuxPane": "%1",
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "boundAt": 150,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200,
+      "source": "hook",
+      "title": null,
+      "model": null,
+      "cliVersion": null,
+      "agent": null,
+      "launch": {
+        "state": "ready"
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "nativeAllocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          }
+        ]
+      }
+    },
+    "original-source:loaded": {
+      "schemaVersion": 4,
+      "nativeAllocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          }
+        ]
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "/fixture/project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 200,
+      "lastHookAt": 200,
+      "lastTranscriptAt": 200
+    },
+    "original-source:notify": {
+      "agentId": "fixture-agent",
+      "engine": "cursor",
+      "active": true,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1"
+    },
+    "original-source:registered": {
+      "schemaVersion": 4,
+      "nativeAllocation": {
+        "version": 1,
+        "receipts": [
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-0",
+              "launchToken": "fixture-launch-token-0",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-1",
+              "launchToken": "fixture-launch-token-1",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-2",
+              "launchToken": "fixture-launch-token-2",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          },
+          {
+            "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+            "request": {
+              "kind": "native-rearm",
+              "agentId": "fixture-agent",
+              "operation": "resume",
+              "source": "live",
+              "creationId": "fixture-original-3",
+              "launchToken": "fixture-launch-token-3",
+              "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sourceProcess": {
+                "processKey": null
+              }
+            }
+          }
+        ]
+      },
+      "nativeControl": {
+        "version": 1,
+        "cancel": {
+          "processKey": null,
+          "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+          "request": {
+            "requestId": "fixture-cancel-request",
+            "nonce": "fixture-cancel-nonce",
+            "agentId": "fixture-agent",
+            "conversationId": "fixture-session",
+            "frontier": {
+              "index": -1,
+              "digest": null
+            }
+          }
+        }
+      },
+      "active": true,
+      "agentId": "fixture-agent",
+      "boundAt": 150,
+      "engine": "cursor",
+      "gateway": null,
+      "grid": null,
+      "codexHome": null,
+      "hermesHome": null,
+      "dsh": null,
+      "dshRuntime": null,
+      "agent": null,
+      "transcriptPath": null,
+      "defaultName": "Fixture",
+      "title": null,
+      "sessionId": "fixture-session",
+      "projectDir": "project",
+      "tmuxPane": "%1",
+      "runtimes": [
+        {
+          "backend": "tmux",
+          "paneId": "%1"
+        }
+      ],
+      "primaryRuntimeKey": "tmux\u0000%1",
+      "cwd": "/fixture/project",
+      "source": "hook",
+      "cliVersion": null,
+      "model": null,
+      "processIdentity": {
+        "pid": 42,
+        "startMarker": "fixture-start",
+        "executable": "<cursor>"
+      },
+      "registeredAt": 100,
+      "touchedAt": 1700000000000,
+      "lastHookAt": 1700000000000,
+      "lastTranscriptAt": 200,
+      "gridLaunch": null,
+      "gridWebSearch": null
+    },
+    "original-source:stale": [
+      {
+        "schemaVersion": 4,
+        "agentId": "fixture-agent",
+        "engine": "cursor",
+        "sessionId": "fixture-session",
+        "active": true,
+        "projectDir": "/fixture/project",
+        "cwd": "/fixture/project",
+        "transcriptPath": null,
+        "defaultName": "Fixture",
+        "runtimes": [
+          {
+            "backend": "tmux",
+            "paneId": "%1"
+          }
+        ],
+        "primaryRuntimeKey": "tmux\u0000%1",
+        "tmuxPane": "%1",
+        "processIdentity": {
+          "pid": 42,
+          "startMarker": "fixture-start",
+          "executable": "<cursor>"
+        },
+        "registeredAt": 100,
+        "touchedAt": 200,
+        "boundAt": 150,
+        "lastHookAt": 200,
+        "lastTranscriptAt": 200,
+        "source": "hook",
+        "title": "Renamed",
+        "model": null,
+        "cliVersion": null,
+        "nativeControl": {
+          "version": 1,
+          "cancel": {
+            "processKey": null,
+            "target": "55327d22fb0e1ac1dce0f928305152dca821264f017593543eaa272c59d4cac1",
+            "request": {
+              "requestId": "fixture-cancel-request",
+              "nonce": "fixture-cancel-nonce",
+              "agentId": "fixture-agent",
+              "conversationId": "fixture-session",
+              "frontier": {
+                "index": -1,
+                "digest": null
+              }
+            }
+          }
+        },
+        "nativeAllocation": {
+          "version": 1,
+          "receipts": [
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-0",
+                "launchToken": "fixture-launch-token-0",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-1",
+                "launchToken": "fixture-launch-token-1",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-2",
+                "launchToken": "fixture-launch-token-2",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            },
+            {
+              "fingerprint": "6fd9b799e746f387a7e7f5b740ce6cb8b8f60b3b2c621a62d4b18960bfd12188",
+              "request": {
+                "kind": "native-rearm",
+                "agentId": "fixture-agent",
+                "operation": "resume",
+                "source": "live",
+                "creationId": "fixture-original-3",
+                "launchToken": "fixture-launch-token-3",
+                "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sourceProcess": {
+                  "processKey": null
+                }
+              }
+            }
+          ]
+        },
+        "agent": null
+      }
+    ],
+    "original-source:invalid": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  }
+}

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from './resumeAgentService.js'
 import { RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { registry, type RegisteredSession } from './registry.js'
+import { nativeTurnTarget } from './nativeTurnIntent.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { env } from '../config/env.js'
@@ -52,6 +53,22 @@ function live(extra: Partial<RegisteredSession> = {}) {
 function rewrite(extra: Partial<RegisteredSession>) { saved = { ...saved, ...extra }; rmSync(join(dir, 'saved', `${saved.agentId}.json`)); deps.stoppedAgents.save(saved) }
 function start() { return createResumeAgentService(deps)(saved.agentId) }
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { promise, resolve } }
+
+it('never retakes an old native cancellation reservation by age', async () => {
+  rewrite({ schemaVersion: 3, nativeControl: { version: 1, cancel: {
+    processKey: null, target: nativeTurnTarget(saved), request: { requestId: 'original-cancel-request', nonce: 'original-cancel-nonce',
+      agentId: saved.agentId, conversationId: saved.sessionId, frontier: { index: -1, digest: null } },
+  } } })
+  deps.stoppedAgents.beginResume(saved.agentId)
+  const marker = join(dir, 'saved', `${saved.agentId}.resume`), bytes = readFileSync(marker, 'utf8')
+  const stale = new Date(Date.now() - RESUME_READINESS_BUDGET_MS - 60_000)
+  utimesSync(marker, stale, stale)
+  const finish = vi.spyOn(deps.stoppedAgents, 'finishResume')
+  await expect(start()).resolves.toMatchObject({ error: 'RESUME_UNCONFIRMED' })
+  expect(finish).not.toHaveBeenCalled()
+  expect(readFileSync(marker, 'utf8')).toBe(bytes)
+  expect(create).not.toHaveBeenCalled()
+})
 
 it('retains the reservation if terminal dispatch starts but loses its reply', async () => {
   create.mockImplementationOnce(async request => { request.onDispatch(); throw Error('Terminal transport disconnected') })

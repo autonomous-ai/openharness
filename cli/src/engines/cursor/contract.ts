@@ -49,3 +49,10 @@ export const CURSOR_HOOK_SETTINGS = {
     ]
   }
 } as const satisfies import('../kit/nativeHookSettings.js').NativeHookSettings
+
+/** The former descriptor remains explicit for compatibility fixtures. Native
+ * completion needs response text carrying the same generation ID as Stop. */
+export const CURSOR_GENERATION_HOOK_SETTINGS = { ...CURSOR_HOOK_SETTINGS,
+  nativeProtocol: 1,
+  events: ['sessionStart', 'beforeSubmitPrompt', 'preToolUse', 'afterAgentResponse', 'stop', 'sessionEnd'],
+} as const satisfies import('../kit/nativeHookSettings.js').NativeHookSettings

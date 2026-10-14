@@ -22,6 +22,18 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { expectForeignHooksPreserved, preservedHookFiles } from '../testing/hookGoldenSafety.js'
 
+// Cursor's production protocol now also retains generation-tagged response
+// content. This former golden still covers its original five-event declaration
+// and real settings-writing mechanics, through core's installer containment.
+// NativeHookActivation.spec.ts covers the unmocked production selection/wiring.
+vi.mock('./nativeHooks.js', async original => {
+  const hooks = await original<typeof import('./nativeHooks.js')>()
+  const { CURSOR_HOOK_SETTINGS } = await import('./cursor/contract.js')
+  const { installNativeHookSettings } = await import('./kit/nativeHookSettings.js')
+  return { ...hooks, installCursorHooks: (port: number, options: import('./kit/nativeLocations.js').NativeHookOptions) =>
+    installNativeHookSettings(CURSOR_HOOK_SETTINGS, port, options) }
+})
+
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/other-hooks.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_OTHER_ENGINES_GOLDEN === '1'
 const PORT = 19473
