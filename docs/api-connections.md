@@ -7,7 +7,7 @@ APIs grouped in one searchable view. The source tabs narrow the list.
 
 Open **Models → APIs**, choose a provider, paste its key, and select **Save**.
 The clipboard icon pastes the key directly; it remains hidden until you reveal it.
-OpenRouter, Requesty, fal.ai, and Replicate have presets. **Custom API**
+OpenRouter, Requesty, API Route, fal.ai, OpenAI, Anthropic, and Replicate have presets. **Custom API**
 accepts a name, base URL, and key; **Advanced** controls the key environment
 variable, authentication header, and optional prefix.
 
@@ -26,6 +26,17 @@ outside Harness too. Multiple named connections to one provider are supported.
 ![Custom API setup](images/models-api-custom.png)
 
 ## Using a connection
+
+For **[API Route](https://www.api-route.com)**, create a key in the
+[API Keys dashboard](https://www.api-route.com/api-keys), choose its preset, and save.
+The preset uses `https://global.api-route.com/v1` with Bearer authentication and exports
+`API_ROUTE_API_KEY` to tools launched through `run`. API Route is a paid service; use a model
+available to your key. For example, using the connection ID returned by `list`:
+
+```sh
+harness api request api-route /models
+harness api run api-route -- node your-tool.mjs
+```
 
 Harness adds a short **Saved APIs** instruction section when starting, restarting,
 or forking a local harness while connections exist. It preserves existing project
@@ -101,6 +112,7 @@ gets a key. Connections do not sync between machines.
 Preset defaults come from the providers' documentation:
 [OpenRouter](https://openrouter.ai/docs/api/reference/authentication),
 [Requesty](https://docs.requesty.ai/api-reference/introduction),
+[API Route](https://www.api-route.com/docs/quickstart),
 [fal.ai](https://fal.ai/models/fal-ai/flux/dev/api), and
 [Replicate](https://replicate.com/docs/reference/http).
 
