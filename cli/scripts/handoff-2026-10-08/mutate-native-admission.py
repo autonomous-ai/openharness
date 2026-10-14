@@ -1,6 +1,7 @@
 """Owned disposable worktree only. A passing baseline and assertion failure are mandatory."""
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -59,7 +60,7 @@ mutations = [
     ('matched process snapshot is still live', 'src/core/engines/hooks.ts',
      'const candidate = structuredClone(live)', 'const candidate = live', spec, 'resolver continuation'),
     ('inspection binding authority ignored', http,
-     'if (!current() || paneReadIdentity(live()) !== inspectionIdentity)', 'if (!current())', 'src/hookServer.hermes.spec.ts', 'known home changes during source inspection'),
+     'paneReadIdentity(live()) !== inspectionIdentity', 'false', 'src/hookServer.hermes.spec.ts', 'known home changes during source inspection'),
     ('Stop admission fence disconnected', http,
      'if (handlers.hookAdmissionBlocked?.(processAgent.agentId))', 'if (false)', spec, 'actual Stop job'),
     ('unmatched Stop claim forgotten', http,
@@ -71,7 +72,7 @@ mutations = [
      '!unmatched && normalizers.sessionTurnState(session.sessionId) !== undefined', '!unmatched',
      'src/core/transcripts/attach.spec.ts', 'catch-hook completion'),
     ('pending Stop erases Cursor tasks', 'hook/notify.mjs',
-     "if (path === '/api/hook/turn-stop' && ok && reply?.pending === true) { resolve('held'); return }", '',
+     "if (reply.pending === true || reply.ignored === true) { finish('held'); return }", "if (reply.pending === true) { finish(true); return }",
      'src/hookNotify.spec.ts', 'Cursor Task/stop'),
     ('remaining admission hold hidden', http,
      "const reason = [...admissionHolds.get(processAgent.agentId)?.values() ?? []].at(-1)",
@@ -84,7 +85,7 @@ mutations = [
     ('same-owner reconstruction loses completion', http,
      'stopRetained = handlers.onAdmissionStop?.(live()!, true) ?? false', 'stopRetained = false', spec, 'same-owner linked Stop'),
     ('duplicate Stop erases Cursor tasks', 'hook/notify.mjs',
-     "if (path === '/api/hook/turn-stop' && ok && reply?.duplicate === true) { resolve('duplicate'); return }", '',
+     "if (path === '/api/hook/turn-stop' && reply.duplicate === true) { finish('duplicate'); return }", "if (path === '/api/hook/turn-stop' && reply.duplicate === true) { finish(true); return }",
      'src/hookNotify.spec.ts', 'Cursor Task/stop'),
     ('refused registration falls through to Stop', http,
      "if (/^[a-zA-Z0-9_-]{16,96}$/.test(delivery) && (body.engine === 'cursor' || body.engine === 'commandcode'))",
@@ -113,18 +114,19 @@ def run(targets, pattern=''):
                           cwd=cli, env=environment, text=True, capture_output=True, timeout=180)
 
 
-for native in [False, True]:
-    targets = sorted({entry[4] for entry in mutations if entry[4].startswith('e2e/') == native})
-    if targets:
-        baseline = run(targets, 'real native prompt visibly held|later Cursor turn open' if native else '')
-        if baseline.returncode:
-            raise SystemExit('Baseline failed; no mutants ran.\n' + baseline.stdout + baseline.stderr)
+# Check every selected mutant's exact positive oracle. Unrelated full HTTP
+# suites can exceed a single mutation's deadline and add no mutation evidence.
+for target, pattern in sorted({(entry[4], entry[5]) for entry in mutations}):
+    baseline = run([target], pattern)
+    output = re.sub(r'\x1b\[[0-9;]*m', '', baseline.stdout + baseline.stderr)
+    if baseline.returncode or not re.search(r'\bTests\s+[1-9]\d* passed\b', output):
+        raise SystemExit('Baseline failed; no mutants ran.\n' + baseline.stdout + baseline.stderr)
 print('Unchanged baselines passed', flush=True)
 failures = []
 for label, relative, before, after, target, pattern in mutations:
     path = cli / relative
     original = path.read_text()
-    expected = 2 if label in ['Stop admission fence disconnected', 'linked Stop invocation duplicated'] else 1
+    expected = 3 if label == 'inspection binding authority ignored' else 2 if label in ['Stop admission fence disconnected', 'linked Stop invocation duplicated'] else 1
     assert original.count(before) == expected, (label, original.count(before))
     try:
         path.write_text(original.replace(before, after))

@@ -131,10 +131,14 @@ jobs:
           cache-dependency-path: cli/package-lock.json
       - run: command -v tmux || brew install tmux
       - run: npm ci --no-audit --no-fund
+      - name: Build the verified macOS process helper used by the daemon bundle
+        run: python3 scripts/build-process-images.py --output "$RUNNER_TEMP/process-images.json"
       - name: A full disk, and an update on a disk that fills
         env:
           DISKFULL: '1'
           E2E_BUNDLE: '1'
+          HARNESS_PROCESS_IMAGES_ARTIFACT: ${{ runner.temp }}/process-images.json
+          HARNESS_REQUIRE_PROCESS_IMAGES: '1'
           E2E_ARTIFACTS_DIR: ${{ runner.temp }}/e2e-daemon-logs
         run: >-
           npx vitest run --config vitest.e2e.config.ts e2e/diskfull.e2e.ts e2e/updateHostile.e2e.ts

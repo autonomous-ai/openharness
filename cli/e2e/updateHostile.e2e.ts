@@ -24,6 +24,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { confirmInitialNativeHook } from './harness/nativeHooks.js'
 import { atVersion, withFault } from './harness/release.js'
 
 const FIRST = '43.0.1'
@@ -223,10 +224,12 @@ class Installed {
         mkdirSync(cwd, { recursive: true })
         const created = await client.request('agent_create', { engine, cwd, bypassPermission: true }, 90_000)
         expect(created.error, JSON.stringify(created)).toBeUndefined()
-        this.agents.push(await until(`${engine} to bind its conversation`, async () => {
+        const agent = await until(`${engine} to bind its conversation`, async () => {
           const row = (await rows(client)).find((one) => one.id === created.agent.id)
           return row?.sessionId && row.status === 'active' ? row : null
-        }, 90_000, 500))
+        }, 90_000, 500)
+        await confirmInitialNativeHook(this.daemon, { id: agent.id, engine: agent.engine, sessionId: agent.sessionId })
+        this.agents.push(agent)
       }
     } finally { client.close() }
   }

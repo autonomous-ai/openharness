@@ -6,6 +6,7 @@ import chokidar, { type FSWatcher } from 'chokidar'
 import { open, readFile, stat } from 'fs/promises'
 import { basename, dirname } from 'path'
 import type { AgentEngine } from '../engines/types.js'
+import type { TranscriptFileIdentity } from '../lib/transcriptBoundary.js'
 
 export interface WatchedSession {
   sessionId: string
@@ -128,7 +129,9 @@ export class Watcher extends EventEmitter {
   /** Attach one trusted transcript. Runtime hydration is handled by cli.ts; the tail starts at EOF, or at
    *  `fromOffset` — where that hydration stopped reading — so a record written while it read is tailed
    *  rather than lost between the two. */
-  async addSession(session: WatchedSession, opts: { fromStart?: boolean; fromOffset?: number; deliveryAllowed?: () => boolean } = {}): Promise<void> {
+  async addSession(session: WatchedSession, opts: { fromStart?: boolean; fromOffset?: number;
+    /** Complete Cursor prefix actually folded by recovery, through fromOffset. */
+    cursorBaseline?: { lines: readonly string[]; identity: TranscriptFileIdentity }; deliveryAllowed?: () => boolean } = {}): Promise<void> {
     const oldPath = this.bySession.get(session.sessionId)
     if (oldPath && oldPath !== session.transcriptPath) await this.removeSession(session.sessionId)
 
@@ -140,7 +143,18 @@ export class Watcher extends EventEmitter {
       // A file that shrank since is a rewrite; its tail starts at the new end, as without an offset.
       offset = opts.fromOffset !== undefined && opts.fromOffset <= size ? opts.fromOffset : size
       if (session.engine === 'cursor') {
-        try { cursorLines = completeLines(await readFile(session.transcriptPath, 'utf8')) } catch { cursorLines = [] }
+        if (opts.fromOffset !== undefined) {
+          // A newer EOF belongs to live delivery. Adopting it as this baseline
+          // silently swallows prompts appended after the recovery fold.
+          offset = opts.fromOffset
+          cursorLines = await this.cursorPrefix(session.transcriptPath, offset, opts.cursorBaseline?.identity)
+          if (opts.cursorBaseline && (cursorLines.length !== opts.cursorBaseline.lines.length
+            || cursorLines.some((line, index) => line !== opts.cursorBaseline!.lines[index]))) {
+            throw new Error('the Cursor transcript changed after its recovery fold')
+          }
+        } else {
+          try { cursorLines = completeLines(await readFile(session.transcriptPath, 'utf8')) } catch { cursorLines = [] }
+        }
       }
     }
     const existing = this.files.get(session.transcriptPath)
@@ -427,6 +441,28 @@ export class Watcher extends EventEmitter {
 
   private flushHistory(state: FileState, lines: LineEvent[]): void {
     this.emit('history', { sessionId: state.sessionId, engine: state.engine, lines: lines.splice(0) } satisfies HistoryEvent)
+  }
+
+  private async cursorPrefix(filePath: string, end: number, expected?: TranscriptFileIdentity): Promise<string[]> {
+    if (!Number.isSafeInteger(end) || end < 0 || end > this.historyMaxBytes) {
+      throw new Error('the Cursor recovery prefix exceeds the bounded watcher limit')
+    }
+    const handle = await this.openFile(filePath)
+    try {
+      const file = await handle.stat()
+      if (!file.isFile() || expected && (file.dev !== expected.device || file.ino !== expected.inode)) {
+        throw new Error('the Cursor transcript file identity changed after its recovery fold')
+      }
+      const bytes = Buffer.alloc(end)
+      let read = 0
+      while (read < end) {
+        const part = await handle.read(bytes, read, end - read, read)
+        if (!part.bytesRead) throw new Error('the Cursor transcript shrank after its recovery fold')
+        read += part.bytesRead
+      }
+      if (end && bytes[end - 1] !== 10) throw new Error('the Cursor recovery cutoff is not a complete record')
+      return completeLines(bytes.toString('utf8'))
+    } finally { await handle.close() }
   }
 
   private async readCursor(filePath: string, state: FileState): Promise<void> {

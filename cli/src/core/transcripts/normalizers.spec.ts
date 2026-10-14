@@ -19,6 +19,26 @@ function put(table: SessionNormalizers, map: EngineMap, sessionId: string, entry
 }
 
 describe('the session normalizer table', () => {
+  it('keeps a turn witness through a natural end, but revokes it for a successor, Cancel or forget', () => {
+    const table = createSessionNormalizers()
+    expect(table.captureTurn('s')).toBeUndefined()
+    put(table, 'cursorNormalizers', 's', fake(true))
+    table.noteTurnStart('s')
+    const first = table.captureTurn('s')!
+    table.cursorNormalizers.get('s')!.closeTurn()
+    expect(first()).toBe(true)
+    table.noteTurnStart('s')
+    expect(first()).toBe(false)
+    const second = table.captureTurn('s')!
+    table.closeTurns('s')
+    expect(second()).toBe(false)
+    table.noteTurnStart('s')
+    const third = table.captureTurn('s')!
+    table.forget('s')
+    expect(third()).toBe(false)
+    expect(table.captureTurn('s')).toBeUndefined()
+  })
+
   it('has state for a session that any engine map holds, and none for one that none does', () => {
     const table = createSessionNormalizers()
     expect(table.hasState('s')).toBe(false)

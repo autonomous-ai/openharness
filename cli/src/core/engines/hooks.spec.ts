@@ -82,6 +82,38 @@ describe('which agent a hook belongs to', () => {
     expect(console.log).not.toHaveBeenCalled()
   })
 
+  it('keeps precise arrival ancestry after the short-lived hook shell exits and its engine is recorded later', async () => {
+    vi.useFakeTimers()
+    try {
+      const panes = { '%1': agent('a1', 100) }, original = agent('a1', 200), onWait = vi.fn()
+      vi.mocked(processRows).mockResolvedValue(tree([200, 1]) as never)
+      const { hooks } = setup(panes)
+      const pending = hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300, onWait,
+        nativeCaller: { owner: row => {
+          if (row.processIdentity?.pid !== 200) throw Error('outside original native ancestry')
+          return { key: 'fixture-original', evidence: 'fixture-original' }
+        } } })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(onWait).toHaveBeenCalledOnce()
+      panes['%1'] = original
+      await vi.advanceTimersByTimeAsync(100)
+      expect(await pending).toEqual(original)
+    } finally { vi.useRealTimers(); vi.mocked(processRows).mockReset() }
+  })
+
+  it.each(['caller', 'runtime', 'missing'] as const)('requires retained %s authority for the Cursor exception', async source => {
+    const cursor = { ...agent('cursor', 100), engine: 'cursor' } as RegisteredSession
+    vi.mocked(processRows).mockResolvedValue(tree([300, 1], [100, 1]) as never)
+    const { hooks } = setup({ '%1': cursor })
+    const resolving = hooks.resolveHookAgent({ engine: 'cursor', runtimeHints: [hint('%1')], callerPid: 300,
+      nativeCaller: { owner: () => {
+        if (source === 'missing') throw Error('no original runtime or caller')
+        return { key: 'fixture-original', evidence: 'fixture-original', source }
+      } } })
+    if (source === 'missing') await expect(resolving).rejects.toThrow('no original runtime or caller')
+    else expect(await resolving).toEqual(cursor)
+  })
+
   it('does not give a delayed hook to a replacement with the same PID', async () => {
     const original = agent('original', 100)
     const replacement = { ...agent('replacement', 100), processIdentity: { pid: 100, startMarker: 'replacement' } } as RegisteredSession

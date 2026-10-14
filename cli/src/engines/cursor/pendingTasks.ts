@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { PENDING_TASKS_FILE } from './contract.js'
+import { cursorTaskId } from './normalizer.js'
 
 export interface PendingCursorTask {
   sessionId: string
@@ -50,21 +51,24 @@ async function withLock<T>(file: string, operation: () => Promise<T>): Promise<T
   return null
 }
 
-async function read(file: string): Promise<PendingCursorTask[]> {
+async function read(file: string, strict = false): Promise<PendingCursorTask[]> {
   try {
     const parsed = JSON.parse(await readFile(file, 'utf8')) as unknown
+    if (strict && (!Array.isArray(parsed) || parsed.some(item => !valid(item)))) throw new Error('Cursor task storage is incomplete.')
     const now = Date.now()
     return Array.isArray(parsed)
       ? parsed.filter((item): item is PendingCursorTask => valid(item) && now - item.createdAt <= MAX_AGE_MS)
       : []
-  } catch {
+  } catch (error) {
+    if (strict && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     return []
   }
 }
 
-async function write(file: string, tasks: PendingCursorTask[]): Promise<void> {
+async function write(file: string, tasks: PendingCursorTask[], current: () => boolean = () => true): Promise<void> {
   const tmp = `${file}.${process.pid}.tmp`
   await writeFile(tmp, JSON.stringify(tasks, null, 2))
+  if (!current()) { await rm(tmp, { force: true }); return }
   await rename(tmp, file)
 }
 
@@ -78,11 +82,14 @@ export async function loadCursorPendingTasks(dataDir: string): Promise<PendingCu
   })) ?? []
 }
 
-export async function removeCursorPendingTasks(dataDir: string, sessionId: string): Promise<void> {
+export async function removeCursorPendingTasks(dataDir: string, sessionId: string, current: () => boolean = () => true, ids?: ReadonlySet<string>): Promise<void> {
   const file = join(dataDir, FILE_NAME)
-  await withLock(file, async () => {
-    const tasks = (await read(file)).filter((task) => task.sessionId !== sessionId)
-    if (tasks.length) await write(file, tasks)
+  const removed = await withLock(file, async () => {
+    const tasks = (await read(file, true)).filter((task) => task.sessionId !== sessionId || ids && !ids.has(cursorTaskId(sessionId, task.toolUseId)))
+    if (!current()) return true
+    if (tasks.length) await write(file, tasks, current)
     else await rm(file, { force: true })
+    return true
   })
+  if (!removed) throw new Error('Waiting for Cursor task storage to be writable.')
 }

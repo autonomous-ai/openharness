@@ -12,6 +12,8 @@
 //     normalizers, turn lifecycle, chips and attach read are exercised for real.
 //
 // A prompt can carry directives that script the turn: `!slow <ms>` holds the answer back,
+// `!stopgate` (Claude Code) waits for the private release-stop file, then sends Stop without a terminal
+// transcript record, so only the daemon's original-turn Stop fallback can complete that turn;
 // `!tool <command>` runs a tool call first, `!grow <MiB>` appends that much compaction history
 // before answering (the transcripts that crashed the daemon on 2026-10-03), `!hold` leaves the turn
 // open until the next prompt, `!holdtool <command>` leaves it open with that tool still running (an
@@ -1347,6 +1349,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
       await new Promise((resolve) => setTimeout(resolve, 300))
     }
     if (directive?.[1] === 'hold') return
+    if (engine === 'claude' && directive?.[1] === 'stopgate') {
+      while (!existsSync(join(config.root, 'release-stop'))) await new Promise(resolve => setTimeout(resolve, 25))
+      await runHooks('Stop', { stop_hook_active: false })
+      open = null
+      return
+    }
     if (directive?.[1] === 'holdtool') {
       // A tool still running when the person interrupts. Both CLIs write its output, marked aborted, only
       // AFTER the interrupt and just before the turn's end: what a real Codex 0.160 did in daemon QA.

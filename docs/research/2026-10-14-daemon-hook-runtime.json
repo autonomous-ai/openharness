@@ -1,0 +1,1600 @@
+{
+  "schema": 1,
+  "receipt": "20261014T023107.238918Z-8881",
+  "notes": [
+    "Core CPU is percent of one logical CPU, not whole-machine percent.",
+    "bundleSource identifies the measured program; source.commit identifies the common benchmark runner.",
+    "Local artifact paths, process identifiers, session identifiers and agent records are omitted; measured fields are unchanged.",
+    "Main advanced from 17ee12593 to 3b3c552d2 in backend-only files; the measured CLI baseline inputs are identical."
+  ],
+  "reports": [
+    {
+      "sample": "baseline-steady-1",
+      "schema": 1,
+      "state": "passed",
+      "startedAt": "2026-10-14T02:31:24.054Z",
+      "endedAt": "2026-10-14T02:32:55.322Z",
+      "source": {
+        "commit": "c4682a1677d57a977571de198c047cd140b8572c",
+        "tree": "54c05a4c254403bd8afe8d58c198c6ce8c414173",
+        "dirty": false,
+        "bundleSource": "17ee12593c34cde422dd2823d5eb6079947aa51f",
+        "bundleSha256": "5db4d8ed3ce3e31597ae329206e52b84271d91a7d08e71df13eb36e8d2177800",
+        "preloadSha256": "9c8c4153745388b310020cd946c83a16d6bda7d9736dee35b139d77d80dc6358"
+      },
+      "machine": {
+        "platform": "darwin",
+        "release": "25.6.0",
+        "node": "v22.23.2",
+        "logicalCpus": 16,
+        "cpu": "Intel(R) Core(TM) i7-10700K CPU @ 3.80GHz",
+        "ramBytes": 68719476736,
+        "tmux": "tmux 3.5a"
+      },
+      "workload": {
+        "modelControls": false,
+        "questions": null,
+        "readerPageEveryMs": null,
+        "agents": 4,
+        "active": 2,
+        "windows": 2,
+        "terminalStreams": 4,
+        "seconds": 10,
+        "warmup": 20,
+        "historyMiB": 0,
+        "turnDelayMs": "5000 + a unique round offset",
+        "inventoryEveryMs": 60000,
+        "heartbeatEveryMs": 5000,
+        "ackEveryMs": 16
+      },
+      "instrumentation": {
+        "profile": false,
+        "heaps": false,
+        "delayResolutionMs": 10,
+        "rssSampleEveryMs": 1000,
+        "cpuPercentBasis": "one logical CPU",
+        "scope": "core PID only; the master by ps, reported separately; excludes services, engines and tmux",
+        "heapPausesOutsideWindows": true
+      },
+      "nativeProcessImages": {
+        "mode": "embedded",
+        "artifactSha256": "b35663b4ddfc5c094c1ae2a02e9b6e03abdd52d4c2c05ad97b8fe77ed2e78bac"
+      },
+      "limitations": [
+        "Fake engines and a loopback fake backend; no real model latency or token streaming.",
+        "Cable access disabled for isolation; not a measurement of USB discovery.",
+        "Heap snapshots force GC after each measured window."
+      ],
+      "loadAverage": {
+        "start": [
+          2.435546875,
+          3.109375,
+          3.7509765625
+        ],
+        "end": [
+          2.5166015625,
+          2.93994140625,
+          3.6171875
+        ]
+      },
+      "transcriptBytes": 23718,
+      "phases": [
+        {
+          "label": "empty",
+          "startUs": 2472599961228,
+          "endUs": 2472609968630,
+          "durationSeconds": 10.007402,
+          "cpu": {
+            "userUs": 46252,
+            "systemUs": 17068,
+            "percent": 0.6327316520311665
+          },
+          "memory": {
+            "start": {
+              "rss": 83795968,
+              "heapTotal": 23056384,
+              "heapUsed": 20778448,
+              "external": 3850236,
+              "arrayBuffers": 95902
+            },
+            "end": {
+              "rss": 87134208,
+              "heapTotal": 28348416,
+              "heapUsed": 24283784,
+              "external": 4008058,
+              "arrayBuffers": 253724
+            },
+            "rssMin": 83795968,
+            "rssMax": 87134208,
+            "rssMean": 85010432,
+            "samples": 12
+          },
+          "eventLoop": {
+            "utilization": 0.007131479986464701,
+            "delaySamples": 930,
+            "meanMs": 10.738826735483872,
+            "p50Ms": 10.592255,
+            "p95Ms": 12.058623,
+            "p99Ms": 12.132351,
+            "maxMs": 29.605887
+          },
+          "readers": [],
+          "master": {
+            "durationSeconds": 10.010842919000002,
+            "source": "ps (10 ms CPU resolution)",
+            "cpu": {
+              "percent": 0.09989168825155159
+            },
+            "memory": {
+              "rssMean": 64266649.6,
+              "rssMax": 64290816,
+              "samples": 10
+            }
+          },
+          "loadAverage": {
+            "start": [
+              2.1005859375,
+              2.98828125,
+              3.69189453125
+            ],
+            "end": [
+              2.3984375,
+              3.021484375,
+              3.69482421875
+            ]
+          },
+          "questions": null,
+          "modelControls": {
+            "claude": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            },
+            "codex": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            }
+          },
+          "historyReads": {
+            "count": 0,
+            "p50Ms": null,
+            "p95Ms": null
+          },
+          "coreAndReaders": {
+            "cpuPercent": 0.6327316520311665,
+            "rssMean": 85010432
+          },
+          "turns": [],
+          "completedTurns": 0,
+          "turnLatencyMs": {
+            "p50": null,
+            "p95": null
+          },
+          "windows": [
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            },
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            }
+          ]
+        },
+        {
+          "label": "populated-idle",
+          "startUs": 2472646789106,
+          "endUs": 2472656792577,
+          "durationSeconds": 10.003471,
+          "cpu": {
+            "userUs": 187533,
+            "systemUs": 46557,
+            "percent": 2.340087755540052
+          },
+          "memory": {
+            "start": {
+              "rss": 106483712,
+              "heapTotal": 35475456,
+              "heapUsed": 25812568,
+              "external": 3888087,
+              "arrayBuffers": 140752
+            },
+            "end": {
+              "rss": 111190016,
+              "heapTotal": 39948288,
+              "heapUsed": 27911720,
+              "external": 3875877,
+              "arrayBuffers": 128542
+            },
+            "rssMin": 106483712,
+            "rssMax": 111190016,
+            "rssMean": 109502836.36363636,
+            "samples": 11
+          },
+          "eventLoop": {
+            "utilization": 0.019650076575180454,
+            "delaySamples": 925,
+            "meanMs": 10.797742356756755,
+            "p50Ms": 10.690559,
+            "p95Ms": 12.091391,
+            "p99Ms": 12.247039,
+            "maxMs": 13.688831
+          },
+          "readers": [],
+          "master": {
+            "durationSeconds": 10.008147899999996,
+            "source": "ps (10 ms CPU resolution)",
+            "cpu": {
+              "percent": 0
+            },
+            "memory": {
+              "rssMean": 71666073.6,
+              "rssMax": 71680000,
+              "samples": 10
+            }
+          },
+          "loadAverage": {
+            "start": [
+              2.5732421875,
+              2.98779296875,
+              3.654296875
+            ],
+            "end": [
+              2.6572265625,
+              2.98876953125,
+              3.646484375
+            ]
+          },
+          "questions": null,
+          "modelControls": {
+            "claude": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            },
+            "codex": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            }
+          },
+          "historyReads": {
+            "count": 0,
+            "p50Ms": null,
+            "p95Ms": null
+          },
+          "coreAndReaders": {
+            "cpuPercent": 2.340087755540052,
+            "rssMean": 109502836.36363636
+          },
+          "turns": [],
+          "completedTurns": 0,
+          "turnLatencyMs": {
+            "p50": null,
+            "p95": null
+          },
+          "windows": [
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            },
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            }
+          ]
+        },
+        {
+          "label": "active",
+          "startUs": 2472656803644,
+          "endUs": 2472666807931,
+          "durationSeconds": 10.004287,
+          "cpu": {
+            "userUs": 584753,
+            "systemUs": 148489,
+            "percent": 7.329277938547745
+          },
+          "memory": {
+            "start": {
+              "rss": 111190016,
+              "heapTotal": 39948288,
+              "heapUsed": 28331736,
+              "external": 3877728,
+              "arrayBuffers": 130393
+            },
+            "end": {
+              "rss": 113557504,
+              "heapTotal": 39391232,
+              "heapUsed": 23820368,
+              "external": 3871726,
+              "arrayBuffers": 124391
+            },
+            "rssMin": 111190016,
+            "rssMax": 115269632,
+            "rssMean": 112803467.63636364,
+            "samples": 11
+          },
+          "eventLoop": {
+            "utilization": 0.10011771582461489,
+            "delaySamples": 890,
+            "meanMs": 11.228663946067416,
+            "p50Ms": 10.600447,
+            "p95Ms": 12.091391,
+            "p99Ms": 12.836863,
+            "maxMs": 228.327423
+          },
+          "readers": [],
+          "master": {
+            "durationSeconds": 10.008789840999992,
+            "source": "ps (10 ms CPU resolution)",
+            "cpu": {
+              "percent": 0
+            },
+            "memory": {
+              "rssMean": 71698432,
+              "rssMax": 71712768,
+              "samples": 10
+            }
+          },
+          "loadAverage": {
+            "start": [
+              2.6572265625,
+              2.98876953125,
+              3.646484375
+            ],
+            "end": [
+              2.56201171875,
+              2.9560546875,
+              3.626953125
+            ]
+          },
+          "questions": null,
+          "modelControls": {
+            "claude": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            },
+            "codex": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            }
+          },
+          "historyReads": {
+            "count": 0,
+            "p50Ms": null,
+            "p95Ms": null
+          },
+          "coreAndReaders": {
+            "cpuPercent": 7.329277938547745,
+            "rssMean": 112803467.63636364
+          },
+          "turns": [
+            1,
+            1
+          ],
+          "completedTurns": 2,
+          "turnLatencyMs": {
+            "p50": 6253.167356999998,
+            "p95": 6253.167356999998
+          },
+          "windows": [
+            {
+              "bytes": 4969,
+              "keyframes": 0,
+              "outputs": 8,
+              "inventories": 0
+            },
+            {
+              "bytes": 904,
+              "keyframes": 0,
+              "outputs": 9,
+              "inventories": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sample": "candidate-v3-1",
+      "schema": 1,
+      "state": "passed",
+      "startedAt": "2026-10-14T02:32:56.167Z",
+      "endedAt": "2026-10-14T02:34:35.879Z",
+      "source": {
+        "commit": "c4682a1677d57a977571de198c047cd140b8572c",
+        "tree": "54c05a4c254403bd8afe8d58c198c6ce8c414173",
+        "dirty": false,
+        "bundleSource": "c4682a1677d57a977571de198c047cd140b8572c",
+        "bundleSha256": "faeb5674b0729507017771f46e7c9e7cdc346b70a474d94abd55d5848529d6bb",
+        "preloadSha256": "9c8c4153745388b310020cd946c83a16d6bda7d9736dee35b139d77d80dc6358"
+      },
+      "machine": {
+        "platform": "darwin",
+        "release": "25.6.0",
+        "node": "v22.23.2",
+        "logicalCpus": 16,
+        "cpu": "Intel(R) Core(TM) i7-10700K CPU @ 3.80GHz",
+        "ramBytes": 68719476736,
+        "tmux": "tmux 3.5a"
+      },
+      "workload": {
+        "modelControls": false,
+        "questions": null,
+        "readerPageEveryMs": null,
+        "agents": 4,
+        "active": 2,
+        "windows": 2,
+        "terminalStreams": 4,
+        "seconds": 10,
+        "warmup": 20,
+        "historyMiB": 0,
+        "turnDelayMs": "5000 + a unique round offset",
+        "inventoryEveryMs": 60000,
+        "heartbeatEveryMs": 5000,
+        "ackEveryMs": 16
+      },
+      "instrumentation": {
+        "profile": false,
+        "heaps": false,
+        "delayResolutionMs": 10,
+        "rssSampleEveryMs": 1000,
+        "cpuPercentBasis": "one logical CPU",
+        "scope": "core PID only; the master by ps, reported separately; excludes services, engines and tmux",
+        "heapPausesOutsideWindows": true
+      },
+      "nativeProcessImages": {
+        "mode": "embedded",
+        "artifactSha256": "cca5d4ad1d2f0c72e9954bf28ee186711f9271eb224a645f28cfc7128c86d7a2"
+      },
+      "limitations": [
+        "Fake engines and a loopback fake backend; no real model latency or token streaming.",
+        "Cable access disabled for isolation; not a measurement of USB discovery.",
+        "Heap snapshots force GC after each measured window."
+      ],
+      "loadAverage": {
+        "start": [
+          2.5166015625,
+          2.93994140625,
+          3.6171875
+        ],
+        "end": [
+          3.3486328125,
+          3.0751953125,
+          3.58935546875
+        ]
+      },
+      "transcriptBytes": 23718,
+      "phases": [
+        {
+          "label": "empty",
+          "startUs": 2472692015830,
+          "endUs": 2472702022290,
+          "durationSeconds": 10.00646,
+          "cpu": {
+            "userUs": 47123,
+            "systemUs": 17403,
+            "percent": 0.6448434311434813
+          },
+          "memory": {
+            "start": {
+              "rss": 83197952,
+              "heapTotal": 22355968,
+              "heapUsed": 20960168,
+              "external": 3852896,
+              "arrayBuffers": 95902
+            },
+            "end": {
+              "rss": 86282240,
+              "heapTotal": 25288704,
+              "heapUsed": 23741456,
+              "external": 3869344,
+              "arrayBuffers": 112350
+            },
+            "rssMin": 83197952,
+            "rssMax": 86282240,
+            "rssMean": 84176523.63636364,
+            "samples": 11
+          },
+          "eventLoop": {
+            "utilization": 0.007327029168956926,
+            "delaySamples": 924,
+            "meanMs": 10.810567480519481,
+            "p50Ms": 10.731519,
+            "p95Ms": 12.083199,
+            "p99Ms": 12.197887,
+            "maxMs": 14.229503
+          },
+          "readers": [],
+          "master": {
+            "durationSeconds": 10.009728292,
+            "source": "ps (10 ms CPU resolution)",
+            "cpu": {
+              "percent": 0
+            },
+            "memory": {
+              "rssMean": 63359385.6,
+              "rssMax": 63401984,
+              "samples": 10
+            }
+          },
+          "loadAverage": {
+            "start": [
+              2.56689453125,
+              2.92626953125,
+              3.595703125
+            ],
+            "end": [
+              2.40576171875,
+              2.87890625,
+              3.57080078125
+            ]
+          },
+          "questions": null,
+          "modelControls": {
+            "claude": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            },
+            "codex": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            }
+          },
+          "historyReads": {
+            "count": 0,
+            "p50Ms": null,
+            "p95Ms": null
+          },
+          "coreAndReaders": {
+            "cpuPercent": 0.6448434311434813,
+            "rssMean": 84176523.63636364
+          },
+          "turns": [],
+          "completedTurns": 0,
+          "turnLatencyMs": {
+            "p50": null,
+            "p95": null
+          },
+          "windows": [
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            },
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            }
+          ]
+        },
+        {
+          "label": "populated-idle",
+          "startUs": 2472746483650,
+          "endUs": 2472756487531,
+          "durationSeconds": 10.003881,
+          "cpu": {
+            "userUs": 237489,
+            "systemUs": 65827,
+            "percent": 3.031983287286204
+          },
+          "memory": {
+            "start": {
+              "rss": 121454592,
+              "heapTotal": 39657472,
+              "heapUsed": 29515736,
+              "external": 3938689,
+              "arrayBuffers": 188694
+            },
+            "end": {
+              "rss": 125177856,
+              "heapTotal": 42954752,
+              "heapUsed": 32092808,
+              "external": 3947466,
+              "arrayBuffers": 197471
+            },
+            "rssMin": 120598528,
+            "rssMax": 125177856,
+            "rssMean": 122716904.72727273,
+            "samples": 11
+          },
+          "eventLoop": {
+            "utilization": 0.028036033825349613,
+            "delaySamples": 924,
+            "meanMs": 10.81327154978355,
+            "p50Ms": 10.657791,
+            "p95Ms": 12.083199,
+            "p99Ms": 12.664831,
+            "maxMs": 17.088511
+          },
+          "readers": [],
+          "master": {
+            "durationSeconds": 10.007860216000001,
+            "source": "ps (10 ms CPU resolution)",
+            "cpu": {
+              "percent": 0
+            },
+            "memory": {
+              "rssMean": 69950668.8,
+              "rssMax": 69959680,
+              "samples": 10
+            }
+          },
+          "loadAverage": {
+            "start": [
+              3.24951171875,
+              3.0458984375,
+              3.595703125
+            ],
+            "end": [
+              3.0634765625,
+              3.01123046875,
+              3.57666015625
+            ]
+          },
+          "questions": null,
+          "modelControls": {
+            "claude": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            },
+            "codex": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            }
+          },
+          "historyReads": {
+            "count": 0,
+            "p50Ms": null,
+            "p95Ms": null
+          },
+          "coreAndReaders": {
+            "cpuPercent": 3.031983287286204,
+            "rssMean": 122716904.72727273
+          },
+          "turns": [],
+          "completedTurns": 0,
+          "turnLatencyMs": {
+            "p50": null,
+            "p95": null
+          },
+          "windows": [
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            },
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            }
+          ]
+        },
+        {
+          "label": "active",
+          "startUs": 2472756498252,
+          "endUs": 2472766505340,
+          "durationSeconds": 10.007088,
+          "cpu": {
+            "userUs": 2364574,
+            "systemUs": 1531701,
+            "percent": 38.93515276372108
+          },
+          "memory": {
+            "start": {
+              "rss": 125194240,
+              "heapTotal": 42954752,
+              "heapUsed": 32551016,
+              "external": 3949317,
+              "arrayBuffers": 199322
+            },
+            "end": {
+              "rss": 127930368,
+              "heapTotal": 41697280,
+              "heapUsed": 26435680,
+              "external": 4005182,
+              "arrayBuffers": 255187
+            },
+            "rssMin": 125194240,
+            "rssMax": 129171456,
+            "rssMean": 127186757.81818181,
+            "samples": 11
+          },
+          "eventLoop": {
+            "utilization": 0.3894508035483708,
+            "delaySamples": 797,
+            "meanMs": 12.54184407528231,
+            "p50Ms": 10.747903,
+            "p95Ms": 20.561919,
+            "p99Ms": 35.291135,
+            "maxMs": 154.664959
+          },
+          "readers": [],
+          "master": {
+            "durationSeconds": 10.011025905999995,
+            "source": "ps (10 ms CPU resolution)",
+            "cpu": {
+              "percent": 0
+            },
+            "memory": {
+              "rssMean": 69983436.8,
+              "rssMax": 69992448,
+              "samples": 10
+            }
+          },
+          "loadAverage": {
+            "start": [
+              3.0634765625,
+              3.01123046875,
+              3.57666015625
+            ],
+            "end": [
+              3.46630859375,
+              3.09375,
+              3.59912109375
+            ]
+          },
+          "questions": null,
+          "modelControls": {
+            "claude": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            },
+            "codex": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            }
+          },
+          "historyReads": {
+            "count": 0,
+            "p50Ms": null,
+            "p95Ms": null
+          },
+          "coreAndReaders": {
+            "cpuPercent": 38.93515276372108,
+            "rssMean": 127186757.81818181
+          },
+          "turns": [
+            1,
+            1
+          ],
+          "completedTurns": 2,
+          "turnLatencyMs": {
+            "p50": 6559.296327999997,
+            "p95": 6559.296327999997
+          },
+          "windows": [
+            {
+              "bytes": 4969,
+              "keyframes": 0,
+              "outputs": 8,
+              "inventories": 0
+            },
+            {
+              "bytes": 904,
+              "keyframes": 0,
+              "outputs": 9,
+              "inventories": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sample": "baseline-steady-2",
+      "schema": 1,
+      "state": "passed",
+      "startedAt": "2026-10-14T02:34:36.695Z",
+      "endedAt": "2026-10-14T02:36:07.822Z",
+      "source": {
+        "commit": "c4682a1677d57a977571de198c047cd140b8572c",
+        "tree": "54c05a4c254403bd8afe8d58c198c6ce8c414173",
+        "dirty": false,
+        "bundleSource": "17ee12593c34cde422dd2823d5eb6079947aa51f",
+        "bundleSha256": "5db4d8ed3ce3e31597ae329206e52b84271d91a7d08e71df13eb36e8d2177800",
+        "preloadSha256": "9c8c4153745388b310020cd946c83a16d6bda7d9736dee35b139d77d80dc6358"
+      },
+      "machine": {
+        "platform": "darwin",
+        "release": "25.6.0",
+        "node": "v22.23.2",
+        "logicalCpus": 16,
+        "cpu": "Intel(R) Core(TM) i7-10700K CPU @ 3.80GHz",
+        "ramBytes": 68719476736,
+        "tmux": "tmux 3.5a"
+      },
+      "workload": {
+        "modelControls": false,
+        "questions": null,
+        "readerPageEveryMs": null,
+        "agents": 4,
+        "active": 2,
+        "windows": 2,
+        "terminalStreams": 4,
+        "seconds": 10,
+        "warmup": 20,
+        "historyMiB": 0,
+        "turnDelayMs": "5000 + a unique round offset",
+        "inventoryEveryMs": 60000,
+        "heartbeatEveryMs": 5000,
+        "ackEveryMs": 16
+      },
+      "instrumentation": {
+        "profile": false,
+        "heaps": false,
+        "delayResolutionMs": 10,
+        "rssSampleEveryMs": 1000,
+        "cpuPercentBasis": "one logical CPU",
+        "scope": "core PID only; the master by ps, reported separately; excludes services, engines and tmux",
+        "heapPausesOutsideWindows": true
+      },
+      "nativeProcessImages": {
+        "mode": "embedded",
+        "artifactSha256": "b35663b4ddfc5c094c1ae2a02e9b6e03abdd52d4c2c05ad97b8fe77ed2e78bac"
+      },
+      "limitations": [
+        "Fake engines and a loopback fake backend; no real model latency or token streaming.",
+        "Cable access disabled for isolation; not a measurement of USB discovery.",
+        "Heap snapshots force GC after each measured window."
+      ],
+      "loadAverage": {
+        "start": [
+          3.3486328125,
+          3.0751953125,
+          3.58935546875
+        ],
+        "end": [
+          2.77392578125,
+          2.93115234375,
+          3.47705078125
+        ]
+      },
+      "transcriptBytes": 23718,
+      "phases": [
+        {
+          "label": "empty",
+          "startUs": 2472792535037,
+          "endUs": 2472802541542,
+          "durationSeconds": 10.006505,
+          "cpu": {
+            "userUs": 49484,
+            "systemUs": 18922,
+            "percent": 0.6836153082419886
+          },
+          "memory": {
+            "start": {
+              "rss": 84189184,
+              "heapTotal": 23056384,
+              "heapUsed": 20783976,
+              "external": 3850236,
+              "arrayBuffers": 95902
+            },
+            "end": {
+              "rss": 87240704,
+              "heapTotal": 26251264,
+              "heapUsed": 23515056,
+              "external": 3866684,
+              "arrayBuffers": 112350
+            },
+            "rssMin": 84189184,
+            "rssMax": 87240704,
+            "rssMean": 85379072,
+            "samples": 12
+          },
+          "eventLoop": {
+            "utilization": 0.00753888482799864,
+            "delaySamples": 926,
+            "meanMs": 10.7891117062635,
+            "p50Ms": 10.641407,
+            "p95Ms": 12.083199,
+            "p99Ms": 12.140543,
+            "maxMs": 12.754943
+          },
+          "readers": [],
+          "master": {
+            "durationSeconds": 10.009929112000002,
+            "source": "ps (10 ms CPU resolution)",
+            "cpu": {
+              "percent": 0.09990080736947388
+            },
+            "memory": {
+              "rssMean": 63483494.4,
+              "rssMax": 63496192,
+              "samples": 10
+            }
+          },
+          "loadAverage": {
+            "start": [
+              2.74365234375,
+              2.9560546875,
+              3.5341796875
+            ],
+            "end": [
+              2.55517578125,
+              2.90771484375,
+              3.509765625
+            ]
+          },
+          "questions": null,
+          "modelControls": {
+            "claude": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            },
+            "codex": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            }
+          },
+          "historyReads": {
+            "count": 0,
+            "p50Ms": null,
+            "p95Ms": null
+          },
+          "coreAndReaders": {
+            "cpuPercent": 0.6836153082419886,
+            "rssMean": 85379072
+          },
+          "turns": [],
+          "completedTurns": 0,
+          "turnLatencyMs": {
+            "p50": null,
+            "p95": null
+          },
+          "windows": [
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            },
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            }
+          ]
+        },
+        {
+          "label": "populated-idle",
+          "startUs": 2472839148440,
+          "endUs": 2472849151941,
+          "durationSeconds": 10.003501,
+          "cpu": {
+            "userUs": 173726,
+            "systemUs": 43178,
+            "percent": 2.16828088486221
+          },
+          "memory": {
+            "start": {
+              "rss": 107950080,
+              "heapTotal": 36802560,
+              "heapUsed": 28903248,
+              "external": 3949676,
+              "arrayBuffers": 202341
+            },
+            "end": {
+              "rss": 111423488,
+              "heapTotal": 39686144,
+              "heapUsed": 27401288,
+              "external": 3870933,
+              "arrayBuffers": 123598
+            },
+            "rssMin": 107950080,
+            "rssMax": 111935488,
+            "rssMean": 110379752.72727273,
+            "samples": 11
+          },
+          "eventLoop": {
+            "utilization": 0.01829220809921024,
+            "delaySamples": 930,
+            "meanMs": 10.73676992688172,
+            "p50Ms": 10.625023,
+            "p95Ms": 12.066815,
+            "p99Ms": 12.140543,
+            "maxMs": 14.376959
+          },
+          "readers": [],
+          "master": {
+            "durationSeconds": 10.007906478000004,
+            "source": "ps (10 ms CPU resolution)",
+            "cpu": {
+              "percent": 0.09992099768300818
+            },
+            "memory": {
+              "rssMean": 72078131.2,
+              "rssMax": 72093696,
+              "samples": 10
+            }
+          },
+          "loadAverage": {
+            "start": [
+              2.908203125,
+              2.962890625,
+              3.50146484375
+            ],
+            "end": [
+              2.91552734375,
+              2.96337890625,
+              3.49462890625
+            ]
+          },
+          "questions": null,
+          "modelControls": {
+            "claude": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            },
+            "codex": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            }
+          },
+          "historyReads": {
+            "count": 0,
+            "p50Ms": null,
+            "p95Ms": null
+          },
+          "coreAndReaders": {
+            "cpuPercent": 2.16828088486221,
+            "rssMean": 110379752.72727273
+          },
+          "turns": [],
+          "completedTurns": 0,
+          "turnLatencyMs": {
+            "p50": null,
+            "p95": null
+          },
+          "windows": [
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            },
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            }
+          ]
+        },
+        {
+          "label": "active",
+          "startUs": 2472849162999,
+          "endUs": 2472859165709,
+          "durationSeconds": 10.00271,
+          "cpu": {
+            "userUs": 559837,
+            "systemUs": 143471,
+            "percent": 7.03117455169649
+          },
+          "memory": {
+            "start": {
+              "rss": 111816704,
+              "heapTotal": 39686144,
+              "heapUsed": 28016280,
+              "external": 3872797,
+              "arrayBuffers": 125462
+            },
+            "end": {
+              "rss": 113893376,
+              "heapTotal": 40734720,
+              "heapUsed": 27619952,
+              "external": 3891457,
+              "arrayBuffers": 144122
+            },
+            "rssMin": 111816704,
+            "rssMax": 114356224,
+            "rssMean": 113178065.45454545,
+            "samples": 11
+          },
+          "eventLoop": {
+            "utilization": 0.098307561858106,
+            "delaySamples": 891,
+            "meanMs": 11.213432098765432,
+            "p50Ms": 10.641407,
+            "p95Ms": 12.091391,
+            "p99Ms": 12.869631,
+            "maxMs": 222.429183
+          },
+          "readers": [],
+          "master": {
+            "durationSeconds": 10.00625162000001,
+            "source": "ps (10 ms CPU resolution)",
+            "cpu": {
+              "percent": 0
+            },
+            "memory": {
+              "rssMean": 72110899.2,
+              "rssMax": 72126464,
+              "samples": 10
+            }
+          },
+          "loadAverage": {
+            "start": [
+              2.91552734375,
+              2.96337890625,
+              3.49462890625
+            ],
+            "end": [
+              2.77392578125,
+              2.93115234375,
+              3.47705078125
+            ]
+          },
+          "questions": null,
+          "modelControls": {
+            "claude": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            },
+            "codex": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            }
+          },
+          "historyReads": {
+            "count": 0,
+            "p50Ms": null,
+            "p95Ms": null
+          },
+          "coreAndReaders": {
+            "cpuPercent": 7.03117455169649,
+            "rssMean": 113178065.45454545
+          },
+          "turns": [
+            1,
+            1
+          ],
+          "completedTurns": 2,
+          "turnLatencyMs": {
+            "p50": 6378.886500000008,
+            "p95": 6378.886500000008
+          },
+          "windows": [
+            {
+              "bytes": 4969,
+              "keyframes": 0,
+              "outputs": 8,
+              "inventories": 0
+            },
+            {
+              "bytes": 904,
+              "keyframes": 0,
+              "outputs": 9,
+              "inventories": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sample": "candidate-v3-2",
+      "schema": 1,
+      "state": "passed",
+      "startedAt": "2026-10-14T02:36:08.670Z",
+      "endedAt": "2026-10-14T02:37:49.479Z",
+      "source": {
+        "commit": "c4682a1677d57a977571de198c047cd140b8572c",
+        "tree": "54c05a4c254403bd8afe8d58c198c6ce8c414173",
+        "dirty": false,
+        "bundleSource": "c4682a1677d57a977571de198c047cd140b8572c",
+        "bundleSha256": "faeb5674b0729507017771f46e7c9e7cdc346b70a474d94abd55d5848529d6bb",
+        "preloadSha256": "9c8c4153745388b310020cd946c83a16d6bda7d9736dee35b139d77d80dc6358"
+      },
+      "machine": {
+        "platform": "darwin",
+        "release": "25.6.0",
+        "node": "v22.23.2",
+        "logicalCpus": 16,
+        "cpu": "Intel(R) Core(TM) i7-10700K CPU @ 3.80GHz",
+        "ramBytes": 68719476736,
+        "tmux": "tmux 3.5a"
+      },
+      "workload": {
+        "modelControls": false,
+        "questions": null,
+        "readerPageEveryMs": null,
+        "agents": 4,
+        "active": 2,
+        "windows": 2,
+        "terminalStreams": 4,
+        "seconds": 10,
+        "warmup": 20,
+        "historyMiB": 0,
+        "turnDelayMs": "5000 + a unique round offset",
+        "inventoryEveryMs": 60000,
+        "heartbeatEveryMs": 5000,
+        "ackEveryMs": 16
+      },
+      "instrumentation": {
+        "profile": false,
+        "heaps": false,
+        "delayResolutionMs": 10,
+        "rssSampleEveryMs": 1000,
+        "cpuPercentBasis": "one logical CPU",
+        "scope": "core PID only; the master by ps, reported separately; excludes services, engines and tmux",
+        "heapPausesOutsideWindows": true
+      },
+      "nativeProcessImages": {
+        "mode": "embedded",
+        "artifactSha256": "cca5d4ad1d2f0c72e9954bf28ee186711f9271eb224a645f28cfc7128c86d7a2"
+      },
+      "limitations": [
+        "Fake engines and a loopback fake backend; no real model latency or token streaming.",
+        "Cable access disabled for isolation; not a measurement of USB discovery.",
+        "Heap snapshots force GC after each measured window."
+      ],
+      "loadAverage": {
+        "start": [
+          2.77392578125,
+          2.93115234375,
+          3.47705078125
+        ],
+        "end": [
+          3.162109375,
+          2.98876953125,
+          3.43310546875
+        ]
+      },
+      "transcriptBytes": 23718,
+      "phases": [
+        {
+          "label": "empty",
+          "startUs": 2472884536030,
+          "endUs": 2472894542031,
+          "durationSeconds": 10.006001,
+          "cpu": {
+            "userUs": 50431,
+            "systemUs": 19077,
+            "percent": 0.6946631326540943
+          },
+          "memory": {
+            "start": {
+              "rss": 85602304,
+              "heapTotal": 23404544,
+              "heapUsed": 21018704,
+              "external": 3852896,
+              "arrayBuffers": 95902
+            },
+            "end": {
+              "rss": 88662016,
+              "heapTotal": 25288704,
+              "heapUsed": 23780960,
+              "external": 3869344,
+              "arrayBuffers": 112350
+            },
+            "rssMin": 85602304,
+            "rssMax": 88662016,
+            "rssMean": 86780928,
+            "samples": 12
+          },
+          "eventLoop": {
+            "utilization": 0.0076840457528505384,
+            "delaySamples": 928,
+            "meanMs": 10.771261793103449,
+            "p50Ms": 10.674175,
+            "p95Ms": 12.083199,
+            "p99Ms": 12.386303,
+            "maxMs": 15.048703
+          },
+          "readers": [],
+          "master": {
+            "durationSeconds": 10.008913486999997,
+            "source": "ps (10 ms CPU resolution)",
+            "cpu": {
+              "percent": 0
+            },
+            "memory": {
+              "rssMean": 64415744,
+              "rssMax": 64430080,
+              "samples": 10
+            }
+          },
+          "loadAverage": {
+            "start": [
+              2.47607421875,
+              2.8408203125,
+              3.42724609375
+            ],
+            "end": [
+              2.32861328125,
+              2.79638671875,
+              3.404296875
+            ]
+          },
+          "questions": null,
+          "modelControls": {
+            "claude": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            },
+            "codex": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            }
+          },
+          "historyReads": {
+            "count": 0,
+            "p50Ms": null,
+            "p95Ms": null
+          },
+          "coreAndReaders": {
+            "cpuPercent": 0.6946631326540943,
+            "rssMean": 86780928
+          },
+          "turns": [],
+          "completedTurns": 0,
+          "turnLatencyMs": {
+            "p50": null,
+            "p95": null
+          },
+          "windows": [
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            },
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            }
+          ]
+        },
+        {
+          "label": "populated-idle",
+          "startUs": 2472940136318,
+          "endUs": 2472950138989,
+          "durationSeconds": 10.002671,
+          "cpu": {
+            "userUs": 251602,
+            "systemUs": 61138,
+            "percent": 3.1265648945166746
+          },
+          "memory": {
+            "start": {
+              "rss": 112467968,
+              "heapTotal": 35852288,
+              "heapUsed": 26620632,
+              "external": 3912996,
+              "arrayBuffers": 163001
+            },
+            "end": {
+              "rss": 120942592,
+              "heapTotal": 40333312,
+              "heapUsed": 30100832,
+              "external": 3924597,
+              "arrayBuffers": 174602
+            },
+            "rssMin": 112467968,
+            "rssMax": 120942592,
+            "rssMean": 118249285.81818181,
+            "samples": 11
+          },
+          "eventLoop": {
+            "utilization": 0.02760088195235316,
+            "delaySamples": 937,
+            "meanMs": 10.66308576307364,
+            "p50Ms": 10.502143,
+            "p95Ms": 12.058623,
+            "p99Ms": 12.378111,
+            "maxMs": 21.626879
+          },
+          "readers": [],
+          "master": {
+            "durationSeconds": 10.006726582999995,
+            "source": "ps (10 ms CPU resolution)",
+            "cpu": {
+              "percent": 0
+            },
+            "memory": {
+              "rssMean": 71893811.2,
+              "rssMax": 71913472,
+              "samples": 10
+            }
+          },
+          "loadAverage": {
+            "start": [
+              3.314453125,
+              3.005859375,
+              3.45068359375
+            ],
+            "end": [
+              3.19189453125,
+              2.98876953125,
+              3.43896484375
+            ]
+          },
+          "questions": null,
+          "modelControls": {
+            "claude": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            },
+            "codex": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            }
+          },
+          "historyReads": {
+            "count": 0,
+            "p50Ms": null,
+            "p95Ms": null
+          },
+          "coreAndReaders": {
+            "cpuPercent": 3.1265648945166746,
+            "rssMean": 118249285.81818181
+          },
+          "turns": [],
+          "completedTurns": 0,
+          "turnLatencyMs": {
+            "p50": null,
+            "p95": null
+          },
+          "windows": [
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            },
+            {
+              "bytes": 0,
+              "keyframes": 0,
+              "outputs": 0,
+              "inventories": 0
+            }
+          ]
+        },
+        {
+          "label": "active",
+          "startUs": 2472950149762,
+          "endUs": 2472960153571,
+          "durationSeconds": 10.003809,
+          "cpu": {
+            "userUs": 1836644,
+            "systemUs": 1129368,
+            "percent": 29.648826761886397
+          },
+          "memory": {
+            "start": {
+              "rss": 120942592,
+              "heapTotal": 40333312,
+              "heapUsed": 30584496,
+              "external": 3926448,
+              "arrayBuffers": 176453
+            },
+            "end": {
+              "rss": 126353408,
+              "heapTotal": 44380160,
+              "heapUsed": 30785320,
+              "external": 5264977,
+              "arrayBuffers": 1514982
+            },
+            "rssMin": 120942592,
+            "rssMax": 126459904,
+            "rssMean": 124552285.0909091,
+            "samples": 11
+          },
+          "eventLoop": {
+            "utilization": 0.33253591225645973,
+            "delaySamples": 793,
+            "meanMs": 12.598500559899119,
+            "p50Ms": 10.625023,
+            "p95Ms": 19.087359,
+            "p99Ms": 33.472511,
+            "maxMs": 326.631423
+          },
+          "readers": [],
+          "master": {
+            "durationSeconds": 10.007371811000004,
+            "source": "ps (10 ms CPU resolution)",
+            "cpu": {
+              "percent": 0
+            },
+            "memory": {
+              "rssMean": 71926579.2,
+              "rssMax": 71946240,
+              "samples": 10
+            }
+          },
+          "loadAverage": {
+            "start": [
+              3.19189453125,
+              2.98876953125,
+              3.43896484375
+            ],
+            "end": [
+              3.162109375,
+              2.98876953125,
+              3.43310546875
+            ]
+          },
+          "questions": null,
+          "modelControls": {
+            "claude": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            },
+            "codex": {
+              "count": 0,
+              "p50Ms": null,
+              "p95Ms": null
+            }
+          },
+          "historyReads": {
+            "count": 0,
+            "p50Ms": null,
+            "p95Ms": null
+          },
+          "coreAndReaders": {
+            "cpuPercent": 29.648826761886397,
+            "rssMean": 124552285.0909091
+          },
+          "turns": [
+            1,
+            1
+          ],
+          "completedTurns": 2,
+          "turnLatencyMs": {
+            "p50": 6522.208809999996,
+            "p95": 6522.208809999996
+          },
+          "windows": [
+            {
+              "bytes": 4969,
+              "keyframes": 0,
+              "outputs": 9,
+              "inventories": 0
+            },
+            {
+              "bytes": 904,
+              "keyframes": 0,
+              "outputs": 7,
+              "inventories": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

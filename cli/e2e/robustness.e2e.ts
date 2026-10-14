@@ -112,13 +112,16 @@ describe('what the daemon survives', () => {
       // Larger than any hook sends: read and dropped, never held in memory.
       expect((await hook(d, path, Buffer.alloc(2 * 1024 * 1024, 'a'), token)).status, path).toBe(400)
     }
-    // A well-formed hook for a pane and a session nobody has: ignored or refused, said out loud.
+    // Without an original caller, a well-formed request owns no intake or binding.
     const stray = await hook(d, '/api/hook/session-start', valid, token)
-    expect([200, 403]).toContain(stray.status)
+    expect(stray.status).toBe(202)
+    expect(await stray.json()).toEqual({ pending: false, retry: true,
+      detail: 'Conversation identity is held: the native hook caller is unavailable.' })
     const unknown = await fetch(`http://127.0.0.1:${d.port}/api/hook/does-not-exist`, { method: 'POST', headers: token, body: '{}' })
     expect(unknown.status).toBe(404)
 
     const client = await LocalClient.connect(d)
+    expect((await client.request('agents_list', {}, 15_000)).agents).toEqual([])
     const agent = await boundAgent(d, client, 'after-hook-abuse')
     await turn(client, agent.id, 'hooks still bind')
     expect(d.coresStarted()).toBe(1)

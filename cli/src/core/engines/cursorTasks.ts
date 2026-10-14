@@ -49,7 +49,7 @@ export function createCursorTaskHooks({ emitSessionEvents, watcher, registry, cu
   }
   /** What the rest of the core holds of the sub-agents and the queue, before and after they are built. */
   const cursorSubagents: Pick<CursorSubagentManager, 'closeParent' | 'forget' | 'stop'> = {
-    closeParent: (parentId, isError) => built?.subagents.closeParent(parentId, isError),
+    closeParent: (parentId, isError, current, ids) => built?.subagents.closeParent(parentId, isError, current, ids),
     forget: (parentId) => built?.subagents.forget(parentId),
     stop: () => built?.subagents.stop(),
   }
@@ -78,10 +78,12 @@ export function createCursorTaskHooks({ emitSessionEvents, watcher, registry, cu
  * lock is looked for first: a hook that takes it, writes the queue and lets go between the two looks leaves the
  * queue for the second.
  */
-async function queued(dataDir: string): Promise<boolean> {
+async function queued(dataDir: string, strict = false): Promise<boolean> {
   const file = join(dataDir, PENDING_TASKS_FILE)
   for (const path of [`${file}.lock`, file]) {
-    try { await access(path); return true } catch { /* not this one */ }
+    try { await access(path); return true } catch (error) {
+      if (strict && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
   }
   return false
 }
@@ -94,7 +96,11 @@ export async function loadPendingCursorTasks(dataDir: string): Promise<PendingCu
 }
 
 /** A session's queued Tasks, dropped on its Stop and when it is forgotten. */
-export async function removePendingCursorTasks(dataDir: string, sessionId: string): Promise<void> {
-  if (!await queued(dataDir)) return
-  await (await loadEngine('cursor'))?.removeCursorPendingTasks(dataDir, sessionId)
+export async function removePendingCursorTasks(dataDir: string, sessionId: string, current: () => boolean = () => true, ids?: ReadonlySet<string>): Promise<void> {
+  if (ids?.size === 0 || !await queued(dataDir, true)) return
+  if (!current()) return
+  const cursor = await loadEngine('cursor')
+  if (!current()) return
+  if (!cursor) throw new Error('Waiting for Cursor task storage to be available.')
+  await cursor.removeCursorPendingTasks(dataDir, sessionId, current, ids)
 }

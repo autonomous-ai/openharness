@@ -1813,6 +1813,17 @@ class Registry {
      */
     orphaned: { agentId: string; sessionId: string } | null
   } | null {
+    return this.prepareRegistration(input, options)?.commit() ?? null
+  }
+
+  /** Inspect without mutating a row. A durable hook claim may be acquired between
+   * preparation and commit; both native evidence and live owners are fenced again
+   * under the registry lock before that claim can publish a binding. */
+  prepareRegistration(input: RegisterInput, options: { verifiedNativeSource?: boolean } = {}): {
+    commit(fence?: () => void): ReturnType<Registry['register']>
+  } | null {
+    input = structuredClone(input)
+    options = { ...options }
 
     if (this.writeBlocked) throw new IdentityReadUnavailable('the saved session registry is unavailable')
     const transcriptPath = input.transcriptPath
@@ -1877,6 +1888,16 @@ class Registry {
       if (!stolenFrom.active) orphaned = { agentId: stolenFrom.agentId, sessionId }
     }
 
+    const owners = new Map([agentId, ...(displaced ? [displaced.agentId] : [])]
+      .map(id => [id, JSON.stringify(this.agents.get(id))]))
+    const sessionOwner = this.bySession(sessionId)?.agentId
+    const verifyOwners = () => {
+      if (this.bySession(sessionId)?.agentId !== sessionOwner
+        || [...owners].some(([id, value]) => JSON.stringify(this.agents.get(id)) !== value)) {
+        throw new IdentityReadUnavailable('the prepared registration owner changed')
+      }
+    }
+
 
     // Command Code announces SessionStart BEFORE writing its transcript, and validTranscriptPath stats the
     // file — so a real path is rejected at that moment and only arrives with the first Stop hook, AFTER the
@@ -1920,6 +1941,7 @@ class Registry {
       const meta = proof.files.header(effectiveTranscriptPath!, first)
       if (meta.isSubagent || meta.id !== sessionId) { proof.verify(); return null }
     }
+    const verifyNative = proof?.retain()
     // A resumed row that has not yet been told, by a hook, which conversation it actually reopened.
     // Two ways to be in that state, and both have to count:
     //  - `lastHookAt === 0` — a resume allocated by `resumePendingAgent` and not yet hooked. Its
@@ -1937,9 +1959,11 @@ class Registry {
       if (sessionId !== existing.sessionId && resumesConversation(engine, existing.sessionId)) {
         const failed: RegisteredSession = { ...existing, active: false, touchedAt: now,
           launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'The agent reported a different conversation. The requested conversation is still saved.' } }
-        this.save(true, false, undefined, { agentId, candidate: failed, verify: () => proof?.verify() })
-        this.traceLaunch(agentId, existing.launch, failed.launch, 'resume conversation mismatch')
-        return null
+        return { commit: fence => {
+          this.save(true, false, undefined, { agentId, candidate: failed, verify: () => { verifyOwners(); verifyNative?.(); fence?.() } })
+          this.traceLaunch(agentId, existing.launch, failed.launch, 'resume conversation mismatch')
+          return null
+        } }
       }
     }
     // Even a first bind can carry a drifted cwd (a fork inherits its source's; `claude --resume` typed
@@ -2034,20 +2058,22 @@ class Registry {
     entry.tmuxPane = tmuxProjection(entry.runtimes)
     entry.primaryRuntimeKey = selectedRuntimeKey(entry.runtimes, input.primaryRuntimeKey || existing?.primaryRuntimeKey)
     const previousLaunch = existing?.launch, promoted = !!existing && isTerminalEngine(existing.engine)
-    this.save(true, false, undefined, { agentId, candidate: entry, displaced, replaceLive: true, verify: () => proof?.verify() })
-    const committed = this.agents.get(agentId)!
-    // Fileless sources cannot use transcript revalidation. A fresh native hook
-    // source/process check can recover this precise peer-write hold only after
-    // its registration has been committed. It cannot clear unrelated holds.
-    if (!committed.transcriptPath && options.verifiedNativeSource && committed.identityHold === BINDING_RECOVERY_HOLD) {
-      delete committed.identityHold
-      committed.evidenceRevision = ++this.evidenceRevision
-      committed.interpretationHold = 'Waiting for transcript interpretation to recover.'
-    }
-    if (orphaned) this.terminalAvailableAgents.delete(orphaned.agentId)
-    if (promoted) this.terminalAvailableAgents.add(agentId)
-    this.traceLaunch(agentId, previousLaunch, committed.launch, `register ${engine} (${isNew ? 'new session' : 're-register'})`)
-    return { entry: committed, isNew, evicted, rebound, orphaned }
+    return { commit: fence => {
+      this.save(true, false, undefined, { agentId, candidate: entry, displaced, replaceLive: true, verify: () => { verifyOwners(); verifyNative?.(); fence?.() } })
+      const committed = this.agents.get(agentId)!
+      // Fileless sources cannot use transcript revalidation. A fresh native hook
+      // source/process check can recover this precise peer-write hold only after
+      // its registration has been committed. It cannot clear unrelated holds.
+      if (!committed.transcriptPath && options.verifiedNativeSource && committed.identityHold === BINDING_RECOVERY_HOLD) {
+        delete committed.identityHold
+        committed.evidenceRevision = ++this.evidenceRevision
+        committed.interpretationHold = 'Waiting for transcript interpretation to recover.'
+      }
+      if (orphaned) this.terminalAvailableAgents.delete(orphaned.agentId)
+      if (promoted) this.terminalAvailableAgents.add(agentId)
+      this.traceLaunch(agentId, previousLaunch, committed.launch, `register ${engine} (${isNew ? 'new session' : 're-register'})`)
+      return { entry: committed, isNew, evicted, rebound, orphaned }
+    } }
   }
 
   remove(sessionId: string): boolean {

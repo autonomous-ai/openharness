@@ -1,5 +1,5 @@
 import { liveFor } from '../../engines/live.js'
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -7,6 +7,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { Watcher, type TailHold } from '../../watcher/watcher.js'
 import { createIngest } from './ingest.js'
 import { createCancel } from '../turns/cancel.js'
+import { createTurnHooks, STOP_HOOK_GRACE_MS } from '../turns/turnHooks.js'
 import { createAttach, type AttachDeps } from './attach.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { createSessionNormalizers } from './normalizers.js'
@@ -487,6 +488,180 @@ describe('attaching a session whose engine\'s code could not be loaded', () => {
 })
 
 describe('attaching a session', () => {
+  it('keeps the binding without starting interpretation until native hook recovery is ready', async () => {
+    let ready = false
+    const run = setup({ nativeRecoveryReady: () => ready }), row = session('claude', '/fixture/transcript')
+    expect(await run.attach.attachSession(row)).toBe(true)
+    expect(run.deps.terminalGone).not.toHaveBeenCalled()
+    expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
+    expect(run.deps.emit).not.toHaveBeenCalled()
+    ready = true
+    expect(await run.attach.attachSession(row)).toBe(true)
+    expect(run.deps.terminalGone).toHaveBeenCalled()
+  })
+
+  it.each([false, true])('preserves the deferred reset=%s decision and the captured legacy Stop turn through native recovery', async reset => {
+    let ready = true
+    const run = setup({ nativeRecoveryReady: () => ready })
+    const row = session('claude', transcript([CLAUDE_PROMPT]))
+    await run.attach.attachSession(row)
+    run.normalizers.noteTurnStart(row.sessionId)
+    const original = run.normalizers.liveParsers.get(row.sessionId)!
+    expect(original.snapshot().turnOpen).toBe(true)
+    const emit = vi.fn(), stopped = vi.fn()
+    const hooks = createTurnHooks({ resolve: () => row, normalizers: run.normalizers, emit,
+      drain: async () => {}, onCursorTaskStart: vi.fn(), cursorTaskHooks: { wait: async () => {} },
+      cursorSubagents: { closeParent: vi.fn() }, announceTurnAborted: vi.fn(), armAgyIdleWatch: vi.fn(),
+      clearAgyIdleWatch: vi.fn(), mirror: { noteEngineStopped: stopped }, dataDir: '/fixture',
+    })
+    ready = false
+    await run.attach.attachSession(row, reset)
+    const stop = hooks.captureStop(row, { sessionId: row.sessionId }, run.attach.captureAdmissionStop(row))
+    expect(run.normalizers.liveParsers.get(row.sessionId)).toBe(original)
+    ready = true
+    await run.attach.attachSession(row)
+    expect(run.normalizers.liveParsers.get(row.sessionId) === original).toBe(!reset)
+    vi.useFakeTimers()
+    const result = stop()
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    expect(await result).toBe(reset ? 'held' : 'completed')
+    expect(stopped).toHaveBeenCalledTimes(reset ? 0 : 1)
+    expect(emit).toHaveBeenCalledTimes(reset ? 0 : 1)
+    expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(reset)
+    run.attach.forget(row.sessionId)
+  })
+
+  it('revokes a started attach when native recovery loses authority during its first await', async () => {
+    let ready = true, finish!: () => void
+    const run = setup({ nativeRecoveryReady: () => ready }), row = session('claude', '/fixture/transcript')
+    vi.mocked(run.deps.terminalGone).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(false) }))
+    const pending = run.attach.attachSession(row)
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    ready = false; finish()
+    expect(await pending).toBe(true)
+    expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
+    expect(run.deps.emit).not.toHaveBeenCalled()
+  })
+
+  it.each(['before attach', 'during probe'] as const)('preserves first-turn replay when native recovery holds %s', async phase => {
+    let ready = phase === 'during probe', finish!: () => void
+    const run = setup({ nativeRecoveryReady: () => ready })
+    const row = session('claude', transcript([CLAUDE_PROMPT,
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'answer' }], stop_reason: 'end_turn' } }]))
+    if (ready) vi.mocked(run.deps.terminalGone).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(false) }))
+    const first = run.attach.attachSession(row, false, false, true)
+    if (phase === 'during probe') {
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+      ready = false; finish()
+    }
+    expect(await first).toBe(true)
+    expect(run.deps.emit).not.toHaveBeenCalled()
+    ready = true
+    await run.attach.attachSession(row, true)
+    expect(vi.mocked(run.deps.emit).mock.calls.flatMap(([, events]) => events).filter(event => event.type === 'turn_started')).toHaveLength(1)
+    await run.attach.attachSession(row, true)
+    expect(vi.mocked(run.deps.emit).mock.calls.flatMap(([, events]) => events).filter(event => event.type === 'turn_started')).toHaveLength(1)
+  })
+
+  it.each(['binding', 'forget', 'Cancel', 'stale reader'] as const)('revokes deferred replay after %s', async change => {
+    let ready = false
+    const run = setup({ nativeRecoveryReady: () => ready })
+    const row = session('cursor', transcript([{ open: true, events: [started()] }, { close: true }]))
+    await run.attach.attachSession(row, false, true, true, change === 'stale reader' ? () => false : undefined)
+    if (change === 'binding') row.boundAt = 1_791_676_800_000
+    if (change === 'forget') run.attach.forget(row.sessionId)
+    if (change === 'Cancel') { run.attach.beforeCancel(row); run.normalizers.closeTurns(row.sessionId) }
+    ready = true
+    await run.attach.attachSession(row, true)
+    expect(run.deps.emit).not.toHaveBeenCalled()
+    run.attach.forget(row.sessionId)
+  })
+
+  it('keeps a newer first-turn replay request when an older probe notices the native hold later', async () => {
+    let ready = true, finish!: () => void
+    const run = setup({ nativeRecoveryReady: () => ready })
+    const row = session('cursor', transcript([{ open: true, events: [started()] }, { close: true }]))
+    vi.mocked(run.deps.terminalGone).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(false) }))
+    const old = run.attach.attachSession(row)
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    ready = false
+    await run.attach.attachSession(row, true, true, true)
+    finish(); expect(await old).toBe(true)
+    ready = true
+    await run.attach.attachSession(row, true)
+    expect(vi.mocked(run.deps.emit).mock.calls.flatMap(([, events]) => events).filter(event => event.type === 'turn_started')).toHaveLength(1)
+  })
+
+  it.each(['probe', 'tail installation'] as const)('keeps Cancel authoritative while the recovered attach awaits %s', async phase => {
+    let ready = false, finish!: () => void
+    const run = setup({ nativeRecoveryReady: () => ready }), row = session('cursor', transcript([{ open: true, events: [started('cancelled')] }]))
+    await run.attach.attachSession(row, false, true, true)
+    ready = true
+    if (phase === 'probe') vi.mocked(run.deps.terminalGone).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(false) }))
+    else vi.mocked(run.deps.watcher.addSession).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const recovering = run.attach.attachSession(row, true)
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    run.attach.beforeCancel(row); run.normalizers.closeTurns(row.sessionId)
+    finish()
+    expect(await recovering).toBe(true)
+    await run.attach.attachSession(row, true)
+    expect(row.interpretationHold).toBeUndefined()
+    expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(false)
+    expect(run.deps.emit).not.toHaveBeenCalled()
+    run.attach.forget(row.sessionId)
+  })
+
+  it.each(['queued', 'detaching'] as const)('keeps a recovery binding when native evidence is lost while %s', async phase => {
+    let ready = true, finish!: () => void
+    const run = setup({ nativeRecoveryReady: () => ready }), row = session('claude', transcript([]))
+    let first: Promise<boolean> | undefined
+    if (phase === 'queued') {
+      vi.mocked(run.deps.terminalGone).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(false) }))
+      first = run.attach.attachSession(row)
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    } else vi.mocked(run.deps.watcher.removeSession).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    row.interpretationHold = 'pending'
+    const recovering = run.attach.attachSession(row, true)
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    ready = false; finish()
+    if (first) expect(await first).toBe(true)
+    expect(await recovering).toBe(true)
+    expect(row.interpretationHold).toBeTruthy()
+    expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
+    ready = true
+    await run.attach.attachSession(row, true)
+    expect(row.interpretationHold).toBeUndefined()
+    run.attach.forget(row.sessionId)
+  })
+
+  it('preserves a native hold that starts while retained turn control is announced', async () => {
+    let ready = true
+    const run = setup({ nativeRecoveryReady: () => ready }), row = session('claude', transcript([CLAUDE_PROMPT]))
+    run.attach.beforeCancel(row); run.normalizers.closeTurns(row.sessionId)
+    vi.mocked(run.deps.announceSession).mockImplementationOnce(() => { ready = false })
+    expect(await run.attach.attachSession(row, true)).toBe(true)
+    expect(run.deps.terminalGone).not.toHaveBeenCalled()
+    ready = true
+    await run.attach.attachSession(row, true)
+    expect(row.interpretationHold).toBeUndefined()
+    expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(false)
+    expect(run.deps.emit).not.toHaveBeenCalled()
+    run.attach.forget(row.sessionId)
+  })
+
+  it('forgetting one deferred binding preserves a sibling first-turn replay', async () => {
+    let ready = false
+    const run = setup({ nativeRecoveryReady: () => ready })
+    const first = session('cursor', transcript([]))
+    const sibling = session('muse', transcript([{ open: true, events: [started()] }, { close: true }]))
+    await run.attach.attachSession(first)
+    await run.attach.attachSession(sibling, false, false, true)
+    run.attach.forget(first.sessionId)
+    ready = true
+    await run.attach.attachSession(sibling, true)
+    expect(run.deps.emit).toHaveBeenCalledWith(sibling.sessionId, [started()])
+  })
+
 
   it('installs worker state after hydration, keeps device/profile observations and reuses only a current binding', async () => {
     const p = remoteSetup(true), s = session('claude', '/private/transcript')
@@ -1441,7 +1616,7 @@ it('revokes captured Stop admission on Cancel, a new conversation and forget wit
   run.attach.forget(sibling.sessionId)
   expect(other()).toBe(false)
 })
-it('recovers a legacy reader without control cuts and holds one that cannot replay them', async () => {
+it('recovers a legacy reader with retained cancellation boundaries', async () => {
   const run = setup(), row = session('muse', transcript([]), { evidenceRevision: 2, interpretationHold: 'pending' })
   await run.attach.attachSession(row)
   expect(row.interpretationHold).toBeUndefined()
@@ -1449,9 +1624,49 @@ it('recovers a legacy reader without control cuts and holds one that cannot repl
   row.interpretationHold = 'pending'
   run.attach.beforeCancel(row); run.normalizers.closeTurns(row.sessionId)
   await run.attach.attachSession(row)
-  expect(row.interpretationHold).toContain('cannot yet replay ordered cancellation')
+  expect(row.interpretationHold).toBeUndefined()
   expect(run.deps.emit).not.toHaveBeenCalled()
   run.attach.forget(row.sessionId)
+})
+it.each(['cursor', 'muse', 'amp', 'grok', 'agy', 'copilot', 'pi', 'commandcode', 'terminal'].flatMap(engine =>
+  [false, true].map(later => ({ engine, later }))))('replays $engine Cancel at its original boundary before later prompt=$later', async ({ engine, later }) => {
+  const first = engine === 'terminal' ? CLAUDE_PROMPT : { open: true, events: [started('cancelled')] }
+  const next = engine === 'terminal' ? { ...CLAUDE_PROMPT, uuid: 'later' } : { open: true, events: [started('later')] }
+  const run = setup(), file = transcript([first, { events: [{ type: 'turn_ended', payload: {} }] }, {}])
+  const row = session(engine, file, { evidenceRevision: 2, interpretationHold: 'pending' })
+  run.attach.beforeCancel(row); run.normalizers.closeTurns(row.sessionId)
+  if (later) appendFileSync(file, JSON.stringify(next) + '\n')
+  await run.attach.attachSession(row)
+  expect(row.interpretationHold).toBeUndefined()
+  expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(later)
+  expect(run.deps.watcher.addSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: row.sessionId }),
+    expect.objectContaining({ fromOffset: statSync(file).size }))
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
+it('delivers a Cursor prompt appended after the recovery fold through the real watcher exactly once', async () => {
+  const watcher = new Watcher(), run = setup({ watcher })
+  const file = transcript([{ open: true, events: [started('cancelled')] }])
+  const row = session('cursor', file, { evidenceRevision: 2, interpretationHold: 'pending' })
+  const emit = vi.fn()
+  const ingest = createIngest({ liveFor, has: () => true, bySession: () => row, device: () => undefined,
+    runtimeProfiles: { ingest: () => false }, tokenUsage: { changed: vi.fn() }, normalizers: run.normalizers,
+    announceTurnAborted: vi.fn(), emit, attachSession: run.attach.attachSession })
+  ingest.wireWatcher(watcher)
+  try {
+    run.attach.beforeCancel(row); run.normalizers.closeTurns(row.sessionId)
+    vi.mocked(run.deps.runtimeProfiles.capturePane).mockImplementationOnce(async () => {
+      appendFileSync(file, JSON.stringify({ open: true, events: [started('later')] }) + '\n')
+      return null
+    })
+    expect(await run.attach.attachSession(row)).toBe(true)
+    await watcher.pollSession(row.sessionId)
+    expect(row.interpretationHold).toBeUndefined()
+    expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(true)
+    expect(emit.mock.calls.flatMap(([, events]) => events)).toEqual([started('later')])
+    await watcher.pollSession(row.sessionId)
+    expect(emit.mock.calls.flatMap(([, events]) => events)).toEqual([started('later')])
+  } finally { run.attach.forget(row.sessionId); await watcher.stop() }
 })
 it('abandons a legacy open turn at the relaunch boundary', async () => {
   const marks = createRelaunchMarks(), run = setup({ relaunchMarks: marks })
@@ -1461,6 +1676,42 @@ it('abandons a legacy open turn at the relaunch boundary', async () => {
   expect(run.normalizers.museNormalizers.get(row.sessionId)?.turnOpen).toBe(false)
   expect(run.deps.emit).not.toHaveBeenCalled()
   expect(marks.read(row.sessionId)).toBeUndefined()
+})
+it.each(['reader limit', 'watcher limit', 'rewrite'] as const)('keeps Cursor recovery visibly held after a %s refusal', async phase => {
+  const watcher = new Watcher({ historyMaxBytes: phase === 'watcher limit' ? 64 : undefined })
+  const run = setup({ watcher, wholeReadCapBytes: phase === 'reader limit' ? 64 : undefined })
+  const file = transcript([{ open: true, events: [started('cancelled')], padding: 'x'.repeat(1_000) }])
+  const row = session('cursor', file, { evidenceRevision: 2, interpretationHold: 'pending' })
+  const original = readFileSync(file, 'utf8')
+  try {
+    run.attach.beforeCancel(row); run.normalizers.closeTurns(row.sessionId)
+    if (phase === 'rewrite') {
+      appendFileSync(file, JSON.stringify({ open: true, events: [started('second')] }) + '\n')
+      vi.mocked(run.deps.runtimeProfiles.capturePane).mockImplementationOnce(async () => {
+        writeFileSync(file, original + JSON.stringify({ open: true, events: [started('edited')] }) + '\n')
+        return null
+      })
+    }
+    expect(await run.attach.attachSession(row)).toBe(true)
+    expect(row.interpretationHold).toContain(phase === 'rewrite' ? 'changed after its recovery fold' : 'bounded')
+    expect(watcher.tails(row.sessionId, file)).toBe(false)
+    expect(run.deps.emit).not.toHaveBeenCalled()
+    expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(false)
+  } finally { run.attach.forget(row.sessionId); await watcher.stop() }
+})
+it.each([false, true])('recovers a complete Cursor prefix with leading blanks and records=%s', async records => {
+  const watcher = new Watcher(), run = setup({ watcher })
+  const file = transcript([])
+  writeFileSync(file, '\n \r\n' + (records ? JSON.stringify({ open: true, events: [started('cancelled')] }) + '\n' : ''))
+  const row = session('cursor', file, { evidenceRevision: 2, interpretationHold: 'pending' })
+  try {
+    run.attach.beforeCancel(row); run.normalizers.closeTurns(row.sessionId)
+    expect(await run.attach.attachSession(row)).toBe(true)
+    expect(row.interpretationHold).toBeUndefined()
+    expect(watcher.tails(row.sessionId, file)).toBe(true)
+    expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(false)
+    expect(run.deps.emit).not.toHaveBeenCalled()
+  } finally { run.attach.forget(row.sessionId); await watcher.stop() }
 })
 it('holds a worker candidate that stops before its cancellation cutoff', async () => {
   const run = remoteSetup(), row = session('claude', transcript([CLAUDE_PROMPT]), { evidenceRevision: 2, interpretationHold: 'pending' })

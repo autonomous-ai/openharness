@@ -58,16 +58,16 @@ vi.mock('node:child_process', async original => {
         const info = statSync(path, { bigint: true })
         return `f${index + 3}\0tREG\0D0x${info.dev.toString(16)}\0i${info.ino}\0n${path}\0\n`
       }).join('')
-    } else if (command === '/fixture-tools/native-control' && args[0] === '--control') {
+    } else if (command === '/fixture-tools/native-control' && (args[0] === '--control' || args[0] === '--identity')) {
       const parent = Number(args[2]), ids = args.slice(3).map(Number)
-      output = JSON.stringify({ schema: 2, mode: 'control', parent,
+      output = JSON.stringify({ schema: 2, mode: args[0].slice(2), parent,
         children: parent ? fixture.rows.filter(row => row.parentPid === parent).map(row => row.pid) : [] }) + '\n'
       for (const id of ids) {
         const row = fixture.rows.find(row => row.pid === id)!
         output += JSON.stringify({ pid: id, parentPid: row.parentPid, startSeconds: Date.parse(row.startMarker) / 1000,
           startMicros: 123456, commandHex: Buffer.from(row.executable.split('/').at(-1)!).toString('hex'),
           imageHex: Buffer.from(row.executable).toString('hex'), commandDigest: 'a'.repeat(64),
-          fds: (fixture.lsof.get(id) ?? []).map((path, index) => {
+          fds: (args[0] === '--control' ? fixture.lsof.get(id) ?? [] : []).map((path, index) => {
             const info = statSync(path, { bigint: true })
             return { fd: index + 3, type: 1, mode: 0o100000, device: String(info.dev), inode: String(info.ino) }
           }),

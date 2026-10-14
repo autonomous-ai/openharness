@@ -1,0 +1,228 @@
+{
+  "linux:original": {
+    "key": "linux:aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\u0000codex\u000042\u000012345",
+    "evidence": "[42,77,\"12345\",\"codex\",\"/fixture/codex\",[\"codex\",\"--model\",\"fixture\"],null]",
+    "source": "caller"
+  },
+  "linux:after-caller-exit": {
+    "key": "linux:aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\u0000codex\u000042\u000012345",
+    "evidence": "[42,77,\"12345\",\"codex\",\"/fixture/codex\",[\"codex\",\"--model\",\"fixture\"],null]"
+  },
+  "linux:replacement-refused": {
+    "name": "Error",
+    "message": "Conversation identity is held: the original native hook process incarnation changed."
+  },
+  "linux:cursor-runtime": {
+    "key": "linux:aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\u0000cursor\u000042\u0000123451",
+    "evidence": "[42,77,\"123451\",\"codex\",\"/fixture/codex\",[\"codex\",\"--model\",\"fixture\"],null]",
+    "source": "runtime"
+  },
+  "linux:cursor-route-changed": {
+    "name": "Error",
+    "message": "Conversation identity is held: the selected engine was not proved in the original native hook caller ancestry or runtime."
+  },
+  "linux:absent-prefix": {
+    "name": "Error",
+    "message": "Conversation identity is held: the selected engine was not proved in the original native hook caller ancestry or runtime."
+  },
+  "linux:kernel-probes": [
+    {
+      "path": "/proc/sys/kernel/random/boot_id",
+      "limit": 128,
+      "deadline": 3000
+    }
+  ],
+  "linux:control-probes": [
+    {
+      "pids": [
+        43
+      ],
+      "parent": 0,
+      "descriptors": false,
+      "deadline": 3000
+    },
+    {
+      "pids": [
+        43,
+        42
+      ],
+      "parent": 0,
+      "descriptors": false,
+      "deadline": 3000
+    },
+    {
+      "pids": [
+        42,
+        77
+      ],
+      "parent": 0,
+      "descriptors": false,
+      "deadline": 3000
+    },
+    {
+      "pids": [
+        43
+      ],
+      "parent": 0,
+      "descriptors": false,
+      "deadline": 3000
+    },
+    {
+      "pids": [
+        43
+      ],
+      "parent": 0,
+      "descriptors": false,
+      "deadline": 3000
+    }
+  ],
+  "linux:registry-proofs": [
+    {
+      "pid": 42,
+      "deadline": 3000,
+      "unused": null,
+      "identity": {
+        "pid": 42,
+        "executable": "codex",
+        "startMarker": "fixture-start"
+      }
+    },
+    {
+      "pid": 42,
+      "deadline": 3000,
+      "unused": null,
+      "identity": {
+        "pid": 42,
+        "executable": "codex",
+        "startMarker": "fixture-start"
+      }
+    },
+    {
+      "pid": 42,
+      "deadline": 3000,
+      "unused": null,
+      "identity": {
+        "pid": 42,
+        "executable": "codex",
+        "startMarker": "fixture-start"
+      }
+    }
+  ],
+  "darwin:original": {
+    "key": "darwin:aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\u0000codex\u000042\u00001791547140:123456",
+    "evidence": "[42,77,\"1791547140:123456\",\"codex\",\"/fixture/codex\",[\"codex\",\"--model\",\"fixture\"],null]",
+    "source": "caller"
+  },
+  "darwin:after-caller-exit": {
+    "key": "darwin:aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\u0000codex\u000042\u00001791547140:123456",
+    "evidence": "[42,77,\"1791547140:123456\",\"codex\",\"/fixture/codex\",[\"codex\",\"--model\",\"fixture\"],null]"
+  },
+  "darwin:replacement-refused": {
+    "name": "Error",
+    "message": "Conversation identity is held: the original native hook process incarnation changed."
+  },
+  "darwin:cursor-runtime": {
+    "key": "darwin:aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa\u0000cursor\u000042\u00001791547140:1234561",
+    "evidence": "[42,77,\"1791547140:1234561\",\"codex\",\"/fixture/codex\",[\"codex\",\"--model\",\"fixture\"],null]",
+    "source": "runtime"
+  },
+  "darwin:cursor-route-changed": {
+    "name": "Error",
+    "message": "Conversation identity is held: the selected engine was not proved in the original native hook caller ancestry or runtime."
+  },
+  "darwin:absent-prefix": {
+    "name": "Error",
+    "message": "Conversation identity is held: the selected engine was not proved in the original native hook caller ancestry or runtime."
+  },
+  "darwin:kernel-probes": [
+    {
+      "path": "<sysctl>",
+      "args": [
+        "-n",
+        "kern.bootsessionuuid"
+      ],
+      "options": {
+        "encoding": "utf8",
+        "timeout": 3000,
+        "maxBuffer": 128,
+        "killSignal": "SIGKILL"
+      }
+    }
+  ],
+  "darwin:control-probes": [
+    {
+      "pids": [
+        43
+      ],
+      "parent": 0,
+      "descriptors": false,
+      "deadline": 3000
+    },
+    {
+      "pids": [
+        43,
+        42
+      ],
+      "parent": 0,
+      "descriptors": false,
+      "deadline": 3000
+    },
+    {
+      "pids": [
+        42,
+        77
+      ],
+      "parent": 0,
+      "descriptors": false,
+      "deadline": 3000
+    },
+    {
+      "pids": [
+        43
+      ],
+      "parent": 0,
+      "descriptors": false,
+      "deadline": 3000
+    },
+    {
+      "pids": [
+        43
+      ],
+      "parent": 0,
+      "descriptors": false,
+      "deadline": 3000
+    }
+  ],
+  "darwin:registry-proofs": [
+    {
+      "pid": 42,
+      "deadline": 3000,
+      "unused": null,
+      "identity": {
+        "pid": 42,
+        "executable": "codex",
+        "startMarker": "fixture-start"
+      }
+    },
+    {
+      "pid": 42,
+      "deadline": 3000,
+      "unused": null,
+      "identity": {
+        "pid": 42,
+        "executable": "codex",
+        "startMarker": "fixture-start"
+      }
+    },
+    {
+      "pid": 42,
+      "deadline": 3000,
+      "unused": null,
+      "identity": {
+        "pid": 42,
+        "executable": "codex",
+        "startMarker": "fixture-start"
+      }
+    }
+  ]
+}

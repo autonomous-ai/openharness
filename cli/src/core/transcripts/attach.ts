@@ -22,6 +22,8 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import type { RuntimeField, RuntimeProfileManager } from '../../lib/runtimeProfile.js'
 import type { ProfileHydration } from '../engines/runtimeProfiles.js'
 import { tailFileCapped, WHOLE_READ_CAP_BYTES } from '../../lib/transcriptTail.js'
+import { controlTranscriptTail } from '../../lib/controlTranscriptTail.js'
+import { replayCloses, type TranscriptClose } from '../../lib/transcriptControls.js'
 import type { TailHold, Watcher } from '../../watcher/watcher.js'
 import type { SessionNormalizers } from './normalizers.js'
 import type { RelaunchMarks } from './relaunch.js'
@@ -34,6 +36,8 @@ import { createTurnReplacements } from './turnReplacement.js'
 export interface AttachDeps {
   liveFor: LiveFor
   resolve: (agentId: string) => RegisteredSession | undefined
+  /** Core restores accepted prompt times and unresolved hook effects before interpretation. */
+  nativeRecoveryReady?: (session: RegisteredSession) => boolean
   remoteLive?: Pick<LiveSessions, 'handles' | 'current' | 'prepare' | 'install' | 'discard' | 'retry'>
   /** Whether the session's terminal is known to be gone (core/terminals/control.ts `terminalGone`). */
   terminalGone: (session: RegisteredSession) => Promise<boolean>
@@ -75,6 +79,7 @@ export function createAttach({
   liveFor, resolve, remoteLive, terminalGone, normalizers, watcher, cursorDiscovery, device, runtimeProfiles, captureTerminal, emit,
   announceTurnAborted, questionWatcher, terminalLabel, dbs, devinHome, hermesDb, concurrency, relaunchMarks,
   wholeReadCapBytes = WHOLE_READ_CAP_BYTES, settled, readerLoadWaitMs, setInterpretationHold, announceSession,
+  nativeRecoveryReady = () => true,
 }: AttachDeps) {
   const {
     liveParsers, cursorNormalizers, opencodeReaders, kiloReaders, museNormalizers, ampNormalizers,
@@ -85,6 +90,8 @@ export function createAttach({
   const turnReplacements = createTurnReplacements(normalizers)
   const recoveryRetries = new Map<string, ReturnType<typeof setTimeout>>()
   const pendingAttaches = new Map<string, number>()
+  const nativeAttaches = new Map<string, { sessionId: string; authority: string; cancelRevision: number; reset: boolean;
+    replayCursorFromStart: boolean; replayFromStart: boolean }>()
   const admissionStops = new Map<string, { sessionId: string }>()
   const captureAdmissionStop = (session: RegisteredSession): (() => boolean) => {
     const agentId = session.agentId
@@ -96,10 +103,11 @@ export function createAttach({
     const captured = token
     return () => admissionStops.get(agentId) === captured
   }
-  const lifetimes = new Map<string, object>()
+  const lifetimes = new Map<string, { cancelRevision: number }>()
   const forget = (sessionId: string): void => {
     readerLoads.forget(sessionId)
     lifetimes.delete(sessionId)
+    for (const [agentId, request] of nativeAttaches) if (request.sessionId === sessionId) nativeAttaches.delete(agentId)
     turnReplacements.forget(sessionId)
     for (const [agentId, token] of admissionStops) if (token.sessionId === sessionId) admissionStops.delete(agentId)
     clearTimeout(recoveryRetries.get(sessionId))
@@ -112,11 +120,18 @@ export function createAttach({
   }
   const beforeCancel = (session: RegisteredSession): void => {
     admissionStops.delete(session.agentId)
+    nativeAttaches.delete(session.agentId)
+    const lifetime = lifetimes.get(session.sessionId)
+    if (lifetime) lifetime.cancelRevision++
     if (session.identityHold || session.interpretationHold) turnReplacements.stage(session)
     else if (session.transcriptPath || turnReplacements.retains(session)) {
       const reason = turnReplacements.cancel(session)
       if (reason && session.transcriptPath) holdInterpretation(session, `Waiting for transcript interpretation: ${reason}.`)
     }
+    // An attach may not have created its parser yet, or may be handing over its
+    // tail. Revoke that candidate now and retain reconstruction of this Cancel;
+    // closing only the currently installed parser lets the late read reopen it.
+    if (pendingAttaches.has(session.sessionId)) holdInterpretation(session, 'Reapplying cancelled turn control.')
   }
   const holdInterpretation = (session: RegisteredSession, reason: string): void => {
     turnReplacements.stage(session)
@@ -359,8 +374,11 @@ export function createAttach({
     // transcript read whole would take every agent's daemon down (the October 3 crash, on Codex). Its
     // oldest history past the cap is not folded; its last turns, which say whether it is working, are.
     let lines: string[] = []
+    let controlled: Awaited<ReturnType<typeof controlTranscriptTail>> | undefined
     if (session.transcriptPath && !fromEnd) {
-      const read = await tailFileCapped(session.transcriptPath, wholeReadCapBytes)
+      const read = closes ? controlled = await controlTranscriptTail(session.transcriptPath, closes, wholeReadCapBytes, session.engine === 'cursor')
+        : await tailFileCapped(session.transcriptPath, wholeReadCapBytes)
+      if (session.engine === 'cursor' && controlled?.start) throw new Error('the Cursor recovery prefix exceeds the bounded reader limit')
       if (read.truncated) console.warn(`[agent] ${sid(session.agentId)} transcript over ${Math.round(wholeReadCapBytes / 1024 / 1024)} MB · folded from its newest ${Math.round(wholeReadCapBytes / 1024 / 1024)} MB`)
       lines = read.lines
     }
@@ -369,7 +387,6 @@ export function createAttach({
       return false
     }
     if (!fromEnd) {
-      if (closes) throw new Error('the native reader cannot yet replay ordered cancellation boundaries')
       if (observe) for (const line of lines) observe(line)
       sideRead('runtime profile', session.sessionId, () => runtimeProfiles.hydrate(session, lines))
     }
@@ -384,8 +401,19 @@ export function createAttach({
       if (prepared) remote!.discard(prepared)
       return keepLiveNormalizer('outlasted its hold on the tail')
     }
-    const fold = (ingest: (line: string) => LiveEvent[], turnOpenAfter: () => boolean): boolean =>
-      take(foldTranscript(ingest, lines, turnOpenAfter, { live: replayLive }))
+    const fold = (ingest: (line: string) => LiveEvent[], turnOpenAfter: () => boolean,
+      close: (reason: TranscriptClose['reason']) => void): boolean => {
+      if (!controlled) return take(foldTranscript(ingest, lines, turnOpenAfter, { live: replayLive }))
+      const closeThrough = replayCloses(closes!, reason => { close(reason); historyExplicitlyClosed = true })
+      const stream = new TranscriptFold(line => {
+        const events = ingest(line)
+        if (events.some(event => event.type === 'turn_started' || event.type === 'turn_ended')) historyExplicitlyClosed = false
+        return events
+      }, turnOpenAfter, false)
+      for (let index = 0; index < lines.length; index++) { closeThrough(controlled.offsets[index]); stream.push(lines[index]) }
+      closeThrough(controlled.next)
+      return take(stream.finish())
+    }
     if (prepared) {
       const install = () => remote!.install(prepared!)
       if (!(session.interpretationHold ? install() : profileHydration?.commitWith ? profileHydration.commitWith(install) : install())) {
@@ -397,7 +425,7 @@ export function createAttach({
       if (replacement) recoveryInstall = () => replacement.commit(recoveryPlan!, prepared!.state.handle)
       else publish()
     } else if (parser) {
-      if (!fromEnd) historyTurnOpen = fold((line) => parser.ingest(line).events, () => parser.turnOpen)
+      if (!fromEnd) historyTurnOpen = fold((line) => parser.ingest(line).events, () => parser.turnOpen, reason => { parser.closeTurn(reason) })
       const install = () => { liveParsers.set(session.sessionId, parser); return true }
       if (replacement) recoveryInstall = () => replacement.commit(recoveryPlan!, parser)
       else if (profileHydration?.commitWith) {
@@ -405,7 +433,7 @@ export function createAttach({
       } else { install(); profileHydration?.commit() }
     } else if (engine('cursor')) {
       const normalizer = new (engine('cursor')!).CursorNormalizer('live', session.sessionId)
-      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
+      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen, () => { normalizer.closeTurn() })
       cursorNormalizers.set(session.sessionId, normalizer)
       await runtimeProfiles.capturePane(session, captureTerminal, 100, true)
     } else if (engine('opencode')) {
@@ -437,17 +465,17 @@ export function createAttach({
     } else if (engine('muse')) {
       // Same JSONL tail as claude/pi; only the record shape differs.
       const normalizer = new (engine('muse')!).MuseNormalizer()
-      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
+      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen, () => { normalizer.closeTurn() })
       museNormalizers.set(session.sessionId, normalizer)
     } else if (engine('amp')) {
       // A JSONL tail like claude/muse — except the file is written by the adapter's own Amp plugin,
       // because Amp is the one engine that keeps no conversation on disk.
       const normalizer = new (engine('amp')!).AmpNormalizer()
-      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
+      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen, () => { normalizer.closeTurn() })
       ampNormalizers.set(session.sessionId, normalizer)
     } else if (engine('grok')) {
       const normalizer = new (engine('grok')!).GrokNormalizer()
-      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
+      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen, () => { normalizer.closeTurn() })
       grokNormalizers.set(session.sessionId, normalizer)
       await runtimeProfiles.capturePane(session, captureTerminal, 60, true)
     } else if (engine('agy')) {
@@ -455,7 +483,7 @@ export function createAttach({
       // A JSONL tail like claude/grok. agy announces its model only in the hook payload and its pane
       // footer, so the pane is read once on attach to fill the chip before the first turn.
       const normalizer = new agy.AgyNormalizer()
-      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
+      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen, () => { normalizer.closeTurn() })
       agyNormalizers.set(session.sessionId, normalizer)
       // agy's transcript has no end-of-turn record - only its Stop hook does - so a fold of a FINISHED
       // conversation still reports the last turn as open, and after a daemon restart nothing is ever
@@ -493,7 +521,7 @@ export function createAttach({
       // conversation, the fold opens a turn on its last `user.message`, and no hook is coming to close
       // it. Ask the records where the last activity actually ended.
       const normalizer = new copilot.CopilotNormalizer()
-      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
+      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen, () => { normalizer.closeTurn() })
       copilotNormalizers.set(session.sessionId, normalizer)
       if (historyTurnOpen && !copilot.copilotHistoryTurnOpen(lines)) {
         normalizer.closeTurn()
@@ -502,7 +530,7 @@ export function createAttach({
     } else if (engine('pi')) {
       const normalizer = new (engine('pi')!).PiNormalizer('live')
       // Hydrate state silently; never replay history live — except a turn left open, below.
-      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
+      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen, () => { normalizer.closeTurn() })
       piNormalizers.set(session.sessionId, normalizer)
     } else if (engine('hermes')) {
       // Hermes has no transcript file — poll its SQLite store, like opencode.
@@ -538,7 +566,7 @@ export function createAttach({
     } else if (engine('commandcode')) {
       const normalizer = new (engine('commandcode')!).CommandCodeNormalizer('live')
       // Hydrate state silently; never replay history live — except a turn left open, below.
-      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
+      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen, () => { normalizer.closeTurn() })
       commandcodeNormalizers.set(session.sessionId, normalizer)
     }
     if (!current()) return false
@@ -563,7 +591,8 @@ export function createAttach({
       // A held tail is already this session's, and resumes from there when the hold is released.
       if (!handover.hold || !watcher.tails(session.sessionId, session.transcriptPath)) {
         await watcher.addSession({ ...session, transcriptPath: session.transcriptPath }, {
-          ...(fromEnd ? { fromOffset: fromEnd.next } : {}),
+          ...(fromEnd || controlled ? { fromOffset: (fromEnd ?? controlled)!.next } : {}),
+          ...(session.engine === 'cursor' && controlled ? { cursorBaseline: { lines: controlled.lines, identity: controlled.identity } } : {}),
           ...(session.interpretationHold ? { deliveryAllowed: () => recoveryReady } : {}),
         })
       }
@@ -574,7 +603,7 @@ export function createAttach({
     }
     if (!current()) return false
     if (session.interpretationHold) {
-      if (closes && fromEnd!.next < closes.at(-1)!.offset) return keepLiveNormalizer('did not reach its cancellation boundary')
+      if (closes && (fromEnd ?? controlled)!.next < closes.at(-1)!.offset) return keepLiveNormalizer('did not reach its cancellation boundary')
       replacement!.check(recoveryPlan!)
       // Both parser and tail are installed. Reads held during watcher installation kept their cursors;
       // resume them only now, after clearing the obligation under the same evidence revision.
@@ -657,6 +686,34 @@ export function createAttach({
     replayFromStart = false,
     retryCurrent?: () => boolean,
   ): Promise<boolean> => {
+    if (retryCurrent && !retryCurrent()) return Promise.resolve(false)
+    session = { ...session, interpretationHold: resolve(session.agentId)?.interpretationHold }
+    let authority = paneReadIdentity(session)
+    if (paneReadIdentity(resolve(session.agentId)) !== authority) return Promise.resolve(false)
+    const lifetime = lifetimes.get(session.sessionId) ?? { cancelRevision: 0 }
+    lifetimes.set(session.sessionId, lifetime)
+    const cancelRevision = lifetime.cancelRevision
+    const cancelled = () => lifetime.cancelRevision !== cancelRevision
+    const deferred = nativeAttaches.get(session.agentId)
+    if (deferred?.authority === authority && deferred.cancelRevision === cancelRevision) {
+      reset ||= deferred.reset
+      replayCursorFromStart ||= deferred.replayCursorFromStart
+      replayFromStart ||= deferred.replayFromStart
+    }
+    nativeAttaches.delete(session.agentId)
+    const retainNativeAttach = (): void => {
+      // Keep the original replay decision through a recovery wait, including one
+      // that starts mid-read. Cancel revokes it, and a new binding cannot inherit it.
+      const previous = nativeAttaches.get(session.agentId)
+      const same = previous?.authority === authority && previous.cancelRevision === cancelRevision ? previous : undefined
+      nativeAttaches.set(session.agentId, { sessionId: session.sessionId, authority, cancelRevision,
+        reset: reset || !!same?.reset,
+        replayCursorFromStart: replayCursorFromStart || !!same?.replayCursorFromStart,
+        replayFromStart: replayFromStart || !!same?.replayFromStart })
+    }
+    // A held process remains bound and visible. Its core recovery callback
+    // retries this attach after the durable order facts are restored.
+    if (!nativeRecoveryReady(session)) { retainNativeAttach(); return Promise.resolve(true) }
     // Compaction and ordinary SessionStart also reconstruct parsers. A prior explicit closure still
     // belongs to this conversation and must survive those resets, not only native-evidence recovery.
     if (reset && turnReplacements.retains(session) && !session.identityHold && !session.interpretationHold
@@ -669,11 +726,12 @@ export function createAttach({
     // An unavailable identity is still the agent's binding, but grants no interpretation authority.
     // Snapshot the mutable row before yielding so a later bind cannot redirect this read's writes.
     session = { ...session, interpretationHold: resolve(session.agentId)?.interpretationHold }
-    const authority = paneReadIdentity(session)
-    const lifetime = lifetimes.get(session.sessionId) ?? {}
-    lifetimes.set(session.sessionId, lifetime)
+    authority = paneReadIdentity(session)
     const current = () => lifetimes.get(session.sessionId) === lifetime && paneReadIdentity(resolve(session.agentId)) === authority
-    if (!current()) return Promise.resolve(false)
+      && !cancelled()
+      && (nativeRecoveryReady(session) || (retainNativeAttach(), false))
+    const held = () => cancelled() || !nativeRecoveryReady(session) || !!resolve(session.agentId)?.identityHold || !!resolve(session.agentId)?.interpretationHold
+    if (!current()) return Promise.resolve(held())
     if (session.identityHold) return Promise.resolve(true)
     // Every caller observes this obligation, including an ordinary hook racing discovery's reset.
     if (session.interpretationHold) { reset = true; replayFromStart = false; replayCursorFromStart = false }
@@ -696,18 +754,18 @@ export function createAttach({
       const handover = { hold: null as TailHold | null, next: null as number | null }
       try {
         if (session.interpretationHold) {
-          if (!current()) return false
+          if (!current()) return held()
           // Another queued recovery may already have fulfilled this same obligation.
           if (!resolve(session.agentId)?.interpretationHold) return true
           turnReplacements.stage(session)
           await watcher.removeSession(session.sessionId)
-          if (!current()) return false
+          if (!current()) return held()
         }
         const attached = await attachSessionNow(session, current, reset, replayCursorFromStart, replayFromStart, handover)
         // A hold that arrived during the read is not evidence that the terminal disappeared.
-        return attached || !!resolve(session.agentId)?.identityHold || !!resolve(session.agentId)?.interpretationHold
+        return attached || held()
       } catch (error) {
-        if (!session.interpretationHold) throw error
+        if (!session.interpretationHold && !cancelled()) throw error
         if (current()) explainRecovery(session, `Waiting for transcript interpretation: ${error instanceof Error ? error.message : error}`)
         return true
       } finally {

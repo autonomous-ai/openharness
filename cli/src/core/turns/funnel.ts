@@ -172,10 +172,15 @@ export function funnelFor({
   }
 }
 
-export function createEventFunnel({ clients, agentIdFor }: { clients: FunnelClients; agentIdFor: (sessionId: string) => string }) {
+export function createEventFunnel({ clients, agentIdFor, onTurnStarted }: {
+  clients: FunnelClients; agentIdFor: (sessionId: string) => string; onTurnStarted?: (sessionId: string) => void
+}) {
   const queuedSessionEvents: Array<{ sessionId: string; events: Events; opts?: EmitOptions }> = []
   let funnel: ((sessionId: string, events: Events, opts?: EmitOptions) => void) | null = null
   const emit = (sessionId: string, events: Events, opts?: EmitOptions): void => {
+    // Observe the whole batch before any consumer can throw or reenter the core.
+    // Queued starts count now; arming the funnel must not count them again.
+    for (const event of events) if (event.type === 'turn_started') onTurnStarted?.(sessionId)
     if (funnel) funnel(sessionId, events, opts)
     else if (events.length) queuedSessionEvents.push({ sessionId, events, opts })
   }

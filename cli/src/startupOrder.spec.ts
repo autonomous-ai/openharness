@@ -260,6 +260,7 @@ describe('the core\'s request gate (core/main.ts)', () => {
     // Readiness never waits on a service: held agents and saved manual requests
     // start their dependency recovery only after the master knows core is ready.
     expect(tail).toEqual(['backend.openRequests()', 'daemonBoot.openRequests = null', 'coreLink.ready()', "console.log('[cli] ready')",
+      'recoverNativeHooks()',
       'installedHooks = env.DISABLE_HOOK_INSTALL ? undefined',
       ': installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })',
       'void heldLaunches.restoreHeld()', 'externalResumes.open()', 'launches.open()'])

@@ -12,8 +12,10 @@ type Location = { path: string; info: BigIntStats } | null
 /** Immutable route facts can cross a service boundary; timestamps matter for aliases, not sibling churn. */
 export type NativePathFact = { path: string; identity: string | null; alias?: { target: string; version: string } }
 export function verifyNativePathFacts(facts: readonly NativePathFact[]): void {
-  const budget = new NativeEvidenceBudget()
-  if (!facts.length || facts.length > 256) return nativeUnavailable('the retained route exceeds its limit')
+  verifyPathFacts(facts, new NativeEvidenceBudget(), 256)
+}
+function verifyPathFacts(facts: readonly NativePathFact[], budget: NativeEvidenceBudget, limit: number): void {
+  if (!facts.length || facts.length > limit) return nativeUnavailable('the retained route exceeds its limit')
   for (const fact of facts) {
     budget.step()
     if (!isAbsolute(fact.path) || fact.path.includes('\0') || Buffer.byteLength(fact.path) > 4096) {
@@ -76,6 +78,15 @@ export class NativePaths {
     this.verify()
     return [...this.parts].map(([path, part]) => ({ path, identity: identity(part.info),
       ...(part.target !== undefined ? { alias: { target: part.target, version: version(part.info!) } } : {}) }))
+  }
+
+  /** A complete pool can contain many individually bounded routes. Preserve its
+   * shared operation budget instead of applying one route's 256-component cap. */
+  retain(): (budget?: NativeEvidenceBudget) => void {
+    const facts = this.snapshot()
+    return (budget = new NativeEvidenceBudget()) => {
+      if (facts.length) verifyPathFacts(facts, budget, 32_768)
+    }
   }
 
   /** Only an observed absent leaf can be announced before creation. A dangling alias is

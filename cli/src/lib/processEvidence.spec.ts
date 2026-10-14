@@ -4,6 +4,8 @@ import { NativeEvidenceBudget, nativeBytes, nativeProbe, nativeUnavailable } fro
 import { parseProcessGraph, readProcessEvidence } from './processEvidence.js'
 import { engineProcessMatchScore, resumeSessionId } from './tmux.js'
 import { nativeProcessControl } from './nativeProcessControl.js'
+import { createNativeHookOwnerReader } from '../engines/kit/nativeHookOwner.js'
+import type { RegisteredSession } from './registry.js'
 
 vi.mock('node:fs/promises', async original => ({ ...await original<object>(), readlink: vi.fn() }))
 vi.mock('../engines/kit/nativeEvidence.js', async original => ({ ...await original<object>(), nativeBytes: vi.fn(), nativeProbe: vi.fn() }))
@@ -71,6 +73,18 @@ describe('complete process graph', () => {
 })
 
 describe('native process incarnation and executable', () => {
+  it.each(['executable', 'ticks'])('checks the declared %s even when retained hook ancestry supplied an exact native owner', async field => {
+    const bytes = vi.mocked(nativeBytes).getMockImplementation()!
+    vi.mocked(nativeBytes).mockImplementation((path, ...args) => path === '/proc/sys/kernel/random/boot_id'
+      ? Promise.resolve(Buffer.from('aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa')) : bytes(path, ...args))
+    const owner = { agentId: 'fixture', active: true, engine: 'codex', processIdentity: {
+      pid: 42, executable: 'codex', startMarker: marker, startTicks: 4200,
+    } } as RegisteredSession
+    const read = createNativeHookOwnerReader(), captured = await read.captureCaller(42, [])
+    if (field === 'executable') owner.processIdentity!.executable = 'another-engine'
+    else owner.processIdentity!.startTicks = 4201
+    await expect(read(owner, captured.owner(owner))).rejects.toThrow('no longer matches the observed owner')
+  })
   it('preserves argv boundaries, including code, quotes and prompt newlines', async () => {
     rows[0] = { ...make(), command: 'node', image: '/fixture/node', argv: ['node', '-e', '"codex"\n\'resume\' aaaaaaaa-1111-4222-8333-000000000001'] }
     const proof = await readProcessEvidence(42, budget())

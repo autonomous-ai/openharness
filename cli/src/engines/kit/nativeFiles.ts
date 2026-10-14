@@ -170,4 +170,20 @@ export class NativeFiles {
     }
     this.paths.verify()
   }
+
+  /** Carry facts across a disk wait, never the inspection's expiring work budget.
+   * A replacement route, directory pool or opening still invalidates the facts. */
+  retain(selected?: string): () => void {
+    this.verify(selected)
+    const verifyPaths = this.paths.retain(), reads = [...this.reads], directories = [...this.directories]
+    return () => {
+      const budget = new NativeEvidenceBudget(250)
+      verifyPaths(budget)
+      const fresh = new NativeFiles(budget)
+      for (const [path, record] of reads) fresh.reads.set(path, record)
+      for (const [path, version] of directories) fresh.directories.set(path, version)
+      fresh.verify(selected)
+      verifyPaths(budget)
+    }
+  }
 }

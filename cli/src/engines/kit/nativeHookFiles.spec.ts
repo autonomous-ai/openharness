@@ -249,3 +249,85 @@ it('rechecks the deadline after the last filesystem observation before removal',
   expect(leafChecks).toBe(2)
   expect(readFileSync(file, 'utf8')).toBe('owned')
 })
+
+it('checks publication authority before starting a preparation', async () => {
+  const { file } = fixture()
+  writeFileSync(file, 'original')
+  const work = vi.fn(async () => 'unowned result')
+  await expect(runHookPreparation([file], work, {
+    verify: () => { throw Error('fixture authority revoked') },
+  })).rejects.toThrow('fixture authority revoked')
+  expect(work).not.toHaveBeenCalled()
+})
+
+it.each(['staging', 'directory', 'unchanged'] as const)('cannot confirm revoked publication authority after the %s flush', async boundary => {
+  const { file } = fixture()
+  writeFileSync(file, 'original')
+  let authorized = true
+  const confirmed = vi.fn()
+  fault.onSync = fd => {
+    if (fstatSync(fd).isDirectory() === (boundary === 'directory')) authorized = false
+  }
+  await expect(runHookPreparation([file], attempt => inspectHookFile(file).replace(boundary === 'unchanged' ? 'original' : 'prepared', attempt), {
+    current: () => true,
+    verify: () => { if (!authorized) throw Error('fixture authority revoked') },
+    confirmed,
+  })).rejects.toThrow('fixture authority revoked')
+  expect(confirmed).not.toHaveBeenCalled()
+  expect(readFileSync(file, 'utf8')).toBe(boundary === 'directory' ? 'prepared' : 'original')
+})
+
+it.each(['deadline', 'owner'] as const)('rejects a %s revoked by the full publication authority check itself', async kind => {
+  const { file } = fixture()
+  writeFileSync(file, 'original')
+  let now = 0, current = true
+  vi.spyOn(performance, 'now').mockImplementation(() => now)
+  const work = vi.fn(async () => 'unowned result')
+  await expect(runHookPreparation([file], work, {
+    timeoutMs: 10, current: () => current,
+    verify: () => { if (kind === 'deadline') now = 20; else current = false },
+  })).rejects.toThrow('expired or its owner changed')
+  expect(work).not.toHaveBeenCalled()
+})
+
+it('rechecks publication authority after the final removal observation', async () => {
+  const { file } = fixture()
+  writeFileSync(file, 'original')
+  let authorized = true, leafChecks = 0
+  const observed = inspectHookFile(file)
+  await expect(runHookPreparation([file], attempt => {
+    fault.onStat = (path, options) => {
+      if (path === file && options === undefined && ++leafChecks === 2) authorized = false
+    }
+    return observed.remove(attempt)
+  }, { verify: () => { if (!authorized) throw Error('fixture authority revoked') } })).rejects.toThrow('fixture authority revoked')
+  expect(leafChecks).toBe(2)
+  expect(inspectHookFile(file).content).toBe('original')
+})
+
+it.each(['before joining', 'while waiting'] as const)('does not borrow a publisher authority revoked %s for its joining caller', async boundary => {
+  const { file } = fixture()
+  writeFileSync(file, 'prepared')
+  let release!: () => void, begun!: () => void
+  const entered = new Promise<void>(done => { begun = done })
+  const gate = new Promise<void>(done => { release = done })
+  const producer = runHookPreparation([file], async () => { begun(); await gate; return 'published' }, { identity: 'same bytes' })
+  await entered
+  let authorized = boundary !== 'before joining'
+  const checked = vi.fn(() => { if (!authorized) throw Error('fixture joining authority revoked') })
+  const confirmed = vi.fn(), work = vi.fn(async () => 'unexpected second preparation')
+  const joined = runHookPreparation([file], work, { identity: 'same bytes', verify: checked, confirmed })
+  const settled = Promise.allSettled([producer, joined])
+  try {
+    // Even a caller which will later receive a publisher's result must prove
+    // its own authority before it takes a waiter slot or waits on disk.
+    expect(checked).toHaveBeenCalledTimes(1)
+  } finally { authorized = false; release(); await settled }
+  expect(await settled).toEqual([
+    { status: 'fulfilled', value: 'published' },
+    { status: 'rejected', reason: expect.objectContaining({ message: 'fixture joining authority revoked' }) },
+  ])
+  expect(work).not.toHaveBeenCalled()
+  expect(confirmed).not.toHaveBeenCalled()
+  expect(readFileSync(file, 'utf8')).toBe('prepared')
+})

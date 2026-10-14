@@ -241,13 +241,15 @@ export class CursorSubagentManager {
     this.schedule(task, 50)
   }
 
-  closeParent(parentId: string, isError = false): void {
+  closeParent(parentId: string, isError = false, current: () => boolean = () => true, ids?: ReadonlySet<string>): void {
+    const original = [...this.pending.values()].filter((task) => task.parentId === parentId && (!ids || ids.has(task.launcherId)))
     setTimeout(() => {
-      const tasks = [...this.pending.values()].filter((task) => task.parentId === parentId)
+      if (!current()) return
+      const tasks = original.filter(task => this.pending.get(task.hook.toolUseId) === task)
       if (tasks.length === 0) return
       for (const task of tasks) this.clear(task)
       const normalizer = tasks[0].normalizer
-      this.emit(parentId, normalizer.closeOutstandingTasks(isError))
+      this.emit(parentId, normalizer.closeOutstandingTasks(isError, new Set(tasks.map(task => task.launcherId))))
     }, 2_000)
   }
 

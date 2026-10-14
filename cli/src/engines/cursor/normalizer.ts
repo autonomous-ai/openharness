@@ -286,10 +286,14 @@ export class CursorNormalizer implements EngineNormalizer {
     return events
   }
 
-  closeOutstandingTasks(isError = false): LiveEvent[] {
+  pendingTaskIds(): ReadonlySet<string> {
+    return new Set([...this.pending].filter(([, pending]) => pending.tool === 'Task').map(([id]) => id))
+  }
+
+  closeOutstandingTasks(isError = false, ids?: ReadonlySet<string>): LiveEvent[] {
     const events: LiveEvent[] = []
     for (const [id, pending] of [...this.pending]) {
-      if (pending.tool !== 'Task') continue
+      if (pending.tool !== 'Task' || ids && !ids.has(id)) continue
       this.pending.delete(id)
       const output = isError ? 'Subagent turn aborted' : 'Subagent completed'
       events.push({

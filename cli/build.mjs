@@ -2,6 +2,8 @@ import * as esbuild from 'esbuild'
 import { readdirSync, statSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
+import { readProcessImageBundle } from './scripts/lib/processImageBundle.mjs'
+import { buildHookNotify } from './scripts/lib/hookNotifyBundle.mjs'
 import { readBuiltinBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
 import { fileURLToPath } from 'node:url'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
@@ -52,6 +54,11 @@ try {
     },
     logLevel: 'info',
   })
+
+  await buildHookNotify({ outfile: 'dist/notify.mjs', processImages: readProcessImageBundle({
+    path: process.env.HARNESS_PROCESS_IMAGES_ARTIFACT,
+    required: process.env.HARNESS_REQUIRE_PROCESS_IMAGES === '1',
+  }) })
 
   console.log('✓ Build completed successfully')
 } catch (error) {

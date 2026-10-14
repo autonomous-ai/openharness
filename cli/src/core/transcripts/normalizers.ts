@@ -38,6 +38,14 @@ export function createSessionNormalizers() {
   const hermesReaders = new Map<string, HermesReader>()
   const devinReaders = new Map<string, DevinReader>()
   const commandcodeNormalizers = new Map<string, CommandCodeNormalizer>()
+  // Native Stop can wait on disk while another turn starts in the same parser.
+  // The core observes starts before fanout; parser identity alone cannot fence that wait.
+  const turns = new Map<string, object>()
+  const noteTurnStart = (sessionId: string): void => { turns.set(sessionId, {}) }
+  const captureTurn = (sessionId: string): (() => boolean) | undefined => {
+    const turn = turns.get(sessionId)
+    return turn ? () => turns.get(sessionId) === turn : undefined
+  }
 
   /** Whether this session's engine state says a turn is open right now, whichever engine it is. */
   const sessionTurnState = (sessionId: string): boolean | undefined =>
@@ -74,6 +82,7 @@ export function createSessionNormalizers() {
 
   /** Drop all of a forgotten session's engine state, stopping its database readers' pollers. */
   const forget = (sessionId: string): void => {
+    turns.delete(sessionId)
     liveParsers.delete(sessionId)
     cursorNormalizers.delete(sessionId)
     opencodeReaders.get(sessionId)?.stop()
@@ -96,6 +105,7 @@ export function createSessionNormalizers() {
   /** Mark the session's turn closed in whichever engine holds it (a cancel). What a closing
    *  normalizer returns is not emitted: a cancel sends no turn end. */
   const closeTurns = (sessionId: string): void => {
+    turns.delete(sessionId)
     liveParsers.get(sessionId)?.closeTurn('cancel')
     cursorNormalizers.get(sessionId)?.closeTurn()
     opencodeReaders.get(sessionId)?.closeTurn()
@@ -123,7 +133,7 @@ export function createSessionNormalizers() {
     liveParsers, cursorNormalizers, opencodeReaders, kiloReaders, piNormalizers,
     museNormalizers, ampNormalizers, grokNormalizers, agyNormalizers, copilotNormalizers, hermesReaders,
     devinReaders, commandcodeNormalizers,
-    sessionTurnState, sessionTurnOpen, hasState, forget, closeTurns, stopPollers,
+    sessionTurnState, sessionTurnOpen, hasState, forget, closeTurns, stopPollers, noteTurnStart, captureTurn,
   }
 }
 

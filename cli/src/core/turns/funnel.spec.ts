@@ -41,6 +41,25 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
 describe('the event funnel', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('records every turn start before queued or throwing consumers, and never records a queued start twice', () => {
+    const observed: string[] = []
+    const { deps } = setup()
+    const queued = createEventFunnel({ clients: deps.clients as never, agentIdFor: () => 'a1',
+      onTurnStarted: id => { observed.push(id) } })
+    queued.emit('s1', [started(), text(), ended(), started()])
+    expect(observed).toEqual(['s1', 's1'])
+    queued.arm(deps)
+    expect(observed).toEqual(['s1', 's1'])
+    vi.mocked(deps.clients.send).mockImplementationOnce(() => {
+      expect(observed).toEqual(['s1', 's1', 's1', 's1'])
+      throw new Error('consumer failed')
+    })
+    expect(() => queued.emit('s1', [text(), started(), ended(), started()])).toThrow('consumer failed')
+    expect(observed).toHaveLength(4)
+    queued.emit('s1', [])
+    expect(observed).toHaveLength(4)
+  })
+
   it('sends the clients a shell result without its outputTail, and still feeds the commander mirror with it', () => {
     const sent: Array<{ payload: object }> = []
     const { funnel, deps } = setup('claude', { clients: { send: vi.fn((f: { payload: object }) => { sent.push(f) }) } as never })

@@ -104,6 +104,7 @@ import { probeTerminalAgents } from '../lib/terminalAgentDiscovery.js'
 import { RECONCILE_PASS_DEADLINE_MS, TerminalAgentReconciler } from '../lib/terminalAgentReconciler.js'
 import { Watcher } from '../watcher/watcher.js'
 import { startHookServer } from '../hookServer.js'
+import { createNativeHookOwnerReader } from '../engines/kit/nativeHookOwner.js'
 import { connectToMaster } from '../harnessd/coreLink.js'
 import { createTerminalOpener } from './terminals/open.js'
 import { createTerminalSessions } from './terminals/sessions.js'
@@ -1106,6 +1107,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // initialization immediately after the localhost server binds: events wait until it is armed below.
   const funnel = createEventFunnel({
     clients: backend,
+    onTurnStarted: normalizers.noteTurnStart,
     // Declared further down: read when a turn aborts, never now.
     agentIdFor: (sessionId) => agentIdFor(sessionId),
   })
@@ -1142,7 +1144,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const relaunchMarks = createRelaunchMarks()
   // Following a session: its history read into its engine's normalizer, then its tail
   // (core/transcripts/attach.ts).
+  let nativeRecoveryReady: (row: RegisteredSession) => boolean = () => false
+  let nativeTranscriptReady: (row: RegisteredSession) => boolean = () => false
   const attach = createAttach({
+    nativeRecoveryReady: row => nativeTranscriptReady(row),
     setInterpretationHold: registry.setInterpretationHold.bind(registry),
     announceSession,
     liveFor,
@@ -1823,7 +1828,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Agent Messages is told when its switch changes, wherever it runs: off, it reads it again only when told or its
     // file changes (messages/service.ts).
     onNotice: (listener) => experimentHooks.onNotice(listener), messagesChanged: () => ports.messages?.settingsChanged() })
-  const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
+  const nativeHookOwners = createNativeHookOwnerReader()
+  const { server: hookServer, port: hookPort, localSocket, startRecovery: recoverNativeHooks,
+    stopRecovery: stopNativeHooks, drainAndStopRecovery: drainNativeHooks, recoveryReady, transcriptReady } = await startHookServer(daemonPort(), {
     onAutonomousDeviceRequest: async (method, target, body) => {
       // Until the pieces below are built; after, a piece that could not be is refused by the requests
       // that need it, and the rest (list, status, revoke) answer from the pairings.
@@ -1853,8 +1860,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     resolveHookAgent: engineHooks.resolveHookAgent,
     hookAdmissionBlocked: id => launchCancelled(id),
     onAdmissionHeld: engineHooks.onAdmissionHeld,
+    readNativeHookOwner: nativeHookOwners,
+    captureNativeHookCaller: nativeHookOwners.captureCaller,
+    onNativeTranscriptReady: entry => { void attachSession(entry).catch(error => console.warn('[hooks] recovered attach held', error)) },
     onAdmissionStop: attach.holdAdmissionStop,
     captureAdmissionStop: attach.captureAdmissionStop,
+    captureTurnStop: (entry, body) => turnHooks.captureStop(entry, body, attach.captureAdmissionStop(entry)),
     onRegistered: handleRegistered,
     onSessionEnd: engineHooks.onSessionEnd,
     // What the engines' own hooks say about a turn (core/turns/turnHooks.ts).
@@ -1910,7 +1921,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onProductUsageRead: () => proxyBackend('GET', '/api/product-usage/settings'),
     onProductUsageWrite: (body) => proxyBackend('POST', '/api/product-usage/settings', body),
     onStore: (method, path, body) => proxyBackend(method, path, body),
-  }, { socketPath: localSocketPath(env.ADAPTER_DATA_DIR, env.PORT), allowPortFallback: true })
+  }, { socketPath: localSocketPath(env.ADAPTER_DATA_DIR, env.PORT), allowPortFallback: true, deferNativeRecovery: true })
+  nativeRecoveryReady = recoveryReady
+  nativeTranscriptReady = transcriptReady
   try { saveDaemonPort(env.ADAPTER_DATA_DIR, env.PORT, hookPort) } catch (error) {
     await localSocket?.close()
     hookServer.close()
@@ -2533,6 +2546,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.purgeProvider = createPurgeRequest({ purgeAgentService: () => lifecycle.purgeAgentService, invalidateStorage: () => { void (ports.monitor ?? MONITOR_OFF).storage([], true) } })
   // Closing agents no window shows, and the cleanup preview (core/agents/close.ts).
   const closing = createAgentClosing({
+    nativeRecoveryReady: row => nativeRecoveryReady(row),
     readScreen: screens.read,
     registry,
     cleanupTabs,
@@ -2640,7 +2654,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // stops being `bootHandoff` HERE, and not a line earlier: everything the teardown releases exists by now.
   // A straight-line assignment, never a wait: if the body never reaches this line the handler stays
   // `bootHandoff`, and the fix still lands.
-  const updateTeardown = (): TeardownStep[] => { heldLaunches.close(); installedHooks?.close(); externalResumes?.stop(); launches.stop(); return [
+  const updateTeardown = (): TeardownStep[] => { const nativeDrained = drainNativeHooks(); heldLaunches.close(); installedHooks?.close(); externalResumes?.stop(); launches.stop(); return [
+    ['the native hook receipts', () => nativeDrained],
     ['the registry', () => registry.flush({ exiting: true })], ['the updater', () => daemonBoot.updaterBeside?.()],
     ['the reconciler', () => agentReconciler.stop()],
     ['the timers', () => { clearInterval(logTrimTimer); clearInterval(runtimeReconcileTimer); clearInterval(paneTitleSyncTimer) }],
@@ -2677,6 +2692,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    *  which restarts any other exit (harnessd/protocol.ts). */
   const forGood = (reason: string): boolean => reason === 'revoked' || reason === 'busy'
   const shutdown = async (signal: string): Promise<void> => {
+    const nativeDrained = drainNativeHooks()
     heldLaunches.close()
     installedHooks?.close()
     externalResumes?.stop()
@@ -2693,9 +2709,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Mid-handoff everything below is already being torn down, and nothing has been started yet: leave
     // — a second teardown of closed servers is noise.
     if (updateHandoff.restarting()) {
+      stopNativeHooks()
       try { if (readPid() === process.pid) rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
       process.exit(0)
     }
+    deadline.at('the native hook receipts')
+    await nativeDrained
     // Release the serial port first. It is exclusive, and a daemon that exits still holding it makes
     // esptool fail in a way that reads exactly like dead hardware.
     void ports.devices?.stop()
@@ -2825,6 +2844,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   daemonBoot.openRequests = null
   coreLink.ready()
   console.log('[cli] ready')
+  recoverNativeHooks()
   // Each launch confirms its own hooks. Startup never waits on any vendor's disk or probe.
   installedHooks = env.DISABLE_HOOK_INSTALL ? undefined
     : installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })

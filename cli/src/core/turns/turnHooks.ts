@@ -24,8 +24,17 @@ import type { SessionNormalizers } from '../transcripts/normalizers.js'
 // only if the turn is still open after this grace + a re-poll do we force-close (by then the assistant
 // text is on disk, so the natural close usually wins and the recap isn't empty).
 export const STOP_HOOK_GRACE_MS = 1_500
+export const STOP_COMPLETION_WAIT_MS = 5_000
 /** How many sessions' latest prompt hooks are remembered. */
 const PROMPT_HOOKS_KEPT = 512
+
+export type CapturedStopOutcome = 'completed' | 'superseded' | 'held'
+export interface StopExecution { current(): boolean; verify(): void; confirm?(): Promise<void> }
+export type CapturedStop = ((execution?: StopExecution) => Promise<CapturedStopOutcome>) & {
+  /** Preparation can retry only after its actual work settled without entering a Stop effect. */
+  retryable?(): boolean
+}
+export interface StopHook { sessionId: string; status?: string; firedAt?: number }
 
 export interface TurnHookDeps {
   holdStop?: (session: RegisteredSession, force?: boolean) => boolean
@@ -89,6 +98,198 @@ export function createTurnHooks({
   }
   const onToolStart = ({ sessionId, toolUseId, toolName, input: toolInput }: { sessionId: string; toolUseId: string; toolName: string; input: unknown }): void => {
     if (toolName === 'Task') onCursorTaskStart(sessionId, toolUseId, toolInput)
+  }
+  /** A legacy Claude notification can arrive while registration is still pending.
+   * Keep its arrival's parser and turn, including a proved no-open-turn observation,
+   * through that wait. A later attachment is never this notification's target. */
+  const captureDeclaredStop = (session: RegisteredSession, stop: StopHook, notCancelled: () => boolean): CapturedStop => {
+    const { sessionId, firedAt } = stop
+    const original = liveParsers.get(sessionId), arrived = original?.snapshot(), turn = normalizers.captureTurn(sessionId)
+    const noEffect = !arrived?.turnOpen && !session.identityHold && !session.interpretationHold
+    const binding = JSON.stringify([session.agentId, sessionId, session.engine])
+    const interpretation = JSON.stringify([session.transcriptPath, session.evidenceRevision])
+    type Attempt = { execution: StopExecution; deadline: number; revoked: boolean; settled: boolean; dispatched: boolean;
+      outcome?: CapturedStopOutcome; completion?: Promise<CapturedStopOutcome> }
+    let attempt: Attempt | undefined
+    const state = (work?: Attempt): 'current' | 'held' | 'superseded' => {
+      if (!notCancelled() || turn && !turn()) return 'superseded'
+      const latest = resolve(sessionId)
+      if (!latest || JSON.stringify([latest.agentId, latest.sessionId, latest.engine]) !== binding
+        || firedAt !== undefined && (promptFiredAt.get(sessionId) ?? 0) > firedAt) return 'superseded'
+      if (work && (work.revoked || !work.execution.current() || performance.now() >= work.deadline)) return 'held'
+      if (noEffect) return 'current'
+      if (!original || !arrived || liveParsers.get(sessionId) !== original
+        || latest.identityHold || latest.interpretationHold
+        || JSON.stringify([latest.transcriptPath, latest.evidenceRevision]) !== interpretation) return 'held'
+      return original.snapshot().identity === arrived.identity ? 'current' : 'superseded'
+    }
+    const confirmed = (work: Attempt): boolean => {
+      if (state(work) !== 'current') return false
+      work.execution.verify()
+      return state(work) === 'current'
+    }
+    const complete = (work: Attempt): Promise<CapturedStopOutcome> => {
+      if (noEffect) { work.settled = true; return Promise.resolve('completed') }
+      const context: HookTurnContext = { ...hookTurns,
+        turnState: id => id === sessionId && state(work) === 'current' ? original!.snapshot() : undefined,
+        closeTurn: (id, identity) => {
+          if (id !== sessionId || !confirmed(work)) return false
+          work.dispatched = true
+          return hookTurns.closeTurn(id, identity)
+        },
+        noteEngineStopped: id => {
+          if (id === sessionId && confirmed(work)) { work.dispatched = true; mirror.noteEngineStopped(id) }
+        },
+        emit: (id, events) => {
+          if (id === sessionId && confirmed(work)) { work.dispatched = true; emit(id, events) }
+        },
+        drain: async id => { await drain(id); if (state(work) === 'current') await work.execution.confirm?.() },
+      }
+      const actual = Promise.resolve().then(() => hooksFor(session.engine)!.onStop!(context, stop))
+      // A logical timeout revokes this attempt immediately. Its actual reader
+      // still owns the slot until settlement; a retry never revives old callbacks.
+      return new Promise<CapturedStopOutcome>((resolve) => {
+        let done = false, timer: ReturnType<typeof setTimeout> | undefined
+        const finish = (outcome: CapturedStopOutcome) => {
+          if (done) return
+          done = true; work.revoked = true; clearTimeout(timer); resolve(outcome)
+        }
+        actual.then(() => {
+          work.settled = true
+          const value = state(work); finish(value === 'current' ? 'completed' : value)
+        }, () => { work.settled = true; finish(state(work) === 'superseded' ? 'superseded' : 'held') })
+        const check = () => {
+          const value = state(work)
+          if (value !== 'current') { finish(value); return }
+          timer = setTimeout(check, 25)
+        }
+        check()
+      })
+    }
+    const retryable = () => !attempt || attempt.settled && !attempt.dispatched && attempt.outcome === 'held'
+    return Object.assign((owner?: StopExecution) => {
+      if (state() === 'superseded') return Promise.resolve('superseded' as const)
+      if (attempt && !retryable()) return attempt.completion!
+      const work: Attempt = { execution: owner ?? { current: () => true, verify: () => {} },
+        deadline: Infinity, revoked: false, settled: false, dispatched: false }
+      // A failed read/confirmation is preparation, not a dispatched Stop. Once
+      // settled it may retry with fresh proof, on this exact original turn only.
+      try {
+        if (!confirmed(work)) return Promise.resolve(state(work) === 'superseded' ? 'superseded' as const : 'held' as const)
+      } catch { return Promise.resolve(state(work) === 'superseded' ? 'superseded' as const : 'held' as const) }
+      work.deadline = performance.now() + STOP_COMPLETION_WAIT_MS
+      attempt = work
+      return work.completion = complete(work).then(outcome => { work.outcome = outcome; return outcome })
+    }, { retryable })
+  }
+  /** A registration already carries Cursor/Command Code's complete Stop. Capture its turn before
+   *  admission waits, and let the registration's durable claim await this exact effect. A recovered
+   *  parser is not evidence about which turn that original Stop meant to close. */
+  const captureStop = (session: RegisteredSession, stop: StopHook, notCancelled: () => boolean): CapturedStop => {
+    if (session.engine === 'claude') return captureDeclaredStop(session, stop, notCancelled)
+    const { sessionId, status } = stop
+    const states = session.engine === 'cursor' ? cursorNormalizers : commandcodeNormalizers
+    const original = states.get(sessionId)
+    const turn = normalizers.captureTurn(sessionId)
+    const tasks = session.engine === 'cursor' ? cursorNormalizers.get(sessionId)?.pendingTaskIds() : undefined
+    let execution: StopExecution = { current: () => true, verify: () => {} }
+    let revoked = false, deadline = Infinity
+    const binding = JSON.stringify([session.agentId, sessionId, session.engine])
+    const interpretation = JSON.stringify([session.transcriptPath, session.evidenceRevision, session.identityHold, session.interpretationHold])
+    const state = (): 'current' | 'superseded' | 'held' => {
+      if (!notCancelled()) return 'superseded'
+      if (!execution.current()) return 'held'
+      const latest = resolve(sessionId)
+      if (!latest || JSON.stringify([latest.agentId, latest.sessionId, latest.engine]) !== binding) return 'superseded'
+      if (!original || !turn || states.get(sessionId) !== original) return 'held'
+      if (!turn()) return 'superseded'
+      if (performance.now() >= deadline) revoked = true
+      if (revoked) return 'held'
+      if (latest.identityHold || latest.interpretationHold || interpretation !== JSON.stringify([
+        latest.transcriptPath, latest.evidenceRevision, latest.identityHold, latest.interpretationHold,
+      ])) return 'held'
+      return 'current'
+    }
+    const hold = (): CapturedStopOutcome => {
+      if (state() === 'superseded') return 'superseded'
+      if (!execution.current()) return 'held'
+      // state() just proved this binding synchronously; no reader or callback intervenes.
+      holdStop?.(resolve(sessionId)!, true)
+      return 'held'
+    }
+    let completion: Promise<CapturedStopOutcome> | undefined
+    const complete = async (): Promise<CapturedStopOutcome> => {
+      deadline = performance.now() + STOP_COMPLETION_WAIT_MS
+      // Bound the logical wait even if the underlying reader never settles. Cancel and shutdown
+      // revoke the continuation; the original Promise is observed, never restarted on an admission retry.
+      const wait = (work: Promise<unknown>): Promise<'current' | 'superseded' | 'held'> => new Promise((resolve, reject) => {
+        let done = false, timer: ReturnType<typeof setTimeout> | undefined
+        const finish = (result: 'current' | 'superseded' | 'held') => {
+          if (done) return
+          done = true; clearTimeout(timer); resolve(result)
+        }
+        work.then(() => finish(state()), error => { if (!done) { done = true; clearTimeout(timer); reject(error) } })
+        const check = () => {
+          const authority = state()
+          if (authority !== 'current') { finish(authority); return }
+          timer = setTimeout(check, 25)
+        }
+        check()
+      })
+      try {
+        let authority = state()
+        if (authority !== 'current') return authority === 'held' ? hold() : authority
+        if (session.engine === 'cursor') {
+          authority = await wait(cursorTaskHooks.wait(sessionId))
+          if (authority !== 'current') return authority === 'held' ? hold() : authority
+        }
+        authority = await wait(drain(sessionId))
+        if (authority !== 'current') return authority === 'held' ? hold() : authority
+        execution.verify()
+        authority = state()
+        if (authority !== 'current') return authority === 'held' ? hold() : authority
+        if (session.engine === 'cursor') {
+          // These exact task IDs belong to the completed turn even after registration rebuilds its
+          // parser. A successor's IDs are never selected; shutdown still revokes every continuation.
+          const current = () => execution.current()
+          cursorSubagents.closeParent(sessionId, status === 'error', current, tasks)
+          const closing = cursorNormalizers.get(sessionId)!.closeTurn()
+          afterStop?.(session)
+          emit(sessionId, closing)
+          if (status === 'error' && closing.length === 0) {
+            announceTurnAborted(sessionId, 'cursor', 'Cursor ended the turn with an error before producing any output')
+          }
+          // Finish file cleanup before the admission receipt can release recovery attachment, which
+          // would otherwise replay those original tasks into the replacement parser.
+          authority = await wait(removePendingCursorTasks(dataDir, sessionId, current, tasks))
+          if (authority !== 'current') return authority === 'held' ? hold() : authority
+        } else if (original!.turnOpen) {
+          authority = await wait(new Promise(resolve => setTimeout(resolve, STOP_HOOK_GRACE_MS)))
+          if (authority !== 'current') return authority === 'held' ? hold() : authority
+          authority = await wait(drain(sessionId))
+          if (authority !== 'current') return authority === 'held' ? hold() : authority
+          execution.verify()
+          authority = state()
+          if (authority !== 'current') return authority === 'held' ? hold() : authority
+          if (original!.turnOpen) {
+            original!.closeTurn()
+            afterStop?.(session)
+            emit(sessionId, [{ type: 'turn_ended', payload: {} }])
+          }
+        }
+        return 'completed'
+      } catch (error) {
+        if (state() === 'superseded') return 'superseded'
+        console.warn(`[hooks] ${session.engine} Stop outcome held:`, error)
+        return hold()
+      }
+    }
+    return (owner) => {
+      // Cancel can resolve an uncertain Stop, but persistence retries must never repeat its effect.
+      if (completion) return state() === 'superseded' ? Promise.resolve('superseded') : completion
+      if (owner) execution = owner
+      return completion = complete()
+    }
   }
   const onTurnStop = ({ sessionId, status, firedAt }: { sessionId: string; status?: string; firedAt?: number }): void => {
     const session = resolve(sessionId)
@@ -279,5 +480,5 @@ export function createTurnHooks({
       return
     }
   }
-  return { onTurnStart, onToolStart, onTurnStop, onPromptHook }
+  return { onTurnStart, onToolStart, onTurnStop, onPromptHook, captureStop }
 }

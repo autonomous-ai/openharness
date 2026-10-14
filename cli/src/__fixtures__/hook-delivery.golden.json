@@ -1,0 +1,434 @@
+{
+  "linux:first-start": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "linux:duplicate-start": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "linux:first-prompt": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "linux:duplicate-prompt": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "linux:changed-payload": {
+    "status": 409,
+    "body": {
+      "pending": false,
+      "error": "HOOK_DELIVERY_CONFLICT"
+    }
+  },
+  "linux:changed-native-time": {
+    "status": 409,
+    "body": {
+      "pending": false,
+      "error": "HOOK_DELIVERY_CONFLICT"
+    }
+  },
+  "linux:distinct-prompt": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "linux:codex-start": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "linux:codex-prompt": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "linux:codex-duplicate": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "linux:delegated": {
+    "status": 200,
+    "body": {
+      "ignored": true,
+      "reason": "codex_subagent"
+    }
+  },
+  "linux:delegated-duplicate": {
+    "status": 200,
+    "body": {
+      "ignored": true,
+      "reason": "codex_subagent"
+    }
+  },
+  "linux:legacy-start": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "linux:callbacks": {
+    "registered": [
+      {
+        "row": {
+          "agent": "claude",
+          "engine": "claude",
+          "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+          "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+          "source": "fixture"
+        },
+        "isNew": true,
+        "evicted": null,
+        "rebound": null,
+        "orphaned": null,
+        "hookEvent": "SessionStart"
+      },
+      {
+        "row": {
+          "agent": "claude",
+          "engine": "claude",
+          "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+          "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+          "source": "fixture"
+        },
+        "isNew": false,
+        "evicted": null,
+        "rebound": null,
+        "orphaned": null,
+        "hookEvent": "UserPromptSubmit"
+      },
+      {
+        "row": {
+          "agent": "claude",
+          "engine": "claude",
+          "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+          "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+          "source": "fixture"
+        },
+        "isNew": false,
+        "evicted": null,
+        "rebound": null,
+        "orphaned": null,
+        "hookEvent": "UserPromptSubmit"
+      },
+      {
+        "row": {
+          "agent": "codex",
+          "engine": "codex",
+          "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+          "transcript": "<root>/CODEX_HOME/sessions/rollout-bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+          "source": "fixture"
+        },
+        "isNew": true,
+        "evicted": null,
+        "rebound": null,
+        "orphaned": null,
+        "hookEvent": "SessionStart"
+      },
+      {
+        "row": {
+          "agent": "codex",
+          "engine": "codex",
+          "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+          "transcript": "<root>/CODEX_HOME/sessions/rollout-bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+          "source": "fixture"
+        },
+        "isNew": false,
+        "evicted": null,
+        "rebound": null,
+        "orphaned": null,
+        "hookEvent": "UserPromptSubmit"
+      },
+      {
+        "row": {
+          "agent": "claude",
+          "engine": "claude",
+          "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+          "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+          "source": "fixture"
+        },
+        "isNew": false,
+        "evicted": null,
+        "rebound": null,
+        "orphaned": null,
+        "hookEvent": "SessionStart"
+      }
+    ],
+    "prompts": [
+      {
+        "agent": "claude",
+        "prompt": "one native prompt"
+      },
+      {
+        "agent": "claude",
+        "prompt": "one native prompt"
+      },
+      {
+        "agent": "codex",
+        "prompt": "one Codex prompt"
+      }
+    ],
+    "promptHooks": [
+      {
+        "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+        "firedAt": 1791590400123
+      },
+      {
+        "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+        "firedAt": 1791590400223
+      },
+      {
+        "sessionId": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+        "firedAt": 1791590400123
+      }
+    ],
+    "turns": [],
+    "ends": []
+  },
+  "linux:bindings": [
+    {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "source": "fixture"
+    },
+    {
+      "agent": "codex",
+      "engine": "codex",
+      "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "transcript": "<root>/CODEX_HOME/sessions/rollout-bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+      "source": "fixture"
+    }
+  ],
+  "darwin:first-start": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "darwin:duplicate-start": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "darwin:first-prompt": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "darwin:duplicate-prompt": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "darwin:changed-payload": {
+    "status": 409,
+    "body": {
+      "pending": false,
+      "error": "HOOK_DELIVERY_CONFLICT"
+    }
+  },
+  "darwin:changed-native-time": {
+    "status": 409,
+    "body": {
+      "pending": false,
+      "error": "HOOK_DELIVERY_CONFLICT"
+    }
+  },
+  "darwin:distinct-prompt": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "darwin:codex-start": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "darwin:codex-prompt": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "darwin:codex-duplicate": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "darwin:delegated": {
+    "status": 200,
+    "body": {
+      "ignored": true,
+      "reason": "codex_subagent"
+    }
+  },
+  "darwin:delegated-duplicate": {
+    "status": 200,
+    "body": {
+      "ignored": true,
+      "reason": "codex_subagent"
+    }
+  },
+  "darwin:legacy-start": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "darwin:callbacks": {
+    "registered": [
+      {
+        "row": {
+          "agent": "claude",
+          "engine": "claude",
+          "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+          "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+          "source": "fixture"
+        },
+        "isNew": true,
+        "evicted": null,
+        "rebound": null,
+        "orphaned": null,
+        "hookEvent": "SessionStart"
+      },
+      {
+        "row": {
+          "agent": "claude",
+          "engine": "claude",
+          "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+          "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+          "source": "fixture"
+        },
+        "isNew": false,
+        "evicted": null,
+        "rebound": null,
+        "orphaned": null,
+        "hookEvent": "UserPromptSubmit"
+      },
+      {
+        "row": {
+          "agent": "claude",
+          "engine": "claude",
+          "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+          "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+          "source": "fixture"
+        },
+        "isNew": false,
+        "evicted": null,
+        "rebound": null,
+        "orphaned": null,
+        "hookEvent": "UserPromptSubmit"
+      },
+      {
+        "row": {
+          "agent": "codex",
+          "engine": "codex",
+          "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+          "transcript": "<root>/CODEX_HOME/sessions/rollout-bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+          "source": "fixture"
+        },
+        "isNew": true,
+        "evicted": null,
+        "rebound": null,
+        "orphaned": null,
+        "hookEvent": "SessionStart"
+      },
+      {
+        "row": {
+          "agent": "codex",
+          "engine": "codex",
+          "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+          "transcript": "<root>/CODEX_HOME/sessions/rollout-bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+          "source": "fixture"
+        },
+        "isNew": false,
+        "evicted": null,
+        "rebound": null,
+        "orphaned": null,
+        "hookEvent": "UserPromptSubmit"
+      },
+      {
+        "row": {
+          "agent": "claude",
+          "engine": "claude",
+          "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+          "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+          "source": "fixture"
+        },
+        "isNew": false,
+        "evicted": null,
+        "rebound": null,
+        "orphaned": null,
+        "hookEvent": "SessionStart"
+      }
+    ],
+    "prompts": [
+      {
+        "agent": "claude",
+        "prompt": "one native prompt"
+      },
+      {
+        "agent": "claude",
+        "prompt": "one native prompt"
+      },
+      {
+        "agent": "codex",
+        "prompt": "one Codex prompt"
+      }
+    ],
+    "promptHooks": [
+      {
+        "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+        "firedAt": 1791590400123
+      },
+      {
+        "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+        "firedAt": 1791590400223
+      },
+      {
+        "sessionId": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+        "firedAt": 1791590400123
+      }
+    ],
+    "turns": [],
+    "ends": []
+  },
+  "darwin:bindings": [
+    {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "source": "fixture"
+    },
+    {
+      "agent": "codex",
+      "engine": "codex",
+      "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "transcript": "<root>/CODEX_HOME/sessions/rollout-bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+      "source": "fixture"
+    }
+  ]
+}

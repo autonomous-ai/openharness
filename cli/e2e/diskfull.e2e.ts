@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
+import { confirmInitialNativeHook } from './harness/nativeHooks.js'
 
 const ON = process.env.DISKFULL === '1' && process.platform === 'darwin'
 
@@ -175,6 +176,7 @@ describe.skipIf(!ON)('a full disk', () => {
       const now = await row(client, created.agent.id)
       return now?.sessionId && now.status === 'active' ? now : null
     }, 60_000, 500)
+    await confirmInitialNativeHook(d, { id: agent.id, engine: agent.engine, sessionId: agent.sessionId })
     expect(existsSync(join(data, 'orchestrator')), 'no turn has asked the orchestrator yet').toBe(false)
     const filler = fill(volume)
     try {
