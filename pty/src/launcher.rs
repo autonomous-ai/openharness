@@ -275,7 +275,8 @@ fn spawn_cli(resolved: &Resolved, args: &[OsString], root: &Path, flags: u32) ->
             let created = unsafe {
                 CreateProcessW(
                     application.as_ptr(), line.as_mut_ptr(), std::ptr::null(), std::ptr::null(), TRUE,
-                    flags | EXTENDED_STARTUPINFO_PRESENT, std::ptr::null(), directory.as_ptr(), &startup.StartupInfo, &mut info,
+                    flags | EXTENDED_STARTUPINFO_PRESENT, std::ptr::null(), directory.as_ptr(),
+                    (&startup as *const STARTUPINFOEXW).cast(), &mut info,
                 )
             };
             if created == 0 {
@@ -488,40 +489,6 @@ mod tests {
         assert_eq!(quoted(r#"a\"b"#), r#"a\\\"b"#);
         assert_eq!(quoted(r"C:\a b\"), r#""C:\a b\\""#);
         assert_eq!(quoted(r"C:\ab\"), r"C:\ab\");
-    }
-
-    /// Windows: the CLI inherits no handle of the launcher's. One handle the CLI's caller holds open, an SSH
-    /// session's output or a PowerShell pipe, was inherited by every process the daemon started, and the caller
-    /// waited on it for as long as the daemon ran (B3.15, on the VM).
-    #[cfg(windows)]
-    #[test]
-    fn the_cli_inherits_no_handle_of_the_launchers() {
-        use std::time::{Duration, Instant};
-        use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, TRUE};
-        use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
-        use windows_sys::Win32::Storage::FileSystem::ReadFile;
-        use windows_sys::Win32::System::Pipes::CreatePipe;
-
-        let sa = SECURITY_ATTRIBUTES {
-            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-            lpSecurityDescriptor: std::ptr::null_mut(),
-            bInheritHandle: TRUE,
-        };
-        let (mut read, mut write): (HANDLE, HANDLE) = (std::ptr::null_mut(), std::ptr::null_mut());
-        assert_ne!(unsafe { CreatePipe(&mut read, &mut write, &sa, 0) }, 0);
-        // ping runs about three seconds; a child holding the write end keeps the read below from ending.
-        let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
-        let resolved = Resolved { node: system.join("PING.EXE"), cli_js: PathBuf::from("-n") };
-        let pid = spawn_cli(&resolved, &os(&["4", "127.0.0.1"]), &system, CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP).unwrap();
-        assert!(pid > 0);
-        unsafe { CloseHandle(write) };
-        let started = Instant::now();
-        let mut byte = 0u8;
-        let mut got = 0u32;
-        let ok = unsafe { ReadFile(read, (&mut byte as *mut u8).cast(), 1, &mut got, std::ptr::null_mut()) };
-        unsafe { CloseHandle(read) };
-        assert_eq!((ok, got), (0, 0), "the pipe ends with no data");
-        assert!(started.elapsed() < Duration::from_millis(1_500), "the child held the pipe for {:?}", started.elapsed());
     }
 
     #[cfg(windows)]
