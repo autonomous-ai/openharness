@@ -24,6 +24,27 @@ export function daemonStopHandler(deps: DaemonStopDeps): () => Promise<DaemonSto
   }
 }
 
+export interface EarlyLeaveDeps {
+  /** Let go of the pid file if it names this process (lib/daemonLaunch.ts `removePidFileIf`). */
+  removePidFile(): void
+  log(line: string): void
+  exit(code: number): void
+}
+
+/**
+ * A core's own stop before its start-up has built `shutdown`: the route is served from the moment the hook server is
+ * bound, and in safe mode after a start-up that never got as far. Nothing has been started that needs stopping in
+ * order, so the process leaves. core/main.ts holds it in `daemonBoot.stopHere` until `runForeground`, and then
+ * safe mode, put their own in.
+ */
+export function leaveBeforeStartUp(deps: EarlyLeaveDeps): (why: string) => void {
+  return (why) => {
+    deps.removePidFile()
+    deps.log(`[cli] ${why} — leaving before start-up finished`)
+    deps.exit(0)
+  }
+}
+
 /**
  * The handler for the server's handlers object, on Windows only. Elsewhere `harness stop` signals the master (the
  * pid file), and the core serves no such route: hookServer.ts registers it only when the handler is given.

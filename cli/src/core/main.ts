@@ -109,7 +109,7 @@ import { RECONCILE_PASS_DEADLINE_MS, TerminalAgentReconciler } from '../lib/term
 import { Watcher } from '../watcher/watcher.js'
 import { startHookServer } from '../hookServer.js'
 import { connectToMaster } from '../harnessd/coreLink.js'
-import { daemonStopRoute } from './daemonStopRoute.js'
+import { daemonStopRoute, leaveBeforeStartUp } from './daemonStopRoute.js'
 import { createTerminalOpener } from './terminals/open.js'
 import { createTerminalSessions } from './terminals/sessions.js'
 import { checkPidRuntime } from '../lib/deleteAgentFallback.js'
@@ -361,7 +361,16 @@ const daemonBoot: {
   applyStagedUpdate: (version: string) => void | Promise<void>
   /** Opens the request gate of a start-up that did not finish, so its clients are answered (safe mode). */
   openRequests: (() => void) | null
-} = { updaterBeside: null, hookServer: null, localSocket: null, markNotReady: null, safeMode: null, handingOff: false, applyStagedUpdate: bootHandoff, openRequests: null }
+  /**
+   * This core's own stop, for `harness stop` on Windows when no master runs it (core/daemonStopRoute.ts). The route
+   * is served from the moment the hook server is bound, so it is held here: until `runForeground` has built its
+   * `shutdown` it leaves at once, then it is `shutdown`, and in safe mode, safe mode's `leave`.
+   */
+  stopHere: (why: string) => void
+} = {
+  updaterBeside: null, hookServer: null, localSocket: null, markNotReady: null, safeMode: null, handingOff: false, applyStagedUpdate: bootHandoff, openRequests: null,
+  stopHere: leaveBeforeStartUp({ removePidFile: () => { removePidFileIf(process.pid) }, log: (line) => console.log(line), exit: (code) => process.exit(code) }),
+}
 
 /**
  * Hand the machine to a newer build without finishing start-up: the master asked (its updater staged one),
@@ -1919,7 +1928,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onMachineDelete: (machineId) => proxyBackend('DELETE', `/api/machines/${encodeURIComponent(machineId)}`),
     onAuthMe: () => proxyBackend('GET', '/api/auth/me'),
     onAuthHandoff: () => proxyBackend('POST', '/api/auth/handoff', {}),
-    ...daemonStopRoute({ askMaster: () => coreLink.stopAll(), stopHere: () => void shutdown('harness stop') }),
+    ...daemonStopRoute({ askMaster: () => coreLink.stopAll(), stopHere: () => daemonBoot.stopHere('harness stop') }),
     // Signed out there is nothing shared WITH this computer and nobody to ask: a share is made on the
     // account. Answered as an empty list rather than proxied into the backend's 401, which is the one
     // status the desktop app reads as "your session ended" — and a guest has no session to end.
@@ -2777,6 +2786,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await backend.stop()
     leave()
   }
+  daemonBoot.stopHere = (why) => void shutdown(why)
   process.on('SIGINT', () => void shutdown('SIGINT'))
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
   // A core whose master is gone stops, so nothing is left holding the port for a master that is not
@@ -2892,7 +2902,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
  * Three ways it earns its keep, in order: the bound control port answers `discoveryReady: false`, so
  * the app reads the machine as not-ready instead of dead and STOPS respawning; the pid file stays
  * ours, so `harness start` is a cheap no-op rather than a zombie factory; and the marker file lets
- * `harness status` say what happened. `harness stop` still works throughout — it kills by pid.
+ * `harness status` say what happened. `harness stop` still works throughout: by signal on a Mac or Linux; on Windows
+ * over its pipe (`daemonBoot.stopHere`, or its master's `harnessd:shutdown`), then by verified pid (lib/daemonStop.ts).
  */
 const enterSafeMode = (err: unknown): void => {
   const disposition = safeModeDisposition(err, { selfPid: process.pid, masterPid: coreLink.masterPid, readPid, isAlive })
@@ -2921,6 +2932,8 @@ const enterSafeMode = (err: unknown): void => {
   }
   process.on('SIGINT', () => leave('SIGINT — leaving safe mode', 0))
   process.on('SIGTERM', () => leave('SIGTERM — leaving safe mode', 0))
+  // `harness stop` on Windows, for a core no master runs: safe mode's own leave, which clears its marker too.
+  daemonBoot.stopHere = (why) => leave(`${why} — leaving safe mode`, 0)
   // Up, though not ready: the master must neither give up waiting for a bind nor take it for hung, or the
   // fix its updater stages would find no core to hand over. It hears why, and rolls back an
   // update whose first core ends up here.

@@ -204,6 +204,24 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     expect(referencedIn(teardown.text)).toEqual(expect.arrayContaining(['registry', 'hookServer', 'localWsServer', 'backend', 'watcher']))
   })
 
+  it('harness stop reaches a stop that exists at every point of a core\'s life', () => {
+    // A core no master runs stops itself (core/daemonStopRoute.ts). The route is served once the hook server is
+    // bound, long before `shutdown` is declared, and in safe mode after a start-up that never got that far: a
+    // closure over `shutdown` then threw in its temporal dead zone, after the 202, and the core kept running.
+    const source = code(SOURCE)
+    const route = callArguments(source, '...daemonStopRoute(')
+    expect(route.text, 'the route goes through the holder, not a local of runForeground').toContain('daemonBoot.stopHere(')
+    expect(route.text).not.toMatch(/\bshutdown\(/)
+    expect(source, 'the holder starts as a stop that needs nothing of start-up').toMatch(/stopHere: leaveBeforeStartUp\(/)
+    const shutdownAt = localsOf(source).get('shutdown') ?? -1
+    expect(shutdownAt, 'runForeground still declares shutdown').toBeGreaterThan(-1)
+    const handed = source.indexOf('daemonBoot.stopHere = (why) => void shutdown(why)')
+    expect(handed, 'runForeground hands the holder its shutdown, once it exists').toBeGreaterThan(shutdownAt)
+    const safeMode = source.indexOf('const enterSafeMode = ')
+    const safeModeBody = source.slice(safeMode, source.indexOf('\n}\n', safeMode))
+    expect(safeModeBody, 'safe mode hands the holder its own leave').toMatch(/daemonBoot\.stopHere = \(why\) => leave\(/)
+  })
+
   it('the daemon arm survives its own start-up failure', () => {
     // The whole arm, to its break: a fixed window read past it as the arm grew a line (the stall fault).
     const cli = code(CLI_SOURCE)

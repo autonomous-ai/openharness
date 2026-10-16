@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { daemonStopHandler, daemonStopRoute } from './daemonStopRoute.js'
+import { daemonStopHandler, daemonStopRoute, leaveBeforeStartUp } from './daemonStopRoute.js'
 
 describe('harness stop, as the core hears it', () => {
   it('answers first, then asks its master to stop everything', async () => {
@@ -28,5 +28,17 @@ describe('harness stop, as the core hears it', () => {
     expect(daemonStopRoute(deps, 'linux')).toEqual({})
     expect(daemonStopRoute(deps, 'win32').onDaemonStop).toBeTypeOf('function')
     expect(Object.keys(daemonStopRoute(deps))).toEqual(process.platform === 'win32' ? ['onDaemonStop'] : [])
+  })
+
+  it('a core stopped before its start-up built its own stop lets go of its pid file and leaves', () => {
+    // A core no master runs, stopped while it starts or in safe mode after an early failure: no `shutdown` yet.
+    const said: string[] = []
+    const stopHere = leaveBeforeStartUp({
+      removePidFile: () => said.push('pid file'),
+      log: (line) => said.push(line),
+      exit: (code) => said.push(`exit ${code}`),
+    })
+    stopHere('harness stop')
+    expect(said).toEqual(['pid file', '[cli] harness stop — leaving before start-up finished', 'exit 0'])
   })
 })
