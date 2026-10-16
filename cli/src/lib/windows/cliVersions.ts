@@ -151,6 +151,7 @@ export async function retireUnused(
     .map((line) => line.toLowerCase().replace(/\//g, '\\'))
   const removed: string[] = []
   for (const name of candidates) {
+    // By text: a path spelled as the launcher spelled it matches; one through an 8.3 short name, a junction or subst does not.
     const folder = `${join(cliDir, name).toLowerCase().replace(/\//g, '\\')}\\`
     if (lines.some((line) => line.includes(folder))) continue
     try {
