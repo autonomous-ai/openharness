@@ -196,8 +196,12 @@ export class AgentTokenUsageCache {
     const key = cacheKeyFor(target)
     const entry = key && this.entries.get(key)
     if (!entry) throw new Error('Usage reader is unavailable')
-    if (!entry.pending) this.schedule(keyFor(target)!, entry)
-    await this.settled()
+    // A change that lands mid-refresh leaves a dirty re-run behind it; wait that out too (bounded).
+    for (let pass = 0; pass < 3; pass++) {
+      if (pass === 0 || entry.dirty) this.schedule(keyFor(target)!, entry)
+      await this.settled()
+      if (!entry.dirty && !entry.pending) break
+    }
     if (!entry.readable) throw new Error('Usage source is unavailable')
     return entry.value
   }

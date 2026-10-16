@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs'
 import { appendFile, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -43,6 +44,37 @@ describe('owning-machine token cache', () => {
     await expect(worker.read(database)).rejects.toThrow('unavailable')
     worker.dispose(); release(); await worker.settled()
     await expect(worker.read({ ...database, agentId: 'agent-0', sessionId: 'session-0' })).rejects.toThrow('disposed')
+  })
+
+  it('read() includes lines appended while a refresh is in flight', async () => {
+    await writeFile(target.transcriptPath!, claude('one'))
+    let racing: AgentTokenUsageCache
+    let armed = false
+    racing = new AgentTokenUsageCache(join(dir, 'race'), { now: () => now, onRead: () => {
+      if (!armed) return
+      armed = false                                  // mid-refresh: a new line lands and a change event arrives
+      appendFileSync(target.transcriptPath!, claude('two'))
+      now += 20_000
+      racing.changed(target)
+    } })
+    armed = true
+    try { expect((await racing.read(target))?.totalTokens).toBe(420) } finally { racing.dispose() }
+  })
+
+  it('read() includes a line appended mid-refresh even with no change event and a frozen clock', async () => {
+    await writeFile(target.transcriptPath!, claude('one'))
+    let armed = true
+    let started!: () => void
+    const midRefresh = new Promise<void>(done => { started = done })
+    const racing: AgentTokenUsageCache = new AgentTokenUsageCache(join(dir, 'race2'), { now: () => now, onRead: () => {
+      if (!armed) return
+      armed = false
+      appendFileSync(target.transcriptPath!, claude('two'))
+      started()
+    } })
+    racing.get(target)                               // a refresh is under way; the line lands after it began
+    await midRefresh
+    try { expect((await racing.read(target))?.totalTokens).toBe(420) } finally { racing.dispose() }
   })
 
   it('coalesces activity bursts, captures their final usage, and does not poll idle harnesses', async () => {
