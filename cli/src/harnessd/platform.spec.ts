@@ -639,6 +639,11 @@ describe('PlatformService over schtasks', () => {
     expect(absent.calls).toEqual([`schtasks /Query /TN ${NAME} /XML`])
     const refused = make({ 'schtasks /Query': ok('<Task/>'), 'schtasks /Delete': fail(1, 'ERROR: Access is denied.') })
     expect(refused.service.unregister()).toEqual({ ok: false, detail: `schtasks /Delete /TN ${NAME} /F failed (exit 1): ERROR: Access is denied.` })
+    // schtasks could not be asked (gone, or past its timeout): the task may still be there, so nothing is removed.
+    const unknown = make({ 'schtasks /Query': { status: null, stdout: '', stderr: '', error: 'spawnSync schtasks ETIMEDOUT' } }, { [join(data, 'harnessd-task.xml')]: 'x' })
+    expect(unknown.service.unregister()).toEqual({ ok: false, detail: `schtasks /Query /TN ${NAME} /XML could not be run: spawnSync schtasks ETIMEDOUT` })
+    expect(unknown.files).toEqual({ [join(data, 'harnessd-task.xml')]: 'x' })
+    expect(unknown.calls).toEqual([`schtasks /Query /TN ${NAME} /XML`])
     const discarded = make({}, { [join(data, 'harnessd-task.xml')]: 'x' })
     discarded.service.discard()
     expect(discarded.files).toEqual({})

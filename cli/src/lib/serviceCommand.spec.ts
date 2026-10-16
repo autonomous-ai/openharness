@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { OS_SYSTEMD_UNIT, OS_UNIT_FILE, PlatformService, SYSTEMD_UNIT, defaultPlatformDeps, type PlatformName } from '../harnessd/platform.js'
+import { OS_SYSTEMD_UNIT, OS_UNIT_FILE, PlatformService, SYSTEMD_UNIT, defaultPlatformDeps, taskName, type CommandResult, type PlatformName } from '../harnessd/platform.js'
 import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
 import { serviceDefinition } from './platformDaemon.js'
 import { SERVICE_USAGE, serviceCommand, serviceCommandDeps, type ServiceCommandDeps } from './serviceCommand.js'
@@ -82,8 +82,8 @@ describe('harness service', () => {
       await expect(serviceCommand(['install'], none)).resolves.toBe(1)
       await expect(serviceCommand(['status'], none)).resolves.toBe(0)
       expect(c.err).toEqual([
-        'harness service runs harnessd under launchd (macOS) or systemd (Linux); this computer has neither.',
-        'harness service runs harnessd under launchd (macOS) or systemd (Linux); this computer has neither.',
+        'harness service runs harnessd under launchd (macOS), systemd (Linux) or Task Scheduler (Windows); this computer has none of them.',
+        'harness service runs harnessd under launchd (macOS), systemd (Linux) or Task Scheduler (Windows); this computer has none of them.',
       ])
       await expect(serviceCommand(['status', '--json'], none)).resolves.toBe(0)
       expect(c.out).toEqual(['{"supported":false}'])
@@ -316,6 +316,206 @@ describe.each(['launchd', 'systemd'] as const)('harness service under %s', (plat
       await serviceCommand(['install'], c.deps)
       expect(c.out).toContain('    and a tmux server it started. `loginctl enable-linger` keeps them running.')
     })
+  })
+})
+
+describe('harness service with Task Scheduler', () => {
+  /** What schtasks and whoami answer, by the start of the call; the rest succeed. */
+  type Answers = Record<string, CommandResult>
+  function windows(over: { registered?: boolean; pid?: number | null; carried?: Record<string, string>; answers?: Answers } = {}) {
+    const dir = mkdtempSync(join(tmpdir(), 'service-task-'))
+    const data = join(dir, 'data')
+    const launcher = join(dir, 'bin', 'harness-launch.exe')
+    const script = join(dir, 'cli', '0.5.0', 'cli.js')
+    for (const file of [launcher, script]) { mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, '') }
+    const calls: string[] = []
+    let registered = over.registered ?? false
+    let pid = over.pid ?? null
+    const service = new PlatformService('taskscheduler', {
+      ...defaultPlatformDeps({ env: { USERNAME: 'demo' }, home: dir, dataDir: data }),
+      run: (command, args) => {
+        const call = [command, ...args].join(' ')
+        const answer = Object.entries(over.answers ?? {}).find(([start]) => call.startsWith(start))?.[1]
+        // whoami names the user by SID for the logon trigger (harnessd/platform.ts); only schtasks's calls are recorded.
+        if (command === 'whoami') return answer ?? { status: 0, stdout: '"DESKTOP\\demo","S-1-5-21-1-2-3-1001"\r\n', stderr: '' }
+        calls.push(call)
+        if (answer) return answer
+        if (call.startsWith('schtasks /Create')) registered = true
+        if (call.startsWith('schtasks /Delete')) registered = false
+        if (call.startsWith('schtasks /Run')) pid = 4343
+        if (call.startsWith('schtasks /Query')) return registered ? { status: 0, stdout: '<Settings><Enabled>true</Enabled></Settings>', stderr: '' } : { status: 1, stdout: '', stderr: 'ERROR' }
+        return { status: 0, stdout: '', stderr: '' }
+      },
+    })
+    const out: string[] = []
+    const err: string[] = []
+    const locks: string[] = []
+    const clock = { now: 0 }
+    const deps: ServiceCommandDeps = {
+      service, logFile: 'C:\\d\\harness.log', readPid: () => pid, isAlive: (p) => p === pid, masterPlatform: () => null,
+      now: () => clock.now, sleep: async (ms) => { clock.now += ms },
+      definition: () => ({ nodePath: 'C:\\n\\node.exe', scriptPath: script, logFile: 'C:\\d\\harness.log', home: 'C:\\Users\\demo', env: over.carried ?? {}, launcherPath: launcher }),
+      bundleExists: (path) => existsSync(path), ensureDir: () => {},
+      stopDaemon: async () => { throw new Error('the task never stops the daemon') },
+      withLock: async (purpose, fn) => { locks.push(purpose); const result = await fn(); locks.push(`${purpose} released`); return result },
+      relaunch: async () => {}, out: (line) => out.push(line), err: (line) => err.push(line), tildify: (path) => path, startWaitMs: 1_000,
+    }
+    return { dir, data, calls, out, err, locks, deps, setPid: (next: number | null) => { pid = next } }
+  }
+  /** What the command did to Task Scheduler: its calls but the queries. */
+  const schtasks = (calls: string[]) => calls.filter((call) => !call.startsWith('schtasks /Query'))
+
+  it('registers the task under the lock, then runs it outside, never stopping the daemon that runs', async () => {
+    const w = windows()
+    try {
+      await expect(serviceCommand(['install'], w.deps)).resolves.toBe(0)
+      const name = taskName('demo')
+      expect(schtasks(w.calls)).toEqual([expect.stringMatching(/harnessd-task\.xml \/F$/), `schtasks /Run /TN ${name}`])
+      expect(w.calls.find((call) => call.startsWith('schtasks /Create'))!.startsWith(`schtasks /Create /TN ${name} /XML `)).toBe(true)
+      expect(w.locks).toEqual(['start', 'start released'])
+      expect(w.out[0]).toBe('✓ harnessd runs under Task Scheduler (pid 4343): it starts at logon, and again within 5 minutes if it stops.')
+      expect(w.err).toEqual([])
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  it('leaves a registered task and a running daemon as they are, and says what a shell setting will not reach', async () => {
+    const w = windows({ registered: true, pid: 4040, carried: { ADAPTER_DATA_DIR: 'C:\\elsewhere' } })
+    try {
+      await serviceCommand(['install'], w.deps)
+      await serviceCommand(['install'], w.deps)
+      expect(w.calls.some((call) => call.startsWith('schtasks /Run'))).toBe(false)
+      expect(w.out).toContain(`harnessd is registered with Task Scheduler already (${taskName('demo')}); nothing to change.`)
+      expect(w.out).toContain('  ! the task starts harness with your Windows user environment, not this shell\'s: ADAPTER_DATA_DIR set only here does not reach it')
+      expect(w.out).toContain('    so the daemon it starts uses your user settings. Set these for your Windows user, or run this from a shell without them.')
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  it('refuses without the launcher, and unregisters without touching the daemon', async () => {
+    const w = windows({ registered: true, pid: 4040 })
+    try {
+      rmSync(join(w.dir, 'bin'), { recursive: true })
+      await expect(serviceCommand(['install'], w.deps)).resolves.toBe(1)
+      expect(w.err[0]).toMatch(/^✗ No installed CLI at .*harness-launch\.exe/)
+      await expect(serviceCommand(['uninstall'], w.deps)).resolves.toBe(0)
+      expect(w.calls).toContain(`schtasks /Delete /TN ${taskName('demo')} /F`)
+      expect(w.out.at(-1)).toMatch(/Task Scheduler no longer runs harnessd/)
+      expect(w.locks).toEqual(['stop', 'stop released'])
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  it('refuses without the installed build the launcher starts', async () => {
+    const w = windows()
+    try {
+      rmSync(join(w.dir, 'cli'), { recursive: true })
+      await expect(serviceCommand(['install'], w.deps)).resolves.toBe(1)
+      expect(w.err[0]).toMatch(/^✗ No installed CLI at .*cli\.js\. Task Scheduler runs the installed CLI through bin\\harness-launch\.exe/)
+      expect(w.calls).toEqual([])
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  it('says in one plain sentence when the task cannot be written, with what Windows said below it, and changes nothing', async () => {
+    const w = windows({ answers: { whoami: { status: 1, stdout: '', stderr: 'ERROR: Access is denied.' } } })
+    try {
+      await expect(serviceCommand(['install'], w.deps)).resolves.toBe(1)
+      expect(w.err).toEqual([
+        '✗ Harness could not set up the task that starts harnessd when you sign in to Windows; nothing was changed.',
+        '  Harness could not tell which Windows user this is: whoami /user /fo csv /nh failed (exit 1): ERROR: Access is denied.',
+      ])
+      expect(schtasks(w.calls)).toEqual([])
+      expect(w.locks).toEqual(['start', 'start released'])
+      expect(existsSync(join(w.data, 'harnessd-task.xml'))).toBe(false)
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  it('says in plain words when Task Scheduler cannot be asked, refuses the task or will not run it', async () => {
+    const gone = windows({ answers: { 'schtasks /Query': { status: null, stdout: '', stderr: '', error: 'spawn schtasks ENOENT' } } })
+    const refused = windows({ answers: { 'schtasks /Create': { status: 1, stdout: '', stderr: 'ERROR: The task XML is malformed.' } } })
+    const idle = windows({ answers: { 'schtasks /Run': { status: 1, stdout: '', stderr: 'ERROR: Access is denied.' } } })
+    try {
+      await expect(serviceCommand(['install'], gone.deps)).resolves.toBe(1)
+      expect(gone.err).toEqual([
+        '✗ Harness could not reach Task Scheduler, so it cannot start harnessd when you sign in to Windows.',
+        `  schtasks /Query /TN ${taskName('demo')} could not be run: spawn schtasks ENOENT — Task Scheduler could not be asked`,
+      ])
+      await expect(serviceCommand(['install'], refused.deps)).resolves.toBe(1)
+      expect(refused.err).toEqual([
+        '✗ Task Scheduler did not accept the task that starts harnessd; nothing was changed.',
+        expect.stringMatching(/^ {2}schtasks \/Create .* failed \(exit 1\): ERROR: The task XML is malformed\.$/),
+      ])
+      expect(existsSync(join(refused.data, 'harnessd-task.xml'))).toBe(false)
+      await expect(serviceCommand(['install'], idle.deps)).resolves.toBe(1)
+      expect(idle.err).toEqual([
+        '✗ Task Scheduler has the task that starts harnessd, but would not run it now: `harness start` starts harnessd.',
+        `  schtasks /Run /TN ${taskName('demo')} failed (exit 1): ERROR: Access is denied.`,
+      ])
+    } finally { for (const w of [gone, refused, idle]) rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  it('says when the task ran but started nothing, as in a session no one signed in to', async () => {
+    const w = windows({ answers: { 'schtasks /Run': { status: 0, stdout: 'SUCCESS', stderr: '' } } })
+    try {
+      await expect(serviceCommand(['install'], w.deps)).resolves.toBe(1)
+      expect(w.err).toEqual([
+        '✗ Task Scheduler has harnessd, but it did not come up. It runs the task only in a signed-in Windows session: `harness start` starts it now.',
+        '  logs C:\\d\\harness.log   ·   harness service status',
+      ])
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  it('removes nothing and says so when Task Scheduler cannot be asked whether it still has the task', async () => {
+    const w = windows({ registered: true, answers: { 'schtasks /Query': { status: null, stdout: '', stderr: '', error: 'spawnSync schtasks ETIMEDOUT' } } })
+    try {
+      w.deps.service!.write(w.deps.definition())
+      await expect(serviceCommand(['uninstall'], w.deps)).resolves.toBe(1)
+      expect(w.err).toEqual([
+        '✗ Harness could not remove the task that starts harnessd: Task Scheduler may still start it when you sign in.',
+        `  schtasks /Query /TN ${taskName('demo')} /XML could not be run: spawnSync schtasks ETIMEDOUT`,
+      ])
+      expect(existsSync(join(w.data, 'harnessd-task.xml'))).toBe(true)
+      const bare = windows({ answers: { 'schtasks /Query': { status: null, stdout: '', stderr: '', error: 'spawnSync schtasks ETIMEDOUT' } } })
+      try {
+        // No file here, but Task Scheduler could not say it has no task either.
+        await expect(serviceCommand(['uninstall'], bare.deps)).resolves.toBe(1)
+        expect(bare.err[0]).toMatch(/^✗ Harness could not remove the task/)
+      } finally { rmSync(bare.dir, { recursive: true, force: true }) }
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  it('says when Task Scheduler would not delete the task', async () => {
+    const w = windows({ registered: true, answers: { 'schtasks /Delete': { status: 1, stdout: '', stderr: 'ERROR: Access is denied.' } } })
+    try {
+      await expect(serviceCommand(['uninstall'], w.deps)).resolves.toBe(1)
+      expect(w.err).toEqual([
+        '✗ Harness could not remove the task that starts harnessd: Task Scheduler may still start it when you sign in.',
+        `  schtasks /Delete /TN ${taskName('demo')} /F failed (exit 1): ERROR: Access is denied.`,
+      ])
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  it('says what is registered', async () => {
+    const w = windows({ registered: true })
+    try {
+      w.deps.service!.write(w.deps.definition())
+      await serviceCommand(['status'], w.deps)
+      expect(w.out).toEqual(['harnessd · Task Scheduler', '  status      ● registered (enabled) · starts at logon, and again within 5 minutes if it stops', expect.stringMatching(/^  task        /), `  target      ${taskName('demo')}`])
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  it('says what is written but not registered, and what it cannot compare', async () => {
+    const w = windows()
+    try {
+      w.deps.service!.write(w.deps.definition())
+      await serviceCommand(['status'], w.deps)
+      expect(w.out[1]).toBe('  status      ◍ written, not registered · `harness service install` registers it')
+      const lost = windows({ answers: { whoami: { status: null, stdout: '', stderr: '', error: 'spawn whoami ENOENT' } } })
+      try {
+        mkdirSync(lost.data, { recursive: true })
+        writeFileSync(join(lost.data, 'harnessd-task.xml'), 'an older task')
+        await expect(serviceCommand(['status'], lost.deps)).resolves.toBe(0)
+        expect(lost.out).toContain('  ! Harness could not check the task against this install: Harness could not tell which Windows user this is: whoami /user /fo csv /nh could not be run: spawn whoami ENOENT')
+        expect(lost.out.some((line) => line.includes('is not the one this install would write'))).toBe(false)
+      } finally { rmSync(lost.dir, { recursive: true, force: true }) }
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
   })
 })
 

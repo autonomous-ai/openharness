@@ -1,5 +1,6 @@
 /**
- * `harness service install | uninstall | status`: harnessd under launchd (macOS) or systemd (Linux).
+ * `harness service install | uninstall | status`: harnessd under launchd (macOS), systemd (Linux) or Task
+ * Scheduler (Windows, which starts the master rather than running it: `installTask`).
  *
  * The platform runs the master in the foreground from login on, and starts it again if it dies: before,
  * nothing restarted a master that died but the desktop app running `harness start` again, and on a
@@ -11,11 +12,11 @@
  */
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { PlatformState, ServiceDefinition } from '../harnessd/platform.js'
+import { PLATFORM_LABEL, type PlatformState, type ServiceDefinition } from '../harnessd/platform.js'
 import { describeSpawnLockOwner, withSpawnLock, type SpawnLockPurpose } from './daemonSpawnLock.js'
 import { stopDaemonProcess } from './daemonStop.js'
 import {
-  PLATFORM_START_WAIT_MS, PLATFORM_STOP_WAIT_MS, describeState, platformDaemonDeps, serviceDefinition, waitForMaster, waitGone,
+  CARRIED_ENV, PLATFORM_START_WAIT_MS, PLATFORM_STOP_WAIT_MS, describeState, platformDaemonDeps, serviceDefinition, waitForMaster, waitGone,
   type PlatformDaemonDeps,
 } from './platformDaemon.js'
 
@@ -42,8 +43,8 @@ export interface ServiceCommandDeps extends PlatformDaemonDeps {
 export const SERVICE_USAGE = [
   'Usage: harness service <install | uninstall | status> [--json]',
   '',
-  '  install    run harnessd under launchd (macOS) or systemd (Linux): it starts at login and comes back',
-  '             if it dies. `harness start` and `harness stop` then go through the platform. Agents keep',
+  '  install    run harnessd under launchd (macOS), systemd (Linux) or Task Scheduler (Windows): it starts at login',
+  '             and comes back if it dies. `harness start` and `harness stop` then go through the platform. Agents keep',
   '             running in tmux whenever the daemon stops, as they do now',
   '  uninstall  stop that, and start the daemon the usual way again',
   '  status     what launchd or systemd has registered, and whether it runs (--json for machines)',
@@ -65,7 +66,7 @@ export async function serviceCommand(argv: string[], deps: ServiceCommandDeps): 
   }
   if (!deps.service) {
     if (json && verb === 'status') deps.out(JSON.stringify({ supported: false }))
-    else deps.err('harness service runs harnessd under launchd (macOS) or systemd (Linux); this computer has neither.')
+    else deps.err('harness service runs harnessd under launchd (macOS), systemd (Linux) or Task Scheduler (Windows); this computer has none of them.')
     return verb === 'status' ? 0 : 1
   }
   if (deps.service.os && verb !== 'status') {
@@ -78,8 +79,9 @@ export async function serviceCommand(argv: string[], deps: ServiceCommandDeps): 
 }
 
 async function installService(deps: ServiceCommandDeps): Promise<number> {
+  if (deps.service!.platform === 'taskscheduler') return installTask(deps)
   const service = deps.service!
-  const name = service.platform
+  const name = PLATFORM_LABEL[service.platform]
   const definition = deps.definition()
   if (!deps.bundleExists(definition.scriptPath)) {
     deps.err(`✗ No installed CLI at ${deps.tildify(definition.scriptPath)}. ${name} runs the installed bundle: install it first, then run this again.`)
@@ -121,7 +123,7 @@ async function installService(deps: ServiceCommandDeps): Promise<number> {
       return 1
     }
     deps.out(`✓ harnessd runs under ${name} (pid ${up}): it starts at login and comes back if it dies.`)
-    deps.out(`  ${service.platform === 'launchd' ? 'agent' : 'unit '}  ${deps.tildify(service.file)}`)
+    deps.out(`  ${service.platform === 'launchd' ? 'agent' : service.platform === 'taskscheduler' ? 'task ' : 'unit '}  ${deps.tildify(service.file)}`)
     deps.out('  `harness start` and `harness stop` now go through it; agents keep running in tmux when the daemon stops.')
     deps.out('  undo: harness service uninstall')
     lingerNote(service.inspect(), deps)
@@ -131,9 +133,11 @@ async function installService(deps: ServiceCommandDeps): Promise<number> {
 
 async function uninstallService(deps: ServiceCommandDeps): Promise<number> {
   const service = deps.service!
-  const name = service.platform
+  const name = PLATFORM_LABEL[service.platform]
+  const task = service.platform === 'taskscheduler'
   const before = service.inspect()
-  if (!before.installed && !before.registered) {
+  // Task Scheduler that could not be asked has not said there is no task: unregister says so (harnessd/platform.ts).
+  if (!before.installed && !before.registered && !(task && before.unreachable)) {
     deps.out(`harnessd is not installed with ${name}; nothing to remove.`)
     return 0
   }
@@ -146,7 +150,11 @@ async function uninstallService(deps: ServiceCommandDeps): Promise<number> {
     return outcome
   })
   if (!removed.ok) {
-    deps.err(`✗ ${removed.detail}`)
+    if (task) {
+      // What schtasks said is for whoever looks into it, under a sentence anyone reads.
+      deps.err('✗ Harness could not remove the task that starts harnessd: Task Scheduler may still start it when you sign in.')
+      deps.err(`  ${removed.detail}`)
+    } else deps.err(`✗ ${removed.detail}`)
     return 1
   }
   deps.out(`✓ removed ${deps.tildify(service.file)}: ${name} no longer runs harnessd.`)
@@ -158,9 +166,16 @@ async function uninstallService(deps: ServiceCommandDeps): Promise<number> {
 
 function serviceStatus(deps: ServiceCommandDeps, json: boolean): number {
   const service = deps.service!
-  const name = service.platform
+  const name = PLATFORM_LABEL[service.platform]
   const state = service.inspect()
-  const current = state.installed && service.current(deps.definition())
+  let current = false
+  let uncompared: string | null = null
+  try {
+    current = state.installed && service.current(deps.definition())
+  } catch (error) {
+    // Windows renders the task with the user's SID, which whoami may not give: then it cannot be compared.
+    uncompared = (error as Error).message
+  }
   if (json) {
     deps.out(JSON.stringify({
       supported: true, platform: state.platform, file: state.file, target: state.target, installed: state.installed, current,
@@ -172,10 +187,11 @@ function serviceStatus(deps: ServiceCommandDeps, json: boolean): number {
   deps.out(`harnessd · ${name}`)
   deps.out(`  status      ${statusLine(state, name)}`)
   if (state.installed || state.registered) {
-    deps.out(`  ${service.platform === 'launchd' ? 'agent ' : 'unit  '}      ${deps.tildify(state.file)}`)
+    deps.out(`  ${service.platform === 'launchd' ? 'agent ' : service.platform === 'taskscheduler' ? 'task  ' : 'unit  '}      ${deps.tildify(state.file)}`)
     deps.out(`  target      ${state.target}`)
   }
-  if (state.installed && !current) deps.out('  ! the definition is not the one this install would write (another Node, bundle or setting): `harness service install` rewrites it')
+  if (uncompared !== null) deps.out(`  ! Harness could not check the ${service.platform === 'taskscheduler' ? 'task' : 'definition'} against this install: ${uncompared}`)
+  else if (state.installed && !current) deps.out('  ! the definition is not the one this install would write (another Node, bundle or setting): `harness service install` rewrites it')
   if (state.failed) deps.out(`  ! systemd gave up after repeated failures${state.lastExit ? ` (${state.lastExit})` : ''}: \`harness start\` tries again · logs ${deps.tildify(deps.logFile)}`)
   lingerNote(state, deps)
   return 0
@@ -185,6 +201,11 @@ function statusLine(state: PlatformState, name: string): string {
   if (state.unreachable) return `? could not ask ${name}: ${state.unreachable}`
   if (!state.installed && !state.registered) return `○ not installed · \`harness start\` runs the daemon; \`harness service install\` hands it to ${name}`
   if (state.registered && !state.installed) return `◍ registered without its file · \`harness service uninstall\` clears it`
+  if (state.platform === 'taskscheduler') {
+    return state.registered
+      ? `● registered (${state.state}) · starts at logon, and again within 5 minutes if it stops`
+      : '◍ written, not registered · `harness service install` registers it'
+  }
   if (!state.registered) {
     return state.platform === 'launchd'
       ? '◍ installed, not loaded · it starts at your next login, or now with `harness start`'
@@ -192,6 +213,82 @@ function statusLine(state: PlatformState, name: string): string {
   }
   if (state.pid !== null) return `● running (pid ${state.pid}) · starts at login, comes back if it dies`
   return `◍ registered, not running (${describeState(state)}) · \`harness start\` starts it`
+}
+
+/**
+ * Windows. Task Scheduler does not run the master, it starts it (harnessd/platform.ts), so nothing that runs is stopped:
+ * the task is registered under the spawn lock, and run once outside it, when no daemon runs, because the task's own
+ * `harness start --if-down` takes that lock and would find it held. Every failure is one sentence a person reads, and
+ * what whoami or schtasks said goes on the line below it.
+ */
+async function installTask(deps: ServiceCommandDeps): Promise<number> {
+  const service = deps.service!
+  const definition = deps.definition()
+  const launcher = definition.launcherPath ?? ''
+  for (const needed of [launcher, definition.scriptPath]) {
+    if (!deps.bundleExists(needed)) {
+      deps.err(`✗ No installed CLI at ${deps.tildify(needed)}. Task Scheduler runs the installed CLI through bin\\harness-launch.exe: install it with install.ps1, then run this again.`)
+      return 1
+    }
+  }
+  const preflight = service.preflight()
+  if (!preflight.ok) {
+    deps.err('✗ Harness could not reach Task Scheduler, so it cannot start harnessd when you sign in to Windows.')
+    deps.err(`  ${preflight.detail}`)
+    return 1
+  }
+  const registered = await deps.withLock('start', async () => {
+    const before = service.inspect()
+    let written: boolean
+    try {
+      written = service.write(definition)
+    } catch (error) {
+      // The XML could not be made: whoami could not say who this is, or a path the task cannot hold. Nothing was written.
+      return { ok: false as const, unwritten: true, detail: (error as Error).message }
+    }
+    if (!written && before.registered) return 'already' as const
+    const outcome = service.register()
+    if (!outcome.ok) service.discard()
+    return { ...outcome, unwritten: false }
+  })
+  if (registered !== 'already' && !registered.ok) {
+    deps.err(registered.unwritten
+      ? '✗ Harness could not set up the task that starts harnessd when you sign in to Windows; nothing was changed.'
+      : '✗ Task Scheduler did not accept the task that starts harnessd; nothing was changed.')
+    deps.err(`  ${registered.detail}`)
+    return 1
+  }
+  const running = deps.readPid()
+  let up = running !== null && deps.isAlive(running) ? running : null
+  if (up === null) {
+    const started = service.start(false)
+    if (!started.ok) {
+      deps.err('✗ Task Scheduler has the task that starts harnessd, but would not run it now: `harness start` starts harnessd.')
+      deps.err(`  ${started.detail}`)
+      return 1
+    }
+    up = await waitForMaster(deps, deps.startWaitMs ?? PLATFORM_START_WAIT_MS)
+    if (up === null) {
+      deps.err('✗ Task Scheduler has harnessd, but it did not come up. It runs the task only in a signed-in Windows session: `harness start` starts it now.')
+      deps.err(`  logs ${deps.tildify(deps.logFile)}   ·   harness service status`)
+      return 1
+    }
+  }
+  if (registered === 'already') deps.out(`harnessd is registered with Task Scheduler already (${service.target}); nothing to change.`)
+  else {
+    deps.out(`✓ harnessd runs under Task Scheduler (pid ${up}): it starts at logon, and again within 5 minutes if it stops.`)
+    deps.out(`  task   ${service.target}`)
+    deps.out('  undo: harness service uninstall')
+  }
+  // A task's action has no environment of its own (harnessd/platform.ts): it runs with the user's logon environment,
+  // and the task is the user's one, whatever data folder this shell names. Reported rather than refused: a value set
+  // for the Windows user as well reaches it, and the CLI cannot tell the two apart.
+  const carried = Object.keys(definition.env).filter((name) => (CARRIED_ENV as readonly string[]).includes(name))
+  if (carried.length) {
+    deps.out(`  ! the task starts harness with your Windows user environment, not this shell's: ${carried.join(', ')} set only here does not reach it`)
+    deps.out('    so the daemon it starts uses your user settings. Set these for your Windows user, or run this from a shell without them.')
+  }
+  return 0
 }
 
 /** systemd without lingering ends the user's manager at their last logout, and everything under it. */

@@ -716,7 +716,11 @@ export class PlatformService {
     if (this.os) return { ok: false, detail: OS_OWNS_IT }
     if (this.platform === 'taskscheduler') {
       // The daemon keeps running: Task Scheduler only ever started it.
-      if (this.inspect().registered) {
+      const state = this.inspect()
+      // schtasks could not be asked (not there, or past COMMAND_TIMEOUT_MS): the task may still be registered, and
+      // removing its file would leave a task that starts harnessd at every logon with nothing on disk to say so.
+      if (state.unreachable) return { ok: false, detail: state.unreachable }
+      if (state.registered) {
         const deleted = this.checked('schtasks', ['/Delete', '/TN', this.target, '/F'])
         if (!deleted.ok) return deleted
       }
