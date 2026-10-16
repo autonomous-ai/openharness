@@ -15,7 +15,7 @@ import { HARNESSD_REEXEC_FILE, HARNESSD_STATUS_FILE, PID_FILE, isAlive, readPid 
 import { readMarker, removeMarker } from '../harnessd/reexec.js'
 import { acquireSpawnLock, describeSpawnLockFailure, describeSpawnLockOwner, SPAWN_LOCK_WAIT_MS } from './daemonSpawnLock.js'
 import { PLATFORM_STOP_WAIT_MS, stopUnderPlatform, waitGone, type PlatformStop } from './platformDaemon.js'
-import { identifyDaemonProcess } from './windows/daemonProcesses.js'
+import { identifyDaemonProcess, judgePidFileOwner, type DaemonProcessVerdict } from './windows/daemonProcesses.js'
 import { askDaemonToStop, processStopCallDeps } from './windows/daemonStopCall.js'
 import { windowsProcessRows } from './windows/processTable.js'
 import { terminateVerified, type TerminateOutcome } from './windows/terminate.js'
@@ -53,6 +53,8 @@ export interface WindowsStopDeps {
 export const WINDOWS_STOP_WAIT_MS = 8_000
 /** How long a core whose master was ended has to leave by itself: it stops once its master's channel closes. */
 export const ORPHAN_CORE_WAIT_MS = 5_000
+/** How long an ended process has to finish going. */
+export const ENDED_WAIT_MS = 2_000
 
 export function defaultWindowsStopDeps(): WindowsStopDeps {
   return {
@@ -109,7 +111,7 @@ export interface StopResult { pid: number | null; stopped: boolean }
 /** What a person reads when Harness could not be stopped: from `harness stop`, and from every command that stops it
  *  first. Only Windows gets here (`stopOnWindows`), where a process that cannot be confirmed is never ended. */
 export function didNotStopSentence(pid: number): string {
-  return `Harness did not stop. Its process (pid ${pid}) is still running; end it in Task Manager or restart the computer, then try again.`
+  return `Harness could not be stopped: pid ${pid} could not be checked or ended. Try again, or restart the computer.`
 }
 
 /** A stop that found Harness running and left it so. */
@@ -175,28 +177,38 @@ function forgetPid(deps: StopDeps, pid: number): void {
  * the master, then a core its end left behind. Never by tree: the pty host's parent is the core, and every agent
  * lives under it.
  */
-async function stopOnWindows(deps: StopDeps, windows: WindowsStopDeps, pid: number): Promise<{ pid: number; stopped: boolean }> {
+async function stopOnWindows(deps: StopDeps, windows: WindowsStopDeps, pid: number): Promise<{ pid: number | null; stopped: boolean }> {
   // Looked up before anything is asked: once the master goes, its core has no parent to be told by.
   const rows = await windows.rows().catch(() => null)
-  // The time the pid file was written is what tells the master from a process given its pid since. Without it the
-  // master is not identified: its command alone would match another same-user daemon (B3.7).
+  // The time the pid file was written is what tells the master from a process given its pid since. Without it, or
+  // without a table, nothing is known: its command alone would match another same-user daemon (B3.7).
   const claimedAtMs = windows.pidFileWrittenMs()
-  const master = rows && claimedAtMs !== null ? identifyDaemonProcess(rows, pid, { role: 'master', claimedAtMs }) : null
+  const master: DaemonProcessVerdict = rows && claimedAtMs !== null ? judgePidFileOwner(rows, pid, claimedAtMs) : { verdict: 'unknown' }
   const corePid = windows.corePid(pid)
   const core = rows && corePid !== null ? identifyDaemonProcess(rows, corePid, { role: 'core', parentPid: pid }) : null
+  // Asked even under a pid file that names no master: a core no master runs answers, and stops itself.
   const asked = await windows.ask()
-  if (!asked) deps.warn('  ! Harness did not stop when asked — ending its processes')
-  if (!asked || !await waitGone(deps, pid, WINDOWS_STOP_WAIT_MS)) {
-    if (!master) {
-      deps.warn(`  ! the process with pid ${pid} could not be confirmed to be Harness, so it was left running`)
-      return { pid, stopped: false }
+  const gone = asked && await waitGone(deps, pid, WINDOWS_STOP_WAIT_MS)
+  if (!gone) {
+    // Windows hands a freed pid to the next process quickly: a pid file whose pid is proven another process's now is
+    // debris, as a dead pid's is (`stopDaemonProcess`), and Harness is not running under it.
+    if (master.verdict === 'not') {
+      if (deps.readPid() === pid) { try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ } }
+      return { pid: null, stopped: false }
     }
+    // Could not tell: left running, and the pid file kept, so a `harness stop` tried again still finds it.
+    if (master.verdict === 'unknown') return { pid, stopped: false }
+    if (!asked) deps.warn('  ! Harness did not stop when asked — ending its processes')
     // `mismatch`: another process has the pid now, the table could not be read again, or the end was refused.
-    if (await windows.terminate(pid, master) === 'mismatch') deps.warn(`  ! Harness's process (pid ${pid}) could not be ended, so it was left running`)
+    if (await windows.terminate(pid, master.startMarker) === 'mismatch') return { pid, stopped: false }
+    // TerminateProcess returns before the process has finished going.
+    await waitGone(deps, pid, ENDED_WAIT_MS)
   }
   if (core && corePid !== null && !await waitGone(deps, corePid, ORPHAN_CORE_WAIT_MS)) await windows.terminate(corePid, core)
+  // A master still there keeps its pid file, as one that could not be ended does.
+  if (deps.isAlive(pid)) return { pid, stopped: false }
   forgetPid(deps, pid)
-  return { pid, stopped: !deps.isAlive(pid) }
+  return { pid, stopped: true }
 }
 
 /**

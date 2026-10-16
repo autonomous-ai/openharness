@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ProcessRow } from '../processTable.js'
-import { identifyDaemonProcess } from './daemonProcesses.js'
+import { identifyDaemonProcess, judgeDaemonProcess, judgePidFileOwner } from './daemonProcesses.js'
 
 // 2026-10-16T00:00:00Z as a FILETIME marker.
 const at = (ms: number): string => `w:${(BigInt(ms) + 11_644_473_600_000n) * 10_000n}`
@@ -49,5 +49,30 @@ describe('the daemon\'s processes, in the process table', () => {
     expect(identifyDaemonProcess([row({})], 500, { role: 'master' })).toBeNull()
     // @ts-expect-error the core's claim carries the master's pid
     expect(identifyDaemonProcess([row({ nativeArgv: ['node.exe', 'cli.js', '__run'] })], 500, { role: 'core' })).toBeNull()
+  })
+
+  it('tells a pid proven not the daemon\'s from one it cannot tell about', () => {
+    expect(judgeDaemonProcess([row({})], 500, master)).toEqual({ verdict: 'is', startMarker: at(T) })
+    // Proven not: gone from the table, another command, started after the claim, or a core with another parent.
+    expect(judgeDaemonProcess([row({})], 501, master)).toEqual({ verdict: 'not' })
+    expect(judgeDaemonProcess([row({ nativeArgv: ['notepad.exe'] })], 500, master)).toEqual({ verdict: 'not' })
+    expect(judgeDaemonProcess([row({ startMarker: at(T + 60_000) })], 500, master)).toEqual({ verdict: 'not' })
+    const core = row({ pid: 600, parentPid: 500, nativeArgv: ['node.exe', 'cli.js', '__run'] })
+    expect(judgeDaemonProcess([core], 600, { role: 'core', parentPid: 501 })).toEqual({ verdict: 'not' })
+    // Cannot tell: no kernel argv, no start marker, a marker it cannot read, or no claim time.
+    expect(judgeDaemonProcess([row({ nativeArgv: undefined })], 500, master)).toEqual({ verdict: 'unknown' })
+    expect(judgeDaemonProcess([row({ startMarker: '' })], 500, master)).toEqual({ verdict: 'unknown' })
+    expect(judgeDaemonProcess([row({ startMarker: 'garbage' })], 500, master)).toEqual({ verdict: 'unknown' })
+    expect(judgeDaemonProcess([row({})], 500, { role: 'master', claimedAtMs: Number.NaN })).toEqual({ verdict: 'unknown' })
+  })
+
+  it('knows a core no master runs, which claims the pid file itself, for Harness: never ended, never forgotten', () => {
+    const CORE_ARGV = ['node.exe', 'cli.js', '__run']
+    expect(judgePidFileOwner([row({})], 500, T + 5_000)).toEqual({ verdict: 'is', startMarker: at(T) })
+    expect(judgePidFileOwner([row({ nativeArgv: CORE_ARGV })], 500, T + 5_000)).toEqual({ verdict: 'unknown' })
+    // A core that started after the file was written was given the pid since; another command is not Harness.
+    expect(judgePidFileOwner([row({ nativeArgv: CORE_ARGV, startMarker: at(T + 60_000) })], 500, T)).toEqual({ verdict: 'not' })
+    expect(judgePidFileOwner([row({ nativeArgv: ['notepad.exe'] })], 500, T + 5_000)).toEqual({ verdict: 'not' })
+    expect(judgePidFileOwner([], 500, T + 5_000)).toEqual({ verdict: 'not' })
   })
 })

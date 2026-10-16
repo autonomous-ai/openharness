@@ -224,27 +224,63 @@ describe('stopDaemonProcess on Windows', () => {
     expect(ended).toEqual([`500:${marker(T)}`])
   })
 
-  it('ends nothing it could not identify: a pid given to another process, or no process table', async () => {
+  it('takes a pid file whose pid Windows has given to another process for debris, as a dead pid\'s: not running', async () => {
+    // Started after the pid file was written, gone from the table, or running something else: proven not Harness.
     const { stopDaemonProcess } = await load()
-    for (const rows of [async () => [{ ...master, startMarker: marker(T + 60_000) }], async () => null, async () => { throw new Error('no ps') }]) {
+    const { PID_FILE } = await import('./daemonState.js')
+    const notOurs = [
+      async () => [{ ...master, startMarker: marker(T + 60_000) }],
+      async () => [core],
+      async () => [{ ...master, args: 'notepad.exe', nativeArgv: ['notepad.exe'] }],
+    ]
+    for (const rows of notOurs) {
+      writeFileSync(PID_FILE, '500\n')
       const state = { pid: 500, alive: new Set([500]), killed: [] as string[], locked: 0, released: 0 }
       const warned: string[] = []
       const { w, ended } = windows(state, { ask: async () => false, rows, corePid: () => null })
-      await expect(stopDaemonProcess(fakeDeps(state, { windows: w, warn: (line) => warned.push(line) }))).resolves.toEqual({ pid: 500, stopped: false })
+      await expect(stopDaemonProcess(fakeDeps(state, { windows: w, warn: (line) => warned.push(line) }))).resolves.toEqual({ pid: null, stopped: false })
       expect(ended).toEqual([])
-      expect(warned.at(-1)).toBe('  ! the process with pid 500 could not be confirmed to be Harness, so it was left running')
+      expect(warned).toEqual([])
+      expect(existsSync(PID_FILE)).toBe(false)
     }
   })
 
-  it('never ends a master on its command alone: with no time the pid file was written, it is not identified', async () => {
+  it('still stops a Harness that takes the stop under a pid file it does not prove: a core no master runs leaves by itself', async () => {
     const { stopDaemonProcess } = await load()
-    const state = { pid: 500, alive: new Set([500, 600]), killed: [] as string[], locked: 0, released: 0 }
-    const warned: string[] = []
-    const { w, ended } = windows(state, { ask: async () => false, pidFileWrittenMs: () => null })
-    await expect(stopDaemonProcess(fakeDeps(state, { windows: w, warn: (line) => warned.push(line) }))).resolves.toEqual({ pid: 500, stopped: false })
+    const state = { pid: 500, alive: new Set([500]), killed: [] as string[], locked: 0, released: 0 }
+    const { w, ended } = windows(state, {
+      ask: async () => { state.alive.clear(); return true },
+      rows: async () => [{ ...master, args: 'node.exe cli.js __run', nativeArgv: ['node.exe', 'cli.js', '__run'] }],
+      corePid: () => null,
+    })
+    await expect(stopDaemonProcess(fakeDeps(state, { windows: w }))).resolves.toEqual({ pid: 500, stopped: true })
     expect(ended).toEqual([])
-    expect(state.killed).toEqual([])
-    expect(warned.at(-1)).toBe('  ! the process with pid 500 could not be confirmed to be Harness, so it was left running')
+  })
+
+  it('keeps the pid file and ends nothing when it cannot tell: no process table, no time the pid file was written', async () => {
+    // Never on the command alone (B3.7): another same-user daemon may hold the pid.
+    const { stopDaemonProcess } = await load()
+    const { PID_FILE } = await import('./daemonState.js')
+    const cannotTell: Array<Partial<NonNullable<StopDeps['windows']>>> = [
+      { rows: async () => null },
+      { rows: async () => { throw new Error('no ps') } },
+      { pidFileWrittenMs: () => null },
+      { rows: async () => [{ ...master, nativeArgv: undefined }] },
+      { rows: async () => [{ ...master, startMarker: '' }] },
+      // A core no master runs claims the pid file itself: Harness, though not a master to end.
+      { rows: async () => [{ ...master, args: 'node.exe cli.js __run', nativeArgv: ['node.exe', 'cli.js', '__run'] }] },
+    ]
+    for (const over of cannotTell) {
+      writeFileSync(PID_FILE, '500\n')
+      const state = { pid: 500, alive: new Set([500, 600]), killed: [] as string[], locked: 0, released: 0 }
+      const warned: string[] = []
+      const { w, ended } = windows(state, { ask: async () => false, ...over })
+      await expect(stopDaemonProcess(fakeDeps(state, { windows: w, warn: (line) => warned.push(line) }))).resolves.toEqual({ pid: 500, stopped: false })
+      expect(ended).toEqual([])
+      expect(state.killed).toEqual([])
+      expect(warned).toEqual([])
+      expect(existsSync(PID_FILE)).toBe(true)
+    }
   })
 
   it('leaves a core it could not identify as the master\'s child', async () => {
@@ -255,13 +291,26 @@ describe('stopDaemonProcess on Windows', () => {
     expect(ended).toEqual([`500:${marker(T)}`])
   })
 
-  it('says so when the master changed between the look and the end', async () => {
+  it('keeps the pid file, and the core, when the end did not happen: refused, or the master could not be checked again', async () => {
     const { stopDaemonProcess } = await load()
+    const { PID_FILE } = await import('./daemonState.js')
+    writeFileSync(PID_FILE, '500\n')
+    const state = { pid: 500, alive: new Set([500, 600]), killed: [] as string[], locked: 0, released: 0 }
+    const asked: number[] = []
+    const { w } = windows(state, { ask: async () => false, terminate: async (pid) => { asked.push(pid); return 'mismatch' } })
+    await expect(stopDaemonProcess(fakeDeps(state, { windows: w }))).resolves.toEqual({ pid: 500, stopped: false })
+    expect(asked).toEqual([500])
+    expect(existsSync(PID_FILE)).toBe(true)
+  })
+
+  it('keeps the pid file of a master that was ended but is still there', async () => {
+    const { stopDaemonProcess } = await load()
+    const { PID_FILE } = await import('./daemonState.js')
+    writeFileSync(PID_FILE, '500\n')
     const state = { pid: 500, alive: new Set([500]), killed: [] as string[], locked: 0, released: 0 }
-    const warned: string[] = []
-    const { w } = windows(state, { ask: async () => false, corePid: () => null, terminate: async () => 'mismatch' })
-    await stopDaemonProcess(fakeDeps(state, { windows: w, warn: (line) => warned.push(line) }))
-    expect(warned.at(-1)).toBe('  ! Harness\'s process (pid 500) could not be ended, so it was left running')
+    const { w } = windows(state, { ask: async () => false, corePid: () => null, terminate: async () => 'ended' })
+    await expect(stopDaemonProcess(fakeDeps(state, { windows: w }))).resolves.toEqual({ pid: 500, stopped: false })
+    expect(existsSync(PID_FILE)).toBe(true)
   })
 
   it('clears the pid file of the master it stopped', async () => {
@@ -302,7 +351,7 @@ describe('a command that stops Harness before it goes on', () => {
     const exit = (code: number): never => { throw new Error(`exit ${code}`) }
     await expect(stopDaemonOrExit({ stop: async () => ({ pid: 500, stopped: false }), say: (line) => said.push(line), exit })).rejects.toThrow('exit 1')
     expect(said).toEqual([`\n  ✗ ${didNotStopSentence(500)}\n`])
-    expect(didNotStopSentence(500)).toBe('Harness did not stop. Its process (pid 500) is still running; end it in Task Manager or restart the computer, then try again.')
+    expect(didNotStopSentence(500)).toBe('Harness could not be stopped: pid 500 could not be checked or ended. Try again, or restart the computer.')
   })
 
   it('reads a stop that left Harness running as such, and only that', async () => {

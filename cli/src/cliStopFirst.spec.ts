@@ -30,6 +30,12 @@ function at(text: string, call: string, after = 0): number {
   return index
 }
 
+/** What changes the computer's state, or starts Harness: none of it may run before a stop's outcome is known. */
+const MUTATING = [
+  'clearAdapterState(', 'clearAuthSession(', 'writeAuthSession(', 'saveAuthSession(', 'rmSync(', 'writeFileSync(', 'renameSync(',
+  'launch(', 'relaunch(', 'passThroughToGridLogout(', 'downloadCanaryStage(', 'signIn(', 'resolveMachineIfUnknown(',
+]
+
 describe('commands that stop Harness first (cli.ts)', () => {
   it.each([
     ['resetCommand', ['clearAdapterState(', 'clearAuthSession(']],
@@ -65,6 +71,23 @@ describe('commands that stop Harness first (cli.ts)', () => {
     expect(refused, 'it says so, the app\'s way too').toContain('didNotStopSentence(')
     expect(refused).toContain("code: 'DAEMON_DID_NOT_STOP'")
     expect(refused).toContain('return { signedIn: false }')
+  })
+
+  // The text before the guard, not its control flow: what may appear there is listed, each on a path that returns
+  // before the stop (or, for `relaunch(`'s `launch(`, a closure called only after it). Anything new fails here.
+  it.each<[string, string, string[]]>([
+    ['resetCommand', 'stopDaemonOrExit(', []],
+    ['logout', 'stopDaemonOrExit(', []],
+    ['updateCommand', 'stopDaemonOrExit(', ['launch(']], // inside `const relaunch = …`, called after the stop
+    ['startCommand', 'stopDaemonOrExit(', []],
+    ['restartDaemonForIdentity', 'stopDaemonOrExit(', ['launch(']], // the branch with no daemon running, which returns
+    ['loginCommand', 'leftRunning(', ['signIn(']], // `if (!force) return await signIn()`: no stop on that path
+  ])('%s changes nothing before it knows Harness stopped', (name, guard, onOtherPaths) => {
+    const text = body(name)
+    const before = text.slice(0, at(text, guard))
+    const changed = MUTATING.filter((call) => before.includes(call))
+    expect(changed, `called before the stop's outcome is known in ${name}`).toEqual(onOtherPaths)
+    for (const call of onOtherPaths) expect(before.split(call).length - 1, `${call} appears once before the stop in ${name}`).toBe(1)
   })
 
   it('harness stop says it did not stop, through the same guard', () => {

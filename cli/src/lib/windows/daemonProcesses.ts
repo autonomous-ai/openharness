@@ -26,14 +26,42 @@ function runsAs(argv: readonly string[], role: DaemonRole): boolean {
   return argv.includes('__harnessd') || (argv.includes('start') && (argv.includes('-f') || argv.includes('--foreground')))
 }
 
-/** The start marker of [pid] when it is the daemon's [claim.role]; null when it is not, or cannot be shown to be. */
-export function identifyDaemonProcess(rows: readonly ProcessRow[], pid: number, claim: DaemonProcessClaim): string | null {
+/** What the table shows of [pid] against [claim]: the daemon's process (with its start marker), proven not to be
+ *  (gone from the table, another command, started after the claim, another parent), or nothing either way. */
+export type DaemonProcessVerdict = { verdict: 'is'; startMarker: string } | { verdict: 'not' } | { verdict: 'unknown' }
+
+export function judgeDaemonProcess(rows: readonly ProcessRow[], pid: number, claim: DaemonProcessClaim): DaemonProcessVerdict {
   const row = rows.find((candidate) => candidate.pid === pid)
+  if (!row) return { verdict: 'not' }
   // The kernel's argv only: split from `args`, an agent's prompt text could pose as a `__run` token. The host gives
   // every row one (pty/src/ps.rs, `[executable]` when the command line could not be read).
-  if (!row || !row.startMarker || !row.nativeArgv) return null
-  if (!runsAs(row.nativeArgv, claim.role)) return null
-  if (claim.role === 'core') return row.parentPid === claim.parentPid ? row.startMarker : null
+  if (!row.startMarker || !row.nativeArgv) return { verdict: 'unknown' }
+  if (!runsAs(row.nativeArgv, claim.role)) return { verdict: 'not' }
+  const is = { verdict: 'is', startMarker: row.startMarker } as const
+  if (claim.role === 'core') return row.parentPid === claim.parentPid ? is : { verdict: 'not' }
   const started = startMarkerMs(row.startMarker)
-  return started !== null && started <= claim.claimedAtMs + CLAIM_SLACK_MS ? row.startMarker : null
+  if (started === null || !Number.isFinite(claim.claimedAtMs)) return { verdict: 'unknown' }
+  return started <= claim.claimedAtMs + CLAIM_SLACK_MS ? is : { verdict: 'not' }
 }
+
+/** The start marker of [pid] when it is the daemon's [claim.role]; null when it is not, or cannot be shown to be. */
+export function identifyDaemonProcess(rows: readonly ProcessRow[], pid: number, claim: DaemonProcessClaim): string | null {
+  const judged = judgeDaemonProcess(rows, pid, claim)
+  return judged.verdict === 'is' ? judged.startMarker : null
+}
+
+/**
+ * Whose pid the pid file holds. Harnessd's master claims it; a core no master runs claims it for itself
+ * (core/main.ts), and is Harness too. `is`: the master, which `harness stop` may end. `not`: proven another process
+ * (gone, another command, or started after the file was written: Windows reissues a freed pid quickly). `unknown`: a
+ * core no master runs, or a row that cannot be read; never ended, and the file is kept.
+ */
+export function judgePidFileOwner(rows: readonly ProcessRow[], pid: number, claimedAtMs: number): DaemonProcessVerdict {
+  const asMaster = judgeDaemonProcess(rows, pid, { role: 'master', claimedAtMs })
+  if (asMaster.verdict !== 'not') return asMaster
+  const row = rows.find((candidate) => candidate.pid === pid)
+  if (!row?.nativeArgv || !runsAs(row.nativeArgv, 'core')) return asMaster
+  const started = startMarkerMs(row.startMarker)
+  return started !== null && started <= claimedAtMs + CLAIM_SLACK_MS ? { verdict: 'unknown' } : asMaster
+}
+
