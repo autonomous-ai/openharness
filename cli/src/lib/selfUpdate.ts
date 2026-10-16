@@ -596,6 +596,8 @@ export function startSelfUpdater(opts: {
 
   const now = opts.now ?? Date.now
   const platform = opts.platform ?? process.platform
+  /** Windows: the version `cli\current` names now. Null on macOS and Linux, and when the pointer cannot be read. */
+  const pointed = (): string | null => platform === 'win32' ? currentCli(dirname(opts.dir))?.version ?? null : null
   const download = opts.limits ?? DOWNLOAD_LIMITS
   const manifest: TransferLimits = {
     idleMs: Math.min(download.idleMs, MANIFEST_LIMITS.idleMs), deadlineMs: Math.min(download.deadlineMs, MANIFEST_LIMITS.deadlineMs),
@@ -628,7 +630,7 @@ export function startSelfUpdater(opts: {
       // against it, it would stage an older build over the newer one and move the pointer back (found in
       // review). What is installed is the build `cli\current` names; this process's own version only when the
       // pointer cannot be read. The dev-build rule then applies to that build, the one a developer installed.
-      const installed = platform === 'win32' ? currentCli(dirname(opts.dir))?.version ?? opts.currentVersion : opts.currentVersion
+      const installed = pointed() ?? opts.currentVersion
       if (!shouldAutoUpdate(entry.version, installed)) return
       const unremembered = settleRolledBack(opts.dir, platform)
       if (unremembered === entry.version || rejectedVersions(opts.dir).includes(entry.version)) {
@@ -681,6 +683,14 @@ export function startSelfUpdater(opts: {
       // nothing shared); swapped and handed off INSIDE it.
       await withLock(async () => {
         if (halted) return
+        // Asked again under the lock: the download and the canary took seconds or minutes since the check
+        // above, and the installer or another process may have put a newer build in meanwhile. The next
+        // check's gate then refuses it, so this is said once.
+        const pointedNow = pointed()
+        if (pointedNow !== null && !shouldAutoUpdate(ready.version, pointedNow)) {
+          console.log(`[update] ${ready.version} is no longer an update: the installed build is now ${pointedNow}. Nothing was staged.`)
+          return
+        }
         stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version, platform)
         done = true
         stop()

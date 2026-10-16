@@ -1173,6 +1173,36 @@ describe('the automatic updater on Windows, judged against the build cli\\curren
     expect(existsSync(join(cli, 'update-pending.json'))).toBe(false)
   })
 
+  it('stages nothing when cli\\current moves past the build while it downloads, and says so once', async () => {
+    // The gate saw 9.9.8 installed; by the time the lock is held, the installer or another process put in 9.9.10.
+    serveUpdate()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const cli = installed('9.9.8')
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: cli, intervalMs: 10, platform: 'win32',
+      withLock: async (fn) => {
+        mkdirSync(join(cli, '9.9.10'))
+        writeFileSync(join(cli, '9.9.10', 'cli.js'), 'cli 9.9.10')
+        writeFileSync(join(cli, '9.9.10', 'notify.mjs'), 'notify 9.9.10')
+        writeFileSync(join(cli, 'current'), '9.9.10\r\n')
+        return fn()
+      },
+      onStaged: (version) => { staged.push(version) },
+    })
+    const said = (): unknown[][] => log.mock.calls.filter(([line]) => String(line).includes('is no longer an update'))
+    try {
+      await vi.waitFor(() => expect(said()).toHaveLength(1), { timeout: 5_000 })
+      const checks = manifestChecks
+      await vi.waitFor(() => expect(manifestChecks).toBeGreaterThanOrEqual(checks + 3), { timeout: 5_000 })
+    } finally { poller.stop() }
+    expect(said()).toEqual([['[update] 9.9.9 is no longer an update: the installed build is now 9.9.10. Nothing was staged.']])
+    expect(staged).toEqual([])
+    expect(readFileSync(join(cli, 'current'), 'utf8')).toBe('9.9.10\r\n')
+    expect(existsSync(join(cli, '9.9.9'))).toBe(false)
+    expect(existsSync(join(cli, 'update-pending.json'))).toBe(false)
+  })
+
   it('judges against its own version when cli\\current cannot be read', async () => {
     serveUpdate()
     vi.spyOn(console, 'log').mockImplementation(() => {})
