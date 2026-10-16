@@ -287,7 +287,7 @@ export async function probeTerminalAgents(
         : ''
       const evidence = gridAssignmentProcess('', agent.engine, env, evidenceArgs)
       if (evidence) agent.gridProcess = evidence
-      else agent.grid = null
+      else if (agent.engine !== 'codex' || agent.argsBoundaryFaithful) agent.grid = null
     }
     // And, for Codex, the profile it runs under — a fact about the process the row cannot otherwise learn.
     agent.codexHome = await probeProfileHome(agent.processIdentity, agent.engine)

@@ -107,7 +107,8 @@ describe('grid assignment on the live terminal discovery path', () => {
       999,
     )
 
-    expect(probe.agents[0]).toMatchObject({ argsBoundaryFaithful: false, grid: null })
+    expect(probe.agents[0]).toMatchObject({ argsBoundaryFaithful: false })
+    expect(probe.agents[0].grid).toBeUndefined()
     expect(probe.agents[0].gridProcess).toBeUndefined()
   })
 
