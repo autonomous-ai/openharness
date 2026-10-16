@@ -935,6 +935,49 @@ describe('database session repair', () => {
   })
 })
 
+/**
+ * OpenCode 2 keeps its sessions in `session_v2` (same columns) and no longer writes `session`, which stays in a
+ * store 1.x made and holds only what 1.x wrote; a fresh store has no `session` at all.
+ */
+describe('OpenCode 2 session repair', () => {
+  const t = hasSqlite ? it : it.skip
+  const time = STARTED_AT + 5
+
+  async function find(statements: string[], options: { excludedSessionId?: string } = {}) {
+    const data = tempRoot()
+    vi.stubEnv('XDG_DATA_HOME', data)
+    mkdirSync(join(data, 'opencode'), { recursive: true })
+    execFileSync('sqlite3', [join(data, 'opencode', 'opencode.db'), statements.join(';')])
+    const { findLiveSession } = await load(tempRoot())
+    return findLiveSession('opencode', CWD, STARTED_AT, { bornOnly: true, ...options })
+  }
+  const table = (name: string) => `CREATE TABLE ${name} (id TEXT, directory TEXT, parent_id TEXT, time_created INTEGER, time_updated INTEGER)`
+  const row = (name: string, id: string, parent: string | null = null, updated = time) =>
+    `INSERT INTO ${name} VALUES ('${id}','${CWD}',${parent ? `'${parent}'` : 'NULL'},${time},${updated})`
+
+  t('finds the session a process started in a store that has only OpenCode 2 tables', async () => {
+    await expect(find([table('session_v2'), row('session_v2', 'ses_new')])).resolves.toEqual({ sessionId: 'ses_new' })
+  })
+
+  t('reads session_v2 alone when the store has both, never the v1 rows that stopped being written', async () => {
+    // The stale v1 row of a session v2 took over would be a second candidate, and a v1-only one a wrong answer.
+    await expect(find([table('session'), row('session', 'ses_stale'), table('session_v2'), row('session_v2', 'ses_new')]))
+      .resolves.toEqual({ sessionId: 'ses_new' })
+    await expect(find([table('session'), row('session', 'ses_stale'), table('session_v2')])).resolves.toBeNull()
+  })
+
+  t('keeps the rules it has: top-level sessions only, and nothing ambiguous', async () => {
+    await expect(find([table('session_v2'), row('session_v2', 'ses_parent'), row('session_v2', 'ses_child', 'ses_parent')]))
+      .resolves.toEqual({ sessionId: 'ses_parent' })
+    await expect(find([table('session_v2'), row('session_v2', 'ses_a'), row('session_v2', 'ses_b', null, time - 1)])).resolves.toBeNull()
+    await expect(find([table('session_v2'), row('session_v2', 'ses_a')], { excludedSessionId: 'ses_a' })).resolves.toBeNull()
+  })
+
+  t('still reads OpenCode 1\'s session table in a store without session_v2', async () => {
+    await expect(find([table('session'), row('session', 'ses_v1')])).resolves.toEqual({ sessionId: 'ses_v1' })
+  })
+})
+
 describe('hermes repair across profile homes', () => {
   const t = hasSqlite ? it : it.skip
   const SID_DEFAULT = '20260727_162325_e25264'
