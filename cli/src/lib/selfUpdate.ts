@@ -458,7 +458,8 @@ function fileSha256(file: string): string | null {
  * crashed the daemon restarted every machine once a minute until a fix was published.
  */
 export function restore(dir: string, platform: NodeJS.Platform = process.platform): void {
-  if (platform === 'win32') restoreVersion(dir)
+  let movedBack = true
+  if (platform === 'win32') movedBack = restoreVersion(dir)
   else {
     for (const name of [CLI, NOTIFY]) {
       const prev = join(dir, `${name}.prev`)
@@ -468,15 +469,23 @@ export function restore(dir: string, platform: NodeJS.Platform = process.platfor
   const failed = pendingVersion(dir)
   try {
     if (failed) writeJson(join(dir, REJECTED), [...rejectedVersions(dir).filter((version) => version !== failed), failed].slice(-REJECTED_KEPT))
-    rmSync(join(dir, PENDING), { force: true })
+    // A pointer that did not move back leaves the failed build in use: its note stays, so the next master to start
+    // judges it again (`unjudgedUpdate`) and rolls it back once more.
+    if (movedBack) rmSync(join(dir, PENDING), { force: true })
   } catch { /* the rollback itself is what matters */ }
 }
 
-/** Windows: `cli\current` back to the build the pending note names. */
-function restoreVersion(dir: string): void {
+/** Windows: `cli\current` back to the build the pending note names. False when the pointer could not be moved there;
+ *  true once it is, and when there is no such build to go back to. */
+function restoreVersion(dir: string): boolean {
   const previous = readPending(dir)?.previous
-  if (!previous || !isVersionFolder(dir, previous)) return
-  try { switchTo(dir, previous) } catch { /* the rejected list below still keeps the failed build from coming back */ }
+  if (!previous || !isVersionFolder(dir, previous)) return true
+  try {
+    switchTo(dir, previous)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**

@@ -1078,6 +1078,22 @@ describe('self-update on Windows, over version folders', () => {
     expect(rejectedVersions(fresh)).toEqual(['0.6.0'])
   })
 
+  it('keeps the pending note when the pointer cannot be moved back, so the next start judges and rolls back again', () => {
+    const cli = layout('0.5.0')
+    stageWin(cli, '0.5.1')
+    pointer.fail = true
+    restore(cli, 'win32')
+    expect(read(cli, 'current').trim()).toBe('0.5.1')
+    expect(rejectedVersions(cli)).toEqual(['0.5.1'])
+    expect(unjudgedUpdate(cli, sha('cli 0.5.1'))).toBe('0.5.1')
+    expect(settleRolledBack(cli, 'win32')).toBeNull()
+    pointer.fail = false
+    restore(cli, 'win32')
+    expect(read(cli, 'current').trim()).toBe('0.5.0')
+    expect(rejectedVersions(cli)).toEqual(['0.5.1'])
+    expect(existsSync(join(cli, 'update-pending.json'))).toBe(false)
+  })
+
   it('rolls back to the last build kept when a newer one was staged during probation', () => {
     const cli = layout('0.5.0')
     stageWin(cli, '0.5.1')
