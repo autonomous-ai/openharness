@@ -44,6 +44,9 @@ export interface ServiceSupervisorDeps {
   log(line: string): void
   /** The updater staged `version` on disk (`harnessd:staged`): the core is to hand over for it. */
   staged?(version: string): void
+  /** Stop a service with `harnessd:shutdown` rather than SIGTERM: Windows, where Node's `kill` is TerminateProcess
+   *  and the service's own stop never runs (./supervisor.ts `SupervisorDeps.stopByMessage`). */
+  stopByMessage?: boolean
 }
 
 export interface ServiceSupervisorOptions {
@@ -262,7 +265,9 @@ class Service {
     const child = this.child!
     this.ending = true
     this.clearTimer('heartbeatTimer')
-    child.kill(signal)
+    // Called with SIGTERM only: a stop, or a restart for memory.
+    if (this.deps.stopByMessage) child.send({ type: 'harnessd:shutdown' })
+    else child.kill(signal)
     this.armTimer('killTimer', () => {
       this.deps.log(`[harnessd] service ${this.spec.name} outlived its ${this.options.stopGraceMs} ms to stop — killing it`)
       child.kill('SIGKILL')
