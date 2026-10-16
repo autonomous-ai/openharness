@@ -1409,9 +1409,11 @@ export function resumeSessionId(engine: RegisteredSession['engine'], args: strin
 export function processTitleSessionId(engine: RegisteredSession['engine'], args: string): string | null {
   const split = argvTokens(args)
   // Linux exposes a Node process.title rewrite as one argv element; the safe serializer quotes that
-  // whole element because it contains spaces. Interpret the contents as the title contract, not as
-  // ordinary argv. Multiple elements remain ordinary argv and must match the anchored grammar as-is.
-  const title = (split.length === 1 ? split[0] : args).trim()
+  // whole element because it contains spaces. The rewritten argv region can retain trailing NULs,
+  // which the boundary-faithful serializer preserves as empty argv elements. Interpret the first
+  // token as the title only when every remainder is empty; any non-empty suffix is ordinary argv.
+  const rewritten = split.length > 0 && split.slice(1).every(token => token === '') ? split[0] : null
+  const title = (rewritten ?? args).trim()
   const exact = engine === 'opencode'
     ? /^opencode\s+(?:--session|-s)\s+(ses_[A-Za-z0-9]+)$/
     : engine === 'pi'
