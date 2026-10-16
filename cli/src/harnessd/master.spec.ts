@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  coreExecArgv, coreHandle, describeMasterStatus, heapLimitInArgv, masterDefaults, onProcessSignal, probeMaster, processExecve, processExit,
+  LOG_TRIM_INTERVAL_MS, coreExecArgv, coreHandle, describeMasterStatus, heapLimitInArgv, masterDefaults, onProcessSignal, probeMaster, processExecve, processExit,
   readStatusFile, runMaster, supervisorOptions, trimLogEvery, writeStatusFile, type MasterStatusFile,
 } from './master.js'
 import { ignoreLogWriteErrors } from '../lib/log.js'
@@ -889,9 +889,11 @@ describe('runMaster', { timeout: 60_000 }, () => {
       `)
       return file
     }
-    const handedTo = (token: string, update: 'pending' | null = null): ResumeState => ({
-      restarts: 0, lastExit: null, lastExitReason: null, update, claimed: true, reexecs: 1, unproven: 1, handover: { from: 999999, token },
+    const handedTo = (token: string, update: 'pending' | null = null, from = 999999): ResumeState => ({
+      restarts: 0, lastExit: null, lastExitReason: null, update, claimed: true, reexecs: 1, unproven: 1, handover: { from, token },
     })
+    /** The log trimmer's interval (`trimLogEvery`): started by a master that serves, never by one that leaves. */
+    const trimmers = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.filter(([, ms]) => ms === LOG_TRIM_INTERVAL_MS).length
 
     it('takes over from the master that handed over: the handover and the pid file this process\'s from its start', async () => {
       const pidFile = join(dir, 'adapter.pid')
@@ -907,9 +909,10 @@ describe('runMaster', { timeout: 60_000 }, () => {
       const updates: string[] = []
       const lines: string[] = []
       const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+      const intervals = vi.spyOn(globalThis, 'setInterval')
       try {
         runMaster({
-          nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, reexecMarkerFile: marker(),
+          nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, reexecMarkerFile: marker(), logFile: join(dir, 'daemon.log'),
           restoreUpdate: () => updates.push('restore'), confirmUpdate: () => {},
           env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo('tok')) },
           exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
@@ -921,12 +924,13 @@ describe('runMaster', { timeout: 60_000 }, () => {
         expect(readdirSync(dir).filter((name) => name.endsWith('.handover'))).toEqual(['harnessd-reexec.json.tok.handover'])
         expect(lines.some((line) => line.endsWith('[harnessd] took over from the master before it (pid 999999)'))).toBe(true)
         expect(lines.some((line) => line.includes('master re-executed'))).toBe(false)
+        expect(trimmers(intervals)).toBe(1)
         await until('its core to come up, which ends the marker', () => !existsSync(marker()))
         expect(updates).toEqual([])
         signals.get('SIGTERM')!()
         await until('the master to finish', () => exits.length > 0)
         expect(existsSync(pidFile)).toBe(false)
-      } finally { log.mockRestore() }
+      } finally { log.mockRestore(); intervals.mockRestore() }
     })
 
     it('takes the marker of the handover it took with it when stopped before its first core is up', async () => {
@@ -964,6 +968,8 @@ describe('runMaster', { timeout: 60_000 }, () => {
       ]
       const lines: string[] = []
       const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+      // Two trimmers would rewrite the one log at once: the master that handed over keeps its own.
+      const intervals = vi.spyOn(globalThis, 'setInterval')
       try {
         for (const { why, token, marker: over, pidFile: file = pidFile, before } of cases) {
           rmSync(marker(), { force: true })
@@ -973,7 +979,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
           const exits: number[] = []
           const updates: string[] = []
           runMaster({
-            nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile: file, reexecMarkerFile: marker(),
+            nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile: file, reexecMarkerFile: marker(), logFile: join(dir, 'daemon.log'),
             restoreUpdate: () => updates.push('restore'), confirmUpdate: () => {},
             env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo(token, 'pending')) },
             exit: (code) => exits.push(code), onSignal: () => {},
@@ -1004,7 +1010,21 @@ describe('runMaster', { timeout: 60_000 }, () => {
         })
         expect(late).toEqual([0])
         expect(lines.some((line) => line.endsWith('[harnessd] the master that started this one (pid 999999) stopped waiting for it as this one took over — leaving'))).toBe(true)
-      } finally { log.mockRestore() }
+        // That master gone: the pid file names this process, which leaves, and so a process that ended.
+        expect(readFileSync(marker(), 'utf8')).toBe(`${process.pid}\n`)
+        // That master still running, having settled on the pid file before this one overwrote it: the file is its again,
+        // or `harness start --if-down` would take the machine for one with no master and start a second.
+        writeMarker(marker(), { pid: process.ppid, from: 'a', to: fingerprint(core)!, at: now, handover: 'h' })
+        const back: number[] = []
+        runMaster({
+          nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile: marker(), reexecMarkerFile: marker(), restoreUpdate: () => {}, confirmUpdate: () => {},
+          env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo('h', null, process.ppid)) },
+          exit: (code) => back.push(code), onSignal: () => {},
+        })
+        expect(back).toEqual([0])
+        expect(readFileSync(marker(), 'utf8')).toBe(`${process.ppid}\n`)
+        expect(trimmers(intervals)).toBe(0)
+      } finally { log.mockRestore(); intervals.mockRestore() }
       await new Promise((resolve) => setTimeout(resolve, 300))
       expect(existsSync(ran)).toBe(false)
       expect(existsSync(pidFile)).toBe(false)

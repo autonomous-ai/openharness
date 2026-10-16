@@ -272,15 +272,12 @@ export function runMaster(config: MasterConfig): Supervisor {
   const resume = decodeResume(given[RESUME_ENV])
   const env: NodeJS.ProcessEnv = { ...given }
   delete env[RESUME_ENV]
-  const writePidFile = (): void => { writeFileSync(config.pidFile, `${process.pid}\n`) }
+  const writePidFile = (pid = process.pid): void => { writeFileSync(config.pidFile, `${pid}\n`) }
   const readPid = (): number | null => {
     try { return Number.parseInt(readFileSync(config.pidFile, 'utf8').trim(), 10) || null } catch { return null }
   }
   const options = supervisorOptions(env, config.execArgv)
   const execArgv = coreExecArgv(config.execArgv, options.heapLimitMiB)
-  // Trimmed here rather than by the core: the master outlives every core, and two trimmers rewriting
-  // one file in place would race.
-  const stopTrimming = trimLogEvery(config.logFile)
   // The core's stamp, local time (lib/log.ts): in UTC, the master's lines sat hours away from the core's
   // lines around them in the one log they share.
   const log = (line: string) => console.log(`${ts()} ${line}`)
@@ -317,17 +314,24 @@ export function runMaster(config: MasterConfig): Supervisor {
   const takeOver = ({ from, token }: { from: number; token: string }): boolean => {
     const leaving = (why: string): false => { log(`[harnessd] ${why} — leaving`); return false }
     const stopped = `the master that started this one (pid ${from}) stopped waiting for it`
+    const write = (pid: number): string | null => { try { writePidFile(pid); return null } catch (error) { return (error as Error).message } }
     if (!markerFile || !takeHandover(markerFile, token, process.pid) || !mayClaimPidFile(markerFile, token)) return leaving(stopped)
-    try {
-      writePidFile()
-    } catch (error) {
-      return leaving(`could not take over from pid ${from} (${(error as Error).message})`)
+    const failed = write(process.pid)
+    if (failed !== null) return leaving(`could not take over from pid ${from} (${failed})`)
+    if (!mayClaimPidFile(markerFile, token)) {
+      // That master may have settled on the pid file naming it before this write: still running, it is the master, and
+      // a pid file naming this process, about to end, would have `harness start --if-down` start a second one.
+      if (readPid() === process.pid && alive(from)) write(from)
+      return leaving(`${stopped} as this one took over`)
     }
-    if (!mayClaimPidFile(markerFile, token)) return leaving(`${stopped} as this one took over`)
     log(`[harnessd] took over from the master before it (pid ${from})`)
     return true
   }
   const tookOver = handover ? takeOver(handover) : true
+  // Trimmed here rather than by the core: the master outlives every core, and two trimmers rewriting
+  // one file in place would race. Not by a master handed over to until it took over: the one before
+  // trims the log until then.
+  const stopTrimming = tookOver ? trimLogEvery(config.logFile) : () => {}
   // The marker is this master's: its own re-execution's, or the handover it took, which names the master before it.
   const ownMarker = (marker: ReexecMarker | null): boolean => !!marker && (marker.pid === process.pid || (!!handover && marker.handover === handover.token))
   if (markerFile && !handover) {
