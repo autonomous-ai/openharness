@@ -497,6 +497,11 @@ matrix job; running by hand, fetch one yourself from the
 and none is needed: the trust boundary is the same sha256-verified manifest entry `DesktopUpdater`
 already checks on every platform.
 
+The Linux viewer uses the host's WebKitGTK 4.1 runtime (`libwebkit2gtk-4.1-0`). The AppImage
+contains Harness and its Flutter bundle, but does not bundle WebKitGTK; install the runtime package
+from the distribution before launching Harness. Linux release builds also need
+`libwebkit2gtk-4.1-dev` on the build host.
+
 **Packaged as a single-file AppImage**, not a tarball. The script stages an AppDir
 (`usr/bin/` = the Flutter `bundle/` verbatim, plus a hand-written `harness.desktop` and the
 `harness.png` icon CMake already installs at the bundle root) and hands it to `appimagetool` with
