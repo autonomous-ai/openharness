@@ -86,6 +86,8 @@ export function decodeResume(text: string | undefined): ResumeState | null {
       && typeof value.claimed === 'boolean'
       && Number.isInteger(value.reexecs) && value.reexecs! >= 0
       && Number.isInteger(value.unproven) && value.unproven! >= 0
+      && (value.handover === undefined || (!!value.handover && Number.isInteger(value.handover.from) && value.handover.from > 0
+        && typeof value.handover.token === 'string' && value.handover.token.length > 0))
     return ok ? value as ResumeState : null
   } catch {
     return null
@@ -98,6 +100,8 @@ export interface ReexecMarker {
   from: string | null
   to: string
   at: number
+  /** Windows: the handover this marker belongs to (`HandOverDeps.token`). */
+  handover?: string
 }
 
 export function writeMarker(file: string, marker: ReexecMarker): void {
@@ -118,6 +122,7 @@ export function readMarker(file: string): ReexecMarker | null {
     const marker = JSON.parse(readFileSync(file, 'utf8')) as Partial<ReexecMarker>
     return Number.isInteger(marker.pid) && typeof marker.to === 'string' && typeof marker.at === 'number'
       && (marker.from === null || typeof marker.from === 'string')
+      && (marker.handover === undefined || typeof marker.handover === 'string')
       ? marker as ReexecMarker
       : null
   } catch {
@@ -218,6 +223,35 @@ export interface ReexecDeps {
   /** The wall clock, ms. */
   now(): number
   log(line: string): void
+  /**
+   * Windows has no exec (`process.execve` is not there): the replacement is a new process, started through
+   * harness-launch.exe, and this master leaves once it holds the pid file. Still only in the gap before a core starts,
+   * the services stopped and reaped first (./AGENTS.md rule 6). Left out, `execve`.
+   */
+  handOver?: HandOverDeps
+}
+
+/** How long the replacement has to start and claim the pid file: Node loading cli.js, under an antivirus scan. */
+export const HANDOVER_WAIT_MS = 30_000
+export const HANDOVER_POLL_MS = 250
+
+export interface HandOverDeps {
+  /**
+   * The daemon spawn lock (lib/daemonSpawnLock.ts), held from before the replacement starts until this master leaves,
+   * so a `harness stop` waits for the handover to finish rather than stop the master on its way out while the new one
+   * comes up, and the scheduled task's `harness start --if-down` does nothing meanwhile. Null when it is busy.
+   */
+  lock(): Promise<(() => void) | null>
+  /** Start `__harnessd` on the bundle on disk with [env]; null once it is started, why not otherwise. */
+  launch(env: NodeJS.ProcessEnv): Promise<string | null>
+  /** Who the pid file names now, and whether that runs. */
+  readPid(): number | null
+  alive(pid: number): boolean
+  sleep(ms: number): Promise<void>
+  /** A fresh token naming this handover in the marker and the state handed on. */
+  token(): string
+  /** This master's end: the replacement holds the pid file. The spawn lock is released just before (./reexec.ts). */
+  leave(): void
 }
 
 /** The supervisor's `reexec`, and a way to abandon a probe still running when the master stops. */
@@ -230,11 +264,79 @@ export function createReexec(deps: ReexecDeps): {
   let warned = false
   let probe: { cancel(): void } | null = null
   let replacing = false
+  const successor = (h: HandOverDeps): number | null => {
+    const pid = h.readPid()
+    return pid !== null && pid !== deps.pid && h.alive(pid) ? pid : null
+  }
+
+  /**
+   * Windows. The marker names this handover's token: the replacement takes it (and the pid file) only while it still
+   * does (./master.ts), and this master takes it back when it gives up waiting, so a replacement that comes up late
+   * leaves rather than run beside this one. One that claimed the pid file as this master gave up keeps the machine.
+   */
+  const handOver = async (h: HandOverDeps, next: string, state: ResumeState, at: number, carryOn: (outcome: ReexecOutcome) => void): Promise<void> => {
+    const release = await h.lock()
+    if (deps.stopping()) { release?.(); return }
+    if (!release) {
+      deps.log('[harnessd] the daemon spawn lock is busy — keeping this master')
+      carryOn('kept')
+      return
+    }
+    const token = h.token()
+    const keep = (why: string): void => {
+      deps.removeMarker()
+      release()
+      deps.log(`[harnessd] ${why} — keeping this master`)
+      carryOn('kept')
+    }
+    // The replacement holds the pid file: this master lets go of the spawn lock and leaves. The replacement never
+    // takes the lock again, so this release is what frees it, and it comes only once the pid file names a live
+    // successor: until then a `harness stop` waits rather than land on a master on its way out.
+    const leave = (): void => {
+      release()
+      h.leave()
+    }
+    try {
+      deps.writeMarker({ pid: deps.pid, from: deps.own, to: next, at, handover: token })
+    } catch (error) {
+      release()
+      deps.log(`[harnessd] could not leave the re-execution marker (${error instanceof Error ? error.message : String(error)}) — keeping this master`)
+      carryOn('kept')
+      return
+    }
+    if (!deps.exists(deps.scriptPath)) { keep(`${deps.scriptPath} is not there to hand over to`); return }
+    const env = {
+      ...deps.env,
+      [RESUME_ENV]: encodeResume({ ...state, reexecs: state.reexecs + 1, unproven: state.unproven + 1, claimed: true, handover: { from: deps.pid, token } }),
+    }
+    const failed = await h.launch(env)
+    if (deps.stopping()) { deps.removeMarker(); release(); return }
+    if (failed !== null) { keep(`could not start the new master (${failed})`); return }
+    const deadline = deps.now() + HANDOVER_WAIT_MS
+    for (;;) {
+      const pid = successor(h)
+      if (pid !== null) {
+        deps.log(`[harnessd] handed over to the new master (pid ${pid}) — leaving`)
+        leave()
+        return
+      }
+      if (deps.now() >= deadline) break
+      await h.sleep(HANDOVER_POLL_MS)
+      // A stop meanwhile is the master's own exit to finish (./master.ts removes the marker it still names).
+      if (deps.stopping()) return
+    }
+    deps.removeMarker()
+    if (successor(h) !== null) { leave(); return }
+    release()
+    deps.log(`[harnessd] the new master did not take over within ${HANDOVER_WAIT_MS} ms — keeping this master`)
+    carryOn('kept')
+  }
+
   return {
     reexec: (state, proceed) => {
       const next = deps.current()
       if (next === null || next === deps.own) { proceed('same'); return }
-      if (!deps.execve) {
+      if (!deps.execve && !deps.handOver) {
         if (!warned) deps.log('[harnessd] the bundle on disk is newer than this master, but this Node cannot re-execute a process: the master keeps its code until it restarts')
         warned = true
         proceed('kept')
@@ -268,6 +370,7 @@ export function createReexec(deps: ReexecDeps): {
             carryOn('refused')
             return
           }
+          if (deps.handOver) { void handOver(deps.handOver, next, state, now, carryOn); return }
           try {
             deps.writeMarker({ pid: deps.pid, from: deps.own, to: next, at: now })
           } catch (error) {

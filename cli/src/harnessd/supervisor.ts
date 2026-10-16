@@ -101,6 +101,9 @@ export interface ResumeState {
   /** Of those, how many since a core last came up: a master that keeps re-executing without one is
    *  in a loop, and stops (./reexec.ts `REEXEC_LIMIT`). */
   unproven: number
+  /** Windows, which has no exec: the master that handed over to this process, and the token its marker carries
+   *  (./reexec.ts `HandOverDeps`). This process claims the pid file and the marker as it starts (./master.ts). */
+  handover?: { from: number; token: string }
 }
 
 /**

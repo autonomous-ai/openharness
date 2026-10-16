@@ -6,8 +6,8 @@ import { join } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  PROBE_ANSWER, PROBE_COMMAND, PROBE_TIMEOUT_MS, REEXEC_LIMIT, RESUME_ENV, createReexec, decodeResume, encodeResume, fingerprint,
-  readMarker, recoverFailedReexec, removeMarker, runProbe, sha256File, writeMarker, type ProbeResult, type ReexecDeps,
+  HANDOVER_WAIT_MS, PROBE_ANSWER, PROBE_COMMAND, PROBE_TIMEOUT_MS, REEXEC_LIMIT, RESUME_ENV, createReexec, decodeResume, encodeResume, fingerprint,
+  readMarker, recoverFailedReexec, removeMarker, runProbe, sha256File, writeMarker, type HandOverDeps, type ProbeResult, type ReexecDeps,
 } from './reexec.js'
 import type { ReexecOutcome, ResumeState } from './supervisor.js'
 
@@ -56,6 +56,16 @@ describe('the state a master hands on', () => {
       { reexecs: -1 }, { reexecs: '1' }, { unproven: 0.5 }, { unproven: null },
     ]) expect(decodeResume(JSON.stringify({ ...state(), ...wrong })), JSON.stringify(wrong)).toBeNull()
   })
+
+  it('hands on who handed over, and reads nothing it does not know as a handover', () => {
+    const handed = state({ claimed: true, handover: { from: 4242, token: 'tok' } })
+    expect(decodeResume(encodeResume(handed))).toEqual(handed)
+    expect(decodeResume(JSON.stringify({ ...state(), handover: { from: 'x', token: 'tok' } }))).toBeNull()
+    expect(decodeResume(JSON.stringify({ ...state(), handover: { from: 1, token: '' } }))).toBeNull()
+    expect(decodeResume(JSON.stringify({ ...state(), handover: null }))).toBeNull()
+    expect(decodeResume(JSON.stringify({ ...state(), handover: { from: 0, token: 'tok' } }))).toBeNull()
+    expect(decodeResume(JSON.stringify({ ...state(), handover: { from: 1, token: 7 } }))).toBeNull()
+  })
 })
 
 describe('the marker', () => {
@@ -81,6 +91,14 @@ describe('the marker', () => {
       writeFileSync(file, JSON.stringify(wrong))
       expect(readMarker(file), JSON.stringify(wrong)).toBeNull()
     }
+  })
+
+  it('reads a marker\'s handover token, and refuses one that is not text', () => {
+    const file = join(dir, 'harnessd-reexec.json')
+    writeMarker(file, { pid: 1, from: null, to: 'b', at: 2, handover: 'tok' })
+    expect(readMarker(file)).toEqual({ pid: 1, from: null, to: 'b', at: 2, handover: 'tok' })
+    writeFileSync(file, JSON.stringify({ pid: 1, from: null, to: 'b', at: 2, handover: 7 }))
+    expect(readMarker(file)).toBeNull()
   })
 
   it('leaves no temporary file behind when it cannot be written', () => {
@@ -350,5 +368,119 @@ describe('re-executing', () => {
     expect(calls).not.toContain('start children')
     third.cancel()
     make().cancel()
+  })
+})
+
+describe('handing over, where there is no exec (Windows)', () => {
+  let calls: string[]
+  let outcomes: ReexecOutcome[]
+  let stopping: boolean
+  let launched: NodeJS.ProcessEnv[]
+  const clock = { now: 1_000 }
+  const make = (over: Partial<HandOverDeps> = {}, more: Partial<ReexecDeps> = {}) => createReexec({
+    own: 'old', current: () => 'new', nodePath: '/opt/node', execArgv: [], scriptPath: 'C:\\h\\cli\\0.5.1\\cli.js', env: { KEEP: '1' }, pid: 4242,
+    execve: null, exists: () => true,
+    probe: () => ({ result: Promise.resolve({ ok: true, detail: PROBE_ANSWER }), cancel: () => {} }),
+    stopChildren: (done) => { calls.push('stop children'); done() },
+    startChildren: () => calls.push('start children'),
+    writeMarker: (marker) => calls.push(`marker ${JSON.stringify(marker)}`),
+    removeMarker: () => calls.push('remove marker'),
+    stopping: () => stopping, now: () => clock.now, log: (line) => calls.push(line),
+    handOver: {
+      lock: async () => { calls.push('lock'); return () => calls.push('unlock') },
+      launch: async (env) => { launched.push(env); return null },
+      readPid: () => 4242, alive: (pid) => pid === 5151,
+      sleep: async (ms) => { clock.now += ms },
+      token: () => 'tok',
+      leave: () => calls.push('leave'),
+      ...over,
+    },
+    ...more,
+  })
+  const run = async (reexec: ReturnType<typeof make>['reexec']) => {
+    reexec(state(), (outcome) => outcomes.push(outcome))
+    for (let i = 0; i < 5; i++) await new Promise((done) => setImmediate(done))
+  }
+  const REEXECUTING = '[harnessd] the bundle on disk is not this master\'s code — re-executing on it'
+
+  beforeEach(() => { calls = []; outcomes = []; stopping = false; launched = []; clock.now = 1_000 })
+
+  it('starts the new master through the launcher with its state, and leaves once it holds the pid file', async () => {
+    let pid = 4242
+    await run(make({ readPid: () => pid, sleep: async (ms) => { clock.now += ms; pid = 5151 } }).reexec)
+    expect(decodeResume(launched[0]![RESUME_ENV])).toEqual({ ...state(), reexecs: 1, unproven: 1, claimed: true, handover: { from: 4242, token: 'tok' } })
+    expect(launched[0]!.KEEP).toBe('1')
+    // ./AGENTS.md rule 11: the master's own environment passed through, and the resume state; nothing else harnessd's.
+    expect(Object.keys(launched[0]!).sort()).toEqual(['KEEP', RESUME_ENV].sort())
+    expect(calls).toEqual([
+      REEXECUTING, 'stop children', 'lock', `marker ${JSON.stringify({ pid: 4242, from: 'old', to: 'new', at: 1_000, handover: 'tok' })}`,
+      '[harnessd] handed over to the new master (pid 5151) — leaving', 'unlock', 'leave',
+    ])
+    expect(outcomes).toEqual([])
+  })
+
+  it('lets go of the spawn lock as it leaves, once the new master holds the pid file, and not before', async () => {
+    // The replacement never takes the lock again: the old master's release, after the pid file names the new one, is
+    // what frees it. Released earlier, a `harness stop` could land on a master on its way out.
+    let pid = 4242
+    const pidWhenReleased: Array<number | null> = []
+    await run(make({
+      readPid: () => pid,
+      sleep: async (ms) => { clock.now += ms; if (clock.now >= 2_000) pid = 5151 },
+      lock: async () => { calls.push('lock'); return () => { pidWhenReleased.push(pid); calls.push('unlock') } },
+    }).reexec)
+    expect(pidWhenReleased).toEqual([5151])
+    expect(calls.slice(-3)).toEqual(['[harnessd] handed over to the new master (pid 5151) — leaving', 'unlock', 'leave'])
+    expect(calls.filter((call) => call === 'unlock')).toHaveLength(1)
+  })
+
+  it('keeps this master when the new one does not take over in time, taking its marker back first', async () => {
+    // Nothing in the pid file, then a pid that runs nothing, then this master's own: none is a successor.
+    await run(make({ readPid: () => (clock.now < 10_000 ? null : clock.now < 20_000 ? 6000 : 4242) }).reexec)
+    expect(calls.slice(-4)).toEqual(['remove marker', 'unlock', `[harnessd] the new master did not take over within ${HANDOVER_WAIT_MS} ms — keeping this master`, 'start children'])
+    expect(outcomes).toEqual(['kept'])
+    expect(clock.now - 1_000).toBeGreaterThanOrEqual(HANDOVER_WAIT_MS)
+  })
+
+  it('leaves after all when the new one claimed the pid file as it gave up', async () => {
+    await run(make({ readPid: () => (calls.includes('remove marker') ? 5151 : 4242) }).reexec)
+    expect(calls.slice(-3)).toEqual(['remove marker', 'unlock', 'leave'])
+    expect(outcomes).toEqual([])
+  })
+
+  it('keeps this master when the spawn lock is busy, the marker will not write, the bundle is gone or the launcher fails', async () => {
+    await run(make({ lock: async () => null }).reexec)
+    expect(calls.slice(-2)).toEqual(['[harnessd] the daemon spawn lock is busy — keeping this master', 'start children'])
+    calls = []
+    await run(make({}, { writeMarker: () => { throw new Error('ENOSPC') } }).reexec)
+    expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] could not leave the re-execution marker (ENOSPC) — keeping this master', 'start children'])
+    calls = []
+    // A throw that is not an Error still names itself in the log (the catch's String(error) branch).
+    await run(make({}, { writeMarker: () => { throw 'EROFS' } }).reexec)
+    expect(calls.slice(-3)).toEqual(['unlock', '[harnessd] could not leave the re-execution marker (EROFS) — keeping this master', 'start children'])
+    calls = []
+    await run(make({}, { exists: () => false }).reexec)
+    expect(calls.slice(-4)).toEqual(['remove marker', 'unlock', '[harnessd] C:\\h\\cli\\0.5.1\\cli.js is not there to hand over to — keeping this master', 'start children'])
+    calls = []
+    await run(make({ launch: async () => 'exit 3' }).reexec)
+    expect(calls.slice(-4)).toEqual(['remove marker', 'unlock', '[harnessd] could not start the new master (exit 3) — keeping this master', 'start children'])
+    expect(outcomes).toEqual(['kept', 'kept', 'kept', 'kept', 'kept'])
+  })
+
+  it('does no more once the master is stopping', async () => {
+    await run(make({ lock: async () => { stopping = true; return () => calls.push('unlock') } }).reexec)
+    expect(calls.slice(-1)).toEqual(['unlock'])
+    calls = []
+    await run(make({ lock: async () => { stopping = true; return null } }).reexec)
+    expect(calls.slice(-1)).toEqual(['stop children'])
+    calls = []
+    stopping = false
+    await run(make({ launch: async () => { stopping = true; return null } }).reexec)
+    expect(calls.slice(-2)).toEqual(['remove marker', 'unlock'])
+    calls = []
+    stopping = false
+    await run(make({ sleep: async () => { stopping = true } }).reexec)
+    expect(calls.includes('leave') || calls.includes('start children')).toBe(false)
+    expect(outcomes).toEqual([])
   })
 })
