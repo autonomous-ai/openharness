@@ -18,7 +18,7 @@ import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './li
  */
 
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
-import { join, resolve } from 'path'
+import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
 import { createServer } from 'http'
@@ -38,9 +38,14 @@ import { buildLogBundle, bundleFileName, redactSecretsInText } from './lib/logBu
 import { machineListCachePath } from './device/machineList.js'
 import { registry } from './lib/registry.js'
 import { readSafeModeMarker } from './lib/daemonSafeMode.js'
-import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, withSpawnLock } from './lib/daemonSpawnLock.js'
+import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, readSpawnLockOwner, withSpawnLock } from './lib/daemonSpawnLock.js'
 import { didNotStopSentence, leftRunning, stopDaemonOrExit, stopDaemonProcess } from './lib/daemonStop.js'
-import { installedPlatform, osDaemonUnit, serviceDefinition, startUnderPlatform } from './lib/platformDaemon.js'
+import { clearTaskStopped, installedPlatform, osDaemonUnit, platformDaemonDeps, serviceDefinition, startThroughTask, startUnderPlatform, taskStoppedThisBoot, waitForMaster } from './lib/platformDaemon.js'
+import { processIfDownDeps, startIfDown } from './lib/startIfDown.js'
+import { launchDetached } from './lib/windows/launcher.js'
+import { harnessLaunchPath } from './lib/windows/installLayout.js'
+import { isInstalledCopy } from './lib/installedCopy.js'
+import { isHarnessdVariable } from './lib/harnessdEnv.js'
 import { askRuntimePort, readCgroup, takeRuntimeBack } from './lib/osUnitTakeover.js'
 import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
 import { flashCommand } from './lib/flash.js'
@@ -129,14 +134,17 @@ Machine:
   harness start --repair       also re-verify the managed Node runtime and repoint the launcher at it
                                (normally done once by the installer; use this if a start fails because
                                the launcher points at a Node that no longer runs)
+  harness start --if-down      start the daemon only if it is not running and \`harness stop\` has not stopped it
+                               since the computer started (what Windows's scheduled task runs; quiet otherwise)
   harness logout               stop the adapter and clear this computer's SSO session
   harness stop                 stop the background adapter (keeps the SSO session)
   harness reset                stop the adapter and clear local CLI state
   harness status               show whether it's running (+ version)
-  harness service install      run the daemon under launchd (macOS) or systemd (Linux): it starts at login
-                               and comes back if it dies; start and stop then go through it (opt-in)
+  harness service install      run the daemon under launchd (macOS) or systemd (Linux), or have Task Scheduler
+                               start it (Windows): it starts at login and comes back if it dies; start and stop
+                               then go through it (opt-in)
   harness service uninstall    undo that: the daemon goes back to \`harness start\`
-  harness service status       what launchd or systemd has registered, and whether it runs (--json)
+  harness service status       what launchd, systemd or Task Scheduler has registered, and whether it runs (--json)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
   harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [@machine] [folder|name] [-- task]
@@ -228,6 +236,8 @@ Env: BACKEND_WS_URL (${env.BACKEND_WS_URL}), WEB_URL (${env.WEB_URL}), ADAPTER_D
 
 /** The `supervisor` row: who keeps the daemon running when it is not `harness start`. */
 function supervisorRow(platform: string): string {
+  // Task Scheduler starts the master at logon and checks every five minutes; it does not run it (lib/startIfDown.ts).
+  if (platform === 'taskscheduler') return 'Task Scheduler · starts at logon, and again within 5 minutes if it stops (harness service status)'
   return `${platform} · starts at login, comes back if it dies (harness service status)`
 }
 
@@ -993,6 +1003,9 @@ function openInBrowser(url: string): void {
   } catch { /* ignore */ }
 }
 
+/** This process is the scheduled task's `harness start --if-down` (Windows), which never forgets a `harness stop`. */
+let startedByTheTask = false
+
 /**
  * Start the adapter, with the saved SSO session when there is one. Missing credentials never open a
  * browser implicitly — and are no longer a refusal.
@@ -1007,7 +1020,17 @@ function openInBrowser(url: string): void {
  * the very value the backend binds a machine to at login) — so a later sign-in ADOPTS this machine
  * rather than replacing it.
  */
-async function startCommand(foreground: boolean, repair: boolean = false): Promise<void> {
+async function startCommand(foreground: boolean, repair: boolean = false, ifDown: boolean = false): Promise<void> {
+  // The scheduled task's start (Windows, lib/startIfDown.ts): nothing to do is the usual answer, and it is quiet.
+  if (ifDown) {
+    const decision = await startIfDown(processIfDownDeps())
+    if (!decision.start) { console.log(`harness start --if-down: ${decision.why} — nothing to do`); process.exit(0) }
+    startedByTheTask = true
+  } else if (process.platform === 'win32') {
+    // Any `harness start` but the task's own is a person asking for the daemon: a `harness stop` written down earlier
+    // (harnessd/platform.ts TASK_STOPPED_FILE) is forgotten, even when the daemon turns out to run already.
+    clearTaskStopped()
+  }
   const session = readAuthSession()
   // The session file is the ONLY thing `start` needs. It used to pull the newest bundle and resolve
   // this computer's machine against the backend before launching — so a computer that could not reach
@@ -1041,6 +1064,18 @@ async function startCommand(foreground: boolean, repair: boolean = false): Promi
       }
       console.log(`machine running (pid ${running}) as another account — restarting it on this sign-in`)
       await stopDaemonOrExit()
+    }
+    // Windows, the task registered: it starts the master, as the task would at logon; not under the spawn lock,
+    // which its own `harness start --if-down` takes (lib/platformDaemon.ts startThroughTask).
+    if (!ifDown && installedPlatform() === 'taskscheduler') {
+      const started = await startThroughTask(serviceDefinition({ logFile: LOG_FILE }), { ...platformDaemonDeps(), lockHeld: () => readSpawnLockOwner() !== null })
+      if (started.ok) return reportStarted(session, started.pid, 'taskscheduler')
+      if (!started.direct) {
+        console.error(`\n✗ ${started.detail}`)
+        console.error(`  logs   ${tildify(LOG_FILE)}   ·   harness service status`)
+        process.exit(1)
+      }
+      console.log(`  ${started.detail} — starting it directly`)
     }
     await withSpawnLock('start', async () => {
       if (session) await resolveMachineIfUnknown(session)
@@ -1467,9 +1502,9 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
   prepareLogFile(LOG_FILE, LEGACY_LOG_FILE) // adopt an older name + enforce the cap before we tail from here
   const logOffset = existsSync(LOG_FILE) ? readFileSync(LOG_FILE).length : 0
   // Opted in to launchd or systemd (`harness service install`): the platform runs the master, and one
-  // spawned here would be a second supervisor beside it (lib/platformDaemon.ts).
+  // spawned here would be a second supervisor beside it (lib/platformDaemon.ts). Task Scheduler only starts it.
   const platform = installedPlatform()
-  if (platform) {
+  if (platform && platform !== 'taskscheduler') {
     const started = await startUnderPlatform(serviceDefinition({ logFile: LOG_FILE }))
     if (!started.ok) {
       const fail = connectFailure(launchDeps.readLogSlice(logOffset), daemonPort())
@@ -1479,12 +1514,44 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
     }
     return reportStarted(session, started.pid, platform)
   }
-  const logFd = openSync(LOG_FILE, 'a')
-  // The daemon starts on the managed runtime straight away rather than inheriting this process's
-  // interpreter and waiting for some later restart to adopt it.
   // harnessd: a master that keeps the daemon's core running (harnessd/supervisor.ts). HARNESS_NO_MASTER=1
   // starts the core on its own, as before, for a machine where the master itself is in question.
   const entry = process.env.HARNESS_NO_MASTER === '1' ? '__run' : '__harnessd'
+  if (process.platform === 'win32') {
+    if (startedByTheTask) {
+      // Asked again under the lock: a `harness stop` that held it while this start waited its turn wrote its stop down,
+      // and the task must not undo it.
+      if (taskStoppedThisBoot()) { console.log('harness start --if-down: `harness stop` stopped it meanwhile — nothing to do'); process.exit(0) }
+    } else {
+      // Any start but the task's own (a login, an update bringing it back) is the daemon wanted: a stop is forgotten.
+      clearTaskStopped()
+    }
+    // The master starts through harness-launch.exe (lib/windows/launcher.ts), outside this terminal's job, so closing
+    // it or an SSH session does not end it; the master writes its own log (masterProcess.ts). A build run from a
+    // checkout is not what the launcher would start, and keeps the spawn below.
+    if (entry === '__harnessd' && isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR)) {
+      const root = dirname(env.ADAPTER_CLI_DIR)
+      // HARNESSD_* are harnessd's own processes' alone (harnessd/AGENTS.md rule 11): an ordinary start passes none.
+      const childEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !isHarnessdVariable(name)))
+      const launched = await launchDetached(harnessLaunchPath(root), root, ['__harnessd'], childEnv)
+      if (!launched.ok) {
+        console.error(`\n✗ Harness could not start its daemon: ${launched.detail}`)
+        console.error(`  logs   ${tildify(LOG_FILE)}`)
+        process.exit(1)
+      }
+      const pid = await waitForMaster(platformDaemonDeps(), BIND_WAIT_MS)
+      if (pid === null) {
+        const fail = connectFailure(launchDeps.readLogSlice(logOffset), daemonPort())
+        console.error(`\n✗ ${fail?.detail ?? `the daemon did not bind within ${BIND_WAIT_MS / 1000}s`}`)
+        console.error(`  logs   ${tildify(LOG_FILE)}`)
+        process.exit(1)
+      }
+      return reportStarted(session, pid)
+    }
+  }
+  const logFd = openSync(LOG_FILE, 'a')
+  // The daemon starts on the managed runtime straight away rather than inheriting this process's
+  // interpreter and waiting for some later restart to adopt it.
   // Under its own name in Activity Monitor (harnessd/processName.ts) rather than `node`.
   const child = spawn(namedNode(runtimeNode ?? process.execPath, entry === '__run' ? 'harnessd-core' : 'harnessd', env.ADAPTER_RUNTIME_DIR), [SCRIPT_PATH, entry], {
     detached: true,
@@ -1512,8 +1579,8 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
   return reportStarted(session, child.pid ?? 0)
 }
 
-/** What `harness start` says once the daemon it started is up, and its exit. `supervisor`: launchd or
- *  systemd started it (`harness service install`). */
+/** What `harness start` says once the daemon it started is up, and its exit. `supervisor`: launchd, systemd or
+ *  Task Scheduler started it (`harness service install`). */
 async function reportStarted(session: AuthSession | null, pid: number, supervisor?: string): Promise<never> {
   // Bound is started. What the daemon does next — dial the backend, retry on its own backoff, sign
   // itself out on a 401, step aside on a 409 — is its own business and is logged by it; this command
@@ -2572,7 +2639,7 @@ switch (cmd) {
     // the environment) records every frame to/from a paired Autonomous device — see lib/autonomous-device/dump.ts.
     const dump = flags.find((f) => f === '--device-dump' || f.startsWith('--device-dump='))
     if (dump) process.env.HARNESS_DEVICE_DUMP = dump === '--device-dump' ? '1' : resolve(dump.slice('--device-dump='.length))
-    startCommand(foreground, repair).catch(onError)
+    startCommand(foreground, repair, flags.includes('--if-down')).catch(onError)
     break
   }
   case 'join':

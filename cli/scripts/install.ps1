@@ -471,6 +471,36 @@ function Write-HarnessDone {
   Write-Host '  harness works in this window now. Terminals that were already open see it once they are reopened.'
 }
 
+function Read-HarnessCurrentCli {
+  # The version cli\current names, or '' before a first install.
+  param([string]$Root)
+  $pointer = Join-Path $Root 'cli\current'
+  if (-not (Test-Path -LiteralPath $pointer -PathType Leaf)) { return '' }
+  return ([string](Get-Content -LiteralPath $pointer -TotalCount 1)).Trim()
+}
+
+function Restart-HarnessDaemon {
+  # Run again over a live install, the installer moves the daemon to the new build. The master re-execs only before
+  # a core starts, and nothing tells it that cli\current moved, so the daemon is restarted once: harness stop, then
+  # harness start. Agents keep running: the terminal host is independent of the daemon, and the new core reattaches
+  # them. Nothing happens on the same version, on a first install, or when no daemon runs.
+  param([string]$Command, [string]$Before, [string]$After)
+  if (-not $Before -or $Before -eq $After) { return $false }
+  $statusLine = @(& $Command status) | Where-Object { $_ -match '^\s*status\s' } | Select-Object -First 1
+  if ($LASTEXITCODE -ne 0 -or -not $statusLine -or $statusLine -match 'stopped|out of reach') { return $false }
+  Write-Host "  Moving the running Harness from $Before to $After (your agents keep running)..."
+  & $Command stop | ForEach-Object { Write-Host "  $_" }
+  # Not piped, and not left as the function's output (which a caller's `$null =` would capture through a pipe too):
+  # the daemon `harness start` leaves running inherits the handles that command writes to, and a pipe read here would
+  # not end until the daemon did (seen on the VM). Start-Process -NoNewWindow gives it this window's own, and waits
+  # for that one process only. Reading Handle first keeps ExitCode readable once it has exited.
+  $start = Start-Process -FilePath $Command -ArgumentList 'start' -NoNewWindow -PassThru
+  $null = $start.Handle
+  $start.WaitForExit()
+  if ($start.ExitCode -ne 0) { Write-Host "  Harness did not start again on version ${After}. Run 'harness start'." }
+  return $true
+}
+
 function Install-Harness {
   # install.sh's steps, in its order. Each step is named, so a failure says which one in a sentence a first-time
   # user can act on. Nothing outside %USERPROFILE%\.harness and the user's PATH is ever changed.
@@ -491,6 +521,8 @@ function Install-Harness {
     $step = 'Installing the Node runtime'
     Install-HarnessNode -Root $root -Entry $sources.node.entry -Source $sources.node.source -Tar $tar -Platform $platform
     $step = 'Installing the Harness CLI'
+    # The version a running daemon may be on, read before the pointer moves (Restart-HarnessDaemon below).
+    $before = Read-HarnessCurrentCli -Root $root
     $version = Install-HarnessCli -Root $root -Entry $sources.cli.entry -Source $sources.cli.source
     # The terminal host is installed in -Desktop mode too: the daemon the app starts runs its terminals on it.
     $step = 'Installing the terminal host'
@@ -502,6 +534,9 @@ function Install-Harness {
     $step = 'Checking the installed CLI'
     $said = [string](@(& $command version) | Select-Object -First 1)
     if ($LASTEXITCODE -ne 0 -or $said.Trim() -ne $version) { throw "harness version answered '$said' (exit code $LASTEXITCODE), not $version." }
+    $step = 'Moving the running Harness to the new build'
+    # $null: Install-Harness returns a single integer (the guard takes the last value).
+    $null = Restart-HarnessDaemon -Command $command -Before $before -After $version
     if (-not $Desktop -and -not $NoService) {
       $step = 'Starting Harness when you sign in'
       Register-HarnessService -Command $command

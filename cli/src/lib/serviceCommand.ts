@@ -47,7 +47,7 @@ export const SERVICE_USAGE = [
   '             and comes back if it dies. `harness start` and `harness stop` then go through the platform. Agents keep',
   '             running in tmux whenever the daemon stops, as they do now',
   '  uninstall  stop that, and start the daemon the usual way again',
-  '  status     what launchd or systemd has registered, and whether it runs (--json for machines)',
+  '  status     what launchd, systemd or Task Scheduler has registered, and whether it runs (--json for machines)',
   '',
   'Opt-in: without it, `harness start` (or the desktop app) runs the daemon, as it always has.',
 ].join('\n')
@@ -202,9 +202,10 @@ function statusLine(state: PlatformState, name: string): string {
   if (!state.installed && !state.registered) return `○ not installed · \`harness start\` runs the daemon; \`harness service install\` hands it to ${name}`
   if (state.registered && !state.installed) return `◍ registered without its file · \`harness service uninstall\` clears it`
   if (state.platform === 'taskscheduler') {
-    return state.registered
-      ? `● registered (${state.state}) · starts at logon, and again within 5 minutes if it stops`
-      : '◍ written, not registered · `harness service install` registers it'
+    if (!state.registered) return '◍ written, not registered · `harness service install` registers it'
+    return state.state === 'disabled'
+      ? '◍ registered, but turned off in Task Scheduler · `harness service install` turns it back on'
+      : `● registered (${state.state}) · starts at logon, and again within 5 minutes if it stops`
   }
   if (!state.registered) {
     return state.platform === 'launchd'
@@ -246,7 +247,9 @@ async function installTask(deps: ServiceCommandDeps): Promise<number> {
       // The XML could not be made: whoami could not say who this is, or a path the task cannot hold. Nothing was written.
       return { ok: false as const, unwritten: true, detail: (error as Error).message }
     }
-    if (!written && before.registered) return 'already' as const
+    // A task someone turned off in Task Scheduler is not installed and fine: registered again from the same file,
+    // whose <Enabled>true</Enabled> turns it back on (`/Create /F`).
+    if (!written && before.registered && before.state !== 'disabled') return 'already' as const
     const outcome = service.register()
     if (!outcome.ok) service.discard()
     return { ...outcome, unwritten: false }

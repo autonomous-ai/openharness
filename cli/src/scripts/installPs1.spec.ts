@@ -47,6 +47,11 @@ describe('install.ps1, as written', () => {
   it('never installs hn or tmux on Windows', () => {
     expect(source).not.toMatch(/harness-tui|tmux/i)
   })
+
+  it('moves a running daemon to the new build when it is run again over an install', () => {
+    expect(source).toContain('$before = Read-HarnessCurrentCli -Root $root')
+    expect(source).toContain('$null = Restart-HarnessDaemon -Command $command -Before $before -After $version')
+  })
 })
 
 const windows = process.platform === 'win32'
@@ -466,5 +471,63 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     const version = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Restricted', '-Command', `& '${command}' version; exit $LASTEXITCODE`], { encoding: 'utf8' })
     expect(version.status, version.stderr).toBe(0)
     expect(version.stdout.trim()).toBe('9.8.7')
+  })
+})
+
+describe.runIf(windows)('install.ps1, run again over a live install', { timeout: 120_000 }, () => {
+  /** A `harness` that logs each call, one per line, and reports the daemon as [state] to `status`. */
+  function fakeHarness(state: string, startLeaves: string[] = []): { command: string; calls: () => string[] } {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-ps1-restart-'))
+    scratch.push(dir)
+    const log = join(dir, 'calls.log')
+    const command = join(dir, 'harness.cmd')
+    writeFileSync(command, ['@echo off', `echo %*>>"${log}"`, `if "%1"=="status" echo    status     ${state}`, ...startLeaves, 'exit /b 0', ''].join('\r\n'))
+    return { command, calls: () => { try { return readFileSync(log, 'utf8').split(/\r?\n/).map((line) => line.trim()).filter(Boolean) } catch { return [] } } }
+  }
+  const last = (text: string) => text.split(/\r?\n/).at(-1)
+
+  it('restarts a running daemon once when the version changed: stop, then start', () => {
+    const harness = fakeHarness('running - backend connected')
+    const run = ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.0' -After '1.0.1'`)
+    expect(last(run.stdout), run.stderr).toBe('True')
+    expect(run.stdout).toContain('Moving the running Harness from 1.0.0 to 1.0.1')
+    expect(harness.calls()).toEqual(['status', 'stop', 'start'])
+  })
+
+  it('goes on once `harness start` has started the daemon, which holds the handles it was given for as long as it runs', () => {
+    // The daemon `harness start` leaves running inherits that command's output handles (seen on the VM: the installer
+    // waited on `harness start | ForEach-Object` for as long as the new daemon ran). Here a process left behind
+    // holds them for 12 seconds.
+    const harness = fakeHarness('running - backend connected', ['if "%1"=="start" start "" /b cmd /c "ping -n 13 127.0.0.1 >nul"'])
+    const run = ps(`$clock = [Diagnostics.Stopwatch]::StartNew(); $moved = Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.0' -After '1.0.1'; "took $($clock.ElapsedMilliseconds)"; $moved`)
+    expect(last(run.stdout), run.stderr).toBe('True')
+    expect(Number(/took (\d+)/.exec(run.stdout)?.[1])).toBeLessThan(8_000)
+    expect(harness.calls()).toEqual(['status', 'stop', 'start'])
+  })
+
+  it('says so when Harness does not start again on the new build', () => {
+    const harness = fakeHarness('running - backend connected', ['if "%1"=="start" exit /b 3'])
+    const run = ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.0' -After '1.0.1'`)
+    expect(last(run.stdout), run.stderr).toBe('True')
+    expect(run.stdout).toContain("Harness did not start again on version 1.0.1. Run 'harness start'.")
+  })
+
+  it('leaves the daemon alone on the same version, on a first install, and when no daemon runs', () => {
+    const same = fakeHarness('running - backend connected')
+    expect(ps(`Restart-HarnessDaemon -Command '${same.command}' -Before '1.0.1' -After '1.0.1'`).stdout).toBe('False')
+    expect(ps(`Restart-HarnessDaemon -Command '${same.command}' -Before '' -After '1.0.1'`).stdout).toBe('False')
+    expect(same.calls()).toEqual([])
+    const stopped = fakeHarness('stopped')
+    expect(ps(`Restart-HarnessDaemon -Command '${stopped.command}' -Before '1.0.0' -After '1.0.1'`).stdout).toBe('False')
+    expect(stopped.calls()).toEqual(['status'])
+  })
+
+  it('reads the version cli\\current names, and none before a first install', () => {
+    const root = mkdtempSync(join(tmpdir(), 'harness-ps1-current-'))
+    scratch.push(root)
+    expect(ps(`Read-HarnessCurrentCli -Root '${root}'`).stdout).toBe('')
+    mkdirSync(join(root, 'cli'))
+    writeFileSync(join(root, 'cli', 'current'), '1.0.0\r\n')
+    expect(ps(`Read-HarnessCurrentCli -Root '${root}'`).stdout).toBe('1.0.0')
   })
 })

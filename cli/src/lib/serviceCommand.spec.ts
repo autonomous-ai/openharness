@@ -395,6 +395,21 @@ describe('harness service with Task Scheduler', () => {
     } finally { rmSync(w.dir, { recursive: true, force: true }) }
   })
 
+  it('registers a task someone turned off in Task Scheduler again, turned on, and says it is off in status', async () => {
+    const off = { 'schtasks /Query': { status: 0, stdout: '<Settings><Enabled>false</Enabled></Settings>', stderr: '' } }
+    const w = windows({ registered: true, pid: 4040, answers: off })
+    try {
+      w.deps.service!.write(w.deps.definition())
+      await serviceCommand(['status'], w.deps)
+      expect(w.out[1]).toBe('  status      ◍ registered, but turned off in Task Scheduler · `harness service install` turns it back on')
+      w.out.length = 0
+      await expect(serviceCommand(['install'], w.deps)).resolves.toBe(0)
+      // The same file, registered again: its <Enabled>true</Enabled> is what turns the task back on (harnessd/platform.ts).
+      expect(schtasks(w.calls)).toEqual([expect.stringMatching(/harnessd-task\.xml \/F$/)])
+      expect(w.out[0]).toBe('✓ harnessd runs under Task Scheduler (pid 4040): it starts at logon, and again within 5 minutes if it stops.')
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
   it('refuses without the launcher, and unregisters without touching the daemon', async () => {
     const w = windows({ registered: true, pid: 4040 })
     try {

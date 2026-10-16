@@ -303,11 +303,20 @@ describe('daemon spawn lock', () => {
   it('releases an abandoned lock only while it is still the one that was judged', async () => {
     const lock = await loadLock()
     mkdirSync(lockDir(), { mode: 0o700 })
-    writeFileSync(ownerFile(), JSON.stringify({ pid: 4242, startMarker: '', token: 't', purpose: 'start', since: 1 }), { mode: 0o600 })
+    const since = Date.parse('2026-10-16T00:00:00Z')
+    writeFileSync(ownerFile(), JSON.stringify({ pid: 4242, startMarker: '', token: 't', purpose: 'start', since }), { mode: 0o600 })
+    const at = (ms: number) => `w:${(BigInt(ms) + 11_644_473_600_000n) * 10_000n}`
+    const reissued = { pid: 4242, startMarker: at(since + 60_000) }
     const judged = lock.readSpawnLockOwner()!
-    expect(lock.releaseAbandonedSpawnLock({ ...judged, token: 'other' })).toBe(false)
+    // Another lock now (another token, pid or time), or a row that does not show the pid reissued: it stays.
+    expect(lock.releaseAbandonedSpawnLock({ ...judged, token: 'other' }, reissued)).toBe(false)
+    expect(lock.releaseAbandonedSpawnLock({ ...judged, pid: 4243 }, { ...reissued, pid: 4243 })).toBe(false)
+    expect(lock.releaseAbandonedSpawnLock({ ...judged, since: since - 1 }, reissued)).toBe(false)
+    expect(lock.releaseAbandonedSpawnLock(judged, { pid: 4242, startMarker: at(since - 1_000) })).toBe(false)
+    expect(lock.releaseAbandonedSpawnLock(judged, { ...reissued, pid: 99 })).toBe(false)
     expect(existsSync(lockDir())).toBe(true)
-    expect(lock.releaseAbandonedSpawnLock(judged)).toBe(true)
+    expect(lock.releaseAbandonedSpawnLock(judged, reissued)).toBe(true)
+    expect(lock.releaseAbandonedSpawnLock(judged, reissued)).toBe(false)
     expect(existsSync(lockDir())).toBe(false)
   })
 })

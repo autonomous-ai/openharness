@@ -93,7 +93,7 @@ describe.each(['launchd', 'systemd'] as const)('under %s', (platform) => {
   })
 
   it('says why when the platform will not start it, or it does not come up', async () => {
-    await expect(startUnderPlatform(w.definition, { ...w.deps, service: null })).resolves.toEqual({ ok: false, detail: 'neither launchd nor systemd runs harnessd on this computer' })
+    await expect(startUnderPlatform(w.definition, { ...w.deps, service: null })).resolves.toEqual({ ok: false, detail: 'this computer has no launchd, systemd or Task Scheduler to run harnessd' })
     w.fake.set({ fail: { [platform === 'launchd' ? 'launchctl bootstrap' : 'systemctl start']: { status: 5, stderr: 'refused' } } })
     await expect(startUnderPlatform(w.definition, w.deps, 1_000)).resolves.toEqual({ ok: false, detail: expect.stringContaining('refused') })
     w.fake.set({ fail: {}, pidFile: null })

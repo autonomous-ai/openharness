@@ -244,10 +244,16 @@ export function spawnLockOwnerReused(owner: SpawnLockOwner, row: { startMarker: 
   return started !== null && started > owner.since + 2_000
 }
 
-/** Remove a lock judged abandoned (`spawnLockOwnerReused`), only while it still names that owner. */
-export function releaseAbandonedSpawnLock(owner: SpawnLockOwner): boolean {
+/**
+ * Remove a lock judged abandoned, only while it is still the lock that was judged: re-read, and judged again against
+ * [row] (the owner pid's row in the process table) right before it goes. A lock that changed hands meanwhile has
+ * another token, and a live holder that must keep it.
+ */
+export function releaseAbandonedSpawnLock(owner: SpawnLockOwner, row: { pid: number; startMarker: string }): boolean {
   try {
-    if (readSpawnLockOwner()?.token !== owner.token) return false
+    const current = readSpawnLockOwner()
+    if (!current || current.token !== owner.token || current.pid !== owner.pid || current.since !== owner.since) return false
+    if (row.pid !== current.pid || !spawnLockOwnerReused(current, row)) return false
     rmSync(SPAWN_LOCK_DIR, { recursive: true, force: true })
     return true
   } catch {

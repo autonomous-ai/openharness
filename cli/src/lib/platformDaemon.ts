@@ -163,7 +163,7 @@ export type StartOutcome = { ok: true; pid: number; refreshed: boolean } | { ok:
  */
 export async function startUnderPlatform(definition: ServiceDefinition, deps: PlatformDaemonDeps = platformDaemonDeps(), waitMs = PLATFORM_START_WAIT_MS): Promise<StartOutcome> {
   const service = deps.service
-  if (!service) return { ok: false, detail: 'neither launchd nor systemd runs harnessd on this computer' }
+  if (!service) return { ok: false, detail: 'this computer has no launchd, systemd or Task Scheduler to run harnessd' }
   const refreshed = service.write(definition)
   const started = service.start(refreshed)
   if (!started.ok) return started
