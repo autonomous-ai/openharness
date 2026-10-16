@@ -208,7 +208,7 @@ describe('stopDaemonProcess on Windows', () => {
     await stopDaemonProcess(fakeDeps(state, { windows: w, warn: (line) => warned.push(line) }))
     expect(ended).toEqual([`500:${marker(T)}`, `600:${marker(T + 1_000)}`])
     expect(state.killed).toEqual([])
-    expect(warned).toEqual(['  ! the daemon did not take the stop over its pipe — ending it'])
+    expect(warned).toEqual(['  ! Harness did not stop when asked — ending its processes'])
   })
 
   it('ends the master that took the stop but did not go in time, and leaves a core that left by itself', async () => {
@@ -232,7 +232,7 @@ describe('stopDaemonProcess on Windows', () => {
       const { w, ended } = windows(state, { ask: async () => false, rows, corePid: () => null })
       await expect(stopDaemonProcess(fakeDeps(state, { windows: w, warn: (line) => warned.push(line) }))).resolves.toEqual({ pid: 500, stopped: false })
       expect(ended).toEqual([])
-      expect(warned.at(-1)).toBe('  ! pid 500 could not be shown to be harnessd\'s master — it was left running')
+      expect(warned.at(-1)).toBe('  ! the process with pid 500 could not be confirmed to be Harness, so it was left running')
     }
   })
 
@@ -244,7 +244,7 @@ describe('stopDaemonProcess on Windows', () => {
     await expect(stopDaemonProcess(fakeDeps(state, { windows: w, warn: (line) => warned.push(line) }))).resolves.toEqual({ pid: 500, stopped: false })
     expect(ended).toEqual([])
     expect(state.killed).toEqual([])
-    expect(warned.at(-1)).toBe('  ! pid 500 could not be shown to be harnessd\'s master — it was left running')
+    expect(warned.at(-1)).toBe('  ! the process with pid 500 could not be confirmed to be Harness, so it was left running')
   })
 
   it('leaves a core it could not identify as the master\'s child', async () => {
@@ -261,7 +261,7 @@ describe('stopDaemonProcess on Windows', () => {
     const warned: string[] = []
     const { w } = windows(state, { ask: async () => false, corePid: () => null, terminate: async () => 'mismatch' })
     await stopDaemonProcess(fakeDeps(state, { windows: w, warn: (line) => warned.push(line) }))
-    expect(warned.at(-1)).toBe('  ! pid 500 is no longer harnessd\'s master — it was left running')
+    expect(warned.at(-1)).toBe('  ! Harness\'s process (pid 500) could not be ended, so it was left running')
   })
 
   it('clears the pid file of the master it stopped', async () => {
@@ -282,5 +282,33 @@ describe('stopDaemonProcess on Windows', () => {
     const parts = defaultWindowsStopDeps()
     expect(parts.pidFileWrittenMs()).toBeNull()
     expect(parts.corePid(500)).toBeNull()
+  })
+})
+
+describe('a command that stops Harness before it goes on', () => {
+  it('goes on when Harness stopped, or was not running', async () => {
+    const { stopDaemonOrExit } = await import('./daemonStop.js')
+    const said: string[] = []
+    const exit = (code: number): never => { throw new Error(`exit ${code}`) }
+    for (const result of [{ pid: 500, stopped: true }, { pid: null, stopped: false }]) {
+      await expect(stopDaemonOrExit({ stop: async () => result, say: (line) => said.push(line), exit })).resolves.toEqual(result)
+    }
+    expect(said).toEqual([])
+  })
+
+  it('says Harness did not stop and exits 1 when it is still running, before the command touches anything', async () => {
+    const { stopDaemonOrExit, didNotStopSentence } = await import('./daemonStop.js')
+    const said: string[] = []
+    const exit = (code: number): never => { throw new Error(`exit ${code}`) }
+    await expect(stopDaemonOrExit({ stop: async () => ({ pid: 500, stopped: false }), say: (line) => said.push(line), exit })).rejects.toThrow('exit 1')
+    expect(said).toEqual([`\n  ✗ ${didNotStopSentence(500)}\n`])
+    expect(didNotStopSentence(500)).toBe('Harness did not stop. Its process (pid 500) is still running; end it in Task Manager or restart the computer, then try again.')
+  })
+
+  it('reads a stop that left Harness running as such, and only that', async () => {
+    const { leftRunning } = await import('./daemonStop.js')
+    expect(leftRunning({ pid: 500, stopped: false })).toBe(true)
+    expect(leftRunning({ pid: 500, stopped: true })).toBe(false)
+    expect(leftRunning({ pid: null, stopped: false })).toBe(false)
   })
 })

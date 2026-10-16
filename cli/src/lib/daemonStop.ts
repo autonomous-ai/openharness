@@ -104,8 +104,41 @@ function clearReexecMarker(pid: number): void {
   if (readMarker(HARNESSD_REEXEC_FILE)?.pid === pid) removeMarker(HARNESSD_REEXEC_FILE)
 }
 
+export interface StopResult { pid: number | null; stopped: boolean }
+
+/** What a person reads when Harness could not be stopped: from `harness stop`, and from every command that stops it
+ *  first. Only Windows gets here (`stopOnWindows`), where a process that cannot be confirmed is never ended. */
+export function didNotStopSentence(pid: number): string {
+  return `Harness did not stop. Its process (pid ${pid}) is still running; end it in Task Manager or restart the computer, then try again.`
+}
+
+/** A stop that found Harness running and left it so. */
+export function leftRunning(result: StopResult): result is { pid: number; stopped: false } {
+  return result.pid !== null && !result.stopped
+}
+
+export interface StopOrExitDeps {
+  stop?: () => Promise<StopResult>
+  say?: (line: string) => void
+  exit?: (code: number) => never
+}
+
+/**
+ * `stopDaemonProcess` for a command that must not go on over a Harness still running — `reset` clearing its pid file
+ * under it, `logout` its session, an update or a sign-in launching beside it: says so and exits 1 when it did not
+ * stop. Otherwise what was stopped.
+ */
+export async function stopDaemonOrExit(deps: StopOrExitDeps = {}): Promise<StopResult> {
+  const result = await (deps.stop ?? (() => stopDaemonProcess()))()
+  if (leftRunning(result)) {
+    (deps.say ?? ((line) => console.error(line)))(`\n  ✗ ${didNotStopSentence(result.pid)}\n`)
+    return (deps.exit ?? ((code) => process.exit(code)))(1)
+  }
+  return result
+}
+
 /** SIGTERM the daemon named by the pid file, SIGKILL if it lingers; on Windows, `stopOnWindows`. Returns what was stopped. */
-export async function stopDaemonProcess(deps: StopDeps = defaultStopDeps()): Promise<{ pid: number | null; stopped: boolean }> {
+export async function stopDaemonProcess(deps: StopDeps = defaultStopDeps()): Promise<StopResult> {
   const release = await deps.lock()
   try {
     const stopped = await stopThroughPlatform(deps)
@@ -152,13 +185,14 @@ async function stopOnWindows(deps: StopDeps, windows: WindowsStopDeps, pid: numb
   const corePid = windows.corePid(pid)
   const core = rows && corePid !== null ? identifyDaemonProcess(rows, corePid, { role: 'core', parentPid: pid }) : null
   const asked = await windows.ask()
-  if (!asked) deps.warn('  ! the daemon did not take the stop over its pipe — ending it')
+  if (!asked) deps.warn('  ! Harness did not stop when asked — ending its processes')
   if (!asked || !await waitGone(deps, pid, WINDOWS_STOP_WAIT_MS)) {
     if (!master) {
-      deps.warn(`  ! pid ${pid} could not be shown to be harnessd's master — it was left running`)
+      deps.warn(`  ! the process with pid ${pid} could not be confirmed to be Harness, so it was left running`)
       return { pid, stopped: false }
     }
-    if (await windows.terminate(pid, master) === 'mismatch') deps.warn(`  ! pid ${pid} is no longer harnessd's master — it was left running`)
+    // `mismatch`: another process has the pid now, the table could not be read again, or the end was refused.
+    if (await windows.terminate(pid, master) === 'mismatch') deps.warn(`  ! Harness's process (pid ${pid}) could not be ended, so it was left running`)
   }
   if (core && corePid !== null && !await waitGone(deps, corePid, ORPHAN_CORE_WAIT_MS)) await windows.terminate(corePid, core)
   forgetPid(deps, pid)

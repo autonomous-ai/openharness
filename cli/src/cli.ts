@@ -39,7 +39,7 @@ import { machineListCachePath } from './device/machineList.js'
 import { registry } from './lib/registry.js'
 import { readSafeModeMarker } from './lib/daemonSafeMode.js'
 import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, withSpawnLock } from './lib/daemonSpawnLock.js'
-import { stopDaemonProcess } from './lib/daemonStop.js'
+import { didNotStopSentence, leftRunning, stopDaemonOrExit, stopDaemonProcess } from './lib/daemonStop.js'
 import { installedPlatform, osDaemonUnit, serviceDefinition, startUnderPlatform } from './lib/platformDaemon.js'
 import { askRuntimePort, readCgroup, takeRuntimeBack } from './lib/osUnitTakeover.js'
 import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
@@ -539,7 +539,17 @@ async function loginCommand(
       // here would take every local terminal on this computer down for as long as the person is in
       // the browser. There is nothing to race either: the lock is held, and the identity swap happens
       // afterwards, once there is an identity to swap to (`restartDaemonForIdentity`).
-      const stopped = readAuthSession() ? (await stopDaemonProcess()).pid !== null : false
+      const stop = readAuthSession() ? await stopDaemonProcess() : null
+      // Windows: a stop that left the old account's Harness running (lib/daemonStop.ts). Signing in under it would
+      // put the new session on disk beside a daemon still serving the old one.
+      if (stop && leftRunning(stop)) {
+        const message = didNotStopSentence(stop.pid)
+        if (json) emit({ type: 'result', status: 'error', code: 'DAEMON_DID_NOT_STOP', message })
+        else console.error(`\n  ✗ ${message}\n`)
+        process.exitCode = 1
+        return { signedIn: false }
+      }
+      const stopped = stop !== null && stop.pid !== null
       const outcome = await signIn()
       // The daemon stopped for the switch comes back once it is made (`restartDaemonForIdentity`).
       return outcome.signedIn && stopped ? { ...outcome, stoppedDaemon: true } : outcome
@@ -1030,7 +1040,7 @@ async function startCommand(foreground: boolean, repair: boolean = false): Promi
         process.exit(0)
       }
       console.log(`machine running (pid ${running}) as another account — restarting it on this sign-in`)
-      await stopDaemonProcess()
+      await stopDaemonOrExit()
     }
     await withSpawnLock('start', async () => {
       if (session) await resolveMachineIfUnknown(session)
@@ -1161,7 +1171,7 @@ async function updateCommand(force: boolean): Promise<void> {
       await new Promise((r) => setTimeout(r, 1000)) // grace for the backend to release the one-machine claim
       await launch(false) // spawns a fresh daemon on the new bytes, prints status, and exits
     }
-    if (wasRunning) { console.log('  stopping the running adapter…'); await stopDaemonProcess() }
+    if (wasRunning) { console.log('  stopping the running adapter…'); await stopDaemonOrExit() }
 
     console.log(`▸ Updating v${VERSION} → v${staged.version}…`)
     let ok = false
@@ -1204,7 +1214,7 @@ async function updateCommand(force: boolean): Promise<void> {
 async function logout(): Promise<void> {
   // Through the lock-taking stop, not an inline kill: a logout that lands mid-handoff would otherwise
   // SIGTERM the OLD daemon, leave the new one coming up, and then delete the session under it.
-  const { pid: stoppedPid } = await stopDaemonProcess()
+  const { pid: stoppedPid } = await stopDaemonOrExit()
   // Before clearAuthSession: see the note above on serve children. Its exit code is deliberately
   // dropped — this command cannot fail — and its own words have already reached the terminal.
   const gridOut = await passThroughToGridLogout([])
@@ -1259,7 +1269,7 @@ async function restartDaemonForIdentity(stoppedDaemon = false): Promise<void> {
   if (!daemon) return
   if (daemon.machineId === wantedDaemonIdentity()) return
   console.log('  restarting the daemon on this account…')
-  await stopDaemonProcess()
+  await stopDaemonOrExit()
   await launch(false)   // prints the status block and exits
 }
 
@@ -1538,15 +1548,11 @@ async function reportStarted(session: AuthSession | null, pid: number, superviso
 
 /** `harness stop` — SIGTERM the background adapter, SIGKILL if it lingers (Windows: lib/daemonStop.ts `stopOnWindows`). */
 async function stop(): Promise<void> {
-  const r = await stopDaemonProcess()
+  // Windows only: a process it could not confirm, or end, is left running; that is said, and it exits 1.
+  const r = await stopDaemonOrExit()
   if (!r.pid) {
     console.log('machine is not running.')
     process.exit(0)
-  }
-  // Windows only: a process it could not identify is left running, and said so above.
-  if (!r.stopped) {
-    console.log(`machine did not stop — check pid ${r.pid} in Task Manager.`)
-    process.exit(1)
   }
   console.log(`machine stopped (pid ${r.pid}).`)
   process.exit(0)
@@ -1595,7 +1601,8 @@ function clearAdapterState(): void {
 
 /** Stop the daemon and clear local state so the next login starts fresh. */
 async function resetCommand(): Promise<void> {
-  const r = await stopDaemonProcess()
+  // Before anything is cleared: a pid file removed under a Harness still running leaves nothing able to stop it.
+  const r = await stopDaemonOrExit()
   clearAdapterState()
   console.log(`\n  ✓ Cleared local machine CLI state at ${tildify(env.ADAPTER_DATA_DIR)}.`)
   if (r.pid) console.log(`    Stopped adapter process ${r.pid}.`)
