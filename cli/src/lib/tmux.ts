@@ -1037,6 +1037,10 @@ function heuristicEngineProcessMatchScore(
   // Command Code rewrites argv/comm to a session title, which becomes its only long-lived marker.
   if (engine === 'commandcode' && (/^\s*⌘(?:\s|$)/.test(row.executable) || /^\s*⌘(?:\s|$)/.test(row.args))) return 3
 
+  // OpenCode and Pi publish their identity by replacing the process title. At that point `comm`
+  // and argv[0] no longer name the launcher, so the exact closed title is the process signature.
+  if (processTitleSessionId(engine, row.args)) return 3
+
   // Cursor's launcher can retain argv[0]=agent while the Node package path appears later in argv.
   if (engine === 'cursor' && hasCursorPackageEntrypoint(row.args)) return 3
 
