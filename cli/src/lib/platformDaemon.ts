@@ -26,8 +26,10 @@ import {
   type PlatformState, type ServiceDefinition,
 } from '../harnessd/platform.js'
 import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, isAlive, readPid } from './daemonState.js'
+import { withoutHarnessdEnv } from './harnessdEnv.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { currentCli, harnessLaunchPath } from './windows/installLayout.js'
+import { launchDetached, type LaunchOutcome } from './windows/launcher.js'
 
 /**
  * The CLI's own settings that decide which daemon this is, carried into the definition when they are
@@ -202,6 +204,19 @@ export async function startThroughTask(
   if (!deps.lockHeld()) return { ok: false, direct: true, detail: 'Task Scheduler did not start harnessd (it runs the task only in a signed-in Windows session)' }
   const pid = await waitForMaster(deps, waitMs)
   return pid !== null ? { ok: true, pid } : { ok: false, direct: false, detail: `harnessd did not come up within ${Math.round((TASK_RUN_WAIT_MS + waitMs) / 1000)}s` }
+}
+
+/**
+ * Windows, the installed copy: `harness start` starts the master through harness-launch.exe (./windows/launcher.ts),
+ * outside this terminal's job, so closing it or an SSH session does not end it. With none of `HARNESSD_*`
+ * (../harnessd/AGENTS.md rule 11): a shell in an agent's pane may have them, and only a master handing over gives its
+ * replacement one (../harnessd/reexec.ts). The rest of this shell's environment is the master's.
+ */
+export function launchMaster(
+  cliDir: string = env.ADAPTER_CLI_DIR, given: NodeJS.ProcessEnv = process.env, launch: typeof launchDetached = launchDetached,
+): Promise<LaunchOutcome> {
+  const root = dirname(cliDir)
+  return launch(harnessLaunchPath(root), root, ['__harnessd'], withoutHarnessdEnv(given))
 }
 
 /** Whether `harness stop` stopped the daemon since this computer started, which the task's starts honour. */

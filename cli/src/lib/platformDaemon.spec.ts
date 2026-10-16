@@ -10,7 +10,7 @@ import {
 import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
 import { HARNESSD_STATUS_FILE } from './daemonState.js'
 import {
-  CARRIED_ENV, TASK_RUN_WAIT_MS, clearTaskStopped, describeState, installedPlatform, osDaemonUnit, platformDaemonDeps, serviceDefinition,
+  CARRIED_ENV, TASK_RUN_WAIT_MS, clearTaskStopped, launchMaster, describeState, installedPlatform, osDaemonUnit, platformDaemonDeps, serviceDefinition,
   startThroughTask, startUnderPlatform, stopUnderPlatform, supervisingPlatform, taskStoppedThisBoot, waitForMaster, waitGone, type PlatformDaemonDeps,
 } from './platformDaemon.js'
 import { currentCli, harnessLaunchPath } from './windows/installLayout.js'
@@ -269,6 +269,21 @@ describe('Windows', () => {
     }
   }
   const definition = (): ServiceDefinition => ({ nodePath: 'C:\\n.exe', scriptPath: 'C:\\h\\cli\\0.5.0\\cli.js', logFile: 'C:\\h\\cli\\data\\harness.log', home: 'C:\\Users\\d', env: {}, launcherPath: 'C:\\h\\bin\\harness-launch.exe' })
+
+  it('starts the master through harness-launch.exe with none of harnessd\'s variables, and the rest of this shell\'s', async () => {
+    const launches: unknown[][] = []
+    const shell = { PATH: 'C:\\Windows', ADAPTER_DATA_DIR: 'C:\\h\\cli\\data', HARNESSD_SERVICE_TOKEN: 'from-an-agent-pane', HARNESSD_RESUME: '{"handover":{}}' }
+    const outcome = await launchMaster(join('/h', 'cli'), shell, async (...args) => { launches.push(args); return { ok: true } })
+    expect(outcome).toEqual({ ok: true })
+    expect(launches).toEqual([[harnessLaunchPath('/h'), '/h', ['__harnessd'], { PATH: 'C:\\Windows', ADAPTER_DATA_DIR: 'C:\\h\\cli\\data' }]])
+    // A copy: this shell keeps its own.
+    expect(shell.HARNESSD_SERVICE_TOKEN).toBe('from-an-agent-pane')
+    // By default, this CLI's folder and this process's environment.
+    const own: unknown[][] = []
+    await launchMaster(undefined, undefined, async (...args) => { own.push(args); return { ok: false, detail: 'x' } })
+    expect(own[0]!.slice(0, 2)).toEqual([harnessLaunchPath(dirname(env.ADAPTER_CLI_DIR)), dirname(env.ADAPTER_CLI_DIR)])
+    expect(own[0]![3]).toEqual(Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('HARNESSD_'))))
+  })
 
   it('starts through the task and waits for the master it starts', async () => {
     const { deps, calls } = taskDeps({ pids: [null, null, 700] })

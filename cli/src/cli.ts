@@ -40,12 +40,9 @@ import { registry } from './lib/registry.js'
 import { readSafeModeMarker } from './lib/daemonSafeMode.js'
 import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, readSpawnLockOwner, withSpawnLock } from './lib/daemonSpawnLock.js'
 import { didNotStopSentence, leftRunning, stopDaemonOrExit, stopDaemonProcess } from './lib/daemonStop.js'
-import { clearTaskStopped, installedPlatform, osDaemonUnit, platformDaemonDeps, serviceDefinition, startThroughTask, startUnderPlatform, taskStoppedThisBoot, waitForMaster } from './lib/platformDaemon.js'
+import { clearTaskStopped, installedPlatform, launchMaster, osDaemonUnit, platformDaemonDeps, serviceDefinition, startThroughTask, startUnderPlatform, taskStoppedThisBoot, waitForMaster } from './lib/platformDaemon.js'
 import { processIfDownDeps, releaseAbandonedLock, runningDaemon, startIfDown } from './lib/startIfDown.js'
-import { launchDetached } from './lib/windows/launcher.js'
-import { harnessLaunchPath } from './lib/windows/installLayout.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
-import { withoutHarnessdEnv } from './lib/harnessdEnv.js'
 import { askRuntimePort, readCgroup, takeRuntimeBack } from './lib/osUnitTakeover.js'
 import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
 import { flashCommand } from './lib/flash.js'
@@ -1560,10 +1557,8 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
     // it or an SSH session does not end it; the master writes its own log (masterProcess.ts). A build run from a
     // checkout is not what the launcher would start, and keeps the spawn below.
     if (entry === '__harnessd' && isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR)) {
-      const root = dirname(env.ADAPTER_CLI_DIR)
-      // HARNESSD_* are harnessd's own processes' alone (harnessd/AGENTS.md rule 11): an ordinary start passes none.
-      const childEnv = withoutHarnessdEnv(process.env)
-      const launched = await launchDetached(harnessLaunchPath(root), root, ['__harnessd'], childEnv)
+      // With none of HARNESSD_* (harnessd/AGENTS.md rule 11): an ordinary start passes none.
+      const launched = await launchMaster()
       if (!launched.ok) {
         console.error(`\n✗ Harness could not start its daemon: ${launched.detail}`)
         console.error(`  logs   ${tildify(LOG_FILE)}`)
