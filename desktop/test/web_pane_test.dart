@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/open_in_browser.dart';
+import 'package:harness/core/runtime_platform.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/terminal_pane.dart';
@@ -338,6 +339,18 @@ void main() {
     await tester.pump();
     expect(WebPanePanel.webviewAvailable, isFalse);
     expect(find.byType(WebPanePanel), findsOneWidget);
+    if (RuntimePlatform.isLinux) {
+      // The native GTK overlay hides itself under any rounded ancestor clip.
+      expect(
+        find.ancestor(of: find.byType(WebPanePanel), matching: find.byType(ClipRRect)),
+        findsNothing,
+      );
+      expect(
+        find.ancestor(of: find.byType(WebPanePanel), matching: find.byType(ClipRect)),
+        findsWidgets,
+      );
+    }
+
     expect(find.byKey(const ValueKey('web-pane-placeholder')), findsOneWidget);
     expect(find.textContaining('http://127.0.0.1:4179/'), findsOneWidget);
     // With no embedded webview the page opens in the browser instead
