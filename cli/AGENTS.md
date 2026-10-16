@@ -23,7 +23,7 @@ they show as `harnessd`, `harnessd-core` and `harnessd-<process>` (`src/harnessd
 
 | Process | Runs | Started |
 |---|---|---|
-| master | supervision only (`src/harnessd/`) | by `harness start`, `harness start -f`, or launchd or systemd after `harness service install` |
+| master | supervision only (`src/harnessd/`) | by `harness start`, `harness start -f`, or launchd or systemd after `harness service install`; on Windows through `harness-launch.exe`, and by Task Scheduler's `harness start --if-down` after `harness service install` |
 | core | sessions (`src/core/`) | always |
 | engine-claude, engine-codex | history, last-turn readers, live transcript parsers, runtime profiles/catalogs, screen interpretation, submission verification readings, model control, question navigation, and (Codex) the shared app-server connection | on demand: an attach or read for that engine |
 | search | session search | always |

@@ -10,17 +10,22 @@
  * code and not the whole CLI's 4.4 MB.
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { existsSync, openSync, readFileSync, writeSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { format } from 'node:util'
 import { env } from './config/env.js'
-import { processExecve, probeMaster, runMaster, type Execve } from './harnessd/master.js'
+import { processExecve, probeMaster, runMaster, type Execve, type MasterConfig } from './harnessd/master.js'
 import { baseNode, namedNode } from './harnessd/processName.js'
 import { PROBE_ANSWER, PROBE_TIMEOUT_MS } from './harnessd/reexec.js'
 import { dropAgentSessionEnv } from './lib/agentSessionEnv.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
+import { acquireSpawnLock } from './lib/daemonSpawnLock.js'
 import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE } from './lib/daemonState.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
 import { unixSocketPath } from './lib/localSocket.js'
+import { currentCli, harnessLaunchPath } from './lib/windows/installLayout.js'
+import { launchDetached } from './lib/windows/launcher.js'
 import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
 import { ts } from './lib/log.js'
 import { confirm as confirmUpdate, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
@@ -65,8 +70,125 @@ export function masterEnv(given: NodeJS.ProcessEnv, socketPath: string | null, l
   return { ...given, HARNESSD_SERVICES: 'none' }
 }
 
+export interface WindowsMasterDeps {
+  cliDir: string
+  currentCli(root: string): { cliJs: string } | null
+  exists(path: string): boolean
+  /** The daemon's log, opened to append. */
+  openLog(): number
+  /** This process's console, written to [fd] from now on. */
+  redirect(fd: number): void
+  /** The master runs in a terminal (`harness start -f`), which shows its output. */
+  isTTY: boolean
+  launch: typeof launchDetached
+  lock(): Promise<(() => void) | null>
+  /** The pid file: null when it names no pid, a throw when it cannot be read (`readHandoverPid`). */
+  readPid(): number | null
+  /** Whether a process runs; a throw when that is not known (`handoverAlive`). */
+  alive(pid: number): boolean
+}
+
+/** How long a master about to hand over waits for the spawn lock: a start or a stop under way finishes in seconds. */
+export const HANDOVER_LOCK_WAIT_MS = 5_000
+/**
+ * How long a master handing over waits on harness-launch.exe, which resolves two pointers and starts a process. A stop
+ * that comes during a handover waits for the launch to be decided, and `harness stop` waits 45 s on the spawn lock the
+ * handover holds: launchDetached's own 30 s, with the rest of a handover after it, came too close to that.
+ */
+export const HANDOVER_LAUNCH_TIMEOUT_MS = 10_000
+
+/**
+ * The pid file, as a handover reads it (harnessd/master.ts `MasterHandOver`): null when there is none or it names no
+ * pid, a throw when it is there and cannot be read. Not daemonState's `readPid`, which takes a failure for null: at a
+ * handover's bound, null keeps this master, and a file it could not read is the new master writing it.
+ */
+export function readHandoverPid(pidFile: string = PID_FILE, read: (path: string) => string = (path) => readFileSync(path, 'utf8')): number | null {
+  let text: string
+  try {
+    text = read(pidFile)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+  const pid = Number.parseInt(text.trim(), 10)
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null
+}
+
+/**
+ * Whether process [pid] runs, as a handover asks it: ended only on ESRCH, alive on EPERM (another account's), a throw on
+ * anything else, which a handover reads as not known and never as ended (harnessd/reexec.ts `HandOverDeps.alive`).
+ */
+export function handoverAlive(pid: number, kill: (pid: number, signal: 0) => void = (target, signal) => { process.kill(target, signal) }): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false
+  try {
+    kill(pid, 0)
+    return true
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ESRCH') return false
+    if (code === 'EPERM') return true
+    throw error
+  }
+}
+
+export const processWindowsMasterDeps = (): WindowsMasterDeps => ({
+  cliDir: env.ADAPTER_CLI_DIR,
+  currentCli: (root) => currentCli(root),
+  exists: existsSync,
+  openLog: () => openSync(DAEMON_LOG_FILE, 'a'),
+  redirect: (fd) => {
+    for (const name of ['log', 'info', 'warn', 'error'] as const) {
+      console[name] = (...args: unknown[]) => { try { writeSync(fd, `${format(...args)}\n`) } catch { /* a full disk costs the line */ } }
+    }
+  },
+  isTTY: !!process.stdout.isTTY,
+  launch: launchDetached,
+  lock: async () => { try { return await acquireSpawnLock('handoff', { waitMs: HANDOVER_LOCK_WAIT_MS }) } catch { return null } },
+  readPid: () => readHandoverPid(),
+  alive: (pid) => handoverAlive(pid),
+})
+
+/**
+ * The master on Windows (spec section 3). It stops its children by message: there is no SIGTERM there. It writes the
+ * daemon's log itself, and gives its children that log for their output: harness-launch.exe starts it with no output
+ * at all. The installed copy starts its children, and hands over, on the build `cli\current` names: an update writes a
+ * new version folder rather than replacing the master's own cli.js. A build from a checkout keeps its own file, and
+ * hands over to nothing (no launcher would start it).
+ */
+export function windowsMaster(scriptPath: string, deps: WindowsMasterDeps = processWindowsMasterDeps()): Partial<MasterConfig> {
+  const installed = isInstalledCopy(scriptPath, deps.cliDir, 'win32')
+  const root = dirname(deps.cliDir)
+  const launcher = harnessLaunchPath(root)
+  let output: number | undefined
+  if (!deps.isTTY) {
+    output = deps.openLog()
+    deps.redirect(output)
+  }
+  return {
+    stopByMessage: true,
+    ...(output !== undefined ? { output } : {}),
+    ...(installed ? { currentScript: () => deps.currentCli(root)?.cliJs ?? null } : {}),
+    ...(installed && deps.exists(launcher) ? {
+      handOver: {
+        lock: deps.lock,
+        launch: async (handed: NodeJS.ProcessEnv) => {
+          const outcome = await deps.launch(launcher, root, ['__harnessd'], handed, undefined, HANDOVER_LAUNCH_TIMEOUT_MS)
+          return outcome.ok ? null : outcome.detail
+        },
+        readPid: deps.readPid,
+        alive: deps.alive,
+        sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+        token: () => randomBytes(16).toString('hex'),
+      },
+    } : {}),
+  }
+}
+
 /** Run the master. */
-export function startMaster(start: MasterStart, exit: (code: number) => void = (code) => process.exit(code)): ReturnType<typeof runMaster> {
+export function startMaster(
+  start: MasterStart, exit: (code: number) => void = (code) => process.exit(code),
+  platform: NodeJS.Platform = process.platform, windows: () => Partial<MasterConfig> = () => windowsMaster(start.scriptPath),
+): ReturnType<typeof runMaster> {
   // Before it starts anything: on Linux an absent locale makes tmux and ps mangle their output, and the
   // core and the services inherit this environment (lib/childLocale.ts). launchd and systemd start the
   // master with no `harness start` before it to have set it.
@@ -75,11 +197,15 @@ export function startMaster(start: MasterStart, exit: (code: number) => void = (
   // (lib/agentSessionEnv.ts).
   dropAgentSessionEnv()
   const { serviceScriptPath } = start
+  // Windows, before the master says anything: harness-launch.exe gave it no output, and its console is the daemon's log
+  // from here on, `masterEnv`'s line among the rest.
+  const windowsConfig = platform === 'win32' ? windows() : {}
   return runMaster({
     env: masterEnv(process.env, unixSocketPath(env.ADAPTER_DATA_DIR, env.PORT)),
     nodePath: baseNode(process.execPath),
     execArgv: process.execArgv,
     runtimeDir: env.ADAPTER_RUNTIME_DIR,
+    ...windowsConfig,
     ...start,
     pidFile: PID_FILE,
     statusFile: HARNESSD_STATUS_FILE,
@@ -138,6 +264,8 @@ export interface BundleMasterDeps {
   node?: () => string
   start: (start: MasterStart) => unknown
   log: (line: string) => void
+  /** This operating system (Windows: no lean bundle). */
+  platform?: NodeJS.Platform
 }
 
 /** Run `<leanPath> __harnessd-probe` with this process's Node and flags, as the master would start on it. */
@@ -165,6 +293,7 @@ export const processBundleDeps = (): BundleMasterDeps => ({
   node: () => namedNode(baseNode(process.execPath), 'harnessd', env.ADAPTER_RUNTIME_DIR, { log: (line) => console.log(`${ts()} ${line}`) }),
   start: startMaster,
   log: (line) => console.log(`${ts()} ${line}`),
+  platform: process.platform,
 })
 
 /**
@@ -180,6 +309,9 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
     if (reason) deps.log(`[harnessd] ${reason}`)
     deps.start({ scriptPath: bundlePath, ...(lean ? { serviceScriptPath: lean.path, leanFingerprint: lean.fingerprint } : {}) })
   }
+  // The lean bundle's claims and its services' identity rely on hard links of the managed node (harnessd/AGENTS.md
+  // rules 7 and 8), which a Windows install does not make: there the master and everything it starts run from cli.js.
+  if (deps.platform === 'win32') { fromBundle(null); return }
   if (deps.env.HARNESSD_LEAN === 'off') { fromBundle(null); return }
   if (deps.leanOff()) { fromBundle(`${LEAN_OFF_FILE} is there: the master, the core and the services run from ${bundlePath}`); return }
   let written: { lean: LeanBundle; path: string } | null
