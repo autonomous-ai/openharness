@@ -86,8 +86,8 @@ export interface MasterConfig {
 /**
  * What a master that hands over is given (../masterProcess.ts). The rest is this file's: the pid file is written as
  * every claim of it is, the handover is decided in the marker's folder (./reexec.ts `readHandoverClaimant`,
- * `takeBackHandover`), and leaving is this process's end. The lock must not wait on a live owner: null at once when
- * busy. The launch is bounded well inside the 45 s a `harness stop` waits on the lock. Each token is fresh. `readPid`
+ * `takeBackHandover`), and leaving is this process's end. The lock waits a bounded while (../masterProcess.ts
+ * `HANDOVER_LOCK_WAIT_MS`) for a start or a stop under way: null when it is still busy, or on any throw. The launch is bounded well inside the 45 s a `harness stop` waits on the lock. Each token is fresh. `readPid`
  * throws when the pid file cannot be read: null says it names no pid, and on that this master stays at the bound
  * (./reexec.ts `taken`), where a file it could not read is a new master it must leave to. This file's own pid-file
  * read, which takes a failure for null, is never given to it.
