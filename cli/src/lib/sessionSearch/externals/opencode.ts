@@ -9,6 +9,12 @@ import { externalReadFailed } from '../evidence.js'
  * (measured in the 1.18.32 binary; the TUI leaves it NULL). A session with no message was never used.
  * Times are epoch milliseconds.
  *
+ * OpenCode 2 keeps its sessions in `session_v2` and their messages in `session_message` (same session columns,
+ * one row per prompt, assistant step or turn end) and no longer writes the v1 tables, which stay in the file with
+ * what v1 wrote (a fresh OpenCode 2 store has none of them): a store that has `session_v2` is listed from it alone.
+ * Kilo's has no such table. v2 leaves `permission` empty even for `opencode run` (measured, 2.0.29), so a headless
+ * session is told by the `permission` of its v1 row, which the sessions v2 took over still have.
+ *
  * Neither engine leaves a per-session lock or pid file: the only owner evidence is the id in a
  * process's arguments (`-s/--session`, never with `--fork`, which writes a NEW session), and it names
  * the session the process started on, not necessarily the one it has now (`fromArgs`). Whether it is
@@ -50,7 +56,7 @@ const SESSION_ID = /^ses_[A-Za-z0-9]{1,64}$/
 const PLACEHOLDER_TITLE = /^(New session - |Child session - )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 
 /** A headless `run` (and the GitHub agent) denies the `question` tool: nobody is there to answer. */
-const HEADLESS = "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(s.permission) THEN s.permission ELSE '[]' END) r"
+const headless = (permission: string) => `EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(${permission}) THEN ${permission} ELSE '[]' END) r`
   + " WHERE CASE WHEN r.type = 'object' THEN json_extract(r.value, '$.permission') END = 'question'"
   + " AND CASE WHEN r.type = 'object' THEN json_extract(r.value, '$.action') END = 'deny')"
 
@@ -60,31 +66,45 @@ const VALUE_FLAGS = new Set(['-s', '--session', '-m', '--model', '--agent', '--p
 
 interface Listed { rows: SqliteRow[]; counts: Tally }
 
+export interface V2Store {
+  /** The columns of the v1 `session` table the file still holds; none when it holds no such table. */
+  legacy: ReadonlySet<string>
+}
+
 /**
  * One statement: the newest sessions a person can resume, and how many rows each rule kept out (a
  * row with a null id is a count). Columns come from the store's own schema, since versions differ.
+ * With `v2` the sessions are those of an OpenCode 2 store, `session_v2` and `session_message`.
  */
-export function opencodeListSql(session: ReadonlySet<string>, message: ReadonlySet<string>): string | null {
+export function opencodeListSql(session: ReadonlySet<string>, message: ReadonlySet<string>, v2?: V2Store): string | null {
   if (!session.has('id') || !session.has('directory') || !session.has('time_updated')) return null
+  // v2's message table also holds compactions, shell runs and turn ends: only what was said counts as use.
   const lastMessage = message.has('session_id') && message.has('time_created')
-    ? '(SELECT max(m.time_created) FROM message m WHERE m.session_id = s.id)'
+    ? `(SELECT max(m.time_created) FROM ${v2 ? "session_message m WHERE m.type IN ('user', 'assistant') AND" : 'message m WHERE'} m.session_id = s.id)`
     : 'NULL'
+  const permission = session.has('permission')
+    ? v2 && v2.legacy.has('id') && v2.legacy.has('permission')
+      ? 'coalesce(s.permission, (SELECT old.permission FROM session old WHERE old.id = s.id))'
+      : 's.permission'
+    : null
   const skip = `CASE${session.has('parent_id') ? " WHEN s.parent_id IS NOT NULL THEN 'child'" : ''}`
     + `${session.has('time_archived') ? " WHEN s.time_archived IS NOT NULL THEN 'archived'" : ''}`
-    + `${session.has('permission') ? ` WHEN ${HEADLESS} THEN 'headless'` : ''}`
+    + `${permission ? ` WHEN ${headless(permission)} THEN 'headless'` : ''}`
     + ` WHEN ${lastMessage} IS NULL THEN 'empty' ELSE '' END`
   const title = session.has('title') ? 's.title' : "''"
   return 'SELECT * FROM (SELECT s.id AS id, s.directory AS directory, '
     + `${title} AS title, s.time_updated AS updated, ${lastMessage} AS last_msg, '' AS skip, NULL AS n `
-    + `FROM session s WHERE ${skip} = '' `
+    + `FROM ${v2 ? 'session_v2' : 'session'} s WHERE ${skip} = '' `
     + `ORDER BY max(coalesce(s.time_updated, 0), coalesce(${lastMessage}, 0)) DESC LIMIT ${LIST_LIMIT}) `
-    + `UNION ALL SELECT NULL, NULL, NULL, NULL, NULL, ${skip} AS skip, count(*) AS n FROM session s GROUP BY skip`
+    + `UNION ALL SELECT NULL, NULL, NULL, NULL, NULL, ${skip} AS skip, count(*) AS n FROM ${v2 ? 'session_v2' : 'session'} s GROUP BY skip`
 }
 
 async function listSessions(read: SqlRead, dbPath: string): Promise<Listed | null> {
-  const columns = await tableColumns(read, dbPath, ['session', 'message'])
+  const columns = await tableColumns(read, dbPath, ['session', 'message', 'session_v2', 'session_message'])
   if (!columns) return null
-  const sql = opencodeListSql(columns.get('session') ?? new Set(), columns.get('message') ?? new Set())
+  const sql = columns.has('session_v2')
+    ? opencodeListSql(columns.get('session_v2') ?? new Set(), columns.get('session_message') ?? new Set(), { legacy: columns.get('session') ?? new Set() })
+    : opencodeListSql(columns.get('session') ?? new Set(), columns.get('message') ?? new Set())
   if (!sql) return { rows: [], counts: {} }
   const rows = await rowsOf(read, dbPath, sql)
   return rows && splitCounts(rows)
@@ -102,6 +122,26 @@ const TAIL_SQL = "SELECT json_extract(m.data, '$.role') AS role, json_extract(m.
   + " json_extract(p.data, '$.state.error') AS part_error"
   + ' FROM (SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT 1) m'
   + ' LEFT JOIN part p ON p.message_id = m.id'
+
+/**
+ * The same question of an OpenCode 2 session, from the newest row that says where the turn is: a prompt (open),
+ * a turn end (`idle`, closed) or an assistant step. A step is open until it completes, while a tool is still
+ * pending or running, and when it stopped to call tools; an error ends it.
+ */
+const V2_TAIL_SQL = "SELECT m.type AS type, json_extract(m.data, '$.finish') AS finish,"
+  + " json_extract(m.data, '$.time.completed') AS completed, json_type(m.data, '$.error') AS failed,"
+  + " EXISTS (SELECT 1 FROM json_each(m.data, '$.content') c WHERE json_extract(c.value, '$.type') = 'tool'"
+  + " AND json_extract(c.value, '$.state.status') IN ('pending', 'running')) AS pending"
+  + " FROM session_message m WHERE m.session_id = ? AND m.type IN ('user', 'assistant', 'idle') ORDER BY m.seq DESC LIMIT 1"
+
+export function opencodeV2TurnOpen(row: SqliteRow): boolean | null {
+  if (row.type === 'user') return true
+  if (row.type === 'idle') return false
+  if (row.type !== 'assistant') return null
+  if (typeof row.failed === 'string' && row.failed !== 'null') return false
+  if (!row.completed || Number(row.pending) === 1) return true
+  return row.finish === 'tool-calls'
+}
 
 export function opencodeTurnOpen(rows: readonly SqliteRow[]): boolean | null {
   const head = rows[0]
@@ -122,7 +162,8 @@ export function opencodeTurnOpen(rows: readonly SqliteRow[]): boolean | null {
 
 export function opencodeProvider(options: OpencodeOptions): ExternalProvider & Counting {
   const { engine, dbPath } = options
-  const read = checkedSql(options.read ?? readSql)
+  const rawRead = options.read ?? readSql
+  const read = checkedSql(rawRead)
   const available = options.available ?? hasSqliteReader
   let counts: Tally = {}
   const history = (sessionId: string) => engine === 'kilo'
@@ -181,8 +222,21 @@ export function opencodeProvider(options: OpencodeOptions): ExternalProvider & C
     async busy(owner): Promise<boolean | null> {
       const at = parseOwnerRecord(owner.record)
       if (!at) return null
-      const result = await read(at.dbPath, TAIL_SQL, [at.sessionId])
-      return result.ok ? opencodeTurnOpen(result.rows) : null
+      if (engine !== 'opencode') {
+        const result = await read(at.dbPath, TAIL_SQL, [at.sessionId])
+        return result.ok ? opencodeTurnOpen(result.rows) : null
+      }
+      // OpenCode 2's own record first, then the v1 tables of a session it has no row of. Neither table is a
+      // failure to read: a store has only the one its version wrote.
+      const noTable = (result: SqliteReadResult) => !result.ok && /no such table/i.test(result.error?.message ?? '')
+      const unreadable = (): null => { externalReadFailed(new Error('SQLite read failed'), 'conversation store'); return null }
+      const v2 = await rawRead(at.dbPath, V2_TAIL_SQL, [at.sessionId])
+      if (v2.ok && v2.rows.length > 0) return opencodeV2TurnOpen(v2.rows[0])
+      if (!v2.ok && !noTable(v2)) return unreadable()
+      const v1 = await rawRead(at.dbPath, TAIL_SQL, [at.sessionId])
+      if (v1.ok) return opencodeTurnOpen(v1.rows)
+      if (!noTable(v1)) return unreadable()
+      return v2.ok ? false : null // v2 only, and it has said nothing in this session; or not OpenCode's store
     },
   }
 }

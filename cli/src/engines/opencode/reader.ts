@@ -8,13 +8,16 @@
  * engines use.
  *
  * opencode 1.18.6 writes the legacy `message`/`part` tables (the newer `session_message`/`seq` tables
- * exist but are empty), so those are the primary cursor.
+ * exist but are empty), so those are the primary cursor. OpenCode 2 is the other way round: its conversation is
+ * in `session_v2`/`session_message`, and the legacy tables only keep what v1 wrote (measured on 2.0.29: 27 recent
+ * sessions with messages in `session_message` and none in `message`). A session is read from `session_message`
+ * when it has rows there, else from the legacy tables, and the cursor of a v2 session is the row's `seq`.
  */
 
 import type { LiveEvent } from '../../lib/normalize.js'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
 import {
-  MAX_OUTPUT, MAX_THINKING, clip, object, str,
+  MAX_OUTPUT, MAX_THINKING, OC_V2_TURN_TYPES, clip, object, str, ocMessageFromV2,
   opencodeToolName, toolOutputText, toolSummary, userMessageText,
   isTaskPart, taskStartEvent, taskEndEvent,
   type OcMessage, type OcPart, type ChildStats,
@@ -29,11 +32,18 @@ function parseJson(text: unknown): Record<string, unknown> {
   try { return object(JSON.parse(text)) ?? {} } catch { return {} }
 }
 
-interface Cursor { tc: number; id: string }
+/** Where a read left off. `seq` is set when the session is OpenCode 2's, whose messages are ordered by it alone. */
+interface Cursor { tc: number; id: string; seq?: number }
+
+function cursorOf(msg: OcMessage): Cursor {
+  return { tc: msg.timeCreated, id: msg.id, seq: msg.seq }
+}
 
 /**
- * Read messages (+ their parts) for one session from opencode.db.
- * `after` restricts to messages strictly after that boundary (for incremental polling).
+ * Read messages (+ their parts) for one session from opencode.db: from OpenCode 2's `session_message` when the
+ * session has rows there, else from the legacy `message`/`part` tables. Either way the result is the v1 shape.
+ * `after` restricts to messages strictly after that boundary (for incremental polling); a cursor with a `seq`
+ * belongs to a v2 session and one without to a v1 session, so it picks the table it continues in.
  * Read-only, with a short busy timeout, so it never contends with opencode's writer.
  * Throws `OpencodeSqliteMissing` when this machine has no way to read SQLite at all.
  */
@@ -43,6 +53,36 @@ export async function readOpencodeMessages(
   after?: Cursor | null,
 ): Promise<OcMessage[]> {
   if (!ID_RE.test(sessionId)) return []
+  if (!after || after.seq !== undefined) {
+    const v2 = await readV2Messages(dbPath, sessionId, Number.isFinite(after?.seq) ? Math.trunc(after!.seq!) : -1)
+    if (v2.length > 0 || after) return v2
+  }
+  return readLegacyMessages(dbPath, sessionId, after ?? null)
+}
+
+/** The user, assistant and idle rows of an OpenCode 2 session after `afterSeq`, in order. Empty for a v1 session. */
+async function readV2Messages(dbPath: string, sessionId: string, afterSeq: number): Promise<OcMessage[]> {
+  const types = OC_V2_TURN_TYPES.map((type) => `'${type}'`).join(', ')
+  const sql =
+    'SELECT m.id AS mid, m.type AS mtype, m.seq AS mseq, m.time_created AS mtc, m.data AS mdata ' +
+    `FROM session_message m WHERE m.session_id = ? AND m.seq > ? AND m.type IN (${types}) ORDER BY m.seq;`
+  const result = await sqliteReadAll(dbPath, sql, [sessionId, afterSeq], { maxBuffer: MAX_BUFFER })
+  if (!result.ok) {
+    if (result.reason === 'missing') throw new OpencodeSqliteMissing()
+    return [] // no `session_message` table (OpenCode 1), or locked / transient — the caller falls back or retries
+  }
+  const messages: OcMessage[] = []
+  for (const row of result.rows) {
+    const message = ocMessageFromV2({
+      id: str(row.mid), type: str(row.mtype), seq: Number(row.mseq) || 0, timeCreated: Number(row.mtc) || 0, data: parseJson(row.mdata),
+    })
+    if (message && message.id) messages.push(message)
+  }
+  return messages
+}
+
+/** The legacy `message`/`part` tables: OpenCode 1's conversation. */
+async function readLegacyMessages(dbPath: string, sessionId: string, after: Cursor | null): Promise<OcMessage[]> {
   const bounded = !!after && ID_RE.test(after.id) && Number.isFinite(after.tc)
   const cond = bounded
     ? 'AND (m.time_created > ? OR (m.time_created = ? AND m.id > ?)) '
@@ -169,7 +209,7 @@ export class OpencodeReader {
     let boundary = -1
     for (let i = messages.length - 1; i >= 0; i--) { if (isDone(messages[i])) { boundary = i; break } }
     const done = boundary >= 0 ? messages[boundary] : null
-    this.cursor = done ? { tc: done.timeCreated, id: done.id } : null
+    this.cursor = done ? cursorOf(done) : null
     for (const msg of messages) {
       if (msg.role === 'user') this.seenUser.add(msg.id)
       for (const part of msg.parts) this.seedPart(part)
@@ -208,7 +248,7 @@ export class OpencodeReader {
       for (const msg of batch) events.push(...await this.processMessage(msg))
       // Advance the cursor past the trailing run of closed messages; keep an in-flight tail for re-read.
       for (let i = batch.length - 1; i >= 0; i--) {
-        if (isDone(batch[i])) { this.cursor = { tc: batch[i].timeCreated, id: batch[i].id }; break }
+        if (isDone(batch[i])) { this.cursor = cursorOf(batch[i]); break }
       }
       if (events.length) this.deps.onEvents(events)
     } catch (err) {
