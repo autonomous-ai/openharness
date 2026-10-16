@@ -1,12 +1,13 @@
 /** Optional model metadata follows discovery; it never owns a binding or delays session control. */
 import type { ModelsPort } from '../api.js'
+import { basename } from 'node:path'
 import { gridAssignmentAnswersIn, gridAssignmentProcess, sameGridAssignment,
   type GridAssignment, type GridAssignmentProcess } from '../../lib/gridAssignmentWire.js'
 import { readProcessEnv } from '../../lib/processEnv.js'
 import type { RegisteredSession, registry as Registry } from '../../lib/registry.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
-import { processArgvIsBoundaryFaithful, processRows } from '../../lib/tmux.js'
+import { argvTokens, processArgvIsBoundaryFaithful, processRows } from '../../lib/tmux.js'
 
 /**
  * The endpoint this daemon itself built a row's launch for, when that launch is a local Grid profile's.
@@ -24,7 +25,20 @@ function trustedBaseUrl(session: RegisteredSession): string | undefined {
 async function faithfulArgs(identity: NonNullable<RegisteredSession['processIdentity']>): Promise<string> {
   const rows = await processRows()
   const row = rows?.find(candidate => sameProcessIdentity(candidate, identity))
-  return row && processArgvIsBoundaryFaithful(row) ? row.args : identity.executable
+  if (!row) return identity.executable
+  if (processArgvIsBoundaryFaithful(row)) return row.args
+  // An engine may replace its argv with a bare process title. The daemon-owned launcher directly
+  // above it still has the launch argv; accept that only with faithful boundaries and the expected
+  // harness-engine shape, so flattened prompt text never becomes model evidence.
+  const title = row.args.trim()
+  const parent = rows?.find(candidate => candidate.pid === row.parentPid)
+  if (!title || /\s/.test(title) || !parent || !processArgvIsBoundaryFaithful(parent)) return identity.executable
+  const tokens = argvTokens(parent.args)
+  const at = tokens.indexOf('harness-engine')
+  if (at < 0) return identity.executable
+  const expected = basename(identity.executable)
+  const launched = [tokens[at + 1], tokens[at + 2]].some(token => token && basename(token) === expected)
+  return launched ? parent.args : identity.executable
 }
 
 export interface GridAssignmentsDeps {
