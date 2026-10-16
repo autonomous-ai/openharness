@@ -753,6 +753,39 @@ describe('the daemon socket', () => {
     }
   })
 
+  it('takes `harness stop` over the trusted endpoint only — never on the loopback port', async () => {
+    const dir = mkdtempSync('/tmp/hsock-')
+    const socketPath = join(dir, 'daemon.sock')
+    const onDaemonStop = vi.fn(async () => ({ status: 202, body: { ok: true } }))
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn(), onDaemonStop }, { socketPath })
+    server = started.server
+    try {
+      const local = { 'x-adapter-local': '1' }
+      expect(await viaSocket(socketPath, 'POST', '/api/daemon/stop', local)).toBe(202)
+      expect(await viaSocket(socketPath, 'POST', '/api/daemon/stop')).toBe(403)
+      const port = (started.server.address() as { port: number }).port
+      const tcp = await fetch(`http://127.0.0.1:${port}/api/daemon/stop`, { method: 'POST', headers: local })
+      expect(tcp.status).toBe(403)
+      expect(onDaemonStop).toHaveBeenCalledTimes(1)
+    } finally {
+      await started.localSocket?.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('has no `harness stop` route where no handler is given: a Mac or Linux core, unchanged', async () => {
+    const dir = mkdtempSync('/tmp/hsock-')
+    const socketPath = join(dir, 'daemon.sock')
+    const started = await startHookServer(0, { onRegistered: vi.fn(), onSessionEnd: vi.fn() }, { socketPath })
+    server = started.server
+    try {
+      expect(await viaSocket(socketPath, 'POST', '/api/daemon/stop', { 'x-adapter-local': '1' })).toBe(404)
+    } finally {
+      await started.localSocket?.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('over the Windows pipe, serves only requests that prove the token, and trusts those', async () => {
     const dir = mkdtempSync('/tmp/hsock-')
     const socketPath = join(dir, `harness-${randomBytes(16).toString('hex')}`)

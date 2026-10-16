@@ -160,6 +160,10 @@ export interface HookServerHandlers {
   /** POST /api/auth/handoff — a one-time code that signs a phone in to this account (the desktop's
    *  Add Phone QR), minted by backend against this daemon's own session. */
   onAuthHandoff?: () => Promise<PairOutcome>
+  /** POST /api/daemon/stop — `harness stop` on Windows (core/daemonStopRoute.ts). Trusted local only: over TCP any
+   *  process on the machine, another user's included, could stop this user's daemon. Given on Windows only; without
+   *  it the route does not exist (404), as before on a Mac or Linux. */
+  onDaemonStop?: () => Promise<PairOutcome>
   onSharedHarnesses?: () => Promise<PairOutcome>
   /** GET /api/desk — the account's tabs, the same on every computer; proxied like the machine list. */
   onDeskRead?: () => Promise<PairOutcome>
@@ -1104,6 +1108,13 @@ export function startHookServer(
         if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onAuthHandoff) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(handlers.onAuthHandoff); return
+      }
+      // Stopping the daemon ends every agent's link to it: like the phone code above, the daemon's own trusted
+      // endpoint only (the owner's socket; on Windows its pipe, with the token's proof, lib/localSocket.ts).
+      // Windows only: the route exists when its handler is given (core/daemonStopRoute.ts daemonStopRoute).
+      if (req.method === 'POST' && url === '/api/daemon/stop' && handlers.onDaemonStop) {
+        if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        await proxied(handlers.onDaemonStop); return
       }
       if (req.method === 'PATCH' && url.startsWith('/api/machines/')) {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }

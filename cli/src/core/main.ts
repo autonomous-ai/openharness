@@ -109,6 +109,7 @@ import { RECONCILE_PASS_DEADLINE_MS, TerminalAgentReconciler } from '../lib/term
 import { Watcher } from '../watcher/watcher.js'
 import { startHookServer } from '../hookServer.js'
 import { connectToMaster } from '../harnessd/coreLink.js'
+import { daemonStopRoute } from './daemonStopRoute.js'
 import { createTerminalOpener } from './terminals/open.js'
 import { createTerminalSessions } from './terminals/sessions.js'
 import { checkPidRuntime } from '../lib/deleteAgentFallback.js'
@@ -1918,6 +1919,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onMachineDelete: (machineId) => proxyBackend('DELETE', `/api/machines/${encodeURIComponent(machineId)}`),
     onAuthMe: () => proxyBackend('GET', '/api/auth/me'),
     onAuthHandoff: () => proxyBackend('POST', '/api/auth/handoff', {}),
+    ...daemonStopRoute({ askMaster: () => coreLink.stopAll(), stopHere: () => void shutdown('harness stop') }),
     // Signed out there is nothing shared WITH this computer and nobody to ask: a share is made on the
     // account. Answered as an empty list rather than proxied into the backend's 401, which is the one
     // status the desktop app reads as "your session ended" — and a guest has no session to end.
@@ -2780,6 +2782,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A core whose master is gone stops, so nothing is left holding the port for a master that is not
   // there to restart it.
   coreLink.onMasterGone(() => void shutdown('the harnessd master is gone'))
+  // Windows: the master's stop is a message (harnessd/protocol.ts `harnessd:shutdown`), never a signal.
+  coreLink.onShutdown(() => void shutdown('the harnessd master asked this core to stop'))
 
   // A machine revocation or invalid SSO refresh ends this adapter session permanently.
   backend.onRevoked = () => {
@@ -2924,6 +2928,7 @@ const enterSafeMode = (err: unknown): void => {
   coreLink.ready(disposition.reason)
   coreLink.startHeartbeat()
   coreLink.onMasterGone(() => leave('the harnessd master is gone — leaving safe mode', 0))
+  coreLink.onShutdown(() => leave('the harnessd master asked this core to stop — leaving safe mode', 0))
 
   // The bound control port is a ref'd handle and holds the loop on its own. Without one — the bind
   // itself was what failed, or we never got that far — take the port for the status alone, so the app
