@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
 import {
   COMMAND_TIMEOUT_MS, LAUNCHD_LABEL, OS_SYSTEMD_UNIT, OS_UNIT_FILE, PLATFORM_ENV, PLATFORM_LABEL, PlatformService, RESTART_THROTTLE_S, STOP_TIMEOUT_S, SYSTEMD_UNIT,
-  TASK_REPEAT, currentUid, defaultPlatformDeps, launchdPlist, platformFor, platformFromEnv, stoppedThisBoot, systemdUnit, taskName, taskSchedulerXml,
+  TASK_REPEAT, WHOAMI_ARGS, currentUid, defaultPlatformDeps, launchdPlist, platformFor, platformFromEnv, stoppedThisBoot, systemdUnit, taskName, taskSchedulerXml, whoamiSid,
   type CommandResult, type PlatformDeps, type ServiceDefinition,
 } from './platform.js'
 
@@ -221,8 +221,9 @@ describe('the default dependencies', { timeout: FAKE_COMMANDS_TIMEOUT_MS }, () =
     expect(defaultPlatformDeps({ env: { XDG_CONFIG_HOME: '/x/config' }, uid: 1, home: '/h' }).configHome).toBe('/x/config')
     expect(defaultPlatformDeps({ env: { XDG_CONFIG_HOME: 'relative' }, uid: 1, home: '/h' }).configHome).toBeUndefined()
     expect(defaultPlatformDeps({ env: {}, uid: 1, home: '/h' }).configHome).toBeUndefined()
-    const windows = defaultPlatformDeps({ env: { USERDOMAIN: 'DESKTOP-1', USERNAME: 'Demo' }, home: '/h', dataDir: '/h/data' })
-    expect(windows.user).toBe('DESKTOP-1\\Demo')
+    // The bare name, whatever USERDOMAIN says: OpenSSH sets it to WORKGROUP, and `WORKGROUP\admin` is no account.
+    const windows = defaultPlatformDeps({ env: { USERDOMAIN: 'WORKGROUP', USERNAME: 'Demo' }, home: '/h', dataDir: '/h/data' })
+    expect(windows.user).toBe('Demo')
     expect(windows.dataDir).toBe('/h/data')
     expect(defaultPlatformDeps({ env: { USERNAME: 'Demo' } }).user).toBe('Demo')
     expect(defaultPlatformDeps({ env: {} }).user).toBeUndefined()
@@ -484,8 +485,10 @@ const task = {
   root: 'C:\\Users\\Demo User\\.harness',
   home: 'C:\\Users\\Demo User',
   logFile: 'C:\\Users\\Demo User\\.harness\\cli\\data\\harness.log',
-  user: 'DESKTOP-1\\Demo User',
+  sid: 'S-1-5-21-1478909626-3441007577-4021198368-1001',
 }
+/** What `whoami /user /fo csv /nh` printed on the Windows 11 VM (2026-10-16). */
+const WHOAMI = '"win-2r12e0mujkc\\admin","S-1-5-21-1478909626-3441007577-4021198368-1001"\r\n'
 
 describe('the scheduled task', () => {
   // Task names are machine-wide, and a task folder one user creates can refuse another standard user: a fixed
@@ -502,7 +505,11 @@ describe('the scheduled task', () => {
     const text = taskSchedulerXml(task)
     // schtasks /Create /XML takes UTF-16 only: a UTF-8 file, with or without a BOM, is "malformed" (Windows 11, 2026-10-16).
     expect(text).toMatch(/^<\?xml version="1\.0" encoding="UTF-16"\?>/)
-    expect(text).toMatch(/<LogonTrigger>\s*<Enabled>true<\/Enabled>\s*<UserId>DESKTOP-1\\Demo User<\/UserId>\s*<\/LogonTrigger>/)
+    // The logon trigger names this user by SID; without one it would fire at anyone's logon.
+    expect(text).toMatch(/<LogonTrigger>\s*<Enabled>true<\/Enabled>\s*<UserId>S-1-5-21-1478909626-3441007577-4021198368-1001<\/UserId>\s*<\/LogonTrigger>/)
+    // The principal names nobody: schtasks registers it for the user who creates it, exactly (Principal, task-B3.12-report.md).
+    expect(text).toMatch(/<Principal id="Author">\s*<LogonType>InteractiveToken<\/LogonType>\s*<RunLevel>LeastPrivilege<\/RunLevel>\s*<\/Principal>/)
+    expect(text.match(/<UserId>/g)).toHaveLength(1)
     expect(text).toMatch(new RegExp(`<TimeTrigger>[\\s\\S]*<Repetition>\\s*<Interval>${TASK_REPEAT}</Interval>\\s*<StopAtDurationEnd>false</StopAtDurationEnd>\\s*</Repetition>[\\s\\S]*</TimeTrigger>`))
     expect(text).toContain('<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>')
     expect(text).toContain('<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>')
@@ -517,12 +524,21 @@ describe('the scheduled task', () => {
   })
 
   it('escapes what XML would misread, and refuses a relative path, a path across lines or no user', () => {
-    expect(taskSchedulerXml({ ...task, user: 'A&B <x>' })).toContain('<UserId>A&amp;B &lt;x&gt;</UserId>')
+    expect(taskSchedulerXml({ ...task, home: 'C:\\A&B <x>' })).toContain('<WorkingDirectory>C:\\A&amp;B &lt;x&gt;</WorkingDirectory>')
     expect(() => taskSchedulerXml({ ...task, launcherPath: 'bin\\harness-launch.exe' })).toThrow(/must be absolute/)
     expect(() => taskSchedulerXml({ ...task, home: 'C:\\a\nb' })).toThrow(/must be absolute/)
     expect(() => taskSchedulerXml({ ...task, root: 'C:\\a"b' })).toThrow(/cannot hold a quote/)
-    expect(() => taskSchedulerXml({ ...task, user: '' })).toThrow(/the user it runs for/)
-    expect(() => taskSchedulerXml({ ...task, user: 'a\nb' })).toThrow(/the user it runs for/)
+    expect(() => taskSchedulerXml({ ...task, sid: '' })).toThrow(/the user it runs for/)
+    expect(() => taskSchedulerXml({ ...task, sid: 'admin' })).toThrow(/the user it runs for/)
+    expect(() => taskSchedulerXml({ ...task, sid: `${task.sid}\nS-1-5-18` })).toThrow(/the user it runs for/)
+  })
+
+  it('reads this user\'s SID from what whoami prints, whatever the name before it holds', () => {
+    expect(WHOAMI_ARGS).toEqual(['/user', '/fo', 'csv', '/nh'])
+    expect(whoamiSid(WHOAMI)).toBe(task.sid)
+    expect(whoamiSid('"CORP\\Smith, Jo","S-1-5-21-1-2-3-1104"\n')).toBe('S-1-5-21-1-2-3-1104')
+    expect(whoamiSid('"WORKGROUP\\admin","not a sid"\r\n')).toBeNull()
+    expect(whoamiSid('')).toBeNull()
   })
 
   it('remembers a stop for as long as this computer runs, and not past its next start', () => {
@@ -542,11 +558,12 @@ describe('PlatformService over schtasks', () => {
     env: {}, launcherPath: task.launcherPath,
   })
   const make = (answers: Record<string, CommandResult> = {}, files: Record<string, string> = {}) => {
-    const made = stubDeps(answers, files, { user: task.user, dataDir: data, bootTime: () => 1_000 })
+    const made = stubDeps({ whoami: ok(WHOAMI), ...answers }, files, { user: 'Demo User', dataDir: data, bootTime: () => 1_000 })
     return { ...made, service: new PlatformService('taskscheduler', made.deps) }
   }
   // The name as stubDeps records it: its arguments joined by spaces, unquoted, as spawnSync passes them.
-  const NAME = taskName(task.user)
+  const NAME = taskName('Demo User')
+  const WHOAMI_CALL = `whoami ${WHOAMI_ARGS.join(' ')}`
 
   it('keeps its definition in the data folder, registers it under this user\'s name, and knows it as this data folder\'s by its log', () => {
     const made = make()
@@ -563,7 +580,17 @@ describe('PlatformService over schtasks', () => {
     expect(files[service.file]).toBe(taskSchedulerXml(task))
     expect(made.encodings[service.file]).toBe('utf16le')
     expect(service.register()).toEqual({ ok: true })
-    expect(calls).toEqual([`schtasks /Create /TN ${NAME} /XML ${service.file} /F`])
+    // whoami once: the SID is this process's for as long as it runs.
+    expect(calls).toEqual([WHOAMI_CALL, `schtasks /Create /TN ${NAME} /XML ${service.file} /F`])
+  })
+
+  it('cannot render a task when whoami cannot say who this is', () => {
+    const gone = make({ whoami: { status: null, stdout: '', stderr: '', error: 'spawn whoami ENOENT' } })
+    expect(() => gone.service.render(definition())).toThrow(`Harness could not tell which Windows user this is: whoami /user /fo csv /nh could not be run: spawn whoami ENOENT`)
+    const odd = make({ whoami: ok('"WORKGROUP\\admin"\r\n') })
+    expect(() => odd.service.render(definition())).toThrow(/could not tell which Windows user this is: whoami \/user \/fo csv \/nh printed no SID/)
+    const refused = make({ whoami: fail(1, 'ERROR: Access is denied.') })
+    expect(() => refused.service.render(definition())).toThrow(/whoami \/user \/fo csv \/nh failed \(exit 1\): ERROR: Access is denied\./)
   })
 
   it('runs the task to start, rewriting it first when it changed, and forgets a stop', () => {
@@ -621,11 +648,11 @@ describe('PlatformService over schtasks', () => {
   it('cannot render a task without a launcher, and takes this process\'s user and the home\'s data folder by default', () => {
     const { service } = make()
     expect(() => service.render({ ...definition(), launcherPath: undefined })).toThrow(/must be absolute/)
-    const plain = new PlatformService('taskscheduler', stubDeps({}).deps)
+    const plain = new PlatformService('taskscheduler', stubDeps({ whoami: ok(WHOAMI) }).deps)
     expect(plain.file).toBe(join('/Users/demo', '.harness', 'cli', 'data', 'harnessd-task.xml'))
-    // No user given: the name and the XML's user are both this process's, from the one source.
+    // No user given: the name is this process's user's; the XML names the user by the SID whoami gives.
     expect(plain.target).toBe(taskName(userInfo().username))
-    expect(plain.render(definition())).toContain(`<UserId>${userInfo().username}</UserId>`)
+    expect(plain.render(definition())).toContain(`<UserId>${task.sid}</UserId>`)
     // Without a clock of its own, the stop is written against this computer's boot.
     expect(plain.stop()).toEqual({ ok: true })
   })

@@ -231,11 +231,15 @@ WantedBy=default.target
  * is what stands in for KeepAlive and Restart=: a master that dies is back within five minutes.
  *
  * No administrator rights: InteractiveToken runs it as the user, only while they are signed in, with no password stored.
+ * The principal names no user: schtasks registers it for the user who creates it, exactly. A name built from
+ * USERDOMAIN is not that user over SSH, where OpenSSH sets USERDOMAIN to WORKGROUP and schtasks refuses
+ * `WORKGROUP\admin` ("No mapping between account names and security IDs", Windows 11, 2026-10-16). The logon
+ * trigger names the user by SID, as whoami gives it: without a user it would fire at anyone's logon.
  * IgnoreNew: a start still running when the next one is due is not doubled. No time limit, though each start lasts
  * seconds: the launcher exits once it has started the CLI, and the master it starts is outside the task's job.
  * The time trigger's start is fixed, so the same install writes the same text and `current` can compare it.
  */
-/** The task of [user] (`DOMAIN\user` or a bare name): `Harness harnessd (<name>)`, the domain left out. */
+/** The task of [user], the bare user name (USERNAME): `Harness harnessd (<name>)`; a `DOMAIN\` before it is left out. */
 export function taskName(user: string): string {
   return `Harness harnessd (${user.slice(user.lastIndexOf('\\') + 1)})`
 }
@@ -250,8 +254,18 @@ export interface TaskDefinition {
   root: string
   home: string
   logFile: string
-  /** `DOMAIN\user`, whose logon starts it and as whom it runs. */
-  user: string
+  /** The SID of the user whose logon starts it (`whoamiSid`). */
+  sid: string
+}
+
+const SID = /^S-1-\d+(-\d+)+$/
+/** `whoami /user /fo csv /nh`: one line, `"<DOMAIN\name>","<SID>"`. */
+export const WHOAMI_ARGS = ['/user', '/fo', 'csv', '/nh']
+
+/** The SID in what `whoami /user /fo csv /nh` printed: its last column, as a name may hold a comma. */
+export function whoamiSid(stdout: string): string | null {
+  const sid = /"([^"]*)"\s*$/.exec(stdout.trim())?.[1]
+  return sid && SID.test(sid) ? sid : null
 }
 
 export function taskSchedulerXml(opts: TaskDefinition): string {
@@ -260,7 +274,7 @@ export function taskSchedulerXml(opts: TaskDefinition): string {
   }
   // Quoted for the launcher's own command line: a quote inside cannot be.
   if (opts.root.includes('"')) throw new Error(`the root for the task cannot hold a quote: ${JSON.stringify(opts.root)}`)
-  if (!opts.user || CONTROL.test(opts.user)) throw new Error(`the task needs the user it runs for: ${JSON.stringify(opts.user)}`)
+  if (!SID.test(opts.sid)) throw new Error(`the task needs the user it runs for, as a SID: ${JSON.stringify(opts.sid)}`)
   // UTF-16, and written so (PlatformService.write): schtasks /Create /XML refused a UTF-8 file as malformed, with
   // a BOM ("incorrect document syntax") or without ("unable to switch the encoding"), and a UTF-16 file that
   // declares UTF-8; it took UTF-16LE with a BOM declaring UTF-16 (Windows 11 ARM64, 2026-10-16).
@@ -274,7 +288,7 @@ export function taskSchedulerXml(opts: TaskDefinition): string {
   <Triggers>
     <LogonTrigger>
       <Enabled>true</Enabled>
-      <UserId>${xml(opts.user)}</UserId>
+      <UserId>${opts.sid}</UserId>
     </LogonTrigger>
     <TimeTrigger>
       <Enabled>true</Enabled>
@@ -287,7 +301,6 @@ export function taskSchedulerXml(opts: TaskDefinition): string {
   </Triggers>
   <Principals>
     <Principal id="Author">
-      <UserId>${xml(opts.user)}</UserId>
       <LogonType>InteractiveToken</LogonType>
       <RunLevel>LeastPrivilege</RunLevel>
     </Principal>
@@ -353,7 +366,7 @@ export interface PlatformDeps {
   home: string
   /** `$XDG_CONFIG_HOME`, where systemd looks for user units first; `~/.config` when unset. */
   configHome?: string
-  /** Windows: `DOMAIN\user`, the task's user. */
+  /** Windows: the user name (USERNAME, no domain), which names the task. */
   user?: string
   /** Windows: the data folder, where the task's definition and a stop are written. `~/.harness/cli/data` when unset. */
   dataDir?: string
@@ -400,7 +413,8 @@ export function defaultPlatformDeps(options: { env?: NodeJS.ProcessEnv; uid?: nu
     uid: options.uid ?? currentUid(),
     home: options.home ?? homedir(),
     ...(configHome && isAbsolute(configHome) ? { configHome } : {}),
-    ...(env.USERNAME ? { user: env.USERDOMAIN ? `${env.USERDOMAIN}\\${env.USERNAME}` : env.USERNAME } : {}),
+    // No USERDOMAIN: OpenSSH sets it to WORKGROUP (see taskSchedulerXml).
+    ...(env.USERNAME ? { user: env.USERNAME } : {}),
     ...(options.dataDir ? { dataDir: options.dataDir } : {}),
     bootTime: bootTimeMs,
   }
@@ -472,10 +486,22 @@ export class PlatformService {
     return join(this.dataDir, TASK_STOPPED_FILE)
   }
 
-  /** Windows: the task's user, `DOMAIN\user`. One source for the task's name and its XML's UserId: the deps' user,
-   *  else this process's. */
+  /** Windows: the user name that names the task, the one source for it: the deps' user, else this process's. */
   private get taskUser(): string {
     return this.deps.user ?? userInfo().username
+  }
+
+  private sidRead: string | undefined
+
+  /** Windows: this user's SID, for the task's logon trigger. Asked once: it is this process's for as long as it runs. */
+  private get sid(): string {
+    if (this.sidRead) return this.sidRead
+    const result = this.deps.run('whoami', WHOAMI_ARGS)
+    const sid = result.status === 0 && !result.error ? whoamiSid(result.stdout) : null
+    const what = `whoami ${WHOAMI_ARGS.join(' ')}`
+    if (!sid) throw new Error(`Harness could not tell which Windows user this is: ${result.status === 0 && !result.error ? `${what} printed no SID` : failure('whoami', WHOAMI_ARGS, result)}`)
+    this.sidRead = sid
+    return sid
   }
 
   /** Where the definition lives. */
@@ -497,7 +523,7 @@ export class PlatformService {
     if (this.platform === 'taskscheduler') {
       const launcherPath = definition.launcherPath ?? ''
       // The launcher is `<root>\bin\harness-launch.exe` (lib/windows/installLayout.ts `harnessLaunchPath`).
-      return taskSchedulerXml({ launcherPath, root: win32.dirname(win32.dirname(launcherPath)), home: definition.home, logFile: definition.logFile, user: this.taskUser })
+      return taskSchedulerXml({ launcherPath, root: win32.dirname(win32.dirname(launcherPath)), home: definition.home, logFile: definition.logFile, sid: this.sid })
     }
     return this.platform === 'launchd' ? launchdPlist(definition) : systemdUnit(definition)
   }
