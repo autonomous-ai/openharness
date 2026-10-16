@@ -7,11 +7,18 @@
  * a holder that has been busy for longer than the wait is reported and then overridden.
  */
 
-import { rmSync } from 'fs'
-import { HARNESSD_REEXEC_FILE, PID_FILE, isAlive, readPid } from './daemonState.js'
+import { rmSync, statSync } from 'fs'
+import { env } from '../config/env.js'
+import { readStatusFile } from '../harnessd/master.js'
+import type { ProcessRow } from './processTable.js'
+import { HARNESSD_REEXEC_FILE, HARNESSD_STATUS_FILE, PID_FILE, isAlive, readPid } from './daemonState.js'
 import { readMarker, removeMarker } from '../harnessd/reexec.js'
 import { acquireSpawnLock, describeSpawnLockFailure, describeSpawnLockOwner, SPAWN_LOCK_WAIT_MS } from './daemonSpawnLock.js'
-import { PLATFORM_STOP_WAIT_MS, stopUnderPlatform, type PlatformStop } from './platformDaemon.js'
+import { PLATFORM_STOP_WAIT_MS, stopUnderPlatform, waitGone, type PlatformStop } from './platformDaemon.js'
+import { identifyDaemonProcess } from './windows/daemonProcesses.js'
+import { askDaemonToStop, processStopCallDeps } from './windows/daemonStopCall.js'
+import { windowsProcessRows } from './windows/processTable.js'
+import { terminateVerified, type TerminateOutcome } from './windows/terminate.js'
 
 export interface StopDeps {
   readPid: () => number | null
@@ -27,6 +34,34 @@ export interface StopDeps {
    * lib/platformDaemon.ts); null when it does not, and nothing was asked. Left out, nothing is.
    */
   stopPlatform?: () => PlatformStop | null
+  /** Windows has no signals: how the daemon is stopped there (`stopOnWindows`). Left out, signals. */
+  windows?: WindowsStopDeps
+}
+
+export interface WindowsStopDeps {
+  /** POST /api/daemon/stop over the pipe (./windows/daemonStopCall.ts): whether the daemon took it. */
+  ask(): Promise<boolean>
+  rows(): Promise<readonly ProcessRow[] | null>
+  terminate(pid: number, startMarker: string): Promise<TerminateOutcome>
+  /** When the pid file was written: the master claimed it after it started. */
+  pidFileWrittenMs(): number | null
+  /** The core the master's status file names. */
+  corePid(masterPid: number): number | null
+}
+
+/** How long the master has to stop its core (2.5 s, then it ends it) and its services beside it, and exit. */
+export const WINDOWS_STOP_WAIT_MS = 8_000
+/** How long a core whose master was ended has to leave by itself: it stops once its master's channel closes. */
+export const ORPHAN_CORE_WAIT_MS = 5_000
+
+export function defaultWindowsStopDeps(): WindowsStopDeps {
+  return {
+    ask: () => askDaemonToStop(processStopCallDeps(env.ADAPTER_DATA_DIR, env.PORT)),
+    rows: () => windowsProcessRows(null),
+    terminate: (pid, startMarker) => terminateVerified(pid, startMarker),
+    pidFileWrittenMs: () => { try { return statSync(PID_FILE).mtimeMs } catch { return null } },
+    corePid: (masterPid) => readStatusFile(HARNESSD_STATUS_FILE, masterPid)?.corePid ?? null,
+  }
 }
 
 export function defaultStopDeps(): StopDeps {
@@ -52,6 +87,7 @@ export function defaultStopDeps(): StopDeps {
     },
     warn: (m) => console.warn(m),
     stopPlatform: () => stopUnderPlatform(),
+    ...(process.platform === 'win32' ? { windows: defaultWindowsStopDeps() } : {}),
   }
 }
 
@@ -68,7 +104,7 @@ function clearReexecMarker(pid: number): void {
   if (readMarker(HARNESSD_REEXEC_FILE)?.pid === pid) removeMarker(HARNESSD_REEXEC_FILE)
 }
 
-/** SIGTERM the daemon named by the pid file, SIGKILL if it lingers. Returns what was stopped. */
+/** SIGTERM the daemon named by the pid file, SIGKILL if it lingers; on Windows, `stopOnWindows`. Returns what was stopped. */
 export async function stopDaemonProcess(deps: StopDeps = defaultStopDeps()): Promise<{ pid: number | null; stopped: boolean }> {
   const release = await deps.lock()
   try {
@@ -80,19 +116,53 @@ export async function stopDaemonProcess(deps: StopDeps = defaultStopDeps()): Pro
       try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
       return { pid: null, stopped: false }
     }
+    if (deps.windows) return await stopOnWindows(deps, deps.windows, pid)
     try { deps.kill(pid, 'SIGTERM') } catch { /* already gone */ }
     const deadline = deps.now() + STOP_GRACE_MS
     while (deps.now() < deadline && deps.isAlive(pid)) await deps.sleep(150)
     if (deps.isAlive(pid)) { try { deps.kill(pid, 'SIGKILL') } catch { /* ignore */ } }
-    // Only if it is still OUR daemon's file: a SIGTERM'd daemon removes its own pid on the way out
-    // (shutdown), and a daemon that came up meanwhile — impossible under the lock, but cheap to
-    // respect — must not lose its record to us.
-    if (deps.readPid() === pid) { try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ } }
-    if (!deps.isAlive(pid)) clearReexecMarker(pid)
+    forgetPid(deps, pid)
     return { pid, stopped: true }
   } finally {
     release()
   }
+}
+
+/** Only if it is still OUR daemon's file: a stopped daemon removes its own pid on the way out, and a daemon that
+ *  came up meanwhile — impossible under the lock, but cheap to respect — must not lose its record to us. */
+function forgetPid(deps: StopDeps, pid: number): void {
+  if (deps.readPid() === pid) { try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ } }
+  if (!deps.isAlive(pid)) clearReexecMarker(pid)
+}
+
+/**
+ * Windows: no SIGTERM to send. The core is asked over its pipe (POST /api/daemon/stop), and asks its master, which
+ * stops the services and the core in order and exits. A daemon that does not take it, or does not go in time, is
+ * ended one process at a time with TerminateProcess, and only a process identified first (./windows/daemonProcesses.ts):
+ * the master, then a core its end left behind. Never by tree: the pty host's parent is the core, and every agent
+ * lives under it.
+ */
+async function stopOnWindows(deps: StopDeps, windows: WindowsStopDeps, pid: number): Promise<{ pid: number; stopped: boolean }> {
+  // Looked up before anything is asked: once the master goes, its core has no parent to be told by.
+  const rows = await windows.rows().catch(() => null)
+  // The time the pid file was written is what tells the master from a process given its pid since. Without it the
+  // master is not identified: its command alone would match another same-user daemon (B3.7).
+  const claimedAtMs = windows.pidFileWrittenMs()
+  const master = rows && claimedAtMs !== null ? identifyDaemonProcess(rows, pid, { role: 'master', claimedAtMs }) : null
+  const corePid = windows.corePid(pid)
+  const core = rows && corePid !== null ? identifyDaemonProcess(rows, corePid, { role: 'core', parentPid: pid }) : null
+  const asked = await windows.ask()
+  if (!asked) deps.warn('  ! the daemon did not take the stop over its pipe — ending it')
+  if (!asked || !await waitGone(deps, pid, WINDOWS_STOP_WAIT_MS)) {
+    if (!master) {
+      deps.warn(`  ! pid ${pid} could not be shown to be harnessd's master — it was left running`)
+      return { pid, stopped: false }
+    }
+    if (await windows.terminate(pid, master) === 'mismatch') deps.warn(`  ! pid ${pid} is no longer harnessd's master — it was left running`)
+  }
+  if (core && corePid !== null && !await waitGone(deps, corePid, ORPHAN_CORE_WAIT_MS)) await windows.terminate(corePid, core)
+  forgetPid(deps, pid)
+  return { pid, stopped: !deps.isAlive(pid) }
 }
 
 /**

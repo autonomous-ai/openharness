@@ -168,3 +168,119 @@ describe('stopDaemonProcess', () => {
     })
   })
 })
+
+describe('stopDaemonProcess on Windows', () => {
+  beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'adapter-stop-win-')) })
+  afterEach(() => { rmSync(dataDir, { recursive: true, force: true }); delete process.env.ADAPTER_DATA_DIR })
+
+  const T = Date.parse('2026-10-16T00:00:00Z')
+  const marker = (ms: number) => `w:${(BigInt(ms) + 11_644_473_600_000n) * 10_000n}`
+  const master = { pid: 500, parentPid: 4, executable: 'node.exe', startMarker: marker(T), args: 'node.exe cli.js __harnessd', nativeArgv: ['node.exe', 'cli.js', '__harnessd'] }
+  const core = { pid: 600, parentPid: 500, executable: 'node.exe', startMarker: marker(T + 1_000), args: 'node.exe cli.js __run', nativeArgv: ['node.exe', 'cli.js', '__run'] }
+
+  function windows(state: { pid: number | null; alive: Set<number>; killed: string[]; locked: number; released: number }, over: Partial<NonNullable<StopDeps['windows']>> = {}) {
+    const ended: string[] = []
+    const w: NonNullable<StopDeps['windows']> = {
+      ask: async () => true,
+      rows: async () => [master, core],
+      terminate: async (pid, startMarker) => { ended.push(`${pid}:${startMarker}`); state.alive.delete(pid); return 'ended' },
+      pidFileWrittenMs: () => T + 5_000,
+      corePid: () => 600,
+      ...over,
+    }
+    return { w, ended }
+  }
+
+  it('asks the core over its pipe and waits for the master to stop the rest — no signal, nothing ended', async () => {
+    const { stopDaemonProcess } = await load()
+    const state = { pid: 500, alive: new Set([500, 600]), killed: [] as string[], locked: 0, released: 0 }
+    const { w, ended } = windows(state, { ask: async () => { state.alive.clear(); return true } })
+    await expect(stopDaemonProcess(fakeDeps(state, { windows: w }))).resolves.toEqual({ pid: 500, stopped: true })
+    expect(state.killed).toEqual([])
+    expect(ended).toEqual([])
+  })
+
+  it('ends the master it identified, then a core left hung, each by itself — never by tree', async () => {
+    const { stopDaemonProcess } = await load()
+    const state = { pid: 500, alive: new Set([500, 600]), killed: [] as string[], locked: 0, released: 0 }
+    const warned: string[] = []
+    const { w, ended } = windows(state, { ask: async () => false })
+    await stopDaemonProcess(fakeDeps(state, { windows: w, warn: (line) => warned.push(line) }))
+    expect(ended).toEqual([`500:${marker(T)}`, `600:${marker(T + 1_000)}`])
+    expect(state.killed).toEqual([])
+    expect(warned).toEqual(['  ! the daemon did not take the stop over its pipe — ending it'])
+  })
+
+  it('ends the master that took the stop but did not go in time, and leaves a core that left by itself', async () => {
+    const { stopDaemonProcess, WINDOWS_STOP_WAIT_MS } = await load()
+    const state = { pid: 500, alive: new Set([500, 600]), killed: [] as string[], locked: 0, released: 0 }
+    const clock = { now: 0 }
+    const { w, ended } = windows(state, {
+      terminate: async (pid, startMarker) => { ended.push(`${pid}:${startMarker}`); state.alive.clear(); return 'ended' },
+    })
+    await expect(stopDaemonProcess(fakeDeps(state, { windows: w, now: () => clock.now, sleep: async (ms) => { clock.now += ms } })))
+      .resolves.toEqual({ pid: 500, stopped: true })
+    expect(clock.now).toBeGreaterThanOrEqual(WINDOWS_STOP_WAIT_MS)
+    expect(ended).toEqual([`500:${marker(T)}`])
+  })
+
+  it('ends nothing it could not identify: a pid given to another process, or no process table', async () => {
+    const { stopDaemonProcess } = await load()
+    for (const rows of [async () => [{ ...master, startMarker: marker(T + 60_000) }], async () => null, async () => { throw new Error('no ps') }]) {
+      const state = { pid: 500, alive: new Set([500]), killed: [] as string[], locked: 0, released: 0 }
+      const warned: string[] = []
+      const { w, ended } = windows(state, { ask: async () => false, rows, corePid: () => null })
+      await expect(stopDaemonProcess(fakeDeps(state, { windows: w, warn: (line) => warned.push(line) }))).resolves.toEqual({ pid: 500, stopped: false })
+      expect(ended).toEqual([])
+      expect(warned.at(-1)).toBe('  ! pid 500 could not be shown to be harnessd\'s master — it was left running')
+    }
+  })
+
+  it('never ends a master on its command alone: with no time the pid file was written, it is not identified', async () => {
+    const { stopDaemonProcess } = await load()
+    const state = { pid: 500, alive: new Set([500, 600]), killed: [] as string[], locked: 0, released: 0 }
+    const warned: string[] = []
+    const { w, ended } = windows(state, { ask: async () => false, pidFileWrittenMs: () => null })
+    await expect(stopDaemonProcess(fakeDeps(state, { windows: w, warn: (line) => warned.push(line) }))).resolves.toEqual({ pid: 500, stopped: false })
+    expect(ended).toEqual([])
+    expect(state.killed).toEqual([])
+    expect(warned.at(-1)).toBe('  ! pid 500 could not be shown to be harnessd\'s master — it was left running')
+  })
+
+  it('leaves a core it could not identify as the master\'s child', async () => {
+    const { stopDaemonProcess } = await load()
+    const state = { pid: 500, alive: new Set([500, 600]), killed: [] as string[], locked: 0, released: 0 }
+    const { w, ended } = windows(state, { ask: async () => false, rows: async () => [master, { ...core, parentPid: 77 }] })
+    await stopDaemonProcess(fakeDeps(state, { windows: w }))
+    expect(ended).toEqual([`500:${marker(T)}`])
+  })
+
+  it('says so when the master changed between the look and the end', async () => {
+    const { stopDaemonProcess } = await load()
+    const state = { pid: 500, alive: new Set([500]), killed: [] as string[], locked: 0, released: 0 }
+    const warned: string[] = []
+    const { w } = windows(state, { ask: async () => false, corePid: () => null, terminate: async () => 'mismatch' })
+    await stopDaemonProcess(fakeDeps(state, { windows: w, warn: (line) => warned.push(line) }))
+    expect(warned.at(-1)).toBe('  ! pid 500 is no longer harnessd\'s master — it was left running')
+  })
+
+  it('clears the pid file of the master it stopped', async () => {
+    const { stopDaemonProcess } = await load()
+    const { PID_FILE } = await import('./daemonState.js')
+    writeFileSync(PID_FILE, '500\n')
+    const state = { pid: 500, alive: new Set([500, 600]), killed: [] as string[], locked: 0, released: 0 }
+    const { w } = windows(state, { ask: async () => false })
+    await stopDaemonProcess(fakeDeps(state, { windows: w }))
+    expect(existsSync(PID_FILE)).toBe(false)
+    expect(state.released).toBe(1)
+  })
+
+  it('is how a Windows stop goes by default, and only there', async () => {
+    const { defaultStopDeps, defaultWindowsStopDeps } = await load()
+    expect(defaultStopDeps().windows === undefined).toBe(process.platform !== 'win32')
+    // Its parts read this data folder's files: nothing written, nothing known.
+    const parts = defaultWindowsStopDeps()
+    expect(parts.pidFileWrittenMs()).toBeNull()
+    expect(parts.corePid(500)).toBeNull()
+  })
+})

@@ -1536,12 +1536,17 @@ async function reportStarted(session: AuthSession | null, pid: number, superviso
   process.exit(0)
 }
 
-/** `harness stop` — SIGTERM the background adapter, SIGKILL if it lingers. */
+/** `harness stop` — SIGTERM the background adapter, SIGKILL if it lingers (Windows: lib/daemonStop.ts `stopOnWindows`). */
 async function stop(): Promise<void> {
   const r = await stopDaemonProcess()
   if (!r.pid) {
     console.log('machine is not running.')
     process.exit(0)
+  }
+  // Windows only: a process it could not identify is left running, and said so above.
+  if (!r.stopped) {
+    console.log(`machine did not stop — check pid ${r.pid} in Task Manager.`)
+    process.exit(1)
   }
   console.log(`machine stopped (pid ${r.pid}).`)
   process.exit(0)
