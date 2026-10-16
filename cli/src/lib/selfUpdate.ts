@@ -521,17 +521,22 @@ export function confirm(dir: string): void {
 /**
  * Windows: remove the builds no longer needed (./windows/cliVersions.ts `retireUnused`). Kept: the build in use, and
  * the one a rollback would go back to — the pending note's while an update is on probation, otherwise the newest
- * other build that was not rolled back. Without a pointer, nothing: nothing proves which build is in use.
+ * other build that was not rolled back. Without a pointer, nothing: nothing proves which build is in use. Both are
+ * read again after the process table is, as a stage may have moved them meanwhile.
  */
-export async function retireCliVersions(dir: string, deps: RetireDeps): Promise<string[]> {
+export function retireCliVersions(dir: string, deps: RetireDeps): Promise<string[]> {
+  return retireUnused(dir, () => buildsToKeep(dir), deps)
+}
+
+function buildsToKeep(dir: string): Set<string> | null {
   const current = currentCli(dirname(dir))
-  if (!current) return []
+  if (!current) return null
   const rejected = new Set(rejectedVersions(dir))
   const others = versionsOnDisk(dir).filter((version) => version !== current.version && !rejected.has(version))
     .sort((a, b) => (semverGt(a, b) ? -1 : semverGt(b, a) ? 1 : 0))
   const pending = readPending(dir)
   const previous = pending?.previous && pending.previous !== current.version ? pending.previous : others[0]
-  return retireUnused(dir, new Set([current.version, ...(previous ? [previous] : [])]), deps)
+  return new Set([current.version, ...(previous ? [previous] : [])])
 }
 
 export interface Poller { stop(): void }

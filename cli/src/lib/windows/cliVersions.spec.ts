@@ -151,6 +151,22 @@ describe('retiring older builds', () => {
     expect(await retireUnused(join(cli, 'none'), new Set(), { rows: rows(), remove: () => {}, log })).toEqual([])
   })
 
+  it('asks which builds to keep again once the process table is read, and removes nothing when none can be said', async () => {
+    const cli = cliDir()
+    for (const version of ['0.5.0', '0.4.0', '0.3.0']) writeVersionFolder(cli, version, Buffer.from(version), Buffer.from('n'))
+    const remove = (path: string) => rmSync(path, { recursive: true, force: true })
+    let keep: Set<string> | null = new Set(['0.5.0'])
+    const rows = async () => { keep = new Set(['0.5.0', '0.3.0']); return [] }
+    expect(await retireUnused(cli, () => keep, { rows, remove, log: () => {} })).toEqual(['0.4.0'])
+    const lost = async () => { keep = null; return [] }
+    keep = new Set(['0.5.0'])
+    expect(await retireUnused(cli, () => keep, { rows: lost, remove, log: () => {} })).toEqual([])
+    const unread = vi.fn(async () => [])
+    expect(await retireUnused(cli, () => null, { rows: unread, remove, log: () => {} })).toEqual([])
+    expect(unread).not.toHaveBeenCalled()
+    expect(readdirSync(cli).sort()).toEqual(['0.3.0', '0.5.0'])
+  })
+
   it('leaves a build a process\'s executable sits in, whatever the case or slashes', async () => {
     const cli = cliDir()
     for (const version of ['0.5.0', '0.4.0', '0.3.0']) writeVersionFolder(cli, version, Buffer.from(version), Buffer.from('n'))

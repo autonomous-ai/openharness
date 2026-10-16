@@ -1137,6 +1137,20 @@ describe('self-update on Windows, over version folders', () => {
     expect(await retireCliVersions(cli, { rows: async () => [], remove, log: () => {} })).toEqual([])
   })
 
+  it('judges what to keep after reading the process table: a stage meanwhile keeps the build it points at', async () => {
+    const cli = layout('0.5.0')
+    for (const version of ['0.4.0', '0.3.0', '0.2.0']) stageWin(cli, version)
+    writeFileSync(join(cli, 'current'), '0.5.0\n')
+    rmSync(join(cli, 'update-pending.json'))
+    const remove = (path: string) => rmSync(path, { recursive: true, force: true })
+    // The updater's own stage, inside the read (the spawn lock nests within a process): cli\current moves to 0.3.0,
+    // a build already on disk that was neither in use nor the one to roll back to.
+    const rows = async () => { stageWin(cli, '0.3.0'); return [] }
+    expect((await retireCliVersions(cli, { rows, remove, log: () => {} })).sort()).toEqual(['0.2.0', '0.4.0'])
+    expect(read(cli, 'current').trim()).toBe('0.3.0')
+    expect(versionsOnDisk(cli).sort()).toEqual(['0.3.0', '0.5.0'])
+  })
+
   it('settles a build rolled back without remembering it, against the build cli\\current names', () => {
     const cli = layout('0.5.0')
     stageWin(cli, '0.5.1')

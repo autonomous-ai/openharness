@@ -129,25 +129,23 @@ function isFolder(path: string): boolean {
 }
 
 /**
- * Remove every build but [keep], and the folders a stage set aside (`.old`) or left (`.tmp`, once it is an hour old),
+ * Remove every build but [keep] (or the builds it names when asked, null for none), and the folders a stage set aside (`.old`) or left (`.tmp`, once it is an hour old),
  * once no process runs from one: a core or a service of the build before may still be running from its folder, and a
  * pane's `harness` command line names one too. Without a process table nothing is removed. A folder Windows will not
  * remove yet (a file in it still open) is said and tried again at the next pass; so is what is left of one it removed
  * only in part, which is why a build here is any folder named as one, with or without its cli.js.
  */
-export async function retireUnused(cliDir: string, keep: ReadonlySet<string>, deps: RetireDeps): Promise<string[]> {
-  let names: string[]
-  try { names = readdirSync(cliDir) } catch { return [] }
-  const now = Date.now()
-  const candidates = names.filter((name) => {
-    if (keep.has(name)) return false
-    if (VERSION_FOLDER.test(name) || SET_ASIDE.test(name)) return isFolder(join(cliDir, name))
-    if (!STAGING.test(name)) return false
-    try { return now - statSync(join(cliDir, name)).mtimeMs > STAGING_GRACE_MS } catch { return false }
-  })
-  if (!candidates.length) return []
+export async function retireUnused(
+  cliDir: string, keep: ReadonlySet<string> | (() => ReadonlySet<string> | null), deps: RetireDeps,
+): Promise<string[]> {
+  const kept = typeof keep === 'function' ? keep : () => keep
+  // A first look: with nothing to retire, no process table to read.
+  if (!retirable(cliDir, kept()).length) return []
   const rows = await deps.rows()
   if (!rows) { deps.log('[update] the process table could not be read — the older CLI builds stay for now'); return [] }
+  // And again after the read, the only wait: a stage meanwhile (this process's own, which the spawn lock lets
+  // through) may have pointed cli\current at a build the first look would have removed. From here on nothing waits.
+  const candidates = retirable(cliDir, kept())
   // What a process runs from: its image, and every path its command line names (node's own, cli.js, a hook's).
   const lines = rows.flatMap((row) => [row.executable, row.imagePath ?? '', row.args, ...(row.nativeArgv ?? [])])
     .map((line) => line.toLowerCase().replace(/\//g, '\\'))
@@ -163,4 +161,18 @@ export async function retireUnused(cliDir: string, keep: ReadonlySet<string>, de
     }
   }
   return removed
+}
+
+/** The folders in [cliDir] `retireUnused` would remove, given [keep]; none without it. */
+function retirable(cliDir: string, keep: ReadonlySet<string> | null): string[] {
+  if (!keep) return []
+  let names: string[]
+  try { names = readdirSync(cliDir) } catch { return [] }
+  const now = Date.now()
+  return names.filter((name) => {
+    if (keep.has(name)) return false
+    if (VERSION_FOLDER.test(name) || SET_ASIDE.test(name)) return isFolder(join(cliDir, name))
+    if (!STAGING.test(name)) return false
+    try { return now - statSync(join(cliDir, name)).mtimeMs > STAGING_GRACE_MS } catch { return false }
+  })
 }
