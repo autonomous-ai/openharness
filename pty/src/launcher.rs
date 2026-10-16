@@ -17,6 +17,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -145,29 +146,153 @@ pub fn log_failure(root: &Path, message: &str) {
     }
 }
 
+/// Append [arg] to a command line, quoted so the C runtime (and `CommandLineToArgvW`) splits it back to [arg]:
+/// quoted when it is empty or holds a space or a tab; a `"` escaped, and the backslashes before it doubled, as are
+/// the backslashes before a closing quote. Other backslashes are literal.
+pub fn quote_arg(arg: &[u16], out: &mut Vec<u16>) {
+    const QUOTE: u16 = b'"' as u16;
+    const BACKSLASH: u16 = b'\\' as u16;
+    let quote = arg.is_empty() || arg.iter().any(|&c| c == b' ' as u16 || c == b'\t' as u16);
+    if quote {
+        out.push(QUOTE);
+    }
+    let mut backslashes = 0;
+    for &c in arg {
+        if c == BACKSLASH {
+            backslashes += 1;
+        } else {
+            if c == QUOTE {
+                out.extend(std::iter::repeat_n(BACKSLASH, backslashes + 1));
+            }
+            backslashes = 0;
+        }
+        out.push(c);
+    }
+    if quote {
+        out.extend(std::iter::repeat_n(BACKSLASH, backslashes));
+        out.push(QUOTE);
+    }
+}
+
+/// `"<node>" <cli.js> <args>` for CreateProcessW. The program's own name is always quoted: Windows reads the first
+/// word by quotes alone.
+#[cfg(windows)]
+pub fn command_line(node: &Path, cli_js: &Path, args: &[OsString]) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    let mut line: Vec<u16> = Vec::new();
+    line.push(b'"' as u16);
+    line.extend(node.as_os_str().encode_wide());
+    line.push(b'"' as u16);
+    for arg in std::iter::once(cli_js.as_os_str()).chain(args.iter().map(|arg| arg.as_os_str())) {
+        line.push(b' ' as u16);
+        quote_arg(&arg.encode_wide().collect::<Vec<u16>>(), &mut line);
+    }
+    line
+}
+
 /// Spawn `node.exe <cli.js> <args>` from the install's root with no stdio, so the CLI holds no handle of the
 /// launcher's and the launcher can exit. It returns the CLI's pid.
+#[cfg(unix)]
 fn spawn_cli(resolved: &Resolved, args: &[OsString], root: &Path, flags: u32) -> io::Result<u32> {
-    let mut command = Command::new(&resolved.node);
-    command
+    use std::os::unix::process::CommandExt;
+    let _ = flags;
+    Command::new(&resolved.node)
         .arg(&resolved.cli_js)
         .args(args)
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(flags);
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map(|child| child.id())
+}
+
+/// Windows: CreateProcessW itself, because the CLI must inherit no handle but its NUL stdio. `Command` (and libuv,
+/// for whatever started this launcher) creates a child with every inheritable handle of its parent: an SSH session's
+/// output, or the pipe a PowerShell pipeline reads `harness start` through, went from the CLI to the master, its core
+/// and the terminal host. The caller then waited on it for as long as the daemon ran: `ssh host "harness start"` did
+/// not return, and install.ps1 hung (B3.15, on the VM). `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` names the one handle the
+/// CLI gets: NUL, as its stdin, stdout and stderr. The environment is this launcher's, as `Command` passed it.
+#[cfg(windows)]
+fn spawn_cli(resolved: &Resolved, args: &[OsString], root: &Path, flags: u32) -> io::Result<u32> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, TRUE};
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList, UpdateProcThreadAttribute,
+        EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        STARTF_USESTDHANDLES, STARTUPINFOEXW,
+    };
+
+    let wide = |path: &Path| path.as_os_str().encode_wide().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let application = wide(&resolved.node);
+    let directory = wide(root);
+    let mut line = command_line(&resolved.node, &resolved.cli_js, args);
+    line.push(0);
+
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: std::ptr::null_mut(),
+        bInheritHandle: TRUE,
+    };
+    let nul_name: Vec<u16> = "NUL".encode_utf16().chain(std::iter::once(0)).collect();
+    let nul: HANDLE = unsafe {
+        CreateFileW(nul_name.as_ptr(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, OPEN_EXISTING, 0, std::ptr::null_mut())
+    };
+    if nul == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let _ = flags;
-        command.process_group(0);
-    }
-    command.spawn().map(|child| child.id())
+
+    // The attribute list, in a buffer aligned for the pointers it holds.
+    let mut size = 0usize;
+    unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size) };
+    let mut buffer = vec![0usize; size.div_ceil(std::mem::size_of::<usize>()).max(1)];
+    let list: LPPROC_THREAD_ATTRIBUTE_LIST = buffer.as_mut_ptr().cast();
+    let handles = [nul];
+    let outcome = (|| {
+        if unsafe { InitializeProcThreadAttributeList(list, 1, 0, &mut size) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let updated = unsafe {
+            UpdateProcThreadAttribute(
+                list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize, handles.as_ptr().cast(), std::mem::size_of_val(&handles),
+                std::ptr::null_mut(), std::ptr::null(),
+            )
+        };
+        let result = if updated == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+            startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+            startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+            startup.StartupInfo.hStdInput = nul;
+            startup.StartupInfo.hStdOutput = nul;
+            startup.StartupInfo.hStdError = nul;
+            startup.lpAttributeList = list;
+            let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+            let created = unsafe {
+                CreateProcessW(
+                    application.as_ptr(), line.as_mut_ptr(), std::ptr::null(), std::ptr::null(), TRUE,
+                    flags | EXTENDED_STARTUPINFO_PRESENT, std::ptr::null(), directory.as_ptr(), &startup.StartupInfo, &mut info,
+                )
+            };
+            if created == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                unsafe {
+                    CloseHandle(info.hThread);
+                    CloseHandle(info.hProcess);
+                }
+                Ok(info.dwProcessId)
+            }
+        };
+        unsafe { DeleteProcThreadAttributeList(list) };
+        result
+    })();
+    unsafe { CloseHandle(nul) };
+    outcome
 }
 
 /// The program: 0 once the CLI has started. A usage error is 2 and goes unlogged: whatever called the launcher
@@ -345,6 +470,82 @@ mod tests {
         let err = start(|_| { calls += 1; Err(io::Error::from(io::ErrorKind::NotFound)) }, |_| {}).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
         assert_eq!(calls, 1);
+    }
+
+    fn quoted(arg: &str) -> String {
+        let mut out = Vec::new();
+        quote_arg(&arg.encode_utf16().collect::<Vec<u16>>(), &mut out);
+        String::from_utf16(&out).unwrap()
+    }
+
+    #[test]
+    fn quotes_each_argument_as_the_c_runtime_splits_it() {
+        assert_eq!(quoted("start"), "start");
+        assert_eq!(quoted(""), r#""""#);
+        assert_eq!(quoted(r"C:\Users\Jö 日 & co\.harness"), r#""C:\Users\Jö 日 & co\.harness""#);
+        // Backslashes are literal unless a quote follows them: then each is doubled, and the quote escaped.
+        assert_eq!(quoted(r#"say "hi""#), r#""say \"hi\"""#);
+        assert_eq!(quoted(r#"a\"b"#), r#"a\\\"b"#);
+        assert_eq!(quoted(r"C:\a b\"), r#""C:\a b\\""#);
+        assert_eq!(quoted(r"C:\ab\"), r"C:\ab\");
+    }
+
+    /// Windows: the CLI inherits no handle of the launcher's. One handle the CLI's caller holds open, an SSH
+    /// session's output or a PowerShell pipe, was inherited by every process the daemon started, and the caller
+    /// waited on it for as long as the daemon ran (B3.15, on the VM).
+    #[cfg(windows)]
+    #[test]
+    fn the_cli_inherits_no_handle_of_the_launchers() {
+        use std::time::{Duration, Instant};
+        use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, TRUE};
+        use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+        use windows_sys::Win32::Storage::FileSystem::ReadFile;
+        use windows_sys::Win32::System::Pipes::CreatePipe;
+
+        let sa = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: std::ptr::null_mut(),
+            bInheritHandle: TRUE,
+        };
+        let (mut read, mut write): (HANDLE, HANDLE) = (std::ptr::null_mut(), std::ptr::null_mut());
+        assert_ne!(unsafe { CreatePipe(&mut read, &mut write, &sa, 0) }, 0);
+        // ping runs about three seconds; a child holding the write end keeps the read below from ending.
+        let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+        let resolved = Resolved { node: system.join("PING.EXE"), cli_js: PathBuf::from("-n") };
+        let pid = spawn_cli(&resolved, &os(&["4", "127.0.0.1"]), &system, CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP).unwrap();
+        assert!(pid > 0);
+        unsafe { CloseHandle(write) };
+        let started = Instant::now();
+        let mut byte = 0u8;
+        let mut got = 0u32;
+        let ok = unsafe { ReadFile(read, (&mut byte as *mut u8).cast(), 1, &mut got, std::ptr::null_mut()) };
+        unsafe { CloseHandle(read) };
+        assert_eq!((ok, got), (0, 0), "the pipe ends with no data");
+        assert!(started.elapsed() < Duration::from_millis(1_500), "the child held the pipe for {:?}", started.elapsed());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_command_line_splits_back_into_the_arguments() {
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::UI::Shell::CommandLineToArgvW;
+        let args = os(&["start", "--if-down", "", "two words", r#"a\"b"#, r"C:\a b\", "Jö 日 & co"]);
+        let mut line = command_line(&PathBuf::from(r"C:\Program Files\node.exe"), &PathBuf::from(r"C:\x y\cli.js"), &args);
+        line.push(0);
+        let mut n = 0i32;
+        let argv = unsafe { CommandLineToArgvW(line.as_ptr(), &mut n) };
+        assert!(!argv.is_null());
+        let words: Vec<String> = unsafe { std::slice::from_raw_parts(argv, n as usize) }
+            .iter()
+            .map(|&w| {
+                let len = (0..).take_while(|&i| unsafe { *w.add(i) } != 0).count();
+                String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(w, len) })
+            })
+            .collect();
+        unsafe { LocalFree(argv.cast()) };
+        let mut expected = vec![r"C:\Program Files\node.exe".to_owned(), r"C:\x y\cli.js".to_owned()];
+        expected.extend(args.iter().map(|a| a.to_string_lossy().into_owned()));
+        assert_eq!(words, expected);
     }
 
     #[test]
