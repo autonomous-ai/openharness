@@ -17,6 +17,10 @@ vi.mock('node:fs', async (real) => {
   return { ...actual, default: { ...actual, writeFileSync }, writeFileSync }
 })
 
+// A's process table, as this computer's retirement reads it.
+const table = vi.hoisted(() => ({ rows: vi.fn() }))
+vi.mock('./processTable.js', () => ({ windowsProcessRows: table.rows }))
+
 const dirs: string[] = []
 const cliDir = () => { const root = mkdtempSync(join(tmpdir(), 'cli-versions-')); dirs.push(root); const cli = join(root, 'cli'); mkdirSync(cli); return cli }
 afterEach(() => { fault.at = null; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -194,7 +198,7 @@ describe('retiring older builds', () => {
     expect(readdirSync(cli)).toEqual(['0.5.0'])
   })
 
-  it('on this computer, removes a whole folder and says so in the daemon log', () => {
+  it('on this computer, reads A\'s process table, removes a whole folder and says so in the daemon log', async () => {
     const cli = cliDir()
     writeVersionFolder(cli, '0.4.0', Buffer.from('cli'), Buffer.from('n'))
     const deps = processRetireDeps()
@@ -205,6 +209,10 @@ describe('retiring older builds', () => {
     deps.log('a line')
     expect(log).toHaveBeenCalledWith('a line')
     log.mockRestore()
-    expect(deps.rows).toBeTypeOf('function')
+    const row = { pid: 7, parentPid: 1, executable: 'node.exe', startMarker: 'w:1', args: 'node' }
+    table.rows.mockResolvedValueOnce([row])
+    // From the host binary, with no host connection of its own.
+    await expect(deps.rows()).resolves.toEqual([row])
+    expect(table.rows).toHaveBeenCalledExactlyOnceWith(null)
   })
 })
