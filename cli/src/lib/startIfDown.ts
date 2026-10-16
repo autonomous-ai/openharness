@@ -42,6 +42,31 @@ export async function startIfDown(deps: IfDownDeps): Promise<IfDown> {
   return { start: true }
 }
 
+/**
+ * The same judge for a plain `harness start` on Windows: the pid of the daemon that runs, or null. A pid file whose
+ * pid is proven another process now is forgotten on the way (`masterRuns`), and the start goes ahead; one that cannot
+ * be told counts as running.
+ */
+export async function runningDaemon(deps: Pick<IfDownDeps, 'readPid' | 'masterRuns'>): Promise<number | null> {
+  const pid = deps.readPid()
+  return pid !== null && await deps.masterRuns(pid) ? pid : null
+}
+
+/**
+ * Before a plain `harness start` waits on the spawn lock: a lock whose owner's pid was given to another process since
+ * is released (`ownerRuns`, judged again as it goes), where waiting on it would only time out. A lock that cannot be
+ * read is left to the start, which says what it is.
+ */
+export async function releaseAbandonedLock(deps: Pick<IfDownDeps, 'lockOwner' | 'ownerRuns'>): Promise<void> {
+  let owner: SpawnLockOwner | null
+  try {
+    owner = deps.lockOwner()
+  } catch {
+    return
+  }
+  if (owner) await deps.ownerRuns(owner)
+}
+
 /** What `processIfDownDeps` reads of this computer, and the two things it may remove. */
 export interface IfDownIo {
   readPid(): number | null

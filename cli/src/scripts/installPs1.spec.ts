@@ -475,13 +475,13 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
 })
 
 describe.runIf(windows)('install.ps1, run again over a live install', { timeout: 120_000 }, () => {
-  /** A `harness` that logs each call, one per line, and reports the daemon as [state] to `status`. */
-  function fakeHarness(state: string, startLeaves: string[] = []): { command: string; calls: () => string[] } {
+  /** A `harness` that logs each call, one per line, reports the daemon as [state] to `status`, then runs [lines]. */
+  function fakeHarness(state: string, lines: string[] = []): { command: string; calls: () => string[] } {
     const dir = mkdtempSync(join(tmpdir(), 'harness-ps1-restart-'))
     scratch.push(dir)
     const log = join(dir, 'calls.log')
     const command = join(dir, 'harness.cmd')
-    writeFileSync(command, ['@echo off', `echo %*>>"${log}"`, `if "%1"=="status" echo    status     ${state}`, ...startLeaves, 'exit /b 0', ''].join('\r\n'))
+    writeFileSync(command, ['@echo off', `echo %*>>"${log}"`, `if "%1"=="status" echo    status     ${state}`, ...lines, 'exit /b 0', ''].join('\r\n'))
     return { command, calls: () => { try { return readFileSync(log, 'utf8').split(/\r?\n/).map((line) => line.trim()).filter(Boolean) } catch { return [] } } }
   }
   const last = (text: string) => text.split(/\r?\n/).at(-1)
@@ -503,6 +503,14 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
     expect(last(run.stdout), run.stderr).toBe('True')
     expect(Number(/took (\d+)/.exec(run.stdout)?.[1])).toBeLessThan(8_000)
     expect(harness.calls()).toEqual(['status', 'stop', 'start'])
+  })
+
+  it('starts nothing, and says the daemon stays on the old build, when it does not stop', () => {
+    const harness = fakeHarness('running - backend connected', ['if "%1"=="stop" exit /b 1'])
+    const run = ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.0' -After '1.0.1'`)
+    expect(last(run.stdout), run.stderr).toBe('False')
+    expect(run.stdout).toContain('Harness is still running version 1.0.0; it moves to 1.0.1 when it next restarts (harness stop, then harness start).')
+    expect(harness.calls()).toEqual(['status', 'stop'])
   })
 
   it('says so when Harness does not start again on the new build', () => {

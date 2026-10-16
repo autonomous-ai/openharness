@@ -41,7 +41,7 @@ import { readSafeModeMarker } from './lib/daemonSafeMode.js'
 import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, readSpawnLockOwner, withSpawnLock } from './lib/daemonSpawnLock.js'
 import { didNotStopSentence, leftRunning, stopDaemonOrExit, stopDaemonProcess } from './lib/daemonStop.js'
 import { clearTaskStopped, installedPlatform, osDaemonUnit, platformDaemonDeps, serviceDefinition, startThroughTask, startUnderPlatform, taskStoppedThisBoot, waitForMaster } from './lib/platformDaemon.js'
-import { processIfDownDeps, startIfDown } from './lib/startIfDown.js'
+import { processIfDownDeps, releaseAbandonedLock, runningDaemon, startIfDown } from './lib/startIfDown.js'
 import { launchDetached } from './lib/windows/launcher.js'
 import { harnessLaunchPath } from './lib/windows/installLayout.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
@@ -140,9 +140,9 @@ Machine:
   harness stop                 stop the background adapter (keeps the SSO session)
   harness reset                stop the adapter and clear local CLI state
   harness status               show whether it's running (+ version)
-  harness service install      run the daemon under launchd (macOS) or systemd (Linux), or have Task Scheduler
-                               start it (Windows): it starts at login and comes back if it dies; start and stop
-                               then go through it (opt-in)
+  harness service install      run the daemon under launchd (macOS) or systemd (Linux): it starts at login and comes
+                               back if it dies. On Windows, Task Scheduler starts it when you sign in, and again
+                               within 5 minutes if it stops. start and stop then go through it (opt-in)
   harness service uninstall    undo that: the daemon goes back to \`harness start\`
   harness service status       what launchd, systemd or Task Scheduler has registered, and whether it runs (--json)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
@@ -1007,6 +1007,18 @@ function openInBrowser(url: string): void {
 let startedByTheTask = false
 
 /**
+ * The pid of the daemon that runs, for `harness start`. On Windows the process table judges the pid file, with the
+ * judge `--if-down` uses (lib/startIfDown.ts `runningDaemon`): Windows gives a freed pid to the next process quickly,
+ * and a pid file whose pid is proven another process now is forgotten, so the start goes ahead instead of saying
+ * "already running" about it; one that cannot be told counts as running. macOS and Linux: its liveness, as before.
+ */
+async function runningDaemonPid(): Promise<number | null> {
+  if (process.platform === 'win32') return runningDaemon(processIfDownDeps())
+  const pid = readPid()
+  return pid && isAlive(pid) ? pid : null
+}
+
+/**
  * Start the adapter, with the saved SSO session when there is one. Missing credentials never open a
  * browser implicitly — and are no longer a refusal.
  *
@@ -1043,8 +1055,11 @@ async function startCommand(foreground: boolean, repair: boolean = false, ifDown
     // A daemon that is already up is left ALONE. The desktop app re-runs `harness start` whenever its
     // 400ms probe misreads a busy daemon as down; `spawnDaemon` repeats this check under the lock, for
     // the daemon that comes up while we are waiting our turn.
-    const running = readPid()
-    if (running && isAlive(running)) {
+    const running = await runningDaemonPid()
+    if (running) {
+      // The task's start never stops a daemon: a stop here would write `harness stop`'s marker, and the task would
+      // then leave the daemon down until the computer restarts (harnessd/platform.ts TASK_STOPPED_FILE).
+      if (ifDown) { console.log(`harness start --if-down: it runs (pid ${running}) — nothing to do`); process.exit(0) }
       // Left alone only when it serves THIS sign-in. A daemon on another account — what a forced
       // login left behind whenever a start landed while its browser was open — is stopped here and
       // started over on the session that is on disk: "already running" is exactly what kept it
@@ -1077,6 +1092,9 @@ async function startCommand(foreground: boolean, repair: boolean = false, ifDown
       }
       console.log(`  ${started.detail} — starting it directly`)
     }
+    // Windows: a lock whose holder's pid was given to another process since would hold this start for the whole
+    // wait and then fail it; it is released first, judged again as it goes (`--if-down` did this already).
+    if (!ifDown && process.platform === 'win32') await releaseAbandonedLock(processIfDownDeps())
     await withSpawnLock('start', async () => {
       if (session) await resolveMachineIfUnknown(session)
       await launch(foreground, repair)
@@ -1491,8 +1509,8 @@ async function launch(foreground: boolean, repair: boolean = false): Promise<voi
 
 /** The part of `launch` that runs under the spawn lock: check, spawn, wait for bind, wait for connect. */
 async function spawnDaemon(session: AuthSession | null, runtimeNode: string | null): Promise<void> {
-  const running = readPid()
-  if (running && isAlive(running)) {
+  const running = await runningDaemonPid()
+  if (running) {
     console.log(`machine already running (pid ${running}) — it auto-reconnects.`)
     console.log('  check: harness status   ·   stop: harness stop')
     process.exit(0)

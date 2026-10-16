@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SpawnLockOwner } from './daemonSpawnLock.js'
 import type { ProcessRow } from './processTable.js'
-import { processIfDownDeps, startIfDown, type IfDownDeps, type IfDownIo } from './startIfDown.js'
+import { processIfDownDeps, releaseAbandonedLock, runningDaemon, startIfDown, type IfDownDeps, type IfDownIo } from './startIfDown.js'
 
 const owner: SpawnLockOwner = { pid: 77, startMarker: '', token: 't', purpose: 'update', since: Date.now() - 4_000 }
 const deps = (over: Partial<IfDownDeps> = {}): IfDownDeps => ({
@@ -80,5 +80,23 @@ describe("--if-down's view of this computer", () => {
     expect(there.lockOwner()).toBe(owner)
     expect(there.readPid()).toBe(500)
     expect(processIfDownDeps('win32', io()).stoppedThisBoot()).toBe(true)
+  })
+})
+
+describe('the same judge for a plain `harness start`', () => {
+  it('names the daemon that runs, and none when the pid file is gone or its pid is proven another process', async () => {
+    await expect(runningDaemon(deps({ readPid: () => 500, masterRuns: async (pid) => pid === 500 }))).resolves.toBe(500)
+    await expect(runningDaemon(deps({ readPid: () => 500, masterRuns: async () => false }))).resolves.toBeNull()
+    await expect(runningDaemon(deps())).resolves.toBeNull()
+  })
+
+  it('asks about the lock\'s owner, which releases a lock whose pid was reissued, and leaves an unusable lock to the start', async () => {
+    const ownerRuns = vi.fn(async () => false)
+    await releaseAbandonedLock(deps({ lockOwner: () => owner, ownerRuns }))
+    expect(ownerRuns).toHaveBeenCalledWith(owner)
+    const untouched = vi.fn(async () => true)
+    await releaseAbandonedLock(deps({ lockOwner: () => null, ownerRuns: untouched }))
+    await expect(releaseAbandonedLock(deps({ lockOwner: () => { throw new Error('not a lock') }, ownerRuns: untouched }))).resolves.toBeUndefined()
+    expect(untouched).not.toHaveBeenCalled()
   })
 })

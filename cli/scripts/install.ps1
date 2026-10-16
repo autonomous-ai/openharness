@@ -490,6 +490,11 @@ function Restart-HarnessDaemon {
   if ($LASTEXITCODE -ne 0 -or -not $statusLine -or $statusLine -match 'stopped|out of reach') { return $false }
   Write-Host "  Moving the running Harness from $Before to $After (your agents keep running)..."
   & $Command stop | ForEach-Object { Write-Host "  $_" }
+  # A daemon that did not stop is still on the old build: nothing is started beside it, and no move is reported.
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "  Harness is still running version $Before; it moves to $After when it next restarts (harness stop, then harness start)."
+    return $false
+  }
   # Not piped, and not left as the function's output (which a caller's `$null =` would capture through a pipe too):
   # the daemon `harness start` leaves running inherits the handles that command writes to, and a pipe read here would
   # not end until the daemon did (seen on the VM). Start-Process -NoNewWindow gives it this window's own, and waits

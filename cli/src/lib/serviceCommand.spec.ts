@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OS_SYSTEMD_UNIT, OS_UNIT_FILE, PlatformService, SYSTEMD_UNIT, defaultPlatformDeps, taskName, type CommandResult, type PlatformName } from '../harnessd/platform.js'
 import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
 import { serviceDefinition } from './platformDaemon.js'
-import { SERVICE_USAGE, serviceCommand, serviceCommandDeps, type ServiceCommandDeps } from './serviceCommand.js'
+import { SERVICE_USAGE, WINDOWS_SERVICE_USAGE, serviceCommand, serviceCommandDeps, type ServiceCommandDeps } from './serviceCommand.js'
 
 /**
  * A computer in a temporary folder: a home, a data folder, an installed bundle, a pid file, and fake
@@ -364,6 +364,18 @@ describe('harness service with Task Scheduler', () => {
   }
   /** What the command did to Task Scheduler: its calls but the queries. */
   const schtasks = (calls: string[]) => calls.filter((call) => !call.startsWith('schtasks /Query'))
+
+  it('says what the task does on Windows: no tmux there, and it starts the daemon again within 5 minutes', async () => {
+    const w = windows()
+    try {
+      await expect(serviceCommand(['--help'], w.deps)).resolves.toBe(0)
+      expect(w.out).toEqual([WINDOWS_SERVICE_USAGE])
+      expect(WINDOWS_SERVICE_USAGE).toContain('again within 5 minutes if it stops')
+      expect(WINDOWS_SERVICE_USAGE).not.toMatch(/tmux|comes back if it dies|launchd|systemd/)
+      await expect(serviceCommand(['restart'], w.deps)).resolves.toBe(2)
+      expect(w.err[0]).toBe(`Unknown command: harness service restart\n\n${WINDOWS_SERVICE_USAGE}`)
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
 
   it('registers the task under the lock, then runs it outside, never stopping the daemon that runs', async () => {
     const w = windows()

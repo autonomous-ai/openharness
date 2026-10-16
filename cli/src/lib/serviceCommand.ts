@@ -52,16 +52,29 @@ export const SERVICE_USAGE = [
   'Opt-in: without it, `harness start` (or the desktop app) runs the daemon, as it always has.',
 ].join('\n')
 
+/** Windows: Task Scheduler starts the daemon, it does not run it, and there is no tmux (harnessd/platform.ts). */
+export const WINDOWS_SERVICE_USAGE = [
+  'Usage: harness service <install | uninstall | status> [--json]',
+  '',
+  '  install    have Task Scheduler start the Harness daemon when you sign in to Windows,',
+  '             and again within 5 minutes if it stops. `harness start` and `harness stop` then go through it',
+  '  uninstall  remove that task: the daemon keeps running, and `harness start` starts it after this',
+  '  status     what Task Scheduler has registered, and whether it is turned on (--json for machines)',
+  '',
+  'Opt-in: without it, `harness start` (or the desktop app) runs the daemon, as it always has.',
+].join('\n')
+
 export async function serviceCommand(argv: string[], deps: ServiceCommandDeps): Promise<number> {
   const words = argv.filter((arg) => !arg.startsWith('-'))
   const json = argv.includes('--json')
   const verb = words[0]
+  const usage = deps.service?.platform === 'taskscheduler' ? WINDOWS_SERVICE_USAGE : SERVICE_USAGE
   if (verb === undefined || verb === 'help' || argv.includes('-h') || argv.includes('--help')) {
-    deps.out(SERVICE_USAGE)
+    deps.out(usage)
     return 0
   }
   if (!['install', 'uninstall', 'status'].includes(verb)) {
-    deps.err(`Unknown command: harness service ${verb}\n\n${SERVICE_USAGE}`)
+    deps.err(`Unknown command: harness service ${verb}\n\n${usage}`)
     return 2
   }
   if (!deps.service) {
