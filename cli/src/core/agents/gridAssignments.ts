@@ -7,7 +7,7 @@ import { readProcessEnv } from '../../lib/processEnv.js'
 import type { RegisteredSession, registry as Registry } from '../../lib/registry.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
-import { argvTokens, processArgvIsBoundaryFaithful, processRows } from '../../lib/tmux.js'
+import { argvTokens, engineProcessMatchScore, processArgvIsBoundaryFaithful, processRows } from '../../lib/tmux.js'
 
 /**
  * The endpoint this daemon itself built a row's launch for, when that launch is a local Grid profile's.
@@ -22,7 +22,7 @@ function trustedBaseUrl(session: RegisteredSession): string | undefined {
  * Flattened `ps` text is never read as flags: a prompt could spell a provider endpoint or `-m`. Without
  * faithful argv the executable alone is offered, so environment- and config-backed launches still classify.
  */
-async function faithfulArgs(identity: NonNullable<RegisteredSession['processIdentity']>): Promise<string> {
+async function faithfulArgs(identity: NonNullable<RegisteredSession['processIdentity']>, engine: RegisteredSession['engine']): Promise<string> {
   const rows = await processRows()
   const row = rows?.find(candidate => sameProcessIdentity(candidate, identity))
   if (!row) return identity.executable
@@ -33,6 +33,10 @@ async function faithfulArgs(identity: NonNullable<RegisteredSession['processIden
   const title = row.args.trim()
   const parent = rows?.find(candidate => candidate.pid === row.parentPid)
   if (!title || /\s/.test(title) || !parent || !processArgvIsBoundaryFaithful(parent)) return identity.executable
+  // Codex's npm entrypoint is a direct wrapper around its native child. Its own faithful argv still
+  // names the model flags after the child has replaced its title; process matching proves this is
+  // the same engine's wrapper, not an arbitrary parent command.
+  if (engineProcessMatchScore(parent, engine) > 0) return parent.args
   const tokens = argvTokens(parent.args)
   const at = tokens.indexOf('harness-engine')
   if (at < 0) return identity.executable
@@ -116,7 +120,7 @@ export function createGridAssignments({ models, registry, revision, announce, wa
       const owner = ticket(session, 'refresh')
       if (!owner) return
       const identity = session.processIdentity
-      void Promise.all([readProcessEnv(identity), faithfulArgs(identity)]).then(([env, args]) => {
+      void Promise.all([readProcessEnv(identity), faithfulArgs(identity, session.engine)]).then(([env, args]) => {
         if (!env) { owner.done(); return }
         const process = gridAssignmentProcess(owner.key, session.engine, env, args, trustedBaseUrl(session))
         if (process) ask([{ owner, process }])

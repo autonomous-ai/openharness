@@ -8,6 +8,7 @@ import { createGridAssignments } from './gridAssignments.js'
 vi.mock('../../lib/processEnv.js', () => ({ readProcessEnv: vi.fn(async () => ({ ANTHROPIC_BASE_URL: 'https://grid.example/relay' })) }))
 vi.mock('../../lib/tmux.js', () => ({
   argvTokens: vi.fn((args: string) => args.split(' ')),
+  engineProcessMatchScore: vi.fn((row: { args: string }) => row.args.startsWith('node ') ? 4 : 0),
   processRows: vi.fn(async () => []),
   processArgvIsBoundaryFaithful: vi.fn(() => true),
 }))
@@ -207,6 +208,24 @@ it('refresh uses a faithful daemon launcher when the engine replaced its argv wi
   s.service.refresh(s.rows[0])
   await flush()
   expect(s.models.gridAssignments).toHaveBeenCalledOnce()
+  vi.mocked(processArgvIsBoundaryFaithful).mockReturnValue(true)
+  vi.mocked(readProcessEnv).mockResolvedValue({ ANTHROPIC_BASE_URL: 'https://grid.example/relay' })
+  vi.mocked(processRows).mockResolvedValue([])
+})
+
+it('refresh uses a faithful Codex wrapper after its native child replaces its argv', async () => {
+  const s = setup()
+  const identity = { ...s.rows[0].processIdentity!, executable: 'codex' }
+  s.rows[0].engine = 'codex'
+  s.rows[0].processIdentity = identity
+  vi.mocked(readProcessEnv).mockResolvedValue({})
+  const parent = { pid: 100, parentPid: 1, startMarker: 'parent', executable: 'node',
+    args: 'node /opt/codex/bin/codex -c model_providers.grid.base_url=https://grid.example/relay/v1 -m chosen' }
+  vi.mocked(processRows).mockResolvedValue([{ ...identity, parentPid: 100, args: 'codex' }, parent])
+  vi.mocked(processArgvIsBoundaryFaithful).mockImplementation(row => row.pid === 100)
+  s.service.refresh(s.rows[0])
+  await flush()
+  expect(s.pending[0].processes[0].args).toContain('model_providers.grid.base_url')
   vi.mocked(processArgvIsBoundaryFaithful).mockReturnValue(true)
   vi.mocked(readProcessEnv).mockResolvedValue({ ANTHROPIC_BASE_URL: 'https://grid.example/relay' })
   vi.mocked(processRows).mockResolvedValue([])
