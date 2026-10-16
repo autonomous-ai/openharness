@@ -12,6 +12,10 @@ describe('the CLI\'s version folders', () => {
   it('are named after a release\'s version and hold its cli.js and notify.mjs', () => {
     expect(['0.5.0', '0.5.1-dev.ab12', '1.2.3+build'].every((name) => VERSION_FOLDER.test(name))).toBe(true)
     expect(['data', 'current', '..', '0.5', '0.5.0\\x', '.0.5.0.1.tmp'].some((name) => VERSION_FOLDER.test(name))).toBe(false)
+    // Semver's identifiers only: Windows drops a trailing dot (`1.2.3-a.` would be `1.2.3-a`'s folder), and the
+    // pointer refuses an empty identifier (`1.2.3-a..b` would be a folder nothing could point at).
+    expect(['1.2.3-a.', '1.2.3-a..b', '1.2.3-', '1.2.3+', '1.2.3+b.', '1.2.3-a+b..c'].filter((name) => VERSION_FOLDER.test(name))).toEqual([])
+    expect(['1.2.3-a.b-c.1', '1.2.3-a+b.c', '1.2.3+b.c-d'].every((name) => VERSION_FOLDER.test(name))).toBe(true)
     const cli = cliDir()
     writeVersionFolder(cli, '0.5.0', Buffer.from('cli'), Buffer.from('notify'))
     mkdirSync(join(cli, '0.4.0'))

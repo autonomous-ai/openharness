@@ -10,8 +10,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, w
 import { join } from 'node:path'
 import { CLI_POINTER, STABLE_NOTIFY, writePointer } from './installLayout.js'
 
-/** A build's folder name under cli\: its version, as the release names it (`0.5.0`, `0.5.1-dev.ab12`). */
-export const VERSION_FOLDER = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
+/** A build's folder name under cli\: its version, as the release names it (`0.5.0`, `0.5.1-dev.ab12`). Semver's
+ *  identifiers, none empty: Windows drops a name's trailing dot, and the pointer refuses `..` (./installLayout.ts). */
+export const VERSION_FOLDER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 
 const CLI = 'cli.js'
 const NOTIFY = 'notify.mjs'
