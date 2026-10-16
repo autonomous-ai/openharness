@@ -45,7 +45,7 @@ import { processIfDownDeps, releaseAbandonedLock, runningDaemon, startIfDown } f
 import { launchDetached } from './lib/windows/launcher.js'
 import { harnessLaunchPath } from './lib/windows/installLayout.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
-import { isHarnessdVariable } from './lib/harnessdEnv.js'
+import { withoutHarnessdEnv } from './lib/harnessdEnv.js'
 import { askRuntimePort, readCgroup, takeRuntimeBack } from './lib/osUnitTakeover.js'
 import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
 import { flashCommand } from './lib/flash.js'
@@ -1562,7 +1562,7 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
     if (entry === '__harnessd' && isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR)) {
       const root = dirname(env.ADAPTER_CLI_DIR)
       // HARNESSD_* are harnessd's own processes' alone (harnessd/AGENTS.md rule 11): an ordinary start passes none.
-      const childEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !isHarnessdVariable(name)))
+      const childEnv = withoutHarnessdEnv(process.env)
       const launched = await launchDetached(harnessLaunchPath(root), root, ['__harnessd'], childEnv)
       if (!launched.ok) {
         console.error(`\n✗ Harness could not start its daemon: ${launched.detail}`)
