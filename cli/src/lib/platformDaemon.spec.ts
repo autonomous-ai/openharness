@@ -41,7 +41,8 @@ describe('the platform that supervises harnessd', () => {
   it('is this operating system\'s, unless the end-to-end suite names another', () => {
     expect(supervisingPlatform('darwin', {})).toBe('launchd')
     expect(supervisingPlatform('linux', {})).toBe('systemd')
-    expect(supervisingPlatform('win32', {})).toBeNull()
+    expect(supervisingPlatform('win32', {})).toBe('taskscheduler')
+    expect(supervisingPlatform('freebsd', {})).toBeNull()
     expect(supervisingPlatform('darwin', { HARNESSD_TEST_PLATFORM: 'systemd' })).toBe('systemd')
     expect(supervisingPlatform('win32', { HARNESSD_TEST_PLATFORM: 'launchd' })).toBe('launchd')
     expect(supervisingPlatform('linux', { HARNESSD_TEST_PLATFORM: 'upstart' })).toBe('systemd')
