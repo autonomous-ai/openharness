@@ -6,7 +6,11 @@
  * tailer is `OpencodeReader` (polls the DB); this module holds the pure row→event mapping it shares
  * with the replay / recap paths (`session_get`, device recap).
  *
- * On-disk shapes (validated against opencode 1.18.6):
+ * OpenCode 2 stopped writing those tables: a conversation lives in `session_v2` and `session_message`, one row per
+ * user prompt, assistant step or turn end (`ocMessageFromV2` below turns a row into the same `OcMessage` shape, so
+ * everything downstream reads both versions alike).
+ *
+ * On-disk shapes of v1 (validated against opencode 1.18.6):
  *   message.data = { role:'user'|'assistant', model:{providerID,modelID}, parentID?, path:{cwd,root}, tokens{…} }
  *   part.data    = discriminated by `type`:
  *     text{text} · reasoning{text} · step-start{} · step-finish{reason:'stop',…} ·
@@ -28,6 +32,8 @@ export interface OcMessage {
   id: string
   role: string
   timeCreated: number
+  /** OpenCode 2 only: the row's `session_message.seq`, the order of a session's messages (time and id can tie or disagree). */
+  seq?: number
   data: Record<string, unknown>
   parts: OcPart[]
 }
@@ -46,9 +52,92 @@ export function clip(value: string, limit: number): string {
   return value.length > limit ? `${value.slice(0, limit)}\n…[truncated]` : value
 }
 
+/** A row of OpenCode 2's `session_message` table, its `data` column parsed. */
+export interface OcV2Row {
+  id: string
+  type: string
+  seq: number
+  timeCreated: number
+  data: Record<string, unknown>
+}
+
+/** The `session_message` types that are turns: what the user asked, what the model did, and the end of the turn. */
+export const OC_V2_TURN_TYPES = ['user', 'assistant', 'idle'] as const
+
+/**
+ * One OpenCode 2 `session_message` row as the v1 message it stands for, or null for the rows that are not part
+ * of the conversation (compaction, shell, synthetic, system). Shapes read off 2.0.29's own store:
+ *
+ *   user      {text, time{created}, files[], agents[]}
+ *   assistant {content[], finish, time{created,completed}, tokens, error?} — one row per model step, rewritten in
+ *             place while it streams; content items are {type:'text'|'reasoning', text} or
+ *             {type:'tool', id, name, state{status, input, content[{type:'text',text}|{type:'file'}], error?, metadata}, time{created,ran,completed}}
+ *   idle      {outcome:'succeeded'|'interrupted'|'failed', time} — written when a turn ends, whatever the outcome
+ *
+ * Tool names are v1's, except the two v2 added that v1 has an equivalent of: `shell` is a `bash` (`TOOL_NAMES`) and
+ * `subagent` a `task`, whose sub-agent session is in `metadata.sessionID`.
+ *
+ * A turn ends in a `step-finish` with reason `stop` in v1, which every reader already closes on, so both ways a v2
+ * turn ends get one: the assistant step that finished with `stop`, and the `idle` row (the only mark of a turn that
+ * was interrupted or failed). A step that finished with `tool-calls` is not an end.
+ */
+export function ocMessageFromV2(row: OcV2Row): OcMessage | null {
+  const { id, data } = row
+  const message = (role: string, parts: OcPart[]): OcMessage => ({ id, role, timeCreated: row.timeCreated, seq: row.seq, data, parts })
+  const stop = (): OcPart => ({ id: `${id}:stop`, type: 'step-finish', data: { type: 'step-finish', reason: 'stop' } })
+  if (row.type === 'user') {
+    return message('user', [{ id: `${id}:0`, type: 'text', data: { type: 'text', text: str(data.text) } }])
+  }
+  if (row.type === 'idle') return message('assistant', [stop()])
+  if (row.type !== 'assistant') return null
+  const content = Array.isArray(data.content) ? data.content : []
+  const parts: OcPart[] = []
+  content.forEach((raw, index) => {
+    const item = object(raw)
+    if (!item) return
+    const type = str(item.type)
+    const partId = str(item.id) || `${id}:${index}`
+    if (type === 'text' || type === 'reasoning') parts.push({ id: partId, type, data: { type, text: str(item.text) } })
+    else if (type === 'tool') parts.push({ id: partId, type, data: v2ToolData(item) })
+  })
+  if (str(data.finish) === 'stop') parts.push(stop())
+  return message('assistant', parts)
+}
+
+/** A v2 tool item in the shape of a v1 `tool` part, which `toolPartEvents` and the readers render. */
+function v2ToolData(item: Record<string, unknown>): Record<string, unknown> {
+  const state = object(item.state) ?? {}
+  const time = object(item.time) ?? {}
+  const metadata = object(state.metadata) ?? {}
+  const text = (Array.isArray(state.content) ? state.content : [])
+    .map((entry) => object(entry))
+    .filter((entry) => entry && str(entry.type) === 'text')
+    .map((entry) => str(entry!.text))
+    .join('\n')
+  const input = object(state.input) ?? {}
+  // v2's `subagent` tool starts a child session like `task` does, with `agent` for `subagent_type`. A background
+  // one is `completed` as soon as it is started (its metadata says `running`), so the card closes with the call
+  // like any other: an open sub-agent row would hold the turn open.
+  const subagent = str(item.name) === 'subagent'
+  return {
+    type: 'tool',
+    tool: subagent ? 'task' : str(item.name),
+    state: {
+      status: str(state.status),
+      input: subagent ? { ...input, subagent_type: str(input.agent) || undefined } : input,
+      output: text || str(object(state.error)?.message),
+      // v2 names the sub-agent's session `sessionId` on `task` and `sessionID` on `subagent`.
+      metadata: { ...metadata, sessionId: str(metadata.sessionId) || str(metadata.sessionID) },
+      time: { start: Number(time.ran) || Number(time.created) || 0, end: Number(time.completed) || 0 },
+    },
+  }
+}
+
 /** OpenCode tool ids are lowercase (`bash`, `edit`, …). Map to the Claude vocabulary the UI renders. */
 const TOOL_NAMES: Record<string, string> = {
   bash: 'Bash',
+  // OpenCode 2's own shell tool: the same `command` / `workdir` / `timeout` input as `bash`.
+  shell: 'Bash',
   edit: 'Edit',
   multiedit: 'Edit',
   patch: 'Edit',
