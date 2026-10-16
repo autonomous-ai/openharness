@@ -58,11 +58,14 @@ describe('the CLI\'s version folders', () => {
     expect(readdirSync(cli).filter((name) => name.endsWith('.old'))).toHaveLength(1)
   })
 
-  it('leave nothing behind when the write fails', () => {
+  it('leave nothing behind when the write fails, and the folder there before as it was', () => {
     const cli = cliDir()
-    writeFileSync(join(cli, 'blocker'), '')
-    expect(() => writeVersionFolder(join(cli, 'blocker'), '0.5.0', Buffer.from(''), Buffer.from(''))).toThrow()
-    expect(readdirSync(cli)).toEqual(['blocker'])
+    writeVersionFolder(cli, '0.5.0', Buffer.from('cli'), Buffer.from('notify'))
+    // The folder beside it is made, and holds package.json, when its cli.js cannot be written whole.
+    fault.at = (file) => file === join(cli, `.0.5.0.${process.pid}.tmp`, 'cli.js')
+    expect(() => writeVersionFolder(cli, '0.5.0', Buffer.from('other'), Buffer.from('notify'))).toThrow('ENOSPC')
+    expect(readdirSync(cli)).toEqual(['0.5.0'])
+    expect(readFileSync(join(cli, '0.5.0', 'cli.js'), 'utf8')).toBe('cli')
   })
 
   it('switch by moving cli\\current and refreshing the stable notify.mjs the hooks name', () => {
