@@ -20,6 +20,7 @@ import {
   processRows,
   processTreePids,
   processArgvIsBoundaryFaithful,
+  processTitleSessionId,
   resumeSessionId,
   type ProcessRow,
 } from './tmux.js'
@@ -177,7 +178,7 @@ function rootOwner(
       cwd: root.cwd,
       processIdentity: processIdentityOf(row),
       args: row.args,
-      resumeSessionId: resumeSessionId(engine, row.args),
+      resumeSessionId: resumeSessionId(engine, row.args) ?? processTitleSessionId(engine, row.args),
       // Flattened `ps` args cannot prove bypass state or a resume id out of prompt text
       // (review cycle-6, P1 security); only /proc-cmdline-reconstructed rows carry real
       // argv boundaries. Set here once so every consumer reads the same evidence flag.

@@ -221,7 +221,8 @@ it('refresh uses a faithful Codex wrapper after its native child replaces its ar
   vi.mocked(readProcessEnv).mockResolvedValue({})
   const parent = { pid: 100, parentPid: 1, startMarker: 'parent', executable: 'node',
     args: 'node /opt/codex/bin/codex -c model_providers.grid.base_url=https://grid.example/relay/v1 -m chosen' }
-  vi.mocked(processRows).mockResolvedValue([{ ...identity, parentPid: 100, args: 'codex' }, parent])
+  vi.mocked(processRows).mockResolvedValue([{ ...identity, parentPid: 100,
+    args: 'codex -c model_providers.grid.base_url=https://untrusted.example/relay/v1 -m prompt' }, parent])
   vi.mocked(processArgvIsBoundaryFaithful).mockImplementation(row => row.pid === 100)
   s.service.refresh(s.rows[0])
   await flush()

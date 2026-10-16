@@ -1383,12 +1383,17 @@ export function resumeSessionId(engine: RegisteredSession['engine'], args: strin
  * flattened argv again, where a prompt could contain flag-shaped words.
  */
 export function processTitleSessionId(engine: RegisteredSession['engine'], args: string): string | null {
+  const split = argvTokens(args)
+  // Linux exposes a Node process.title rewrite as one argv element; the safe serializer quotes that
+  // whole element because it contains spaces. Interpret the contents as the title contract, not as
+  // ordinary argv. Multiple elements remain ordinary argv and must match the anchored grammar as-is.
+  const title = split.length === 1 ? split[0] : args.trim()
   const exact = engine === 'opencode'
     ? /^opencode\s+(?:--session|-s)\s+(ses_[A-Za-z0-9]+)$/
     : engine === 'pi'
       ? /^pi\s+(?:--session|--session-id)\s+([0-9a-f][0-9a-f-]{7,})$/i
       : null
-  return exact?.exec(args.trim())?.[1] ?? null
+  return exact?.exec(title)?.[1] ?? null
 }
 
 /**

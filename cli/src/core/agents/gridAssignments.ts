@@ -32,11 +32,12 @@ async function faithfulArgs(identity: NonNullable<RegisteredSession['processIden
   // harness-engine shape, so flattened prompt text never becomes model evidence.
   const title = row.args.trim()
   const parent = rows?.find(candidate => candidate.pid === row.parentPid)
-  if (!title || /\s/.test(title) || !parent || !processArgvIsBoundaryFaithful(parent)) return identity.executable
+  if (!parent || !processArgvIsBoundaryFaithful(parent)) return identity.executable
   // Codex's npm entrypoint is a direct wrapper around its native child. Its own faithful argv still
   // names the model flags after the child has replaced its title; process matching proves this is
   // the same engine's wrapper, not an arbitrary parent command.
   if (engineProcessMatchScore(parent, engine) > 0) return parent.args
+  if (!title || /\s/.test(title)) return identity.executable
   const tokens = argvTokens(parent.args)
   const at = tokens.indexOf('harness-engine')
   if (at < 0) return identity.executable
