@@ -1411,7 +1411,7 @@ export function processTitleSessionId(engine: RegisteredSession['engine'], args:
   // Linux exposes a Node process.title rewrite as one argv element; the safe serializer quotes that
   // whole element because it contains spaces. Interpret the contents as the title contract, not as
   // ordinary argv. Multiple elements remain ordinary argv and must match the anchored grammar as-is.
-  const title = split.length === 1 ? split[0] : args.trim()
+  const title = (split.length === 1 ? split[0] : args).trim()
   const exact = engine === 'opencode'
     ? /^opencode\s+(?:--session|-s)\s+(ses_[A-Za-z0-9]+)$/
     : engine === 'pi'

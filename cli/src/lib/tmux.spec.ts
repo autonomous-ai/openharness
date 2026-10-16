@@ -759,6 +759,10 @@ describe('tmux process primitives', () => {
       .toBe('ses_05e335115ffeM05DT5hJHeN3Vp')
     expect(processTitleSessionId('pi', '"pi --session-id 53d3843c-724e-47ff-ae3a-9fedfa328bba"'))
       .toBe('53d3843c-724e-47ff-ae3a-9fedfa328bba')
+    const openCodeProc = faithfulArgsFromCmdline('opencode --session ses_05e335115ffeM05DT5hJHeN3Vp'.padEnd(160) + '\0')!
+    const piProc = faithfulArgsFromCmdline('pi --session-id 53d3843c-724e-47ff-ae3a-9fedfa328bba'.padEnd(160) + '\0')!
+    expect(processTitleSessionId('opencode', openCodeProc)).toBe('ses_05e335115ffeM05DT5hJHeN3Vp')
+    expect(processTitleSessionId('pi', piProc)).toBe('53d3843c-724e-47ff-ae3a-9fedfa328bba')
     expect(processTitleSessionId('opencode', 'opencode prompt --session ses_OTHER')).toBeNull()
     expect(processTitleSessionId('pi', 'pi --session-id 53d3843c-724e-47ff-ae3a-9fedfa328bba prompt')).toBeNull()
     expect(processTitleSessionId('claude', 'claude --resume 53d3843c-724e-47ff-ae3a-9fedfa328bba')).toBeNull()
