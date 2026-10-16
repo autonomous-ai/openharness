@@ -169,17 +169,27 @@ function decide(file: string, text: string, pid: number): boolean {
 }
 
 /**
- * The replacement: take the handover under [token], saying who took it. True only when this call took it, and from
- * then on this process is the master and the one to claim the pid file; false when the master that handed over took
- * it back, or it could not be taken. Taken only while the marker names this handover and before its cutoff
- * (`HANDOVER_CUTOFF_MS` after the marker's `at`, on [now]): past it, the master that handed over, if it never learned
- * whether it was taken, stays.
+ * The replacement, right before it writes the pid file, and before and after it takes the handover: may it still?
+ * Only while the marker names this handover and before its cutoff (`HANDOVER_CUTOFF_MS` after the marker's `at`, on
+ * [now]). Past it and its margin, the master that handed over stays unless the pid file names another process that
+ * runs, and removes the marker.
+ */
+export function mayClaimPidFile(file: string, token: string, now: () => number = Date.now): boolean {
+  const marker = readMarker(file)
+  return marker?.handover === token && now() <= marker.at + HANDOVER_CUTOFF_MS
+}
+
+/**
+ * The replacement: take the handover under [token], saying who took it. True only when this call took it while it
+ * still may (`mayClaimPidFile`, asked again once it is taken, for a marker gone in between), and from then on this
+ * process is the master and the one to claim the pid file; false when the master that handed over took it back, or it
+ * could not be taken. Taken and then refused, the decision is left naming this process: the master that handed over
+ * reads it as taken, and stays all the same, the pid file never naming this process (`HandOverDeps`).
  */
 export function takeHandover(file: string, token: string, pid: number, now: () => number = Date.now): boolean {
   try {
-    const marker = readMarker(file)
-    if (marker?.handover !== token || now() > marker.at + HANDOVER_CUTOFF_MS) return false
-    return decide(handoverFile(file, token), `${JSON.stringify({ pid })}\n`, pid)
+    if (!mayClaimPidFile(file, token, now)) return false
+    return decide(handoverFile(file, token), `${JSON.stringify({ pid })}\n`, pid) && mayClaimPidFile(file, token, now)
   } catch {
     return false
   }
@@ -359,7 +369,7 @@ export function createReexec(deps: ReexecDeps): {
    * Windows. The replacement holds the machine once it took the handover (`takeHandover`) and the pid file names it, so
    * a pid file written by anything else, or a replacement from another handover, is never taken for this one's.
    */
-  const handOver = async (h: HandOverDeps, next: string, state: ResumeState, at: number, carryOn: (outcome: ReexecOutcome) => void): Promise<void> => {
+  const handOver = async (h: HandOverDeps, next: string, state: ResumeState, carryOn: (outcome: ReexecOutcome) => void): Promise<void> => {
     let busy = 'the daemon spawn lock is busy'
     const release = await h.lock().catch((error: unknown) => {
       busy = `could not take the daemon spawn lock (${message(error)})`
@@ -381,6 +391,11 @@ export function createReexec(deps: ReexecDeps): {
     // A name for the handover's decision file (`takeBackHandover`): with any other, every handover would only time out.
     if (!HANDOVER_TOKEN.test(token)) { stay(`the handover token ${JSON.stringify(token)} is not one a file can be named by`); return }
     try { h.claim() } catch (error) { stay(`could not claim the pid file (${message(error)})`); return }
+    // Now, not as the re-execution began: stopping the children and the probe took up to PROBE_TIMEOUT_MS of it.
+    const at = deps.now()
+    // No replacement takes the handover or claims the pid file after its cutoff (`mayClaimPidFile`): past that and
+    // its margin, this master settles on what the pid file says.
+    const until = at + HANDOVER_CUTOFF_MS + HANDOVER_CUTOFF_MARGIN_MS
     try {
       deps.writeMarker({ pid: deps.pid, from: deps.own, to: next, at, handover: token })
     } catch (error) {
@@ -395,8 +410,8 @@ export function createReexec(deps: ReexecDeps): {
     // The replacement holds the pid file: this master lets go of the spawn lock and leaves. The replacement never
     // takes the lock again, so this release is what frees it, and it comes only once the pid file names a live
     // successor: until then a `harness stop` waits rather than land on a master on its way out.
-    const leave = (pid: number): void => {
-      deps.log(`[harnessd] handed over to the new master (pid ${pid}) — leaving`)
+    const leave = (why: string): void => {
+      deps.log(`[harnessd] ${why} — leaving`)
       release()
       h.leave()
     }
@@ -423,14 +438,17 @@ export function createReexec(deps: ReexecDeps): {
     }
     // A sleep that fails is a pause cut short: every wait below is bounded by the clock, not by the number of pauses.
     const pause = (): Promise<void> => h.sleep(HANDOVER_POLL_MS).catch(() => undefined)
-    const keep = (why: string): void => {
-      deps.removeMarker()
+    const stayOn = (why: string): void => {
       try {
         if (h.readPid() !== deps.pid) h.claim()
       } catch (error) {
         deps.log(`[harnessd] could not claim the pid file back (${message(error)})`)
       }
       stay(why)
+    }
+    const keep = (why: string): void => {
+      deps.removeMarker()
+      stayOn(why)
     }
     /**
      * Stopping: no replacement may take over now, unless it already has. Not known within HANDOVER_STOP_BUDGET_MS, the
@@ -448,15 +466,30 @@ export function createReexec(deps: ReexecDeps): {
         await pause()
       }
     }
-    /** The replacement took the handover: this master leaves once the pid file names it, and stays if it ended or never got there. */
+    /**
+     * The replacement took the handover: this master leaves once the pid file names it, and stays if it ended. Past the
+     * cutoff and its margin no replacement claims the pid file any more, and this master stays only on a pid file that
+     * names no process but this one that runs: a machine left with no master is started again (`harness start
+     * --if-down`), two masters are noticed by nothing.
+     */
     const taken = async (): Promise<void> => {
-      const until = deps.now() + HANDOVER_WAIT_MS
       for (;;) {
         const pid = successor()
-        if (pid !== null) { leave(pid); return }
+        if (pid !== null) { leave(`handed over to the new master (pid ${pid})`); return }
         const who = claimant()
         if (who !== null && runs(who) === false) { keep(`the new master (pid ${who}) took over and then ended`); return }
-        if (deps.now() >= until) { keep(`the new master took over but did not claim the pid file within ${HANDOVER_WAIT_MS} ms`); return }
+        if (deps.now() >= until) {
+          let named: number | null
+          try {
+            named = h.readPid()
+          } catch (error) {
+            leave(`the new master took over, and the pid file cannot be read (${message(error)})`)
+            return
+          }
+          if (named !== null && named !== deps.pid && runs(named) !== false) { leave(`the new master took over, and the pid file names pid ${named}`); return }
+          keep('the new master took over but never claimed the pid file')
+          return
+        }
         await pause()
         // Stopping: the replacement is the master now, and the marker is not this one's to remove.
         if (deps.stopping()) { release(); return }
@@ -464,14 +497,20 @@ export function createReexec(deps: ReexecDeps): {
     }
     /** The wait is over, for [why]: whose is the handover? */
     const settle = async (why: string): Promise<void> => {
-      const until = at + HANDOVER_CUTOFF_MS + HANDOVER_CUTOFF_MARGIN_MS
       for (;;) {
         const pid = successor()
-        if (pid !== null) { leave(pid); return }
+        if (pid !== null) { leave(`handed over to the new master (pid ${pid})`); return }
         const back = takeBack()
         if (back === true) { keep(why); return }
         if (back === false) { await taken(); return }
-        if (deps.now() >= until) { keep(`${why}, and no new master can take over any more`); return }
+        if (deps.now() >= until) {
+          // Past the cutoff: the marker goes, and then who took the handover is read once more, for one that took it as
+          // this master gave up on knowing.
+          deps.removeMarker()
+          if (claimant() !== null) { await taken(); return }
+          stayOn(`${why}, and no new master can take over any more`)
+          return
+        }
         await pause()
         if (deps.stopping()) { await stop(); return }
       }
@@ -498,7 +537,7 @@ export function createReexec(deps: ReexecDeps): {
     const outcome = await wait().catch((error: unknown) => (deps.stopping() ? null : `the handover failed (${message(error)})`))
     if (outcome === null) { await stop(); return }
     if (typeof outcome === 'string') { await settle(outcome); return }
-    leave(outcome)
+    leave(`handed over to the new master (pid ${outcome})`)
   }
 
   return {
@@ -539,7 +578,7 @@ export function createReexec(deps: ReexecDeps): {
             carryOn('refused')
             return
           }
-          if (deps.handOver) { void handOver(deps.handOver, next, state, now, carryOn); return }
+          if (deps.handOver) { void handOver(deps.handOver, next, state, carryOn); return }
           try {
             deps.writeMarker({ pid: deps.pid, from: deps.own, to: next, at: now })
           } catch (error) {

@@ -7,7 +7,7 @@ import type { ChildProcess } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   HANDOVER_CUTOFF_MARGIN_MS, HANDOVER_CUTOFF_MS, HANDOVER_POLL_MS, HANDOVER_STOP_BUDGET_MS, HANDOVER_WAIT_MS, PROBE_ANSWER, PROBE_COMMAND, PROBE_TIMEOUT_MS, REEXEC_LIMIT, RESUME_ENV, createReexec, decodeResume, encodeResume, fingerprint,
-  readHandoverClaimant, readMarker, recoverFailedReexec, removeMarker, runProbe, sha256File, takeBackHandover, takeHandover,
+  mayClaimPidFile, readHandoverClaimant, readMarker, recoverFailedReexec, removeMarker, runProbe, sha256File, takeBackHandover, takeHandover,
   writeMarker, type HandOverDeps, type ProbeResult, type ReexecDeps,
 } from './reexec.js'
 import type { ReexecOutcome, ResumeState } from './supervisor.js'
@@ -417,6 +417,31 @@ describe('a handover\'s decision, where there is no exec (Windows)', () => {
     expect(takeHandover(file, 'tok-1', 5151, () => at + HANDOVER_CUTOFF_MS)).toBe(true)
   })
 
+  it('lets the replacement claim the pid file only while the marker names its handover, and not after the cutoff', () => {
+    mark('tok-1')
+    expect(mayClaimPidFile(file, 'tok-1', inTime)).toBe(true)
+    expect(mayClaimPidFile(file, 'tok-1', () => at + HANDOVER_CUTOFF_MS)).toBe(true)
+    expect(mayClaimPidFile(file, 'tok-1', () => at + HANDOVER_CUTOFF_MS + 1)).toBe(false)
+    expect(mayClaimPidFile(file, 'tok-1')).toBe(false)
+    expect(mayClaimPidFile(file, 'tok-2', inTime)).toBe(false)
+    removeMarker(file)
+    expect(mayClaimPidFile(file, 'tok-1', inTime)).toBe(false)
+  })
+
+  it('is refused once taken when the marker went or moved on meanwhile, the decision left naming the replacement', () => {
+    // The marker another handover's by the time the link is made: asked again, refused.
+    mark('tok-1')
+    let first = true
+    expect(takeHandover(file, 'tok-1', 5151, () => { if (first) mark('tok-2'); first = false; return inTime() })).toBe(false)
+    expect(readHandoverClaimant(file, 'tok-1')).toBe(5151)
+    // Its cutoff passed by then.
+    mark('tok-3')
+    let calls = 0
+    expect(takeHandover(file, 'tok-3', 5151, () => (calls++ === 0 ? inTime() : at + HANDOVER_CUTOFF_MS + 1))).toBe(false)
+    expect(readHandoverClaimant(file, 'tok-3')).toBe(5151)
+    expect(takeBackHandover(file, 'tok-3', 4242)).toBe(false)
+  })
+
   it('is one per handover: one taken back is not another\'s', () => {
     expect(takeBackHandover(file, 'tok-1', 4242)).toBe(true)
     mark('tok-2')
@@ -486,7 +511,8 @@ describe('handing over, where there is no exec (Windows)', () => {
   }
   const REEXECUTING = '[harnessd] the bundle on disk is not this master\'s code — re-executing on it'
   const KEPT_LATE = `[harnessd] the new master did not take over within ${HANDOVER_WAIT_MS} ms — keeping this master`
-  const NO_CLAIM = `[harnessd] the new master took over but did not claim the pid file within ${HANDOVER_WAIT_MS} ms — keeping this master`
+  const NO_CLAIM = '[harnessd] the new master took over but never claimed the pid file — keeping this master'
+  const BOUND = 1_000 + HANDOVER_CUTOFF_MS + HANDOVER_CUTOFF_MARGIN_MS
   const HANDED = '[harnessd] handed over to the new master (pid 5151) — leaving'
   const NOT_YET = '[harnessd] could not take the handover back yet (EBUSY) — trying again'
   const EXIT_3 = '[harnessd] could not start the new master (exit 3) — keeping this master'
@@ -545,17 +571,52 @@ describe('handing over, where there is no exec (Windows)', () => {
     expect(outcomes).toEqual([])
   })
 
-  it('stays, with the pid file back, when the new one took the handover but never claimed the pid file, or was never read', async () => {
-    // Taken, the pid file another's: not proven, until the bound.
-    await run(make({ sleep: async (ms) => { clock.now += ms; world.taken = true; world.claimant = 5151; world.pidFile = 7777 } }).reexec)
-    expect(calls.slice(-5)).toEqual(['remove marker', 'claim', 'unlock', NO_CLAIM, 'start children'])
-    expect(clock.now - 1_000).toBeGreaterThanOrEqual(2 * HANDOVER_WAIT_MS)
-    calls = []; outcomes = []; clock.now = 1_000; world = { pidFile: 999, taken: false, claimant: null, running: new Set([4242, 5151]) }
-    // Taken, and who took it not to be read until the bound: not proven either.
-    await run(make({ takeBack: () => { world.taken = true; return false } }).reexec)
+  it('stays at the bound, the new one having taken the handover, only on a pid file that names no other process that runs', async () => {
+    const tookIt = () => { world.taken = true; world.claimant = 5151; return false }
+    // The pid file still this master's, the new one alive: it can claim the file no more (`mayClaimPidFile`).
+    await run(make({ takeBack: tookIt }).reexec)
     expect(calls.slice(-4)).toEqual(['remove marker', 'unlock', NO_CLAIM, 'start children'])
-    expect(calls).not.toContain('leave')
-    expect(outcomes).toEqual(['kept'])
+    expect(clock.now).toBeGreaterThanOrEqual(BOUND)
+    calls = []
+    // A pid that runs nothing, or none: the file back.
+    for (const pidFile of [7777, null]) {
+      await run(make({ takeBack: tookIt, sleep: async (ms) => { clock.now += ms; if (world.taken) world.pidFile = pidFile } }).reexec)
+      expect(calls.slice(-5)).toEqual(['remove marker', 'claim', 'unlock', NO_CLAIM, 'start children'])
+      calls = []
+    }
+    expect(calls).toEqual([])
+    expect(outcomes).toEqual(['kept', 'kept', 'kept'])
+  })
+
+  it('leaves at the bound, the new one having taken the handover, on a pid file it cannot read or that names another process that runs', async () => {
+    const tookIt = () => { world.taken = true; world.claimant = 5151; return false }
+    // Who took it never read, the pid file the new one's.
+    await run(make({ claimant: () => { throw new Error('EBUSY') }, sleep: async (ms) => { clock.now += ms; takes() } }).reexec)
+    expect(calls.slice(-3)).toEqual(['[harnessd] the new master took over, and the pid file names pid 5151 — leaving', 'unlock', 'leave'])
+    expect(clock.now).toBeGreaterThanOrEqual(BOUND)
+    calls = []; world = { pidFile: 999, taken: false, claimant: null, running: new Set([4242, 5151]) }
+    // Whether it runs never known.
+    await run(make({ alive: () => { throw new Error('EPERM') }, sleep: async (ms) => { clock.now += ms; takes() } }).reexec)
+    expect(calls.slice(-3)).toEqual(['[harnessd] the new master took over, and the pid file names pid 5151 — leaving', 'unlock', 'leave'])
+    calls = []; world = { pidFile: 999, taken: false, claimant: null, running: new Set([4242, 5151, 7777]) }
+    // Another process that runs.
+    await run(make({ takeBack: tookIt, sleep: async (ms) => { clock.now += ms; if (world.taken) world.pidFile = 7777 } }).reexec)
+    expect(calls.slice(-3)).toEqual(['[harnessd] the new master took over, and the pid file names pid 7777 — leaving', 'unlock', 'leave'])
+    calls = []
+    // A pid file that cannot be read.
+    await run(make({ takeBack: tookIt, readPid: () => { throw new Error('EBUSY') } }).reexec)
+    expect(calls.slice(-3)).toEqual(['[harnessd] the new master took over, and the pid file cannot be read (EBUSY) — leaving', 'unlock', 'leave'])
+    expect(outcomes).toEqual([])
+  })
+
+  it('counts its bounds from the handover, not from when the re-execution began', async () => {
+    // Stopping the children and the probe took ten seconds.
+    await run(make({ takeBack: () => { world.taken = true; world.claimant = 5151; return false } }, {
+      stopChildren: (done) => { calls.push('stop children'); clock.now += 10_000; done() },
+    }).reexec)
+    expect(calls).toContain(`marker ${JSON.stringify({ pid: 4242, from: 'old', to: 'new', at: 11_000, handover: 'tok' })}`)
+    expect(calls.slice(-2)).toEqual([NO_CLAIM, 'start children'])
+    expect(clock.now).toBeGreaterThanOrEqual(BOUND + 10_000)
   })
 
   it('keeps this master when the new one does not take over in time, taking the handover and its marker back first', async () => {
@@ -648,19 +709,16 @@ describe('handing over, where there is no exec (Windows)', () => {
     expect(calls.slice(-2)).toEqual(['[harnessd] the handover failed (gone), and no new master can take over any more — keeping this master', 'start children'])
   })
 
-  it('takes nothing for proven that a dep cannot tell, and still stays', async () => {
-    // Who took it never read: the take back's answer is all it goes by, and the pid file never proves a successor.
-    await run(make({ claimant: () => { throw new Error('EBUSY') }, sleep: async (ms) => { clock.now += ms; takes() } }).reexec)
-    expect(calls.slice(-5)).toEqual(['remove marker', 'claim', 'unlock', NO_CLAIM, 'start children'])
-    expect(calls).not.toContain('leave')
-    calls = []; outcomes = []; clock.now = 1_000; world = { pidFile: 999, taken: false, claimant: null, running: new Set([4242, 5151]) }
-    await run(make({ alive: () => { throw new Error('EPERM') }, sleep: async (ms) => { clock.now += ms; takes() } }).reexec)
-    expect(calls.slice(-5)).toEqual(['remove marker', 'claim', 'unlock', NO_CLAIM, 'start children'])
-    calls = []
-    await run(make({ readPid: () => { throw new Error('EBUSY') }, sleep: async (ms) => { clock.now += ms; world.claimant = 5151 } }).reexec)
-    expect(calls).not.toContain('leave')
-    expect(calls.slice(-4)).toEqual(['[harnessd] could not claim the pid file back (EBUSY)', 'unlock', NO_CLAIM, 'start children'])
-    expect(outcomes).toEqual(['kept', 'kept'])
+  it('stays when it cannot claim the pid file back, saying so', async () => {
+    await run(make({ launch: async () => 'exit 3', readPid: () => { throw new Error('EBUSY') } }).reexec)
+    expect(calls.slice(-5)).toEqual(['remove marker', '[harnessd] could not claim the pid file back (EBUSY)', 'unlock', EXIT_3, 'start children'])
+    expect(outcomes).toEqual(['kept'])
+  })
+
+  it('reads who took the handover once more past the cutoff, as it removes its marker, and goes the new one\'s way', async () => {
+    await run(make({ launch: async () => 'exit 3', takeBack: busy() }, { removeMarker: () => { calls.push('remove marker'); takes() } }).reexec)
+    expect(calls.slice(-4)).toEqual(['remove marker', HANDED, 'unlock', 'leave'])
+    expect(outcomes).toEqual([])
   })
 
   it('does no more once the master is stopping, and lets no replacement take over then unless it already has', async () => {
