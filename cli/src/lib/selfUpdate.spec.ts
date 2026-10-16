@@ -5,7 +5,8 @@ import { createHash } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   DOWNLOAD_LIMITS, MANIFEST_LIMITS, REFUSED_RETRY_MAX_MS, RUNTIME_DOWNLOAD_LIMITS, TransferStalledError, canary, confirm, downloadVerified, fetchManifest, isLocalDevBuild,
-  msUntilSlot, rejectedVersions, restore, runCanary, semverGt, settleRolledBack, shouldAutoUpdate, stage, startSelfUpdater, unjudgedUpdate,
+  msUntilSlot, rejectedVersions, restore as restoreOn, runCanary, semverGt, settleRolledBack as settleRolledBackOn, shouldAutoUpdate, stage as stageOn,
+  startSelfUpdater as startSelfUpdaterOn, unjudgedUpdate,
 } from './selfUpdate.js'
 import { SpawnLockBusyError } from './daemonSpawnLock.js'
 
@@ -15,6 +16,16 @@ vi.mock('./windows/installLayout.js', async (real) => {
   const actual = await real<typeof import('./windows/installLayout.js')>()
   return { ...actual, writePointer: (...args: Parameters<typeof actual.writePointer>) => { if (pointer.fail) throw new Error('EPERM'); actual.writePointer(...args) } }
 })
+
+// The cases below that pass no platform are about the macOS and Linux layout (files swapped in place, `.prev`
+// backups). Left to the default, `process.platform`, they took the Windows version-folder path when the suite
+// ran on Windows; pinned here, they test the same layout on every host. The Windows cases pass 'win32'.
+const stage = (dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string, platform: NodeJS.Platform = 'darwin'): void =>
+  stageOn(dir, cliBuf, notifyBuf, version, platform)
+const restore = (dir: string, platform: NodeJS.Platform = 'darwin'): void => restoreOn(dir, platform)
+const settleRolledBack = (dir: string, platform: NodeJS.Platform = 'darwin'): string | null => settleRolledBackOn(dir, platform)
+const startSelfUpdater = (opts: Parameters<typeof startSelfUpdaterOn>[0]): ReturnType<typeof startSelfUpdaterOn> =>
+  startSelfUpdaterOn({ platform: 'darwin', ...opts })
 
 let dirs: string[] = []
 
@@ -561,7 +572,7 @@ describe('staging, all or nothing (e2e/updateHostile.e2e.ts)', () => {
       const { stage: stageCopying } = await import('./selfUpdate.js')
       const dir = installed()
       const before = statSync(join(dir, 'cli.js')).ino
-      stageCopying(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0')
+      stageCopying(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0', 'darwin')
       expect(readFileSync(join(dir, 'cli.js.prev'), 'utf8')).toBe('v1')
       expect(statSync(join(dir, 'cli.js.prev')).ino).not.toBe(before)
       expect(readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual([])
