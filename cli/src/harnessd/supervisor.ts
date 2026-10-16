@@ -70,6 +70,18 @@ export interface SupervisorDeps {
    * never asks for a process that became on demand after its protocol, and expects it to run, as it did.
    */
   unasked?(protocol: number): void
+  /**
+   * Stop the core with `harnessd:shutdown` (./protocol.ts) rather than SIGTERM. Windows: Node's `kill` there is
+   * TerminateProcess, whatever the signal, and a core ended that way never flushes its registry or closes its
+   * servers. SIGKILL after the grace is TerminateProcess on the handle this master holds, so it can only end its
+   * own child. Left out, signals, as on macOS and Linux.
+   */
+  stopByMessage?: boolean
+  /**
+   * The core asked to stop everything (`harnessd:stop`: `harness stop` reached it over its pipe). The master stops
+   * its services beside the core, as on a signal (./master.ts); left out, the supervisor stops the core itself.
+   */
+  stopRequested?(why: string): void
 }
 
 /**
@@ -453,6 +465,12 @@ export class Supervisor {
         // none, before or after.
         this.deps.want?.(message.service)
         return
+      case 'harnessd:stop': {
+        const why = 'the core asked to stop (harness stop)'
+        if (this.deps.stopRequested) this.deps.stopRequested(why)
+        else this.stop(why)
+        return
+      }
       case 'harnessd:heartbeat': {
         if (!this.bound) return
         this.watchHeartbeat()
@@ -603,13 +621,16 @@ export class Supervisor {
     core.kill('SIGKILL')
   }
 
-  /** End the running core: SIGTERM (or SIGKILL), and SIGKILL if it outlives the grace. */
+  /** End the running core: SIGTERM (or SIGKILL), and SIGKILL if it outlives the grace. On Windows the SIGTERM is
+   *  `harnessd:shutdown` (`stopByMessage`). */
   private end(why: 'stop' | 'restart', signal: NodeJS.Signals): void {
     const core = this.core!
     this.ending = why
     this.clearTimer('heartbeatTimer')
     this.clearTimer('readyTimer')
-    core.kill(signal)
+    // Every caller ends a core with SIGTERM; a second stop is SIGKILL through `stop`, never through here.
+    if (this.deps.stopByMessage) core.send({ type: 'harnessd:shutdown' })
+    else core.kill(signal)
     this.armTimer('killTimer', () => {
       this.deps.log(`[harnessd] core outlived its ${this.options.stopGraceMs} ms to stop — killing it`)
       core.kill('SIGKILL')

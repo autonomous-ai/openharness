@@ -882,4 +882,53 @@ describe('Supervisor', () => {
       expect(calls).toEqual(['claim', 'up'])
     })
   })
+
+  it('on Windows, asks the core to leave rather than signalling it, and ends it after the grace all the same', () => {
+    const supervisor = make({}, { stopByMessage: true })
+    supervisor.start()
+    core().up()
+    supervisor.stop('harness stop')
+    expect(core().kills).toEqual([])
+    expect(core().sent.at(-1)).toEqual({ type: 'harnessd:shutdown' })
+    vi.advanceTimersByTime(options.stopGraceMs)
+    expect(core().kills).toEqual(['SIGKILL'])
+    core().exit(null, 'SIGKILL')
+    expect(exited).toEqual([0])
+  })
+
+  it('on Windows, restarts a core over its memory budget by message too', () => {
+    make({}, { stopByMessage: true }).start()
+    core().up()
+    core().beat(100 * MIB, 900 * MIB)
+    expect(core().kills).toEqual([])
+    expect(core().sent.at(-1)).toEqual({ type: 'harnessd:shutdown' })
+    core().exit(0)
+    vi.runOnlyPendingTimers()
+    expect(cores).toHaveLength(2)
+  })
+
+  it('signals the core everywhere else, as before', () => {
+    const supervisor = make()
+    supervisor.start()
+    core().up()
+    supervisor.stop('SIGTERM')
+    expect(core().kills).toEqual(['SIGTERM'])
+    expect(core().sent.some((message) => message.type === 'harnessd:shutdown')).toBe(false)
+  })
+
+  it('stops everything when the core asks (harness stop over its pipe), through the master when it says how', () => {
+    const asked: string[] = []
+    const supervisor = make({}, { stopRequested: (why) => asked.push(why) })
+    supervisor.start()
+    core().up()
+    core().say({ type: 'harnessd:stop' })
+    expect(asked).toEqual(['the core asked to stop (harness stop)'])
+    // Without a way to stop the rest, the supervisor stops its core and finishes itself.
+    const alone = make()
+    alone.start()
+    core().up()
+    core().say({ type: 'harnessd:stop' })
+    expect(alone.status().state).toBe('stopping')
+    expect(core().kills).toEqual(['SIGTERM'])
+  })
 })
