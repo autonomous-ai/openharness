@@ -279,4 +279,35 @@ describe('daemon spawn lock', () => {
     }
     expect(existsSync(lockDir())).toBe(false)
   }, 30_000)
+
+  it('on Windows, reads an owner whatever its mode says: Windows reports 0666, and the profile\'s ACL is what protects it', async () => {
+    const lock = await loadLock()
+    mkdirSync(lockDir(), { mode: 0o700 })
+    writeFileSync(ownerFile(), JSON.stringify({ pid: 4242, startMarker: '', token: 't', purpose: 'start', since: 1 }), { mode: 0o666 })
+    spawnSync('chmod', ['0777', lockDir()])
+    spawnSync('chmod', ['0666', ownerFile()])
+    expect(() => lock.readSpawnLockOwner('darwin')).toThrow(/unsafe owner, mode, or type/)
+    expect(lock.readSpawnLockOwner('win32')).toMatchObject({ pid: 4242, token: 't', purpose: 'start' })
+  })
+
+  it('knows a Windows owner whose pid now runs a process that started after it took the lock', async () => {
+    const lock = await loadLock()
+    const owner = { pid: 4242, startMarker: '', token: 't', purpose: 'start' as const, since: Date.parse('2026-10-16T00:00:00Z') }
+    const at = (ms: number) => `w:${(BigInt(ms) + 11_644_473_600_000n) * 10_000n}`
+    expect(lock.spawnLockOwnerReused(owner, { startMarker: at(owner.since - 1_000) })).toBe(false)
+    expect(lock.spawnLockOwnerReused(owner, { startMarker: at(owner.since + 60_000) })).toBe(true)
+    expect(lock.spawnLockOwnerReused(owner, null)).toBe(false)
+    expect(lock.spawnLockOwnerReused(owner, { startMarker: 'unreadable' })).toBe(false)
+  })
+
+  it('releases an abandoned lock only while it is still the one that was judged', async () => {
+    const lock = await loadLock()
+    mkdirSync(lockDir(), { mode: 0o700 })
+    writeFileSync(ownerFile(), JSON.stringify({ pid: 4242, startMarker: '', token: 't', purpose: 'start', since: 1 }), { mode: 0o600 })
+    const judged = lock.readSpawnLockOwner()!
+    expect(lock.releaseAbandonedSpawnLock({ ...judged, token: 'other' })).toBe(false)
+    expect(existsSync(lockDir())).toBe(true)
+    expect(lock.releaseAbandonedSpawnLock(judged)).toBe(true)
+    expect(existsSync(lockDir())).toBe(false)
+  })
 })

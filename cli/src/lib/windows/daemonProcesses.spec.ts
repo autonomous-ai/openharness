@@ -75,4 +75,19 @@ describe('the daemon\'s processes, in the process table', () => {
     expect(judgePidFileOwner([row({ nativeArgv: ['notepad.exe'] })], 500, T + 5_000)).toEqual({ verdict: 'not' })
     expect(judgePidFileOwner([], 500, T + 5_000)).toEqual({ verdict: 'not' })
   })
+
+  it('decides by time first: a process that started after the claim is not the master, whatever its argv says', () => {
+    const late = at(T + 60_000)
+    const claim = { role: 'master', claimedAtMs: T } as const
+    expect(judgeDaemonProcess([row({ startMarker: late, nativeArgv: undefined })], 500, claim)).toEqual({ verdict: 'not' })
+    expect(judgeDaemonProcess([row({ startMarker: late, nativeArgv: ['node.exe'] })], 500, claim)).toEqual({ verdict: 'not' })
+  })
+
+  it('never proves a process not ours when its command line could not be read (the host sends just its executable)', () => {
+    expect(judgeDaemonProcess([row({ nativeArgv: ['node.exe'] })], 500, master)).toEqual({ verdict: 'unknown' })
+    expect(judgeDaemonProcess([row({ pid: 600, parentPid: 500, nativeArgv: ['node.exe'] })], 600, { role: 'core', parentPid: 501 })).toEqual({ verdict: 'unknown' })
+    expect(judgePidFileOwner([row({ nativeArgv: ['node.exe'] })], 500, T + 5_000)).toEqual({ verdict: 'unknown' })
+    // A different program's own name is a command line that was read.
+    expect(judgeDaemonProcess([row({ nativeArgv: ['notepad.exe'] })], 500, master)).toEqual({ verdict: 'not' })
+  })
 })

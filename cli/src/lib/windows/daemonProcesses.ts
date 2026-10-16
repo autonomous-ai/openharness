@@ -33,13 +33,16 @@ export type DaemonProcessVerdict = { verdict: 'is'; startMarker: string } | { ve
 export function judgeDaemonProcess(rows: readonly ProcessRow[], pid: number, claim: DaemonProcessClaim): DaemonProcessVerdict {
   const row = rows.find((candidate) => candidate.pid === pid)
   if (!row) return { verdict: 'not' }
+  // By time first: a master that started after the claim was given the pid since, whatever its argv shows.
+  const started = startMarkerMs(row.startMarker)
+  if (claim.role === 'master' && started !== null && started > claim.claimedAtMs + CLAIM_SLACK_MS) return { verdict: 'not' }
   // The kernel's argv only: split from `args`, an agent's prompt text could pose as a `__run` token. The host gives
-  // every row one (pty/src/ps.rs, `[executable]` when the command line could not be read).
+  // every row one (pty/src/ps.rs): `[executable]` when the command line could not be read, which shows nothing.
   if (!row.startMarker || !row.nativeArgv) return { verdict: 'unknown' }
+  if (row.nativeArgv.length === 1 && row.nativeArgv[0] === row.executable) return { verdict: 'unknown' }
   if (!runsAs(row.nativeArgv, claim.role)) return { verdict: 'not' }
   const is = { verdict: 'is', startMarker: row.startMarker } as const
   if (claim.role === 'core') return row.parentPid === claim.parentPid ? is : { verdict: 'not' }
-  const started = startMarkerMs(row.startMarker)
   if (started === null || !Number.isFinite(claim.claimedAtMs)) return { verdict: 'unknown' }
   return started <= claim.claimedAtMs + CLAIM_SLACK_MS ? is : { verdict: 'not' }
 }
