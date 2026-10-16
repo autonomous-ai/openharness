@@ -15,6 +15,7 @@ import { existsSync } from 'node:fs'
 import WebSocket from 'ws'
 import type { Asker, ServiceRequests } from '../core/api.js'
 import { heartbeatInterval, processLoopDelay, type LoopDelay, type MasterChannel } from '../harnessd/coreLink.js'
+import { isMasterMessage } from '../harnessd/protocol.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
 
 type Payload = Record<string, unknown>
@@ -163,6 +164,8 @@ export function hostServices(options: ServiceHostOptions): ServiceHost {
   if (faults.some((fault) => fault.crash)) setTimeout(() => leave(1), 200)
   // The master is gone: so is this process, rather than an orphan holding what it holds.
   channel.once('disconnect', () => leave(0))
+  // Windows: the master's stop is a message, as its SIGTERM is elsewhere (harnessd/services.ts `stopByMessage`).
+  channel.on('message', (message) => { if (isMasterMessage(message) && message.type === 'harnessd:shutdown') leave(0) })
   ;(options.onSignal ?? ((signal, handler) => { process.once(signal, handler) }))('SIGTERM', () => leave(0))
   return { add: (service) => { services.push(service) }, leave }
 }
