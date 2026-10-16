@@ -47,14 +47,19 @@ describe("--if-down's view of this computer", () => {
     await expect(processIfDownDeps('win32', io({ rows: async () => [row(500, CLAIMED - 5_000, ['C:\\node.exe', 'C:\\cli.js', '__run'])] })).masterRuns(500)).resolves.toBe(true)
   })
 
-  it('on Windows, forgets a pid file whose pid is proven another process now, so the start that follows is not refused', async () => {
+  it('on Windows, forgets a pid file whose pid is proven another process now only under the lock, so the start goes ahead', async () => {
     for (const rows of [[master(500, CLAIMED + 60_000)], [row(500, CLAIMED - 5_000, ['C:\\Windows\\notepad.exe', 'a.txt'])], []]) {
-      const seen = io({ rows: async () => rows })
-      await expect(processIfDownDeps('win32', seen).masterRuns(500)).resolves.toBe(false)
-      expect(seen.forgetPid).toHaveBeenCalledWith(500)
+      // Outside the spawn lock it only judges: a start holding the lock may write a fresh pid file between a read and
+      // a remove here, and that file must not be lost.
+      const judged = io({ rows: async () => rows })
+      await expect(processIfDownDeps('win32', judged).masterRuns(500)).resolves.toBe(false)
+      expect(judged.forgetPid).not.toHaveBeenCalled()
+      const locked = io({ rows: async () => rows })
+      await expect(processIfDownDeps('win32', locked, { forget: true }).masterRuns(500)).resolves.toBe(false)
+      expect(locked.forgetPid).toHaveBeenCalledWith(500)
     }
     const kept = io({ rows: async () => null })
-    await processIfDownDeps('win32', kept).masterRuns(500)
+    await processIfDownDeps('win32', kept, { forget: true }).masterRuns(500)
     expect(kept.forgetPid).not.toHaveBeenCalled()
   })
 

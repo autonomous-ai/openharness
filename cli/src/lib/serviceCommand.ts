@@ -218,7 +218,7 @@ function statusLine(state: PlatformState, name: string): string {
     if (!state.registered) return '◍ written, not registered · `harness service install` registers it'
     return state.state === 'disabled'
       ? '◍ registered, but turned off in Task Scheduler · `harness service install` turns it back on'
-      : `● registered (${state.state}) · starts at logon, and again within 5 minutes if it stops`
+      : `● registered (${state.state}) · starts the daemon when you sign in to Windows, and again within 5 minutes if it stops`
   }
   if (!state.registered) {
     return state.platform === 'launchd'
@@ -292,7 +292,7 @@ async function installTask(deps: ServiceCommandDeps): Promise<number> {
   }
   if (registered === 'already') deps.out(`harnessd is registered with Task Scheduler already (${service.target}); nothing to change.`)
   else {
-    deps.out(`✓ harnessd runs under Task Scheduler (pid ${up}): it starts at logon, and again within 5 minutes if it stops.`)
+    deps.out(`✓ Task Scheduler starts the Harness daemon when you sign in to Windows, and again within 5 minutes if it stops (pid ${up} runs now).`)
     deps.out(`  task   ${service.target}`)
     deps.out('  undo: harness service uninstall')
   }

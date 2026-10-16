@@ -385,7 +385,7 @@ describe('harness service with Task Scheduler', () => {
       expect(schtasks(w.calls)).toEqual([expect.stringMatching(/harnessd-task\.xml \/F$/), `schtasks /Run /TN ${name}`])
       expect(w.calls.find((call) => call.startsWith('schtasks /Create'))!.startsWith(`schtasks /Create /TN ${name} /XML `)).toBe(true)
       expect(w.locks).toEqual(['start', 'start released'])
-      expect(w.out[0]).toBe('✓ harnessd runs under Task Scheduler (pid 4343): it starts at logon, and again within 5 minutes if it stops.')
+      expect(w.out[0]).toBe('✓ Task Scheduler starts the Harness daemon when you sign in to Windows, and again within 5 minutes if it stops (pid 4343 runs now).')
       expect(w.err).toEqual([])
     } finally { rmSync(w.dir, { recursive: true, force: true }) }
   })
@@ -418,7 +418,7 @@ describe('harness service with Task Scheduler', () => {
       await expect(serviceCommand(['install'], w.deps)).resolves.toBe(0)
       // The same file, registered again: its <Enabled>true</Enabled> is what turns the task back on (harnessd/platform.ts).
       expect(schtasks(w.calls)).toEqual([expect.stringMatching(/harnessd-task\.xml \/F$/)])
-      expect(w.out[0]).toBe('✓ harnessd runs under Task Scheduler (pid 4040): it starts at logon, and again within 5 minutes if it stops.')
+      expect(w.out[0]).toBe('✓ Task Scheduler starts the Harness daemon when you sign in to Windows, and again within 5 minutes if it stops (pid 4040 runs now).')
     } finally { rmSync(w.dir, { recursive: true, force: true }) }
   })
 
@@ -529,7 +529,7 @@ describe('harness service with Task Scheduler', () => {
     try {
       w.deps.service!.write(w.deps.definition())
       await serviceCommand(['status'], w.deps)
-      expect(w.out).toEqual(['harnessd · Task Scheduler', '  status      ● registered (enabled) · starts at logon, and again within 5 minutes if it stops', expect.stringMatching(/^  task        /), `  target      ${taskName('demo')}`])
+      expect(w.out).toEqual(['harnessd · Task Scheduler', '  status      ● registered (enabled) · starts the daemon when you sign in to Windows, and again within 5 minutes if it stops', expect.stringMatching(/^  task        /), `  target      ${taskName('demo')}`])
     } finally { rmSync(w.dir, { recursive: true, force: true }) }
   })
 

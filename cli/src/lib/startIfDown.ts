@@ -101,12 +101,15 @@ function defaultIfDownIo(): IfDownIo {
  * This computer's. On Windows a pid is checked against the process table: a pid file or a lock whose pid was given to
  * another process since must not stand for a running daemon, or the task would never start one again. Only what is
  * proven goes: a pid file whose pid the table shows is another process now is forgotten (as `harness stop` forgets it,
- * lib/daemonStop.ts), or the start that follows would read it as a running daemon all the same; a lock is released
- * only while it is still the lock judged. What cannot be told (no table, no time the pid file was written, a command
+ * lib/daemonStop.ts), or the start that follows would read it as a running daemon all the same, but only by a caller
+ * that holds the spawn lock (`forget`): outside it, a start that holds the lock may write a fresh pid file between the
+ * read and the remove, and its file would be lost. A lock is released only while it is still the lock judged. What cannot be told (no table, no time the pid file was written, a command
  * line that cannot be read) proves nothing either way, and the pid's liveness decides, as elsewhere: the master's
  * command line alone would match another daemon of this user's (B3.7).
  */
-export function processIfDownDeps(platform: NodeJS.Platform = process.platform, overrides: Partial<IfDownIo> = {}): IfDownDeps {
+export function processIfDownDeps(
+  platform: NodeJS.Platform = process.platform, overrides: Partial<IfDownIo> = {}, options: { forget?: boolean } = {},
+): IfDownDeps {
   const io = { ...defaultIfDownIo(), ...overrides }
   const windows = platform === 'win32'
   return {
@@ -118,7 +121,7 @@ export function processIfDownDeps(platform: NodeJS.Platform = process.platform, 
       const claimedAtMs = io.pidFileWrittenMs()
       if (!rows || claimedAtMs === null) return true
       if (judgePidFileOwner(rows, pid, claimedAtMs).verdict !== 'not') return true
-      io.forgetPid(pid)
+      if (options.forget) io.forgetPid(pid)
       return false
     },
     lockOwner: () => io.readLockOwner(),

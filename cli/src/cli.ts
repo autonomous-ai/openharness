@@ -142,7 +142,8 @@ Machine:
   harness status               show whether it's running (+ version)
   harness service install      run the daemon under launchd (macOS) or systemd (Linux): it starts at login and comes
                                back if it dies. On Windows, Task Scheduler starts it when you sign in, and again
-                               within 5 minutes if it stops. start and stop then go through it (opt-in)
+                               within 5 minutes if it stops. \`harness start\` and \`harness stop\` then go through
+                               it (opt-in)
   harness service uninstall    undo that: the daemon goes back to \`harness start\`
   harness service status       what launchd, systemd or Task Scheduler has registered, and whether it runs (--json)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
@@ -237,7 +238,7 @@ Env: BACKEND_WS_URL (${env.BACKEND_WS_URL}), WEB_URL (${env.WEB_URL}), ADAPTER_D
 /** The `supervisor` row: who keeps the daemon running when it is not `harness start`. */
 function supervisorRow(platform: string): string {
   // Task Scheduler starts the master at logon and checks every five minutes; it does not run it (lib/startIfDown.ts).
-  if (platform === 'taskscheduler') return 'Task Scheduler · starts at logon, and again within 5 minutes if it stops (harness service status)'
+  if (platform === 'taskscheduler') return 'Task Scheduler · starts it when you sign in to Windows, and again within 5 minutes if it stops (harness service status)'
   return `${platform} · starts at login, comes back if it dies (harness service status)`
 }
 
@@ -1009,11 +1010,13 @@ let startedByTheTask = false
 /**
  * The pid of the daemon that runs, for `harness start`. On Windows the process table judges the pid file, with the
  * judge `--if-down` uses (lib/startIfDown.ts `runningDaemon`): Windows gives a freed pid to the next process quickly,
- * and a pid file whose pid is proven another process now is forgotten, so the start goes ahead instead of saying
- * "already running" about it; one that cannot be told counts as running. macOS and Linux: its liveness, as before.
+ * and a pid file whose pid is proven another process now does not count, so the start goes ahead instead of saying
+ * "already running" about it; one that cannot be told counts as running. `underLock`: the caller holds the spawn lock,
+ * and such a pid file is forgotten too. Outside the lock it is only judged: a start that holds the lock may write a
+ * fresh pid file between the read and the remove. macOS and Linux: its liveness, as before.
  */
-async function runningDaemonPid(): Promise<number | null> {
-  if (process.platform === 'win32') return runningDaemon(processIfDownDeps())
+async function runningDaemonPid(underLock: boolean = false): Promise<number | null> {
+  if (process.platform === 'win32') return runningDaemon(processIfDownDeps(process.platform, {}, { forget: underLock }))
   const pid = readPid()
   return pid && isAlive(pid) ? pid : null
 }
@@ -1083,6 +1086,14 @@ async function startCommand(foreground: boolean, repair: boolean = false, ifDown
     // Windows, the task registered: it starts the master, as the task would at logon; not under the spawn lock,
     // which its own `harness start --if-down` takes (lib/platformDaemon.ts startThroughTask).
     if (!ifDown && installedPlatform() === 'taskscheduler') {
+      // A pid file proven another process's is forgotten first, under the lock and only for that moment: the wait
+      // below would take that process for the master the task started.
+      const up = await withSpawnLock('start', () => runningDaemonPid(true)).catch(() => null)
+      if (up) {
+        console.log(`machine already running (pid ${up}) — it auto-reconnects.`)
+        console.log('  check: harness status   ·   stop: harness stop')
+        process.exit(0)
+      }
       const started = await startThroughTask(serviceDefinition({ logFile: LOG_FILE }), { ...platformDaemonDeps(), lockHeld: () => readSpawnLockOwner() !== null })
       if (started.ok) return reportStarted(session, started.pid, 'taskscheduler')
       if (!started.direct) {
@@ -1509,7 +1520,8 @@ async function launch(foreground: boolean, repair: boolean = false): Promise<voi
 
 /** The part of `launch` that runs under the spawn lock: check, spawn, wait for bind, wait for connect. */
 async function spawnDaemon(session: AuthSession | null, runtimeNode: string | null): Promise<void> {
-  const running = await runningDaemonPid()
+  // Under the spawn lock (launch): a pid file proven another process's is forgotten here.
+  const running = await runningDaemonPid(true)
   if (running) {
     console.log(`machine already running (pid ${running}) — it auto-reconnects.`)
     console.log('  check: harness status   ·   stop: harness stop')
