@@ -1378,6 +1378,20 @@ export function resumeSessionId(engine: RegisteredSession['engine'], args: strin
 }
 
 /**
+ * A session id an engine publishes by replacing its whole process title. These exact, closed shapes
+ * are safe even when `ps` cannot preserve argv boundaries: any extra token makes the text ordinary
+ * flattened argv again, where a prompt could contain flag-shaped words.
+ */
+export function processTitleSessionId(engine: RegisteredSession['engine'], args: string): string | null {
+  const exact = engine === 'opencode'
+    ? /^opencode\s+(?:--session|-s)\s+(ses_[A-Za-z0-9]+)$/
+    : engine === 'pi'
+      ? /^pi\s+(?:--session|--session-id)\s+([0-9a-f][0-9a-f-]{7,})$/i
+      : null
+  return exact?.exec(args.trim())?.[1] ?? null
+}
+
+/**
  * Resolve the stable CLI process below one tmux pane, ahead of short-lived helper descendants — and say
  * whether a negative answer means "nothing is running there" or "the probe itself failed". Those are not
  * the same fact: `tmux display-message` and `ps` are subprocesses with 2-3s timeouts, and treating a

@@ -24,6 +24,7 @@ import { findCorroboratedResumeSession, findLiveSession, findResumedTranscript }
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import { conversationKey, type ConversationOwners } from './conversationOwners.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
+import { processTitleSessionId } from '../../lib/tmux.js'
 
 /** Between session-binding attempts for a process whose engine store is not resolvable yet. */
 const REPAIR_RETRY_MS = 60_000
@@ -350,7 +351,10 @@ export function createBinding({
     // A resume id read from flattened `ps` text is only a hint: the token scan cannot prove its
     // origin when the string has no faithful boundaries (review cycle-7, P1 security). The store
     // corroboration below must independently identify the same live session before it can bind.
-    let sessionId = observed.argsBoundaryFaithful ? observed.resumeSessionId : null
+    const titleSessionId = processTitleSessionId(observed.engine, observed.args ?? '')
+    let sessionId = observed.argsBoundaryFaithful || titleSessionId === observed.resumeSessionId
+      ? observed.resumeSessionId
+      : null
     let transcriptPath: string | undefined
     let hermesHome: string | undefined
     let source = 'terminal-resume'

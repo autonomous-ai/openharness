@@ -22,6 +22,7 @@ import {
   quoteArgvElement,
   repairInteropRowFromCmdline,
   pasteRawIntoTmux,
+  processTitleSessionId,
   resumeSessionId,
   sendLiteralToTmux,
   sendToTmux,
@@ -746,6 +747,16 @@ describe('tmux process primitives', () => {
     // Hermes takes -r too; opencode's --fork names the parent, never the session.
     expect(resumeSessionId('hermes', 'hermes -r 20260927_101500_ab12cd')).toBe('20260927_101500_ab12cd')
     expect(resumeSessionId('opencode', 'opencode -s ses_abc --fork')).toBeNull()
+  })
+
+  it('trusts only exact OpenCode and Pi self-declared process titles', () => {
+    expect(processTitleSessionId('opencode', 'opencode --session ses_05e335115ffeM05DT5hJHeN3Vp'))
+      .toBe('ses_05e335115ffeM05DT5hJHeN3Vp')
+    expect(processTitleSessionId('pi', 'pi --session-id 53d3843c-724e-47ff-ae3a-9fedfa328bba'))
+      .toBe('53d3843c-724e-47ff-ae3a-9fedfa328bba')
+    expect(processTitleSessionId('opencode', 'opencode prompt --session ses_OTHER')).toBeNull()
+    expect(processTitleSessionId('pi', 'pi --session-id 53d3843c-724e-47ff-ae3a-9fedfa328bba prompt')).toBeNull()
+    expect(processTitleSessionId('claude', 'claude --resume 53d3843c-724e-47ff-ae3a-9fedfa328bba')).toBeNull()
   })
 
   it('reads a claude/codex resume id from argv, but never the parent of a fork', () => {

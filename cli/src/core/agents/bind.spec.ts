@@ -743,6 +743,17 @@ describe('binding a running process to its session', () => {
       expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'faithful-r' }))
     })
 
+    it.each([
+      ['opencode', 'opencode --session ses_05e335115ffeM05DT5hJHeN3Vp', 'ses_05e335115ffeM05DT5hJHeN3Vp'],
+      ['pi', 'pi --session-id 53d3843c-724e-47ff-ae3a-9fedfa328bba', '53d3843c-724e-47ff-ae3a-9fedfa328bba'],
+    ] as const)('binds an exact %s process-title session without an optional store reader', async (engine, args, resumeSessionId) => {
+      const run = setup()
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ engine, sessionId: '' }))
+      await run.binding.bindObservedAgent(observed({ engine, args, resumeSessionId, argsBoundaryFaithful: false }))
+      expect(findCorroboratedResumeSession).not.toHaveBeenCalled()
+      expect(run.deps.registry.register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: resumeSessionId }))
+    })
+
     it('never binds a resume id from flattened prompt text unless the store corroborates it (P1 security)', async () => {
       const run = setup()
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
