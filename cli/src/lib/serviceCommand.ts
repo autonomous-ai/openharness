@@ -285,7 +285,7 @@ async function installTask(deps: ServiceCommandDeps): Promise<number> {
   // for the Windows user as well reaches it, and the CLI cannot tell the two apart.
   const carried = Object.keys(definition.env).filter((name) => (CARRIED_ENV as readonly string[]).includes(name))
   if (carried.length) {
-    deps.out(`  ! the task starts harness with your Windows user environment, not this shell's: ${carried.join(', ')} set only here does not reach it`)
+    deps.out(`  ! the task starts harness with your Windows user environment, not this shell's: ${carried.join(', ')} set only here ${carried.length > 1 ? 'do' : 'does'} not reach it`)
     deps.out('    so the daemon it starts uses your user settings. Set these for your Windows user, or run this from a shell without them.')
   }
   return 0

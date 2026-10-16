@@ -387,6 +387,11 @@ describe('harness service with Task Scheduler', () => {
       expect(w.out).toContain(`harnessd is registered with Task Scheduler already (${taskName('demo')}); nothing to change.`)
       expect(w.out).toContain('  ! the task starts harness with your Windows user environment, not this shell\'s: ADAPTER_DATA_DIR set only here does not reach it')
       expect(w.out).toContain('    so the daemon it starts uses your user settings. Set these for your Windows user, or run this from a shell without them.')
+      const two = windows({ registered: true, pid: 4040, carried: { ADAPTER_DATA_DIR: 'C:\\elsewhere', PORT: '18613' } })
+      try {
+        await serviceCommand(['install'], two.deps)
+        expect(two.out).toContain('  ! the task starts harness with your Windows user environment, not this shell\'s: ADAPTER_DATA_DIR, PORT set only here do not reach it')
+      } finally { rmSync(two.dir, { recursive: true, force: true }) }
     } finally { rmSync(w.dir, { recursive: true, force: true }) }
   })
 
