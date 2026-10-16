@@ -17,6 +17,7 @@ import {
   ambiguousAgentProcess,
   engineProcessMatchScore,
   enrichProcessRows,
+  gridModelEvidenceArgs,
   processRows,
   processTreePids,
   processArgvIsBoundaryFaithful,
@@ -281,7 +282,7 @@ export async function probeTerminalAgents(
     // Only the marker read is core work. Models classifies it after reconciliation, without blocking binding.
     const env = await readProcessEnv(agent.processIdentity)
     if (env) {
-      const evidence = gridAssignmentProcess('', agent.engine, env, agent.args)
+      const evidence = gridAssignmentProcess('', agent.engine, env, gridModelEvidenceArgs(agent.engine, agent.args))
       if (evidence) agent.gridProcess = evidence
       else agent.grid = null
     }

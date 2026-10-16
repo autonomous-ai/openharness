@@ -9,6 +9,7 @@ vi.mock('../../lib/processEnv.js', () => ({ readProcessEnv: vi.fn(async () => ({
 vi.mock('../../lib/tmux.js', () => ({
   argvTokens: vi.fn((args: string) => args.split(' ')),
   engineProcessMatchScore: vi.fn((row: { args: string }) => row.args.startsWith('node ') ? 4 : 0),
+  gridModelEvidenceArgs: vi.fn((_engine: string, args: string) => args),
   processRows: vi.fn(async () => []),
   processArgvIsBoundaryFaithful: vi.fn(() => true),
 }))
@@ -227,6 +228,7 @@ it('refresh uses a faithful Codex wrapper after its native child replaces its ar
   s.service.refresh(s.rows[0])
   await flush()
   expect(s.pending[0].processes[0].args).toContain('model_providers.grid.base_url')
+  expect(s.pending[0].processes[0].args).not.toContain('untrusted.example')
   vi.mocked(processArgvIsBoundaryFaithful).mockReturnValue(true)
   vi.mocked(readProcessEnv).mockResolvedValue({ ANTHROPIC_BASE_URL: 'https://grid.example/relay' })
   vi.mocked(processRows).mockResolvedValue([])

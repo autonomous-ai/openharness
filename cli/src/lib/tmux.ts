@@ -143,6 +143,30 @@ export function argvTokens(args: string): string[] {
   return tokens
 }
 
+/**
+ * The argv fragment models may inspect for Codex grid assignment. Read only exact option tokens from
+ * boundary-preserving argv: regexing the display string can find provider flags inside one quoted
+ * positional prompt and disclose that prompt fragment to the models process.
+ */
+export function gridModelEvidenceArgs(engine: RegisteredSession['engine'], args: string): string {
+  if (engine !== 'codex') return args
+  const tokens = argvTokens(args)
+  const evidence: string[] = []
+  const provider = /^model_providers\.[A-Za-z0-9_-]+\.base_url=(?:"[^"]+"|\S+)$/
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]
+    if (token === '--') break
+    const config = token === '-c' ? tokens[++index]
+      : token.startsWith('-c=') ? token.slice(3) : undefined
+    if (config && provider.test(config)) evidence.push(config)
+    if (token === '-m') {
+      const model = tokens[++index]
+      if (model && /^\S+$/.test(model)) evidence.push('-m', model)
+    }
+  }
+  return evidence.join(' ')
+}
+
 /** Discovery only needs a command prefix. Do not tokenize a shell script or
  * prompt suffix once per candidate engine. Keep the same token grammar as
  * argvTokens, but stop scanning as soon as the consumer has enough evidence. */

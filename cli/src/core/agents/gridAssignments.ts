@@ -7,7 +7,7 @@ import { readProcessEnv } from '../../lib/processEnv.js'
 import type { RegisteredSession, registry as Registry } from '../../lib/registry.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
-import { argvTokens, engineProcessMatchScore, processArgvIsBoundaryFaithful, processRows } from '../../lib/tmux.js'
+import { argvTokens, engineProcessMatchScore, gridModelEvidenceArgs, processArgvIsBoundaryFaithful, processRows } from '../../lib/tmux.js'
 
 /**
  * The endpoint this daemon itself built a row's launch for, when that launch is a local Grid profile's.
@@ -23,10 +23,11 @@ function trustedBaseUrl(session: RegisteredSession): string | undefined {
  * faithful argv the executable alone is offered, so environment- and config-backed launches still classify.
  */
 async function faithfulArgs(identity: NonNullable<RegisteredSession['processIdentity']>, engine: RegisteredSession['engine']): Promise<string> {
+  const safe = (args: string) => gridModelEvidenceArgs(engine, args)
   const rows = await processRows()
   const row = rows?.find(candidate => sameProcessIdentity(candidate, identity))
   if (!row) return identity.executable
-  if (processArgvIsBoundaryFaithful(row)) return row.args
+  if (processArgvIsBoundaryFaithful(row)) return safe(row.args)
   // An engine may replace its argv with a bare process title. The daemon-owned launcher directly
   // above it still has the launch argv; accept that only with faithful boundaries and the expected
   // harness-engine shape, so flattened prompt text never becomes model evidence.
@@ -36,14 +37,14 @@ async function faithfulArgs(identity: NonNullable<RegisteredSession['processIden
   // Codex's npm entrypoint is a direct wrapper around its native child. Its own faithful argv still
   // names the model flags after the child has replaced its title; process matching proves this is
   // the same engine's wrapper, not an arbitrary parent command.
-  if (engineProcessMatchScore(parent, engine) > 0) return parent.args
+  if (engineProcessMatchScore(parent, engine) > 0) return safe(parent.args)
   if (!title || /\s/.test(title)) return identity.executable
   const tokens = argvTokens(parent.args)
   const at = tokens.indexOf('harness-engine')
   if (at < 0) return identity.executable
   const expected = basename(identity.executable)
   const launched = [tokens[at + 1], tokens[at + 2]].some(token => token && basename(token) === expected)
-  return launched ? parent.args : identity.executable
+  return launched ? safe(parent.args) : identity.executable
 }
 
 export interface GridAssignmentsDeps {

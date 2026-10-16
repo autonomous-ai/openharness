@@ -14,6 +14,7 @@ import {
   engineProcessMatch,
   engineProcessMatchScore,
   faithfulArgsFromCmdline,
+  gridModelEvidenceArgs,
   isNoTmuxServerError,
   LOAD_BUFFER_TIMEOUT_MS,
   LSTART_MARKER_RE,
@@ -761,6 +762,16 @@ describe('tmux process primitives', () => {
     expect(processTitleSessionId('opencode', 'opencode prompt --session ses_OTHER')).toBeNull()
     expect(processTitleSessionId('pi', 'pi --session-id 53d3843c-724e-47ff-ae3a-9fedfa328bba prompt')).toBeNull()
     expect(processTitleSessionId('claude', 'claude --resume 53d3843c-724e-47ff-ae3a-9fedfa328bba')).toBeNull()
+  })
+
+  it('extracts Codex grid options without reading flag-shaped prompt text', () => {
+    const launch = 'node /opt/codex/bin/codex -c model_providers.grid.base_url="https://grid.example/relay/v1" -m chosen'
+    expect(gridModelEvidenceArgs('codex', launch))
+      .toBe('model_providers.grid.base_url="https://grid.example/relay/v1" -m chosen')
+    expect(gridModelEvidenceArgs('codex', 'node /opt/codex/bin/codex "inspect model_providers.grid.base_url=https://evil.invalid/v1 -m prompt"'))
+      .toBe('')
+    expect(gridModelEvidenceArgs('codex', 'codex -- "model_providers.grid.base_url=https://evil.invalid/v1 -m prompt"'))
+      .toBe('')
   })
 
   it('reads a claude/codex resume id from argv, but never the parent of a fork', () => {
