@@ -1,12 +1,25 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { VERSION_FOLDER, isVersionFolder, replaceFile, switchTo, versionsOnDisk, writeVersionFolder } from './cliVersions.js'
 
+// A disk that fills up partway through a write: the file is left with half its bytes, and the write throws.
+const fault = vi.hoisted(() => ({ at: null as ((file: string) => boolean) | null }))
+vi.mock('node:fs', async (real) => {
+  const actual = await real<typeof import('node:fs')>()
+  const writeFileSync = (...args: Parameters<typeof actual.writeFileSync>): void => {
+    const [file, data] = args
+    if (!fault.at?.(String(file))) return actual.writeFileSync(...args)
+    actual.writeFileSync(file, String(data).slice(0, 1))
+    throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' })
+  }
+  return { ...actual, default: { ...actual, writeFileSync }, writeFileSync }
+})
+
 const dirs: string[] = []
 const cliDir = () => { const root = mkdtempSync(join(tmpdir(), 'cli-versions-')); dirs.push(root); const cli = join(root, 'cli'); mkdirSync(cli); return cli }
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => { fault.at = null; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 describe('the CLI\'s version folders', () => {
   it('are named after a release\'s version and hold its cli.js and notify.mjs', () => {
@@ -88,5 +101,15 @@ describe('replacing a file a hook may hold', () => {
     expect(() => replaceFile(file, Buffer.from('x'), missing, 5, 0)).toThrow('ENOENT')
     expect(missing).toHaveBeenCalledTimes(1)
     expect(readdirSync(cli)).toEqual(['notify.mjs'])
+  })
+
+  it('leaves no part-written file beside it when the write fails', () => {
+    const cli = cliDir()
+    const file = join(cli, 'notify.mjs')
+    writeFileSync(file, 'old')
+    fault.at = (path) => path.startsWith(`${file}.`)
+    expect(() => replaceFile(file, Buffer.from('new'), renameSync, 1, 0)).toThrow('ENOSPC')
+    expect(readdirSync(cli)).toEqual(['notify.mjs'])
+    expect(readFileSync(file, 'utf8')).toBe('old')
   })
 })

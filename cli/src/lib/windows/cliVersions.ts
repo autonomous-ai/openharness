@@ -70,19 +70,22 @@ export function replaceFile(
   file: string, bytes: Buffer, rename: (from: string, to: string) => void = renameSync, tries = REPLACE_TRIES, pauseMs = REPLACE_PAUSE_MS,
 ): void {
   const temporary = `${file}.${process.pid}.tmp`
-  writeFileSync(temporary, bytes)
-  for (let attempt = 1; ; attempt++) {
-    try {
-      rename(temporary, file)
-      return
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (attempt >= tries || (code !== 'EBUSY' && code !== 'EPERM' && code !== 'EACCES')) {
-        rmSync(temporary, { force: true })
-        throw error
+  try {
+    writeFileSync(temporary, bytes)
+    for (let attempt = 1; ; attempt++) {
+      try {
+        rename(temporary, file)
+        return
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (attempt >= tries || (code !== 'EBUSY' && code !== 'EPERM' && code !== 'EACCES')) throw error
+        pause(pauseMs * attempt)
       }
-      pause(pauseMs * attempt)
     }
+  } catch (error) {
+    // Also a file the write left half-written (a full disk).
+    rmSync(temporary, { force: true })
+    throw error
   }
 }
 
