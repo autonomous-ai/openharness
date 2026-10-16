@@ -282,7 +282,10 @@ export async function probeTerminalAgents(
     // Only the marker read is core work. Models classifies it after reconciliation, without blocking binding.
     const env = await readProcessEnv(agent.processIdentity)
     if (env) {
-      const evidence = gridAssignmentProcess('', agent.engine, env, gridModelEvidenceArgs(agent.engine, agent.args))
+      const evidenceArgs = agent.argsBoundaryFaithful
+        ? gridModelEvidenceArgs(agent.engine, agent.args)
+        : ''
+      const evidence = gridAssignmentProcess('', agent.engine, env, evidenceArgs)
       if (evidence) agent.gridProcess = evidence
       else agent.grid = null
     }
