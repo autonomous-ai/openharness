@@ -150,7 +150,10 @@ describe('two daemons on one computer', () => {
     await dev.start()
     const installed = () => [join(release.env.HOME!, '.claude', 'settings.json'), join(release.env.CODEX_HOME!, 'hooks.json')]
       .map((file) => readFileSync(file, 'utf8'))
+    const hooksAt = (daemon: IsolatedDaemon, label: string) => until(`${label} hook entries are installed`,
+      () => installed().every(file => file.includes(`--port ${daemon.port} `)) || null, 20_000, 50)
     // The precondition of the incident: the entries every engine started from here on runs are the dev daemon's.
+    await hooksAt(dev, 'dev')
     for (const file of installed()) expect(file).toContain(`--port ${dev.port} `)
 
     const atRelease = await LocalClient.connect(release)
@@ -180,6 +183,7 @@ describe('two daemons on one computer', () => {
     // And the other way round: restarted, the release daemon owns the entries; a new dev agent reaches dev.
     atRelease.close()
     await release.restart()
+    await hooksAt(release, 'release')
     for (const file of installed()) expect(file).toContain(`--port ${release.port} `)
     const later = await create(dev, atDev, 'claude', 'dev-later')
     await turn(atDev, later.id, 'a dev turn after the release daemon restarted')

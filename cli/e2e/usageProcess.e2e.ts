@@ -81,7 +81,7 @@ it('usage unavailable at boot never delays readiness or binding; recovery update
 it('a new core receives an unchanged warm worker snapshot', async () => {
   const { d, client } = await fresh()
   const a = await create(d, client, 'claude')
-  await usage(d, a); await totals(client, a.id, 120)
+  await usage(d, a); await turn(client, a.id, 'warm usage before core restart'); await totals(client, a.id, 120)
   const worker = edge(d), before = d.corePid()!
   const ready = [...d.log().matchAll(/\[cli\] ready/g)].length
   client.close(); process.kill(before, 'SIGKILL')
@@ -97,8 +97,7 @@ it('a new core receives an unchanged warm worker snapshot', async () => {
 it('explicit inline usage follows the same aggregate boundary', async () => {
   const { d, client } = await fresh('none')
   const a = await create(d, client, 'codex')
-  await usage(d, a); await totals(client, a.id, 120)
-  await turn(client, a.id, 'inline remains usable')
+  await usage(d, a); await turn(client, a.id, 'inline remains usable'); await totals(client, a.id, 120)
   expect(d.coresStarted()).toBe(1)
   client.close()
 })
