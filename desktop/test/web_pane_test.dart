@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/open_in_browser.dart';
+import 'package:harness/core/runtime_platform.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/terminal_pane.dart';
@@ -325,6 +326,31 @@ void main() {
     expect(app.panes.map((p) => p.isWeb), [true, false]);
   });
 
+  testWidgets('Linux viewer hides beneath dialogs and returns after dismissal', (tester) async {
+    final app = createApp();
+    addTearDown(app.dispose);
+    app.stateOf('m')!.nodeOnline = true;
+    app.adoptSessionForTest(terminal('a0', <TerminalBinaryFrame>[]));
+    await mount(tester, app);
+    await _synced(app, 'a0', viewerUrl: 'http://127.0.0.1:4179/');
+    await tester.pump();
+    final context = tester.element(find.byType(WebPanePanel));
+    final placeholder = find.byKey(const ValueKey('web-pane-placeholder'));
+    expect(placeholder, findsOneWidget);
+    final dialog = showDialog<void>(context: context, builder: (_) => const AlertDialog(title: Text('Close tab?')));
+    await tester.pumpAndSettle();
+    expect(find.text('Close tab?'), findsOneWidget);
+    if (RuntimePlatform.isLinux) {
+      expect(placeholder, findsNothing);
+      expect(find.byKey(const ValueKey('web-pane-placeholder'), skipOffstage: false), findsOneWidget);
+    }
+    Navigator.of(tester.element(find.text('Close tab?'))).pop();
+    await dialog;
+    await tester.pumpAndSettle();
+    expect(placeholder, findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('the tile renders a header and, under test, the URL in words', (
     tester,
   ) async {
@@ -338,6 +364,18 @@ void main() {
     await tester.pump();
     expect(WebPanePanel.webviewAvailable, isFalse);
     expect(find.byType(WebPanePanel), findsOneWidget);
+    if (RuntimePlatform.isLinux) {
+      // The native GTK overlay hides itself under any rounded ancestor clip.
+      expect(
+        find.ancestor(of: find.byType(WebPanePanel), matching: find.byType(ClipRRect)),
+        findsNothing,
+      );
+      expect(
+        find.ancestor(of: find.byType(WebPanePanel), matching: find.byType(ClipRect)),
+        findsWidgets,
+      );
+    }
+
     expect(find.byKey(const ValueKey('web-pane-placeholder')), findsOneWidget);
     expect(find.textContaining('http://127.0.0.1:4179/'), findsOneWidget);
     // With no embedded webview the page opens in the browser instead

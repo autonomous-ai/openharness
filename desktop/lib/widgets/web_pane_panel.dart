@@ -5,8 +5,8 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
+import 'package:webview_all/webview_all.dart';
+import 'package:webview_all_wkwebview/webview_all_wkwebview.dart';
 
 import '../core/open_in_browser.dart';
 import '../core/runtime_platform.dart';
@@ -84,7 +84,8 @@ class WebPanePanel extends StatefulWidget {
 
   /// Whether this build can put a real webview on screen. One place, so the
   /// panel and its tests agree on when the placeholder is the right answer.
-  static bool get webviewAvailable => !kUnderTest && RuntimePlatform.isMacOS;
+  static bool get webviewAvailable =>
+      !kUnderTest && (RuntimePlatform.isMacOS || RuntimePlatform.isLinux);
 
   @override
   State<WebPanePanel> createState() => _WebPanePanelState();
@@ -342,7 +343,15 @@ class _WebPanePanelState extends State<WebPanePanel> {
         children: [
           _header(context),
           Divider(height: 1, color: AppColors.border),
-          Expanded(child: _body(context)),
+          Expanded(
+            // GTK overlays sit above Flutter dialogs. Keep the page mounted,
+            // but unpainted while a modal route covers the workspace.
+            child: Offstage(
+              offstage: RuntimePlatform.isLinux &&
+                  (!widget.visible || ModalRoute.isCurrentOf(context) == false),
+              child: _body(context),
+            ),
+          ),
         ],
       ),
     );

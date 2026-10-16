@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
+import 'package:webview_all/webview_all.dart';
+import 'package:webview_all_wkwebview/webview_all_wkwebview.dart';
 
 import '../core/dsh_catalog.dart';
 import '../shared/theme/app_theme.dart' as grid;

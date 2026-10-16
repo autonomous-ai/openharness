@@ -82,15 +82,11 @@ dependencies:
   desktop_drop: ^0.8.4
   path: ^1.9.1
   # The web pane: a domain harness's viewer (Circuit's board, Workshop's part)
-  # drawn beside its agent's terminal. THE one native plugin this feature adds
-  # — WKWebView via the endorsed `webview_flutter_wkwebview`, which lands in
-  # the macOS SPM package list and GeneratedPluginRegistrant. macOS only for
-  # now; the pane shows the URL as text where no implementation is registered
-  # (Linux, and every `flutter test`). See CLAUDE.md on what a plugin costs.
-  webview_flutter: ^4.14.1
-  # Named directly for the WebKit creation params (muted autoplay in viewer panes).
-  webview_flutter_platform_interface: ^2.15.1
-  webview_flutter_wkwebview: ^3.26.1
+  # drawn beside its agent's terminal. macOS uses WKWebView; Linux uses
+  # WebKitGTK 4.1. Linux AppImage users need the host runtime library; see
+  # RELEASE.md.
+  webview_all: ^1.4.4
+  webview_all_wkwebview: ^1.4.4
 
 dev_dependencies:
   flutter_test:

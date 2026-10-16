@@ -11,6 +11,7 @@ import 'package:xterm/xterm.dart';
 import 'window_chrome.dart';
 
 import '../clipboard/image_bytes.dart';
+import '../core/runtime_platform.dart';
 import '../core/dsh_catalog.dart' show DshEntry;
 import '../core/models.dart' show Agent, kUntitledPane;
 import '../clipboard/native_clipboard.dart';
@@ -1355,6 +1356,18 @@ class _PaneCell extends StatelessWidget {
     );
   }
 
+  Widget _clipContent({required Widget child}) {
+    // GTK overlays cannot render under a rounded Flutter clip.
+    if (RuntimePlatform.isLinux && pane.isWeb) {
+      return ClipRect(child: child);
+    }
+    // Keep terminal backgrounds inside the pane rim.
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(_paneRadius - 1),
+      child: child,
+    );
+  }
+
   Widget _frame(
     AppearancePrefs prefs, {
     required bool focused,
@@ -1401,18 +1414,7 @@ class _PaneCell extends StatelessWidget {
         // Keeps a terminal's constant repainting inside its own layer instead
         // of dirtying the whole grid. No key: nothing reads this boundary, it
         // only has to exist.
-        child: ClipRRect(
-          // Clipped HERE rather than through Container's own clipBehavior.
-          //
-          // Both clip, but they clip to different shapes: Container's is the
-          // decoration's OUTER edge, so the child fills the full radius and
-          // paints under the rim, leaving a square-shouldered corner peeking
-          // through the 1px the rim occupies. This one takes the rim's pixel
-          // off the radius, so the fill stops exactly where the rim starts.
-          //
-          // TerminalPanel opens with a ColoredBox across its whole box, and
-          // that is what was reaching the corners.
-          borderRadius: BorderRadius.circular(_paneRadius - 1),
+        child: _clipContent(
           child: RepaintBoundary(
             child: _FileDropZone(
               notifier: notifier,

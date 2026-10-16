@@ -18,7 +18,7 @@ import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/store/store_showcase.dart';
 import 'package:harness/store/store_demo_dialog.dart';
-import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_all/webview_all.dart';
 import 'package:harness/widgets/new_agent_dialog.dart';
 
 import 'swarm_state_test.dart' show createApp;
