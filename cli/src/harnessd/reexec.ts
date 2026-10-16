@@ -26,7 +26,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, linkSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { PROBE_ANSWER, PROBE_COMMAND, PROBE_TIMEOUT_MS } from './protocol.js'
 import type { ExitReason, ReexecOutcome, ResumeState } from './supervisor.js'
 
@@ -135,6 +135,67 @@ export function removeMarker(file: string): void {
 }
 
 /**
+ * Windows, which has no exec: a handover's one decision. The replacement takes the handover (`takeHandover`), or the
+ * master that handed over takes it back when it gives up waiting (`takeBackHandover`): each makes the same file, and
+ * only one of them can. The replacement claims the pid file only once it took the handover, and the master that
+ * handed over leaves only once it can no longer take it back. The file is made by a hard link from a file of the
+ * process's own, so it is never there unwritten; a rename would not do, because on Windows two processes renaming the
+ * same file away both succeed, the file ending under the last name (measured 2026-10-16 on Windows 11, Node 24: 931
+ * of 2000 races; never with a hard link or an exclusive create). The name is the marker's with the token:
+ * `readMarker`, `removeMarker` and the marker's own temporary file (`<marker>.<pid>.tmp`) never touch it. It stays
+ * after the decision, so a replacement that comes up late finds it made.
+ */
+const HANDOVER_TOKEN = /^[\w-]{1,64}$/
+
+function handoverFile(file: string, token: string): string {
+  // In a file name: one that could reach out of the data folder is refused.
+  if (!HANDOVER_TOKEN.test(token)) throw new Error(`not a handover token: ${JSON.stringify(token)}`)
+  return `${file}.${token}.handover`
+}
+
+/** Make [file] hold [text] if no process has made it yet: true when this call made it, false when one had. */
+function decide(file: string, text: string, pid: number): boolean {
+  const own = `${file}.${pid}.tmp`
+  try {
+    writeFileSync(own, text)
+    linkSync(own, file)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false
+    throw error
+  } finally {
+    removeMarker(own)
+  }
+}
+
+/**
+ * The replacement: take the handover under [token], saying who took it. True only when this call took it, and from
+ * then on this process is the master and the one to claim the pid file; false when the master that handed over took
+ * it back, or it could not be taken.
+ */
+export function takeHandover(file: string, token: string, pid: number): boolean {
+  try { return decide(handoverFile(file, token), `${JSON.stringify({ pid })}\n`, pid) } catch { return false }
+}
+
+/** Who took the handover under [token] (`takeHandover`), or null while no one has, as far as can be read. */
+export function readHandoverClaimant(file: string, token: string): number | null {
+  try {
+    const { pid } = JSON.parse(readFileSync(handoverFile(file, token), 'utf8')) as { pid?: unknown }
+    return Number.isInteger(pid) && (pid as number) > 0 ? pid as number : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The master that handed over ([pid]): take the handover back. True when this call took it, and no replacement can
+ * take over any more; false when the replacement took it. Throws when neither is known.
+ */
+export function takeBackHandover(file: string, token: string, pid: number): boolean {
+  return decide(handoverFile(file, token), `${JSON.stringify({ abandoned: pid })}\n`, pid)
+}
+
+/**
  * At a master's start: did a re-execution before it fail? A marker left by a process that is gone,
  * with the bundle it moved to still on disk, means the master that process became never brought a core
  * up. The previous bundle is put back (`restoreUpdate` also remembers the version, so the updater does
@@ -239,16 +300,27 @@ export interface HandOverDeps {
   /**
    * The daemon spawn lock (lib/daemonSpawnLock.ts), held from before the replacement starts until this master leaves,
    * so a `harness stop` waits for the handover to finish rather than stop the master on its way out while the new one
-   * comes up, and the scheduled task's `harness start --if-down` does nothing meanwhile. Null when it is busy.
+   * comes up, and the scheduled task's `harness start --if-down` does nothing meanwhile. Null when it is busy; a
+   * rejection (`SpawnLockBusyError`) is taken as busy.
    */
   lock(): Promise<(() => void) | null>
+  /**
+   * Write this master's pid to the pid file. Before the replacement starts, so that what the file held before (a
+   * crash's, a pid Windows has since given to another process) is never taken for it: under the lock, the replacement
+   * is the only other writer. Again when this master stays and the file no longer names it.
+   */
+  claim(): void
   /** Start `__harnessd` on the bundle on disk with [env]; null once it is started, why not otherwise. */
   launch(env: NodeJS.ProcessEnv): Promise<string | null>
   /** Who the pid file names now, and whether that runs. */
   readPid(): number | null
   alive(pid: number): boolean
+  /** Who took the handover (`readHandoverClaimant`), null while no one has. */
+  claimant(token: string): number | null
+  /** Take the handover back (`takeBackHandover`, as this master): false once the replacement took it. */
+  takeBack(token: string): boolean
   sleep(ms: number): Promise<void>
-  /** A fresh token naming this handover in the marker and the state handed on. */
+  /** A fresh token naming this handover in the marker, the state handed on and its decision: letters, digits, - and _. */
   token(): string
   /** This master's end: the replacement holds the pid file. The spawn lock is released just before (./reexec.ts). */
   leave(): void
@@ -264,31 +336,39 @@ export function createReexec(deps: ReexecDeps): {
   let warned = false
   let probe: { cancel(): void } | null = null
   let replacing = false
-  const successor = (h: HandOverDeps): number | null => {
-    const pid = h.readPid()
-    return pid !== null && pid !== deps.pid && h.alive(pid) ? pid : null
-  }
+  const message = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
   /**
-   * Windows. The marker names this handover's token: the replacement takes it (and the pid file) only while it still
-   * does (./master.ts), and this master takes it back when it gives up waiting, so a replacement that comes up late
-   * leaves rather than run beside this one. One that claimed the pid file as this master gave up keeps the machine.
+   * Windows. The replacement holds the machine once it took the handover (`takeHandover`) and the pid file names it, so
+   * a pid file written by anything else, or a replacement from another handover, is never taken for this one's.
    */
   const handOver = async (h: HandOverDeps, next: string, state: ResumeState, at: number, carryOn: (outcome: ReexecOutcome) => void): Promise<void> => {
-    const release = await h.lock()
+    let busy = 'the daemon spawn lock is busy'
+    const release = await h.lock().catch((error: unknown) => {
+      busy = `could not take the daemon spawn lock (${message(error)})`
+      return null
+    })
     if (deps.stopping()) { release?.(); return }
     if (!release) {
-      deps.log('[harnessd] the daemon spawn lock is busy — keeping this master')
+      deps.log(`[harnessd] ${busy} — keeping this master`)
       carryOn('kept')
       return
     }
-    const token = h.token()
-    const keep = (why: string): void => {
-      deps.removeMarker()
+    const stay = (why: string): void => {
       release()
       deps.log(`[harnessd] ${why} — keeping this master`)
       carryOn('kept')
     }
+    if (!deps.exists(deps.scriptPath)) { stay(`${deps.scriptPath} is not there to hand over to`); return }
+    const token = h.token()
+    try { h.claim() } catch (error) { stay(`could not claim the pid file (${message(error)})`); return }
+    try {
+      deps.writeMarker({ pid: deps.pid, from: deps.own, to: next, at, handover: token })
+    } catch (error) {
+      stay(`could not leave the re-execution marker (${message(error)})`)
+      return
+    }
+
     // The replacement holds the pid file: this master lets go of the spawn lock and leaves. The replacement never
     // takes the lock again, so this release is what frees it, and it comes only once the pid file names a live
     // successor: until then a `harness stop` waits rather than land on a master on its way out.
@@ -296,40 +376,69 @@ export function createReexec(deps: ReexecDeps): {
       release()
       h.leave()
     }
-    try {
-      deps.writeMarker({ pid: deps.pid, from: deps.own, to: next, at, handover: token })
-    } catch (error) {
-      release()
-      deps.log(`[harnessd] could not leave the re-execution marker (${error instanceof Error ? error.message : String(error)}) — keeping this master`)
-      carryOn('kept')
-      return
+    const successor = (): number | null => {
+      const pid = h.claimant(token)
+      return pid !== null && pid === h.readPid() && h.alive(pid) ? pid : null
     }
-    if (!deps.exists(deps.scriptPath)) { keep(`${deps.scriptPath} is not there to hand over to`); return }
+    // Not knowing whether the replacement took the handover, this master stays: the old master running is what every
+    // failure leaves.
+    const takeBack = (): boolean => {
+      try {
+        return h.takeBack(token)
+      } catch (error) {
+        deps.log(`[harnessd] could not take the handover back (${message(error)})`)
+        return true
+      }
+    }
+    // Stopping: the replacement must not take over now, unless it already has.
+    const stop = (): void => {
+      if (takeBack()) deps.removeMarker()
+      release()
+    }
+    const settle = (why: string): void => {
+      let reason = why
+      if (!takeBack()) {
+        // The replacement took the handover as this master gave up: it is the master, unless it has ended since.
+        const pid = h.claimant(token)
+        if (pid === null || h.alive(pid)) {
+          deps.log('[harnessd] the new master took over as this one gave up — leaving')
+          leave()
+          return
+        }
+        reason = `the new master (pid ${pid}) took over and then ended`
+      }
+      deps.removeMarker()
+      try {
+        if (h.readPid() !== deps.pid) h.claim()
+      } catch (error) {
+        deps.log(`[harnessd] could not claim the pid file back (${message(error)})`)
+      }
+      stay(reason)
+    }
+
     const env = {
       ...deps.env,
       [RESUME_ENV]: encodeResume({ ...state, reexecs: state.reexecs + 1, unproven: state.unproven + 1, claimed: true, handover: { from: deps.pid, token } }),
     }
-    const failed = await h.launch(env)
-    if (deps.stopping()) { deps.removeMarker(); release(); return }
-    if (failed !== null) { keep(`could not start the new master (${failed})`); return }
-    const deadline = deps.now() + HANDOVER_WAIT_MS
-    for (;;) {
-      const pid = successor(h)
-      if (pid !== null) {
-        deps.log(`[harnessd] handed over to the new master (pid ${pid}) — leaving`)
-        leave()
-        return
+    // The successor's pid; why this master stays; or null once it is stopping.
+    const wait = async (): Promise<number | string | null> => {
+      const failed = await h.launch(env)
+      if (deps.stopping()) return null
+      if (failed !== null) return `could not start the new master (${failed})`
+      const deadline = deps.now() + HANDOVER_WAIT_MS
+      for (;;) {
+        const pid = successor()
+        if (pid !== null) return pid
+        if (deps.now() >= deadline) return `the new master did not take over within ${HANDOVER_WAIT_MS} ms`
+        await h.sleep(HANDOVER_POLL_MS)
+        if (deps.stopping()) return null
       }
-      if (deps.now() >= deadline) break
-      await h.sleep(HANDOVER_POLL_MS)
-      // A stop meanwhile is the master's own exit to finish (./master.ts removes the marker it still names).
-      if (deps.stopping()) return
     }
-    deps.removeMarker()
-    if (successor(h) !== null) { leave(); return }
-    release()
-    deps.log(`[harnessd] the new master did not take over within ${HANDOVER_WAIT_MS} ms — keeping this master`)
-    carryOn('kept')
+    const outcome = await wait().catch((error: unknown) => (deps.stopping() ? null : `the handover failed (${message(error)})`))
+    if (outcome === null) { stop(); return }
+    if (typeof outcome === 'string') { settle(outcome); return }
+    deps.log(`[harnessd] handed over to the new master (pid ${outcome}) — leaving`)
+    leave()
   }
 
   return {
