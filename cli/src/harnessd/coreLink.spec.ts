@@ -132,6 +132,13 @@ describe('connectToMaster', () => {
     expect(later).not.toHaveBeenCalled()
   })
 
+  it('ignores a shutdown for now: nothing listens for it yet', () => {
+    const channel = new FakeChannel()
+    const link = connectToMaster(channel, supervised)
+    channel.say({ type: 'harnessd:shutdown' })
+    expect(link.status()).toBeNull()
+  })
+
   it('keeps what the master says about itself, and hears when the master goes', () => {
     const channel = new FakeChannel()
     const link = connectToMaster(channel, supervised)

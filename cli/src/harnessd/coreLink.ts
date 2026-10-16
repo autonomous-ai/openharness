@@ -115,6 +115,7 @@ export function connectToMaster(
     channel.on('message', (message) => {
       if (!isMasterMessage(message)) return
       if (message.type === 'harnessd:status') { status = message.status; return }
+      if (message.type === 'harnessd:shutdown') return // B3.4 gives it a listener
       if (updateListener) updateListener(message.version)
       else update = message.version
     })
