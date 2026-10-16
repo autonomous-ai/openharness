@@ -6,9 +6,11 @@ import { VERSION } from '../version.js'
 import { processUpdaterDeps, runUpdaterService, type UpdaterServiceDeps } from './updaterProcess.js'
 
 // A lock someone else holds a moment: what the updater says while it waits for it.
+const locked = vi.hoisted(() => [] as string[])
 vi.mock('../lib/daemonSpawnLock.js', async (real) => ({
   ...await real<object>(),
-  withSpawnLock: async (_purpose: string, fn: () => Promise<unknown>, opts: { onWaiting?: (owner: object) => void } = {}) => {
+  withSpawnLock: async (purpose: string, fn: () => Promise<unknown>, opts: { onWaiting?: (owner: object) => void } = {}) => {
+    locked.push(purpose)
     opts.onWaiting?.({ pid: 4242, purpose: 'start', since: Date.now(), startMarker: 'x', token: 't' })
     return fn()
   },
@@ -82,6 +84,25 @@ describe('the updater in its own process', () => {
     runUpdaterService(undefined, m.deps)
     expect(await m.cli().withLock!(async () => 'staged')).toBe('staged')
     expect(m.calls.at(-1)).toMatch(/^\[update\] waiting — the daemon is .*4242/)
+  })
+
+  it('on Windows, retires the older CLI builds as it starts, says when that fails, and does nothing of the kind elsewhere', async () => {
+    const retire = vi.fn(async () => [])
+    const m = make()
+    runUpdaterService(undefined, { ...m.deps, retire })
+    expect(retire).toHaveBeenCalledOnce()
+    for (const thrown of [new Error('boom'), 'plain']) {
+      const failing = make()
+      runUpdaterService(undefined, { ...failing.deps, retire: async () => { throw thrown } })
+      await new Promise((done) => setImmediate(done))
+      expect(failing.calls).toContain(`[update] retiring older CLI builds failed: ${thrown instanceof Error ? thrown.message : thrown}`)
+    }
+    expect(processUpdaterDeps('linux').retire).toBeUndefined()
+    // Here, with no cli\current in the test's CLI folder, it proves nothing in use and removes nothing.
+    locked.length = 0
+    await expect(processUpdaterDeps('win32').retire!()).resolves.toEqual([])
+    // Under the lock a stage takes, so no `harness update` moves the pointer to a folder it removes.
+    expect(locked).toEqual(['update'])
   })
 
   it('reaches the master over the spawn channel, or tells no one when started by hand', () => {

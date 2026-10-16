@@ -16,7 +16,8 @@
 import { env } from '../config/env.js'
 import { SERVICE_EXIT_RESTART, type UpdaterMessage } from '../harnessd/protocol.js'
 import { describeSpawnLockOwner, withSpawnLock } from '../lib/daemonSpawnLock.js'
-import { DOWNLOAD_LIMITS, startSelfUpdater } from '../lib/selfUpdate.js'
+import { DOWNLOAD_LIMITS, retireCliVersions, startSelfUpdater } from '../lib/selfUpdate.js'
+import { processRetireDeps } from '../lib/windows/cliVersions.js'
 import { startTuiUpdater } from '../tui/update.js'
 import { VERSION } from '../version.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
@@ -29,9 +30,12 @@ export interface UpdaterServiceDeps {
   startCli: typeof startSelfUpdater
   startHn: typeof startTuiUpdater
   log(line: string): void
+  /** Windows: retire the older CLI builds (lib/selfUpdate.ts `retireCliVersions`), once as the updater starts — it
+   *  starts again after every build it stages, and with every master. Left out elsewhere. */
+  retire?: () => Promise<unknown>
 }
 
-export const processUpdaterDeps = (): UpdaterServiceDeps => ({
+export const processUpdaterDeps = (platform: NodeJS.Platform = process.platform): UpdaterServiceDeps => ({
   tell: (message, sent) => {
     // Under its master, the spawn channel; started by hand, there is no one to tell, and nothing to wait on.
     if (!process.send) { sent(); return }
@@ -41,6 +45,9 @@ export const processUpdaterDeps = (): UpdaterServiceDeps => ({
   startCli: startSelfUpdater,
   startHn: startTuiUpdater,
   log: (line) => console.log(line),
+  // Under the lock every stage takes: a `harness update` that renames a build's folder into place and then moves the
+  // pointer to it must not find the folder gone in between.
+  ...(platform === 'win32' ? { retire: () => withSpawnLock('update', () => retireCliVersions(env.ADAPTER_CLI_DIR, processRetireDeps())) } : {}),
 })
 
 export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps = processUpdaterDeps()): ServiceProcess {
@@ -78,6 +85,8 @@ export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps =
     intervalMs: env.ADAPTER_UPDATE_CHECK_MS,
     slotSecond: env.ADAPTER_UPDATE_SLOT_SEC,
   })
+  // Never in the way of the update itself: a pass that fails is the next start's to repeat.
+  void deps.retire?.().catch((error: unknown) => deps.log(`[update] retiring older CLI builds failed: ${error instanceof Error ? error.message : String(error)}`))
   deps.log(`[update] self-update on · v${VERSION} · every ${Math.round(env.ADAPTER_UPDATE_CHECK_MS / 1000)}s`)
   return { stop: () => { cli.stop(); hn.stop() } }
 }

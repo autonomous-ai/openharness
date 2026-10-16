@@ -5,10 +5,11 @@ import { createHash } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   DOWNLOAD_LIMITS, MANIFEST_LIMITS, REFUSED_RETRY_MAX_MS, RUNTIME_DOWNLOAD_LIMITS, TransferStalledError, canary, confirm, downloadVerified, fetchManifest, isLocalDevBuild,
-  msUntilSlot, rejectedVersions, restore as restoreOn, runCanary, semverGt, settleRolledBack as settleRolledBackOn, shouldAutoUpdate, stage as stageOn,
+  msUntilSlot, rejectedVersions, restore as restoreOn, retireCliVersions, runCanary, semverGt, settleRolledBack as settleRolledBackOn, shouldAutoUpdate, stage as stageOn,
   startSelfUpdater as startSelfUpdaterOn, unjudgedUpdate,
 } from './selfUpdate.js'
 import { SpawnLockBusyError } from './daemonSpawnLock.js'
+import { versionsOnDisk } from './windows/cliVersions.js'
 
 // The pointer file's writer (B1), with a switch to make it fail.
 const pointer = vi.hoisted(() => ({ fail: false }))
@@ -1117,6 +1118,23 @@ describe('self-update on Windows, over version folders', () => {
     expect(() => stageWin(cli, '0.5.1')).toThrow('EPERM')
     expect(read(cli, 'update-pending.json')).toBe('{"version":"0.4.9"}\n')
     expect(read(cli, 'current').trim()).toBe('0.5.0')
+  })
+
+  it('keeps the build in use and the one to roll back to, and retires the rest', async () => {
+    const cli = layout('0.5.0')
+    for (const version of ['0.4.0', '0.4.1', '0.4.2']) stageWin(cli, version)
+    writeFileSync(join(cli, 'current'), '0.5.0\n')
+    rmSync(join(cli, 'update-pending.json'))
+    writeFileSync(join(cli, 'update-rejected.json'), '["0.4.2"]\n')
+    const remove = (path: string) => rmSync(path, { recursive: true, force: true })
+    expect((await retireCliVersions(cli, { rows: async () => [], remove, log: () => {} })).sort()).toEqual(['0.4.0', '0.4.2'])
+    expect(versionsOnDisk(cli).sort()).toEqual(['0.4.1', '0.5.0'])
+    // On probation, the build to roll back to is the pending note's.
+    stageWin(cli, '0.5.1')
+    expect(await retireCliVersions(cli, { rows: async () => [], remove, log: () => {} })).toEqual(['0.4.1'])
+    // No pointer: nothing proves which build is in use.
+    rmSync(join(cli, 'current'))
+    expect(await retireCliVersions(cli, { rows: async () => [], remove, log: () => {} })).toEqual([])
   })
 
   it('settles a build rolled back without remembering it, against the build cli\\current names', () => {

@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { VERSION_FOLDER, isVersionFolder, replaceFile, switchTo, versionsOnDisk, writeVersionFolder } from './cliVersions.js'
+import { VERSION_FOLDER, isVersionFolder, processRetireDeps, replaceFile, retireUnused, switchTo, versionsOnDisk, writeVersionFolder } from './cliVersions.js'
 
 // A disk that fills up partway through a write: the file is left with half its bytes, and the write throws.
 const fault = vi.hoisted(() => ({ at: null as ((file: string) => boolean) | null }))
@@ -114,5 +114,81 @@ describe('replacing a file a hook may hold', () => {
     expect(() => replaceFile(file, Buffer.from('new'), renameSync, 1, 0)).toThrow('ENOSPC')
     expect(readdirSync(cli)).toEqual(['notify.mjs'])
     expect(readFileSync(file, 'utf8')).toBe('old')
+  })
+})
+
+describe('retiring older builds', () => {
+  const rows = (...args: string[]) => async () => args.map((line, i) => ({ pid: 100 + i, parentPid: 1, executable: 'node.exe', startMarker: 'w:1', args: line }))
+
+  it('removes builds and leftovers outside the ones to keep, unless a process runs from one', async () => {
+    const cli = cliDir()
+    for (const version of ['0.5.0', '0.5.1', '0.5.2', '0.4.0']) writeVersionFolder(cli, version, Buffer.from(version), Buffer.from('n'))
+    mkdirSync(join(cli, '.0.3.0.1.old'))
+    mkdirSync(join(cli, '.0.5.3.999.tmp'))
+    const stale = join(cli, '.0.5.4.998.tmp')
+    mkdirSync(stale)
+    utimesSync(stale, new Date(Date.now() - 2 * 3_600_000), new Date(Date.now() - 2 * 3_600_000))
+    mkdirSync(join(cli, 'data'))
+    const removed = await retireUnused(cli, new Set(['0.5.2', '0.5.1']), {
+      rows: rows(`node ${join(cli, '0.4.0', 'cli.js')} __run`), remove: (path) => rmSync(path, { recursive: true, force: true }), log: () => {},
+    })
+    expect(removed.sort()).toEqual(['.0.3.0.1.old', '.0.5.4.998.tmp', '0.5.0'])
+    expect(readdirSync(cli).sort()).toEqual(['.0.5.3.999.tmp', '0.4.0', '0.5.1', '0.5.2', 'data'])
+  })
+
+  it('removes nothing it cannot see is unused, and tries again later what it cannot remove yet', async () => {
+    const cli = cliDir()
+    for (const version of ['0.5.0', '0.4.0', '0.3.0']) writeVersionFolder(cli, version, Buffer.from(version), Buffer.from('n'))
+    const log = vi.fn()
+    expect(await retireUnused(cli, new Set(['0.5.0']), { rows: async () => null, remove: () => { throw new Error('no') }, log })).toEqual([])
+    expect(log).toHaveBeenCalledWith('[update] the process table could not be read — the older CLI builds stay for now')
+    const removed = await retireUnused(cli, new Set(['0.5.0']), {
+      rows: rows(), log,
+      remove: (path) => { if (path.endsWith('0.4.0')) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' }); rmSync(path, { recursive: true }) },
+    })
+    expect(removed).toEqual(['0.3.0'])
+    expect(log).toHaveBeenLastCalledWith('[update] 0.4.0 could not be removed yet (EBUSY) — trying again later')
+    expect(await retireUnused(join(cli, 'none'), new Set(), { rows: rows(), remove: () => {}, log })).toEqual([])
+  })
+
+  it('leaves a build a process\'s executable sits in, whatever the case or slashes', async () => {
+    const cli = cliDir()
+    for (const version of ['0.5.0', '0.4.0', '0.3.0']) writeVersionFolder(cli, version, Buffer.from(version), Buffer.from('n'))
+    const remove = (path: string) => rmSync(path, { recursive: true, force: true })
+    const running = async () => [
+      { pid: 7, parentPid: 1, executable: join(cli, '0.4.0', 'helper.exe').toUpperCase(), startMarker: 'w:1', args: 'helper' },
+      { pid: 8, parentPid: 1, executable: 'node.exe', startMarker: 'w:2', args: 'node', imagePath: `${join(cli, '0.3.0').replace(/\\/g, '/')}/x.exe` },
+    ]
+    expect(await retireUnused(cli, new Set(['0.5.0']), { rows: running, remove, log: () => {} })).toEqual([])
+    // A name that only starts with a build's (0.4.0 in 0.4.01's path) is not that build.
+    const elsewhere = async () => [{ pid: 9, parentPid: 1, executable: 'node.exe', startMarker: 'w:3', args: `node ${join(cli, '0.4.01', 'cli.js')}` }]
+    expect((await retireUnused(cli, new Set(['0.5.0']), { rows: elsewhere, remove, log: () => {} })).sort()).toEqual(['0.3.0', '0.4.0'])
+  })
+
+  it('tries again at the next pass a build it removed only in part', async () => {
+    const cli = cliDir()
+    for (const version of ['0.5.0', '0.4.0']) writeVersionFolder(cli, version, Buffer.from(version), Buffer.from('n'))
+    const log = vi.fn()
+    // Windows removes the files it can and refuses the one still open: cli.js went, notify.mjs stayed.
+    const partly = (path: string) => { rmSync(join(path, 'cli.js')); throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' }) }
+    expect(await retireUnused(cli, new Set(['0.5.0']), { rows: async () => [], remove: partly, log })).toEqual([])
+    expect(isVersionFolder(cli, '0.4.0')).toBe(false)
+    const remove = (path: string) => rmSync(path, { recursive: true, force: true })
+    expect(await retireUnused(cli, new Set(['0.5.0']), { rows: async () => [], remove, log })).toEqual(['0.4.0'])
+    expect(readdirSync(cli)).toEqual(['0.5.0'])
+  })
+
+  it('on this computer, removes a whole folder and says so in the daemon log', () => {
+    const cli = cliDir()
+    writeVersionFolder(cli, '0.4.0', Buffer.from('cli'), Buffer.from('n'))
+    const deps = processRetireDeps()
+    deps.remove(join(cli, '0.4.0'))
+    deps.remove(join(cli, 'gone already'))
+    expect(readdirSync(cli)).toEqual([])
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    deps.log('a line')
+    expect(log).toHaveBeenCalledWith('a line')
+    log.mockRestore()
+    expect(deps.rows).toBeTypeOf('function')
   })
 })

@@ -6,9 +6,11 @@
  * without Developer Mode, so a build is never touched once written: an update writes a new folder and moves the
  * pointer, a rollback moves it back.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { ProcessRow } from '../processTable.js'
 import { CLI_POINTER, STABLE_NOTIFY, writePointer } from './installLayout.js'
+import { windowsProcessRows } from './processTable.js'
 
 /** A build's folder name under cli\: its version, as the release names it (`0.5.0`, `0.5.1-dev.ab12`). Semver's
  *  identifiers, none empty: Windows drops a name's trailing dot, and the pointer refuses `..` (./installLayout.ts). */
@@ -101,4 +103,64 @@ export function switchTo(cliDir: string, version: string, log: (line: string) =>
   } catch (error) {
     log(`[update] the hooks' notify.mjs could not be refreshed yet (${error instanceof Error ? error.message : String(error)}) — they keep the one before until the next update`)
   }
+}
+
+export interface RetireDeps {
+  rows(): Promise<readonly ProcessRow[] | null>
+  remove(path: string): void
+  log(line: string): void
+}
+
+/** This computer's: A's process table, a removal of the whole folder, the daemon log. */
+export const processRetireDeps = (): RetireDeps => ({
+  rows: () => windowsProcessRows(null),
+  remove: (path) => rmSync(path, { recursive: true, force: true }),
+  log: (line) => console.log(line),
+})
+
+/** A folder a stage is still writing is left alone for this long. */
+const STAGING_GRACE_MS = 60 * 60_000
+/** A build moved aside by `writeVersionFolder`, and a folder a stage writes before its rename. */
+const SET_ASIDE = /^\..+\.old$/
+const STAGING = /^\..+\.tmp$/
+
+function isFolder(path: string): boolean {
+  try { return statSync(path).isDirectory() } catch { return false }
+}
+
+/**
+ * Remove every build but [keep], and the folders a stage set aside (`.old`) or left (`.tmp`, once it is an hour old),
+ * once no process runs from one: a core or a service of the build before may still be running from its folder, and a
+ * pane's `harness` command line names one too. Without a process table nothing is removed. A folder Windows will not
+ * remove yet (a file in it still open) is said and tried again at the next pass; so is what is left of one it removed
+ * only in part, which is why a build here is any folder named as one, with or without its cli.js.
+ */
+export async function retireUnused(cliDir: string, keep: ReadonlySet<string>, deps: RetireDeps): Promise<string[]> {
+  let names: string[]
+  try { names = readdirSync(cliDir) } catch { return [] }
+  const now = Date.now()
+  const candidates = names.filter((name) => {
+    if (keep.has(name)) return false
+    if (VERSION_FOLDER.test(name) || SET_ASIDE.test(name)) return isFolder(join(cliDir, name))
+    if (!STAGING.test(name)) return false
+    try { return now - statSync(join(cliDir, name)).mtimeMs > STAGING_GRACE_MS } catch { return false }
+  })
+  if (!candidates.length) return []
+  const rows = await deps.rows()
+  if (!rows) { deps.log('[update] the process table could not be read — the older CLI builds stay for now'); return [] }
+  // What a process runs from: its image, and every path its command line names (node's own, cli.js, a hook's).
+  const lines = rows.flatMap((row) => [row.executable, row.imagePath ?? '', row.args, ...(row.nativeArgv ?? [])])
+    .map((line) => line.toLowerCase().replace(/\//g, '\\'))
+  const removed: string[] = []
+  for (const name of candidates) {
+    const folder = `${join(cliDir, name).toLowerCase().replace(/\//g, '\\')}\\`
+    if (lines.some((line) => line.includes(folder))) continue
+    try {
+      deps.remove(join(cliDir, name))
+      removed.push(name)
+    } catch (error) {
+      deps.log(`[update] ${name} could not be removed yet (${(error as NodeJS.ErrnoException).code ?? (error as Error).message}) — trying again later`)
+    }
+  }
+  return removed
 }
