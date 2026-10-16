@@ -28,6 +28,9 @@ export const HARNESSD_PROTOCOL = 6
 /** The command a bundle's master answers its probe on, and what it answers. */
 export const PROBE_COMMAND = '__harnessd-probe'
 export const PROBE_ANSWER = 'harnessd-probe ok'
+/** Added to the answer by a master that takes a handover (Windows, ./reexec.ts `HandOverDeps`): one from before would
+ *  be handed the state, never take the handover, and run beside the master that handed over. */
+export const PROBE_HANDOVER = 'takes a handover'
 /** How long a probe may take: the updater gives its canary as long. */
 export const PROBE_TIMEOUT_MS = 15_000
 

@@ -6,8 +6,8 @@ import { join } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  HANDOVER_CUTOFF_MARGIN_MS, HANDOVER_CUTOFF_MS, HANDOVER_POLL_MS, HANDOVER_STOP_BUDGET_MS, HANDOVER_WAIT_MS, PROBE_ANSWER, PROBE_COMMAND, PROBE_TIMEOUT_MS, REEXEC_LIMIT, RESUME_ENV, createReexec, decodeResume, encodeResume, fingerprint,
-  mayClaimPidFile, readHandoverClaimant, readMarker, recoverFailedReexec, removeMarker, runProbe, sha256File, takeBackHandover, takeHandover,
+  HANDOVER_CUTOFF_MARGIN_MS, HANDOVER_CUTOFF_MS, HANDOVER_POLL_MS, HANDOVER_STOP_BUDGET_MS, HANDOVER_WAIT_MS, PROBE_ANSWER, PROBE_COMMAND, PROBE_HANDOVER, PROBE_TIMEOUT_MS, REEXEC_LIMIT, RESUME_ENV, createReexec, decodeResume, encodeResume, fingerprint,
+  mayClaimPidFile, readHandoverClaimant, readMarker, recoverFailedReexec, removeMarker, runProbe, sha256File, sweepHandovers, takeBackHandover, takeHandover,
   writeMarker, type HandOverDeps, type ProbeResult, type ReexecDeps,
 } from './reexec.js'
 import type { ReexecOutcome, ResumeState } from './supervisor.js'
@@ -155,6 +155,9 @@ describe('the probe', () => {
   it('passes a bundle whose master answers, and says why one that does not fails', async () => {
     const ok = await runProbe(process.execPath, [script(`console.log('loading'); console.log(${JSON.stringify(PROBE_ANSWER)} + ' · protocol 2')`), PROBE_COMMAND], process.env).result
     expect(ok).toEqual({ ok: true, detail: `${PROBE_ANSWER} · protocol 2` })
+    // One that takes a handover (Windows) says so.
+    expect(await runProbe(process.execPath, [script(`console.log(${JSON.stringify(`${PROBE_ANSWER} · protocol 6 · ${PROBE_HANDOVER}`)})`), PROBE_COMMAND], process.env).result)
+      .toEqual({ ok: true, detail: `${PROBE_ANSWER} · protocol 6 · ${PROBE_HANDOVER}`, handover: true })
     // A bundle from before probes: its usage on stdout, the reason on stderr, which is what is said.
     expect(await runProbe(process.execPath, [script(`console.error('Unknown command: ' + process.argv[2]); console.log('Usage: harness …\\n  harness --help'); process.exit(1)`), PROBE_COMMAND], process.env).result)
       .toEqual({ ok: false, detail: `Unknown command: ${PROBE_COMMAND}` })
@@ -449,6 +452,22 @@ describe('a handover\'s decision, where there is no exec (Windows)', () => {
     expect(readHandoverClaimant(file, 'tok-2')).toBe(5151)
   })
 
+  it('is swept as a later master starts, all but the handovers it is told to keep', () => {
+    for (const token of ['tok-1', 'tok-2', 'tok-3']) takeBackHandover(file, token, 4242)
+    mark('tok-2')
+    // Not a decision: the marker's own temporary file, a decision's half-made one, another file, a name no token makes.
+    for (const name of ['harnessd-reexec.json.4242.tmp', 'harnessd-reexec.json.tok-1.handover.4242.tmp', 'adapter.pid', 'harnessd-reexec.json.a.b.handover']) {
+      writeFileSync(join(dir, name), '')
+    }
+    sweepHandovers(file, ['tok-2', undefined])
+    expect(readdirSync(dir).sort()).toEqual([
+      'adapter.pid', 'harnessd-reexec.json', 'harnessd-reexec.json.4242.tmp', 'harnessd-reexec.json.a.b.handover',
+      'harnessd-reexec.json.tok-1.handover.4242.tmp', 'harnessd-reexec.json.tok-2.handover',
+    ])
+    // A folder that cannot be read: nothing to sweep.
+    sweepHandovers(join(dir, 'missing', 'harnessd-reexec.json'), [])
+  })
+
   it('reads no claimant that is not a pid', () => {
     for (const wrong of ['{', 'null', '{"pid":0}', '{"pid":"5151"}', '{"abandoned":4242}']) {
       writeFileSync(`${file}.tok-1.handover`, wrong)
@@ -484,7 +503,7 @@ describe('handing over, where there is no exec (Windows)', () => {
   const make = (over: Partial<HandOverDeps> = {}, more: Partial<ReexecDeps> = {}) => createReexec({
     own: 'old', current: () => 'new', nodePath: '/opt/node', execArgv: [], scriptPath: 'C:\\h\\cli\\0.5.1\\cli.js', env: { KEEP: '1' }, pid: 4242,
     execve: null, exists: () => true,
-    probe: () => ({ result: Promise.resolve({ ok: true, detail: PROBE_ANSWER }), cancel: () => {} }),
+    probe: () => ({ result: Promise.resolve({ ok: true, detail: PROBE_ANSWER, handover: true }), cancel: () => {} }),
     stopChildren: (done) => { calls.push('stop children'); done() },
     startChildren: () => calls.push('start children'),
     writeMarker: (marker) => calls.push(`marker ${JSON.stringify(marker)}`),
@@ -765,5 +784,53 @@ describe('handing over, where there is no exec (Windows)', () => {
     expect(calls).not.toContain('remove marker')
     expect(calls.includes('leave') || calls.includes('start children')).toBe(false)
     expect(outcomes).toEqual([])
+  })
+
+  it('keeps this master, handing over to nothing, when the new bundle\'s master does not say it takes a handover', async () => {
+    // A bundle from before handovers would be handed the state, never take the handover, and run beside this master.
+    await run(make({}, { probe: () => ({ result: Promise.resolve({ ok: true, detail: PROBE_ANSWER }), cancel: () => {} }) }).reexec)
+    expect(calls).toEqual([REEXECUTING, 'stop children', '[harnessd] the new bundle\'s master cannot take a handover — keeping this master', 'start children'])
+    expect(launched).toEqual([])
+    expect(outcomes).toEqual(['kept'])
+  })
+
+  it('says, once the handover under way is decided, whether the new master has the pid file and the marker', async () => {
+    // None under way: at once.
+    let none: boolean | null = null
+    make().settled((handed) => { none = handed })
+    expect(none).toBe(false)
+    const decided = async (launch: () => Promise<string | null>, over: Partial<HandOverDeps> = {}): Promise<boolean | null> => {
+      world = { pidFile: 999, taken: false, claimant: null, running: new Set([4242, 5151]) }
+      stopping = false
+      let answer: boolean | null = null
+      const reexec = make({
+        ...over,
+        launch: async () => {
+          reexec.settled((handed) => { answer = handed })
+          // Not before it is decided.
+          calls.push(`answered ${answer}`)
+          return launch()
+        },
+      })
+      await run(reexec.reexec)
+      return answer
+    }
+    // Left for the new master; stopped once the new one took it, as it waited or past the wait.
+    expect(await decided(async () => null, { sleep: async (ms) => { clock.now += ms; takes() } })).toBe(true)
+    expect(await decided(async () => { world.taken = true; world.claimant = 5151; stopping = true; return null })).toBe(true)
+    expect(await decided(async () => 'exit 3', {
+      takeBack: () => { world.taken = true; world.claimant = 5151; return false }, sleep: async (ms) => { clock.now += ms; stopping = true },
+    })).toBe(true)
+    // Stopped and taken back, or kept: this master's.
+    expect(await decided(async () => { stopping = true; return null })).toBe(false)
+    expect(await decided(async () => 'exit 3')).toBe(false)
+    expect(calls.filter((call) => call.startsWith('answered'))).toEqual(Array(5).fill('answered null'))
+    expect(outcomes).toEqual(['kept'])
+  })
+
+  it('gives a replacement that read the marker in time twenty seconds past the cutoff before this master settles', () => {
+    // A stall of more than five seconds between its last check and its pid file write came after the master had settled.
+    expect(HANDOVER_CUTOFF_MARGIN_MS).toBe(20_000)
+    expect(HANDOVER_CUTOFF_MS).toBe(2 * HANDOVER_WAIT_MS)
   })
 })

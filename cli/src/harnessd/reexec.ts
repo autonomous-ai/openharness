@@ -26,15 +26,16 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, linkSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { PROBE_ANSWER, PROBE_COMMAND, PROBE_TIMEOUT_MS } from './protocol.js'
+import { closeSync, linkSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
+import { PROBE_ANSWER, PROBE_COMMAND, PROBE_HANDOVER, PROBE_TIMEOUT_MS } from './protocol.js'
 import type { ExitReason, ReexecOutcome, ResumeState } from './supervisor.js'
 
 /** The environment variable that hands a master's state to the one it re-executes as. */
 export const RESUME_ENV = 'HARNESSD_RESUME'
 /** Asked by a core on its own too, before it hands an update to a master (core/updateHandoff.ts): in
  *  ./protocol.ts, which the core's process loads anyway, where this module it does not need is not. */
-export { PROBE_ANSWER, PROBE_COMMAND, PROBE_TIMEOUT_MS } from './protocol.js'
+export { PROBE_ANSWER, PROBE_COMMAND, PROBE_HANDOVER, PROBE_TIMEOUT_MS } from './protocol.js'
 /**
  * This many re-executions in a row without a core coming up, and the master keeps its code: each new
  * master found yet another bundle before it could start one, and following them would be a loop. An
@@ -214,6 +215,21 @@ export function takeBackHandover(file: string, token: string, pid: number): bool
 }
 
 /**
+ * A master's start (Windows): the decisions of handovers over and done go, all but [keep]'s, the handover this master
+ * took and the one its marker names, which a master that handed over may still be reading.
+ */
+export function sweepHandovers(file: string, keep: ReadonlyArray<string | undefined>): void {
+  const prefix = `${basename(file)}.`
+  let names: string[]
+  try { names = readdirSync(dirname(file)) } catch { return }
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !name.endsWith('.handover')) continue
+    const token = name.slice(prefix.length, -'.handover'.length)
+    if (HANDOVER_TOKEN.test(token) && !keep.includes(token)) removeMarker(join(dirname(file), name))
+  }
+}
+
+/**
  * At a master's start: did a re-execution before it fail? A marker left by a process that is gone,
  * with the bundle it moved to still on disk, means the master that process became never brought a core
  * up. The previous bundle is put back (`restoreUpdate` also remembers the version, so the updater does
@@ -240,7 +256,12 @@ export function recoverFailedReexec(deps: {
   return true
 }
 
-export interface ProbeResult { ok: boolean; detail: string }
+export interface ProbeResult {
+  ok: boolean
+  detail: string
+  /** The bundle's master says it takes a handover (`PROBE_HANDOVER`); left out, it does not. */
+  handover?: true
+}
 
 /** Run a bundle's master probe: `node <flags> <bundle> __harnessd-probe`, which must answer in time. */
 export function runProbe(
@@ -256,11 +277,11 @@ export function runProbe(
   const lastLine = (text: string): string => { const lines = text.trim().split('\n'); return lines[lines.length - 1].trim() }
   const result = new Promise<ProbeResult>((resolve) => {
     let settled = false
-    const done = (ok: boolean, detail: string) => {
+    const done = (ok: boolean, detail: string, handover = false) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolve({ ok, detail })
+      resolve({ ok, detail, ...(handover ? { handover: true } : {}) })
     }
     const timer = setTimeout(() => {
       try { child.kill('SIGKILL') } catch { /* gone */ }
@@ -268,7 +289,8 @@ export function runProbe(
     }, timeoutMs)
     child.on('error', (error) => done(false, error.message))
     child.on('close', (code, signal) => {
-      done(code === 0 && out.includes(PROBE_ANSWER), lastLine(err) || lastLine(out) || (signal ? `signal ${signal}` : `exit ${code}`))
+      const ok = code === 0 && out.includes(PROBE_ANSWER)
+      done(ok, lastLine(err) || lastLine(out) || (signal ? `signal ${signal}` : `exit ${code}`), ok && out.includes(PROBE_HANDOVER))
     })
   })
   return { result, cancel: () => { try { child.kill('SIGKILL') } catch { /* gone */ } } }
@@ -315,8 +337,9 @@ export const HANDOVER_WAIT_MS = 30_000
 export const HANDOVER_POLL_MS = 250
 /** After this, from the marker's `at`, no replacement takes the handover (`takeHandover`). */
 export const HANDOVER_CUTOFF_MS = 2 * HANDOVER_WAIT_MS
-/** And this much past it, for one that read the marker in time and was a moment taking it, this master stays. */
-export const HANDOVER_CUTOFF_MARGIN_MS = 5_000
+/** And this much past it, for one that read the marker in time and was a moment writing the pid file (a stall under an
+ *  antivirus scan), this master waits before it settles on what the pid file says. */
+export const HANDOVER_CUTOFF_MARGIN_MS = 20_000
 /** How long a master that is stopping tries to take the handover back. */
 export const HANDOVER_STOP_BUDGET_MS = 2_000
 
@@ -359,10 +382,17 @@ export function createReexec(deps: ReexecDeps): {
   cancel(): void
   /** On its way to replacing this master: from stopping its children until it carries on as itself. */
   replacing(): boolean
+  /**
+   * Once no handover is under way (Windows), [done]: true when this master handed over, the pid file and the marker
+   * then the new master's, never this one's to remove; at once when none is. Asked as the master stops.
+   */
+  settled(done: (handedOver: boolean) => void): void
 } {
   let warned = false
   let probe: { cancel(): void } | null = null
   let replacing = false
+  let handing: Promise<void> | null = null
+  let handedOver = false
   const message = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
   /**
@@ -412,6 +442,7 @@ export function createReexec(deps: ReexecDeps): {
     // successor: until then a `harness stop` waits rather than land on a master on its way out.
     const leave = (why: string): void => {
       deps.log(`[harnessd] ${why} — leaving`)
+      handedOver = true
       release()
       h.leave()
     }
@@ -461,7 +492,7 @@ export function createReexec(deps: ReexecDeps): {
       const until = deps.now() + HANDOVER_STOP_BUDGET_MS
       for (;;) {
         const back = takeBack()
-        if (back === false) { release(); return }
+        if (back === false) { handedOver = true; release(); return }
         if (back === true || deps.now() >= until) { deps.removeMarker(); release(); return }
         await pause()
       }
@@ -492,7 +523,7 @@ export function createReexec(deps: ReexecDeps): {
         }
         await pause()
         // Stopping: the replacement is the master now, and the marker is not this one's to remove.
-        if (deps.stopping()) { release(); return }
+        if (deps.stopping()) { handedOver = true; release(); return }
       }
     }
     /** The wait is over, for [why]: whose is the handover? */
@@ -570,7 +601,8 @@ export function createReexec(deps: ReexecDeps): {
         if (deps.stopping()) return
         const running = deps.probe([...args, PROBE_COMMAND], env)
         probe = running
-        void running.result.then(({ ok, detail }) => {
+        void running.result.then((result) => {
+          const { ok, detail } = result
           probe = null
           if (deps.stopping()) return
           if (!ok) {
@@ -578,7 +610,15 @@ export function createReexec(deps: ReexecDeps): {
             carryOn('refused')
             return
           }
-          if (deps.handOver) { void handOver(deps.handOver, next, state, carryOn); return }
+          if (deps.handOver) {
+            if (!result.handover) {
+              deps.log('[harnessd] the new bundle\'s master cannot take a handover — keeping this master')
+              carryOn('kept')
+              return
+            }
+            handing = handOver(deps.handOver, next, state, carryOn)
+            return
+          }
           try {
             deps.writeMarker({ pid: deps.pid, from: deps.own, to: next, at: now })
           } catch (error) {
@@ -615,5 +655,10 @@ export function createReexec(deps: ReexecDeps): {
     },
     cancel: () => { probe?.cancel(); probe = null },
     replacing: () => replacing,
+    settled: (done) => {
+      if (!handing) { done(handedOver); return }
+      const decided = (): void => done(handedOver)
+      void handing.then(decided, decided)
+    },
   }
 }
