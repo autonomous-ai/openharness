@@ -326,6 +326,31 @@ void main() {
     expect(app.panes.map((p) => p.isWeb), [true, false]);
   });
 
+  testWidgets('Linux viewer hides beneath dialogs and returns after dismissal', (tester) async {
+    final app = createApp();
+    addTearDown(app.dispose);
+    app.stateOf('m')!.nodeOnline = true;
+    app.adoptSessionForTest(terminal('a0', <TerminalBinaryFrame>[]));
+    await mount(tester, app);
+    await _synced(app, 'a0', viewerUrl: 'http://127.0.0.1:4179/');
+    await tester.pump();
+    final context = tester.element(find.byType(WebPanePanel));
+    final placeholder = find.byKey(const ValueKey('web-pane-placeholder'));
+    expect(placeholder, findsOneWidget);
+    final dialog = showDialog<void>(context: context, builder: (_) => const AlertDialog(title: Text('Close tab?')));
+    await tester.pumpAndSettle();
+    expect(find.text('Close tab?'), findsOneWidget);
+    if (RuntimePlatform.isLinux) {
+      expect(placeholder, findsNothing);
+      expect(find.byKey(const ValueKey('web-pane-placeholder'), skipOffstage: false), findsOneWidget);
+    }
+    Navigator.of(tester.element(find.text('Close tab?'))).pop();
+    await dialog;
+    await tester.pumpAndSettle();
+    expect(placeholder, findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('the tile renders a header and, under test, the URL in words', (
     tester,
   ) async {

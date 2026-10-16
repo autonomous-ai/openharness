@@ -343,7 +343,15 @@ class _WebPanePanelState extends State<WebPanePanel> {
         children: [
           _header(context),
           Divider(height: 1, color: AppColors.border),
-          Expanded(child: _body(context)),
+          Expanded(
+            // GTK overlays sit above Flutter dialogs. Keep the page mounted,
+            // but unpainted while a modal route covers the workspace.
+            child: Offstage(
+              offstage: RuntimePlatform.isLinux &&
+                  (!widget.visible || ModalRoute.isCurrentOf(context) == false),
+              child: _body(context),
+            ),
+          ),
         ],
       ),
     );
