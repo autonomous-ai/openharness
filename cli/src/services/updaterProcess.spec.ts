@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SERVICE_EXIT_RESTART, type UpdaterMessage } from '../harnessd/protocol.js'
 import type { startSelfUpdater } from '../lib/selfUpdate.js'
@@ -15,6 +18,9 @@ vi.mock('../lib/daemonSpawnLock.js', async (real) => ({
     return fn()
   },
 }))
+
+// No process runs from any build: the retirement's table, the same on every host.
+vi.mock('../lib/windows/processTable.js', () => ({ windowsProcessRows: async () => [] }))
 
 type CliOptions = Parameters<typeof startSelfUpdater>[0]
 type HnOptions = Parameters<typeof startTuiUpdater>[0]
@@ -98,11 +104,25 @@ describe('the updater in its own process', () => {
       expect(failing.calls).toContain(`[update] retiring older CLI builds failed: ${thrown instanceof Error ? thrown.message : thrown}`)
     }
     expect(processUpdaterDeps('linux').retire).toBeUndefined()
-    // Here, with no cli\current in the test's CLI folder, it proves nothing in use and removes nothing.
-    locked.length = 0
-    await expect(processUpdaterDeps('win32').retire!()).resolves.toEqual([])
-    // Under the lock a stage takes, so no `harness update` moves the pointer to a folder it removes.
-    expect(locked).toEqual(['update'])
+    // In a CLI folder of the test's own, never this user's %USERPROFILE%\.harness\cli (on Windows the suite's
+    // home is not that folder's: vitest.setup.ts moves HOME, and Windows takes the home from USERPROFILE).
+    const root = mkdtempSync(join(tmpdir(), 'updater-retire-'))
+    try {
+      const cli = join(root, 'cli')
+      // No cli\current: nothing proves which build is in use, so nothing is removed.
+      mkdirSync(join(cli, '0.4.0'), { recursive: true })
+      locked.length = 0
+      await expect(processUpdaterDeps('win32', cli).retire!()).resolves.toEqual([])
+      // Under the lock a stage takes, so no `harness update` moves the pointer to a folder it removes.
+      expect(locked).toEqual(['update'])
+      for (const version of ['0.5.0', '0.4.0', '0.3.0']) {
+        mkdirSync(join(cli, version), { recursive: true })
+        for (const file of ['cli.js', 'notify.mjs']) writeFileSync(join(cli, version, file), version)
+      }
+      writeFileSync(join(cli, 'current'), '0.5.0\n')
+      await expect(processUpdaterDeps('win32', cli).retire!()).resolves.toEqual(['0.3.0'])
+      expect(readdirSync(cli).sort()).toEqual(['0.4.0', '0.5.0', 'current'])
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
   it('reaches the master over the spawn channel, or tells no one when started by hand', () => {

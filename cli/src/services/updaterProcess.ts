@@ -35,7 +35,8 @@ export interface UpdaterServiceDeps {
   retire?: () => Promise<unknown>
 }
 
-export const processUpdaterDeps = (platform: NodeJS.Platform = process.platform): UpdaterServiceDeps => ({
+/** [cliDir]: the CLI folder the retirement looks at, this user's own unless a test names one of its own. */
+export const processUpdaterDeps = (platform: NodeJS.Platform = process.platform, cliDir: string = env.ADAPTER_CLI_DIR): UpdaterServiceDeps => ({
   tell: (message, sent) => {
     // Under its master, the spawn channel; started by hand, there is no one to tell, and nothing to wait on.
     if (!process.send) { sent(); return }
@@ -47,7 +48,7 @@ export const processUpdaterDeps = (platform: NodeJS.Platform = process.platform)
   log: (line) => console.log(line),
   // Under the lock every stage takes: a `harness update` that renames a build's folder into place and then moves the
   // pointer to it must not find the folder gone in between.
-  ...(platform === 'win32' ? { retire: () => withSpawnLock('update', () => retireCliVersions(env.ADAPTER_CLI_DIR, processRetireDeps())) } : {}),
+  ...(platform === 'win32' ? { retire: () => withSpawnLock('update', () => retireCliVersions(cliDir, processRetireDeps())) } : {}),
 })
 
 export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps = processUpdaterDeps()): ServiceProcess {
