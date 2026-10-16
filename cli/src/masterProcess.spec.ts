@@ -23,7 +23,7 @@ vi.mock('./lib/daemonSpawnLock.js', async (real) => ({ ...await real<object>(), 
 
 const {
   BUNDLE_ENV, BUNDLE_SHA256_ENV, HANDOVER_LAUNCH_TIMEOUT_MS, HANDOVER_LOCK_WAIT_MS, LEAN_DIR, LEAN_FINGERPRINT_ENV, LEAN_OFF_FILE, handoverAlive, masterEnv, probeLean,
-  probeThisMaster, processBundleDeps, processWindowsMasterDeps, readHandoverPid, startMaster, startMasterFromBundle, startMasterInForeground, windowsMaster,
+  probeThisMaster, processBundleDeps, processWindowsMasterDeps, readHandoverPid, startMaster, startMasterFromBundle, startMasterInForeground, windowsMaster, writeFatalTo,
 } = await import('./masterProcess.js')
 type Deps = Parameters<typeof startMasterFromBundle>[1] & object
 
@@ -164,7 +164,7 @@ describe('the master on Windows', () => {
   })
 
   const windowsDeps = (over: Partial<WindowsMasterDeps> = {}) => {
-    const seen = { launches: [] as unknown[][], redirected: [] as number[] }
+    const seen = { launches: [] as unknown[][], redirected: [] as number[], fatal: [] as number[] }
     // Posix paths: the test runs on macOS, and the path module there splits on `/` (the Windows comparison
     // itself, `isInstalledCopy`, reads either separator).
     const given: WindowsMasterDeps = {
@@ -177,6 +177,7 @@ describe('the master on Windows', () => {
       launch: async (...args) => { seen.launches.push(args); return { ok: false, detail: 'exit 3' } },
       lock: async () => () => {},
       readPid: () => null, alive: () => false,
+      fatal: (fd) => { seen.fatal.push(fd) },
       ...over,
     }
     return { given, seen }
@@ -188,6 +189,8 @@ describe('the master on Windows', () => {
     expect(config.stopByMessage).toBe(true)
     expect(config.output).toBe(42)
     expect(seen.redirected).toEqual([42])
+    // An error that ends the master is written there too: harness-launch.exe gave it no stderr to print it on.
+    expect(seen.fatal).toEqual([42])
     expect(config.currentScript!()).toBe('/h/cli/0.5.1/cli.js')
     await expect(config.handOver!.launch({ A: '1' })).resolves.toBe('exit 3')
     // Bounded well inside the 45 s a `harness stop` waits on the spawn lock: a stop during a handover waits on it.
@@ -227,7 +230,22 @@ describe('the master on Windows', () => {
     const terminal = windowsDeps({ isTTY: true })
     expect(windowsMaster('/h/cli/0.5.0/cli.js', terminal.given).output).toBeUndefined()
     expect(terminal.seen.redirected).toEqual([])
+    expect(terminal.seen.fatal).toEqual([])
     expect(windowsMaster('/h/cli/0.5.0/cli.js', windowsDeps({ currentCli: () => null }).given).currentScript!()).toBeNull()
+  })
+
+  it('runs without a log when the log cannot be opened, rather than end with no trace', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const lost = windowsDeps({ openLog: () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }) } })
+      const config = windowsMaster('/h/cli/0.5.0/cli.js', lost.given)
+      expect(config.output).toBeUndefined()
+      expect(config).not.toHaveProperty('output')
+      expect(config.stopByMessage).toBe(true)
+      expect(lost.seen.redirected).toEqual([])
+      expect(lost.seen.fatal).toEqual([])
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('could not open the daemon log (EACCES: permission denied)'))
+    } finally { error.mockRestore() }
   })
 
   it('is what startMaster runs on Windows, and nothing of it elsewhere', () => {
@@ -288,6 +306,34 @@ describe('the master on Windows', () => {
         expect(() => console.log('lost')).not.toThrow()
         expect(() => console.error('lost')).not.toThrow()
       } finally { Object.assign(console, saved) }
+    })
+
+    it('writes an error that ends the master to the log, then exits 1 as Node would have', () => {
+      const file = join(dir, 'harness.log')
+      const fd = openSync(file, 'a')
+      const listeners = new Map<string, (error: unknown) => void>()
+      const exits: number[] = []
+      writeFatalTo(fd, (event, listener) => { listeners.set(event, listener) }, (code) => { exits.push(code) })
+      expect([...listeners.keys()]).toEqual(['uncaughtException', 'unhandledRejection'])
+      listeners.get('uncaughtException')!(new Error('boom'))
+      listeners.get('unhandledRejection')!('a reason that is no Error')
+      closeSync(fd)
+      const text = readFileSync(file, 'utf8')
+      expect(text).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} \[harnessd\] the master stopped on an uncaught error: Error: boom\n    at /)
+      expect(text).toContain('[harnessd] the master stopped on an unhandled rejection: a reason that is no Error\n')
+      expect(exits).toEqual([1, 1])
+      // A log it can no longer write costs the line, never the exit.
+      listeners.get('uncaughtException')!(new Error('again'))
+      expect(exits).toEqual([1, 1, 1])
+      // As this process runs it: on this process, through process.exit.
+      const on = vi.spyOn(process, 'on').mockImplementation((() => process) as never)
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+      try {
+        processWindowsMasterDeps().fatal(fd)
+        expect(on.mock.calls.map(([event]) => event)).toEqual(['uncaughtException', 'unhandledRejection'])
+        ;(on.mock.calls[0]![1] as (error: unknown) => void)(new Error('real'))
+        expect(exit).toHaveBeenCalledWith(1)
+      } finally { on.mockRestore(); exit.mockRestore() }
     })
 
     it('takes the spawn lock as a handoff, waiting 5 s at most, and reads busy for any failure', async () => {

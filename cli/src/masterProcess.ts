@@ -86,6 +86,8 @@ export interface WindowsMasterDeps {
   readPid(): number | null
   /** Whether a process runs; a throw when that is not known (`handoverAlive`). */
   alive(pid: number): boolean
+  /** An error that ends this process, written to [fd] first (`writeFatalTo`). */
+  fatal(fd: number): void
 }
 
 /** How long a master about to hand over waits for the spawn lock: a start or a stop under way finishes in seconds. */
@@ -110,6 +112,8 @@ export function readHandoverPid(pidFile: string = PID_FILE, read: (path: string)
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     throw error
   }
+  // A torn or half-written file reads as null, which is harmless: the replacement writes the pid file only before the
+  // cutoff, and the old master reads it for its decision at cutoff + 20 s (harnessd/reexec.ts HANDOVER_CUTOFF_MARGIN_MS).
   const pid = Number.parseInt(text.trim(), 10)
   return Number.isSafeInteger(pid) && pid > 0 ? pid : null
 }
@@ -131,6 +135,26 @@ export function handoverAlive(pid: number, kill: (pid: number, signal: 0) => voi
   }
 }
 
+/**
+ * Under harness-launch.exe the master has no stderr: an error that ended it left no word of why. So, once it writes
+ * the daemon's log itself, such an error is written there, at once (the process is about to end), and it exits 1, as
+ * Node does on an uncaught error or an unhandled rejection.
+ */
+export function writeFatalTo(
+  fd: number,
+  on: (event: 'uncaughtException' | 'unhandledRejection', listener: (error: unknown) => void) => void = (event, listener) => { process.on(event, listener) },
+  exit: (code: number) => void = (code) => process.exit(code),
+): void {
+  const fatal = (what: string) => (error: unknown): void => {
+    try {
+      writeSync(fd, `${ts()} [harnessd] the master stopped on ${what}: ${error instanceof Error ? error.stack ?? error.message : format(error)}\n`)
+    } catch { /* the log cannot be written: the line is lost, never the exit */ }
+    exit(1)
+  }
+  on('uncaughtException', fatal('an uncaught error'))
+  on('unhandledRejection', fatal('an unhandled rejection'))
+}
+
 export const processWindowsMasterDeps = (): WindowsMasterDeps => ({
   cliDir: env.ADAPTER_CLI_DIR,
   currentCli: (root) => currentCli(root),
@@ -146,6 +170,7 @@ export const processWindowsMasterDeps = (): WindowsMasterDeps => ({
   lock: async () => { try { return await acquireSpawnLock('handoff', { waitMs: HANDOVER_LOCK_WAIT_MS }) } catch { return null } },
   readPid: () => readHandoverPid(),
   alive: (pid) => handoverAlive(pid),
+  fatal: (fd) => writeFatalTo(fd),
 })
 
 /**
@@ -161,8 +186,16 @@ export function windowsMaster(scriptPath: string, deps: WindowsMasterDeps = proc
   const launcher = harnessLaunchPath(root)
   let output: number | undefined
   if (!deps.isTTY) {
-    output = deps.openLog()
-    deps.redirect(output)
+    try {
+      output = deps.openLog()
+    } catch (error) {
+      // A log it cannot open (a full disk, a file held by a scan) costs the master its lines, never the daemon.
+      console.error(`${ts()} [harnessd] could not open the daemon log (${error instanceof Error ? error.message : String(error)}) — running without it`)
+    }
+    if (output !== undefined) {
+      deps.redirect(output)
+      deps.fatal(output)
+    }
   }
   return {
     stopByMessage: true,
