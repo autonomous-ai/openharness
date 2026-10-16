@@ -10,13 +10,12 @@ import { startMarkerMs } from '../processProof.js'
 
 export type DaemonRole = 'master' | 'core'
 
-export interface DaemonProcessClaim {
-  role: DaemonRole
-  /** The core's: the master's pid. */
-  parentPid?: number
-  /** The master's: when the pid file was written, ms since the epoch. */
-  claimedAtMs?: number
-}
+/**
+ * What the CLI knows of the process besides its pid, and must know: the argv alone would accept another same-user
+ * daemon (another install, another data folder) that the pid was given to since. The master's: when the pid file
+ * was written, ms since the epoch. The core's: the master's pid.
+ */
+export type DaemonProcessClaim = { role: 'master'; claimedAtMs: number } | { role: 'core'; parentPid: number }
 
 /** A FILETIME is exact; this covers a clock that moved and a file system's own rounding. */
 const CLAIM_SLACK_MS = 2_000
@@ -30,13 +29,11 @@ function runsAs(argv: readonly string[], role: DaemonRole): boolean {
 /** The start marker of [pid] when it is the daemon's [claim.role]; null when it is not, or cannot be shown to be. */
 export function identifyDaemonProcess(rows: readonly ProcessRow[], pid: number, claim: DaemonProcessClaim): string | null {
   const row = rows.find((candidate) => candidate.pid === pid)
-  if (!row || !row.startMarker) return null
-  const argv = row.nativeArgv ?? row.args.split(/\s+/).filter(Boolean)
-  if (!runsAs(argv, claim.role)) return null
-  if (claim.parentPid !== undefined && row.parentPid !== claim.parentPid) return null
-  if (claim.claimedAtMs !== undefined) {
-    const started = startMarkerMs(row.startMarker)
-    if (started === null || started > claim.claimedAtMs + CLAIM_SLACK_MS) return null
-  }
-  return row.startMarker
+  // The kernel's argv only: split from `args`, an agent's prompt text could pose as a `__run` token. The host gives
+  // every row one (pty/src/ps.rs, `[executable]` when the command line could not be read).
+  if (!row || !row.startMarker || !row.nativeArgv) return null
+  if (!runsAs(row.nativeArgv, claim.role)) return null
+  if (claim.role === 'core') return row.parentPid === claim.parentPid ? row.startMarker : null
+  const started = startMarkerMs(row.startMarker)
+  return started !== null && started <= claim.claimedAtMs + CLAIM_SLACK_MS ? row.startMarker : null
 }
