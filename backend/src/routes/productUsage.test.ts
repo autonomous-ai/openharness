@@ -118,14 +118,17 @@ it('takes the CLI\'s launch codes, late launch failures and first launches by en
   expect((await submit({ ...good, context, counters })).statusCode).toBe(200)
   expect(methods.ingestProductUsage).toHaveBeenCalledWith('account', expect.objectContaining({ counters }))
   methods.ingestProductUsage.mockClear()
-  // One unknown name refuses the whole report: the reason every new name goes into the contract first.
+  // A name outside the list is never stored: the report keeps its known counters without it (an unknown
+  // name no longer refuses the whole report), and alone it is still refused.
   for (const name of ['launch_failed_code_PRIVATE_CANARY', 'launch_failed_code_ENGINE_DID_NOT_START', 'restart_error_code_internal',
     'first_launch_engine_cursor', 'first_launch_opencode_signed_in', 'launch_late_failed_other']) {
     const response = await submit({ ...good, context, counters: { launch_late_failed: 1, [name]: 1 } })
-    expect(response.statusCode, name).toBe(400)
+    expect(response.statusCode, name).toBe(200)
     expect(response.body).not.toContain('PRIVATE_CANARY')
+    expect(methods.ingestProductUsage).toHaveBeenLastCalledWith('account', expect.objectContaining(
+      { counters: { launch_late_failed: 1, health_cli_report_unknown_metric: 1 } }))
+    expect((await submit({ ...good, context, counters: { [name]: 1 } })).statusCode, name).toBe(400)
   }
-  expect(methods.ingestProductUsage).not.toHaveBeenCalled()
 })
 
 it('takes a phone build context: its release and iOS or Android, nothing finer', async () => {
