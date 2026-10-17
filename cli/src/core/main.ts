@@ -10,6 +10,7 @@ import { opencodeMajorVersion } from '../engines/launchControl.js'
 import { inspectNativeLaunch, type NativeLaunch } from '../engines/nativeLaunch.js'
 import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
 import { createNativeLaunchPreparer } from '../engines/prepareNativeLaunch.js'
+import { engineDownloading } from '../engines/kit/downloadMarker.js'
 import { createNativeInstallations } from '../engines/kit/nativeInstall.js'
 import { publishGridConfigDir } from '../lib/publishedGridConfig.js'
 import { masterRunsEngineScreen } from '../harnessd/services.js'
@@ -2169,6 +2170,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     inspect: (engine, source) => inspectNativeLaunch(engine, source, {
       confirmHome: (engine, home) => { confirmHomes({ [sessionStoreContracts[engine].sessions.moved.variable]: home }) },
     }),
+    // The Desktop's own download of the engine on a fresh computer: a launch waits for it rather than installing beside it.
+    downloading: (engine) => engineDownloading(engine),
   })
   const launchOverridesDeps: LaunchOverridesDeps = {
     publishConfig: publishGridConfigDir,
