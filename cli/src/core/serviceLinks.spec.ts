@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createServiceLinks, HELD_MAX, ON_DEMAND_START_MS, type ServiceFrame } from './serviceLinks.js'
+import { createServiceLinks, HELD_MAX, ON_DEMAND_START_MS, RESTART_HELD_MAX, type ServiceFrame } from './serviceLinks.js'
 
 const TOKEN = 'a'.repeat(48)
 const ASKER = { local: false, owner: true }
@@ -192,6 +192,70 @@ describe('service links', () => {
     const search = vi.fn()
     links.route('session_search', {}, ASKER, search)
     expect(search).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
+  })
+
+  it('holds a request for the Store while its process restarts and delivers it once it is back; one past its wait is refused', async () => {
+    // 2026-10-16, a day of six updates: a window's Store list asked while the master restarted the viewers' process
+    // was answered SERVICE_UNAVAILABLE at once, 7 times.
+    const want = vi.fn()
+    const unavailable = (service: string) => ({ error: 'SERVICE_UNAVAILABLE', service, retryable: true })
+    const links = make({ owned: { store: ['dsh_list'], devices: ['harness_devices_list'] }, onDemand: new Set(['store', 'devices']),
+      waitsThroughRestart: new Set(['store']), want, startWaitMs: 20_000, timeoutMs: 30_000 })
+    links.accept('store', TOKEN, sink(), vi.fn())!.closed()
+    // Asked while it is down: held, and asked for again, since a master that re-executed for an update leaves a
+    // process on demand off until it is asked for.
+    const listed = vi.fn()
+    links.route('dsh_list', {}, ASKER, listed)
+    expect(listed).not.toHaveBeenCalled()
+    expect(want).toHaveBeenCalledWith('store')
+    vi.advanceTimersByTime(3_000)
+    const store = sink()
+    const link = links.accept('store', TOKEN, store, vi.fn())!
+    expect(store.sent).toEqual([{ type: 'dsh_list', payload: { requestId: 'route-1' }, asker: ASKER }])
+    link.receive({ type: 'dsh_list_result', payload: { requestId: 'route-1', dsh: [] } })
+    expect(listed).toHaveBeenCalledWith({ dsh: [] })
+    // Gone again, and not back within the start wait: refused then, and what comes after at once, until it is back.
+    link.closed()
+    const late = vi.fn(), next = vi.fn()
+    links.route('dsh_list', {}, ASKER, late)
+    vi.advanceTimersByTime(19_999)
+    expect(late).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(late).toHaveBeenCalledWith(unavailable('store'))
+    links.route('dsh_list', {}, ASKER, next)
+    expect(next).toHaveBeenCalledWith(unavailable('store'))
+    // Back, then gone: waited for again, and a request with a shorter wait of its own only for that wait.
+    links.accept('store', TOKEN, sink(), vi.fn())!.closed()
+    const waited = vi.fn()
+    links.route('dsh_list', {}, ASKER, waited)
+    const launch = links.call('store', 'dshLaunch', {}, 5_000)
+    vi.advanceTimersByTime(5_000)
+    await expect(launch).resolves.toEqual(unavailable('store'))
+    expect(waited).not.toHaveBeenCalled()
+    // Any other service on demand is refused at once while it is down, as before.
+    links.accept('devices', TOKEN, sink(), vi.fn())!.closed()
+    const devices = vi.fn()
+    links.route('harness_devices_list', {}, ASKER, devices)
+    expect(devices).toHaveBeenCalledWith(unavailable('devices'))
+  })
+
+  it('holds a bounded number of requests for a service to come back, and refuses the rest at once', () => {
+    const links = make({ owned: { store: ['dsh_list'], search: ['session_search'] }, onDemand: new Set(['store']),
+      waitsThroughRestart: new Set(['store']), want: vi.fn() })
+    links.accept('store', TOKEN, sink(), vi.fn())!.closed()
+    // What waits on another service is not counted against this one.
+    links.accept('search', TOKEN, sink(), vi.fn())
+    const searching = vi.fn()
+    for (let n = 0; n < RESTART_HELD_MAX; n++) links.route('session_search', {}, ASKER, searching)
+    const held = vi.fn(), over = vi.fn()
+    for (let n = 0; n < RESTART_HELD_MAX; n++) links.route('dsh_list', {}, ASKER, held)
+    links.route('dsh_list', {}, ASKER, over)
+    expect(held).not.toHaveBeenCalled()
+    expect(searching).not.toHaveBeenCalled()
+    expect(over).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'store', retryable: true })
+    const store = sink()
+    links.accept('store', TOKEN, store, vi.fn())
+    expect(store.sent).toHaveLength(RESTART_HELD_MAX)
   })
 
   it('waits as long as a call says it may (a pairing), and answers SERVICE_UNAVAILABLE after', async () => {

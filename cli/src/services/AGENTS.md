@@ -101,7 +101,8 @@ master too old to run it starts it beside itself, still in its own process (`src
   with the master's token, reconnecting after core restarts. `<host>.crash` and `<host>.leak`, or a
   service's own, crash or leak the whole process: it is one process.
 - `src/core/serviceLinks.ts` is the core's side: it routes those requests to the process, answers
-  `SERVICE_UNAVAILABLE` while it is down, and holds what the service must not miss.
+  `SERVICE_UNAVAILABLE` while it is down, and holds what the service must not miss. The Store's requests
+  (`waitsThroughRestart`) wait for its process to come back instead, bounded as a first start's wait is.
 - `src/services/searchProcess.ts` is the example to copy. `e2e/serviceProcesses.e2e.ts` is the proof
   to copy: killed, hung (SIGSTOP), leaking, crashing on every start.
 - A port the core calls asynchronously, answered when it is read, can be a request to the process: the

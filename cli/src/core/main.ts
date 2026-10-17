@@ -1406,6 +1406,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // can beat that host's connection. Hold it through the same bounded startup gate; after any disconnect, fail
     // promptly as before. Under a master from before, Agent Messages' own process starts at its first request this way.
     onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, ...VIEWERS_ON_DEMAND, ...Object.values(READER_SERVICES), 'models', 'gateway', 'shell', 'messages']),
+    // But the Store's requests wait through its process's restart too: a window's Store list was answered unavailable
+    // while the master restarted the viewers (core/serviceLinks.ts `waitsThroughRestart`).
+    waitsThroughRestart: new Set(['store']),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
     answer: async (service, query, payload, authority) => await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
