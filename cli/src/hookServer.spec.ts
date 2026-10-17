@@ -110,6 +110,27 @@ describe('process-owned hook server', () => {
     })
   })
 
+  it('resolves a hook from a pty host pane (Windows) by its instance and pane', async () => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const response = await fetch(`${base}/api/hook/session-start`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        engine: 'claude',
+        sessionId: '7f3b1c2e-0a4d-4e5f-9a6b-1c2d3e4f5a6b',
+        runtimeHints: [{ backend: 'ptyhost', instance: 'p2', paneId: '%1003' }],
+        callerPid: 4242,
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(resolveHookAgent).toHaveBeenCalledWith({
+      engine: 'claude', tmuxPane: undefined, runtimeHints: [{ backend: 'ptyhost', instance: 'p2', paneId: '%1003' }], callerPid: 4242,
+      onWait: expect.any(Function),
+    })
+  })
+
   it('answers a hook whose agent has yet to record its process before the wait, and only logs what the wait finds', async () => {
     // The engine's hook command gives up on a reply after 500ms and then writes the registry itself, as for
     // a daemon that is down (hook/notify.mjs, fallbackRegister): held for the wait, its own row took the
@@ -207,6 +228,9 @@ describe('process-owned hook server', () => {
   it.each([
     [{ engine: 'claude', sessionId: 'session-1', tmuxPane: '%1', unknown: true }],
     [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'tmux', paneId: '%1', extra: true }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p1', paneId: '%1', extra: true }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'host', paneId: '%1' }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p1', paneId: '1' }] }],
     [{ engine: 'claude', sessionId: 'session-1', tmuxPane: '%1', source: { forged: true } }],
     [{ engine: 'claude', sessionId: 'session-1', tmuxPane: '%1', input: 'x'.repeat(128 * 1024 + 1) }],
     [null],
