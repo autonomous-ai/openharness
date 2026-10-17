@@ -365,6 +365,22 @@ describe('scheduleFinalRemoval', () => {
     expect([...thrown.files.keys()]).toEqual([])
   })
 
+  it('when WMI refuses a standard user signed in over SSH, says so and that the desktop works', () => {
+    // The prelude's stderr (the exception's message) when WMI refuses a network logon, as for hb512 over SSH on the VM
+    // (B5.12: HRESULT 0x80041003, "Access denied").
+    const refused = () => ({ status: 1, stdout: '', stderr: 'Access denied ' })
+    expect(scheduleFinalRemoval(plan, deps({ powershell: refused }).base)).toEqual({
+      ok: false,
+      reason: 'Windows did not start the step that removes Harness\'s files once this command has ended.',
+      manual: 'Windows does not let a standard user signed in over SSH start it; run harness uninstall at the desktop, or delete C:\\U\\.harness yourself.',
+      detail: 'Access denied',
+    })
+    const keep = { root: 'C:\\U\\.harness', removeRoot: false, kept: ['auth'], remove: [{ path: 'C:\\U\\.harness\\bin', dir: true }] }
+    expect(scheduleFinalRemoval(keep, deps({ powershell: refused }).base)).toMatchObject({
+      manual: 'Windows does not let a standard user signed in over SSH start it; run harness uninstall at the desktop, or delete these yourself:\n  C:\\U\\.harness\\bin',
+    })
+  })
+
   it('names what to delete by hand without the root when the plan keeps something in it', () => {
     const keep = { root: 'C:\\U\\.harness', removeRoot: false, kept: ['auth', 'cli\\data'], remove: [{ path: 'C:\\U\\.harness\\bin', dir: true }, { path: 'C:\\U\\.harness\\cli\\0.5.1', dir: true }] }
     expect(scheduleFinalRemoval(keep, deps({ powershell: wmiOff }).base)).toMatchObject({

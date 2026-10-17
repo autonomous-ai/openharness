@@ -271,7 +271,8 @@ function removeFiles(deps: UninstallDeps, keepData: boolean, problems: string[])
     const what = keepData ? `the program in ${root}` : plan.removeRoot ? root : `everything in ${root} except ${plan.kept.join(', ')}`
     if (windows) {
       const final = deps.scheduleFinalRemoval(plan)
-      if (!final.ok) { problems.push(`${final.reason} ${final.manual}`); return false }
+      // What Windows said, in brackets, for a bug report; the sentence around it is the person's.
+      if (!final.ok) { problems.push(`${final.reason} (${final.detail}) ${final.manual}`); return false }
       deps.out(`✓ ${what} goes once this command has exited (anything left is listed in ${final.log})`)
     } else {
       const left = deps.removeNow(plan)

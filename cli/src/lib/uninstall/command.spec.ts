@@ -322,7 +322,7 @@ describe('harness uninstall', () => {
     expect(t.out.some((line) => line.startsWith('Harness is uninstalled') || line.includes('goes once'))).toBe(false)
     expect(t.err).toEqual([
       '✗ Harness is only partly uninstalled:',
-      '  · Windows did not start the step that removes Harness\'s files once this command has ended. When this command has finished, delete these yourself:\n      C:\\Users\\u\\.harness\\bin\n      C:\\Users\\u\\.harness\\cli',
+      '  · Windows did not start the step that removes Harness\'s files once this command has ended. (Win32_Process.Create returned 2) When this command has finished, delete these yourself:\n      C:\\Users\\u\\.harness\\bin\n      C:\\Users\\u\\.harness\\cli',
     ])
   })
 })

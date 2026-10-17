@@ -355,7 +355,20 @@ export function scheduleFinalRemoval(plan: RemovalPlan, deps: FinalRemovalDeps):
   if (!started.error && started.status === 0) return { ok: true, script, log }
   try { deps.remove(script) } catch { /* a script left in the temp folder does nothing on its own */ }
   const detail = started.error ? message(started.error) : (started.stderr.trim() || `PowerShell exited with ${started.status}`)
-  return { ok: false, reason: 'Windows did not start the step that removes Harness\'s files once this command has ended.', manual, detail }
+  return { ok: false, reason: 'Windows did not start the step that removes Harness\'s files once this command has ended.', manual: wmiRefused(detail) ? overSsh(plan) : manual, detail }
+}
+
+/**
+ * WMI's refusal (Access denied, 0x80041003): what it answers a standard user whose logon is a network logon, as an SSH
+ * session is. Seen on the VM for a fresh standard user over SSH (task-B3.21 finding F1, B5.12); at the desktop the same
+ * user starts the step.
+ */
+const wmiRefused = (detail: string): boolean => /access (is )?denied|0x80041003/i.test(detail)
+
+/** The manual line when WMI refused: why, the way that works, and what to delete otherwise. */
+function overSsh(plan: RemovalPlan): string {
+  const why = 'Windows does not let a standard user signed in over SSH start it; run harness uninstall at the desktop, or'
+  return plan.removeRoot ? `${why} delete ${plan.root} yourself.` : `${why} delete these yourself:${plan.remove.map((t) => `\n  ${t.path}`).join('')}`
 }
 
 /** This computer's. */
