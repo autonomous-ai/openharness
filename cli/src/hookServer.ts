@@ -685,7 +685,9 @@ export function startHookServer(
           if (!current()) return { kind: 'reject', reason: 'stale_hook' }
           if (handlers.hookAdmissionBlocked?.(processAgent.agentId)) return { kind: 'hold', reason: 'Waiting for Stop to settle before admitting the hook.' }
           const row = live()!
-          if (!runtimeHints.some(hint => row.runtimes.some(runtime => runtime.backend === hint.backend && runtime.paneId === hint.paneId))) {
+          if (!runtimeHints.some(hint => row.runtimes.some(runtime => runtime.backend === hint.backend && runtime.paneId === hint.paneId
+            // A paneId is only unique within one pty host.
+            && (hint.backend !== 'ptyhost' || (runtime.backend === 'ptyhost' && runtime.instance === hint.instance))))) {
             return { kind: 'hold', reason: 'Waiting for the original hook pane to belong to its engine process.' }
           }
           inspectionIdentity = paneReadIdentity(row)

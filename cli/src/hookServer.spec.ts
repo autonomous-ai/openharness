@@ -64,6 +64,31 @@ describe('process-owned hook server', () => {
     } finally { admit.mockRestore(); byAgent.mockRestore() }
   })
 
+  it('keeps both hints of a mixed tmux and pty host array', async () => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const runtimeHints = [{ backend: 'tmux', paneId: '%5' }, { backend: 'ptyhost', instance: 'p2', paneId: '%1003' }]
+    await fetch(`${base}/api/hook/session-start`, { method: 'POST', headers,
+      body: JSON.stringify({ engine: 'claude', sessionId: 'session-1', runtimeHints, callerPid: 4242 }) })
+    expect(resolveHookAgent).toHaveBeenCalledWith(expect.objectContaining({ runtimeHints }))
+  })
+
+  it('holds a hook whose pty host pane is another host instance\'s pane with the same id', async () => {
+    const admit = vi.spyOn(engineHooks.codex, 'admit').mockReturnValue({ accepted: false, reason: 'codex_subagent' })
+    const runtime = { backend: 'ptyhost', instance: 'p1', paneId: '%1' }
+    const agent = { engine: 'codex', agentId: 'parent', runtimes: [runtime], primaryRuntimeKey: 'ptyhost\u0000p1\u0000%1', processIdentity: { pid: 4242, startMarker: 'fixture', executable: '<codex>' } } as unknown as RegisteredSession
+    const byAgent = vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    try {
+      const { base, headers } = await start({ resolveHookAgent: async () => agent })
+      const post = async (instance: string) => (await fetch(`${base}/api/hook/session-start`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ engine: 'codex', runtimeHints: [{ backend: 'ptyhost', instance, paneId: '%1' }], sessionId: `child-${instance}`, hookEvent: 'UserPromptSubmit' }),
+      })).json()
+      expect(await post('p2')).toEqual({ pending: true })
+      expect(await post('p1')).toEqual({ ignored: true, reason: 'codex_subagent' })
+    } finally { admit.mockRestore(); byAgent.mockRestore() }
+  })
+
   it('runs targeted resolution and rejects a hook without a matching pane engine process', async () => {
     const resolveHookAgent = vi.fn(async () => null)
     const { handlers, base, headers } = await start({ resolveHookAgent })
@@ -231,6 +256,9 @@ describe('process-owned hook server', () => {
     [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p1', paneId: '%1', extra: true }] }],
     [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'host', paneId: '%1' }] }],
     [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p1', paneId: '1' }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p1' }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 1, paneId: '%1' }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p1', paneId: '%1\n' }] }],
     [{ engine: 'claude', sessionId: 'session-1', tmuxPane: '%1', source: { forged: true } }],
     [{ engine: 'claude', sessionId: 'session-1', tmuxPane: '%1', input: 'x'.repeat(128 * 1024 + 1) }],
     [null],
