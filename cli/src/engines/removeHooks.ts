@@ -95,6 +95,9 @@ function commandCodeProfile(platform: NodeJS.Platform): NativeHookSettings[] {
   return file === COMMANDCODE_HOOK_SETTINGS.file ? [] : [{ ...COMMANDCODE_HOOK_SETTINGS, file }]
 }
 
+/** The report's name for the homes Harness adopted, when they could not be read (`HookTargets.unread`). */
+export const ADOPTED_HOMES = 'the homes Harness adopted'
+
 /** Why a home on a network share or a device path is left: opening one can start a connection to another computer. */
 const NETWORK = 'the path is a network share or a device path, which Harness does not open on Windows'
 
@@ -195,6 +198,6 @@ export async function removeEngineHooks(targets: HookTargets, platform: NodeJS.P
   }
   const hermes = targets.hermes.homes.filter((home) => !remote(home, join(home, targets.hermes.rule.homes.file)))
   out.push(...await removeNativeYamlHooks(targets.hermes.rule, hermes))
-  if (targets.unread) out.push({ file: 'the homes Harness adopted', removed: 0, failed: targets.unread })
+  if (targets.unread) out.push({ file: ADOPTED_HOMES, removed: 0, failed: targets.unread })
   return out.filter((o) => o.removed || o.failed || o.kept)
 }

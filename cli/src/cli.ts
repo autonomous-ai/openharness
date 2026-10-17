@@ -136,6 +136,8 @@ Machine:
   harness logout               stop the adapter and clear this computer's SSO session
   harness stop                 stop the background adapter (keeps the SSO session)
   harness reset                stop the adapter and clear local CLI state
+  harness uninstall            remove Harness from this computer: harnesses, daemon, hooks, PATH and ~/.harness
+                               (asks first; --yes skips it, --keep-data keeps your sign-in and history)
   harness status               show whether it's running (+ version)
   harness service install      run the daemon under launchd (macOS) or systemd (Linux): it starts at login and comes
                                back if it dies. On Windows, Task Scheduler starts it when you sign in, and again
@@ -2856,6 +2858,14 @@ switch (cmd) {
     break
   case 'reset':
     resetCommand().catch(onError)
+    break
+  case 'uninstall':
+    // Loaded only here: the engines' hook declarations and the Windows helpers are not every command's. Exits as soon
+    // as it is done, because on Windows the last step waits for this process to end before it deletes its node.exe.
+    Promise.all([import('./lib/uninstall/command.js'), import('./lib/uninstall/deps.js')])
+      .then(async ([{ uninstallCommand }, { uninstallDeps }]) => uninstallCommand(rest, await uninstallDeps({ tildify, ask: askLine })))
+      .then((code) => process.exit(code))
+      .catch(onError)
     break
   case 'status':
     status().catch(onError)

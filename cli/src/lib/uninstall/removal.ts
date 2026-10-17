@@ -293,16 +293,22 @@ export type FinalRemoval =
   | { ok: true; script: string; log: string }
   | { ok: false; reason: string; manual: string; detail: string }
 
-/** What the person deletes by hand: the root when the plan takes all of it, else the plan's paths, which never hold data that is kept. */
+/**
+ * What the person deletes by hand: the root when the plan takes all of it, else the plan's paths, which never hold data
+ * that is kept. Once the command has finished, not once the window is closed: the files are free as soon as this
+ * command's node.exe has exited, and the terminal holds none of them (uninstall refuses to run from inside the root).
+ */
 export function manualRemoval(plan: RemovalPlan): string {
-  if (plan.removeRoot) return `Close this window, then delete ${plan.root} yourself.`
-  return `Close this window, then delete these yourself:${plan.remove.map((t) => `\n  ${t.path}`).join('')}`
+  if (plan.removeRoot) return `When this command has finished, delete ${plan.root} yourself.`
+  return `When this command has finished, delete these yourself:${plan.remove.map((t) => `\n  ${t.path}`).join('')}`
 }
 
 /**
- * cmd.exe gets the script's name only, run from the temp folder: cmd /c expands a %VAR% in its command line, so a full
- * path such as C:\Users\a%OS%b\AppData\Local\Temp\… would be run as another. The name is digits and dashes. /v:off
- * keeps a `!` a `!` even where the registry turns delayed expansion on for every cmd.
+ * Starts the last step through WMI (Win32_Process.Create), hidden, outside this process's job, with
+ * `cmd.exe /d /v:off /c .\<script>` run from the temp folder. cmd.exe gets the script's name only: cmd /c expands a
+ * %VAR% in its command line, so a full path such as C:\Users\a%OS%b\AppData\Local\Temp\… would be run as another. The
+ * name is digits and dashes. /v:off keeps a `!` a `!` even where the registry turns delayed expansion on for every cmd;
+ * /d skips the AutoRun commands the registry may give every cmd.
  */
 const START_OUTSIDE_JOB = String.raw`$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
 $command = '"' + $env:HARNESS_CMD + '" /d /v:off /c .\' + $env:HARNESS_UNINSTALL_SCRIPT

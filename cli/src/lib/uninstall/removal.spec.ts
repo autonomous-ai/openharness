@@ -336,7 +336,7 @@ describe('scheduleFinalRemoval', () => {
     expect(scheduleFinalRemoval(plan, t.base)).toEqual({
       ok: false,
       reason: 'Windows did not start the step that removes Harness\'s files once this command has ended.',
-      manual: 'Close this window, then delete C:\\U\\.harness yourself.',
+      manual: 'When this command has finished, delete C:\\U\\.harness yourself.',
       detail: 'Win32_Process.Create returned 2',
     })
     expect(t.written).toEqual(['C:\\T\\harness-uninstall-77-1000.cmd'])
@@ -349,7 +349,7 @@ describe('scheduleFinalRemoval', () => {
   it('names what to delete by hand without the root when the plan keeps something in it', () => {
     const keep = { root: 'C:\\U\\.harness', removeRoot: false, kept: ['auth', 'cli\\data'], remove: [{ path: 'C:\\U\\.harness\\bin', dir: true }, { path: 'C:\\U\\.harness\\cli\\0.5.1', dir: true }] }
     expect(scheduleFinalRemoval(keep, deps({ powershell: wmiOff }).base)).toMatchObject({
-      ok: false, manual: 'Close this window, then delete these yourself:\n  C:\\U\\.harness\\bin\n  C:\\U\\.harness\\cli\\0.5.1',
+      ok: false, manual: 'When this command has finished, delete these yourself:\n  C:\\U\\.harness\\bin\n  C:\\U\\.harness\\cli\\0.5.1',
     })
   })
 
@@ -358,7 +358,7 @@ describe('scheduleFinalRemoval', () => {
     expect(scheduleFinalRemoval(plan, unwritable.base)).toEqual({
       ok: false,
       reason: 'Harness could not save the step that removes its files once this command has ended.',
-      manual: 'Close this window, then delete C:\\U\\.harness yourself.',
+      manual: 'When this command has finished, delete C:\\U\\.harness yourself.',
       detail: 'could not write C:\\T\\harness-uninstall-77-1000.cmd: EACCES',
     })
     expect(unwritable.scripts).toEqual([])
