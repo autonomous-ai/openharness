@@ -89,8 +89,9 @@ describe('the shell a Windows engine\'s pane becomes', () => {
     expect(windowsPaneLaunch('codex', { cwd: null, clearEnv: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], native }, 'win32'))
       .toEqual({ clearInherited: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_HOME'], afterExit: windowsAfterExit('codex') })
     expect(windowsPaneLaunch('codex', { clearEnv: [], native: { clearEnvironment: [] } }, 'win32')).toEqual({ afterExit: windowsAfterExit('codex') })
-    // The command a person would type names it: Command Code's is `cmd`.
-    expect(windowsPaneLaunch('commandcode', {}, 'win32').afterExit?.env).toEqual({ HARNESS_ENGINE_COMMAND: 'cmd' })
+    // The command a person would type names it. On Windows Command Code's is `command-code`: `cmd` is the command
+    // processor there (F7, B4.13).
+    expect(windowsPaneLaunch('commandcode', {}, 'win32').afterExit?.env).toEqual({ HARNESS_ENGINE_COMMAND: 'command-code' })
     vi.stubEnv('CODEX_PATH', 'C:\\tools\\codex.exe')
     try {
       expect(windowsPaneLaunch('codex', {}, 'win32').afterExit?.env).toEqual({ HARNESS_ENGINE_COMMAND: 'codex.exe' })

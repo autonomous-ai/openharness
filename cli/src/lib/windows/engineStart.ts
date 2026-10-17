@@ -133,7 +133,7 @@ export interface WindowsPaneLaunchOptions {
  * The cwd, cleared names and hand-off of a Windows pane for [engine], to spread into its create or respawn request;
  * nothing elsewhere, where the launch script enters the workspace, unsets the names and hands the pane on itself. A
  * terminal or a held pane hands off to nothing: its process ending is the pane's end. The notice names the engine by
- * the command a person would type (`cursor-agent`, `cmd`), as `harness_after`'s does.
+ * the command a person would type (`cursor-agent`, `command-code`), as `harness_after`'s does.
  */
 export function windowsPaneLaunch(engine: AgentEngine, launch: WindowsPaneLaunchOptions,
   platform: NodeJS.Platform = process.platform): WindowsPaneLaunch {
@@ -142,6 +142,6 @@ export function windowsPaneLaunch(engine: AgentEngine, launch: WindowsPaneLaunch
   return {
     ...(launch.cwd ? { cwd: launch.cwd } : {}),
     ...(clearInherited.length ? { clearInherited } : {}),
-    ...(isTerminalEngine(engine) || launch.held ? {} : { afterExit: windowsAfterExit(engineBin(engine).split(/[\\/]/).pop() || engine) }),
+    ...(isTerminalEngine(engine) || launch.held ? {} : { afterExit: windowsAfterExit(engineBin(engine, platform).split(/[\\/]/).pop() || engine) }),
   }
 }
