@@ -179,7 +179,7 @@ export async function removeEngineHooks(targets: HookTargets, platform: NodeJS.P
     const hooks = await removeJsonHooks(settingsFile, { schema: 'nested', messages: true })
     out.push(hooks)
     // Only once the hooks are out (or were already, on a second uninstall): a record taken away from a hook still there makes Codex ask about it again.
-    if (codex.reviewed && !hooks.failed) out.push(await removeReviewedHooks(codex.reviewed, home, settingsFile, { before, now: codexHooksNow(home) }))
+    if (codex.reviewed && !hooks.failed) out.push(await removeReviewedHooks(codex.reviewed, home, settingsFile, { before, now: () => codexHooksNow(home) }))
     if (codex.allow && 'file' in codex.allow) out.push(await removeOwnedFile(join(home, codex.allow.file), (content) => content.startsWith(RULES_HEADER)))
   }
   for (const rule of targets.native) {

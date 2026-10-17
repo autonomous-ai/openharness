@@ -149,14 +149,16 @@ export async function removeOwnedFile(file: string, owned: (content: string) => 
  * when it holds exactly the hash of one of Harness's hooks, and nothing else (`withoutReviewRecords`): the hook at its
  * place in [held.before], the settings file before Harness's hooks were taken out of it, or, by the settings file
  * alone, any of the hooks Harness writes there now ([held.now]), which finds them again on a second uninstall after
- * one that stopped between the hooks and their records. The rest of the config stays byte for byte.
+ * one that stopped between the hooks and their records. [held.now] is worked out here, inside the preparation: a hook
+ * line Harness cannot write for this computer now (a path its quoting refuses, notifyHooks.ts `quoteHookCommand`) finds
+ * none, and only the records of the hooks in [held.before] go. The rest of the config stays byte for byte.
  *
  * The limit: Codex keys a record by the hook's place in the settings file (block, hook) and holds its hash, which
  * covers the whole command. A record for a hook of Harness's that is no longer in the file, written by another
  * release, another port or another install folder, matches neither and stays: a stale entry Codex no longer uses.
  */
 export async function removeReviewedHooks(record: HookReviewRecord, home: string, settingsFile: string,
-  held: { before: Settings | null; now: Settings }, platform: NodeJS.Platform = hostPlatform()): Promise<HookFileRemoval> {
+  held: { before: Settings | null; now: () => Settings }, platform: NodeJS.Platform = hostPlatform()): Promise<HookFileRemoval> {
   const config = join(home, record.file)
   try {
     return await runHookPreparation([config], async (attempt) => {
@@ -165,7 +167,9 @@ export async function removeReviewedHooks(record: HookReviewRecord, home: string
       // Keyed as prepareReviewed keys them: the config's real folder and the settings file's name.
       const keyed = join(observed.directory, basename(settingsFile))
       const before = held.before ? reviewRecords(record, keyed, held.before, platform) : new Map<string, string>()
-      const now = new Set(reviewRecords(record, keyed, held.now, platform).values())
+      let current: Settings
+      try { current = held.now() } catch { current = { hooks: {} } }
+      const now = new Set(reviewRecords(record, keyed, current, platform).values())
       if (before.size === 0 && now.size === 0) return { file: config, removed: 0 }
       const owned = (key: string, hash: string) => before.get(key) === hash || (key.startsWith(`${keyed}:`) && now.has(hash))
       try { parseToml(observed.content, { integersAsBigInt: true, maxDepth: 64 }) }

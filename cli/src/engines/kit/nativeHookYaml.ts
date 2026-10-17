@@ -210,8 +210,11 @@ export async function removeNativeYamlHooks(rule: NativeYamlHooks, homes: readon
           if (foreignHooks && managedHooksIn(rule, cleaned)) kept = YAML_HOOKS_KEPT
           if (removed > 0) {
             const next = cleaned.trim() ? cleaned : ''
-            const left = parseDocument(next, { strict: true, uniqueKeys: true, prettyErrors: false })
-            if (left.errors.length || (left.contents !== null && !isMap(left.contents))) {
+            // The person's own duplicate keys are theirs, read by Hermes as before: only an error the removal made counts.
+            const duplicates = (yaml: string) => parseDocument(yaml, { strict: true, uniqueKeys: true, prettyErrors: false }).errors
+              .filter((error) => error.code === 'DUPLICATE_KEY').length
+            const left = parseDocument(next, { strict: true, uniqueKeys: false, prettyErrors: false })
+            if (left.errors.length || (left.contents !== null && !isMap(left.contents)) || duplicates(next) > duplicates(text)) {
               throw new HookPreparationHeld('the YAML configuration would not stay a complete mapping')
             }
             config = { next: crlf ? next.replace(/\n/g, '\r\n') : next, removed }

@@ -313,12 +313,11 @@ describe('Hermes\'s YAML hooks, taken out', () => {
     expect(readFileSync(config, 'utf8')).toBe('model: x\n\nother: y\n\n\n')
   })
 
-  it('writes nothing when what is left would not be a complete mapping', async () => {
+  it('keeps the person\'s own duplicate keys, which Hermes reads as it always has', async () => {
     const { rule, home, config } = hermes()
-    const text = `model: a\nmodel: b\n\n${block}`
-    write(config, text)
-    expect(await removeNativeYamlHooks(rule, [home])).toEqual([{ file: config, removed: 0, failed: 'the YAML configuration would not stay a complete mapping' }])
-    expect(readFileSync(config, 'utf8')).toBe(text)
+    write(config, `model: a\nmodel: b\n\n${block}`)
+    expect(await removeNativeYamlHooks(rule, [home])).toEqual([{ file: config, removed: 1 }])
+    expect(readFileSync(config, 'utf8')).toBe('model: a\nmodel: b\n')
   })
 
   it('reports a held file by its reason, without the installers\' wording', async () => {
@@ -361,5 +360,26 @@ describe('a Hermes home on a network share', () => {
     } finally {
       vi.mocked(homeIsNetworkOrDevice).mockReset()
     }
+  })
+})
+
+describe('a Codex home whose hooks Harness could not write now', () => {
+  it('still loses the records of the hooks it held, and the plugins after it are still taken out', async () => {
+    const { root, targets } = machine()
+    const record = hookContracts.codex.settings.reviewed!
+    const home = join(root, 'codex')
+    targets.codex.homes = [home]
+    const settings = { hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: OURS, timeout: 5 }] }] } }
+    write(join(home, 'hooks.json'), JSON.stringify(settings))
+    write(join(home, 'config.toml'), withReviewRecords('model = "o3"\n', record, reviewRecords(record, join(realpathSync(home), 'hooks.json'), settings)) as string)
+    write(targets.plugins[0].file, nativePluginSource(targets.plugins[0], values))
+    // A line break in a path is refused by the hook line's quoting (notifyHooks.ts quoteHookCommand).
+    const saved = env.ADAPTER_DATA_DIR
+    env.ADAPTER_DATA_DIR = '/tmp/a\nb'
+    let outcomes: Awaited<ReturnType<typeof removeEngineHooks>>
+    try { outcomes = await removeEngineHooks(targets) } finally { env.ADAPTER_DATA_DIR = saved }
+    expect(outcomes).toContainEqual({ file: join(home, 'config.toml'), removed: 1 })
+    expect(readFileSync(join(home, 'config.toml'), 'utf8')).toBe('model = "o3"\n')
+    expect(existsSync(targets.plugins[0].file)).toBe(false)
   })
 })
