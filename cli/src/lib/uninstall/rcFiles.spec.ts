@@ -108,7 +108,8 @@ describe('removeHarnessPathLines', () => {
     expect(filesWithHarnessPathLines(home)).toEqual([])
   })
 
-  it('edits every startup file the installer wrote to, through a link without replacing it', () => {
+  // POSIX-only: file modes (chmod/0o640) and /h/... paths do not exist on Windows; the rc files are a mac/Linux feature.
+  it.skipIf(process.platform === 'win32')('edits every startup file the installer wrote to, through a link without replacing it', () => {
     const home = mkdtempSync(join(tmpdir(), 'rc-files-'))
     dirs.push(home)
     writeFileSync(join(home, '.zshrc'), installed('alias ll="ls -l"\n'), { mode: 0o640 })
@@ -177,7 +178,8 @@ describe('removeHarnessPathLines', () => {
     expect(readdirSync(h).filter((n) => n.includes('harness-uninstall'))).toEqual([])
   })
 
-  it('edits a link\'s target by rename, keeping the link and the target\'s mode', () => {
+  // POSIX-only: asserts file modes, which Windows does not keep.
+  it.skipIf(process.platform === 'win32')('edits a link\'s target by rename, keeping the link and the target\'s mode', () => {
     const h = home()
     mkdirSync(join(h, 'dots'))
     writeFileSync(join(h, 'dots', 'zshrc'), installed('a\n'), { mode: 0o600 })
@@ -213,7 +215,8 @@ describe('removeHarnessPathLines', () => {
     expect(readFileSync(join(h, '.config', 'fish', 'config.fish'), 'utf8')).toBe(fish)
   })
 
-  it('names every file it looks at', () => {
+  // POSIX-only: asserts /h/... paths; Windows joins with backslashes.
+  it.skipIf(process.platform === 'win32')('names every file it looks at', () => {
     expect(rcFiles('/h').map((f) => f.file)).toEqual([
       '/h/.zshrc', '/h/.bashrc', '/h/.bash_profile', '/h/.bash_login', '/h/.profile', '/h/.config/fish/config.fish',
     ])
