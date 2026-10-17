@@ -7293,12 +7293,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
                               ),
                               const SizedBox(width: 10),
                               Expanded(
-                                // Whole message, selectable: a refusal can carry
-                                // a path the person needs to copy.
-                                child: SelectableText(
-                                  _projects.error ?? app.lastError!,
-                                  maxLines: 4,
-                                  style: grid.AppType.body(),
+                                // Plain text, so the banner never takes keyboard
+                                // focus from the terminal; the tooltip carries
+                                // the whole message when it is clipped.
+                                child: Tooltip(
+                                  message: _projects.error ?? app.lastError!,
+                                  child: Text(
+                                    _projects.error ?? app.lastError!,
+                                    maxLines: 4,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: grid.AppType.body(),
+                                  ),
                                 ),
                               ),
                               if (_projects.error == null &&

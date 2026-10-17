@@ -1,7 +1,9 @@
 /// What the app says when the daemon refuses to move an agent to another model.
 ///
-/// One sentence per refusal, in the app's own words. The daemon's `detail` is not shown: it is
-/// written for its log and names the grid, and the user's vocabulary is "Subscription" and "Local".
+/// One sentence per refusal, in the app's own words. The daemon's `detail` is not shown, except for
+/// `API_UNAVAILABLE` and `ENGINE_LAUNCH_REFUSED`: elsewhere it is written for its log and names the
+/// grid, and the user's vocabulary is "Subscription" and "Local". Those two details are written for
+/// the person, so they are shown.
 /// Every code the daemon's `agent_retarget` can answer with is here, and an unknown one still gets a
 /// sentence rather than the code — a new refusal in a newer daemon must not surface as `SOME_CODE`.
 ///
