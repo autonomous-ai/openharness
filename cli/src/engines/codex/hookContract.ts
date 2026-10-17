@@ -34,6 +34,9 @@ export const hooks: HookContract = {
       ],
     },
     commandNamesHome: true,
+    // Windows: `%COMSPEC% /C "<line>"`, the line given verbatim (codex-rs hooks/src/engine/command_runner.rs `build_command`,
+    // rust-v0.162.1). `commandWindows` would override `command` there; Harness writes `command`, quoted for cmd.exe.
+    win32Runner: 'cmd',
     upToDate: { command: 'first', matcher: true },
     messages: {
       current: '[hooks] Codex SessionStart/UserPromptSubmit hooks already installed → {file}',

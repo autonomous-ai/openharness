@@ -1,0 +1,173 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { AGY_HOOK_SETTINGS } from '../agy/contract.js'
+import { hooks as claude } from '../claude/hookContract.js'
+import { hooks as codex } from '../codex/hookContract.js'
+import { COMMANDCODE_HOOK_SETTINGS } from '../commandcode/contract.js'
+import { COPILOT_HOOK_SETTINGS } from '../copilot/contract.js'
+import { CURSOR_HOOK_SETTINGS } from '../cursor/contract.js'
+import { DEVIN_HOOK_SETTINGS } from '../devin/contract.js'
+import { GROK_HOOK_SETTINGS } from '../grok/contract.js'
+import { managedNodePath } from '../../lib/nodeRuntime.js'
+import { installHermesHooks } from '../nativeHooks.js'
+import { installHookSettings, notifyHookEntry } from './hookSettings.js'
+import { installNativeHookSettings } from './nativeHookSettings.js'
+import { hookScriptCandidates, identitySettings } from './notifyHooks.js'
+
+const dirs: string[] = []
+afterEach(() => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+const argv = ['C:\\h\\node.exe', 'C:\\h\\cli\\notify.mjs', '--port', '18473', '--data-dir', 'C:\\h\\cli\\data']
+
+describe('the hook each engine runs on Windows', () => {
+  it('is declared for every engine whose hooks Harness installs there, and for no other', () => {
+    expect(claude.settings.win32Runner).toBe('argv')
+    expect(codex.settings.win32Runner).toBe('cmd')
+    expect(COPILOT_HOOK_SETTINGS.win32Runner).toBe('powershell')
+    expect(COMMANDCODE_HOOK_SETTINGS.win32Runner).toBe('cmd')
+    for (const rule of [CURSOR_HOOK_SETTINGS, DEVIN_HOOK_SETTINGS, GROK_HOOK_SETTINGS, AGY_HOOK_SETTINGS]) expect('win32Runner' in rule).toBe(false)
+  })
+
+  it('writes Claude Code exec form on Windows: node.exe and its arguments, no shell', () => {
+    expect(notifyHookEntry(claude.settings, argv, 'win32')).toEqual({ command: argv[0], args: argv.slice(1) })
+  })
+
+  it('writes Codex a line cmd.exe reads', () => {
+    expect(notifyHookEntry(codex.settings, argv, 'win32'))
+      .toEqual({ command: '"C:\\h\\node.exe" "C:\\h\\cli\\notify.mjs" --port 18473 --data-dir "C:\\h\\cli\\data"' })
+  })
+
+  it('keeps the POSIX line for both off Windows', () => {
+    const posix = ['/h/node', '/h/notify.mjs', '--port', '1']
+    expect(notifyHookEntry(claude.settings, posix, 'darwin')).toEqual({ command: "'/h/node' '/h/notify.mjs' --port 1" })
+    expect(notifyHookEntry(codex.settings, posix, 'linux')).toEqual({ command: "'/h/node' '/h/notify.mjs' --port 1" })
+  })
+
+  it('installs nothing for an engine with no Windows runner, and says so', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installNativeHookSettings({ ...GROK_HOOK_SETTINGS, file: join(dir, 'grok', 'hooks', 'harness.json') }, 19473, {}, 'win32')).toBe(true)
+    expect(existsSync(join(dir, 'grok'))).toBe(false)
+    expect(log).toHaveBeenCalledWith('[hooks] grok hooks are not installed on Windows yet')
+  })
+})
+
+describe('a hook preparation\'s identity', () => {
+  // installHookSettings and installNativeHookSettings name a preparation by JSON.stringify of the settings, among
+  // others. Off Windows that string must be byte for byte what it was before win32Runner existed (mac/Linux unchanged).
+  it('is the settings without win32Runner off Windows, byte for byte, and the whole declaration on Windows', () => {
+    const { win32Runner: _claude, ...claudeBefore } = claude.settings
+    const { win32Runner: _copilot, ...copilotBefore } = COPILOT_HOOK_SETTINGS
+    expect(JSON.stringify(identitySettings(claude.settings, 'darwin'))).toBe(JSON.stringify(claudeBefore))
+    expect(JSON.stringify(identitySettings(codex.settings, 'linux'))).not.toContain('win32Runner')
+    expect(JSON.stringify(identitySettings(COPILOT_HOOK_SETTINGS, 'darwin'))).toBe(JSON.stringify(copilotBefore))
+    expect(JSON.stringify(identitySettings(CURSOR_HOOK_SETTINGS, 'darwin'))).toBe(JSON.stringify(CURSOR_HOOK_SETTINGS))
+    expect(identitySettings(COPILOT_HOOK_SETTINGS, 'win32')).toBe(COPILOT_HOOK_SETTINGS)
+    expect(JSON.stringify(identitySettings(claude.settings, 'win32'))).toContain('"win32Runner":"argv"')
+  })
+})
+
+describe('the notify.mjs a hook line names', () => {
+  const root = 'C:\\Users\\u\\.harness\\cli'
+  it('is the stable cli\\notify.mjs when the CLI runs from its Windows install', () => {
+    expect(hookScriptCandidates(`${root}\\0.5.0`, `${root}\\0.5.0\\cli.js`, 'win32', root)[0]).toBe(`${root}\\notify.mjs`)
+  })
+  it('is the sibling for a CLI run from anywhere else, and always off Windows', () => {
+    expect(hookScriptCandidates('C:\\work\\e2e\\dist', 'C:\\work\\e2e\\dist\\cli.js', 'win32', root)[0]).toBe(join('C:\\work\\e2e\\dist', 'notify.mjs'))
+    expect(hookScriptCandidates('/Users/u/.harness/cli', '/Users/u/.harness/cli/cli.js', 'darwin', '/Users/u/.harness/cli'))
+      // join, not literals: on a Windows host the path module writes backslashes, whatever platform is asked about.
+      .toEqual([join('/Users/u/.harness/cli', 'notify.mjs'), join('/Users/u/.harness/cli', 'notify.mjs'), join('/Users/u/.harness/cli', '..', '..', '..', 'hook', 'notify.mjs')])
+  })
+})
+
+// B4.1 review: a hook line a runner would misread is refused (quoteHookCommand). That refusal is an install that
+// failed, logged with its reason like any other, never a rejected promise the daemon reports with a stack trace.
+describe('a hook argument the Windows runner refuses', () => {
+  it('fails the install with its reason for cmd.exe (Codex): a % in the home it names', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const home = join(dir, 'co%dex')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(false)
+    expect(error).toHaveBeenCalledTimes(1)
+    expect(error.mock.calls[0]![0]).toBe(codex.settings.messages.failed)
+    expect(String((error.mock.calls[0]![1] as Error).message)).toMatch(/holds one of " % !/)
+    expect(existsSync(home)).toBe(false)
+  })
+
+  it('fails the install with its reason for PowerShell (Copilot): a typographic quote in its home', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const copilotHome = join(dir, 'O\u2019Brien')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const rule = { ...COPILOT_HOOK_SETTINGS, file: join(copilotHome, 'hooks', 'harness.json') }
+    expect(await installNativeHookSettings(rule, 19473, { environment: { HOME: dir, COPILOT_HOME: copilotHome } }, 'win32')).toBe(false)
+    expect(error).toHaveBeenCalledTimes(1)
+    expect(error.mock.calls[0]![0]).toBe(COPILOT_HOOK_SETTINGS.messages.failed)
+    expect(String((error.mock.calls[0]![1] as Error).message)).toMatch(/typographic quote/)
+    expect(existsSync(copilotHome)).toBe(false)
+  })
+})
+
+// B4.2 review: exec form keeps its arguments in `args`. A drift check that compared `command` alone saw every exec-form
+// hook as current, whatever its port; one that compared the line saw none, and rewrote the file at every start.
+describe('Claude Code\'s exec-form hook already in place', () => {
+  it('is left alone: a second install writes nothing and says it is current', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const home = join(dir, 'claude'), file = join(home, claude.settings.file)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
+    const written = readFileSync(file, 'utf8'), before = statSync(file, { bigint: true })
+    const hook = JSON.parse(written).hooks.Stop[0].hooks[0]
+    expect(hook.args).toEqual(expect.arrayContaining(['--port', '19473']))
+    expect(hook.command).toBe(managedNodePath())
+    log.mockClear()
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
+    expect(log.mock.calls.map(([line]) => line)).toEqual([claude.settings.messages.current])
+    const after = statSync(file, { bigint: true })
+    expect(readFileSync(file, 'utf8')).toBe(written)
+    expect([after.ino, after.mtimeNs]).toEqual([before.ino, before.mtimeNs])
+  })
+
+  it('is rewritten when only its arguments changed (another port)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const home = join(dir, 'claude'), file = join(home, claude.settings.file)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'win32')).toBe(true)
+    log.mockClear()
+    expect(await installHookSettings('claude', claude.settings, 19474, home, {}, 'win32')).toBe(true)
+    expect(log.mock.calls[0]![0]).toMatch(/^\[hooks\] updated/)
+    const events = JSON.parse(readFileSync(file, 'utf8')).hooks as Record<string, Array<{ hooks: Array<{ args: string[] }> }>>
+    for (const blocks of Object.values(events)) {
+      expect(blocks).toHaveLength(1)
+      expect(blocks[0]!.hooks[0]!.args).toEqual(expect.arrayContaining(['--port', '19474']))
+    }
+  })
+})
+
+// The B3.21 VM log: every start printed a stack trace for each of these engines' files. With no runner verified
+// there, each is one line, and nothing is an error.
+describe('an engine with no hooks on Windows', () => {
+  it.each([CURSOR_HOOK_SETTINGS, DEVIN_HOOK_SETTINGS, GROK_HOOK_SETTINGS, AGY_HOOK_SETTINGS])('logs one line for $engine, no error', async (rule) => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await installNativeHookSettings({ ...rule, file: join(dir, 'x', 'hooks.json') }, 19473, {}, 'win32')).toBe(true)
+    expect(log.mock.calls).toEqual([[`[hooks] ${rule.engine} hooks are not installed on Windows yet`]])
+    expect(error).not.toHaveBeenCalled(); expect(warn).not.toHaveBeenCalled()
+    expect(existsSync(join(dir, 'x'))).toBe(false)
+  })
+
+  it('logs one line for hermes, no error', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await installHermesHooks(19473, join(dir, 'hermes'), {}, 'win32')).toBe(true)
+    expect(log.mock.calls).toEqual([['[hooks] hermes hooks are not installed on Windows yet']])
+    expect(error).not.toHaveBeenCalled(); expect(warn).not.toHaveBeenCalled()
+    expect(existsSync(join(dir, 'hermes'))).toBe(false)
+  })
+})

@@ -4,9 +4,12 @@ import { basename, dirname, isAbsolute, join, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { env } from '../../config/env.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
+import { insideWindowsRoots } from '../../lib/secureState.js'
+import { STABLE_NOTIFY } from '../../lib/windows/installLayout.js'
 import { HookPreparationHeld } from './nativeHookFiles.js'
 import { cursorDataDir } from '../cursor/contract.js'
 import { nativeHookLocations } from './nativeLocations.js'
+import { hostPlatform } from './windowsFiles.js'
 
 // notify.mjs location depends on the layout (import.meta.url is the REAL executing file at runtime):
 //  - packaged/bundled: cli.js at ~/.harness/cli/cli.js → notify.mjs is a SIBLING (dist/ bundle too).
@@ -15,9 +18,35 @@ import { nativeHookLocations } from './nativeLocations.js'
 //  - dev/per-file:      notifyHooks.js at <appRoot>/{src,dist}/engines/kit/ → ../../../hook/notify.mjs.
 // Prefer the sibling, fall back to the dev path.
 const cliDir = dirname(fileURLToPath(import.meta.url))
-export const HOOK_SCRIPT =
-  [join(cliDir, 'notify.mjs'), ...(process.argv[1] ? [join(dirname(process.argv[1]), 'notify.mjs')] : []), join(cliDir, '..', '..', '..', 'hook', 'notify.mjs')].find(existsSync) ??
-  join(cliDir, '..', '..', '..', 'hook', 'notify.mjs')
+
+/**
+ * Where notify.mjs is, best first. Windows' installed layout (lib/windows/installLayout.ts) keeps one CLI folder per
+ * version, with a stable `cli\notify.mjs` beside them that the updater refreshes. The hook lines name that one, so
+ * they do not change at each update, and Codex does not ask to review them again.
+ */
+export function hookScriptCandidates(dir: string, script: string | undefined, platform: NodeJS.Platform = hostPlatform(),
+  cliRoot: string = env.ADAPTER_CLI_DIR): string[] {
+  const stable = platform === 'win32' && insideWindowsRoots(dir, [cliRoot]) ? [win32.join(cliRoot, STABLE_NOTIFY)] : []
+  return [...stable, join(dir, 'notify.mjs'), ...(script ? [join(dirname(script), 'notify.mjs')] : []), join(dir, '..', '..', '..', 'hook', 'notify.mjs')]
+}
+export const HOOK_SCRIPT = hookScriptCandidates(cliDir, process.argv[1]).find(existsSync) ?? join(cliDir, '..', '..', '..', 'hook', 'notify.mjs')
+
+/** An engine that declares no Windows hook runner gets no hooks there. That is said once per install and is not a failure. */
+export function hooksNotOnWindows(engine: string): true {
+  console.log(`[hooks] ${engine} hooks are not installed on Windows yet`)
+  return true
+}
+
+/**
+ * A hook rule as a preparation's identity names it (`runHookPreparation`'s `identity`: a refresh and a launch with
+ * the same one share a preparation). Off Windows `win32Runner` is left out, so the identity is byte for byte what it
+ * was before Windows hooks: mac and Linux do not change. The other keys keep their order.
+ */
+export function identitySettings<T extends object>(settings: T, platform: NodeJS.Platform = hostPlatform()): T | Omit<T, 'win32Runner'> {
+  if (platform === 'win32') return settings
+  const { win32Runner: _runner, ...rest } = settings as T & { win32Runner?: unknown }
+  return rest
+}
 
 export interface CommandHook {
   type: string
@@ -41,7 +70,8 @@ function shellQuote(value: string): string {
  * nativeHookSettings.ts `NativeHookSettings.win32Runner`). Off Windows every engine runs its hooks in a POSIX shell (`bash`).
  * - `argv`: the engine starts the program with its arguments and no shell (Claude Code's exec form, `command` + `args`).
  * - `bash`: a POSIX shell reads the line.
- * - `cmd`: `cmd.exe /C` reads it (the line is meant for a wrapping `cmd /s /c "…"`, so it refuses `" % ! & | < > ^ ( )` and a trailing backslash rather than escape them) (Codex 0.162 runs `%COMSPEC% /C "<line>"`; Command Code runs it through Node's `shell: true`).
+ * - `cmd`: `cmd.exe` reads it, meant for a line the engine wraps in quotes (`/C "…"` — Codex — or `/d /s /c "…"` —
+ *   Command Code via Node's shell:true). It refuses `" % ! & | < > ^ ( )` and a trailing backslash rather than escape them.
  * - `powershell`: PowerShell reads it (Copilot CLI's `command` fills its `powershell` field on Windows).
  */
 export type HookRunner = 'argv' | 'bash' | 'cmd' | 'powershell'
@@ -66,8 +96,9 @@ export function quoteHookCommand(runner: HookRunner, argv: string[]): string | s
     case 'argv': return [...argv]
     case 'bash': return argv.map((arg) => BARE_WORD.test(arg) ? arg : shellQuote(arg)).join(' ')
     case 'cmd': return argv.map((arg) => {
-      // cmd.exe expands %…% (and !…! with delayed expansion) even inside quotes, and a quote ends them. A trailing
-      // backslash would escape the closing quote for the program's own parser (CommandLineToArgvW's rules).
+      // cmd.exe expands %…% (and !…! with delayed expansion) even inside quotes, and a quote ends them. `& | < > ^ ( )`
+      // are refused too, in case an engine does not wrap the line: unquoted, cmd.exe reads them as its own syntax. A
+      // trailing backslash would escape the closing quote for the program's own parser (CommandLineToArgvW's rules).
       if (/["%!&|<>^()]/.test(arg)) refuse('holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text')
       if (arg.endsWith('\\')) refuse('ends in a backslash, which would escape its closing quote')
       return BARE_WORD.test(arg) ? arg : `"${arg}"`
