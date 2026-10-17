@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createHomeAdopter, readAdoptedHomes } from './homeAdoption.js'
+import { createHomeAdopter, homeIsAbsolute, inspectJournalEntry, readAdoptedHomes } from './homeAdoption.js'
 import { NATIVE_EVIDENCE_MS } from './nativeEvidence.js'
 
 const clock = vi.hoisted(() => ({ now: 0, remaining: Infinity }))
@@ -309,5 +309,32 @@ describe('durable monotone home adoption', () => {
     vi.mocked(fs.fsyncSync).mockImplementation(fd => { actual.fsyncSync(fd); clock.now += NATIVE_EVIDENCE_MS + 1 })
     expect(() => adopter.adopt(add('/held'))).toThrow('work deadline')
     expect(actual.existsSync(record(0))).toBe(false)
+  })
+})
+
+describe('the adoption journal on Windows', () => {
+  const ntfs = (kind: 'file' | 'dir' | 'link') => ({
+    dev: 1n, ino: 2n, uid: 0n, size: 10n, mtimeNs: 1n, ctimeNs: 1n, mode: kind === 'dir' ? 0o40666n : 0o100666n,
+    isFile: () => kind === 'file', isDirectory: () => kind === 'dir', isSymbolicLink: () => kind === 'link',
+  }) as unknown as fs.BigIntStats
+
+  it('trusts a file and folder NTFS reports with no owner and every write bit, on Windows only', () => {
+    expect(() => inspectJournalEntry(ntfs('file'), false, 'win32')).not.toThrow()
+    expect(() => inspectJournalEntry(ntfs('dir'), true, 'win32')).not.toThrow()
+    expect(() => inspectJournalEntry(ntfs('file'), false, 'linux')).toThrow(/unsafe owner, type or write permission/)
+  })
+
+  it('still refuses a link or junction on Windows', () => {
+    expect(() => inspectJournalEntry(ntfs('link'), false, 'win32')).toThrow(/unsafe owner, type or write permission/)
+    expect(() => inspectJournalEntry(ntfs('link'), true, 'win32')).toThrow(/unsafe owner, type or write permission/)
+  })
+
+  it('takes a Windows home on Windows and a POSIX home elsewhere', () => {
+    expect(homeIsAbsolute('C:\\Users\\u\\.claude-work', 'win32')).toBe(true)
+    expect(homeIsAbsolute('c:/Users/u/.codex-2', 'win32')).toBe(true)
+    expect(homeIsAbsolute('\\\\server\\share\\.claude', 'win32')).toBe(false)
+    expect(homeIsAbsolute('/Users/u/.claude', 'win32')).toBe(false)
+    expect(homeIsAbsolute('/Users/u/.claude', 'darwin')).toBe(true)
+    expect(homeIsAbsolute('C:\\Users\\u\\.claude', 'linux')).toBe(false)
   })
 })

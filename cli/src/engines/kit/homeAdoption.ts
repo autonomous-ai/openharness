@@ -2,12 +2,13 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
   opendirSync, readSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { MAX_CATALOG_HOMES, readHomeCatalog, type HomeCatalog, type HomeCatalogRead } from './homeCatalog.js'
 import { IdentityReadUnavailable } from './identityScan.js'
 import { NATIVE_EVIDENCE_MS } from './nativeEvidence.js'
 import { directorySyncSupported } from '../../lib/secureState.js'
+import { journalFlushFlags } from './windowsFiles.js'
 
 const MAX_RECORDS = MAX_CATALOG_HOMES * 2 + 2
 const MAX_BYTES = 64 * 1024
@@ -25,10 +26,29 @@ const deadline = () => {
   const until = performance.now() + NATIVE_EVIDENCE_MS
   return () => { if (performance.now() > until) throw unavailable('exceeded its work deadline') }
 }
-function inspect(info: BigIntStats, directory = false): void {
-  if (!(directory ? info.isDirectory() : info.isFile())
-    || (typeof process.getuid === 'function' && info.uid !== BigInt(process.getuid()))
+/**
+ * Windows is decided by the path module, as NativePaths does, not process.platform: specs that fake win32 on a POSIX
+ * host keep the POSIX behaviour (and its owner and mode checks).
+ */
+const hostPlatform = (): NodeJS.Platform => sep === '\\' ? 'win32' : 'linux'
+
+/**
+ * A journal entry is a plain file or folder of this account's that no one else can write. Windows: NTFS gives Node no
+ * owner (uid 0) and reports every file 0o100666 and folder 0o40666, so only the type is checked. The data folder's place in
+ * the profile (secureState.ts `windowsStateRoots`) is what protects it there. A link or junction is neither to lstat,
+ * so it is still refused.
+ */
+export function inspectJournalEntry(info: BigIntStats, directory = false, platform: NodeJS.Platform = hostPlatform()): void {
+  if (!(directory ? info.isDirectory() : info.isFile())) throw unavailable('has an unsafe owner, type or write permission')
+  if (platform === 'win32') return
+  if ((typeof process.getuid === 'function' && info.uid !== BigInt(process.getuid()))
     || (info.mode & 0o022n)) throw unavailable('has an unsafe owner, type or write permission')
+}
+const inspect = (info: BigIntStats, directory = false): void => inspectJournalEntry(info, directory)
+
+/** A home folder as the catalog stores it: absolute, as this platform spells one. */
+export function homeIsAbsolute(home: string, platform: NodeJS.Platform = hostPlatform()): boolean {
+  return platform === 'win32' ? /^[A-Za-z]:[\\/]/.test(home) : home.startsWith('/')
 }
 function read(file: string, check: () => void, max = MAX_BYTES + 1024): FileRead | null {
   check()
@@ -66,7 +86,7 @@ function merge(...catalogs: HomeCatalog[]): HomeCatalog {
   const result = empty()
   for (const catalog of catalogs) for (const engine of ENGINES) {
     if (!catalog || !Array.isArray(catalog[engine]) || catalog[engine].length > MAX_CATALOG_HOMES
-      || catalog[engine].some(home => typeof home !== 'string' || !home.startsWith('/') || home.length > 4096 || home.includes('\0'))) {
+      || catalog[engine].some(home => typeof home !== 'string' || !homeIsAbsolute(home) || home.length > 4096 || home.includes('\0'))) {
       throw unavailable('contains an invalid home list')
     }
     for (const home of catalog[engine]) if (!result[engine].includes(home)) result[engine].push(home)
@@ -96,7 +116,7 @@ function parse(text: string, previous: string | null): RecordValue {
   for (const engine of ENGINES) {
     const homes = value.homes[engine]
     if (!Array.isArray(homes) || homes.length > MAX_CATALOG_HOMES
-      || homes.some(home => typeof home !== 'string' || !home.startsWith('/') || home.length > 4096 || home.includes('\0'))
+      || homes.some(home => typeof home !== 'string' || !homeIsAbsolute(home) || home.length > 4096 || home.includes('\0'))
       || new Set(homes).size !== homes.length) throw unavailable('contains an invalid home list')
   }
   return value
@@ -245,7 +265,7 @@ function seal(entry: Entry, index: number, found: State, staging: string, check:
   // Another writer may finish a crashed writer's complete immutable record. No lock or partial slot is reaped.
   const source = read(entry.path, check)
   if (!source || digest(source.text) !== entry.digest) throw unavailable('changed before durability confirmation')
-  const fd = openSync(entry.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  const fd = openSync(entry.path, journalFlushFlags(hostPlatform()))
   try {
     if (stamp(fstatSync(fd, { bigint: true })) !== source.version) throw unavailable('changed before its durable flush')
     fsyncSync(fd)
