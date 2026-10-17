@@ -19,6 +19,10 @@ export async function stopEveryAgent(open: () => Promise<Daemon>): Promise<Agent
   try { daemon = await open() } catch (error) { return { stopped: 0, failed: [], unreachable: message(error) } }
   try {
     const listed = await daemon.request('agents_list', { includeStopped: false })
+    if (listed.error) {
+      const detail = typeof listed.detail === 'string' && listed.detail ? `: ${listed.detail}` : ''
+      return { stopped: 0, failed: [], unreachable: `The daemon would not list its harnesses (${String(listed.error)}${detail}), so none were stopped.` }
+    }
     const agents = (Array.isArray(listed.agents) ? listed.agents as Array<Record<string, unknown>> : []).filter((a) => typeof a.id === 'string')
     let stopped = 0
     const failed: AgentsStopped['failed'] = []
@@ -26,6 +30,7 @@ export async function stopEveryAgent(open: () => Promise<Daemon>): Promise<Agent
     const worker = async (): Promise<void> => {
       while (next < agents.length) {
         const agent = agents[next++]
+        // A request that times out may still finish later in the daemon; ending the terminal host is the backstop.
         try {
           const reply = await daemon.request('agent_delete', { agentId: agent.id }, AGENT_STOP_TIMEOUT_MS)
           if (reply.error) failed.push({ name: label(agent), error: `${reply.error}${typeof reply.detail === 'string' && reply.detail ? `: ${reply.detail}` : ''}` })
