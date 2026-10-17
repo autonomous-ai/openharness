@@ -299,6 +299,8 @@ void main() {
     for (final (code, says) in [
       ('TMUX_UNAVAILABLE', 'needs tmux'),
       ('UNSUPPORTED', 'Update the harness CLI'),
+      ('PTY_HOST_UNAVAILABLE', 'could not open a terminal'),
+      ('ENGINE_LAUNCH_REFUSED', 'cannot start on'),
       ('INVALID_ENGINE', 'Create harness failed'),
     ]) {
       test('$code is worded for a person', () async {

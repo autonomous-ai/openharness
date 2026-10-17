@@ -25,6 +25,10 @@ String retargetRefusalMessage(String code, {required String engineLabel}) {
     'TMUX_TOO_OLD_FOR_GRID' => "This machine's tmux is too old to move a harness to a Local model. Update tmux there.",
     'TMUX_UNAVAILABLE' || 'TMUX_FAILED' =>
       "This machine's tmux did not answer. Try again in a moment.",
+    'PTY_HOST_UNAVAILABLE' =>
+      "This machine's terminals did not answer. Run harness start there, then try again.",
+    'ENGINE_LAUNCH_REFUSED' =>
+      "$engineLabel cannot start on this machine with the new model.",
     // Changing model restarts the agent's process, which would cut off the
     // reply it is writing — so the daemon waits for the person, and the
     // sentence says what to do rather than naming the state ("mid-turn" read

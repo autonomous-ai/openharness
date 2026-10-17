@@ -4357,6 +4357,11 @@ class AppNotifier extends ChangeNotifier {
         'TMUX_UNAVAILABLE' =>
           'Harness needs tmux to start harnesses on $machine. '
               'Install tmux there, then try again.',
+        'PTY_HOST_UNAVAILABLE' =>
+          'Harness could not open a terminal on $machine. '
+              'Run harness start on that computer, then try again.',
+        'ENGINE_LAUNCH_REFUSED' =>
+          detail ?? 'This engine cannot start on $machine. Nothing was started.',
         'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
           'Update the harness CLI on this machine to create a harness',
         // Opening a conversation Harness did not start (`resumeSessionId`). The machine says what
@@ -4468,6 +4473,8 @@ class AppNotifier extends ChangeNotifier {
         'INVALID_GRID',
         'INVALID_CODEX_HOME',
         'TMUX_UNAVAILABLE',
+        'PTY_HOST_UNAVAILABLE',
+        'ENGINE_LAUNCH_REFUSED',
         'TMUX_TOO_OLD_FOR_GRID',
         'GRID_CONFIG_FAILED',
         'UNSUPPORTED_ON_REMOTE',
@@ -4863,9 +4870,13 @@ class AppNotifier extends ChangeNotifier {
 
   /// The desktop's `_restartFailure` wording for a resume the machine refused.
   String _resumeFailure(String code, Object? detail) =>
-      detail is String && detail.isNotEmpty
+      code == 'PTY_HOST_UNAVAILABLE'
+      ? 'Harness could not open a terminal on this machine. Run harness start on it, then try again.'
+      : detail is String && detail.isNotEmpty
       ? detail
       : switch (code) {
+          'ENGINE_LAUNCH_REFUSED' =>
+            'This engine cannot start on this machine. Nothing was started.',
           'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
             'Update the harness CLI on this machine to open saved harnesses.',
           'AGENT_BUSY' => 'Another operation is changing this harness. Wait for it to finish, then retry.',

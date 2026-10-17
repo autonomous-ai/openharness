@@ -77,6 +77,22 @@ void main() {
     expect(resumed.sessionId, 'session-b');
   });
 
+  test('a resume the terminal service could not take says what to do', () async {
+    final conn = _ResumeConn()
+      ..answer = (_, payload) => {
+        'creationId': payload['creationId'],
+        'state': 'failed',
+        'failure': {'code': 'PTY_HOST_UNAVAILABLE', 'detail': 'harness-pty is not installed'},
+      };
+    final app = stoppedApp(conn);
+    addTearDown(app.dispose);
+
+    expect(
+      (await app.resumeAgent('m', 'b')).error,
+      'Harness could not open a terminal on this machine. Run harness start on it, then try again.',
+    );
+  });
+
   test('a lost reply is checked on the next tap, not sent again', () async {
     final conn = _ResumeConn()
       ..answer = (_, _) => throw StateError('socket dropped');

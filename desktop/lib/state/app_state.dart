@@ -12217,6 +12217,15 @@ class AppNotifier extends ChangeNotifier {
     'TMUX_UNAVAILABLE' =>
       'Harness needs tmux to start harnesses on $machine. '
           'Install tmux there, then try again.',
+    // Windows: the terminal service (the pty host) did not answer. Its own
+    // reason is written for the log; the person needs the one fix.
+    'PTY_HOST_UNAVAILABLE' =>
+      'Harness could not open a terminal on $machine. '
+          'Run harness start on that computer, then try again.',
+    // Refused before any pane opened, in words the machine wrote for the
+    // person (an engine Windows cannot start as asked).
+    'ENGINE_LAUNCH_REFUSED' =>
+      detail ?? 'This engine cannot start on $machine. Nothing was started.',
     'CODEX_CLI_TOO_OLD' =>
       detail ??
           'The installed Codex CLI on $machine is too old for Auto approvals. '
@@ -12504,6 +12513,8 @@ class AppNotifier extends ChangeNotifier {
         'INVALID_AGENT',
         'INVALID_PERMISSION_MODE',
         'TMUX_UNAVAILABLE',
+        'PTY_HOST_UNAVAILABLE',
+        'ENGINE_LAUNCH_REFUSED',
         'CODEX_CLI_TOO_OLD',
         'TMUX_TOO_OLD_FOR_GRID',
         'GRID_CONFIG_FAILED',
@@ -13603,9 +13614,14 @@ class AppNotifier extends ChangeNotifier {
     String code,
     Object? detail, {
     bool resuming = false,
-  }) => detail is String && detail.isNotEmpty
+  }) => code == 'PTY_HOST_UNAVAILABLE'
+      // Its detail is written for the log.
+      ? 'Harness could not open a terminal on this machine. Run harness start on it, then try again.'
+      : detail is String && detail.isNotEmpty
       ? detail
       : switch (code) {
+          'ENGINE_LAUNCH_REFUSED' =>
+            'This engine cannot start on this machine. Nothing was stopped.',
           'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
             resuming
                 ? 'Update the harness CLI on this machine to open saved harnesses.'

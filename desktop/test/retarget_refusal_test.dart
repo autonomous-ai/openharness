@@ -106,6 +106,8 @@ void main() {
         'TMUX_TOO_OLD_FOR_GRID',
         'TMUX_UNAVAILABLE',
         'TMUX_FAILED',
+        'PTY_HOST_UNAVAILABLE',
+        'ENGINE_LAUNCH_REFUSED',
         'AGENT_BUSY',
         'AGENT_NOT_FOUND',
         'NO_ACTIVE_PROCESS',
