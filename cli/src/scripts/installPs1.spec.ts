@@ -1,8 +1,8 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 
 // vitest runs from cli/, so this is cli/scripts/install.ps1, the file published to the CDN.
@@ -496,13 +496,33 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
 
   it('goes on once `harness start` has started the daemon, which holds the handles it was given for as long as it runs', () => {
     // The daemon `harness start` leaves running inherits that command's output handles (seen on the VM: the installer
-    // waited on `harness start | ForEach-Object` for as long as the new daemon ran). Here a process left behind
-    // holds them for 12 seconds.
-    const harness = fakeHarness('running - backend connected', ['if "%1"=="start" start "" /b cmd /c "ping -n 13 127.0.0.1 >nul"'])
-    const run = ps(`$clock = [Diagnostics.Stopwatch]::StartNew(); $moved = Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.0' -After '1.0.1'; "took $($clock.ElapsedMilliseconds)"; $moved`)
-    expect(last(run.stdout), run.stderr).toBe('True')
-    expect(Number(/took (\d+)/.exec(run.stdout)?.[1])).toBeLessThan(8_000)
-    expect(harness.calls()).toEqual(['status', 'stop', 'start'])
+    // waited on `harness start | ForEach-Object` for as long as the new daemon ran). Here a process left behind holds
+    // them for 120 seconds, and the restart must take under 60. The margins are wide on purpose: a slow runner (the
+    // arm64 one took 22 s for a restart that waits on nothing) can blur a gap of a few seconds, but it cannot make
+    // a restart that does not wait take longer than a holder that would be waited on for two minutes.
+    const harness = fakeHarness('running - backend connected', ['if "%1"=="start" start "" /b cmd /c "ping -n 121 127.0.0.1 >nul & rem holder-of-handles"'])
+    try {
+      // The holder keeps whatever handles it was given, so these go to files: a pipe would not reach end of file
+      // until the holder ended, and this test would wait on it as well.
+      const text = `$ErrorActionPreference = 'Stop'; . '${installer}'; $clock = [Diagnostics.Stopwatch]::StartNew(); $moved = Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.0' -After '1.0.1'; "took $($clock.ElapsedMilliseconds)"; $moved`
+      const outPath = join(dirname(harness.command), 'out.txt')
+      const errPath = join(dirname(harness.command), 'err.txt')
+      const out = openSync(outPath, 'w')
+      const err = openSync(errPath, 'w')
+      try {
+        spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(text, 'utf16le').toString('base64')], {
+          env: powershellEnv('default', { HARNESS_INSTALL_LIBRARY: '1' }), timeout: 110_000, stdio: ['ignore', out, err],
+        })
+      } finally { closeSync(out); closeSync(err) }
+      const run = { stdout: readFileSync(outPath, 'utf8').trim(), stderr: readFileSync(errPath, 'utf8') }
+      expect(last(run.stdout), run.stderr).toBe('True')
+      expect(Number(/took (\d+)/.exec(run.stdout)?.[1])).toBeLessThan(60_000)
+      expect(harness.calls()).toEqual(['status', 'stop', 'start'])
+    } finally {
+      // End the holder (the cmd that started the ping, and the ping under it), so nothing outlives the test.
+      const kill = "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*holder-of-handles*' } | ForEach-Object { taskkill /T /F /PID $_.ProcessId | Out-Null }"
+      spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(kill, 'utf16le').toString('base64')], { encoding: 'utf8' })
+    }
   })
 
   it('starts nothing, and says the daemon stays on the old build, when it does not stop', () => {
