@@ -1,11 +1,12 @@
 /** Hook preparation owns only a verified file version. Unknown contents are
  * never an empty configuration, and a completed write includes its directory. */
 import { randomUUID } from 'node:crypto'
-import { accessSync, closeSync, constants, fchmodSync, fstatSync, fsync, linkSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
+import { accessSync, closeSync, constants, fchmodSync, fstatSync, fsync, linkSync, lstatSync, mkdirSync, openSync, readSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { NativePaths, verifyNativePathFacts } from './nativePaths.js'
 import { directorySyncSupported } from '../../lib/secureState.js'
+import { renameReplacing, unchangedFlushFlags } from './windowsFiles.js'
 
 export class HookPreparationHeld extends Error {
   constructor(detail: string) { super(`Hook preparation is waiting: ${detail}`); this.name = 'HookPreparationHeld' }
@@ -37,7 +38,8 @@ async function syncDirectory(path: string, attempt: HookPreparationAttempt): Pro
 async function syncDirectoryChain(path: string, attempt: HookPreparationAttempt): Promise<void> {
   for (let depth = 0; depth < 256; depth++) {
     attempt.check(); await syncDirectory(path, attempt)
-    if (path === '/') return
+    // The root (`/`, or a drive's `C:\`) is its own parent. Compared with `/` alone, Windows never ended (F9).
+    if (dirname(path) === path) return
     path = dirname(path)
   }
   throw new HookPreparationHeld('the directory sync exceeds its path limit')
@@ -140,12 +142,15 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
       if (content === next) {
         // A previous rename may have succeeded before directory sync failed.
         // Equality alone cannot turn that uncertainty into a durable success.
-        const fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-        try {
-          if (version(fstatSync(fd, { bigint: true })) !== before) throw new HookPreparationHeld('the settings changed before sync')
-          await attempt.flush(fd)
-          if (version(fstatSync(fd, { bigint: true })) !== before) throw new HookPreparationHeld('the settings changed during sync')
-        } finally { closeSync(fd) }
+        const flags = unchangedFlushFlags(mode)
+        if (flags !== null) {
+          const fd = openSync(target, flags)
+          try {
+            if (version(fstatSync(fd, { bigint: true })) !== before) throw new HookPreparationHeld('the settings changed before sync')
+            await attempt.flush(fd)
+            if (version(fstatSync(fd, { bigint: true })) !== before) throw new HookPreparationHeld('the settings changed during sync')
+          } finally { closeSync(fd) }
+        }
         await syncDirectoryChain(dirname(target), attempt)
         verify()
         return { verify }
@@ -178,7 +183,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
         verifyNativePathFacts(facts.filter(fact => fact.identity !== null))
         attempt.verify()
         if (exclusive) { linkSync(temporary, actual); unlinkSync(temporary) }
-        else renameSync(temporary, actual)
+        else await renameReplacing(temporary, actual, { check: () => { attempt.check(); attempt.verify() } })
         const committed = inspectHookFile(file)
         if (committed.content !== next || committed.stamp !== version(fstatSync(fd, { bigint: true }))) {
           throw new HookPreparationHeld('the published settings changed before sync')
