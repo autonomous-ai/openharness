@@ -6,14 +6,14 @@ import { env } from '../../config/env.js'
 import { openDaemon, whereFor } from '../../agentClient/daemon.js'
 import { AUTH_DIR } from '../authSession.js'
 import { daemonPort, isAlive, readPid } from '../daemonState.js'
-import { describeSpawnLockOwner, SpawnLockBusyError, withSpawnLock } from '../daemonSpawnLock.js'
+import { SpawnLockBusyError, withSpawnLock } from '../daemonSpawnLock.js'
 import { stopDaemonProcess } from '../daemonStop.js'
 import { gridCredentialsPath, gridCredentialsExist } from '../gridCredentials.js'
 import { ownedBinEntries } from '../launchers.js'
 import { platformDaemonDeps } from '../platformDaemon.js'
 import { runPowershell } from '../windows/powershell.js'
 import { stopEveryAgent } from './agents.js'
-import { labelHookRemoval, UninstallLockBusy, type UninstallDeps } from './command.js'
+import { labelHookRemoval, lockHolder, UninstallLockBusy, type UninstallDeps } from './command.js'
 import { endPtyHosts, ptyHostsDeps } from './ptyHosts.js'
 import { filesWithHarnessPathLines, removeHarnessPathLines } from './rcFiles.js'
 import { checkRemovable, finalRemovalDeps, listEntries, removeNow, scheduleFinalRemoval } from './removal.js'
@@ -62,11 +62,12 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
     } : null,
     withLock: async (fn) => {
       try {
-        return await withSpawnLock('stop', fn, { onWaiting: (owner) => out(`  the Harness daemon is ${describeSpawnLockOwner(owner)}, waiting for it to finish…`) })
+        return await withSpawnLock('stop', fn, { onWaiting: (owner) => out(`  ${lockHolder(owner)}: waiting for it to finish…`) })
       } catch (error) {
         // Unlike `harness stop`, no going ahead: an update or a start in the middle would put back what this removes.
         if (error instanceof SpawnLockBusyError) {
-          throw new UninstallLockBusy(error.reason ?? (error.owner ? `it is ${describeSpawnLockOwner(error.owner)}` : 'it did not say who'))
+          if (error.reason) throw new UninstallLockBusy('foreign', error.reason)
+          throw new UninstallLockBusy('busy', error.owner ? lockHolder(error.owner) : 'Harness could not tell which one')
         }
         throw error
       }

@@ -25,6 +25,7 @@
  */
 import { posix, win32 } from 'node:path'
 import type { HookFileRemoval } from '../../engines/kit/hookRemoval.js'
+import type { SpawnLockOwner, SpawnLockPurpose } from '../daemonSpawnLock.js'
 import type { AgentsStopped } from './agents.js'
 import type { PtyHostEnd } from './ptyHosts.js'
 import { RC_MARKER, type RcOutcome } from './rcFiles.js'
@@ -91,9 +92,24 @@ export function labelHookRemoval(hook: HookFileRemoval, labels: HookFileLabels):
   return labelled
 }
 
-/** Another Harness command (a start, an update) held the daemon for longer than the uninstall waits. [detail] is who. */
+/**
+ * The daemon lock could not be taken. `busy`: another Harness command (a start, an update) held it for longer than the
+ * uninstall waits, and the message says who. `foreign`: the lock's path holds something this CLI did not make, which no
+ * other command is going to release; the message says what (daemonSpawnLock.ts SpawnLockBusyError `reason`).
+ */
 export class UninstallLockBusy extends Error {
   override name = 'UninstallLockBusy'
+  constructor(readonly kind: 'busy' | 'foreign', detail: string) { super(detail) }
+}
+
+const LOCK_PURPOSE: Record<SpawnLockPurpose, string> = {
+  start: 'started', update: 'updated', handoff: 'restarted for an update', stop: 'stopped', login: 'signed in',
+}
+
+/** Who holds the daemon lock, as a person reads it: "Harness is being updated by process 51, for 4 seconds". */
+export function lockHolder(owner: Pick<SpawnLockOwner, 'pid' | 'purpose' | 'since'>, now: number = Date.now()): string {
+  const seconds = Math.max(0, Math.round((now - owner.since) / 1000))
+  return `Harness is being ${LOCK_PURPOSE[owner.purpose] ?? 'used'} by process ${owner.pid}, for ${plural(seconds, 'second')}`
 }
 
 export interface UninstallDeps {
@@ -213,7 +229,7 @@ function reportHooks(deps: UninstallDeps, hooks: readonly UninstallHookFile[], p
     if (hook.kept) deps.out(`· kept ${file}: it is ${hook.kept}`)
   }
   // Said again here, and not only in the question: --yes never asks it (B5.9 review, M7).
-  if (claude) deps.out(`· a permission rule of yours in ${claude} that was the same as one of Harness's went too: add it again if you need it`)
+  if (claude) deps.out(`· if you had added a permission rule in ${claude} that is the same as one of Harness's, it went too: add it again if you need it`)
   // Codex keys each record of a reviewed hook by its place in hooks.json: taking Harness's block out moves the person's.
   if (codex) deps.out(`· Codex may ask you to review your own hooks again: it remembers the hooks you reviewed by their place in ${codex}, and taking Harness's out moved them`)
 }
@@ -298,20 +314,22 @@ export async function uninstallCommand(argv: readonly string[], deps: UninstallD
     deps.err(`✗ This terminal is in ${deps.tildify(deps.cwd)}, which the uninstall removes, and Windows cannot delete a folder a terminal is in. Run \`cd ~\`, then run it again.`)
     return 1
   }
-  // A root the last step would refuse is refused now, before a harness, the service or the daemon is touched (I1).
+  let daemon: number | null
   try {
+    // A root the last step would refuse is refused now, before a harness, the service or the daemon is touched (I1).
     deps.checkRemovable(planFor(deps, keepData))
+    daemon = deps.daemonPid()
+    if (!yes) {
+      if (!deps.isTTY) { deps.err('✗ harness uninstall asks before it removes anything. Run it in a terminal, or add --yes. Nothing was removed.'); return 1 }
+      for (const line of whatItDoes(deps, daemon, keepData)) deps.out(line)
+      const answer = (await deps.ask('  Remove Harness from this computer? [y/N] ')).trim().toLowerCase()
+      if (answer !== 'y' && answer !== 'yes') { deps.out('Nothing was removed.'); return 1 }
+    }
   } catch (error) {
-    if (!(error instanceof RemovalRefused)) throw error
-    deps.err(`✗ ${refusal(deps, error)}`)
+    if (error instanceof RemovalRefused) deps.err(`✗ ${refusal(deps, error)}`)
+    // Before the first step: whatever went wrong, nothing has been touched yet (B5.9 review round 2).
+    else deps.err(`✗ harness uninstall could not start (${clause(message(error))}). Nothing was removed.`)
     return 1
-  }
-  const daemon = deps.daemonPid()
-  if (!yes) {
-    if (!deps.isTTY) { deps.err('✗ harness uninstall asks before it removes anything. Run it in a terminal, or add --yes. Nothing was removed.'); return 1 }
-    for (const line of whatItDoes(deps, daemon, keepData)) deps.out(line)
-    const answer = (await deps.ask('  Remove Harness from this computer? [y/N] ')).trim().toLowerCase()
-    if (answer !== 'y' && answer !== 'yes') { deps.out('Nothing was removed.'); return 1 }
   }
   const problems: string[] = []
   const notDeleted = 'None of Harness\'s files were deleted.'
@@ -320,7 +338,8 @@ export async function uninstallCommand(argv: readonly string[], deps: UninstallD
   // reboot can name a live process that is not Harness's, and nothing then went wrong (I2).
   let unreachable: string | undefined
   if (daemon !== null) {
-    const agents = await deps.stopAgents()
+    // stopEveryAgent reports a daemon it cannot reach; anything else it throws is read the same way.
+    const agents = await deps.stopAgents().catch((error: unknown) => ({ stopped: 0, failed: [], unreachable: message(error) }))
     if (agents.unreachable) unreachable = `Harness could not ask the Harness daemon to stop the harnesses (${clause(agents.unreachable)}), so some harnesses may still be running`
     if (agents.stopped) deps.out(`✓ stopped ${plural(agents.stopped, 'harness', 'harnesses')}`)
     for (const failed of agents.failed) problems.push(`the harness ${failed.name} did not stop (${failed.error}), so it may still be running`)
@@ -348,7 +367,9 @@ export async function uninstallCommand(argv: readonly string[], deps: UninstallD
       return null
     })
   } catch (error) {
-    if (error instanceof UninstallLockBusy) {
+    if (error instanceof UninstallLockBusy && error.kind === 'foreign') {
+      deps.err(`✗ Harness found something it did not make where it keeps its daemon lock (${clause(error.message)}). ${notDeleted}`)
+    } else if (error instanceof UninstallLockBusy) {
       deps.err(`✗ Another Harness command is using the Harness daemon (${clause(error.message)}). ${notDeleted} Try again in a moment.`)
     } else {
       deps.err(`✗ Harness could not stop the Harness daemon (${clause(message(error))}). ${notDeleted} Run \`harness stop\`, then \`harness uninstall\` again.`)

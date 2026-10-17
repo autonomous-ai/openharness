@@ -2865,10 +2865,11 @@ switch (cmd) {
     Promise.all([import('./lib/uninstall/command.js'), import('./lib/uninstall/deps.js')])
       .then(async ([{ uninstallCommand }, { uninstallDeps }]) => uninstallCommand(rest, await uninstallDeps({ tildify, ask: askLine })))
       .then((code) => process.exit(code))
-      // Not onError, whose "Failed to start adapter" is another command's: what was done so far stays done. Written at
-      // once, as the command's own lines are (uninstall/deps.ts): process.exit drops what a pipe has not taken yet.
+      // Not onError, whose "Failed to start adapter" is another command's. uninstallCommand reports every error once its
+      // steps have begun, so what reaches here came before the first one: loading the command or reading this computer.
+      // Written at once, as the command's own lines are (uninstall/deps.ts): process.exit drops what a pipe has not taken.
       .catch((error: unknown) => {
-        try { writeSync(2, `✗ harness uninstall stopped before it finished (${error instanceof Error ? error.message : String(error)}). Run harness uninstall again to finish.\n`) } catch { /* no stderr */ }
+        try { writeSync(2, `✗ harness uninstall could not start (${error instanceof Error ? error.message : String(error)}). Nothing was removed.\n`) } catch { /* no stderr */ }
         process.exit(1)
       })
     break

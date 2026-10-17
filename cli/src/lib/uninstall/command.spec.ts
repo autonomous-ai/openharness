@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { labelHookRemoval, UNINSTALL_USAGE, uninstallCommand, UninstallLockBusy, type UninstallDeps } from './command.js'
+import { labelHookRemoval, lockHolder, UNINSTALL_USAGE, uninstallCommand, UninstallLockBusy, type UninstallDeps } from './command.js'
 import { RemovalRefused } from './removal.js'
 
 function fake(overrides: Partial<UninstallDeps> = {}) {
@@ -188,10 +188,15 @@ describe('harness uninstall', () => {
   })
 
   it('deletes nothing while another Harness command holds the daemon', async () => {
-    const t = fake({ withLock: async () => { throw new UninstallLockBusy('it is being updated by pid 51 for 4s') } })
+    const t = fake({ withLock: async () => { throw new UninstallLockBusy('busy', lockHolder({ pid: 51, purpose: 'update', since: 1_000 }, 5_200)) } })
     expect(await uninstallCommand(['--yes'], t.deps)).toBe(1)
     expect(t.calls).toEqual(['agents'])
-    expect(t.err).toEqual(['✗ Another Harness command is using the Harness daemon (it is being updated by pid 51 for 4s). None of Harness\'s files were deleted. Try again in a moment.'])
+    expect(t.err).toEqual(['✗ Another Harness command is using the Harness daemon (Harness is being updated by process 51, for 4 seconds). None of Harness\'s files were deleted. Try again in a moment.'])
+    expect(lockHolder({ pid: 7, purpose: 'start', since: 0 }, 1_000)).toBe('Harness is being started by process 7, for 1 second')
+    // Something at the lock's path that this CLI did not make: no other command is the cause, and none will release it.
+    const foreign = fake({ withLock: async () => { throw new UninstallLockBusy('foreign', 'not a lock this CLI made: /Users/u/.harness/cli/data/spawn.lock — remove it by hand (EEXIST)') } })
+    expect(await uninstallCommand(['--yes'], foreign.deps)).toBe(1)
+    expect(foreign.err).toEqual(['✗ Harness found something it did not make where it keeps its daemon lock (not a lock this CLI made: /Users/u/.harness/cli/data/spawn.lock — remove it by hand (EEXIST)). None of Harness\'s files were deleted.'])
     // Anything else that went wrong stopping it is said as a stop that failed.
     const broken = fake({ stopDaemon: async () => { throw new Error('EPERM') } })
     expect(await uninstallCommand(['--yes'], broken.deps)).toBe(1)
@@ -337,6 +342,23 @@ describe('harness uninstall, review round 1', () => {
     expect(odd.err).toEqual(['✗ Harness will not remove "~/harness": it is not a folder named .harness. Nothing was removed.'])
   })
 
+  it('an error before the first step says nothing was removed', async () => {
+    for (const broken of [
+      fake({ listEntries: () => { throw new Error('EACCES: permission denied, scandir') } }),
+      fake({ checkRemovable: () => { throw new Error('EBUSY') } }),
+      fake({ isTTY: true, ask: async () => { throw new Error('stdin closed') } }),
+    ]) {
+      expect(await uninstallCommand([], broken.deps)).toBe(1)
+      expect(broken.calls.filter((call) => call !== 'ask')).toEqual([])
+      expect(broken.err).toHaveLength(1)
+      expect(broken.err[0]).toMatch(/^✗ harness uninstall could not start \(.+\)\. Nothing was removed\.$/)
+    }
+    // A stop of the harnesses that throws is a daemon that did not answer, not a crash half way.
+    const agents = fake({ stopAgents: async () => { throw new Error('socket hang up') } })
+    expect(await uninstallCommand(['--yes'], agents.deps)).toBe(1)
+    expect(agents.err).toContain('  · Harness could not ask the Harness daemon to stop the harnesses (socket hang up), so some harnesses may still be running')
+  })
+
   it('a pid file naming another live process: no daemon answered, none was stopped, and nothing went wrong', async () => {
     const t = fake({
       isTTY: true, ask: async () => 'y',
@@ -364,7 +386,7 @@ describe('harness uninstall, review round 1', () => {
   it('says, with --yes too, that a rule of the person\'s that was the same as Harness\'s went from Claude Code\'s settings', async () => {
     const t = fake({ removeHooks: async () => [{ file: '/Users/u/.claude/settings.json', removed: 5, kind: 'settings', claude: true }] })
     expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
-    expect(t.out).toContain('· a permission rule of yours in ~/.claude/settings.json that was the same as one of Harness\'s went too: add it again if you need it')
+    expect(t.out).toContain('· if you had added a permission rule in ~/.claude/settings.json that is the same as one of Harness\'s, it went too: add it again if you need it')
     expect(fake().out.some((line) => line.includes('permission rule'))).toBe(false)
   })
 })
