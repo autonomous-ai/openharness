@@ -257,8 +257,25 @@
 # before (11:27:16): time 2026-10-17T11:27:16.5527251-07:00 | listen 18473:  | listen 18475:  | processes mentioning C:\work\e2e: 0  | C:\work\e2e LastWriteTime 2026-10-15T06:06:34.5351437-07:00 | C:\work\e2e\daemon.log 251011 bytes, LastWriteTime 2026-10-15T06:31:41.9115772-07:00
 # after  (12:05:56): time 2026-10-17T12:05:56.9053534-07:00 | listen 18473:  | listen 18475:  | processes mentioning C:\work\e2e: 0  | C:\work\e2e LastWriteTime 2026-10-15T06:06:34.5351437-07:00 | C:\work\e2e\daemon.log 251011 bytes, LastWriteTime 2026-10-15T06:31:41.9115772-07:00
 
+## 9b. Specs on the VM (C:\work\oh\cli, synced by vm-sync.sh --cli, after fix 1)
+# npx vitest run src/lib/windows/hookFiles.real.spec.ts src/engines/kit/windowsHooks.spec.ts src/lib/windows/hooksOn.spec.ts
+#  ✓ src/lib/windows/hooksOn.spec.ts (2 tests)
+#  ✓ src/engines/kit/windowsHooks.spec.ts (23 tests)
+#  ✓ src/lib/windows/hookFiles.real.spec.ts (7 tests)
+#    ✓ delivers every argument whole the way each engine runs its line, from a profile named Thảo Nguyễn
+#    ✓ refuses a home with & ( ) for the cmd.exe engine with its reason, and the PowerShell engines pass it whole
+#  Test Files 3 passed (3), Tests 32 passed (32)
+
 ## 10. Backup / restore (sha256). Line: target|file in it|bytes|SHA256, or ABSENT. "after" is the final check
 ## (VM, then the same manifest diffed on the Mac: identical, 30 lines).
+# Procedure: before the first hooks-on start, list every target below, copy what exists to a backup folder and check
+# the copies' manifest against the originals. After the run, restore each pre-existing target from the backup, delete
+# each one that was absent, and compare the new manifest with the first line by line: every pre-existing file must be
+# byte-identical (same size and SHA256).
+# The adoption journal: the daemon keeps it beside C:\work\b4\data\engine-homes.json, as the siblings
+# engine-homes.json.adoptions\, engine-homes.json.confirmations\ and engine-homes.json.adopted (kit/homeAdoption.ts).
+# The manifest's second journal line names `engine-homes`, which is not one of them. The siblings were checked through
+# the data folder's listings instead: no engine-homes* entry before the run (before.toplevel) or after the cleanup.
 ~\.claude\settings.json|.|6241|951558812963DCC81ECF1B96DDC60F2DBA1077D7069890140D89616E451C7A00
     after: .|6241|951558812963DCC81ECF1B96DDC60F2DBA1077D7069890140D89616E451C7A00   [restored from backup]
 ~\.claude.json|.|852|7A247B72E2A4CBC4026C376C1B17BA89C1B4DAE1311E3D47619FD1418598E2AF

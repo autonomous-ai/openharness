@@ -234,7 +234,9 @@ remembered. Agents survive because the pty host is independent of the daemon (A)
 - **Hook command lines.** Each engine's hook contract declares, for win32, what runs its hooks:
   `argv` (an argument list, no shell), `bash`, `cmd` or `powershell`. Verified while planning: Claude
   Code takes an exec-form hook (`argv`; its shell form runs Git Bash, or PowerShell without it, which no
-  single quoting serves), Codex and Command Code run `cmd`, Copilot runs `powershell`. An engine with
+  single quoting serves), Codex runs `powershell` (its Windows session shell, with `-NoProfile -Command`;
+  `%COMSPEC% /C` only when there is no one local session shell or no PowerShell, and there the line fails closed;
+  measured in B4.15), Command Code runs `cmd`, Copilot runs `powershell`. An engine with
   no verified runner gets no hooks on Windows. `notifyHooks.ts` quotes for that runner. The line names only `node.exe`, the stable
   `cli\notify.mjs` and flags Harness writes; no user input.
 - **Pane identity.** `notify.mjs` reads `HARNESS_PANE` (`<instance>:%N`, set by the pty host since A)

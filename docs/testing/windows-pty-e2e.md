@@ -77,6 +77,10 @@ The SSH session is an elevated admin running `cmd.exe`. Installed beforehand:
      `HARNESS_HOOK_ROUTES_DIR`, `HARNESS_AGENT_MESSAGES_DIR`, `DSH_DIR` and `HARNESS_DEVICES_DIR`, all under
      `C:\work\e2e`;
    - `DISABLE_GRID_INSTALL=true`. The value has to be `true`; `1` is read as off (F9). Engine hooks stay on (B4.15);
+   - With hooks on, the daemon writes the running user's real engine homes (`~\.claude\settings.json`,
+     `~\.codex\hooks.json` and `config.toml`, the OpenCode, Kilo, Pi, Amp, Copilot and Command Code hook files). Back
+     them up with their sha256 before the first start, and verify the restore afterwards: the procedure and the list are
+     in [`evidence/hooks.log`](../../cli/scripts/windows-pty-e2e/evidence/hooks.log), section 10;
    - `HARNESS_PTY_BIN=C:\work\e2e\dist\pty\harness-pty.exe`. This one is required, because the "beside the bundle"
      lookup does not work under `start -f` (F8).
 8. **Drive the scenarios.**
