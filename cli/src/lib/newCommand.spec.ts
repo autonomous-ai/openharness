@@ -6,7 +6,8 @@ import { join } from 'node:path'
 import { newAgentPayload, newCommand, NewUsageError, parseNewArgs, resolveNewMachine, trustAsked, type NewCommandDeps, type NewSocket } from './newCommand.js'
 import { SANDBOXED } from './unreachable.js'
 
-const env = { cwd: '/work/repo', home: '/home/me' }
+// POSIX paths, read by POSIX rules wherever the spec runs: on Windows the shell's paths are read as Windows ones.
+const env = { cwd: '/work/repo', home: '/home/me', platform: 'linux' as const }
 
 describe('harness new: the words', () => {
   it('asks nothing: claude, here, on this machine', () => {
