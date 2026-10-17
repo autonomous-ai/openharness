@@ -49,6 +49,11 @@ function withEcho(line: string, echo: string): string {
 // Codex 0.162.1 (codex-rs): its Windows session shell, `powershell.exe -NoProfile -Command <line>`, the line one argument
 // that Rust quotes as Node does (core/src/session/mod.rs `build_hooks_config`; seen on the VM in B4.15).
 const codexRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile', '-Command', line], { encoding: 'utf8' })
+// Codex prefers PowerShell 7 when it is installed (B4.15), `pwsh -NoProfile -Command <line>`. pwsh 7.3 and later pass
+// a native program's arguments by their own rules ($PSNativeCommandArgumentPassing), so the same line is run there too.
+// The VM has no pwsh; windows-latest has it.
+const pwshInstalled = enabled && spawnSync('where.exe', ['pwsh'], { stdio: 'ignore' }).status === 0
+const codexRunsPwsh = (line: string) => spawnSync('pwsh', ['-NoProfile', '-Command', line], { encoding: 'utf8' })
 // Command Code: Node's spawn(line, { shell: true }), which is cmd.exe /d /s /c "<line>".
 const commandCodeRuns = (line: string) => spawnSync(line, { shell: true, encoding: 'utf8' })
 // Copilot CLI copies `command` to its `powershell` field and runs it in Windows PowerShell. Its exact flags are not
@@ -160,6 +165,16 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
     expect(await engineHooks.codex.installIn(PORT, codexHome, { environment })).toBe(true)
     const codexLine = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8')).hooks.SessionStart[0].hooks[0].command
     expect(delivered(codexRuns(withEcho(codexLine, echo)))).toEqual(hookArgv(PORT, 'codex', codexHome, undefined, environment).slice(2))
+  }, 60_000)
+
+  it.skipIf(!pwshInstalled)('delivers every argument of the Codex line whole under pwsh 7, from a profile named Thảo & co (1)', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { home, echo, environment } = profile('pwsh Thảo & co (1)')
+    const codexHome = join(home, '.codex')
+    expect(await engineHooks.codex.installIn(PORT, codexHome, { environment })).toBe(true)
+    const line = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8')).hooks.SessionStart[0].hooks[0].command
+    expect(delivered(codexRunsPwsh(withEcho(line, echo)))).toEqual(hookArgv(PORT, 'codex', codexHome, undefined, environment).slice(2))
   }, 60_000)
 
   it('replaces a settings file another handle holds open once it lets go, and keeps it whole while it does not', async () => {
