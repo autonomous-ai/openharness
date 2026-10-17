@@ -17,7 +17,7 @@ A study of how software gets built when one person directs a swarm of AI agents,
 4. the lead's coordination;
 5. **the owner's attention**, which is the final limit.
 
-Every scaled operation, inside and outside the pilot, names review and attention as the scarce resource. In the pilot, **most of the cost came from things there was only one of**: one lead dispatching, one reviewer, one subscription carrying both, one integration device, one 1,500-comment thread. Compute limits (runners, disk) were fixed within a day; the single points never were.
+Every scaled operation, inside and outside the pilot, names review and attention as the scarce resource. In the pilot, **most of the cost came from things there was only one of**: one reviewer, one subscription carrying the reviewer and the lead, one integration device, one lead dispatching, one 1,500-comment thread. Compute limits (runners, disk) were fixed within a day; the single points never were. The record shows which one set the output: **review and merge** ([14](14-which-gate.md)). At full size merges held at ~9 an hour whatever the queue, and fell to 0–2 an hour whenever the gatekeepers hit a usage limit.
 
 **Other people add value through what one owner can't supply:**
 - **knowledge outside the model,** e.g. a hardware fact that ended days of agents chasing a non-software problem;
@@ -77,7 +77,8 @@ The owner's own limit is set by how decisions arrive. Questions in a thread cap 
 
 **What are the bottlenecks: compute, disk, API, subscriptions, VMs, CI?**
 - **All of them showed up, in both shapes,** but **compute was the cheap part:** runner queues and full disks were fixed within a day once named.
-- **The expensive limits were single points:** one lead dispatching (the largest cost), one reviewer, one subscription carrying both gatekeepers, one integration device, one thread.
+- **The expensive limits were single points:** one reviewer, one subscription carrying both gatekeepers, one integration device, one lead dispatching, one thread.
+- **Review and merge set the output** ([14](14-which-gate.md)). Builders' idle time looked like the largest cost, but 46 of 68 "my list is empty" reports came from builders whose own work was waiting in review. Widen review first; faster dispatch only lengthens the queue.
 - **Each gate has a builder count where it saturates:** CI near runners ÷ 0.58, one reviewer near 15, one lead near 15. Past that, more builders only lengthen the queue ([04](04-bottlenecks.md)).
 
 **How do frontier labs and other teams build, and what do their people do?**
@@ -106,15 +107,16 @@ The owner's own limit is set by how decisions arrive. Questions in a thread cap 
 | [11 · Default playbook](11-default-playbook.md) | What every new swarm starts with: rules for workers, the lead, the reviewer, the tester, the people |
 | [12 · Economics](12-economics.md) | What a swarm costs per change, and why it rests on flat-rate plans today |
 | [13 · The first slice](13-first-slice.md) | The smallest Swarm worth building, on parts Harness already ships, and how it's judged |
+| [14 · Which gate](14-which-gate.md) | An audit of the pilot's record: review and merge set the output; most idle builders were waiting on review, not on the lead |
 | [floor.html](floor.html) | A clickable mockup of the Swarm floor: desks, ⌘⏎ zoom, the panel, decision packets |
 | [sources/](sources/) | The research reports behind 01b, 02 and 10: the Harness repo, the landscape, frontier practice and the market |
 
 ## The next step is an experiment, not more design
 Four rule changes on the pilot test the study's top claims with no new code ([08 §0](08-experiments.md)):
-1. builders pull their next task instead of waiting for the lead;
+1. a reviewer pool: a second reviewer, and builders whose work is waiting review the oldest PR first;
 2. the reviewer on a different subscription from the lead;
-3. a second reviewer;
-4. the lead never waits on the owner.
+3. the lead never waits on the owner;
+4. builders pull their next task instead of waiting for the lead.
 
 If they hold, build the smallest slice ([13](13-first-slice.md): Swarm tab, floor, `harness task next`, an inbox per worker) and judge it on the owner's own swarms within days. Harness's previous agent-team design skipped this step, and the first real team ignored it.
 

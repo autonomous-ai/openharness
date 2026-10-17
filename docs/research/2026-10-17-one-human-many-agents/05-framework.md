@@ -42,7 +42,7 @@ The **facts the models can't know** section is new. In the pilot it would have s
 
 **Lead** (one agent per swarm, or per domain):
 - plans tasks with a bar for done, each about an hour of work. The 80% reliability horizon is ~1–3 h, so bigger tasks get split.
-- keeps the backlog ordered, sized and three deep for every area, so workers pull their next task without waiting for it. In the pilot, waiting for the lead to hand out work was the largest single cost ([04](04-bottlenecks.md));
+- keeps the backlog ordered, sized and three deep for every area, so workers pull their next task without waiting for it. In the pilot, builders waiting for the lead lost the most hours ([04](04-bottlenecks.md)), though review set the output ([14](14-which-gate.md));
 - checks that the work decomposes before parallelizing it (16 agents on one kernel bug is one agent's work).
 - integrates: merge order, conflicts, a green integration branch;
 - runs the whole product end to end every evening;
@@ -109,7 +109,7 @@ brief ─▶ lead plans ─▶ task ─▶ worker leases it ─▶ builds in its
 **Paths decide the route.** Security, money, cryptography, public interfaces, safety and anything irreversible always reach a person. Docs and tests can merge on rungs 1–3.
 
 ## 5. Keeping everyone busy, without burning anything
-- **A worker is never idle while the backlog has work.** At turn end it gets its next step; with an empty list it pulls the oldest unowned task in its area; only when there is none does the lead hear. (In the pilot, builders posted 64 "list empty" reports and the lead wrote 81 comments chasing silent ones.)
+- **A worker is never idle while the backlog has work.** At turn end it gets its next step; with all its own work waiting downstream it reviews the oldest PR in the queue; with an empty list it pulls the oldest unowned task in its area; only when there is none does the lead hear. (In the pilot, builders posted 64 "list empty" reports and the lead wrote 81 comments chasing silent ones.)
 - **Assignments and messages are delivered, never polled.** No reading a 1 M-character thread to find your task.
 - **A dead worker's leases expire** (machine offline, subscription limit), and its tasks go back to the backlog.
 - **Pace never overrides safety.** "Test 24/7" and "never idle" in the pilot produced unattended motion and a full disk. Anything physical, irreversible or shared needs its owner's rule, not the swarm's clock.
