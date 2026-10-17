@@ -6702,7 +6702,7 @@ class AppNotifier extends ChangeNotifier {
             'This copy of Harness cannot install updates automatically.';
         return false;
       }
-      flushAppLog();
+      flushAppLog(durable: true);
       productRuntimeHealth?.cleanExit();
       exit(0);
     } catch (error) {

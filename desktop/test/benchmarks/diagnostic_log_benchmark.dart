@@ -110,7 +110,15 @@ class _TimedLogFile extends DailyLogFile {
     Directory directory,
     DateTime Function() clock,
     void Function(File, String) appendFile,
-  ) : super(directory, 'app', clock: clock, appendFile: appendFile);
+  ) : super(
+        directory,
+        'app',
+        clock: clock,
+        appendFile: appendFile,
+        // Every write durable, as when this benchmark was written: it
+        // measures batching, not the fsync INFO/WARN have since dropped.
+        appendFileUnsynced: appendFile,
+      );
   final work = Stopwatch();
   var depth = 0;
 
@@ -126,11 +134,14 @@ class _TimedLogFile extends DailyLogFile {
   }
 
   @override
-  void append(String block, {bool buffered = false}) =>
-      _measure(() => super.append(block, buffered: buffered));
+  void append(String block, {bool buffered = false, bool durable = false}) =>
+      _measure(
+        () => super.append(block, buffered: buffered, durable: durable),
+      );
 
   @override
-  void flush() => _measure(super.flush);
+  void flush({bool durable = false}) =>
+      _measure(() => super.flush(durable: durable));
 }
 
 class _Writes {

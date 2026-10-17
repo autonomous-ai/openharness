@@ -279,6 +279,7 @@ void main() {
           1,
           reason: 'quit must commit the pending debug tail',
         );
+        expect(log.durableFlushes, 1, reason: 'and fsync the day so far');
         await app.flushPaneLayout();
         expect(storage.values['swarm_layout_v1'], contains('Before quit'));
         await tester.pumpWidget(const SizedBox());
@@ -310,6 +311,8 @@ void main() {
       expect(log.flushes, 1);
       await tester.pumpWidget(const SizedBox());
       expect(log.flushes, 2);
+      // A desktop goes inactive on every focus change: write, never fsync.
+      expect(log.durableFlushes, 0);
       app.dispose();
     },
   );
@@ -413,9 +416,12 @@ void main() {
 }
 
 class _FlushLog implements FlushableAppLog {
-  var flushes = 0;
+  var flushes = 0, durableFlushes = 0;
   @override
-  void flush() => flushes++;
+  void flush({bool durable = false}) {
+    flushes++;
+    if (durable) durableFlushes++;
+  }
   @override
   void record(
     AppLogLevel level,
