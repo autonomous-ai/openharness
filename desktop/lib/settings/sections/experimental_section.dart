@@ -48,8 +48,6 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             spacing: 10,
             children: [
-              if (!kIsWeb && widget.notifier != null)
-                ProductUsageSetting(notifier: widget.notifier!, compact: true),
               if (!preferences.loaded ||
                   (preferences.error != null &&
                       preferences.errorFeature == null))
@@ -69,7 +67,7 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
                       ),
                   ],
                 ),
-              for (final feature in features)
+              for (final feature in features) ...[
                 SettingRow(
                   title: feature.label,
                   detail: feature.description,
@@ -85,7 +83,12 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
                                 !preferences.saving &&
                                 (preferences.isAvailable(feature) ||
                                     preferences.enabled(feature))
-                            ? (on) => unawaited(preferences.set(feature, on != feature.inverted))
+                            ? (on) => unawaited(
+                                preferences.set(
+                                  feature,
+                                  on != feature.inverted,
+                                ),
+                              )
                             : null,
                       ),
                     ),
@@ -112,6 +115,16 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
                         )
                       : null,
                 ),
+                // Product usage sharing is the account's, as the experiments are, and sits among them as one more row,
+                // after the agents' own pull request line (owner, 2026-10-17).
+                if (feature == ExperimentalFeature.agentPullRequestLine &&
+                    !kIsWeb &&
+                    widget.notifier != null)
+                  ProductUsageSetting(
+                    notifier: widget.notifier!,
+                    compact: true,
+                  ),
+              ],
             ],
           ),
         ),
