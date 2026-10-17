@@ -4,6 +4,7 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, r
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
+import { SERVICE_REGISTERED_NOT_RUNNING } from '../lib/serviceCommand.js'
 
 // vitest runs from cli/, so this is cli/scripts/install.ps1, the file published to the CDN.
 const installer = join(process.cwd(), 'scripts', 'install.ps1')
@@ -42,6 +43,11 @@ describe('install.ps1, as written', () => {
   it('uses no command that module autoload must find: Get-FileHash is not recognized under a PowerShell 7 PSModulePath', () => {
     const code = source.split(/\r?\n/).filter((line) => !line.trimStart().startsWith('#'))
     expect(code.filter((line) => /Get-FileHash|Expand-Archive|New-TemporaryFile|Format-Hex|Import-PowerShellDataFile/i.test(line))).toEqual([])
+  })
+
+  it('tells the task registered but not running now (exit 5, serviceCommand.ts) from a failure', () => {
+    expect(SERVICE_REGISTERED_NOT_RUNNING).toBe(5)
+    expect(source).toContain('if ($exit -eq 5 -and -not $why) {')
   })
 
   it('never installs hn or tmux on Windows', () => {
@@ -548,6 +554,16 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
     const stopped = fakeHarness('stopped')
     expect(ps(`Restart-HarnessDaemon -Command '${stopped.command}' -Before '1.0.0' -After '1.0.1'`).stdout).toBe('False')
     expect(stopped.calls()).toEqual(['status'])
+  })
+
+  it('says the task starts Harness at sign-in when `harness service install` registered it but it is not running now (exit 5)', () => {
+    const registered = fakeHarness('stopped', ['if "%1"=="service" exit /b 5'])
+    const run = ps(`Register-HarnessService -Command '${registered.command}'`)
+    expect(run.stdout, run.stderr).toContain("Harness starts when you sign in to Windows; it is not running now: run 'harness start'.")
+    expect(run.stdout).not.toContain('could not set itself to start')
+    expect(registered.calls()).toEqual(['service install'])
+    const failed = fakeHarness('stopped', ['if "%1"=="service" exit /b 1'])
+    expect(ps(`Register-HarnessService -Command '${failed.command}'`).stdout).toContain('Harness could not set itself to start when you sign in (harness service install exited 1).')
   })
 
   it('reads the version cli\\current names, and none before a first install', () => {

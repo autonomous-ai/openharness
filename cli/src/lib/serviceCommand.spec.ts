@@ -6,7 +6,7 @@ import { OS_SYSTEMD_UNIT, OS_UNIT_FILE, PlatformService, SYSTEMD_UNIT, defaultPl
 import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
 import { serviceDefinition } from './platformDaemon.js'
 import {
-  SERVICE_USAGE, USER_ENVIRONMENT_TIMEOUT_MS, WINDOWS_SERVICE_USAGE, readUserEnvironment, serviceCommand, serviceCommandDeps, type RegRun, type ServiceCommandDeps,
+  SERVICE_REGISTERED_NOT_RUNNING, SERVICE_USAGE, USER_ENVIRONMENT_TIMEOUT_MS, WINDOWS_SERVICE_USAGE, readUserEnvironment, serviceCommand, serviceCommandDeps, type RegRun, type ServiceCommandDeps,
 } from './serviceCommand.js'
 
 /**
@@ -501,7 +501,9 @@ describe('harness service with Task Scheduler', () => {
         expect.stringMatching(/^ {2}schtasks \/Create .* failed \(exit 1\): ERROR: The task XML is malformed\.$/),
       ])
       expect(existsSync(join(refused.data, 'harnessd-task.xml'))).toBe(false)
-      await expect(serviceCommand(['install'], idle.deps)).resolves.toBe(1)
+      // Registered all the same: the task starts harnessd at the next sign-in, which install.ps1 reads from the code.
+      await expect(serviceCommand(['install'], idle.deps)).resolves.toBe(SERVICE_REGISTERED_NOT_RUNNING)
+      expect(idle.deps.service!.inspect().registered).toBe(true)
       expect(idle.err).toEqual([
         '✗ Task Scheduler has the task that starts harnessd, but would not run it now: `harness start` starts harnessd.',
         `  schtasks /Run /TN ${taskName('demo')} failed (exit 1): ERROR: Access is denied.`,
@@ -512,7 +514,9 @@ describe('harness service with Task Scheduler', () => {
   it('says when the task ran but started nothing, as in a session no one signed in to', async () => {
     const w = windows({ answers: { 'schtasks /Run': { status: 0, stdout: 'SUCCESS', stderr: '' } } })
     try {
-      await expect(serviceCommand(['install'], w.deps)).resolves.toBe(1)
+      // Not a failure: the task is registered and starts harnessd at the next sign-in (SERVICE_REGISTERED_NOT_RUNNING).
+      await expect(serviceCommand(['install'], w.deps)).resolves.toBe(SERVICE_REGISTERED_NOT_RUNNING)
+      expect(SERVICE_REGISTERED_NOT_RUNNING).toBe(5)
       expect(w.err).toEqual([
         '✗ Task Scheduler has harnessd, but it did not come up. It runs the task only in a signed-in Windows session: `harness start` starts it now.',
         '  logs C:\\d\\harness.log   ·   harness service status',

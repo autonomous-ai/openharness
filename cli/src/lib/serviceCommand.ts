@@ -44,6 +44,15 @@ export interface ServiceCommandDeps extends PlatformDaemonDeps {
   userEnvironment?(name: string): Promise<string | null>
 }
 
+/**
+ * `harness service install`'s exit code on Windows when the task is registered and will start harnessd at the next
+ * sign-in, but did not start it now (Task Scheduler runs the task only in a signed-in Windows session). install.ps1 told
+ * that apart from a failure only by this: with exit 1 it said "Harness could not set itself to start when you sign in"
+ * of a task it had just registered (the Windows install job, B5.12). 5: harness.exe already exits 3 for a broken install
+ * and 4 for a Node that does not start (pty/src/command.rs), and the CLI exits 1 and 2 (usage).
+ */
+export const SERVICE_REGISTERED_NOT_RUNNING = 5
+
 /** As long as `reg query` is given: it reads one value. */
 export const USER_ENVIRONMENT_TIMEOUT_MS = 3_000
 
@@ -315,13 +324,13 @@ async function installTask(deps: ServiceCommandDeps): Promise<number> {
     if (!started.ok) {
       deps.err('✗ Task Scheduler has the task that starts harnessd, but would not run it now: `harness start` starts harnessd.')
       deps.err(`  ${started.detail}`)
-      return 1
+      return SERVICE_REGISTERED_NOT_RUNNING
     }
     up = await waitForMaster(deps, deps.startWaitMs ?? PLATFORM_START_WAIT_MS)
     if (up === null) {
       deps.err('✗ Task Scheduler has harnessd, but it did not come up. It runs the task only in a signed-in Windows session: `harness start` starts it now.')
       deps.err(`  logs ${deps.tildify(deps.logFile)}   ·   harness service status`)
-      return 1
+      return SERVICE_REGISTERED_NOT_RUNNING
     }
   }
   if (registered === 'already') deps.out(`harnessd is registered with Task Scheduler already (${service.target}); nothing to change.`)
