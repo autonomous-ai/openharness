@@ -13,7 +13,7 @@ import { HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type HookSettings } from '../
 import { prepareReviewed } from './hookReview.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { isMessagesBlock, messagesCommand, writeMessagesHook } from './messagesHook.js'
-import { HOOK_SCRIPT, hookArgv, hooksNotOnWindows, identitySettings, isManagedHook, foreignHookBlocks, quoteHookCommand, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
+import { HOOK_SCRIPT, hookArgv, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, foreignHookBlocks, quoteHookCommand, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
 import type { NativeHookOptions } from './nativeLocations.js'
 import { hostPlatform } from './windowsFiles.js'
@@ -61,6 +61,8 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
       return true
     }, { ...options, identity: JSON.stringify([engine, identitySettings(settings, platform), port, home, entry.args ? [entry.command, entry.args] : entry.command, env.HARNESS_AGENT_MESSAGES_DIR]) })
   } catch (err) {
+    const line = hooksNotInstalled(engine, err, platform)
+    if (line) { console.error(line); return false }
     console.error(settings.messages.failed.replace(/\{(file|script|port)\}/g, (_, name: string) =>
       name === 'file' ? files[0] : name === 'script' ? HOOK_SCRIPT : String(port)), err)
     return false

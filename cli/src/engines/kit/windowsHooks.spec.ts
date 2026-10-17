@@ -1,6 +1,6 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AGY_HOOK_SETTINGS } from '../agy/contract.js'
 import { hooks as claude } from '../claude/hookContract.js'
@@ -13,6 +13,7 @@ import { GROK_HOOK_SETTINGS } from '../grok/contract.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { installHermesHooks } from '../nativeHooks.js'
 import { installHookSettings, notifyHookEntry } from './hookSettings.js'
+import { HookPreparationHeld } from './nativeHookFiles.js'
 import { installNativeHookSettings } from './nativeHookSettings.js'
 import { hookArgv, hookScriptCandidates, identitySettings, quoteHookCommand } from './notifyHooks.js'
 
@@ -90,9 +91,8 @@ describe('a hook argument the Windows runner refuses', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
     expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(false)
-    expect(error).toHaveBeenCalledTimes(1)
-    expect(error.mock.calls[0]![0]).toBe(codex.settings.messages.failed)
-    expect(String((error.mock.calls[0]![1] as Error).message)).toMatch(/holds one of " % !/)
+    // One line, no stack (B4.10 review).
+    expect(error.mock.calls).toEqual([['[hooks] Codex hooks are not installed: a hook argument holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text']])
     expect(existsSync(home)).toBe(false)
   })
 
@@ -103,10 +103,33 @@ describe('a hook argument the Windows runner refuses', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const rule = { ...COPILOT_HOOK_SETTINGS, file: join(copilotHome, 'hooks', 'harness.json') }
     expect(await installNativeHookSettings(rule, 19473, { environment: { HOME: dir, COPILOT_HOME: copilotHome } }, 'win32')).toBe(false)
-    expect(error).toHaveBeenCalledTimes(1)
-    expect(error.mock.calls[0]![0]).toBe(COPILOT_HOOK_SETTINGS.messages.failed)
-    expect(String((error.mock.calls[0]![1] as Error).message)).toMatch(/typographic quote/)
+    expect(error.mock.calls).toEqual([['[hooks] Copilot hooks are not installed: a hook argument holds a double or typographic quote, which PowerShell passes on differently']])
     expect(existsSync(copilotHome)).toBe(false)
+  })
+
+  // Any held preparation is one line on Windows; off Windows the log is what it always was: the failure line and the error.
+  it('is one line on Windows for any held install, and the failure line with its error off Windows', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const claudeHome = join(dir, 'claude'), rule = { ...COMMANDCODE_HOOK_SETTINGS, file: join(dir, 'commandcode', 'settings.json') }
+    for (const file of [join(claudeHome, claude.settings.file), rule.file]) {
+      mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, '{"hooks":[]}\n')
+    }
+    expect(await installHookSettings('claude', claude.settings, 19473, claudeHome, {}, 'win32')).toBe(false)
+    expect(await installNativeHookSettings(rule, 19473, {}, 'win32')).toBe(false)
+    expect(error.mock.calls).toEqual([
+      ['[hooks] Claude Code hooks are not installed: the hook settings do not have the declared object shape'],
+      ['[hooks] Command Code hooks are not installed: the hooks member is not an object'],
+    ])
+    error.mockClear()
+    expect(await installHookSettings('claude', claude.settings, 19473, claudeHome, {}, 'linux')).toBe(false)
+    expect(await installNativeHookSettings(rule, 19473, {}, 'linux')).toBe(false)
+    expect(error.mock.calls.map(([line, reason]) => [line, (reason as Error).message])).toEqual([
+      [claude.settings.messages.failed, 'Hook preparation is waiting: the hook settings do not have the declared object shape'],
+      [COMMANDCODE_HOOK_SETTINGS.messages.failed, 'Hook preparation is waiting: the hooks member is not an object'],
+    ])
+    expect(error.mock.calls.every(([, reason]) => reason instanceof HookPreparationHeld)).toBe(true)
   })
 })
 
