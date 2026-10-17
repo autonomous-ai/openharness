@@ -76,7 +76,7 @@ The SSH session is an elevated admin running `cmd.exe`. Installed beforehand:
    - `ADAPTER_DATA_DIR`, `HARNESS_PTY_DIR`, `ADAPTER_COMPUTER_ID_FILE`, `HARNESS_LOGS_DIR`,
      `HARNESS_HOOK_ROUTES_DIR`, `HARNESS_AGENT_MESSAGES_DIR`, `DSH_DIR` and `HARNESS_DEVICES_DIR`, all under
      `C:\work\e2e`;
-   - `DISABLE_HOOK_INSTALL=true` and `DISABLE_GRID_INSTALL=true`. The value has to be `true`; `1` is read as off (F9);
+   - `DISABLE_GRID_INSTALL=true`. The value has to be `true`; `1` is read as off (F9). Engine hooks stay on (B4.15);
    - `HARNESS_PTY_BIN=C:\work\e2e\dist\pty\harness-pty.exe`. This one is required, because the "beside the bundle"
      lookup does not work under `start -f` (F8).
 8. **Drive the scenarios.**
@@ -373,8 +373,12 @@ Each fix is a separate commit with a test that fails without it. Each was verifi
     Windows process-evidence reader.
   - Workaround used here: end the engine inside its pane (`/exit` or Ctrl+C). The row is archived and the pane becomes
     a terminal row, which can then be deleted.
+  - With hooks on (B4.15, `evidence/hooks.log`): stop is accepted for Claude Code, Codex and Kilo once the pane's
+    conversation is bound (`deleted: true`). A pane with no bound conversation is still refused this way.
 - **F6 — Resume reopens no conversation for Claude Code or Codex** (`resumed: false`, "fresh"). Hooks are off, so no
   conversation is ever bound (sub-project B).
+  - With hooks on (B4.15, `evidence/hooks.log`): resume answers `resumed: true` for Claude Code and Codex, keeps the
+    `sessionId`, and the new pane shows the earlier prompt and answer.
 - **F7 — Command Code did not start on Windows.** Fixed (B4.13).
   - `ENGINE_CLI_COMMANDS.commandcode` is `cmd`, which resolved to `C:\Windows\System32\cmd.exe` before npm's `cmd.cmd`.
     Every Command Code pane opened the command processor instead.
@@ -437,8 +441,7 @@ Each fix is a separate commit with a test that fails without it. Each was verifi
 
 ## Known limits (by design, sub-project B or later)
 
-- Hooks are not supported on Windows. The daemon runs with `DISABLE_HOOK_INSTALL=true`, and no conversation is bound
-  (F5, F6).
+- Hooks are on (sub-project B, Phase B4); see `evidence/hooks.log`.
 - Engine install-first is not carried on Windows (F2 refuses with a reason).
 - There is no named-pipe trust for the daemon socket and no local socket, so services run in the core's process.
 - The clients (desktop, mobile, `hn`) do not yet word `PTY_HOST_UNAVAILABLE` or `ENGINE_LAUNCH_REFUSED`.

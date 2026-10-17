@@ -95,6 +95,15 @@ async function psChecks(c: Client, s: Stream, label: string) {
 async function enginePrompt(c: Client, s: Stream, engine: string) {
   return c.waitScreen(s, `${engine} prompt`, 60_000, (t) => {
     if (engine === 'claude' && /Try the new fullscreen renderer\?/.test(t)) { c.input(s, '2'); return false }
+    // A profile whose Claude Code has not finished its first run: the text style, then the security notes (B4.15).
+    if (engine === 'claude' && /Choose the text style|Press Enter to continue/.test(t)) { c.input(s, '\r'); return false }
+    // Codex on Windows asks once how to sandbox its commands. The default needs an administrator; the run picks the
+    // one that does not (written to config.toml's [windows], which the run's restore removes) (B4.15).
+    if (engine === 'codex' && t.includes('Set up the Codex agent sandbox')) {
+      if (/›\s*2\. Use non-admin sandbox/.test(t)) c.input(s, '\r')
+      else c.input(s, '2')
+      return false
+    }
     if (engine === 'claude' && t.includes('Yes, I trust this folder')) {
       // The trust prompt's selection starts on "No, exit" in this build: move down, then Enter.
       if (/>\s*No, exit/.test(t)) c.input(s, '\u001b[B')
@@ -102,7 +111,8 @@ async function enginePrompt(c: Client, s: Stream, engine: string) {
       return false
     }
     return engine === 'claude' ? /\? for shortcuts|shift\+tab to cycle|accept edits|^\s*[>❯]\s/m.test(t) && !t.includes('trust this folder') && !t.includes('Enter to confirm')
-      : /Ask Codex to do anything|›/.test(t)
+        && !/Choose the text style|Press Enter to continue/.test(t)
+      : /Ask Codex to do anything|›/.test(t) && !t.includes('Set up the Codex agent sandbox')
   })
 }
 
@@ -476,4 +486,31 @@ export async function perfstream({ c, args }: Ctx) {
   await sleep(1000)
   log(`STREAMED ${bytes} chars in ${Math.round((Date.now() - t0) / 1000)} s`)
   c.close(s)
+}
+
+/**
+ * Phase B4: each engine's hook (or plugin) binds the conversation of a pane on the pty host, through HARNESS_PANE and the
+ * hook credential. `run.cmd hooks [engine…]`. The default is the four spec section 6 names.
+ */
+export async function hooks({ c, args, create, waitReady }: Ctx) {
+  const engines = args.length ? args : ['claude', 'codex', 'opencode', 'kilo']
+  for (const engine of engines) {
+    await attempt(`${engine}: its hook binds the pane's conversation`, async () => {
+      const agent = await create(engine)
+      if (!agent) throw new Error('create refused (see the line above)')
+      await waitReady(agent.id)
+      const s = await c.open(agent.id, 120, 40)
+      if (engine === 'claude' || engine === 'codex') await enginePrompt(c, s, engine)
+      else await sleep(15_000)
+      // Claude and Codex bind at SessionStart; the plugins bind when their engine creates a session, at the first prompt.
+      // Enter on its own: Kilo's input box took the text and the Enter of one write as text only (B4.15).
+      c.input(s, 'Reply with the single word ok.')
+      await sleep(1000)
+      c.input(s, '\r')
+      const row = await c.poll(`${engine} sessionId`, 120_000, async () => { const r = await c.row(agent.id); return r?.sessionId ? r : undefined })
+      c.close(s)
+      return `agent ${agent.id.slice(0, 8)} session ${row.sessionId} status ${row.status}`
+    })
+  }
+  summary()
 }

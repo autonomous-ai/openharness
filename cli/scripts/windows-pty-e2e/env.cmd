@@ -6,6 +6,5 @@ set HARNESS_HOOK_ROUTES_DIR=C:\work\e2e\hook-routes
 set HARNESS_AGENT_MESSAGES_DIR=C:\work\e2e\agent-messages
 set DSH_DIR=C:\work\e2e\dsh
 set HARNESS_DEVICES_DIR=C:\work\e2e\devices
-set DISABLE_HOOK_INSTALL=true
 set DISABLE_GRID_INSTALL=true
 set HARNESS_PTY_BIN=C:\work\e2e\dist\pty\harness-pty.exe
