@@ -266,12 +266,18 @@ void main() {
         rasterFinish: ms * 1000,
         rasterFinishWallTime: ms * 1000,
       );
-      // A launch's first frame is its heavy workspace restore: not a sample.
-      runtime.framesForTest([frame(900), for (var i = 1; i < 60; i++) frame(5)]);
-      // Hidden or minimised: the OS throttles it, so nothing counts, nor the
-      // first frame back (its catch-up).
+      // A launch's first frame is its heavy workspace restore: not a sample
+      // (frames 1–59 are not sampled; the 60th is).
+      runtime.framesForTest([frame(900), for (var i = 1; i < 59; i++) frame(5)]);
+      // Minimised, then shown: the first frame back is the catch-up, and would
+      // otherwise be the 60th, the sampled one.
+      runtime.lifecycleChanged(AppLifecycleState.hidden);
+      runtime.lifecycleChanged(AppLifecycleState.inactive);
+      runtime.framesForTest([frame(700), frame(5)]);
+      // A batch reported while hidden is the OS's throttling: none of it counts.
       lifecycle = AppLifecycleState.hidden;
       runtime.framesForTest([for (var i = 0; i < 120; i++) frame(400)]);
+      // Visible but without focus (inactive) still counts: a person sees it.
       lifecycle = AppLifecycleState.inactive;
       runtime.framesForTest([frame(700), for (var i = 0; i < 60; i++) frame(5)]);
       await usage.flush();

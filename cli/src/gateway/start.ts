@@ -561,8 +561,10 @@ export function startGateway(host: GatewayHost): StartedGateway {
     windowRelay,
     stop: async () => {
       // Shutdown never waits for the optional disk queue. The stopped collector cannot upload. Its final, clean
-      // state is on disk when stop() returns (written synchronously), so a process that exits next keeps it.
-      void usage?.stop()
+      // state is on disk when stop() returns (written synchronously), so a process that exits next keeps it. A write
+      // already on its way can still rename an older snapshot over it and put the final state back after: waited for
+      // below, at most half a second, so an exit in between does not read as an unclean restart (review of #1393).
+      const usageStopped = usage?.stop()
       clearInterval(devlogTimer)
       syncer.stop()
       direct?.stop()
@@ -572,6 +574,10 @@ export function startGateway(host: GatewayHost): StartedGateway {
       tabKey.clear()
       tabRelay.closeAll()
       await gateway.stop()
+      if (usageStopped) {
+        await Promise.race([usageStopped.catch(() => false),
+          new Promise<void>(resolve => { setTimeout(resolve, 500).unref?.() })])
+      }
     },
   }
 }

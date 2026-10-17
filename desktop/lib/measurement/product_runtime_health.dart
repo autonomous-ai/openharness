@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleListener;
 
 import '../core/app_version.dart';
 import '../core/harness_file_store.dart';
@@ -33,6 +34,7 @@ class ProductRuntimeHealth {
   final Future<void> Function(Map<String, dynamic>)? writeState;
   final Future<String> Function()? readVersion;
   final AppLifecycleState? Function() _lifecycle;
+  AppLifecycleListener? _lifecycleListener;
   String? _scope;
   String? _accountId;
   int _epoch = 0, _revision = -1, _frame = 0;
@@ -136,6 +138,9 @@ class ProductRuntimeHealth {
       if (_ready) ready();
       SchedulerBinding.instance.addTimingsCallback(_frames);
       _timingsInstalled = true;
+      _lifecycleListener ??= AppLifecycleListener(
+        onStateChange: lifecycleChanged,
+      );
       _sample = Timer.periodic(
         const Duration(minutes: 1),
         (_) => sampleResources(),
@@ -217,25 +222,34 @@ class ProductRuntimeHealth {
   @visibleForTesting
   void framesForTest(List<FrameTiming> timings) => _frames(timings);
 
+  /// Hidden, minimised or occluded: the first frame reported after it is the
+  /// OS throttling's catch-up (or one drawn while hidden), not the app's.
+  /// Flutter draws nothing while hidden, so no batch arrives to say so.
+  @visibleForTesting
+  void lifecycleChanged(AppLifecycleState state) {
+    if (_hidden(state)) _skipCatchUp = true;
+  }
+
+  static bool _hidden(AppLifecycleState? state) =>
+      state == AppLifecycleState.hidden ||
+      state == AppLifecycleState.paused ||
+      state == AppLifecycleState.detached;
+
   void _frames(List<FrameTiming> timings) {
     if (!_active || _state.isEmpty || !measurement.sharing) return;
     // A hidden, minimised or occluded window is throttled by the OS (App Nap, the compositor), so its
     // frames time the OS, not the app; the first frame back is that throttling's catch-up. Frames of a
     // visible window without focus (inactive) still count: a person can see them.
-    final lifecycle = _lifecycle();
-    if (lifecycle == AppLifecycleState.hidden ||
-        lifecycle == AppLifecycleState.paused ||
-        lifecycle == AppLifecycleState.detached) {
+    if (_hidden(_lifecycle())) {
       _skipCatchUp = true;
       return;
     }
-    var first = true;
     for (final frame in timings) {
-      if (first && _skipCatchUp) {
-        first = _skipCatchUp = false;
+      // Not counted towards the one-in-60 either: the next frame takes its place.
+      if (_skipCatchUp) {
+        _skipCatchUp = false;
         continue;
       }
-      first = false;
       // Every 60th frame, never the first: `_frame++` sampled index 0, each launch's workspace
       // restore, which app_start already times. Oct 16 had 155 app starts, one long sample each.
       if (++_frame % 60 != 0) continue;
@@ -285,6 +299,8 @@ class ProductRuntimeHealth {
       SchedulerBinding.instance.removeTimingsCallback(_frames);
       _timingsInstalled = false;
     }
+    _lifecycleListener?.dispose();
+    _lifecycleListener = null;
     _workspace = null;
     _state = {};
     _readyCounted = false;
