@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AGY_HOOK_SETTINGS } from '../agy/contract.js'
 import { hooks as claude } from '../claude/hookContract.js'
 import { hooks as codex } from '../codex/hookContract.js'
@@ -201,11 +201,6 @@ describe('an engine with no hooks on Windows', () => {
 // Fix round 1 of the B4.6 review: an install that succeeds on Windows, and is then left alone.
 describe('Codex\'s PowerShell hook on Windows', () => {
   it('is written as the line PowerShell reads, and a second install writes nothing', async () => {
-    // The review records find Harness's own blocks as the host reads a hook (hookReview.ts `isOurs`): a PowerShell line
-    // is Harness's own on Windows only.
-    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
-    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
-    onTestFinished(() => { Object.defineProperty(process, 'platform', platform) })
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
     const home = join(dir, 'codex'), file = join(home, codex.settings.file), config = join(home, codex.settings.reviewed!.file)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})

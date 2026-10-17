@@ -239,7 +239,7 @@ async function installNotifyHooks(settings: HookSettings, port: number, home: st
   }
 
   const next = changed ? JSON.stringify(current, null, 2) + '\n' : observed.content!
-  const reviewed = settings.reviewed ? prepareReviewed(settings.reviewed, home, file, JSON.parse(next) as Settings) : null
+  const reviewed = settings.reviewed ? prepareReviewed(settings.reviewed, home, file, JSON.parse(next) as Settings, platform) : null
   reviewed?.verify()
   if (!changed) {
     const published = await observed.replace(next, attempt)

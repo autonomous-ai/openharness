@@ -275,8 +275,8 @@ export function isManagedHook(hook: { type?: unknown; command?: unknown; args?: 
     && managedArgs([hook.command, ...hook.args as string[]], win32, WINDOWS_NODE, false)
 }
 
-export function isOurs(block: HookBlock): boolean {
-  return Array.isArray(block?.hooks) && block.hooks.some(hook => isManagedHook(hook))
+export function isOurs(block: HookBlock, platform: NodeJS.Platform = process.platform): boolean {
+  return Array.isArray(block?.hooks) && block.hooks.some(hook => isManagedHook(hook, platform))
 }
 
 /** A managed command can share a block with somebody else's command. Updating
