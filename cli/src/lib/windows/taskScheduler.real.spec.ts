@@ -33,10 +33,21 @@ describe.skipIf(process.platform !== 'win32')('the scheduled task on Windows', (
       expect(text).toMatch(/<MultipleInstancesPolicy>IgnoreNew<\/MultipleInstancesPolicy>/)
       // Enabled: schtasks shows a setting only when it is not the default, so an enabled task has no <Enabled> in its
       // settings, and a disabled one says false (the rule PlatformService.inspect reads it by).
+      const DISABLED = /<Settings>[\s\S]*?<Enabled>false<\/Enabled>[\s\S]*?<\/Settings>/
       expect(text).toMatch(/<Settings>/)
-      expect(text).not.toMatch(/<Settings>[\s\S]*?<Enabled>false<\/Enabled>[\s\S]*?<\/Settings>/)
+      expect(text).not.toMatch(DISABLED)
+      // The negative control: the same task turned off shows exactly what the check above looks for.
+      const disabled = run('/Change', '/TN', name, '/DISABLE')
+      expect(disabled.status, disabled.stderr).toBe(0)
+      const off = run('/Query', '/TN', name, '/XML')
+      expect(off.status).toBe(0)
+      expect(off.stdout.replace(/\u0000/g, '')).toMatch(DISABLED)
     } finally {
       run('/Delete', '/TN', name, '/F')
+      // schtasks makes the \HarnessTest folder for the task and never removes it: the scheduler's COM API does,
+      // and refuses while another run's task is still in it (then it stays for that run to remove).
+      spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+        "$s = New-Object -ComObject Schedule.Service; $s.Connect(); $s.GetFolder('\\').DeleteFolder('HarnessTest', 0)"], { encoding: 'utf8' })
       rmSync(dir, { recursive: true, force: true })
     }
   })

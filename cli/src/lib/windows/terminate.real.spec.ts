@@ -18,8 +18,10 @@ describe.skipIf(!enabled)('TerminateProcess on Windows', () => {
       console.log(child.pid)
       setTimeout(() => {}, 60000)
     `], { stdio: ['ignore', 'pipe', 'ignore'] })
-    const childPid = Number(await new Promise<string>((resolve) => parent.stdout!.once('data', (chunk) => resolve(String(chunk).trim()))))
+    let childPid: number | undefined
     try {
+      // Inside the try: a parent that never prints still ends in the finally below.
+      childPid = Number(await new Promise<string>((resolve) => parent.stdout!.once('data', (chunk) => resolve(String(chunk).trim()))))
       const rows = await windowsProcessRows(null)
       const marker = rows!.find((row) => row.pid === parent.pid)!.startMarker
       await expect(terminateVerified(parent.pid!, 'w:1')).resolves.toBe('mismatch')
@@ -29,7 +31,7 @@ describe.skipIf(!enabled)('TerminateProcess on Windows', () => {
       expect(processExists(childPid)).toBe(true)
       await expect(terminateVerified(parent.pid!, marker)).resolves.toBe('gone')
     } finally {
-      try { process.kill(childPid) } catch { /* gone */ }
+      try { if (childPid) process.kill(childPid) } catch { /* gone */ }
       parent.kill()
     }
   }, 30_000)
