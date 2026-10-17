@@ -50,7 +50,10 @@ describe('quoteHookCommand', () => {
 
   it.each([
     ['cmd', 'C:\\100%\\data'], ['cmd', 'C:\\wow!\\data'], ['cmd', 'C:\\a"b'], ['cmd', 'C:\\data\\'],
-    ['powershell', 'C:\\a"b'], ['powershell', 'C:\\a\u2019b'],
+    ['cmd', 'a&b'], ['cmd', 'a|b'], ['cmd', 'a<b'], ['cmd', 'a>b'], ['cmd', 'a^b'], ['cmd', 'a(b'], ['cmd', 'a)b'],
+    ['powershell', 'C:\\a"b'], ['powershell', 'C:\\data\\'], ['powershell', ''],
+    ['powershell', 'C:\\a\u2018b'], ['powershell', 'C:\\a\u2019b'], ['powershell', 'C:\\a\u201ab'], ['powershell', 'C:\\a\u201bb'],
+    ['bash', 'a\rb'],
     ['bash', 'line\nbreak'], ['argv', 'nul\0'],
   ] as const)('refuses what %s would read as something other than one argument: %j', (runner, value) => {
     expect(() => quoteHookCommand(runner, ['C:\\node.exe', value])).toThrow(HookPreparationHeld)
@@ -64,8 +67,9 @@ describe('quoteHookCommand', () => {
 })
 
 describe('quoteHookCommand injection', () => {
-  it('keeps cmd metacharacters inert inside quotes and keeps PowerShell expansion characters literal', () => {
-    expect(quoteHookCommand('cmd', ["C:\\node.exe", "C:\\a&b|c<d>e^f\\x"])).toBe("\"C:\\node.exe\" \"C:\\a&b|c<d>e^f\\x\"")
+  it('refuses cmd metacharacters, names a non-text argument, and keeps PowerShell expansion characters literal', () => {
+    expect(() => quoteHookCommand('cmd', ['C:\\node.exe', 'C:\\a&b|c<d>e^f\\x'])).toThrow(HookPreparationHeld)
+    expect(() => quoteHookCommand('bash', ['x', 5 as unknown as string])).toThrow(/is not text/)
     expect(quoteHookCommand('powershell', ['C:\\node.exe', 'C:\\a$(calc);`b\\x'])).toBe("& 'C:\\node.exe' 'C:\\a$(calc);`b\\x'")
   })
   it('refuses a cmd or PowerShell argument that closes its quote, then runs a command', () => {

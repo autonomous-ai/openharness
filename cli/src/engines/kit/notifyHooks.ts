@@ -39,7 +39,7 @@ function shellQuote(value: string): string {
  * nativeHookSettings.ts `NativeHookSettings.win32Runner`). Off Windows every engine runs its hooks in a POSIX shell (`bash`).
  * - `argv`: the engine starts the program with its arguments and no shell (Claude Code's exec form, `command` + `args`).
  * - `bash`: a POSIX shell reads the line.
- * - `cmd`: `cmd.exe /C` reads it (Codex 0.162 runs `%COMSPEC% /C "<line>"`; Command Code runs it through Node's `shell: true`).
+ * - `cmd`: `cmd.exe /C` reads it (the line is meant for a wrapping `cmd /s /c "…"`, so it refuses `" % ! & | < > ^ ( )` and a trailing backslash rather than escape them) (Codex 0.162 runs `%COMSPEC% /C "<line>"`; Command Code runs it through Node's `shell: true`).
  * - `powershell`: PowerShell reads it (Copilot CLI's `command` fills its `powershell` field on Windows).
  */
 export type HookRunner = 'argv' | 'bash' | 'cmd' | 'powershell'
@@ -57,7 +57,8 @@ const refuse = (reason: string): never => { throw new HookPreparationHeld(`a hoo
 export function quoteHookCommand(runner: HookRunner, argv: string[]): string | string[] {
   if (!argv.length) refuse('list is empty')
   for (const arg of argv) {
-    if (typeof arg !== 'string' || /[\0\r\n]/.test(arg)) refuse('holds a line break or NUL, which no hook runner passes whole')
+    if (typeof arg !== 'string') refuse('is not text')
+    if (/[\0\r\n]/.test(arg)) refuse('holds a line break or NUL, which no hook runner passes whole')
   }
   switch (runner) {
     case 'argv': return [...argv]
@@ -65,13 +66,15 @@ export function quoteHookCommand(runner: HookRunner, argv: string[]): string | s
     case 'cmd': return argv.map((arg) => {
       // cmd.exe expands %…% (and !…! with delayed expansion) even inside quotes, and a quote ends them. A trailing
       // backslash would escape the closing quote for the program's own parser (CommandLineToArgvW's rules).
-      if (/["%!]/.test(arg)) refuse('holds " % or !, which cmd.exe reads inside quotes')
+      if (/["%!&|<>^()]/.test(arg)) refuse('holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text')
       if (arg.endsWith('\\')) refuse('ends in a backslash, which would escape its closing quote')
       return BARE_WORD.test(arg) ? arg : `"${arg}"`
     }).join(' ')
     case 'powershell': return `& ${argv.map((arg) => {
       // Inside single quotes PowerShell reads only a quote, typographic ones too. Windows PowerShell 5.1 passes a
       // double quote inside an argument to a native program unescaped.
+      if (arg === '') refuse('is empty, which Windows PowerShell 5.1 drops')
+      if (arg.endsWith('\\')) refuse('ends in a backslash, which would escape its closing quote')
       if (/["\u2018\u2019\u201a\u201b]/.test(arg)) refuse('holds a double or typographic quote, which PowerShell passes on differently')
       return BARE_WORD.test(arg) ? arg : `'${arg.replace(/'/g, "''")}'`
     }).join(' ')}`
