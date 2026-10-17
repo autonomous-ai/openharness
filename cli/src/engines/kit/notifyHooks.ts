@@ -81,9 +81,10 @@ function shellQuote(value: string): string {
  * nativeHookSettings.ts `NativeHookSettings.win32Runner`). Off Windows every engine runs its hooks in a POSIX shell (`bash`).
  * - `argv`: the engine starts the program with its arguments and no shell (Claude Code's exec form, `command` + `args`).
  * - `bash`: a POSIX shell reads the line.
- * - `cmd`: `cmd.exe` reads it, meant for a line the engine wraps in quotes (`/C "…"` — Codex — or `/d /s /c "…"` —
- *   Command Code via Node's shell:true). It refuses `" % ! & | < > ^ ( )` and a trailing backslash rather than escape them.
- * - `powershell`: PowerShell reads it (Copilot CLI's `command` fills its `powershell` field on Windows).
+ * - `cmd`: `cmd.exe` reads it, meant for a line the engine wraps in quotes (`/d /s /c "…"` — Command Code via Node's
+ *   shell:true). It refuses `" % ! & | < > ^ ( )` and a trailing backslash rather than escape them.
+ * - `powershell`: PowerShell reads it (Copilot CLI's `command` fills its `powershell` field on Windows; Codex runs it with
+ *   `powershell.exe -NoProfile -Command`, its Windows session shell).
  */
 export type HookRunner = 'argv' | 'bash' | 'cmd' | 'powershell'
 

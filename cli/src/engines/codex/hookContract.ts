@@ -34,9 +34,12 @@ export const hooks: HookContract = {
       ],
     },
     commandNamesHome: true,
-    // Windows: `%COMSPEC% /C "<line>"`, the line given verbatim (codex-rs hooks/src/engine/command_runner.rs `build_command`,
-    // rust-v0.162.1). `commandWindows` would override `command` there; Harness writes `command`, quoted for cmd.exe.
-    win32Runner: 'cmd',
+    // Windows: the session's shell runs the line, and on Windows that shell is PowerShell: `powershell.exe -NoProfile
+    // -Command <line>` (rust-v0.162.1: core/src/session/mod.rs `build_hooks_config`, shell-command/src/shell_detect.rs
+    // `default_user_shell`). `%COMSPEC% /C "<line>"` (hooks/src/engine/command_runner.rs `build_command`) is only the
+    // fallback with no session shell. Seen on the Windows VM (B4.15): a line quoted for cmd.exe made every hook exit 1.
+    // `commandWindows` would override `command` there; Harness writes `command`, quoted for PowerShell.
+    win32Runner: 'powershell',
     upToDate: { command: 'first', matcher: true },
     messages: {
       current: '[hooks] Codex SessionStart/UserPromptSubmit hooks already installed → {file}',

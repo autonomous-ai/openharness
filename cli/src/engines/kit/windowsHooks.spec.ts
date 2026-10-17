@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { AGY_HOOK_SETTINGS } from '../agy/contract.js'
 import { hooks as claude } from '../claude/hookContract.js'
 import { hooks as codex } from '../codex/hookContract.js'
@@ -24,7 +24,7 @@ const argv = ['C:\\h\\node.exe', 'C:\\h\\cli\\notify.mjs', '--port', '18473', '-
 describe('the hook each engine runs on Windows', () => {
   it('is declared for every engine whose hooks Harness installs there, and for no other', () => {
     expect(claude.settings.win32Runner).toBe('argv')
-    expect(codex.settings.win32Runner).toBe('cmd')
+    expect(codex.settings.win32Runner).toBe('powershell')
     expect(COPILOT_HOOK_SETTINGS.win32Runner).toBe('powershell')
     expect(COMMANDCODE_HOOK_SETTINGS.win32Runner).toBe('cmd')
     for (const rule of [CURSOR_HOOK_SETTINGS, DEVIN_HOOK_SETTINGS, GROK_HOOK_SETTINGS, AGY_HOOK_SETTINGS]) expect('win32Runner' in rule).toBe(false)
@@ -34,9 +34,12 @@ describe('the hook each engine runs on Windows', () => {
     expect(notifyHookEntry(claude.settings, argv, 'win32')).toEqual({ command: argv[0], args: argv.slice(1) })
   })
 
-  it('writes Codex a line cmd.exe reads', () => {
+  // Codex 0.162.1 runs a hook in the session's shell, which on Windows is PowerShell: `powershell.exe -NoProfile -Command
+  // <line>` (codex-rs core/src/session/mod.rs `build_hooks_config`, shell-command/src/shell_detect.rs). A line quoted for
+  // cmd.exe is a PowerShell parse error there, and every hook exited 1 (B4.15, the Windows VM).
+  it('writes Codex a line PowerShell reads', () => {
     expect(notifyHookEntry(codex.settings, argv, 'win32'))
-      .toEqual({ command: '"C:\\h\\node.exe" "C:\\h\\cli\\notify.mjs" --port 18473 --data-dir "C:\\h\\cli\\data"' })
+      .toEqual({ command: "& 'C:\\h\\node.exe' 'C:\\h\\cli\\notify.mjs' --port 18473 --data-dir 'C:\\h\\cli\\data'" })
   })
 
   it('keeps the POSIX line for both off Windows', () => {
@@ -85,14 +88,14 @@ describe('the notify.mjs a hook line names', () => {
 // B4.1 review: a hook line a runner would misread is refused (quoteHookCommand). That refusal is an install that
 // failed, logged with its reason like any other, never a rejected promise the daemon reports with a stack trace.
 describe('a hook argument the Windows runner refuses', () => {
-  it('fails the install with its reason for cmd.exe (Codex): a % in the home it names', async () => {
+  it('fails the install with its reason for PowerShell (Codex): a typographic quote in the home it names', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
-    const home = join(dir, 'co%dex')
+    const home = join(dir, 'co\u2019dex')
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
     expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(false)
     // One line, no stack (B4.10 review).
-    expect(error.mock.calls).toEqual([['[hooks] Codex hooks are not installed: a hook argument holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text']])
+    expect(error.mock.calls).toEqual([['[hooks] Codex hooks are not installed: a hook argument holds a double or typographic quote, which PowerShell passes on differently']])
     expect(existsSync(home)).toBe(false)
   })
 
@@ -196,8 +199,13 @@ describe('an engine with no hooks on Windows', () => {
 })
 
 // Fix round 1 of the B4.6 review: an install that succeeds on Windows, and is then left alone.
-describe('Codex\'s cmd.exe hook on Windows', () => {
-  it('is written as the line cmd.exe reads, and a second install writes nothing', async () => {
+describe('Codex\'s PowerShell hook on Windows', () => {
+  it('is written as the line PowerShell reads, and a second install writes nothing', async () => {
+    // The review records find Harness's own blocks as the host reads a hook (hookReview.ts `isOurs`): a PowerShell line
+    // is Harness's own on Windows only.
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    onTestFinished(() => { Object.defineProperty(process, 'platform', platform) })
     const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
     const home = join(dir, 'codex'), file = join(home, codex.settings.file), config = join(home, codex.settings.reviewed!.file)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})

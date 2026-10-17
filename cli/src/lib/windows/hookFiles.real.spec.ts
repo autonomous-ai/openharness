@@ -46,8 +46,9 @@ function withEcho(line: string, echo: string): string {
   return line.replace(HOOK_SCRIPT, () => echo)
 }
 // Each engine's own way to run a hook line on Windows.
-// Codex 0.162 (codex-rs): %COMSPEC% /C "<line>", the quoted line passed verbatim (raw_arg).
-const codexRuns = (line: string) => spawnSync(process.env.ComSpec ?? 'cmd.exe', ['/C', `"${line}"`], { windowsVerbatimArguments: true, encoding: 'utf8' })
+// Codex 0.162.1 (codex-rs): its Windows session shell, `powershell.exe -NoProfile -Command <line>`, the line one argument
+// that Rust quotes as Node does (core/src/session/mod.rs `build_hooks_config`; seen on the VM in B4.15).
+const codexRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile', '-Command', line], { encoding: 'utf8' })
 // Command Code: Node's spawn(line, { shell: true }), which is cmd.exe /d /s /c "<line>".
 const commandCodeRuns = (line: string) => spawnSync(line, { shell: true, encoding: 'utf8' })
 // Copilot CLI copies `command` to its `powershell` field and runs it in Windows PowerShell. Its exact flags are not
@@ -66,7 +67,7 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
     } finally { rmSync(link) } // the junction only, never what it points to
   })
 
-  it('installs Claude Code exec form and a Codex line for cmd.exe, and finds both current the second time', async () => {
+  it('installs Claude Code exec form and a Codex line for PowerShell, and finds both current the second time', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     // An explicit profile, so no engine home of the real USERPROFILE is named in the lines.
@@ -81,7 +82,7 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
     // Agent Messages' block is a POSIX line and is not installed on Windows yet.
     expect(claude.hooks.PostToolUse).toBeUndefined()
     const codex = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8'))
-    expect(codex.hooks.SessionStart[0].hooks[0].command).toMatch(new RegExp(`^"[^"]+node\\.exe" "[^"]+notify\\.mjs" --port ${PORT} `, 'i'))
+    expect(codex.hooks.SessionStart[0].hooks[0].command).toMatch(new RegExp(`^& '[^']+node\\.exe' '[^']+notify\\.mjs' --port ${PORT} `, 'i'))
     expect(isOurs(codex.hooks.SessionStart[0])).toBe(true)
     // No ~\.grok, ~\.cursor, … of the person running the spec.
     const realHomes = `${process.env.USERPROFILE}\\.`
@@ -139,24 +140,26 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
       .toEqual([...flags('copilot'), '--copilot-event', 'sessionStart'])
   }, 60_000) // a ceiling for the slow arm64 runner's process starts, not a timing assertion
 
-  it('refuses a home with & ( ) for the cmd.exe engines with its reason, and PowerShell passes it whole', async () => {
+  it('refuses a home with & ( ) for the cmd.exe engine with its reason, and the PowerShell engines pass it whole', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { home, echo, environment } = profile('Thảo & co (1)')
-    expect(await engineHooks.codex.installIn(PORT, join(home, '.codex'), { environment })).toBe(false)
     expect(await installCommandCodeHooks(PORT, { environment })).toBe(false)
-    // One line each, no stack.
+    // One line, no stack.
     expect(error.mock.calls).toEqual([
-      ['[hooks] Codex hooks are not installed: a hook argument holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text'],
       ['[hooks] Command Code hooks are not installed: a hook argument holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text'],
     ])
-    expect([existsSync(join(home, '.codex')), existsSync(join(home, '.commandcode'))]).toEqual([false, false])
-    // Inside PowerShell's single quotes these are text.
+    expect(existsSync(join(home, '.commandcode'))).toBe(false)
+    // Inside PowerShell's single quotes these are text: Copilot's line, and Codex's.
     expect(await installCopilotHooks(PORT, { environment })).toBe(true)
     const line = JSON.parse(readFileSync(join(home, '.copilot', 'hooks', 'harness.json'), 'utf8')).hooks.agentStop[0].command
     expect(delivered(copilotRuns(withEcho(line, echo))))
       .toEqual([...hookArgv(PORT, 'copilot', undefined, undefined, environment).slice(2), '--copilot-event', 'agentStop'])
+    const codexHome = join(home, '.codex')
+    expect(await engineHooks.codex.installIn(PORT, codexHome, { environment })).toBe(true)
+    const codexLine = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8')).hooks.SessionStart[0].hooks[0].command
+    expect(delivered(codexRuns(withEcho(codexLine, echo)))).toEqual(hookArgv(PORT, 'codex', codexHome, undefined, environment).slice(2))
   }, 60_000)
 
   it('replaces a settings file another handle holds open once it lets go, and keeps it whole while it does not', async () => {
