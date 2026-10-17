@@ -4,7 +4,7 @@ import { createServer as createNetServer } from 'net'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
-import { fileURLToPath } from 'url'
+import { fileURLToPath, pathToFileURL } from 'url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ENGINES } from './engines/types.js'
 import { HARNESS_OWNER_OPTION, HARNESS_SESSION_PREFIX, harnessPaneOwner, ownerCommand, paneOwnerFormat } from './lib/harnessSessionLabel.js'
@@ -1932,7 +1932,7 @@ describe('hook notify in a Harness pty host pane (Windows)', () => {
     const preload = join(dataDir, 'win32.mjs')
     writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32' })\n")
     const { port, requests } = await collect({}, 'b'.repeat(43))
-    await runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${preload}` }, input: sessionStart() })
+    await runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` }, input: sessionStart() })
     expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-start'])
   })
 
@@ -1944,7 +1944,7 @@ describe('hook notify in a Harness pty host pane (Windows)', () => {
     const preload = join(dataDir, 'win32.mjs')
     writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32' })\n")
     const { port, requests } = await collect({}, 'b'.repeat(43))
-    await runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${preload}` }, input: sessionStart() })
+    await runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` }, input: sessionStart() })
     expect(requests).toEqual([])
   })
 })
