@@ -89,7 +89,8 @@ class SharedTabMember {
 
 @immutable
 class SharedTab {
-  const SharedTab({
+  // Not const: a const class cannot hold the late [_memberDeskTabId].
+  SharedTab({
     required this.sharedTabId,
     required this.ownerTabId,
     required this.name,
@@ -126,7 +127,12 @@ class SharedTab {
   /// ([memberDeskTabId]); the owner's is the tab it shared (null when the
   /// daemon did not say, so it shows in no desk tab).
   String? deskTabId(String myAccountId) =>
-      ownedBy(myAccountId) ? ownerTabId : memberDeskTabId(sharedTabId);
+      ownedBy(myAccountId) ? ownerTabId : _memberDeskTabId;
+
+  /// Worked out once per tab: [SharedTabsController.tabForDesk] asks every
+  /// shared tab for its desk id, for each desk tab, on every native menu
+  /// flush — and each answer was a fresh SHA-256 of the shared tab id.
+  late final String _memberDeskTabId = memberDeskTabId(sharedTabId);
 
   static SharedTab? fromJson(Object? json) {
     if (json is! Map) return null;

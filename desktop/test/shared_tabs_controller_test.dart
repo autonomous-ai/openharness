@@ -60,6 +60,19 @@ void main() {
     expect(c.agentMessagesTabIds('other'), ['other']);
   });
 
+  // tabForDesk asks every shared tab for its desk id, for each desk tab, on
+  // every native menu flush; each answer was a fresh SHA-256.
+  test("a member tab's desk id is worked out once, not on every ask", () async {
+    final c = make((p) async => shares(rosters: [roster()]));
+    await c.refresh();
+    final tab = c.snapshot.tabs.single;
+    final desk = tab.deskTabId('bob');
+    expect(desk, memberDeskTabId(id1));
+    expect(identical(tab.deskTabId('bob'), desk), isTrue);
+    expect(identical(c.tabForDesk(desk!), tab), isTrue);
+    expect(tab.deskTabId('alice'), isNull, reason: "the owner's: its own tab id");
+  });
+
   test("the owner's tab's Agent Messages are its desk tab's alone", () async {
     final c = make((p) async => shares(rosters: [roster(owner: 'bob', tabId: 'swarm-3')]));
     await c.refresh();
