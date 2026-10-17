@@ -82,7 +82,9 @@ The SSH session is an elevated admin running `cmd.exe`. Installed beforehand:
 8. **Drive the scenarios.**
    - Run `C:\work\e2e\run.cmd <command> [args]`, for example `run.cmd s1` or `run.cmd list`.
    - The commands are in `scenarios.mts`. Evidence was captured from their output.
-   - The machine id comes from the isolated `computer-id` file. The loopback API needs no account.
+   - The driver selects the machine id the daemon serves, as the CLI's own clients do: the sign-in's machine id when
+     the daemon is signed in, otherwise the isolated `computer-id` file. A signed-in core serves under its account's
+     machine id, so the computer id alone was refused with `NO_PEER_LINK`. The loopback API needs no account.
 
 ## Scenario results
 

@@ -3,13 +3,25 @@
 import { randomUUID } from 'node:crypto'
 import { inflateSync } from 'node:zlib'
 import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { encodeTerminalLocal, decodeTerminalLocal, TerminalBinaryKind } from '../../src/lib/terminalBinary.ts'
 
 export const ts = () => new Date().toISOString().slice(11, 23)
 export const log = (m: string) => console.log(`${ts()} ${m}`)
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * The machine id the daemon serves, picked as the CLI's own clients pick it (src/agentClient/daemon.ts): a signed-in
+ * core serves under its account's machine id, from the sign-in, and only a signed-out one under this computer's id.
+ * Sending the computer id to a signed-in daemon closed the socket with NO_PEER_LINK (the B4 install, 2026-10-17).
+ */
 export function machineId(): string {
+  const auth = process.env.HARNESS_AUTH_DIR?.trim() || join(homedir(), '.harness', 'auth')
+  try {
+    const signedIn = JSON.parse(readFileSync(join(auth, 'session.json'), 'utf8')).machineId
+    if (typeof signedIn === 'string' && signedIn) return signedIn
+  } catch { /* not signed in: the computer id below */ }
   return readFileSync(process.env.ADAPTER_COMPUTER_ID_FILE ?? 'C:\\work\\e2e\\computer-id', 'utf8').trim()
 }
 
