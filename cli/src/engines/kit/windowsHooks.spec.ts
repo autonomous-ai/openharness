@@ -14,7 +14,7 @@ import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { installHermesHooks } from '../nativeHooks.js'
 import { installHookSettings, notifyHookEntry } from './hookSettings.js'
 import { installNativeHookSettings } from './nativeHookSettings.js'
-import { hookArgv, hookScriptCandidates, identitySettings } from './notifyHooks.js'
+import { hookArgv, hookScriptCandidates, identitySettings, quoteHookCommand } from './notifyHooks.js'
 
 const dirs: string[] = []
 afterEach(() => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -192,6 +192,44 @@ describe('Codex\'s cmd.exe hook on Windows', () => {
     expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
     expect(log.mock.calls[0]![0]).toBe(codex.settings.messages.current.replace('{file}', file))
     expect([stamp(file), stamp(config)]).toEqual(before)
+  })
+})
+
+// B4.10 (the B4.6 carries): the Copilot (PowerShell) and Command Code (cmd.exe, nested schema) installs that succeed on
+// Windows, and are then left alone. hookFiles.real.spec.ts runs the same round trips on NTFS.
+describe('Copilot\'s PowerShell and Command Code\'s cmd.exe hooks on Windows', () => {
+  const stamp = (path: string) => { const info = statSync(path, { bigint: true }); return [readFileSync(path, 'utf8'), info.ino, info.mtimeNs] }
+
+  it('writes Copilot a PowerShell line per event, and a second install writes nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const rule = { ...COPILOT_HOOK_SETTINGS, file: join(dir, 'copilot', 'hooks', 'harness.json') }
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installNativeHookSettings(rule, 19473, {}, 'win32')).toBe(true)
+    const line = quoteHookCommand('powershell', hookArgv(19473, 'copilot')) as string
+    expect(line.startsWith('& ')).toBe(true)
+    expect(JSON.parse(readFileSync(rule.file, 'utf8'))).toEqual({ version: 1, hooks: Object.fromEntries(COPILOT_HOOK_SETTINGS.events.map(event =>
+      [event, [{ type: 'command', command: `${line} --copilot-event ${event}` }]])) })
+    const before = stamp(rule.file)
+    log.mockClear()
+    expect(await installNativeHookSettings(rule, 19473, {}, 'win32')).toBe(true)
+    expect(log.mock.calls).toEqual([[COPILOT_HOOK_SETTINGS.messages.current]])
+    expect(stamp(rule.file)).toEqual(before)
+  })
+
+  it('writes Command Code one cmd.exe line in each nested block, and a second install writes nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const rule = { ...COMMANDCODE_HOOK_SETTINGS, file: join(dir, 'commandcode', 'settings.json') }
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installNativeHookSettings(rule, 19473, {}, 'win32')).toBe(true)
+    const line = quoteHookCommand('cmd', hookArgv(19473, 'commandcode')) as string
+    expect(line.startsWith('"')).toBe(true)
+    expect(JSON.parse(readFileSync(rule.file, 'utf8')).hooks).toEqual(Object.fromEntries(COMMANDCODE_HOOK_SETTINGS.events.map(event =>
+      [event, [{ hooks: [{ type: 'command', command: line, timeout: COMMANDCODE_HOOK_SETTINGS.timeout }] }]])))
+    const before = stamp(rule.file)
+    log.mockClear()
+    expect(await installNativeHookSettings(rule, 19473, {}, 'win32')).toBe(true)
+    expect(log.mock.calls).toEqual([[COMMANDCODE_HOOK_SETTINGS.messages.current]])
+    expect(stamp(rule.file)).toEqual(before)
   })
 })
 
