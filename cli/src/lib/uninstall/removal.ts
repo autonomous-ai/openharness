@@ -184,11 +184,28 @@ function removeLink(path: string): void {
   try { unlinkSync(path) } catch { rmdirSync(path) }
 }
 
+/**
+ * Every check a plan must pass before anything is removed, as removeNow and scheduleFinalRemoval make them: its paths
+ * (checkPlan), its root not a link, and, given the temp folder the last step runs from, that folder not in the root.
+ * `harness uninstall` runs it before it asks or stops anything, so a root it would refuse at the end is refused while
+ * nothing has been done yet (B5.9 review, I1). Returns the normalized root.
+ */
+export function checkRemovable(plan: RemovalPlan, o: { platform?: NodeJS.Platform; home?: string; tempDir?: string } = {}): string {
+  const platform = o.platform ?? process.platform
+  const root = checkPlan(platform, plan, o.home ?? defaultHome(platform))
+  if (o.tempDir !== undefined) {
+    // The script and its log must outlive the removal, and the script must not remove the folder it runs from.
+    const temp = normalized(platform, o.tempDir)
+    if (same(platform, temp, root) || inside(platform, root, temp)) refuse(plan.root, `the temp folder ${o.tempDir} is inside it`)
+  }
+  if (isLink(root)) refuse(plan.root, 'it is a link to another folder')
+  return root
+}
+
 /** mac and Linux: the plan, carried out now. Returns what is still there. Throws, removing nothing, on a bad plan. */
 export function removeNow(plan: RemovalPlan, o: { platform?: NodeJS.Platform; home?: string } = {}): string[] {
   const platform = o.platform ?? process.platform
-  const root = checkPlan(platform, plan, o.home ?? defaultHome(platform))
-  if (isLink(root)) refuse(plan.root, 'it is a link to another folder')
+  const root = checkRemovable(plan, o)
   for (const target of plan.remove) {
     // A folder on the way that has become a link would take the removal outside the root: leave the target.
     if (between(platform, root, target.path).some(isLink)) continue
@@ -328,11 +345,7 @@ export function scheduleFinalRemoval(plan: RemovalPlan, deps: FinalRemovalDeps):
   const log = win32.join(deps.tempDir, `harness-uninstall-${stamp}.log`)
   checkPathText('win32', script)
   const text = finalRemovalScript({ pid: deps.pid, plan, log, systemRoot: deps.systemRoot })
-  // The script and its log must outlive the removal, and the script must not remove the folder it runs from.
-  const temp = normalized('win32', deps.tempDir)
-  const root = normalized('win32', plan.root)
-  if (same('win32', temp, root) || inside('win32', root, temp)) refuse(plan.root, `the temp folder ${deps.tempDir} is inside it`)
-  if (isLink(plan.root)) refuse(plan.root, 'it is a link to another folder')
+  checkRemovable(plan, { platform: 'win32', tempDir: deps.tempDir })
   const manual = manualRemoval(plan)
   try { deps.write(script, text) } catch (error) {
     return { ok: false, reason: 'Harness could not save the step that removes its files once this command has ended.', manual, detail: `could not write ${script}: ${message(error)}` }

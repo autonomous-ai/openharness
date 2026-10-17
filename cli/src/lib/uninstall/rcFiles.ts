@@ -54,6 +54,20 @@ export function withoutHarnessPathLines(text: string, line: string): RcEdit {
   return { text: out.join('\n'), removed, changedByPerson }
 }
 
+/**
+ * The startup files in [home] that hold one of the installer's pairs, read and left as they are: whether there is a
+ * PATH line of Harness's at all, before uninstall says it kept one (B5.9 review, M8). A file that cannot be read holds none.
+ */
+export function filesWithHarnessPathLines(home: string): string[] {
+  return rcFiles(home).filter(({ file, line }) => {
+    try {
+      return withoutHarnessPathLines(readFileSync(file, 'latin1'), Buffer.from(line, 'utf8').toString('latin1')).removed > 0
+    } catch {
+      return false
+    }
+  }).map(({ file }) => file)
+}
+
 export interface RcOutcome { file: string; removed: number; changedByPerson: number; failed?: string }
 
 /**

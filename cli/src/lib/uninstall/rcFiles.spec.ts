@@ -2,7 +2,7 @@ import { chmodSync, existsSync, lstatSync, readdirSync, mkdirSync, mkdtempSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { RC_MARKER, SH_PATH_LINE, fishPathLine, rcFiles, removeHarnessPathLines, withoutHarnessPathLines } from './rcFiles.js'
+import { RC_MARKER, SH_PATH_LINE, filesWithHarnessPathLines, fishPathLine, rcFiles, removeHarnessPathLines, withoutHarnessPathLines } from './rcFiles.js'
 
 const fsState = vi.hoisted(() => ({ failRename: false }))
 vi.mock('node:fs', async (importOriginal) => {
@@ -93,6 +93,20 @@ describe('install.sh', () => {
 describe('removeHarnessPathLines', () => {
   const dirs: string[] = []
   afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+
+  it('names the files that hold the installer\'s pair, and changes none of them', () => {
+    const home = mkdtempSync(join(tmpdir(), 'rc-files-'))
+    dirs.push(home)
+    const zshrc = installed('alias ll="ls -l"\n')
+    writeFileSync(join(home, '.zshrc'), zshrc)
+    // A marker whose line the person changed is not Harness's PATH line.
+    writeFileSync(join(home, '.bashrc'), `${RC_MARKER}\nexport PATH="/opt/x:$PATH"\n`)
+    writeFileSync(join(home, '.profile'), 'export UNTOUCHED=1\n')
+    expect(filesWithHarnessPathLines(home)).toEqual([join(home, '.zshrc')])
+    expect(readFileSync(join(home, '.zshrc'), 'utf8')).toBe(zshrc)
+    rmSync(join(home, '.zshrc'))
+    expect(filesWithHarnessPathLines(home)).toEqual([])
+  })
 
   it('edits every startup file the installer wrote to, through a link without replacing it', () => {
     const home = mkdtempSync(join(tmpdir(), 'rc-files-'))

@@ -17,7 +17,7 @@ import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './li
  * and the backend socket (events up / chat + RPCs down).
  */
 
-import { readFileSync, readdirSync, writeFileSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
+import { readFileSync, readdirSync, writeFileSync, writeSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
@@ -2865,7 +2865,12 @@ switch (cmd) {
     Promise.all([import('./lib/uninstall/command.js'), import('./lib/uninstall/deps.js')])
       .then(async ([{ uninstallCommand }, { uninstallDeps }]) => uninstallCommand(rest, await uninstallDeps({ tildify, ask: askLine })))
       .then((code) => process.exit(code))
-      .catch(onError)
+      // Not onError, whose "Failed to start adapter" is another command's: what was done so far stays done. Written at
+      // once, as the command's own lines are (uninstall/deps.ts): process.exit drops what a pipe has not taken yet.
+      .catch((error: unknown) => {
+        try { writeSync(2, `✗ harness uninstall stopped before it finished (${error instanceof Error ? error.message : String(error)}). Run harness uninstall again to finish.\n`) } catch { /* no stderr */ }
+        process.exit(1)
+      })
     break
   case 'status':
     status().catch(onError)

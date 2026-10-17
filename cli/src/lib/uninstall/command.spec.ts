@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { labelHookRemoval, UNINSTALL_USAGE, uninstallCommand, type UninstallDeps } from './command.js'
+import { labelHookRemoval, UNINSTALL_USAGE, uninstallCommand, UninstallLockBusy, type UninstallDeps } from './command.js'
 import { RemovalRefused } from './removal.js'
 
 function fake(overrides: Partial<UninstallDeps> = {}) {
@@ -24,6 +24,7 @@ function fake(overrides: Partial<UninstallDeps> = {}) {
     removePathEntry: () => { calls.push('path'); return { kind: 'rc', edits: [{ file: '/Users/u/.zshrc', removed: 1, changedByPerson: 0 }], keptFor: [] } },
     listEntries: (dir) => (dir === '/Users/u/.harness' ? [{ name: 'auth', dir: true }, { name: 'cli', dir: true }, { name: 'runtime', dir: true }] : [{ name: 'cli.js', dir: false }, { name: 'data', dir: true }]),
     exists: () => true,
+    checkRemovable: () => {},
     removeNow: (plan) => { calls.push(`files ${plan.remove.map((t) => t.path.replace('/Users/u/.harness/', '')).join(',')}${plan.removeRoot ? ' +root' : ''}`); return [] },
     scheduleFinalRemoval: (plan) => { calls.push(`final ${plan.remove.length}${plan.removeRoot ? ' +root' : ''}`); return { ok: true, script: 'C:\\T\\h.cmd', log: 'C:\\T\\h.log' } },
     afterword: () => { calls.push('afterword') },
@@ -85,14 +86,15 @@ describe('harness uninstall', () => {
     const service = fake({ service: { name: 'systemd', present: () => true, unregister: () => ({ ok: false, detail: 'systemctl --user disable harnessd.service: exit 1' }) } })
     expect(await uninstallCommand(['--yes'], service.deps)).toBe(1)
     expect(service.calls).toEqual(['agents', 'lock'])
-    expect(service.err).toEqual(['✗ systemd would not let go of the Harness daemon: systemctl --user disable harnessd.service: exit 1. Nothing was deleted: run harness uninstall again once it has stopped.'])
+    expect(service.err).toEqual(['✗ systemd would not let go of the Harness daemon (systemctl --user disable harnessd.service: exit 1). None of Harness\'s files were deleted. Try again; if it keeps failing, run `harness service uninstall` to see why.'])
     // schtasks ends its message with a full stop: the sentence does not get two.
     const denied = fake({ service: { name: 'Task Scheduler', present: () => true, unregister: () => ({ ok: false, detail: 'ERROR: Access is denied.' }) } })
     expect(await uninstallCommand(['--yes'], denied.deps)).toBe(1)
-    expect(denied.err).toEqual(['✗ Task Scheduler would not let go of the Harness daemon: ERROR: Access is denied. Nothing was deleted: run harness uninstall again once it has stopped.'])
+    expect(denied.err).toEqual(['✗ Task Scheduler would not let go of the Harness daemon (ERROR: Access is denied). None of Harness\'s files were deleted. Try again; if it keeps failing, run `harness service uninstall` to see why.'])
     const stuck = fake({ stopDaemon: async () => ({ pid: 4242, stopped: true }) })
     expect(await uninstallCommand(['--yes'], stuck.deps)).toBe(1)
     expect(stuck.calls).not.toContain('hooks')
+    expect(stuck.err).toEqual(['✗ The Harness daemon (pid 4242) did not stop. None of Harness\'s files were deleted. Run `harness stop`, then `harness uninstall` again.'])
   })
 
   it('reports what it could not do, and still does the rest', async () => {
@@ -104,9 +106,12 @@ describe('harness uninstall', () => {
     expect(await uninstallCommand(['-y'], t.deps)).toBe(1)
     expect(t.calls).toContain('files auth,cli,runtime +root')
     expect(t.out).toContain('· kept the PATH line in your shell\'s startup file: ~/.local/bin also holds claude, uv, which need it')
+    const one = fake({ removePathEntry: () => ({ kind: 'rc', edits: [], keptFor: ['uv'] }) })
+    await uninstallCommand(['-y'], one.deps)
+    expect(one.out).toContain('· kept the PATH line in your shell\'s startup file: ~/.local/bin also holds uv, which needs it')
     expect(t.err).toEqual([
       '✗ Harness is uninstalled, except:',
-      '  · claude-x did not stop (IDENTITY_UNAVAILABLE)',
+      '  · the harness claude-x did not stop (IDENTITY_UNAVAILABLE), so it may still be running',
       '  · Harness\'s hooks are still in ~/.codex/hooks.json (the settings file is read-only): remove the entries that run notify.mjs',
     ])
   })
@@ -162,7 +167,7 @@ describe('harness uninstall', () => {
     })
     expect(await uninstallCommand(['--yes'], stuck.deps)).toBe(1)
     expect(stuck.calls.some((call) => call.startsWith('final'))).toBe(false)
-    expect(stuck.err).toEqual(['✗ the Harness daemon (pid 4242) did not stop. Nothing was deleted: run harness uninstall again once it has stopped.'])
+    expect(stuck.err).toEqual(['✗ The Harness daemon (pid 4242) did not stop. None of Harness\'s files were deleted. Run `harness stop`, then `harness uninstall` again.'])
   })
 
   // The B5.9 carries: what the summary must say so that a person can trust it.
@@ -183,16 +188,20 @@ describe('harness uninstall', () => {
   })
 
   it('deletes nothing while another Harness command holds the daemon', async () => {
-    const t = fake({ withLock: async () => { throw new Error('Harness is still updating on this computer. Try again in a moment.') } })
+    const t = fake({ withLock: async () => { throw new UninstallLockBusy('it is being updated by pid 51 for 4s') } })
     expect(await uninstallCommand(['--yes'], t.deps)).toBe(1)
     expect(t.calls).toEqual(['agents'])
-    expect(t.err).toEqual(['✗ Harness is still updating on this computer. Try again in a moment. Nothing was deleted.'])
+    expect(t.err).toEqual(['✗ Another Harness command is using the Harness daemon (it is being updated by pid 51 for 4s). None of Harness\'s files were deleted. Try again in a moment.'])
+    // Anything else that went wrong stopping it is said as a stop that failed.
+    const broken = fake({ stopDaemon: async () => { throw new Error('EPERM') } })
+    expect(await uninstallCommand(['--yes'], broken.deps)).toBe(1)
+    expect(broken.err).toEqual(['✗ Harness could not stop the Harness daemon (EPERM). None of Harness\'s files were deleted. Run `harness stop`, then `harness uninstall` again.'])
   })
 
   it('lists a daemon it could not ask to stop the harnesses', async () => {
-    const t = fake({ stopAgents: async () => ({ stopped: 0, failed: [], unreachable: 'The daemon would not list its harnesses (BUSY), so none were stopped.' }) })
+    const t = fake({ stopAgents: async () => ({ stopped: 0, failed: [], unreachable: 'it refused to list them: BUSY' }) })
     expect(await uninstallCommand(['--yes'], t.deps)).toBe(1)
-    expect(t.err).toEqual(['✗ Harness is uninstalled, except:', '  · could not ask the Harness daemon to stop its harnesses: the daemon would not list its harnesses (BUSY), so none were stopped'])
+    expect(t.err).toEqual(['✗ Harness is uninstalled, except:', '  · Harness could not ask the Harness daemon to stop the harnesses (it refused to list them: BUSY), so some harnesses may still be running'])
   })
 
   it('a terminal host it could not end, a launcher it could not remove, and a PATH note', async () => {
@@ -205,15 +214,15 @@ describe('harness uninstall', () => {
     expect(t.out).toContain('✓ removed ~/.local/bin/harness')
     expect(t.err).toEqual([
       '✗ Harness is uninstalled, except:',
-      '  · the Harness terminal host (pid 77) is still running: it would not shut down (busy)',
-      '  · could not remove ~/.local/bin/hn (EACCES)',
+      '  · the Harness terminal host is still running (pid 77: it would not shut down (busy)), so some terminals may still be open',
+      '  · could not remove ~/.local/bin/hn (EACCES): delete it yourself',
     ])
     const note = fake({ ...win, removePathEntry: () => ({ kind: 'windows', result: { state: 'removed', folder: 'C:\\Users\\u\\.harness\\bin', note: 'Could not announce the PATH change; terminals opened before you sign in again may still have it.' } }) })
     expect(await uninstallCommand(['--yes'], note.deps)).toBe(0)
     expect(note.out).toContain('· Could not announce the PATH change; terminals opened before you sign in again may still have it.')
     const failed = fake({ ...win, removePathEntry: () => ({ kind: 'windows', result: { state: 'failed', folder: 'C:\\Users\\u\\.harness\\bin', detail: 'could not read your PATH (exit 1)' } }) })
     expect(await uninstallCommand(['--yes'], failed.deps)).toBe(1)
-    expect(failed.err).toContain('  · ~\\.harness\\bin is still on your PATH: could not read your PATH (exit 1)')
+    expect(failed.err).toContain('  · Harness could not take ~\\.harness\\bin off your PATH (could not read your PATH (exit 1)): remove it yourself in "Edit environment variables for your account"')
   })
 
   it('lists every hook file it left, in words for each kind, and says once that Codex may ask again', async () => {
@@ -269,7 +278,7 @@ describe('harness uninstall', () => {
     expect(busy.err).toEqual(['✗ Harness is uninstalled, except:', '  · ~/.harness is still there: something was added to it during the uninstall. Look in it, then delete it yourself'])
     const partly = fake({ removeNow: () => ['/Users/u/.harness/runtime', '/Users/u/.harness'] })
     expect(await uninstallCommand(['--yes'], partly.deps)).toBe(1)
-    expect(partly.err).toEqual(['✗ Harness is uninstalled, except:', '  · could not remove ~/.harness/runtime', '  · ~/.harness is still there, with what could not be removed in it'])
+    expect(partly.err).toEqual(['✗ Harness is uninstalled, except:', '  · could not remove ~/.harness/runtime: delete it yourself', '  · ~/.harness is still there, with what could not be removed in it'])
   })
 
   it('removes and schedules nothing when there is nothing to remove, and prints no empty line for it', async () => {
@@ -288,7 +297,6 @@ describe('harness uninstall', () => {
     for (const deps of [
       fake({ removeNow: () => { throw refused } }),
       fake({ ...win, scheduleFinalRemoval: () => { throw refused } }),
-      fake({ root: '/Users/u/harness' }),
     ]) {
       expect(await uninstallCommand(['--yes'], deps.deps)).toBe(1)
       expect(deps.err[0]).toBe('✗ Harness is only partly uninstalled:')
@@ -314,9 +322,56 @@ describe('harness uninstall', () => {
   })
 })
 
+describe('harness uninstall, review round 1', () => {
+  it('refuses a root it would not remove before it asks, stops or removes anything', async () => {
+    const link = new RemovalRefused('Harness will not remove "/Users/u/.harness": it is a link to another folder.')
+    const t = fake({ isTTY: true, checkRemovable: () => { throw link } })
+    expect(await uninstallCommand([], t.deps)).toBe(1)
+    expect(t.calls).toEqual([])
+    expect(t.out).toEqual([])
+    expect(t.err).toEqual(['✗ Harness will not remove "~/.harness": it is a link to another folder. Nothing was removed. Remove the link yourself, and the folder it points to if it is Harness\'s.'])
+    // The plan itself refused (a root that is not a .harness folder) is refused the same way, as early.
+    const odd = fake({ root: '/Users/u/harness' })
+    expect(await uninstallCommand(['--yes'], odd.deps)).toBe(1)
+    expect(odd.calls).toEqual([])
+    expect(odd.err).toEqual(['✗ Harness will not remove "~/harness": it is not a folder named .harness. Nothing was removed.'])
+  })
+
+  it('a pid file naming another live process: no daemon answered, none was stopped, and nothing went wrong', async () => {
+    const t = fake({
+      isTTY: true, ask: async () => 'y',
+      daemonPid: () => 4242, alive: (pid) => pid === 4242, service: { name: 'launchd', present: () => false, unregister: () => ({ ok: true }) },
+      stopAgents: async () => ({ stopped: 0, failed: [], unreachable: 'connect ECONNREFUSED 127.0.0.1:18473' }),
+      stopDaemon: async () => ({ pid: null, stopped: false }),
+    })
+    expect(await uninstallCommand([], t.deps)).toBe(0)
+    expect(t.err).toEqual([])
+    expect(t.out.some((line) => line.includes('4242'))).toBe(false)
+    expect(t.out.at(-1)).toBe('Harness is uninstalled.')
+  })
+
+  it('an error nobody expected after the daemon stopped is one more problem, and the rest still runs', async () => {
+    const t = fake({ removeHooks: async () => { throw new Error('EMFILE: too many open files') } })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(1)
+    expect(t.calls).toEqual(['agents', 'lock', 'service', 'stop', 'pty', 'launchers', 'path', 'files auth,cli,runtime +root', 'afterword'])
+    expect(t.out).toContain('✓ removed ~/.harness')
+    expect(t.err).toEqual(['✗ Harness is uninstalled, except:', '  · Harness could not remove its hooks from your agents\' settings (EMFILE: too many open files), so your agents may still try to reach Harness'])
+    const files = fake({ removeNow: () => { throw new Error('EIO') } })
+    expect(await uninstallCommand(['--yes'], files.deps)).toBe(1)
+    expect(files.err).toEqual(['✗ Harness is only partly uninstalled:', '  · Harness could not remove its files in ~/.harness (EIO): delete ~/.harness yourself once this command has finished'])
+  })
+
+  it('says, with --yes too, that a rule of the person\'s that was the same as Harness\'s went from Claude Code\'s settings', async () => {
+    const t = fake({ removeHooks: async () => [{ file: '/Users/u/.claude/settings.json', removed: 5, kind: 'settings', claude: true }] })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+    expect(t.out).toContain('· a permission rule of yours in ~/.claude/settings.json that was the same as one of Harness\'s went too: add it again if you need it')
+    expect(fake().out.some((line) => line.includes('permission rule'))).toBe(false)
+  })
+})
+
 describe('labelHookRemoval', () => {
   const labels = {
-    codexSettings: new Set(['/h/.codex/hooks.json']), reviews: new Set(['/h/.codex/config.toml']), whole: new Set(['/h/.codex/rules/harness.rules']),
+    claudeSettings: new Set(['/h/.claude/settings.json']), codexSettings: new Set(['/h/.codex/hooks.json']), reviews: new Set(['/h/.codex/config.toml']), whole: new Set(['/h/.codex/rules/harness.rules']),
     adopted: 'the homes Harness adopted', hooksLeft: 'Harness\'s hook commands are in a hooks: mapping Harness did not write; remove them by hand.',
   }
   it('says which kind of file each one is', () => {
@@ -324,7 +379,8 @@ describe('labelHookRemoval', () => {
     expect(labelHookRemoval({ file: '/h/.codex/config.toml', removed: 1 }, labels)).toEqual({ file: '/h/.codex/config.toml', removed: 1, kind: 'reviews' })
     expect(labelHookRemoval({ file: '/h/.codex/rules/harness.rules', removed: 1 }, labels)).toEqual({ file: '/h/.codex/rules/harness.rules', removed: 1, kind: 'file' })
     expect(labelHookRemoval({ file: 'the homes Harness adopted', removed: 0, failed: 'x' }, labels)).toMatchObject({ kind: 'adopted' })
-    expect(labelHookRemoval({ file: '/h/.claude/settings.json', removed: 1 }, labels)).toEqual({ file: '/h/.claude/settings.json', removed: 1, kind: 'settings' })
+    expect(labelHookRemoval({ file: '/h/.claude/settings.json', removed: 1 }, labels)).toEqual({ file: '/h/.claude/settings.json', removed: 1, kind: 'settings', claude: true })
+    expect(labelHookRemoval({ file: '/h/.grok/hooks/harness.json', removed: 1 }, labels)).toEqual({ file: '/h/.grok/hooks/harness.json', removed: 1, kind: 'settings' })
   })
   it('reads hooks left in a mapping Harness did not write as hooks still there', () => {
     expect(labelHookRemoval({ file: '/h/.hermes/config.yaml', removed: 1, kept: labels.hooksLeft }, labels))

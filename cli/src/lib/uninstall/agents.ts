@@ -21,7 +21,7 @@ export async function stopEveryAgent(open: () => Promise<Daemon>): Promise<Agent
     const listed = await daemon.request('agents_list', { includeStopped: false })
     if (listed.error) {
       const detail = typeof listed.detail === 'string' && listed.detail ? `: ${listed.detail}` : ''
-      return { stopped: 0, failed: [], unreachable: `The daemon would not list its harnesses (${String(listed.error)}${detail}), so none were stopped.` }
+      return { stopped: 0, failed: [], unreachable: `it refused to list them: ${String(listed.error)}${detail}` }
     }
     const agents = (Array.isArray(listed.agents) ? listed.agents as Array<Record<string, unknown>> : []).filter((a) => typeof a.id === 'string')
     let stopped = 0

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, type FinalRemovalDeps, type PlanInput, type RemovalPlan, type RootEntry } from './removal.js'
+import { checkRemovable, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, type FinalRemovalDeps, type PlanInput, type RemovalPlan, type RootEntry } from './removal.js'
 
 const d = (name: string): RootEntry => ({ name, dir: true })
 const f = (name: string): RootEntry => ({ name, dir: false })
@@ -152,6 +152,25 @@ describe('removeNow', () => {
   const home = () => { const dir = mkdtempSync(join(tmpdir(), 'removal-')); dirs.push(dir); return dir }
   const planOf = (root: string, keepData = false, extra: Partial<PlanInput> = {}) => removalPlan({
     platform: process.platform, root, cliDir: join(root, 'cli'), dataDir: join(root, 'cli', 'data'), entries: listEntries(root), cliEntries: listEntries(join(root, 'cli')), keepData, ...extra,
+  })
+
+  it('checkRemovable refuses before anything goes what removeNow and the last step would refuse at the end', () => {
+    const base = home()
+    const root = join(base, '.harness')
+    mkdirSync(join(root, 'cli'), { recursive: true })
+    const plan = planOf(root)
+    expect(checkRemovable(plan)).toBe(root)
+    // The last step's temp folder inside the root: the script would remove itself and its log.
+    expect(() => checkRemovable(plan, { tempDir: join(root, 'tmp') })).toThrow(`Harness will not remove "${root}": the temp folder ${join(root, 'tmp')} is inside it.`)
+    expect(checkRemovable(plan, { tempDir: join(base, 'tmp') })).toBe(root)
+    // A root that is a link: a junction on Windows, which any user can make.
+    const elsewhere = join(base, 'elsewhere')
+    mkdirSync(elsewhere)
+    const linked = join(home(), '.harness')
+    symlinkSync(elsewhere, linked, 'junction')
+    expect(() => checkRemovable({ root: linked, remove: [], kept: [], removeRoot: true })).toThrow(`Harness will not remove "${linked}": it is a link to another folder.`)
+    expect(() => checkRemovable({ ...plan, remove: [{ path: join(base, 'x'), dir: true }] })).toThrow(/is not inside/)
+    expect(existsSync(elsewhere) && existsSync(join(root, 'cli'))).toBe(true)
   })
 
   it('removes the plan and the root, and says what is left', () => {

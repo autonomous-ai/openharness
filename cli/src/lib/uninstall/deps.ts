@@ -6,17 +6,17 @@ import { env } from '../../config/env.js'
 import { openDaemon, whereFor } from '../../agentClient/daemon.js'
 import { AUTH_DIR } from '../authSession.js'
 import { daemonPort, isAlive, readPid } from '../daemonState.js'
-import { describeSpawnLockBusyPlainly, describeSpawnLockOwner, SpawnLockBusyError, withSpawnLock } from '../daemonSpawnLock.js'
+import { describeSpawnLockOwner, SpawnLockBusyError, withSpawnLock } from '../daemonSpawnLock.js'
 import { stopDaemonProcess } from '../daemonStop.js'
 import { gridCredentialsPath, gridCredentialsExist } from '../gridCredentials.js'
 import { ownedBinEntries } from '../launchers.js'
 import { platformDaemonDeps } from '../platformDaemon.js'
 import { runPowershell } from '../windows/powershell.js'
 import { stopEveryAgent } from './agents.js'
-import { labelHookRemoval, type UninstallDeps } from './command.js'
+import { labelHookRemoval, UninstallLockBusy, type UninstallDeps } from './command.js'
 import { endPtyHosts, ptyHostsDeps } from './ptyHosts.js'
-import { removeHarnessPathLines } from './rcFiles.js'
-import { finalRemovalDeps, listEntries, removeNow, scheduleFinalRemoval } from './removal.js'
+import { filesWithHarnessPathLines, removeHarnessPathLines } from './rcFiles.js'
+import { checkRemovable, finalRemovalDeps, listEntries, removeNow, scheduleFinalRemoval } from './removal.js'
 import { removeUserPathEntry } from './windowsPath.js'
 
 const SERVICE_NAMES: Record<string, string> = { launchd: 'launchd', systemd: 'systemd', taskscheduler: 'Task Scheduler' }
@@ -53,6 +53,8 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
       // home, the person's real one when this runs with a throwaway HOME, is not this install's to remove.
       present: () => {
         if (service.ownedBy(platform.logFile)) return true
+        // A task whose file is gone (a half install) is still found, by the log its registered XML names (B5.9 review, I3).
+        if (!service.installed() && service.registeredFor(platform.logFile)) return true
         const pid = platform.readPid()
         return pid !== null && platform.isAlive(pid) && platform.masterPlatform(pid) === service.platform
       },
@@ -63,7 +65,9 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
         return await withSpawnLock('stop', fn, { onWaiting: (owner) => out(`  the Harness daemon is ${describeSpawnLockOwner(owner)}, waiting for it to finish…`) })
       } catch (error) {
         // Unlike `harness stop`, no going ahead: an update or a start in the middle would put back what this removes.
-        if (error instanceof SpawnLockBusyError) throw new Error(error.reason ?? describeSpawnLockBusyPlainly(error))
+        if (error instanceof SpawnLockBusyError) {
+          throw new UninstallLockBusy(error.reason ?? (error.owner ? `it is ${describeSpawnLockOwner(error.owner)}` : 'it did not say who'))
+        }
         throw error
       }
     },
@@ -79,6 +83,7 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
       const codex = hookContracts.codex.settings
       const inCodex = (file: string | undefined) => (file ? targets.codex.homes.map((codexHome) => join(codexHome, file)) : [])
       const labels = {
+        claudeSettings: new Set(targets.claude.homes.map((claudeHome) => join(claudeHome, hookContracts.claude.settings.file))),
         codexSettings: new Set(inCodex(codex.file)),
         reviews: new Set(inCodex(codex.reviewed?.file)),
         whole: new Set([...targets.plugins.map((plugin) => plugin.file), ...inCodex(codex.allow && 'file' in codex.allow ? codex.allow.file : undefined)]),
@@ -96,11 +101,15 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
     removePathEntry: () => {
       if (process.platform === 'win32') return { kind: 'windows', result: removeUserPathEntry(win32.join(root, 'bin'), runPowershell) }
       // The lines put ~/.local/bin on PATH, which other installers share (Claude Code's, uv, pipx): kept while it holds their commands.
+      // Said to be kept only when there is a line of Harness's to keep (B5.9 review, M8).
       const others = listEntries(join(home, '.local', 'bin')).map((entry) => entry.name).filter((name) => !name.startsWith('.'))
-      return others.length ? { kind: 'rc', edits: [], keptFor: others } : { kind: 'rc', edits: removeHarnessPathLines(home), keptFor: [] }
+      if (!others.length) return { kind: 'rc', edits: removeHarnessPathLines(home), keptFor: [] }
+      return { kind: 'rc', edits: [], keptFor: filesWithHarnessPathLines(home).length ? others : [] }
     },
     listEntries,
     exists: existsSync,
+    // On Windows with the temp folder the last step runs from, which must not be in the root.
+    checkRemovable: (plan) => { checkRemovable(plan, process.platform === 'win32' ? { tempDir: finalRemovalDeps().tempDir } : {}) },
     removeNow: (plan) => removeNow(plan),
     scheduleFinalRemoval: (plan) => scheduleFinalRemoval(plan, finalRemovalDeps()),
     // Not `warnIfGridSignInRemains`: its `harness grid logout` is a command this one has just removed.

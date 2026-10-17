@@ -13,8 +13,15 @@
  * A service that would not go, or a daemon that would not stop, ends it before anything is deleted: what was left
  * would start a program that is no longer there. Everything after that is reported, and the rest is still done.
  *
+ * The spawn lock is held for the service and the daemon only. The harnesses are stopped before it, through the daemon
+ * (the brief's order: a `harness start` cannot land while a stop of each harness runs, since the daemon is up and
+ * holds its record). It is released before the hooks and the files: by then there is no service to start a daemon,
+ * and a `harness start` the person runs in between starts one that the files' removal takes away under it. Accepted
+ * (B5.9 review, M9): holding the lock through the files would make that start wait, then fail the same way.
+ *
  * The summary is what a person trusts to know whether Harness is gone: it never says "uninstalled" over files that were
- * not removed, nor over a step that did not start.
+ * not removed, nor over a step that did not start. Each problem is a plain clause, what went wrong in brackets after
+ * it, then what it leaves or what to do.
  */
 import { posix, win32 } from 'node:path'
 import type { HookFileRemoval } from '../../engines/kit/hookRemoval.js'
@@ -54,9 +61,12 @@ export interface UninstallHookFile extends HookFileRemoval {
   kind?: HookFileKind
   /** Codex's hooks.json, whose review records are keyed by each hook's place in it. */
   codex?: true
+  /** Claude Code's settings, whose permission rules are Harness's by their text alone. */
+  claude?: true
 }
 
 export interface HookFileLabels {
+  claudeSettings: ReadonlySet<string>
   codexSettings: ReadonlySet<string>
   reviews: ReadonlySet<string>
   whole: ReadonlySet<string>
@@ -69,12 +79,21 @@ export interface HookFileLabels {
 /** [hook] with what kind of file it is. Hooks of Harness's left in a file are a failure to report, not a kept file. */
 export function labelHookRemoval(hook: HookFileRemoval, labels: HookFileLabels): UninstallHookFile {
   const kind: HookFileKind = hook.file === labels.adopted ? 'adopted' : labels.reviews.has(hook.file) ? 'reviews' : labels.whole.has(hook.file) ? 'file' : 'settings'
-  const labelled: UninstallHookFile = { ...hook, kind, ...(labels.codexSettings.has(hook.file) ? { codex: true as const } : {}) }
+  const labelled: UninstallHookFile = {
+    ...hook, kind,
+    ...(labels.codexSettings.has(hook.file) ? { codex: true as const } : {}),
+    ...(labels.claudeSettings.has(hook.file) ? { claude: true as const } : {}),
+  }
   if (hook.kept === labels.hooksLeft) {
     delete labelled.kept
     labelled.failed = 'they are in a hooks: section Harness did not write'
   }
   return labelled
+}
+
+/** Another Harness command (a start, an update) held the daemon for longer than the uninstall waits. [detail] is who. */
+export class UninstallLockBusy extends Error {
+  override name = 'UninstallLockBusy'
 }
 
 export interface UninstallDeps {
@@ -94,7 +113,7 @@ export interface UninstallDeps {
   alive(pid: number): boolean
   stopAgents(): Promise<AgentsStopped>
   service: UninstallService | null
-  /** Under the daemon spawn lock; rejects with a sentence when another Harness command holds it too long. */
+  /** Under the daemon spawn lock; rejects with UninstallLockBusy when another Harness command holds it too long. */
   withLock<T>(fn: () => Promise<T>): Promise<T>
   stopDaemon(): Promise<{ pid: number | null; stopped: boolean }>
   endPtyHosts(): Promise<PtyHostEnd[]>
@@ -105,6 +124,8 @@ export interface UninstallDeps {
   removePathEntry(): PathStep
   listEntries(dir: string): RootEntry[]
   exists(path: string): boolean
+  /** removal.ts checkRemovable: throws RemovalRefused for a plan removeNow or the last step would refuse. */
+  checkRemovable(plan: RemovalPlan): void
   /** Throws RemovalRefused, removing nothing, on a plan it will not carry out. */
   removeNow(plan: RemovalPlan): string[]
   /** Throws RemovalRefused, writing and starting nothing, on a plan it will not carry out. */
@@ -131,11 +152,15 @@ const clause = (text: string): string => text.trim().replace(/\.$/, '')
 /** hookRemoval.ts gets this from nativeHookFiles.ts, for a whole file that is a link: Harness never deletes through one. */
 const ALIAS = 'the plugin entry is an alias'
 
+/** Where Windows keeps the user's PATH, as a person finds it: the Start menu's search finds this name. */
+const WINDOWS_PATH_SETTING = 'Edit environment variables for your account'
+
+/** The pid is not named: before the stop it is only the pid file's, which a reboot can leave naming another process. */
 function whatItDoes(deps: UninstallDeps, daemon: number | null, keepData: boolean): string[] {
   const root = deps.tildify(deps.root)
   return [
     'harness uninstall removes Harness from this computer:',
-    ...(daemon !== null ? [`  · stops every harness running here, then the Harness daemon (pid ${daemon})`] : []),
+    ...(daemon !== null ? ['  · stops every harness running here, then the Harness daemon'] : []),
     ...(deps.service?.present() ? [`  · takes the Harness daemon out of ${deps.service.name}, so it no longer starts at login`] : []),
     // The rules are recognized by their text: one the person added that is the same as Harness's cannot be told apart (B5.5).
     '  · removes the hooks and permission rules Harness added to Claude Code, Codex and your other agents (a rule of yours that is the same as one of Harness\'s goes too)',
@@ -149,8 +174,23 @@ function whatItDoes(deps: UninstallDeps, daemon: number | null, keepData: boolea
   ]
 }
 
+function planFor(deps: UninstallDeps, keepData: boolean): RemovalPlan {
+  return removalPlan({
+    platform: deps.platform, root: deps.root, home: deps.home, entries: deps.listEntries(deps.root),
+    cliDir: deps.cliDir, cliEntries: deps.listEntries(deps.cliDir), dataDir: deps.dataDir, keepData,
+  })
+}
+
+/** A refusal's sentence, with the home as ~ and what to do next. */
+function refusal(deps: UninstallDeps, error: RemovalRefused): string {
+  const said = clause(error.message).split(deps.root).join(deps.tildify(deps.root))
+  const next = /a link to another folder$/.test(said) ? ' Remove the link yourself, and the folder it points to if it is Harness\'s.' : ''
+  return `${said}. Nothing was removed.${next}`
+}
+
 function reportHooks(deps: UninstallDeps, hooks: readonly UninstallHookFile[], problems: string[]): void {
   let codex: string | undefined
+  let claude: string | undefined
   for (const hook of hooks) {
     const file = deps.tildify(hook.file)
     const kind = hook.kind ?? 'settings'
@@ -159,6 +199,7 @@ function reportHooks(deps: UninstallDeps, hooks: readonly UninstallHookFile[], p
       else if (kind === 'reviews') deps.out(`✓ removed Codex's record of Harness's hooks from ${file}`)
       else deps.out(`✓ removed Harness's hooks from ${file}`)
       if (hook.codex) codex ??= file
+      if (hook.claude) claude ??= file
     }
     if (hook.failed) {
       const link = hook.failed === ALIAS
@@ -171,6 +212,8 @@ function reportHooks(deps: UninstallDeps, hooks: readonly UninstallHookFile[], p
     }
     if (hook.kept) deps.out(`· kept ${file}: it is ${hook.kept}`)
   }
+  // Said again here, and not only in the question: --yes never asks it (B5.9 review, M7).
+  if (claude) deps.out(`· a permission rule of yours in ${claude} that was the same as one of Harness's went too: add it again if you need it`)
   // Codex keys each record of a reviewed hook by its place in hooks.json: taking Harness's block out moves the person's.
   if (codex) deps.out(`· Codex may ask you to review your own hooks again: it remembers the hooks you reviewed by their place in ${codex}, and taking Harness's out moved them`)
 }
@@ -181,7 +224,10 @@ function reportPath(deps: UninstallDeps, path: PathStep, problems: string[]): vo
       deps.out(`✓ removed ${deps.tildify(path.result.folder)} from your PATH`)
       if (path.result.note) deps.out(`· ${path.result.note}`)
     }
-    if (path.result.state === 'failed') problems.push(`${deps.tildify(path.result.folder)} is still on your PATH: ${path.result.detail}`)
+    if (path.result.state === 'failed') {
+      const folder = deps.tildify(path.result.folder)
+      problems.push(`Harness could not take ${folder} off your PATH (${path.result.detail}): remove it yourself in "${WINDOWS_PATH_SETTING}"`)
+    }
     return
   }
   for (const edit of path.edits) {
@@ -191,7 +237,7 @@ function reportPath(deps: UninstallDeps, path: PathStep, problems: string[]): vo
   }
   if (path.keptFor.length) {
     const named = path.keptFor.slice(0, 3).join(', ') + (path.keptFor.length > 3 ? ' and more' : '')
-    deps.out(`· kept the PATH line in your shell's startup file: ~/.local/bin also holds ${named}, which need it`)
+    deps.out(`· kept the PATH line in your shell's startup file: ~/.local/bin also holds ${named}, which ${path.keptFor.length === 1 ? 'needs' : 'need'} it`)
   }
 }
 
@@ -201,10 +247,8 @@ function removeFiles(deps: UninstallDeps, keepData: boolean, problems: string[])
   const root = deps.tildify(deps.root)
   let plan: RemovalPlan
   try {
-    plan = removalPlan({
-      platform: deps.platform, root: deps.root, home: deps.home, entries: deps.listEntries(deps.root),
-      cliDir: deps.cliDir, cliEntries: deps.listEntries(deps.cliDir), dataDir: deps.dataDir, keepData,
-    })
+    // Made again: the harnesses, the daemon and the terminal host may have changed what is in the root since the check.
+    plan = planFor(deps, keepData)
     // Nothing to take: no step to start, and no line about it.
     if (!plan.remove.length && (!plan.removeRoot || !deps.exists(deps.root))) return true
     // What stays in the root besides what could not be removed: the desktop app's state, or with --keep-data the data.
@@ -215,7 +259,7 @@ function removeFiles(deps: UninstallDeps, keepData: boolean, problems: string[])
       deps.out(`✓ ${what} goes once this command has exited (anything left is listed in ${final.log})`)
     } else {
       const left = deps.removeNow(plan)
-      for (const stayed of left) if (stayed !== plan.root) problems.push(`could not remove ${deps.tildify(stayed)}`)
+      for (const stayed of left) if (stayed !== plan.root) problems.push(`could not remove ${deps.tildify(stayed)}: delete it yourself`)
       // rmdir, never a recursive remove: the root goes only when what the plan named was all that was in it.
       if (left.includes(plan.root)) {
         problems.push(left.length > 1 ? `${root} is still there, with what could not be removed in it`
@@ -224,14 +268,22 @@ function removeFiles(deps: UninstallDeps, keepData: boolean, problems: string[])
       if (!left.length) deps.out(keepData ? `✓ removed the program from ${root}` : `✓ removed ${what}`)
     }
   } catch (error) {
-    if (!(error instanceof RemovalRefused)) throw error
-    problems.push(`${clause(error.message)}. None of its files were deleted`)
+    if (error instanceof RemovalRefused) problems.push(`${clause(error.message)}. None of its files were deleted`)
+    else problems.push(`Harness could not remove its files in ${root} (${message(error)}): delete ${root} yourself once this command has finished`)
     return false
   }
   if (plan.kept.some((name) => DESKTOP_STATE.test(name))) {
     deps.out(`· kept the Harness desktop app's own settings in ${root}: the app sets Harness up again when it starts. Remove the app to remove them.`)
   }
   return true
+}
+
+/**
+ * One step after the daemon has stopped. An error nobody expected is one more problem in the summary, with what it
+ * leaves: the steps after it still run, and the person still reads what was done (B5.9 review, M4).
+ */
+async function step(problems: string[], failed: (detail: string) => string, run: () => unknown): Promise<void> {
+  try { await run() } catch (error) { problems.push(failed(message(error))) }
 }
 
 export async function uninstallCommand(argv: readonly string[], deps: UninstallDeps): Promise<number> {
@@ -246,6 +298,14 @@ export async function uninstallCommand(argv: readonly string[], deps: UninstallD
     deps.err(`✗ This terminal is in ${deps.tildify(deps.cwd)}, which the uninstall removes, and Windows cannot delete a folder a terminal is in. Run \`cd ~\`, then run it again.`)
     return 1
   }
+  // A root the last step would refuse is refused now, before a harness, the service or the daemon is touched (I1).
+  try {
+    deps.checkRemovable(planFor(deps, keepData))
+  } catch (error) {
+    if (!(error instanceof RemovalRefused)) throw error
+    deps.err(`✗ ${refusal(deps, error)}`)
+    return 1
+  }
   const daemon = deps.daemonPid()
   if (!yes) {
     if (!deps.isTTY) { deps.err('✗ harness uninstall asks before it removes anything. Run it in a terminal, or add --yes. Nothing was removed.'); return 1 }
@@ -254,54 +314,71 @@ export async function uninstallCommand(argv: readonly string[], deps: UninstallD
     if (answer !== 'y' && answer !== 'yes') { deps.out('Nothing was removed.'); return 1 }
   }
   const problems: string[] = []
+  const notDeleted = 'None of Harness\'s files were deleted.'
 
+  // A daemon that did not answer is a problem only once the stop shows there was one: a pid file left by a crash or a
+  // reboot can name a live process that is not Harness's, and nothing then went wrong (I2).
+  let unreachable: string | undefined
   if (daemon !== null) {
     const agents = await deps.stopAgents()
-    if (agents.unreachable) {
-      const why = clause(agents.unreachable)
-      problems.push(`could not ask the Harness daemon to stop its harnesses: ${why.charAt(0).toLowerCase()}${why.slice(1)}`)
-    }
+    if (agents.unreachable) unreachable = `Harness could not ask the Harness daemon to stop the harnesses (${clause(agents.unreachable)}), so some harnesses may still be running`
     if (agents.stopped) deps.out(`✓ stopped ${plural(agents.stopped, 'harness', 'harnesses')}`)
-    for (const failed of agents.failed) problems.push(`${failed.name} did not stop (${failed.error})`)
+    for (const failed of agents.failed) problems.push(`the harness ${failed.name} did not stop (${failed.error}), so it may still be running`)
   }
 
   let halted: string | null
+  let ended: number | null = null
   try {
     halted = await deps.withLock(async () => {
       if (deps.service?.present()) {
         const removed = deps.service.unregister()
-        if (!removed.ok) return `${deps.service.name} would not let go of the Harness daemon: ${removed.detail}`
+        if (!removed.ok) {
+          return `${deps.service.name} would not let go of the Harness daemon (${clause(removed.detail)}). ${notDeleted} Try again; if it keeps failing, run \`harness service uninstall\` to see why.`
+        }
         deps.out(`✓ removed the Harness daemon from ${deps.service.name}: it no longer starts at login`)
       }
       const stopped = await deps.stopDaemon()
-      if (stopped.pid !== null && deps.alive(stopped.pid)) return `the Harness daemon (pid ${stopped.pid}) did not stop`
+      if (stopped.pid !== null && deps.alive(stopped.pid)) {
+        return `The Harness daemon (pid ${stopped.pid}) did not stop. ${notDeleted} Run \`harness stop\`, then \`harness uninstall\` again.`
+      }
       // launchd's bootout stops the daemon as it unregisters it, and the stop then finds none. A pid the stop found to
       // be another process's now (Windows gives freed pids out again) is still alive, and is not named.
-      const ended = stopped.pid ?? (daemon !== null && !deps.alive(daemon) ? daemon : null)
+      ended = stopped.pid ?? (daemon !== null && !deps.alive(daemon) ? daemon : null)
       if (ended !== null) deps.out(`✓ stopped the Harness daemon (pid ${ended})`)
       return null
     })
   } catch (error) {
-    deps.err(`✗ ${clause(message(error))}. Nothing was deleted.`)
+    if (error instanceof UninstallLockBusy) {
+      deps.err(`✗ Another Harness command is using the Harness daemon (${clause(error.message)}). ${notDeleted} Try again in a moment.`)
+    } else {
+      deps.err(`✗ Harness could not stop the Harness daemon (${clause(message(error))}). ${notDeleted} Run \`harness stop\`, then \`harness uninstall\` again.`)
+    }
     return 1
   }
-  if (halted) { deps.err(`✗ ${clause(halted)}. Nothing was deleted: run harness uninstall again once it has stopped.`); return 1 }
+  if (halted) { deps.err(`✗ ${halted}`); return 1 }
+  if (unreachable && ended !== null) problems.unshift(unreachable)
 
-  for (const host of await deps.endPtyHosts()) {
-    if (host.how === 'left') problems.push(`the Harness terminal host (pid ${host.pid}) is still running: ${host.detail}`)
-    else if (host.panes) deps.out(`✓ ended ${plural(host.panes, 'terminal')} in the Harness terminal host`)
-  }
+  await step(problems, (detail) => `Harness could not end its terminal host (${detail}), so some terminals may still be open`, async () => {
+    for (const host of await deps.endPtyHosts()) {
+      if (host.how === 'left') problems.push(`the Harness terminal host is still running (pid ${host.pid}: ${host.detail}), so some terminals may still be open`)
+      else if (host.panes) deps.out(`✓ ended ${plural(host.panes, 'terminal')} in the Harness terminal host`)
+    }
+  })
 
-  reportHooks(deps, await deps.removeHooks(), problems)
+  await step(problems, (detail) => `Harness could not remove its hooks from your agents' settings (${detail}), so your agents may still try to reach Harness`,
+    async () => reportHooks(deps, await deps.removeHooks(), problems))
 
   if (!windows) {
-    for (const launcher of deps.removeLaunchers()) {
-      if (typeof launcher === 'string') deps.out(`✓ removed ${deps.tildify(launcher)}`)
-      else problems.push(`could not remove ${deps.tildify(launcher.path)} (${launcher.failed})`)
-    }
+    await step(problems, (detail) => `Harness could not remove the harness and hn commands (${detail}): delete them from ~/.local/bin yourself`, () => {
+      for (const launcher of deps.removeLaunchers()) {
+        if (typeof launcher === 'string') deps.out(`✓ removed ${deps.tildify(launcher)}`)
+        else problems.push(`could not remove ${deps.tildify(launcher.path)} (${launcher.failed}): delete it yourself`)
+      }
+    })
   }
 
-  reportPath(deps, deps.removePathEntry(), problems)
+  await step(problems, (detail) => `Harness could not take itself off your PATH (${detail}): remove its entry yourself`,
+    () => reportPath(deps, deps.removePathEntry(), problems))
 
   const filesDone = removeFiles(deps, keepData, problems)
   if (!keepData) {
@@ -310,7 +387,8 @@ export async function uninstallCommand(argv: readonly string[], deps: UninstallD
       if (!inside(deps.root, dir, windows) && deps.exists(dir)) deps.out(`· left ${deps.tildify(dir)}: it is outside ${root} (ADAPTER_DATA_DIR or HARNESS_AUTH_DIR names it); delete it yourself if it is Harness's`)
     }
   }
-  deps.afterword()
+  // A note about what is not Harness's: nothing to report when it cannot be said.
+  try { deps.afterword() } catch { /* the summary is what matters */ }
 
   if (problems.length) {
     deps.err(filesDone ? '✗ Harness is uninstalled, except:' : '✗ Harness is only partly uninstalled:')
