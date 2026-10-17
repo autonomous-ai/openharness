@@ -1,8 +1,9 @@
 /** Canonical path evidence for a bounded native descriptor pool, including excluded candidates. */
 import { lstatSync, readlinkSync, type BigIntStats } from 'node:fs'
 import { lstat, readlink } from 'node:fs/promises'
-import { dirname, isAbsolute, join, sep, win32 } from 'node:path'
+import { dirname, isAbsolute, join, win32 } from 'node:path'
 import { NativeEvidenceBudget, nativeUnavailable } from './nativeEvidence.js'
+import { hostPlatform } from './windowsFiles.js'
 
 export const nativeFileKey = (info: Pick<BigIntStats, 'dev' | 'ino'>) => `${info.dev}:${info.ino}`
 const identity = (info: BigIntStats | null) => info && `${nativeFileKey(info)}:${info.mode}:${info.uid}`
@@ -39,7 +40,7 @@ export class NativePaths {
   private readonly parts = new Map<string, Part>()
   private readonly windows: boolean
   constructor(private readonly budget: NativeEvidenceBudget, platform?: NodeJS.Platform) {
-    this.windows = platform ? platform === 'win32' : sep === '\\'
+    this.windows = (platform ?? hostPlatform()) === 'win32'
   }
 
   async resolve(path: string, missingOkay = false): Promise<Location> {

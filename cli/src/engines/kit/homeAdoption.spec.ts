@@ -331,10 +331,17 @@ describe('the adoption journal on Windows', () => {
 
   it('takes a Windows home on Windows and a POSIX home elsewhere', () => {
     expect(homeIsAbsolute('C:\\Users\\u\\.claude-work', 'win32')).toBe(true)
-    expect(homeIsAbsolute('c:/Users/u/.codex-2', 'win32')).toBe(true)
+    expect(homeIsAbsolute('c:/Users/u/.codex-2', 'win32')).toBe(false)
     expect(homeIsAbsolute('\\\\server\\share\\.claude', 'win32')).toBe(false)
     expect(homeIsAbsolute('/Users/u/.claude', 'win32')).toBe(false)
     expect(homeIsAbsolute('/Users/u/.claude', 'darwin')).toBe(true)
     expect(homeIsAbsolute('C:\\Users\\u\\.claude', 'linux')).toBe(false)
+  })
+
+  it('round-trips a home built from the real temp folder through seal and inspect on this host', () => {
+    const home = join(root, 'home')
+    const adopter = createHomeAdopter(file)
+    adopter.adopt({ claude: [home], codex: [] })
+    expect(readAdoptedHomes(file).homes).toEqual({ claude: [home], codex: [] })
   })
 })

@@ -2,13 +2,13 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
   opendirSync, readSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
-import { dirname, join, sep } from 'node:path'
+import { dirname, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { MAX_CATALOG_HOMES, readHomeCatalog, type HomeCatalog, type HomeCatalogRead } from './homeCatalog.js'
 import { IdentityReadUnavailable } from './identityScan.js'
 import { NATIVE_EVIDENCE_MS } from './nativeEvidence.js'
 import { directorySyncSupported } from '../../lib/secureState.js'
-import { journalFlushFlags } from './windowsFiles.js'
+import { hostPlatform, journalFlushFlags } from './windowsFiles.js'
 
 const MAX_RECORDS = MAX_CATALOG_HOMES * 2 + 2
 const MAX_BYTES = 64 * 1024
@@ -27,12 +27,6 @@ const deadline = () => {
   return () => { if (performance.now() > until) throw unavailable('exceeded its work deadline') }
 }
 /**
- * Windows is decided by the path module, as NativePaths does, not process.platform: specs that fake win32 on a POSIX
- * host keep the POSIX behaviour (and its owner and mode checks).
- */
-const hostPlatform = (): NodeJS.Platform => sep === '\\' ? 'win32' : 'linux'
-
-/**
  * A journal entry is a plain file or folder of this account's that no one else can write. Windows: NTFS gives Node no
  * owner (uid 0) and reports every file 0o100666 and folder 0o40666, so only the type is checked. The data folder's place in
  * the profile (secureState.ts `windowsStateRoots`) is what protects it there. A link or junction is neither to lstat,
@@ -48,7 +42,7 @@ const inspect = (info: BigIntStats, directory = false): void => inspectJournalEn
 
 /** A home folder as the catalog stores it: absolute, as this platform spells one. */
 export function homeIsAbsolute(home: string, platform: NodeJS.Platform = hostPlatform()): boolean {
-  return platform === 'win32' ? /^[A-Za-z]:[\\/]/.test(home) : home.startsWith('/')
+  return platform === 'win32' ? /^[A-Za-z]:\\/.test(home) : home.startsWith('/')
 }
 function read(file: string, check: () => void, max = MAX_BYTES + 1024): FileRead | null {
   check()
@@ -265,7 +259,7 @@ function seal(entry: Entry, index: number, found: State, staging: string, check:
   // Another writer may finish a crashed writer's complete immutable record. No lock or partial slot is reaped.
   const source = read(entry.path, check)
   if (!source || digest(source.text) !== entry.digest) throw unavailable('changed before durability confirmation')
-  const fd = openSync(entry.path, journalFlushFlags(hostPlatform()))
+  const fd = openSync(entry.path, journalFlushFlags())
   try {
     if (stamp(fstatSync(fd, { bigint: true })) !== source.version) throw unavailable('changed before its durable flush')
     fsyncSync(fd)
