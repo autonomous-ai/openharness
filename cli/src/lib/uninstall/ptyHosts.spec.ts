@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -6,6 +6,10 @@ import type { PtyHostDiscovery } from '../ptyHost/client.js'
 import { endPtyHosts, HOST_EXIT_WAIT_MS, PANE_GRACE_MS, ptyHostsDeps, type HostClient, type PtyHostsDeps } from './ptyHosts.js'
 
 const discovery = (pid: number, protocol = 2): PtyHostDiscovery => ({ protocol, instance: `p${protocol}`, endpoint: 'e', pid, version: '0.5.0', token: 't' })
+/** When the record was written, as it was read: after both rows' start markers below. */
+const WRITTEN = Date.parse('Sun Oct 18 10:00:00 2026')
+const rec = (pid: number, protocol = 2, written: number | null = WRITTEN) => ({ discovery: discovery(pid, protocol), written })
+const filetime = (ms: number) => `w:${(BigInt(ms) + 11_644_473_600_000n) * 10_000n}`
 
 const WIN_HOME = 'C:\\Users\\u\\.harness\\adapters\\pty'
 const WIN_EXE = 'C:\\Users\\u\\.harness\\runtime\\pty\\0.5.0\\harness-pty.exe'
@@ -49,7 +53,7 @@ function deps(h: ReturnType<typeof host> | null, overrides: Partial<PtyHostsDeps
     deps: {
       platform: 'win32',
       home: WIN_HOME,
-      discover: () => [discovery(100)],
+      discover: () => [rec(100)],
       reach: async () => (h ? { client: h.client } : { unreachable: 'nothing answers' }),
       alive: (pid) => pid === 100 && (h ? h.alive() : true),
       dead: async () => false,
@@ -100,12 +104,33 @@ describe('endPtyHosts', () => {
     expect((await endPtyHosts(native.deps))[0]!.how).toBe('ended')
   })
 
-  it('leaves a harness-pty that started after its record was written, judged from the row it read', async () => {
-    const seen: string[] = []
-    const t = deps(null, { dead: async (_d, rows) => { if (!rows) return false; const [row] = (await rows())!; seen.push(row!.startMarker); return true } })
-    expect(await endPtyHosts(t.deps)).toEqual(left('nothing answers, and pid 100 started after its record was written, so it is another process'))
-    expect(seen).toEqual(['w:1'])
+  it('leaves a harness-pty that started after its record was written, or whose record has no time', async () => {
+    const later = deps(null, { rows: async () => [winRow({ startMarker: filetime(WRITTEN + 10_000) })] })
+    expect(await endPtyHosts(later.deps)).toEqual(left('nothing answers, and pid 100 started after its record was written, so it is another process'))
+    expect((await endPtyHosts(deps(null, { rows: async () => [winRow({ startMarker: filetime(WRITTEN + 1_000) })] }).deps))[0]!.how).toBe('ended')
+    // Fail closed: no time for the record, or a start marker that does not read as a time, is no proof.
+    const untimed = deps(null, { discover: () => [rec(100, 2, null)] })
+    expect(await endPtyHosts(untimed.deps)).toEqual(left("nothing answers, and its record's time could not be read"))
+    const unparsed = deps(null, { rows: async () => [winRow({ startMarker: 'soon' })] })
+    expect(await endPtyHosts(unparsed.deps)).toEqual(left("nothing answers, and its record's time could not be read"))
+    expect([...later.ended, ...untimed.ended, ...unparsed.ended]).toEqual([])
+  })
+
+  it('reports a host that exited between the table read and the kill as gone', async () => {
+    let asked = 0
+    const t = deps(null, { alive: () => asked++ < 1 })
+    expect(await endPtyHosts(t.deps)).toEqual([{ pid: 100, protocol: 2, panes: 0, how: 'gone' }])
     expect(t.ended).toEqual([])
+  })
+
+  it('reads a --home value as a whole token: a further token after it is another path', async () => {
+    const win = deps(null, { rows: async () => [winRow({ args: `"${WIN_EXE}" serve --home ${WIN_HOME} old` })] })
+    expect(await endPtyHosts(win.deps)).toEqual(left(`nothing answers, and pid 100 is not the host of ${WIN_HOME}`))
+    const unix = deps(null, { platform: 'linux', home: '/x/pty', rows: async () => [unixRow({ args: 'harness-pty serve --home /x/pty old' })] })
+    expect(await endPtyHosts(unix.deps)).toEqual(left('nothing answers, and pid 100 is not the host of /x/pty'))
+    expect([...win.ended, ...unix.ended]).toEqual([])
+    const flagged = deps(null, { platform: 'linux', home: '/x/pty', alive: () => !flagged.ended.length, rows: async () => [unixRow({ args: 'harness-pty serve --home /x/pty --history-limit 2000' })] })
+    expect((await endPtyHosts(flagged.deps))[0]!.how).toBe('ended')
   })
 
   it('leaves a host whose start time cannot be read, or that changed while it was being ended', async () => {
@@ -133,7 +158,7 @@ describe('endPtyHosts', () => {
     // After a reboot the recorded pid may be any of the user's processes.
     const shell = deps(null, { platform: 'darwin', home: UNIX_HOME, rows: async () => [unixRow({ executable: '/bin/zsh', args: '-zsh' })] })
     expect(await endPtyHosts(shell.deps)).toEqual(left('nothing answers, and pid 100 is not a harness-pty process'))
-    const later = deps(null, { platform: 'darwin', home: UNIX_HOME, rows: async () => [unixRow()], dead: async (_d, rows) => !!rows })
+    const later = deps(null, { platform: 'darwin', home: UNIX_HOME, rows: async () => [unixRow({ startMarker: 'Sun Oct 18 10:00:10 2026' })] })
     expect((await endPtyHosts(later.deps))[0]!.how).toBe('left')
     const elsewhere = deps(null, { platform: 'darwin', home: UNIX_HOME, rows: async () => [unixRow({ args: 'harness-pty serve --home /Users/u/other/pty' })] })
     expect(await endPtyHosts(elsewhere.deps)).toEqual(left(`nothing answers, and pid 100 is not the host of ${UNIX_HOME}`))
@@ -172,7 +197,7 @@ describe('endPtyHosts', () => {
 
   it('ends a protocol 1 host, which has no shutdown, once its panes are gone, without waiting for it first', async () => {
     const h = host(['%1'], { protocol: 1 })
-    const t = deps(h, { discover: () => [discovery(100, 1)] })
+    const t = deps(h, { discover: () => [rec(100, 1)] })
     expect(await endPtyHosts(t.deps)).toEqual([{ pid: 100, protocol: 1, panes: 1, how: 'ended' }])
     expect(h.calls).toEqual(['inventory', 'kill %1', 'close'])
     expect(t.ended).toEqual(['100 w:1'])
@@ -188,7 +213,7 @@ describe('endPtyHosts', () => {
 
   it('keeps an inventory that failed as the reason', async () => {
     const h = host([], { protocol: 1, inventoryFails: true })
-    const t = deps(h, { discover: () => [discovery(100, 1)], terminate: async () => 'mismatch' })
+    const t = deps(h, { discover: () => [rec(100, 1)], terminate: async () => 'mismatch' })
     expect((await endPtyHosts(t.deps))[0]!.detail).toBe('its panes could not be listed (the table is busy); pid 100 changed while it was being ended')
   })
 
@@ -204,21 +229,36 @@ describe('endPtyHosts', () => {
 })
 
 describe('ptyHostsDeps', () => {
-  it("judges a row it is given against the discovery file's own time", async () => {
+  it("takes each record's time as it reads the record, so a host that removes its record while it exits is still judged", async () => {
     const home = mkdtempSync(path.join(tmpdir(), 'pty-hosts-'))
     try {
       mkdirSync(path.join(home, 'run'))
       const file = path.join(home, 'run', 'pty-host-2.json')
-      writeFileSync(file, '{}')
+      writeFileSync(file, JSON.stringify(discovery(100)))
       const written = Date.now() - 60_000
       utimesSync(file, new Date(written), new Date(written))
-      const marker = (ms: number) => `w:${(BigInt(ms) + 11_644_473_600_000n) * 10_000n}`
-      const row = (ms: number) => async () => [{ pid: process.pid, executable: 'harness-pty', startMarker: marker(ms) }]
       const real = ptyHostsDeps(home)
       expect(real.home).toBe(home)
-      expect(await real.dead(discovery(process.pid), row(written - 10_000))).toBe(false)
-      expect(await real.dead(discovery(process.pid), row(written + 1_000))).toBe(false)
-      expect(await real.dead(discovery(process.pid), row(written + 10_000))).toBe(true)
+      const recorded = real.discover()
+      expect(recorded).toEqual([{ discovery: discovery(100), written: statSync(file).mtimeMs }])
+      // A host that agreed to shut down removes its record first, then exits; this one does not exit.
+      const h = host([], { exitsOnShutdown: false })
+      const call = h.client.call
+      h.client.call = (async (op: { op: string }) => { if (op.op === 'shutdown') rmSync(file); return call(op as never) }) as typeof call
+      const ended: string[] = []
+      const t = {
+        ...real,
+        discover: () => recorded,
+        reach: async () => ({ client: h.client }),
+        alive: () => h.alive(),
+        dead: async () => false,
+        rows: async () => [{ pid: 100, parentPid: 1, executable: '/opt/harness-pty', startMarker: filetime(written - 5_000), args: `/opt/harness-pty serve --home ${home}` }],
+        terminate: async (pid: number, marker: string) => { ended.push(`${pid} ${marker}`); h.kill(); return 'ended' as const },
+        sleep: async () => {},
+      }
+      expect(await endPtyHosts(t)).toEqual([{ pid: 100, protocol: 2, panes: 0, how: 'ended' }])
+      expect(ended).toEqual([`100 ${filetime(written - 5_000)}`])
+      expect(real.discover()).toEqual([])
     } finally {
       rmSync(home, { recursive: true, force: true })
     }

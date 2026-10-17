@@ -37,7 +37,17 @@ export function startMarkerMs(marker: string): number | null {
 }
 
 /** A marker read to the second (`lstart`) may be up to this much early; a FILETIME is exact. */
-const START_SLACK_MS = 2_000
+export const START_SLACK_MS = 2_000
+
+/**
+ * Whether [row]'s process started no later than [writtenMs] (when a file its process wrote was written), within
+ * START_SLACK_MS. False when its start cannot be read: a caller that ends a process on this proof fails closed
+ * (uninstall/ptyHosts.ts).
+ */
+export function startedNoLaterThan(row: Pick<HostProcessRow, 'startMarker'>, writtenMs: number): boolean {
+  const started = row.startMarker ? startMarkerMs(row.startMarker) : null
+  return started !== null && started <= writtenMs + START_SLACK_MS
+}
 
 /**
  * Whether the process [pid] that wrote [file] is proven dead. It is proven when the pid runs no process, when the
