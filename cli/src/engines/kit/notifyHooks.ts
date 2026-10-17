@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { env } from '../../config/env.js'
+import { engineName } from '../../lib/agentNames.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { insideWindowsRoots } from '../../lib/secureState.js'
 import { STABLE_NOTIFY } from '../../lib/windows/installLayout.js'
@@ -37,11 +38,6 @@ export function hooksNotOnWindows(engine: string): true {
   return true
 }
 
-const PRODUCTS: Record<NotifyEngine, string> = {
-  claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor', hermes: 'Hermes', commandcode: 'Command Code', devin: 'Devin',
-  grok: 'Grok', agy: 'agy', copilot: 'Copilot',
-}
-
 /**
  * The log line for an install that did not happen, when [error] says why: on Windows one sentence, no stack. A refused
  * hook line (quoteHookCommand) or a held file is the person's to read, and a stack trace there buried the reason (B4.10
@@ -49,7 +45,7 @@ const PRODUCTS: Record<NotifyEngine, string> = {
  */
 export function hooksNotInstalled(engine: NotifyEngine, error: unknown, platform: NodeJS.Platform): string | null {
   if (platform !== 'win32' || !(error instanceof HookPreparationHeld)) return null
-  return `[hooks] ${PRODUCTS[engine]} hooks are not installed: ${error.reason}`
+  return `[hooks] ${engineName(engine)} hooks are not installed: ${error.reason}`
 }
 
 /**

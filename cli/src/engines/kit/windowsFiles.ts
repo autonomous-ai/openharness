@@ -5,8 +5,7 @@
  */
 import { constants, renameSync } from 'node:fs'
 import nodePath, { sep, type posix } from 'node:path'
-// A cycle with nativeHookFiles.ts, which is safe: the class is used only when a rename gives up, never at load.
-import { HookPreparationHeld } from './nativeHookFiles.js'
+import { HookPreparationHeld } from './hookHeld.js'
 
 /**
  * Windows is decided by the path module, not process.platform: specs that fake win32 on a POSIX host keep the POSIX

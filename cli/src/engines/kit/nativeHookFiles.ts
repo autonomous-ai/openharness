@@ -7,12 +7,9 @@ import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { NativePaths, verifyNativePathFacts } from './nativePaths.js'
 import { directorySyncSupported } from '../../lib/secureState.js'
 import { isRoot, renameReplacing, unchangedFlushFlags } from './windowsFiles.js'
-
-export class HookPreparationHeld extends Error {
-  /** What holds it, as a sentence's end: the message without its "is waiting" prefix (notifyHooks.ts `hooksNotInstalled`). */
-  readonly reason: string
-  constructor(detail: string) { super(`Hook preparation is waiting: ${detail}`); this.name = 'HookPreparationHeld'; this.reason = detail }
-}
+import { HookPreparationHeld } from './hookHeld.js'
+// Every importer of the class from here keeps working; windowsFiles.ts imports it from the leaf, with no cycle.
+export { HookPreparationHeld }
 const version = (info: BigIntStats) => `${info.dev}:${info.ino}:${info.uid}:${info.mode}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 const fileIdentity = (info: BigIntStats) => `${info.dev}:${info.ino}:${info.uid}:${info.mode}`
 export interface HookFilePublication { verify(): void }
