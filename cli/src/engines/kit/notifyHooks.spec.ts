@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { command, hookArgv, isManagedHookCommand, quoteHookCommand } from './notifyHooks.js'
+import { command, hookArgv, isManagedHook, isManagedHookCommand, isOurs, quoteHookCommand } from './notifyHooks.js'
 import { HookPreparationHeld } from './nativeHookFiles.js'
 
 it.each([
@@ -76,5 +76,86 @@ describe('quoteHookCommand injection', () => {
     expect(() => quoteHookCommand('cmd', ['C:\\node.exe', 'x" & calc & "'])).toThrow(HookPreparationHeld)
     expect(() => quoteHookCommand('powershell', ['C:\\node.exe', 'x" ; calc ; "'])).toThrow(HookPreparationHeld)
     expect(() => quoteHookCommand('cmd', [])).toThrow(HookPreparationHeld)
+  })
+})
+
+describe('the hooks Harness writes on Windows', () => {
+  const cmdLine = '"C:\\Program Files\\Harness\\node.exe" "C:\\Users\\u\\.harness\\cli\\notify.mjs" --port 18473'
+    + ' --data-dir "C:\\Users\\u\\.harness\\cli\\data" --engine codex'
+  const psLine = "& 'C:\\Users\\u\\.harness\\runtime\\node\\node.exe' 'C:\\Users\\u\\.harness\\cli\\notify.mjs' --port 18473"
+    + " --data-dir 'C:\\Users\\u\\.harness\\cli\\data' --engine copilot --copilot-event sessionStart"
+
+  it('recognizes its cmd.exe and PowerShell lines on Windows only', () => {
+    expect(isManagedHookCommand(cmdLine, 'win32')).toBe(true)
+    expect(isManagedHookCommand(psLine, 'win32')).toBe(true)
+    expect(isManagedHookCommand(cmdLine, 'darwin')).toBe(false)
+    expect(isManagedHookCommand(psLine, 'linux')).toBe(false)
+  })
+
+  it('recognizes every line quoteHookCommand writes', () => {
+    const argv = ["C:\\O'Brien co\\node.exe", 'C:\\h x\\notify.mjs', '--port', '1', '--data-dir', 'C:\\h\\data', '--engine', 'commandcode']
+    expect(isManagedHookCommand(quoteHookCommand('cmd', argv), 'win32')).toBe(true)
+    expect(isManagedHookCommand(quoteHookCommand('powershell', argv), 'win32')).toBe(true)
+  })
+
+  it.each([
+    cmdLine + ' & calc',
+    cmdLine.replace('--port 18473', '--port %PORT%'),
+    '"C:\\tools\\other.exe" "C:\\Users\\u\\notify.mjs" --port 1 --data-dir "C:\\d"',
+    '"C:\\node.exe" "relative\\notify.mjs" --port 1 --data-dir "C:\\d"',
+    psLine + '; Remove-Item C:\\',
+    "& 'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir $env:TEMP",
+    "& 'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir 'C:\\d' --data-dir 'C:\\e'",
+  ])('claims no other Windows line: %s', (line) => {
+    expect(isManagedHookCommand(line, 'win32')).toBe(false)
+  })
+
+  it('recognizes Claude Code exec form (command and args) on Windows only', () => {
+    const hook = { type: 'command', command: 'C:\\h\\node.exe', args: ['C:\\h\\notify.mjs', '--port', '18473', '--data-dir', 'C:\\h\\data'] }
+    expect(isManagedHook(hook, 'win32')).toBe(true)
+    expect(isManagedHook({ ...hook, args: [...hook.args, '--evil'] }, 'win32')).toBe(false)
+    expect(isManagedHook({ ...hook, args: 'C:\\h\\notify.mjs' }, 'win32')).toBe(false)
+    expect(isManagedHook(hook, 'darwin')).toBe(false)
+    expect(isOurs({ hooks: [hook] })).toBe(process.platform === 'win32')
+  })
+
+  it('answers a POSIX hook as before, on every platform', () => {
+    const line = "'/fixture/node' '/fixture/notify.mjs' --data-dir '/fixture/harness' --port 19473 --engine codex"
+    expect(isManagedHookCommand(line, 'darwin')).toBe(true)
+    expect(isManagedHook({ type: 'command', command: line }, 'linux')).toBe(true)
+    // An `args` beside a POSIX line is ignored off Windows, as it always was.
+    expect(isManagedHook({ type: 'command', command: line, args: ['x'] }, 'darwin')).toBe(true)
+  })
+
+  it.each([
+    // a user's own notify.mjs hook: other flags, another path, trailing commands, a trailing backslash, an empty argument
+    '"C:\\node.exe" "C:\\notify.mjs" --port 1 --data-dir "C:\\d" --verbose',
+    '"C:\\node.exe" "C:\\notify.mjs" --port 1 --data-dir "C:\\d" && echo hi',
+    '"C:\\node.exe" "C:\\notify.mjs" --port 1 --data-dir "C:\\d\\"',
+    '"C:\\node.exe" "C:\\notify.mjs" --port 1 --data-dir "C:\\d^&x"',
+    '"C:\\node.exe" "C:\\notify.mjs" --port 1 --data-dir "C:\\d"  --engine codex',
+    '"C:\\node.exe" "C:\\notify.mjs" --port 1 --data-dir "C:\\d" "',
+    '"C:\\python.exe" "C:\\notify.mjs" --port 1 --data-dir "C:\\d"',
+    "& 'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir 'C:\\d' --verbose",
+    "& 'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir 'C:\\d\\'",
+    "& 'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir ''",
+    "& 'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir 'C:\\d' | tee x",
+    "& 'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir 'C:\\d' $(calc)",
+    "& 'C:\\node.exe' 'C:\\other\\script.mjs' --port 1 --data-dir 'C:\\d'",
+    "& 'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir 'C:\\d' --engine \u2018x\u2019",
+    "'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir 'C:\\d'",
+  ])('does not claim a look-alike user hook on Windows: %s', (line) => {
+    expect(isManagedHookCommand(line, 'win32')).toBe(false)
+    expect(isManagedHook({ type: 'command', command: line }, 'win32')).toBe(false)
+  })
+
+  it('does not claim a look-alike exec form', () => {
+    const hook = { type: 'command', command: 'C:\\h\\node.exe', args: ['C:\\h\\notify.mjs', '--port', '1', '--data-dir', 'C:\\h\\data'] }
+    expect(isManagedHook({ ...hook, command: 'C:\\h\\python.exe' }, 'win32')).toBe(false)
+    expect(isManagedHook({ ...hook, args: ['notify.mjs', '--port', '1', '--data-dir', 'C:\\h'] }, 'win32')).toBe(false)
+    expect(isManagedHook({ ...hook, args: [...hook.args, '--port', '2'] }, 'win32')).toBe(false)
+    expect(isManagedHook({ ...hook, args: ['C:\\h\\notify.mjs', '--port', '1', '--data-dir', 'C:\\h', 7] }, 'win32')).toBe(false)
+    expect(isManagedHook({ command: 5, args: [] }, 'win32')).toBe(false)
+    expect(isManagedHook(null, 'win32')).toBe(false)
   })
 })

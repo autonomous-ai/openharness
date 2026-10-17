@@ -1,6 +1,6 @@
 /** The notify.mjs command and JSON merge primitives shared by shell-hook engines. */
 import { existsSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { env } from '../../config/env.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
@@ -19,9 +19,11 @@ export const HOOK_SCRIPT =
   [join(cliDir, 'notify.mjs'), ...(process.argv[1] ? [join(dirname(process.argv[1]), 'notify.mjs')] : []), join(cliDir, '..', '..', '..', 'hook', 'notify.mjs')].find(existsSync) ??
   join(cliDir, '..', '..', '..', 'hook', 'notify.mjs')
 
-interface CommandHook {
+export interface CommandHook {
   type: string
   command: string
+  /** Exec form: the program in `command`, these its arguments, no shell (Claude Code on Windows, B4.6). */
+  args?: string[]
   timeout?: number
 }
 export interface HookBlock {
@@ -131,35 +133,72 @@ export function command(
   return quoteHookCommand(runner, hookArgv(port, engine, codexHome, hermesHome, environment)) as string
 }
 
-/** Accept only a literal Node invocation with Harness's protocol arguments.
- * A foreign script sharing the notify.mjs basename is not ours to remove. */
-export function isManagedHookCommand(value: unknown): boolean {
-  if (typeof value !== 'string' || value.length > 64 * 1024) return false
+/** The words of a POSIX shell line as `sh` splits it; null for anything but literal words. */
+function posixWords(value: string): string[] | null {
   const args: string[] = []
   let word = '', active = false, quote = ''
   for (let index = 0; index < value.length; index++) {
     const char = value[index]
     if (quote) {
       if (char === quote) { quote = ''; continue }
-      if (quote === '"' && /[$`\\]/.test(char)) return false
+      if (quote === '"' && /[$`\\]/.test(char)) return null
       word += char; continue
     }
     if (char === "'" || char === '"') { quote = char; active = true; continue }
     if (char === '\\') {
-      if (++index === value.length || /[\r\n]/.test(value[index])) return false
+      if (++index === value.length || /[\r\n]/.test(value[index])) return null
       word += value[index]; active = true; continue
     }
-    if (/[\r\n]/.test(char)) return false
+    if (/[\r\n]/.test(char)) return null
     if (/[ \t]/.test(char)) { if (active) { args.push(word); word = ''; active = false }; continue }
-    if (/[;&|<>$`(){}*?\[\]~#]/.test(char)) return false
+    if (/[;&|<>$`(){}*?\[\]~#]/.test(char)) return null
     word += char; active = true
   }
-  if (quote) return false
+  if (quote) return null
   if (active) args.push(word)
-  if (!/^(?:node|nodejs)(?:\.exe)?$/.test(basename(args[0] ?? '')) || !isAbsolute(args[1] ?? '') || basename(args[1] ?? '') !== 'notify.mjs') return false
+  return args
+}
+
+// Exactly what quoteHookCommand writes: it refuses the characters excluded here, a trailing backslash (cmd, PowerShell)
+// and an empty argument (PowerShell), so a line holding one was written by somebody else.
+const CMD_WORD = /"([^"%!&|<>^()]*)"|([A-Za-z0-9_-]+)/y
+const POWERSHELL_WORD = /'((?:[^'"\u2018\u2019\u201a\u201b]|'')+)'|([A-Za-z0-9_-]+)/y
+
+/** Words separated by one space, each matching [word] whole; null otherwise. */
+function separatedWords(text: string, word: RegExp, unquote: (quoted: string) => string): string[] | null {
+  const words: string[] = []
+  let at = 0
+  while (at < text.length) {
+    if (words.length) { if (text[at] !== ' ') return null; at++ }
+    word.lastIndex = at
+    const match = word.exec(text)
+    if (!match) return null
+    const quoted = match[1] !== undefined
+    if (quoted && /\\$/.test(unquote(match[1]))) return null
+    words.push(quoted ? unquote(match[1]) : match[2])
+    at = word.lastIndex
+  }
+  return words.length ? words : null
+}
+
+/** The words of a Windows hook line as quoteHookCommand writes it: cmd.exe's (`"…"`) or PowerShell's (`& '…'`). */
+function windowsWords(value: string): string[] | null {
+  if (/[\0\r\n]/.test(value)) return null
+  if (value.startsWith('& ')) return separatedWords(value.slice(2), POWERSHELL_WORD, (quoted) => quoted.replace(/''/g, "'"))
+  return separatedWords(value, CMD_WORD, (quoted) => quoted)
+}
+
+const LEGACY_SCRIPT = /\/\.harness\/cli\/(?:hook\/)?notify\.mjs$/
+const NODE = /^(?:node|nodejs)(?:\.exe)?$/
+const WINDOWS_NODE = /^(?:node|nodejs)(?:\.exe)?$/i
+const NATIVE_PATH = { basename, isAbsolute }
+
+/** Harness's protocol: a literal Node, an absolute notify.mjs, and only Harness's flags, each once. */
+function managedArgs(args: string[], path: Pick<typeof win32, 'basename' | 'isAbsolute'>, node: RegExp, legacy: boolean): boolean {
+  if (!node.test(path.basename(args[0] ?? '')) || !path.isAbsolute(args[1] ?? '') || path.basename(args[1] ?? '') !== 'notify.mjs') return false
   // The original positional protocol was installed only under Harness's own
   // CLI directory. Later commands identify the data root explicitly.
-  if (args.length === 4 && /\/\.harness\/cli\/(?:hook\/)?notify\.mjs$/.test(args[1])
+  if (legacy && args.length === 4 && LEGACY_SCRIPT.test(args[1])
     && /^\d+$/.test(args[2]) && /^(?:claude|codex)$/.test(args[3])) return true
   const flags = new Map<string, string>()
   for (let index = 2; index < args.length; index += 2) {
@@ -168,11 +207,32 @@ export function isManagedHookCommand(value: unknown): boolean {
       || value === undefined || flags.has(key)) return false
     flags.set(key, value)
   }
-  return /^\d+$/.test(flags.get('--port') ?? '') && isAbsolute(flags.get('--data-dir') ?? '')
+  return /^\d+$/.test(flags.get('--port') ?? '') && path.isAbsolute(flags.get('--data-dir') ?? '')
+}
+
+/** Accept only a literal Node invocation with Harness's protocol arguments.
+ * A foreign script sharing the notify.mjs basename is not ours to remove. On Windows, the cmd.exe and PowerShell
+ * lines quoteHookCommand writes are literal invocations too. */
+export function isManagedHookCommand(value: unknown, platform: NodeJS.Platform = process.platform): boolean {
+  if (typeof value !== 'string' || value.length > 64 * 1024) return false
+  const words = posixWords(value)
+  if (words && managedArgs(words, NATIVE_PATH, NODE, true)) return true
+  if (platform !== 'win32') return false
+  const windows = windowsWords(value)
+  return !!windows && managedArgs(windows, win32, WINDOWS_NODE, false)
+}
+
+/** One hook of an engine's settings: a line, or on Windows exec form (Claude Code's `command` + `args`). */
+export function isManagedHook(hook: { type?: unknown; command?: unknown; args?: unknown } | null | undefined, platform: NodeJS.Platform = process.platform): boolean {
+  if (!hook || typeof hook !== 'object') return false
+  if (hook.args === undefined || platform !== 'win32') return isManagedHookCommand(hook.command, platform)
+  return typeof hook.command === 'string' && Array.isArray(hook.args) && hook.args.length <= 64
+    && hook.args.every((arg) => typeof arg === 'string' && !/[\0\r\n]/.test(arg))
+    && managedArgs([hook.command, ...hook.args as string[]], win32, WINDOWS_NODE, false)
 }
 
 export function isOurs(block: HookBlock): boolean {
-  return Array.isArray(block?.hooks) && block.hooks.some(hook => isManagedHookCommand(hook?.command))
+  return Array.isArray(block?.hooks) && block.hooks.some(hook => isManagedHook(hook))
 }
 
 /** A managed command can share a block with somebody else's command. Updating
