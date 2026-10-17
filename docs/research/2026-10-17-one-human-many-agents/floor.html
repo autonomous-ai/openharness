@@ -77,8 +77,8 @@
 <footer id="health"></footer>
 <div class="note" id="note"><span class="x" onclick="this.parentNode.remove()">✕</span>
   <b>A design mockup, not the product.</b> The swarm is a team on an open floor: every worker's live terminal is a desk.
-  Arrows or click move between desks · <b>⌘⏎</b> (or <b>z</b>) zooms the desk to real size and back · type into your own workers when zoomed ·
-  <b>t</b> shows or hides the panel · answer the packets under YOU. Desks keep their places; marks and borders change, positions never do.
+  Arrows or click move between desks · <b>⌘⏎</b> (or <b>z</b>) zooms the desk to real size and back (Esc stays with the agent) · type into your own workers when zoomed ·
+  <b>t</b> shows or hides the panel · answer the packets under YOU. Desks keep their places; marks and borders change, positions never do. An idle desk (○) pulls its next task by itself, without waiting for the lead.
   Everything here is invented and moves on its own.</div>
 <script>
 const ME = 'Mira'
@@ -108,7 +108,7 @@ const tasks = [
   ['open','Self-test at first boot','—'], ['open','Head move settles first','—'], ['prop','Slow tests outside the group','tests'], ['prop','Retire the strip mapping','gardener'],
 ]
 const packets = [
-  { k:'Decide', t:'#1155 hello quiet: count only talk to the device?', rec:'Lead recommends yes: in a busy room the hello was refused 9 of 12.', acts:['yes','no','…'] },
+  { k:'Decide', t:'#1155 hello quiet: count only talk to the device?', rec:'Lead recommends yes: in a busy room the hello was refused 9 of 12.', acts:['yes','no'] },
   { k:'Hands', t:'device-a: unplug the servo bus, press the elbow back (~5 min)', rec:'first is waiting; motors stay still until then.', acts:['done','can\'t'] },
   { k:'Try it', t:'3 changes on device-a since lunch: stop words, head tap, setup ring', rec:'Each switched on for device-a only. Notes per change.', acts:['notes'] },
 ]
@@ -116,7 +116,7 @@ const MACHINE = { Mira: 'studio-mac', Tomas: 'build-box', Ines: 'ines-laptop' }
 workers.forEach(w => {
   if (w.s === 'off') return
   const before = w.n === 'lead'
-    ? ['$ harness report', '177 merged/day · 24 waiting · 2 decisions waiting', '$ harness task --all --open | head', 'Reading proposals: 2 new since 09:40.']
+    ? ['$ harness report', '165 merged/day · 24 waiting · 2 decisions waiting', '$ harness task --all --open | head', 'Reading proposals: 2 new since 09:40.']
     : w.n === 'reviewer'
     ? ['$ harness task --role reviewer', '4 ready for review, oldest 22 min', '$ gh pr checkout 1325', 'Reading the hand-back.']
     : ['$ harness task next', '→ ' + w.task, 'Reading the task thread and the brief.', '$ harness slot build -- cargo build -p ' + w.n + '-crate', '   Compiling (slot 2 of 3 on ' + MACHINE[w.m] + ')', '   Finished in 48 s']
@@ -138,24 +138,25 @@ function render() {
   }).join('')
   if (zoomed >= 0) { const inp = floor.querySelector('.zoom input'); if (inp) { inp.value = draft; inp.focus() } }
   document.getElementById('tasks').innerHTML = tasks.map(([s, t, o]) => `<div class="row" onclick="pick(${Math.max(0, workers.findIndex(w => w.n === o))})"><span class="mk ${s}">${MARK[s]}</span><span class="t">${t}</span><span class="o">${o}</span></div>`).join('')
-  document.getElementById('taskCount').textContent = tasks.length + ' open · 38 ✓'
+  document.getElementById('taskCount').textContent = tasks.filter(t => t[0] !== 'done').length + ' open · ' + (38 + tasks.filter(t => t[0] === 'done').length) + ' ✓'
   const open = packets.filter(p => !p.done).length
   document.getElementById('youCount').textContent = open ? open + ' need you' : 'clear'
-  document.getElementById('you').innerHTML = packets.map((p, i) => `<div class="pkt ${p.done ? 'done' : ''}"><span class="k">${p.k}</span> ${p.t}<div class="rec">${p.rec}</div>${p.done ? '<div class="rec">answered: ' + p.done + '</div>' : '<div class="acts">' + p.acts.map(a => `<button onclick="answer(${i},'${a}')">${a}</button>`).join('') + '</div>'}</div>`).join('')
+  document.getElementById('you').innerHTML = packets.map((p, i) => `<div class="pkt ${p.done ? 'done' : ''}"><span class="k">${p.k}</span> ${p.t}<div class="rec">${p.rec}</div>${p.done ? '<div class="rec">answered: ' + p.done + '</div>' : '<div class="acts">' + p.acts.map((a, j) => `<button onclick="answer(${i},${j})">${a}</button>`).join('') + '</div>'}</div>`).join('')
   document.getElementById('people').innerHTML = 'Mira (owner) 8 · Tomas 4 · Ines 4<br>✉ Ana invited you to "web-app": join with a worker?'
   const marks = workers.reduce((a, w) => (a[w.s] = (a[w.s] || 0) + 1, a), {})
-  document.getElementById('health').innerHTML = `<span>177 merged/day</span><span>PR wait p50 1.5 h</span><span>24 waiting</span><span>rework 18%</span><span>37 switches off</span><span>CI 7 running · 3 queued</span><span>$212 today</span><span class="need">${open} need you · ${marks.ask || 0} ? desks</span>`
+  document.getElementById('health').innerHTML = `<span>165 merged/day</span><span>PR wait p50 1.5 h</span><span>24 waiting</span><span>rework 18%</span><span>37 switches off</span><span>CI 7 running · 3 queued</span><span>$212 today</span><span class="need">${open} need you · ${marks.ask || 0} ? desks</span>`
   document.getElementById('panel').classList.toggle('hidden', !panel)
 }
 function pick(i) { if (zoomed >= 0 && zoomed !== i) zoomed = -1; focus = i; render() }
-function answer(i, a) { packets[i].done = a; if (i === 1 && a === 'done') { workers[1].s = 'work'; workers[1].lines.push('Mira: done. Elbow back. Standing test resumes.') } if (i === 0) { tasks[0][0] = 'work'; workers[0].lines.push('Mira answered ' + a + ' on #1155. el told when back online.') } render() }
-function say(e, i) { if (e.key !== 'Enter' || e.metaKey || !e.target.value) return; workers[i].lines.push('you: ' + e.target.value); workers[i].lines.push('• Working on it…'); e.target.value = ''; render() }
+function answer(i, j) { const a = packets[i].acts[j]; packets[i].done = a; if (i === 1 && a === 'done') { workers[1].s = 'work'; tasks[1][0] = 'work'; workers[1].lines.push('Mira: done. Elbow back. Standing test resumes.') } if (i === 0) { tasks[0][0] = 'work'; workers[0].lines.push('Mira answered ' + a + ' on #1155. el told when back online.') } render() }
+function say(e, i) { if (e.key !== 'Enter' || e.metaKey || e.ctrlKey || !e.target.value) return; workers[i].lines.push('you: ' + e.target.value); workers[i].lines.push('• Working on it…'); e.target.value = ''; render() }
 document.addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT' && !(e.metaKey && e.key === 'Enter')) return
+  const mod = e.metaKey || e.ctrlKey
+  if (e.target.tagName === 'INPUT' && !(mod && e.key === 'Enter')) return
   const c = cols()
-  if ((e.metaKey && e.key === 'Enter') || e.key === 'z') { zoomed = zoomed === focus ? -1 : focus; e.preventDefault(); render(); return }
+  if ((mod && e.key === 'Enter') || (!mod && e.key === 'z')) { zoomed = zoomed === focus ? -1 : focus; e.preventDefault(); render(); return }
   if (zoomed >= 0) return
-  if (e.key === 't') { panel = !panel; render(); return }
+  if (!mod && e.key === 't') { panel = !panel; render(); return }
   const moves = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: c, ArrowUp: -c }
   if (moves[e.key] !== undefined) { focus = Math.max(0, Math.min(workers.length - 1, focus + moves[e.key])); e.preventDefault(); render() }
 })
@@ -175,8 +176,14 @@ setInterval(() => {
   const names = Object.keys(chatter), n = names[Math.floor(Math.random() * names.length)]
   const w = workers.find(x => x.n === n), opts = chatter[n]
   w.lines.push(opts[Math.floor(Math.random() * opts.length)])
+  const idle = workers.find(x => x.s === 'idle')
+  if (idle && Math.random() < .3) {
+    const t = tasks.find(t => t[0] === 'open' && (t[2] === idle.n || t[2] === '—'))
+    if (t) { t[0] = 'work'; t[2] = idle.n; idle.s = 'work'; idle.task = t[1]; idle.lines.push('$ harness task next', '→ ' + t[1] + ' (oldest unowned in my area)', 'Lease taken. Reading the task and the brief.') }
+  }
   if (n === 'reviewer' && workers[6].s === 'rev' && Math.random() < .3) { workers[6].s = 'idle'; workers[6].task = 'next: #1409'; tasks[4][0] = 'done'; workers[6].lines.push('#1291 merged by the reviewer, switch off.') }
-  render()
+  const typing = document.activeElement && document.activeElement.tagName === 'INPUT' && document.activeElement.value
+  if (!typing) render()
 }, 1800)
 render()
 </script>

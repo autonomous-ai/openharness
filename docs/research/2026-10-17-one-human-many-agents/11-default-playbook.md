@@ -102,5 +102,19 @@
 
 ## For the people around it
 - **Owner:** keep the brief current. Answer packets on your own schedule. Try what's on, and say what you saw.
+
+**A day for the owner, about two hours of attention** (the budget in [03 §4](03-first-principles.md)):
+
+| When | What | About |
+|---|---|---|
+| Morning | Read the lead's report: what's on and shown working, what's waiting, what needs you | 10 min |
+| Morning | Clear YOU: answer the packets, one key each | 20–30 min |
+| Midday | Try what was switched on since yesterday, on a real device or with a real user. Say what you saw; each verdict becomes a test or a rule | 30 min |
+| Any time | Visit desks that interest you (⌘⏎). Watching is free; typing goes to your own workers only | as wanted |
+| Afternoon | Second pass on YOU. Edit the brief where the same question keeps coming back | 15 min |
+| Evening | Read the lead's end-to-end run. Set what the night should work on, and what must wait for people | 10 min |
+| Weekly | Look at the measures ([08](08-experiments.md)), not the PR count. Pick one oracle to build, one rule to add, one gate to widen | 30 min |
+
+The rest of the day is free. That is the point.
 - **Everyone:** write the facts only you know into the brief on day one (hardware, customers, regulations, history). It is the cheapest thing a person can do for a swarm.
 - **Hands:** when the lead asks for hands, the request says what, where, how long and why. Answer done or can't.

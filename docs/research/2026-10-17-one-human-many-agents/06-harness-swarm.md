@@ -154,7 +154,7 @@ From [04](04-bottlenecks.md), each one designed in:
 
 One line under the floor, with a page behind it:
 ```
-177 merged/day · PR wait p50 1.5 h · 24 waiting · rework 18% · idle 0 · decisions waiting 2 (oldest 40 min) · $212 today
+165 merged/day · PR wait p50 1.5 h · 24 waiting · rework 18% · idle 0 · decisions waiting 2 (oldest 40 min) · $212 today
 ```
 
 The page behind it shows **each gate's saturation point** ([04 §3](04-bottlenecks.md)): CI saturates near runners ÷ 0.58 builders, one reviewer near 15, one lead near 15. With 16 builders it says "add a reviewer", not "add a builder".
@@ -196,6 +196,8 @@ What Harness already ships toward these (CLI 0.4.x, October 2026):
 A swarm that ignores some of these still works. The lead can keep its own queue issue, and a team can keep using GitHub. Each primitive simply makes one part of the hand-built process unnecessary.
 
 ## 11. Order of building
+The first step is specified in [13](13-first-slice.md), after the rule experiments in [08 §0](08-experiments.md).
+
 1. **The Swarm tab and floor,** with plain workers you add, and the panel's People. No tasks yet. You can already run a swarm as the pilot does, with the lead using GitHub.
 2. **Native tasks and threads, and the YOU box,** with `harness task` and `harness decide`.
 3. **Delivery and liveness:** routing, never idle, dead-worker release.

@@ -16,8 +16,8 @@ Full report: [sources/harness-repo.md](sources/harness-repo.md). Accounts are "c
 
 | | The pilot | Harness's repo |
 |---|---|---|
-| **Structure** | Owner → one lead → ~15 workers, plus a reviewer and a tester | Several people, each with their own agents; no lead |
-| **Merged PRs a day** | ~177 | ~55 weekdays, ~31 weekends |
+| **Structure** | Owner → one lead → ~14 builders, plus a reviewer and a tester | Several people, each with their own agents; no lead |
+| **Merged PRs a day** | ~165 (~177 opened) | ~55 weekdays, ~31 weekends |
 | **Open → merge, p50** | 1.5 h | 12 min |
 | **Review** | A reviewer agent on every PR; 66% had findings, 22% three rounds or more | 98% merged by their own author; 0 approvals required; 1 of 354 PRs had a GitHub review; 27–49% record a review in the body |
 | **Rework** | 18% of PRs were follow-ups to review | 4% of PRs fix one merged in the last 72 h (up to ~14% by a looser count); 88% by the same account that broke it |
@@ -66,7 +66,7 @@ Each rule cost a measured incident to learn. The ones not already in the pilot's
 4. **Split hot files before scaling out.** Conflict tables in plans (files, line ranges, order). New seams (service registration, a folder per engine). Shared baselines regenerated once per batch.
 5. **Isolate every agent:** its own worktree, home folder, ports, tmux socket and a cleaned environment. Heavy suites at most two at a time, after a disk check. Never clean another session's files to make room.
 6. **Done is external evidence.** Models claimed "done" before the signal arrived. Task state comes from PR, CI and merged-tree facts, never from an agent's report. Show "blocked" and "pending" differently from "failed": the draft gate made up two-thirds of sampled failures, which teaches everyone to ignore red.
-7. **Independent review on the exact commit, recorded where the merge tool checks it.** Agent review found real defects on almost every daemon PR. A 20-round panel still missed a race found after merge, so review is a rung, not the ladder.
+7. **Independent review on the exact commit, recorded where the merge tool checks it.** Agent review found real defects on almost every PR it covered. A 20-round panel still missed a race found after merge, so review is a rung, not the ladder.
 8. **A doorbell, not a protocol.** Message only when blocked, or when you changed something others depend on. A few lines, one message per settled finding. Pre-approve the reply command.
 9. **Limit spawning.** Each agent may have 4 open children at depth 1, with 20 starts per 10 minutes and 40 per machine. An agent closes only what it started; idle children close after 30 minutes. Every started task carries who sent it.
 10. **People own the irreversible, with mechanical guards.**

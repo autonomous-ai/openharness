@@ -5,7 +5,7 @@ Draft, 2026-10-17. The red team for [05](05-framework.md) and [06](06-harness-sw
 ## 1. Motion instead of progress (Goodhart)
 A swarm is very good at producing what is counted: PRs, passing tests, closed tasks. The pilot merged ~250 PRs on its best day, and 18% of its output was follow-ups to reviews.
 - **Sign:** throughput rises while the owner's "try it" verdicts and real users' experience don't improve.
-- **Mitigation:** make **escaped defects** and **value against the brief** the headline numbers, not PR counts. Every change users can feel climbs to rung 5 (the owner tries it) before it's on. The lead's evening end-to-end run is the most important ritual. Keep it.
+- **Mitigation:** make **escaped defects** and **value against the brief** the headline numbers, not PR counts. Every change users can feel climbs to rung 6 (a person tries it) before it's on. The lead's evening end-to-end run is the most important ritual. Keep it.
 
 ## 1½. Gaming the verifier
 As models get more capable, they get better at passing checks without doing the work:
@@ -19,12 +19,12 @@ High-adoption teams show +54% bugs per developer, about 3× incidents per PR, 5�
 - **Mitigation:** headline metrics are escaped defects and shown-working, not PRs. Throttle creation to what the gates can verify.
 
 ## 1⅞. Nobody reviews
-In Harness's own repo, 98% of October PRs were merged by their own author, `main` requires 0 approvals, and 1 of 354 PRs had a GitHub review ([01b](01b-harness-repo.md)). Up to ~14% of PRs fix something merged in the previous 72 hours. Agents reviewing agents found real defects on almost every core PR, but only 27–49% of PRs record a review at all.
+In Harness's own repo, 98% of October PRs were merged by their own author, `main` requires 0 approvals, and 1 of 354 PRs had a GitHub review ([01b](01b-harness-repo.md)). Up to ~14% of PRs fix something merged in the previous 72 hours. Agents reviewing agents found real defects on almost every PR they covered, but only 27–49% of PRs record a review at all.
 - **Sign:** fix-forward rate rises; `main` is red for long stretches; reviews are mentioned, not recorded.
 - **Mitigation:** an independent review on the exact commit, by a different context (ideally a different model), recorded where the merge tool checks it. A person samples merged changes weekly.
 
 ## 2. Architectural entropy
-Thousands of small changes, each locally right, add up to a system nobody designed. In the pilot, behaviour switches that are off unless set (`…=on` environment flags) are the safety valve for merging fast, and they accumulate. PRs named **96 new switches in four days** (Oct 14–17), about 30 a day, where there had been one before.
+Thousands of small changes, each locally right, add up to a system nobody designed. In the pilot, behaviour switches that are off unless set (`…=on` environment flags) are the safety valve for merging fast, and they accumulate. PRs named **96 new switches in four days** (Oct 14–17), about 24 a day, where there had been one before (the Oct 17 census found 89, 37 of them off).
 - **Sign:** flag count grows, duplicate helpers appear, test runtime climbs (the pilot found 123 real-clock tests waiting 977 s).
 - **Mitigation:**
   - A flag lifecycle: each flag has a task to turn it on for everyone or remove it.
@@ -93,7 +93,7 @@ Autonomous goals don't stop themselves. An earlier agent-team design study in Ha
 - **Mitigation:** every goal has a time limit and a stop rule; design ends in an experiment ([08 §0](08-experiments.md)); the owner reviews scope, not volume.
 
 ## 10. The deskilling trap
-If people only want and judge, who can still debug the system when the swarm can't? This is the long-term version of comprehension debt. Anthropic's own trial found 17% lower comprehension when people learned a new library with AI, worst at debugging. Its staff call it the "paradox of supervision": supervising agents needs the skills that heavy use erodes. Early-career developer employment is already ~20% below trend, so fewer people are learning the craft that supervision depends on.
+If people only want and judge, who can still debug the system when the swarm can't? This is the long-term version of comprehension debt. Anthropic's own trial found 17% lower comprehension when people learned a new library with AI, worst at debugging. Its staff call it the "paradox of supervision": supervising agents needs the skills that heavy use erodes. Early-career developer employment is already ~20% below its late-2022 peak, so fewer people are learning the craft that supervision depends on.
 - **Mitigation:**
   - Keep the system explainable (risk 3).
   - Practise "a person fixes it with agents' help" on real incidents.

@@ -7,7 +7,7 @@
 - 3,849 CI runs, and job timings for a one-in-three sample of the target-architecture runs;
 - the process documents, role files and builders' work logs.
 
-Over that window the swarm grew from 3 to 16 agents on 5 accounts and 5 devices. It merged 491 PRs, with a median of 1.6 h from open to merge. Costs marked *est.* are estimates; the method is in the source report.
+Over that window the swarm grew from 3 to 16 agents on 5 accounts and 5 devices. It merged 491 PRs into the integration branch, with a median of 1.6 h from open to merge (1.5 h across all of the repo's PRs, Oct 15–17; see [01](01-pilot-evidence.md)). Costs marked *est.* are estimates; the method is in the source report.
 
 ## 1. The finding: single points, not compute
 
@@ -61,9 +61,9 @@ Each gate has a builder count where it saturates. Past the smallest one, more bu
 | **Reviewer** | ~0.6 PRs per builder-hour; ~6–7 min per PR | ~15 builders per reviewer |
 | **Lead** | ~40 tasks and ~93 comments a day for ~13 builders | ~15 builders, then split by domain |
 | **Devices** | One integration device; every change users would notice needs device minutes | By the share of changes needing a device |
-| **Owner** | Not counted; one 3.5 h overnight wait stopped dispatch | Latency matters more than count |
+| **Owner** | Not counted; one 3.4 h overnight wait stopped dispatch | Latency matters more than count |
 
-**Little's law ties them together:** work waiting = arrival rate × time waiting. With 26 PRs waiting and ~3.1 h in review, the queue drains at ~8.6 an hour, against ~7.5 merged. Halving review time halves the work in progress at the same throughput, which means fewer stale branches, conflicts and rebases.
+**Little's law ties them together:** work waiting = arrival rate × time waiting. With ~24 PRs waiting and ~3.1 h in review, the queue drains at ~7.7 an hour, close to the ~7.5 merged. Halving review time halves the work in progress at the same throughput, which means fewer stale branches, conflicts and rebases.
 
 **Amdahl's law sets the ceiling:** the serial parts (the lead's decisions, the integration device, the owner's answers) bound the whole, however many builders run.
 

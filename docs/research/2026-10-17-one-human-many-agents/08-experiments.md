@@ -8,7 +8,7 @@ The study's top claims can be tested on the pilot with rule changes alone. Each 
 | # | Change | Measure (baseline from [04](04-bottlenecks.md)) | Keep it if |
 |---|---|---|---|
 | E1 | **Pull rule:** a builder with an empty list takes the oldest unowned open task in its area without waiting for the lead | Wait from "list empty" to the next task: median 23 min, mean 107, max 738 | median under 5 min, with no rise in duplicate work |
-| E2 | **Gatekeepers on different subscriptions:** move the reviewer to another account than the lead | Hours with dispatch and review stopped together: 4 windows in ~30 h | no window where both stop |
+| E2 | **Gatekeepers on different subscriptions:** move the reviewer to another account than the lead | Hours with dispatch and review stopped together: 4 windows of 1.2–2.4 h in 3.2 days | no window where both stop |
 | E3 | **A second reviewer** on another engine, oldest PR first | Ready → first review p90 107 min; 26% past 30 min | p90 under 30 min |
 | E4 | **The lead never waits on the owner:** a question becomes a written packet, and the lead carries on | Dispatch stopped 3.4 h on one question | no dispatch stop longer than 15 min |
 

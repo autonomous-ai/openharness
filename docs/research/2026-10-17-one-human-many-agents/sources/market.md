@@ -156,7 +156,7 @@ Every claim carries a tag:
 
 ### Implications for a swarm workspace
 
-1. **The first user must get value on day one, alone.** For a swarm workspace that user is the person who owns a fleet: a founder, tech lead, or staff engineer running 5-50 agents. Harness's pilot (one owner, one lead, about 14 builders, about 177 PRs/day) is that user.
+1. **The first user must get value on day one, alone.** For a swarm workspace that user is the person who owns a fleet: a founder, tech lead, or staff engineer running 5-50 agents. Harness's pilot (one owner, one lead, about 14 builders, about 165 merged PRs/day) is that user.
 2. **The viral loop has to be a share.** Figma spreads through a file link and Slack through a channel invite. A swarm workspace spreads when the owner sends a reviewer, teammate, or manager a live view of the floor (on phone or web) and that person needs a seat to act. Harness's cross-account shared tabs are the seed of this loop.
 3. **Charge at the moment of sharing, not at the individual tier.** Individuals spend their budget on tokens ($100-500/month to the labs) and expect the wrapper to be free (Vibe Kanban, Conductor, Emdash). Slack and Figma monetized when a second person needed in.
 4. **Enterprise features follow team pull, but the data model must carry them from the start**: identity, an audit log of every human and agent action, budgets, and on-prem execution. Retrofitting them is what killed many team tools at the enterprise step.

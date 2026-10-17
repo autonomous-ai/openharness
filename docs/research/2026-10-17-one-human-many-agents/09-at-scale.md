@@ -27,12 +27,33 @@ Today's programmer splits into roles that don't need typing:
 
 Far fewer people are needed to produce a given amount of software. That isn't the same as fewer people building software: when software costs a hundredth as much, a hundred times more of it gets made. Every business, every device, every person gets software that today nobody would pay to write.
 
+## 2½. Could it be literally one person?
+Take each thing the pilot needed another person for, and ask what would remove it:
+
+| Needed another person for | What could replace them | Removable? |
+|---|---|---|
+| Knowledge outside the model (a hardware fact) | Better models, the vendor's documents, telemetry from the device | Mostly, over time |
+| Contact with reality (real rooms, voices, users) | Real users, if the product has them: they are the oracle, and distribution brings them for free. Device labs and test panels as services. | Yes for software with users; slowly for hardware |
+| Hands (unplug, weigh, push) | Remote device labs, robots, a service that books hands | Partly; cost and latency stay |
+| Process design from experience | Playbooks as packages (§3½ below) | Yes, once they exist |
+| Business facts, taste | The owner, if the owner has them | Only by being that owner |
+| Accountability (keys, money, safety, law) | Nothing. Someone signs | No |
+
+So **one person is enough when the product's oracle is its users and no hardware is involved:** a web product, an app, a developer tool. There the other people are users, suppliers and services, not colleagues. Where reality is physical, or the domain is far from the owner's knowledge, a handful of people stays. They aren't there as programmers; they're there as knowledge, reality and judgment.
+
+**The programmer goes extinct before the owner, the user and the verifier do.** The jobs that remain are the ones no model can hold: wanting, judging, signing, and being where reality is.
+
 ## 3. The organization becomes a portfolio of swarms
 
 - **The unit is an owner with a swarm,** one direction pursued well.
 - **A company is a few owners,** each with a swarm, coordinating at the level of goals and interfaces. The owners' agreements are the architecture.
 - **Big efforts are swarms of swarms:** a brief at the top, domain leads below, each with its own owner where judgment matters.
 - **Capacity is pooled and lent:** idle machines, subscriptions and devices flow to whichever swarm needs them, within an organization and possibly between people.
+
+## 3½. What spreads across a million projects
+- **Playbooks as packages.** A swarm template packages roles, a playbook, a verification ladder and its oracles for one kind of project: a web app, an embedded device, a library. It would install from the Store like any harness. A new owner then starts where an experienced owner ended, as the pilot's builders did from one member's rules.
+- **Capacity as a market.** Idle machines, devices and subscriptions are lent between people and swarms (shared machines already do the first). Device labs and real-user panels become services that swarms book.
+- **Verifiers as a profession.** People who build oracles and run reality checks for other people's swarms, paid per verified change.
 
 ## 4. What Harness should be in that world
 

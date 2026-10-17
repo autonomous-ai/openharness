@@ -3,8 +3,8 @@
 Draft, 2026-10-17. Tested against the market research in [sources/market.md](sources/market.md). Tags there: [P] primary, [S] secondary, [C] company claim, [B] background, [E] estimate. Numbers here keep the tag of their source.
 
 ## 1. Two proof points, one pattern
-- **The pilot:** one owner, one lead agent and ~14 builders took a product from ~11 to ~177 merged PRs a day in three days, working around the clock.
-- **Harness itself:** one owner directing agents launched about one new initiative a week for two months (CLI, desktop, mobile, store, devices, terminal UI, website, OS), with a few people owning some areas. That's ~25–118 PRs merged a day.
+- **The pilot:** one owner, one lead agent and ~14 builders took a product from ~11 to ~177 PRs a day in three days (~165 merged), working around the clock.
+- **Harness itself:** one owner directing agents launched about one new initiative a week for two months (CLI, desktop, mobile, store, devices, terminal UI, website, OS), with a few people owning some areas. That's ~27–55 merged PRs a weekday (September → October), peaking at 99.
 
 Both are the same shape: **one person who wants something, a swarm that builds it, and a few people where judgment, knowledge or hands are needed.** Not a team of programmers.
 

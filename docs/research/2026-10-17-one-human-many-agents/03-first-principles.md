@@ -39,7 +39,7 @@ Agents now run the middle. Two things decide what the loop is worth: **the ends*
 A swarm is a pipeline. Its output is set by its narrowest stage, and work queues in front of that stage (Little's law). In the pilot, measured over three days:
 - **Build** scaled ~15×, from ~11 to ~177 PRs a day. That came from working every hour of the week (~3.7× alone), ~14 parallel builders, and no person in the dispatch loop.
 - **Verify and integrate** scaled less. Median PR wait went from 7 minutes to 1.5 hours, with ~24 PRs waiting at any time (up to 67). CI ran ~630 target-architecture builds a day, and a quarter were cancelled by newer pushes.
-- **Want and observe** stayed at one person's pace. The lead sat blocked 3.5 hours overnight waiting for the owner, and weekend work waited for Sunday.
+- **Want and observe** stayed at one person's pace. The lead sat blocked 3.4 hours overnight waiting for the owner, and weekend work waited for Sunday.
 
 Every scaled report outside agrees: Superset says "most of our agents spend more time waiting for us to review their work than they spend doing it". OpenAI's zero-hand-written-code team calls human attention "the scarce resource". So **the bottleneck migrates**, roughly in this order:
 1. **Verification:** CI, devices, reviewers, real-world checks.
@@ -56,6 +56,18 @@ Every scaled report outside agrees: Superset says "most of our agents spend more
 - **Taste as data.** Each judgment becomes a rule or an example, so the next one is pre-decided.
 - **Decision latency** is measured, because the swarm waits on it.
 - **Live terminals are for drill-down.** The owner's main surface is decisions and evidence. (Our owner watches terminals and keeps them; the design makes room for both.)
+
+**The attention budget sets how many workers one owner can run.** An illustration, not a measurement:
+- Suppose the owner spends **A** minutes a day on decisions; each worker finishes **k** tasks a day; a share **e** of tasks needs a decision; and each decision takes **t** minutes.
+- Then the owner can keep up with at most **N ≈ A ÷ (k × e × t)** workers.
+
+| Decisions arrive as | t | e | Workers one owner sustains (A = 120 min, k = 3) |
+|---|---|---|---|
+| Questions in a thread | ~10 min | 30% | ~13 |
+| Packets with a recommendation | ~3 min | 30% | ~44 |
+| Packets, plus a standing brief that pre-decides | ~3 min | 10% | ~130 |
+
+The pilot sat near the first row: ~13 builders, with about 91 messages in 34 threads waiting on the owner over three days. **Packet quality (t) and the brief (e) move the limit by an order of magnitude;** more machines don't move it at all. That's why the YOU box and the brief are the product's core, not features.
 
 ## 5. What other people add, beyond capacity
 The owner can buy machines, subscriptions and agents alone. In the pilot, value that needed another person was:
@@ -84,6 +96,19 @@ So a second person is worth having for **knowledge, reality, judgment and experi
 
 **Verification quality is what buys autonomy.** Public evidence agrees: the strongest "agents did it all" results are greenfield or have a near-perfect oracle (a C compiler against GCC's tests). Gaming the verifier rises with capability.
 
+## 6½. Autonomy is bounded by the cost of the oracle
+An oracle is whatever says a change is right. How cheap it is decides how much of the work can run without people. Sort a project's work by oracle before choosing its autonomy:
+
+| Class | The oracle | Examples | Autonomy |
+|---|---|---|---|
+| **A. A machine oracle exists** | A reference implementation, a compiler, a spec, an existing test suite, a baseline to compare against | Ports, migrations, performance work, reproducing a reported bug, a C compiler against GCC's tests | Level 4: people sample the results |
+| **B. An oracle can be built** | Hidden scenarios, golden recordings, cloned third-party services, simulators, property tests | StrongDM's holdout scenarios; OpenAI's "harness engineering"; the pilot's played-audio tests | Level 3–4, after the oracle is built. **Building it is the owner's first job.** |
+| **C. The oracle is reality or a person** | Real users, real rooms, hardware physics, taste, the market | How a voice feels in a noisy room; whether motion looks alive; whether people want it | Bounded by how often reality can be sampled: batch it, route it, schedule it into the hours people are there |
+
+- **A swarm's long-run productivity is how fast it turns class C into class B.** Each person's judgment, captured as a test, a recording or a rule, is a judgment nobody has to make again. This is "taste as data" (§4), and it's the most valuable thing a person does in a swarm.
+- **The pilot was heavy in class C:** voice, motion and setup on real devices. That's why 37 of 89 switches sat merged but off: the oracle that could turn them on was a device and a person. A web back end with good tests is mostly A and B, so it would run at higher autonomy with fewer people.
+- **For the next million projects,** this is the first question to ask, before choosing how many workers to run: what fraction of the work has a cheap oracle?
+
 ## 7. What the evidence doesn't yet show
 - **No peer-reviewed study of large swarms on real codebases.** Controlled work stops at two agents or one manager with a few workers. Everything bigger is vendor or practitioner reporting, the pilot included.
 - **Org-wide data shows more output with worse quality:** +54% bugs per developer and about 3× incidents per PR at high-adoption teams (Faros 2026); higher instability (DORA 2025).
@@ -98,3 +123,4 @@ So the thesis is plausible and early. It has to be measured per swarm, not assum
 3. A lead saturates around 10–20 workers; then swarms split by domain, with a lead per domain.
 4. The scarce skills become **wanting well, judging well and designing verification**: product sense, taste, oracles.
 5. Teams will compete on verification infrastructure (devices, environments, real-user loops) more than on build capacity.
+6. Projects will be planned by oracle class: the share of work with a cheap oracle will predict a swarm's autonomy and its people per product better than its size will.

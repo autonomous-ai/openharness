@@ -1,6 +1,6 @@
 # The pilot: one owner, one lead and ~15 agents
 
-2026-10-17. Measured from the pilot repository: 1,000 PRs (Jul 9 – Oct 17, 2026), 156 task issues, 3,240 CI runs, its coordination issue (1,500+ comments) and its process documents.
+2026-10-17. Measured from the pilot repository: 1,000 PRs (Jul 9 – Oct 17, 2026), 156 task issues, 3,240 CI runs (Oct 14–17), its coordination issue (1,500+ comments) and its process documents.
 
 The pilot is an embedded consumer product with voice, motion, a camera and a light ring, tested on real devices. People aren't named: there's the owner, member people A–D, and outside teams. Builders go by their role names (first, second, … ten, reviewer, tests).
 
@@ -51,7 +51,7 @@ The pilot is an embedded consumer product with voice, motion, a camera and a lig
 
 | | Before (Sep 15 – Oct 13) | Swarm (Oct 15–17) |
 |---|---|---|
-| PRs opened per day | ~11 | ~177 |
+| PRs opened per day | ~11 | ~177 (~165 merged) |
 | Merged | 93% | 92% |
 | Reverts | 0 | 0 |
 | Median PR size | ~240 lines | ~240 lines |
@@ -61,7 +61,7 @@ The pilot is an embedded consumer product with voice, motion, a camera and a lig
 | When | 08:00–19:00 on weekdays | every hour, every day (154 PRs on a Saturday) |
 | Tasks opened per day | — | ~40 (82% by the lead); time to close p50 6.6 h |
 
-Best day: 248 merged. About **half the merged work came from member accounts** (247 of ~491 into the integration branch).
+Best day: 248 merged. About **half the merged work came from member accounts** (247 of the ~491 merged into the integration branch, Oct 14–17).
 
 ## 4. Where the gain came from
 1. **Around the clock.** About 3.7× a person's working hours on its own.
@@ -81,7 +81,7 @@ Best day: 248 merged. About **half the merged work came from member accounts** (
   - One builder missed three tasks by reading only its first page; another missed a decision.
 - **Usage limits.** The owner's account stopped the lead, the reviewer and a builder at the same time.
 - **Rework:** 18% of PRs were review follow-ups.
-- **Switches:** 96 new ones in four days; 37 of 89 still off on the last day.
+- **Switches:** PRs named 96 new ones in four days; the census on the last day found 89, with 37 still off.
 - **Unread volume:** 846k changed lines merged on the best day, partly generated or vendored.
 - **Resources:** see [04](04-bottlenecks.md).
 
@@ -111,7 +111,7 @@ Importance runs from 1 (nice to have) to 5 (the project would be on a different 
 | **Access** | ssh, sudo, sign-ins, private repos, a quota raised after a device's voice was dead ~7 h | 3 |
 | **Capacity** | Members' accounts and machines; four more devices, each with a person beside it | 4, partly the owner's |
 
-**When nobody was there, work stopped:** the lead blocked for 3.5 h overnight; signed updates waiting for the key; setup waiting for a decision; weekend tests moved because nobody was at two devices; builders paused when their person went home.
+**When nobody was there, work stopped:** the lead blocked for 3.4 h overnight; signed updates waiting for the key; setup waiting for a decision; weekend tests moved because nobody was at two devices; builders paused when their person went home.
 
 ## 7. Failure modes, and who caught them
 

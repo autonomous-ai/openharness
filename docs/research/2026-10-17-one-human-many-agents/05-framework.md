@@ -8,7 +8,7 @@
                      OWNER  (wants · decides · judges · answers for it · programs the factory)
                        │  brief · decisions · try-it
                        ▼
-                     LEAD   (plans · assigns · integrates · reports · escalates with a recommendation)
+                     LEAD   (plans · orders the backlog · integrates · reports · escalates with a recommendation)
           ┌────────────┼──────────────┬───────────────┐
        builders     reviewer        tester        researcher      … named workers, each owning an area
           │            │              │               │
@@ -42,14 +42,14 @@ The **facts the models can't know** section is new. In the pilot it would have s
 
 **Lead** (one agent per swarm, or per domain):
 - plans tasks with a bar for done, each about an hour of work. The 80% reliability horizon is ~1–3 h, so bigger tasks get split.
-- assigns work and keeps every worker busy;
+- keeps the backlog ordered, sized and three deep for every area, so workers pull their next task without waiting for it. In the pilot, waiting for the lead to hand out work was the largest single cost ([04](04-bottlenecks.md));
 - checks that the work decomposes before parallelizing it (16 agents on one kernel bug is one agent's work).
 - integrates: merge order, conflicts, a green integration branch;
 - runs the whole product end to end every evening;
 - reports to the owner: what changed, what's **on**, what to try, what needs a decision;
 - escalates with options, a recommendation and evidence, never with an open question.
 
-The lead is a single point of failure, so its state lives outside it (§7), its claims are checked by another agent (the pilot's lead got 7 of 62 claims wrong in a customer summary), and it's restarted fresh periodically to avoid drift.
+The lead is a single point of failure, so its state lives outside it (§7), its claims are checked by another agent (the pilot's lead got 7 of 62 claims wrong in one summary), and it's restarted fresh periodically to avoid drift. **It never blocks:** a question to the owner becomes a packet and the lead carries on (the pilot lost 3.4 hours of dispatch to one question). A deputy takes its queue if it stops. The lead and the reviewer run on different subscriptions, so one usage limit can't stop both.
 
 **Workers** (named agents). Each has a name, a role, a home (machine, folder, subscription, permission mode), an **area it owns** (crates, folders), and a log:
 - **builder:** takes a task, delivers a PR with evidence;
@@ -65,7 +65,7 @@ The lead is a single point of failure, so its state lives outside it (§7), its 
 | Field | Why |
 |---|---|
 | **Title and bar** | What done means, machine-checkable where possible |
-| **Owner, by lease** | One worker at a time. The lease renews with a heartbeat and expires if it stops, so stalled work returns to the lead without anyone noticing by hand. |
+| **Owner, by lease** | One worker at a time. The lease renews while the worker's session is alive and expires if it stops, so stalled work returns to the backlog without anyone noticing by hand. |
 | **State** | proposed → open → working → **verified** → on → done. Only a verifier (reviewer, tester, CI, the owner) moves a task past *working*, never its own worker. |
 | **Order** | Its place in its owner's list; the lead sets it |
 | **Waiting on** | A person, a device, a key, another task |
@@ -109,14 +109,16 @@ brief ─▶ lead plans ─▶ task ─▶ worker leases it ─▶ builds in its
 **Paths decide the route.** Security, money, cryptography, public interfaces, safety and anything irreversible always reach a person. Docs and tests can merge on rungs 1–3.
 
 ## 5. Keeping everyone busy, without burning anything
-- **A worker with open tasks is never idle.** At turn end it gets its next step; when it has none, the lead hears at once. (In the pilot, the lead wrote 81 comments chasing silent builders.)
+- **A worker is never idle while the backlog has work.** At turn end it gets its next step; with an empty list it pulls the oldest unowned task in its area; only when there is none does the lead hear. (In the pilot, builders posted 64 "list empty" reports and the lead wrote 81 comments chasing silent ones.)
 - **Assignments and messages are delivered, never polled.** No reading a 1 M-character thread to find your task.
-- **A dead worker's leases expire** (machine offline, subscription limit), and the lead reassigns.
+- **A dead worker's leases expire** (machine offline, subscription limit), and its tasks go back to the backlog.
 - **Pace never overrides safety.** "Test 24/7" and "never idle" in the pilot produced unattended motion and a full disk. Anything physical, irreversible or shared needs its owner's rule, not the swarm's clock.
 - **Throttle creation to what can be verified.** More PRs than the gates can check is waste: 24 waiting, a quarter of CI cancelled.
 
 ## 6. Scaling past one lead
 - **Offload the lead first:** reviewer, tester, gardener. The pilot added a reviewer on day two, because every PR waited for the lead.
+- **Widen the narrowest gate, not the builder count.** CI saturates near runners ÷ 0.58 builders, one reviewer near 15 builders, one lead near 15 ([04 §3](04-bottlenecks.md)). Past the narrowest, more builders only lengthen the queue.
+- **Choose autonomy by oracle class** ([03 §6½](03-first-principles.md)): work with a machine oracle runs at level 4; work whose oracle is reality or a person runs at the pace reality can be sampled, whatever the worker count.
 - **Split by domain at ~10–15 workers,** each sub-swarm with a lead and ideally a human domain owner. Leads coordinate through the shared brief and explicit interfaces.
 - **Areas, not files.** Each worker owns an area; a conflict is a sign the areas need redrawing.
 - **Watch the direction changes.** Each owner redirect moved 10+ builders within the hour. Direction changes are decisions too, recorded and costed ("this pauses 6 tasks").
@@ -139,12 +141,12 @@ See [04](04-bottlenecks.md). Each worker has a budget of compute, disk, model ca
 | Metric | Why | Pilot (Oct 15–17) |
 |---|---|---|
 | **Shown working per day** (changes on and verified with a person or device) | real progress | not measured; build % counted merges |
-| Merged per day | throughput | ~177 |
+| Merged per day | throughput | ~165 |
 | PR wait (opened → merged) | gate capacity | p50 1.5 h, p90 7.9 h |
 | Work waiting (open PRs) | queue health | p50 24, max 67 |
 | Rework share | first-attempt quality | 18% |
 | **Escaped defects** (found after merge by people or users) | the real quality signal | not measured |
-| **Decision latency** | owner bandwidth | e.g. 3.5 h overnight |
+| **Decision latency** | owner bandwidth | e.g. 3.4 h overnight |
 | **Human minutes per surviving change** | the attention budget | not measured |
 | Idle worker-hours | liveness | found by hand |
 | Cost per surviving change | economics | not measured |
