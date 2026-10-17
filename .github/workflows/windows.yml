@@ -205,6 +205,9 @@ jobs:
         shell: pwsh
         run: |
           $prefix = "$env:RUNNER_TEMP\opencode"
+          # With its postinstall, as on the VM (npm 11 warns that allowScripts does not cover it, and runs it): the
+          # postinstall puts the platform build in place of bin\opencode.exe. With --ignore-scripts that file stays a
+          # placeholder Windows will not run ("not compatible with the version of Windows"), seen on the VM in B5.12.
           npm install --global --prefix $prefix opencode-ai@1.19.3
           if ($LASTEXITCODE -ne 0) { throw "npm install opencode-ai exited $LASTEXITCODE" }
           $shim = Join-Path $prefix 'opencode.cmd'
@@ -214,8 +217,11 @@ jobs:
       - name: Install with Windows PowerShell, as a person does
         shell: pwsh
         run: |
-          # No update may replace the build under test (a local build never auto-updates, and this pins it anyway).
+          # No update may replace the build under test. It is 0.0.0-dev.ci<run>, a -dev version the updater never replaces
+          # (lib/selfUpdate.ts), and ADAPTER_UPDATE_DISABLE turns the updater off as well: at user level for a daemon the
+          # scheduled task starts, and in this step's environment for the one `harness start` starts below.
           [Environment]::SetEnvironmentVariable('ADAPTER_UPDATE_DISABLE', 'true', 'User')
+          $env:ADAPTER_UPDATE_DISABLE = 'true'
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File cli\scripts\install.ps1 -Manifest "$env:RUNNER_TEMP\manifest\install-manifest.json"
           if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE" }
           # install.ps1 does not start the daemon itself: a task Task Scheduler would not run leaves it down, and the
@@ -251,9 +257,17 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\logs" | Out-Null
-          foreach ($dir in @("$env:USERPROFILE\.harness\cli\data", "$env:USERPROFILE\.harness\pty\logs", "$env:USERPROFILE\.local\share\opencode\log")) {
-            if (Test-Path $dir) { Get-ChildItem $dir -Filter '*.log' -Recurse | Copy-Item -Destination "$env:RUNNER_TEMP\logs" }
+          # Each tree under its own path below logs\ (the same file name is in more than one), as it is under the profile.
+          $logs = "$env:RUNNER_TEMP\logs"
+          New-Item -ItemType Directory -Force $logs | Out-Null
+          foreach ($tree in @('.harness\cli\data', '.harness\pty\logs', '.harness\logs', '.local\share\opencode\log')) {
+            $from = Join-Path $env:USERPROFILE $tree
+            if (-not (Test-Path $from)) { continue }
+            Get-ChildItem $from -Filter '*.log' -Recurse -File | ForEach-Object {
+              $to = Join-Path (Join-Path $logs $tree) $_.FullName.Substring($from.Length).TrimStart('\')
+              New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
+              Copy-Item $_.FullName $to
+            }
           }
       - name: Uninstall, and check nothing is left
         shell: pwsh

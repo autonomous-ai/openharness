@@ -39,5 +39,11 @@ if (-not $created.ok -or -not $created.agent.id) { Fail "harness new terminal an
 $deadline = (Get-Date).AddSeconds(30)
 do { $hosts = @(Get-CimInstance Win32_Process -Filter "Name='harness-pty.exe'"); if ($hosts.Count) { break }; Start-Sleep 1 } while ((Get-Date) -lt $deadline)
 if (-not $hosts.Count) { Fail 'no harness-pty.exe runs after creating a terminal' }
-$shells = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(powershell|pwsh)\.exe$' -and $_.ParentProcessId -in $hosts.ProcessId })
+# The PowerShell the terminal runs, a child of the host: what the install promises, so none is a failure.
+$deadline = (Get-Date).AddSeconds(30)
+do {
+  $shells = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(powershell|pwsh)\.exe$' -and $_.ParentProcessId -in $hosts.ProcessId })
+  if ($shells.Count) { break }; Start-Sleep 1
+} while ((Get-Date) -lt $deadline)
+if (-not $shells.Count) { Fail "no PowerShell runs under harness-pty.exe (pid $($hosts.ProcessId -join ', ')) 30 s after creating terminal $($created.agent.id)" }
 Write-Host "ok   terminal $($created.agent.id) on harness-pty pid $($hosts[0].ProcessId) ($($shells.Count) shell(s) under it)"
