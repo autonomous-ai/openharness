@@ -93,6 +93,23 @@ void main() {
     );
   });
 
+  for (final (detail, expected) in [
+    ('Use another engine.', 'Use another engine.'),
+    ('', 'This engine cannot start on this machine. Nothing was started.'),
+  ]) {
+    test('a resume an engine refuses says why (detail "$detail")', () async {
+      final conn = _ResumeConn()
+        ..answer = (_, payload) => {
+          'creationId': payload['creationId'],
+          'state': 'failed',
+          'failure': {'code': 'ENGINE_LAUNCH_REFUSED', 'detail': detail},
+        };
+      final app = stoppedApp(conn);
+      addTearDown(app.dispose);
+      expect((await app.resumeAgent('m', 'b')).error, expected);
+    });
+  }
+
   test('a lost reply is checked on the next tap, not sent again', () async {
     final conn = _ResumeConn()
       ..answer = (_, _) => throw StateError('socket dropped');

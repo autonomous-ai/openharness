@@ -40,7 +40,9 @@ String retargetRefusalMessage(
     'PTY_HOST_UNAVAILABLE' =>
       "This machine's terminals did not answer. Run harness start there, then try again.",
     'ENGINE_LAUNCH_REFUSED' =>
-      detail ?? "$engineLabel cannot start on this machine with the new model.",
+      detail != null && detail.isNotEmpty
+      ? detail
+      : "$engineLabel cannot start on this machine with the new model.",
     // Changing model restarts the agent's process, which would cut off the
     // reply it is writing — so the daemon waits for the person, and the
     // sentence says what to do rather than naming the state ("mid-turn" read

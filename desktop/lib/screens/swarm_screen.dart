@@ -7293,10 +7293,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
                               ),
                               const SizedBox(width: 10),
                               Expanded(
-                                child: Text(
+                                // Whole message, selectable: a refusal can carry
+                                // a path the person needs to copy.
+                                child: SelectableText(
                                   _projects.error ?? app.lastError!,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 4,
                                   style: grid.AppType.body(),
                                 ),
                               ),

@@ -9101,7 +9101,12 @@ class AppNotifier extends ChangeNotifier {
         timeout: const Duration(seconds: 30),
       );
     } on WsRequestFailure catch (failure) {
-      _reportRetargetRefusal(machineId, agentId, failure.code);
+      _reportRetargetRefusal(
+        machineId,
+        agentId,
+        failure.code,
+        detail: failure.detail,
+      );
     } catch (_) {
       // A transport failure or a timeout: the daemon may well have done the move, and the frame
       // that follows says where the agent is. A guess here would tell a story the pane contradicts.
@@ -9158,7 +9163,12 @@ class AppNotifier extends ChangeNotifier {
         timeout: const Duration(seconds: 30),
       );
     } on WsRequestFailure catch (failure) {
-      _reportRetargetRefusal(machineId, agentId, failure.code);
+      _reportRetargetRefusal(
+        machineId,
+        agentId,
+        failure.code,
+        detail: failure.detail,
+      );
     } catch (_) {
       // See `clearAgentGrid`: a transport failure is not a refusal, and the next frame is the truth.
     }
@@ -12225,7 +12235,9 @@ class AppNotifier extends ChangeNotifier {
     // Refused before any pane opened, in words the machine wrote for the
     // person (an engine Windows cannot start as asked).
     'ENGINE_LAUNCH_REFUSED' =>
-      detail ?? 'This engine cannot start on $machine. Nothing was started.',
+      detail != null && detail.isNotEmpty
+      ? detail
+      : 'This engine cannot start on $machine. Nothing was started.',
     'CODEX_CLI_TOO_OLD' =>
       detail ??
           'The installed Codex CLI on $machine is too old for Auto approvals. '
@@ -13621,7 +13633,9 @@ class AppNotifier extends ChangeNotifier {
       ? detail
       : switch (code) {
           'ENGINE_LAUNCH_REFUSED' =>
-            'This engine cannot start on this machine. Nothing was stopped.',
+            resuming
+                ? 'This engine cannot start on this machine. Nothing was started.'
+                : 'This engine cannot start on this machine. Nothing was stopped.',
           'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
             resuming
                 ? 'Update the harness CLI on this machine to open saved harnesses.'

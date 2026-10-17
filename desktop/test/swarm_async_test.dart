@@ -138,6 +138,11 @@ void main() {
       'OpenCode does not run on Windows on Arm yet: its Arm build stops before its screen opens. Use another engine on this computer.',
     ),
     (
+      'ENGINE_LAUNCH_REFUSED',
+      '',
+      'This engine cannot start on Test host. Nothing was started.',
+    ),
+    (
       'SPAWN_FAILED',
       'The machine could not allocate an agent process.',
       'Test host has not confirmed the new harness yet. Check status before starting another.',
