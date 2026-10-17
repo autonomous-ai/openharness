@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cryptography/dart.dart' show DartSha256;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/scheduler.dart';
 
 import '../core/app_version.dart';
@@ -22,13 +23,16 @@ class ProductRuntimeHealth {
     this.readState,
     this.writeState,
     this.readVersion,
-  }) {
+    AppLifecycleState? Function()? lifecycle,
+  }) : _lifecycle =
+           lifecycle ?? (() => SchedulerBinding.instance.lifecycleState) {
     measurement.addListener(_choiceChanged);
   }
   final ProductMeasurement measurement;
   final Future<Map<String, dynamic>> Function()? readState;
   final Future<void> Function(Map<String, dynamic>)? writeState;
   final Future<String> Function()? readVersion;
+  final AppLifecycleState? Function() _lifecycle;
   String? _scope;
   String? _accountId;
   int _epoch = 0, _revision = -1, _frame = 0;
@@ -36,7 +40,8 @@ class ProductRuntimeHealth {
       _active = false,
       _timingsInstalled = false,
       _ready = false,
-      _readyCounted = false;
+      _readyCounted = false,
+      _skipCatchUp = false;
   bool newInstallation = false;
   Timer? _sample;
   Map<String, dynamic> _state = {};
@@ -209,10 +214,31 @@ class ProductRuntimeHealth {
     }
   }
 
+  @visibleForTesting
+  void framesForTest(List<FrameTiming> timings) => _frames(timings);
+
   void _frames(List<FrameTiming> timings) {
     if (!_active || _state.isEmpty || !measurement.sharing) return;
+    // A hidden, minimised or occluded window is throttled by the OS (App Nap, the compositor), so its
+    // frames time the OS, not the app; the first frame back is that throttling's catch-up. Frames of a
+    // visible window without focus (inactive) still count: a person can see them.
+    final lifecycle = _lifecycle();
+    if (lifecycle == AppLifecycleState.hidden ||
+        lifecycle == AppLifecycleState.paused ||
+        lifecycle == AppLifecycleState.detached) {
+      _skipCatchUp = true;
+      return;
+    }
+    var first = true;
     for (final frame in timings) {
-      if (_frame++ % 60 != 0) continue;
+      if (first && _skipCatchUp) {
+        first = _skipCatchUp = false;
+        continue;
+      }
+      first = false;
+      // Every 60th frame, never the first: `_frame++` sampled index 0, each launch's workspace
+      // restore, which app_start already times. Oct 16 had 155 app starts, one long sample each.
+      if (++_frame % 60 != 0) continue;
       final ms = frame.totalSpan.inMilliseconds;
       measurement.health(
         ms < 16

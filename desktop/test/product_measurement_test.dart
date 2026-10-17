@@ -402,6 +402,29 @@ void main() {
     });
     expect(setup, isEmpty);
   });
+  test('agent downloads are anonymous setup counts by engine name', () async {
+    usage.setupDownload('codex');
+    usage.setupDownload('codex', ok: true, took: const Duration(seconds: 95));
+    usage.setupDownload('claude');
+    usage.setupDownload('claude', ok: false, took: const Duration(minutes: 7));
+    usage.setupDownload('/Users/PRIVATE/.local/bin/x', ok: true);
+    await account();
+    usage.setupDownload('opencode');
+    await usage.flush();
+    final counters = {
+      for (final report in setup) ...(report['counters'] as Map),
+    };
+    expect(counters, {
+      'setup_desktop_agent_download_codex_started': 1,
+      'setup_desktop_agent_download_codex_ok': 1,
+      'setup_desktop_agent_download_codex_1m_to_5m': 1,
+      'setup_desktop_agent_download_claude_started': 1,
+      'setup_desktop_agent_download_claude_failed': 1,
+      'setup_desktop_agent_download_claude_over_5m': 1,
+      'setup_desktop_agent_download_opencode_started': 1,
+    });
+    expect(jsonEncode(setup), isNot(contains('PRIVATE')));
+  });
   test(
     'flow observations are bounded and unknown operations never upload content',
     () async {

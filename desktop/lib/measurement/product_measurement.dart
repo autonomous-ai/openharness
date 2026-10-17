@@ -477,6 +477,35 @@ class ProductMeasurement extends ChangeNotifier {
     );
   }
 
+  /// An agent download beside setup (AgentPrefetch): started when [ok] is null, then ok or failed
+  /// with how long it took. Anonymous setup counts only, so the setup preference governs them
+  /// whether or not the person has signed in meanwhile; a fixed engine name, nothing else.
+  void setupDownload(String engine, {bool? ok, Duration? took}) {
+    if (!_setupAllowed ||
+        surface != 'desktop' ||
+        _disposed ||
+        !const ['opencode', 'codex', 'claude'].contains(engine)) {
+      return;
+    }
+    final day = _now().toUtc().toIso8601String().substring(0, 10);
+    final prefix = 'setup_desktop_agent_download_${engine}_';
+    if (ok == null) {
+      _count('setup', day, '${prefix}started');
+      return;
+    }
+    _count('setup', day, '$prefix${ok ? 'ok' : 'failed'}');
+    final minutes = (took ?? Duration.zero).inSeconds / 60;
+    _count(
+      'setup',
+      day,
+      '$prefix${minutes < 1
+          ? 'under_1m'
+          : minutes < 5
+          ? '1m_to_5m'
+          : 'over_5m'}',
+    );
+  }
+
   void _count(String channel, String day, String metric) {
     final today = _now().toUtc();
     final date = DateTime.parse(day);

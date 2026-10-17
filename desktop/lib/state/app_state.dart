@@ -3743,6 +3743,7 @@ class AppNotifier extends ChangeNotifier {
               sendDesktopSetupMeasurement(this.config.apiBaseUrl, report),
         );
     productConnections = ProductConnections(this.productMeasurement);
+    this.agentPrefetch?.onDownload ??= this.productMeasurement.setupDownload;
     this.productMeasurement.addListener(_measurementChoiceChanged);
     if (!kUnderTest && this.productMeasurement.healthEnabled) {
       productRuntimeHealth = ProductRuntimeHealth(this.productMeasurement);

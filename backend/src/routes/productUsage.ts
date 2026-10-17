@@ -38,6 +38,23 @@ export const setupUsageSchema = z.union([
       Object.keys(report.counters).every(key => key.startsWith(prefix)))),
 ])
 
+const REPORT_METRICS = new Set<string>(PRODUCT_USAGE_METRICS)
+const SETUP_METRICS = new Set<string>(PRODUCT_USAGE_SETUP_METRICS)
+/** A client a release ahead of this backend can name a counter the contract here does not have yet.
+ * Rejecting the whole report for it lost every other counter in it — up to 64 per CLI report — and the
+ * client retried the same rejected report for days. Keep the known counters, drop the unknown names
+ * (never stored or echoed) and say how many reports that happened to. A report with no known counter
+ * left is still refused. Values and every other field are validated as before. */
+function withoutUnknownCounters(body: unknown, allowed: Set<string>): { body: unknown; dropped: boolean } {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { body, dropped: false }
+  const counters = (body as { counters?: unknown }).counters
+  if (!counters || typeof counters !== 'object' || Array.isArray(counters)) return { body, dropped: false }
+  const all = Object.entries(counters)
+  const known = all.filter(([metric]) => allowed.has(metric))
+  if (!known.length || known.length === all.length) return { body, dropped: false }
+  return { body: { ...body, counters: Object.fromEntries(known) }, dropped: true }
+}
+
 export async function productUsageRoutes(app: FastifyInstance): Promise<void> {
   // A process-wide budget bounds untrusted pre-sign-in counts without collecting IPs or cookies.
   // Exhaustion loses measurement only; it never shares a gate with sign-in or product traffic.
@@ -51,7 +68,7 @@ export async function productUsageRoutes(app: FastifyInstance): Promise<void> {
   })
   app.post('/api/product-usage/setup', { bodyLimit: 4096 }, async (req, reply) => {
     if (req.headers.authorization || req.headers.cookie) return sendError(reply, 'Setup reports must omit credentials', 'INVALID_SETUP_REPORT', 400)
-    const parsed = setupUsageSchema.safeParse(req.body)
+    const parsed = setupUsageSchema.safeParse(withoutUnknownCounters(req.body, SETUP_METRICS).body)
     if (!parsed.success) return sendError(reply, 'Invalid setup report', 'INVALID_SETUP_REPORT', 400)
     const minute = Math.floor(Date.now() / 60_000)
     if (minute !== setupWindow) { setupWindow = minute; setupRequests = 0 }
@@ -83,9 +100,13 @@ export async function productUsageRoutes(app: FastifyInstance): Promise<void> {
   })
   app.post('/api/product-usage/report', { bodyLimit: 8192 }, async (req, reply) => {
     if (!req.user?.sub) return sendError(reply, 'Unauthorized', 'UNAUTHORIZED', 401)
-    const parsed = productUsageReportSchema.safeParse(req.body)
+    const cleaned = withoutUnknownCounters(req.body, REPORT_METRICS)
+    const parsed = productUsageReportSchema.safeParse(cleaned.body)
     // Never reflect rejected fields, values or raw validation errors into logs or responses.
     if (!parsed.success) return sendError(reply, 'Invalid usage report', 'INVALID_USAGE_REPORT', 400)
+    if (cleaned.dropped && parsed.data.context) {
+      parsed.data.counters[`health_${parsed.data.context.surface}_report_unknown_metric`] = 1
+    }
     try { return sendSuccess(reply, await ingestProductUsage(req.user.sub, parsed.data)) }
     catch (error) {
       // A fixed category can diagnose delivery without exposing database errors or report contents.

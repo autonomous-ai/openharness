@@ -95,6 +95,10 @@ class AgentPrefetch {
   /// `harness_wait_download`). Null writes none (tests).
   final String? Function() _markerDir;
 
+  /// Told when each engine's download starts (`ok` null) and how it settled, for the setup counts
+  /// (ProductMeasurement.setupDownload): the engine's fixed name only, never a path, log or exit code.
+  void Function(String engine, {bool? ok, Duration? took})? onDownload;
+
   /// Runs OpenCode once after its download ([_warmOpenCode]). Off under test unless asked for.
   final bool _warm;
 
@@ -198,6 +202,7 @@ class AgentPrefetch {
     // A fresh Ubuntu has no curl until setup's apt step installs it (`environment_provisioner.dart`).
     if (!await _until(_curl)) {
       _log('OpenCode was not downloaded during setup: curl never arrived');
+      _notStarted(const ['opencode']);
       return;
     }
     // A create's wait counts from the download itself, not from the wait for curl before it.
@@ -250,6 +255,7 @@ class AgentPrefetch {
       _log(
         'Codex and Claude Code were not downloaded during setup: Harness\'s Node never arrived',
       );
+      _notStarted(const ['codex', 'claude']);
       return;
     }
     // A create's wait counts from the download itself, not from the wait for Node before it.
@@ -281,6 +287,18 @@ class AgentPrefetch {
   ) async {
     final started = _now();
     final markers = <File>[];
+    var settled = false;
+    void settle(bool Function(String engine) ok) {
+      if (settled) return;
+      settled = true;
+      for (final engine in engines) {
+        _tell(engine, ok: ok(engine), took: _now().difference(started));
+      }
+    }
+
+    for (final engine in engines) {
+      _tell(engine);
+    }
     try {
       final process = await _start(_shell, [
         '-c',
@@ -327,6 +345,7 @@ class AgentPrefetch {
       final seconds = _now().difference(started).inMilliseconds / 1000;
       // Judged by the binary, as the CLI judges an install: an exit code alone says nothing about
       // which half of a pipeline failed.
+      settle((engine) => code == 0 && _installed(engine));
       _log(
         code == 0 && inPlace()
             ? '$what downloaded during setup in ${seconds.toStringAsFixed(1)}s'
@@ -335,6 +354,7 @@ class AgentPrefetch {
                   '${tail.join(' | ')}',
       );
     } catch (error) {
+      settle((_) => false);
       _log('$what download during setup did not start: $error');
     } finally {
       for (final marker in markers) {
@@ -369,6 +389,23 @@ class AgentPrefetch {
       found = there();
     }
     return found;
+  }
+
+  /// A download that could not run because what it needs (curl, Harness's Node) never arrived:
+  /// started and failed, so the counts show it rather than a computer that never downloaded.
+  void _notStarted(List<String> engines) {
+    for (final engine in engines) {
+      _tell(engine);
+      _tell(engine, ok: false, took: Duration.zero);
+    }
+  }
+
+  void _tell(String engine, {bool? ok, Duration? took}) {
+    try {
+      onDownload?.call(engine, ok: ok, took: took);
+    } catch (_) {
+      // Optional measurement never touches a download.
+    }
   }
 
   /// curl on the PATH the app runs downloads with.

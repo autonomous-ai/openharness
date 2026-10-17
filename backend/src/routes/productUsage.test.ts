@@ -34,6 +34,22 @@ it.each([
   expect(response.body).not.toContain('PRIVATE_CANARY')
   expect(methods.ingestProductUsage).not.toHaveBeenCalled()
 })
+it('keeps a report with a name this backend does not know yet, without that name', async () => {
+  const context = { surface: 'cli', release: '0.4.18', platform: 'macos', channel: 'production' }
+  const response = await submit({ ...good, context, counters: { turns_started: 2, PRIVATE_CANARY_from_a_newer_client: 1 } })
+  expect(response.statusCode).toBe(200)
+  expect(response.body).not.toContain('PRIVATE_CANARY')
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account',
+    { ...good, context, counters: { turns_started: 2, health_cli_report_unknown_metric: 1 } })
+})
+it('keeps a setup report with a name this backend does not know yet, without that name', async () => {
+  const setup = { schemaVersion: 1, id: good.id, day: good.day, sharing: 'default',
+    counters: { setup_desktop_sign_in_started: 1, setup_desktop_PRIVATE_CANARY: 1 } }
+  const response = await app.inject({ method: 'POST', url: '/api/product-usage/setup', payload: setup })
+  expect(response.statusCode).toBe(200)
+  expect(methods.ingestSetupUsage).toHaveBeenCalledExactlyOnceWith(
+    { ...setup, counters: { setup_desktop_sign_in_started: 1 } })
+})
 it('does not reflect a database error or report contents', async () => {
   methods.ingestProductUsage.mockRejectedValue(new Error('PRIVATE_CANARY'))
   const response = await submit(good)

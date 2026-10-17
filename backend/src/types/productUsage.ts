@@ -104,6 +104,9 @@ export const PRODUCT_USAGE_METRICS = [
   ...PRODUCT_USAGE_UI_METRICS,
   ...PRODUCT_USAGE_ONBOARDING_METRICS,
   ...PRODUCT_USAGE_PHONE_SCREEN_METRICS,
+  // Written by the backend itself: a report that named counters this backend does not know yet, which
+  // it kept without them (routes/productUsage.ts). One per report, never the names.
+  'health_cli_report_unknown_metric', 'health_desktop_report_unknown_metric', 'health_phone_report_unknown_metric',
 ] as const
 export type ProductUsageMetric = typeof PRODUCT_USAGE_METRICS[number]
 export interface ProductUsageReport {
