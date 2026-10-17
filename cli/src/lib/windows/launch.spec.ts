@@ -4,7 +4,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { parseNpmCmdShim, WindowsBatchLaunchRefused, windowsEngineArgv, windowsLaunchRefusal } from './launch.js'
+import { parseNpmCmdShim, peMachine, WindowsBatchLaunchRefused, WindowsEngineUnavailable, windowsEngineArgv, windowsEngineUnavailable, windowsLaunchRefusal } from './launch.js'
 
 const FIXTURES = join(import.meta.dirname, 'fixtures')
 const CODEX_SHIM = readFileSync(join(FIXTURES, 'npm-codex.cmd'), 'utf8')
@@ -126,5 +126,37 @@ describe('the refusal as a create answers it', () => {
     expect(windowsLaunchRefusal(new WindowsBatchLaunchRefused('codex', 'C:\\x\\codex.bat')))
       .toEqual({ ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: expect.stringContaining('C:\\x\\codex.bat is a batch file') })
     expect(() => windowsLaunchRefusal(new Error('other'))).toThrow('other')
+  })
+})
+
+describe('an engine whose Windows build cannot run', () => {
+  const pe = (machine: number): Buffer => {
+    const bytes = Buffer.alloc(0x100)
+    bytes.write('MZ', 0, 'latin1'); bytes.writeUInt32LE(0x80, 0x3c)
+    bytes.write('PE\0\0', 0x80, 'latin1'); bytes.writeUInt16LE(machine, 0x84)
+    return bytes
+  }
+
+  it('reads the machine a program is built for from its PE header', () => {
+    expect(peMachine('x', () => pe(0xaa64))).toBe('arm64')
+    expect(peMachine('x', () => pe(0x8664))).toBe('x64')
+    expect(peMachine('x', () => Buffer.from('#!/bin/sh\n'))).toBeNull()
+    expect(peMachine('x', () => { throw new Error('gone') })).toBeNull()
+  })
+
+  it('refuses the Arm build of OpenCode before a pane opens, in words for the person', () => {
+    const exe = touch(join(folder(), 'opencode.exe'))
+    let refused: unknown
+    try { windowsEngineArgv('opencode', [exe], { platform: 'win32', machine: () => 'arm64' }) } catch (error) { refused = error }
+    expect(refused).toBeInstanceOf(WindowsEngineUnavailable)
+    expect(windowsLaunchRefusal(refused)).toEqual({ ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: windowsEngineUnavailable('opencode', exe, () => 'arm64') })
+    expect((refused as Error).message).toMatch(/OpenCode/)
+  })
+
+  it('starts its x64 build, any other engine, and a version probe as before', () => {
+    const exe = touch(join(folder(), 'opencode.exe'))
+    expect(windowsEngineArgv('opencode', [exe, '--help'], { platform: 'win32', machine: () => 'x64' })).toEqual([exe, '--help'])
+    expect(windowsEngineArgv('codex', [exe], { platform: 'win32', machine: () => 'arm64' })).toEqual([exe])
+    expect(windowsEngineArgv('the engine', [exe, '--version'], { platform: 'win32', machine: () => 'arm64' })).toEqual([exe, '--version'])
   })
 })

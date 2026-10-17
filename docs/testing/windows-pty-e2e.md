@@ -402,7 +402,16 @@ Each fix is a separate commit with a test that fails without it. Each was verifi
     settle;
   - a `?` was once lost in fast typing, and was not reproduced in a later probe.
   - PowerShell and Claude get the same bytes intact.
-- **F14 — OpenCode's ARM64 build has no `bun:ffi`**, so its TUI exits (known since Task 20).
+- **F14 — OpenCode's ARM64 build has no `bun:ffi`**, so its TUI exits (known since Task 20). Measured again in Task B4.12
+  (`cli/scripts/windows-pty-e2e/evidence/opencode-arm64.log`), outcome C:
+  - OpenCode 1.19.3, the latest, still stops: `Failed to initialize OpenTUI render library: bun:ffi dlopen() is not
+    available in this build`.
+  - Its x64 build crashes (access violation) under emulation before OpenCode's screen shows.
+    `npm i opencode-ai --cpu=x64` fails in OpenCode's install script and leaves no program. Only the x64 baseline
+    build drew, unpacked by hand.
+  - Harness now refuses the Arm build before a pane opens. `create opencode` answers `ENGINE_LAUNCH_REFUSED` with
+    "OpenCode does not run on Windows on Arm yet: its Arm build stops before its screen opens. Use another engine on
+    this computer."
 - **F15 — Side effect on the VM's Claude Code settings.**
   - Claude's one-time "Try the new fullscreen renderer?" dialog was answered by typed text in the first run, which
     turned the fullscreen renderer on.
@@ -425,7 +434,8 @@ Each fix is a separate commit with a test that fails without it. Each was verifi
 - The clients (desktop, mobile, `hn`) do not yet word `PTY_HOST_UNAVAILABLE` or `ENGINE_LAUNCH_REFUSED`.
 - The host version is still `0.1.0` across protocol builds. Version folders and the `current-pty` pointer are the
   installer's job (B).
-- OpenCode does not run on Windows ARM64 (F14).
+- OpenCode does not run on Windows on Arm (F14; measured with 1.19.3). Harness says so when an OpenCode agent is
+  created, and no pane opens.
 
 ## Clean-up done on the VM
 

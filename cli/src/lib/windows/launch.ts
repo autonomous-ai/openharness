@@ -13,7 +13,7 @@
  * Any other batch file is refused when an argument holds a character cmd.exe reads (`%`, `"`, `&`, `|`, `<`, `>`, `^`,
  * `(`, `)`, `!`, a backtick, or a line break), with an error that names the engine.
  */
-import { accessSync, constants, readFileSync } from 'node:fs'
+import { accessSync, closeSync, constants, openSync, readFileSync, readSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { windowsLaunchCommand } from '../binaryOnPath.js'
 
@@ -32,6 +32,48 @@ export class WindowsBatchLaunchRefused extends WindowsLaunchRefused {
       + 'or through npm, or start it without a first message.')
     this.name = 'WindowsBatchLaunchRefused'
   }
+}
+
+/** An engine whose Windows build cannot run here, refused before any pane opens (outcome of Task B4.12). */
+export class WindowsEngineUnavailable extends WindowsLaunchRefused {
+  constructor(readonly engine: string, detail: string) {
+    super(detail)
+    this.name = 'WindowsEngineUnavailable'
+  }
+}
+
+/** The machine a Windows program is built for, from its PE header (`IMAGE_FILE_HEADER.Machine`); null if it is not one. */
+export function peMachine(file: string, read: (file: string) => Buffer = readHead): 'x64' | 'arm64' | 'x86' | null {
+  let head: Buffer
+  try { head = read(file) } catch { return null }
+  if (head.length < 0x40 || head.toString('latin1', 0, 2) !== 'MZ') return null
+  const header = head.readUInt32LE(0x3c)
+  if (header + 6 > head.length || head.toString('latin1', header, header + 4) !== 'PE\0\0') return null
+  switch (head.readUInt16LE(header + 4)) {
+    case 0x8664: return 'x64'
+    case 0xaa64: return 'arm64'
+    case 0x14c: return 'x86'
+    default: return null
+  }
+}
+
+function readHead(file: string): Buffer {
+  const fd = openSync(file, 'r')
+  try {
+    const bytes = Buffer.alloc(4096)
+    return bytes.subarray(0, readSync(fd, bytes, 0, bytes.length, 0))
+  } finally { closeSync(fd) }
+}
+
+/**
+ * Why [engine] cannot run as [program] on Windows, in words for the person, or null. Measured on the Windows VM
+ * (Task B4.12, cli/scripts/windows-pty-e2e/evidence/opencode-arm64.log): outcome C.
+ */
+export function windowsEngineUnavailable(engine: string, program: string, machine: (file: string) => ReturnType<typeof peMachine> = peMachine): string | null {
+  if (engine === 'opencode' && /\.exe$/i.test(program) && machine(program) === 'arm64') {
+    return 'OpenCode does not run on Windows on Arm yet: its Arm build stops before its screen opens. Use another engine on this computer.'
+  }
+  return null
 }
 
 export type NpmShimTarget = { kind: 'node'; script: string; nodeArgs: string[] } | { kind: 'exe'; program: string }
@@ -77,6 +119,8 @@ export interface WindowsEngineArgvOptions {
   environment?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
   read?: (file: string) => string
+  /** The PE machine of a program (tests). */
+  machine?: (file: string) => ReturnType<typeof peMachine>
 }
 
 /**
@@ -85,21 +129,26 @@ export interface WindowsEngineArgvOptions {
  * batch file refused when an argument holds a character cmd.exe reads. Unchanged off Windows.
  */
 export function windowsEngineArgv(engine: string, argv: readonly string[], options: WindowsEngineArgvOptions = {}): string[] {
-  const { environment = process.env, platform = process.platform, read = (file) => readFileSync(file, 'utf8') } = options
+  const { environment = process.env, platform = process.platform, read = (file) => readFileSync(file, 'utf8'), machine = peMachine } = options
   const [command = '', ...args] = argv
   if (platform !== 'win32') return [...argv]
+  const runs = (resolved: string[]): string[] => {
+    const unavailable = windowsEngineUnavailable(engine, resolved[0]!, machine)
+    if (unavailable) throw new WindowsEngineUnavailable(engine, unavailable)
+    return resolved
+  }
   const program = windowsLaunchCommand(command, environment, platform)
-  if (!BATCH.test(program)) return [program, ...args]
+  if (!BATCH.test(program)) return runs([program, ...args])
   let shim: NpmShimTarget | null = null
   try { shim = exists(program) ? parseNpmCmdShim(read(program), dirname(program)) : null } catch { shim = null }
-  if (shim?.kind === 'exe' && exists(shim.program)) return [shim.program, ...args]
+  if (shim?.kind === 'exe' && exists(shim.program)) return runs([shim.program, ...args])
   if (shim?.kind === 'node' && exists(shim.script)) {
     const beside = join(dirname(program), 'node.exe')
     const node = exists(beside) ? beside : windowsLaunchCommand('node', environment, platform)
-    if (/\.exe$/i.test(node)) return [node, ...shim.nodeArgs, shim.script, ...args]
+    if (/\.exe$/i.test(node)) return runs([node, ...shim.nodeArgs, shim.script, ...args])
   }
   if (args.some((arg) => CMD_METACHARACTERS.test(arg))) throw new WindowsBatchLaunchRefused(engine, program)
-  return [program, ...args]
+  return runs([program, ...args])
 }
 
 /** A create's or fork's answer for [error] when it is a refused Windows launch, a batch file's or an unverified
