@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
-import 'package:cryptography/cryptography.dart';
+import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
@@ -121,6 +122,24 @@ List<int>? _parseSemverCore(String version) {
 }
 
 String _singleQuote(String value) => "'${value.replaceAll("'", "'\\''")}'";
+
+/// The lowercase hex SHA-256 of [bytes], worked out on a background isolate.
+///
+/// A release download is ~45 MB, and the hash used to be awaited on the UI
+/// isolate — but `Sha256().hash` is pure Dart and synchronous underneath
+/// (`DartHashAlgorithmMixin.hash` calls `hashSync`), so every Update froze the
+/// window for the whole of it: 45 MiB took 535 ms in an AOT build and ~560 ms
+/// under `flutter test` (i7-10700K, 2026-10-17). Same algorithm, same digest;
+/// only the isolate changes. A top-level function, so the closure carries
+/// nothing but the bytes, which are copied to the worker once.
+Future<String> sha256HexOffUiIsolate(List<int> bytes) =>
+    Isolate.run(() => _sha256Hex(bytes));
+
+String _sha256Hex(List<int> bytes) => const DartSha256()
+    .hashSync(bytes)
+    .bytes
+    .map((b) => b.toRadixString(16).padLeft(2, '0'))
+    .join();
 
 /// Resolves the path the running build should be swapped at.
 ///
@@ -364,10 +383,7 @@ class DesktopUpdater {
         );
         return null;
       }
-      final hash = await Sha256().hash(bytes);
-      final actualSha = hash.bytes
-          .map((b) => b.toRadixString(16).padLeft(2, '0'))
-          .join();
+      final actualSha = await sha256HexOffUiIsolate(bytes);
       if (actualSha != info.sha256) {
         debugPrint(
           'DesktopUpdater: sha256 mismatch for ${info.version} — discarding download',
