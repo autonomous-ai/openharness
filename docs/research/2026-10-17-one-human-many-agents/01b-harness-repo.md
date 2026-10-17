@@ -21,9 +21,9 @@ Full report: [sources/harness-repo.md](sources/harness-repo.md). Accounts are "c
 | **Open → merge, p50** | 1.5 h | 12 min |
 | **Review** | A reviewer agent on every PR; 66% had findings, 22% three rounds or more | 98% merged by their own author; 0 approvals required; 1 of 354 PRs had a GitHub review; 27–49% record a review in the body |
 | **Rework** | 18% of PRs were follow-ups to review | 4% of PRs fix one merged in the last 72 h (up to ~14% by a looser count); 88% by the same account that broke it |
-| **Dispatch** | The lead: the largest single cost ([04](04-bottlenecks.md)) | Each person: none needed, and none shared |
+| **Dispatch** | The lead: the most hours lost, though review set the output ([14](14-which-gate.md)) | Each person: none needed, and none shared |
 | **Coordination** | A 1,500-comment thread | Git (PRs, status files, commit SHAs) plus a doorbell (`harness send`) |
-| **First hard limit** | The lead, the reviewer, the device | Shared CI runners |
+| **First hard limit** | Review and merge, then the device ([14](14-which-gate.md)) | Shared CI runners |
 
 The trade is visible:
 - **The pilot's gates make each PR slower but catch more before merge.**

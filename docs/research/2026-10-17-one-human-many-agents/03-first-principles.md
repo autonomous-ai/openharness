@@ -67,7 +67,7 @@ Every scaled report outside agrees: Superset says "most of our agents spend more
 | Packets with a recommendation | ~3 min | 30% | ~44 |
 | Packets, plus a standing brief that pre-decides | ~3 min | 10% | ~130 |
 
-The pilot sat near the first row: ~13 builders, with about 91 messages in 34 threads waiting on the owner over three days. **Packet quality (t) and the brief (e) move the limit by an order of magnitude;** more machines don't move it at all. That's why the YOU box and the brief are the product's core, not features.
+The pilot sat near the first row: ~13 builders, with about 91 messages in 34 threads waiting on the owner over three days. That's 34 of ~120 tasks, so e ≈ 0.3. The owner's minutes per decision aren't in the record, because the owner answered in a private chat with the lead. **Packet quality (t) and the brief (e) move the limit by an order of magnitude;** more machines don't move it at all. That's why the YOU box and the brief are the product's core, not features.
 
 ## 5. What other people add, beyond capacity
 The owner can buy machines, subscriptions and agents alone. In the pilot, value that needed another person was:
@@ -106,7 +106,7 @@ An oracle is whatever says a change is right. How cheap it is decides how much o
 | **C. The oracle is reality or a person** | Real users, real rooms, hardware physics, taste, the market | How a voice feels in a noisy room; whether motion looks alive; whether people want it | Bounded by how often reality can be sampled: batch it, route it, schedule it into the hours people are there |
 
 - **A swarm's long-run productivity is how fast it turns class C into class B.** Each person's judgment, captured as a test, a recording or a rule, is a judgment nobody has to make again. This is "taste as data" (§4), and it's the most valuable thing a person does in a swarm.
-- **The pilot was heavy in class C:** voice, motion and setup on real devices. That's why 37 of 89 switches sat merged but off: the oracle that could turn them on was a device and a person. A web back end with good tests is mostly A and B, so it would run at higher autonomy with fewer people.
+- **The pilot was heavy in class C:** voice, motion and setup on real devices. That's why 46 of 97 behaviour switches sat merged but off ([15](15-merged-not-on.md)): the oracle that could turn them on was a device and a person. A web back end with good tests is mostly A and B, so it would run at higher autonomy with fewer people.
 - **For the next million projects,** this is the first question to ask, before choosing how many workers to run: what fraction of the work has a cheap oracle?
 
 ## 7. What the evidence doesn't yet show

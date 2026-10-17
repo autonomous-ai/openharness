@@ -43,7 +43,7 @@ The pilot is an embedded consumer product with voice, motion, a camera and a lig
 | Oct 16 | Peer reviews before own work | The owner counted 76 open PRs while the reviewer was out |
 | Oct 16 | **Disk rules** | The lead's machine ran out of disk; an install failed half-way |
 | Oct 17 | **Motors still until Monday** | An unattended test drifted the arm |
-| Oct 17 | **Switch census:** 89 switches, 37 off; "build %" and "quality %" | The owner asked "why off?" |
+| Oct 17 | **Switch census:** 89 switches and 37 off at first; 110 and 46 by the evening ([15](15-merged-not-on.md)); "build %" and "quality %" | The owner asked "why off?" |
 
 **The pattern:** mechanics came from the agents and from one member person; speed and priority from the owner. Most changes answered an observed failure, and people noticed about half of them.
 
@@ -81,7 +81,7 @@ Best day: 248 merged. About **half the merged work came from member accounts** (
   - One builder missed three tasks by reading only its first page; another missed a decision.
 - **Usage limits.** The owner's account stopped the lead, the reviewer and a builder at the same time.
 - **Rework:** 18% of PRs were review follow-ups.
-- **Switches:** PRs named 96 new ones in four days; the census on the last day found 89, with 37 still off.
+- **Switches:** PRs named 96 new ones in four days; the census on the last day found 89 at first, with 37 off; by the evening it listed 110, with 46 off until a device check ([15](15-merged-not-on.md)).
 - **Unread volume:** 846k changed lines merged on the best day, partly generated or vendored.
 - **Resources:** see [04](04-bottlenecks.md).
 

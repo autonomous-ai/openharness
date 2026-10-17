@@ -5,9 +5,10 @@
 ## 1. What the slice must remove
 | Cost in the pilot | The slice's answer | Accepted when |
 |---|---|---|
-| #1 Builders waiting for the lead | `harness task next` pulls from the backlog | Wait from an empty list to the next task: median under 5 min (was 23) |
-| #10 A thread nobody can read | Native tasks and an inbox per worker | No missed assignments; coordination tokens per hour down 10× (was ~1 M) |
-| #3 One subscription stopping both gatekeepers | A warning when the lead and the reviewer share a subscription | No window where dispatch and review stop together |
+| Review and merge set the output ([14](14-which-gate.md)) | A reviewer pool; `next` offers the oldest PR waiting review to a worker whose own work is all downstream; the review gate's saturation on the health line | Merges an hour rise with the swarm (were flat at ~9) |
+| Builders waiting for the lead | `harness task next` pulls from the backlog | Wait from an empty list to the next task: median under 5 min (was 23) |
+| A thread nobody can read | Native tasks and an inbox per worker | No missed assignments; coordination tokens per hour down 10× (was ~1 M) |
+| One subscription stopping both gatekeepers | A warning when the lead and the reviewer share a subscription | No window where merges stop (they fell to 0–2 an hour) |
 | A lead blocked on the owner | `harness decide` puts a packet in YOU and returns at once | No dispatch stop longer than 15 min |
 | No view of the whole floor | The Swarm tab with the floor | The owner runs a day from the floor without a terminal grid |
 
@@ -47,10 +48,11 @@ proposed ──lead/owner──▶ open ──next──▶ working ──worker
 ## 4. `next`, the pull
 ```
 harness task next   →  1. my working task, if any (resume)
-                       2. open tasks assigned to me, by order
-                       3. unowned open tasks in my areas, by order
-                       4. unowned open tasks my role may take
-                       5. nothing: "list empty" goes to the lead's inbox and the swarm-health line, once
+                       2. if all my own work is waiting downstream: the oldest PR waiting review
+                       3. open tasks assigned to me, by order
+                       4. unowned open tasks in my areas, by order
+                       5. unowned open tasks my role may take
+                       6. nothing: "list empty" goes to the lead's inbox and the swarm-health line, once
 ```
 A worker never waits on a person to start its next task. The lead's job becomes keeping the backlog ordered and sized, not handing out work one message at a time.
 
@@ -95,7 +97,7 @@ No worker reads a thread to find its work. `harness inbox` shows what's unread, 
   - YOU: decisions only in the slice; hands and try-it come later;
   - TASKS: one flat list;
   - PEOPLE: the roster and invitations.
-- **The health line:** merged today, PR wait, waiting PRs, empty-list wait, decisions waiting, and the shared-gatekeeper warning.
+- **The health line:** merges an hour against review capacity, PR wait, waiting PRs, empty-list wait, decisions waiting, and the shared-gatekeeper warning.
 
 ## 9. Recorded from the first day
 Every state change with its time and actor. Every inbox item with delivered and read times. Every decision with asked and answered times. Exported as one file per swarm, so the [08](08-experiments.md) measures need no extra work.

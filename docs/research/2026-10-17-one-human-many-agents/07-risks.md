@@ -24,7 +24,7 @@ In Harness's own repo, 98% of October PRs were merged by their own author, `main
 - **Mitigation:** an independent review on the exact commit, by a different context (ideally a different model), recorded where the merge tool checks it. A person samples merged changes weekly.
 
 ## 2. Architectural entropy
-Thousands of small changes, each locally right, add up to a system nobody designed. In the pilot, behaviour switches that are off unless set (`…=on` environment flags) are the safety valve for merging fast, and they accumulate. PRs named **96 new switches in four days** (Oct 14–17), about 24 a day, where there had been one before (the Oct 17 census found 89, 37 of them off).
+Thousands of small changes, each locally right, add up to a system nobody designed. In the pilot, behaviour switches that are off unless set (`…=on` environment flags) are the safety valve for merging fast, and they accumulate. PRs named **96 new switches in four days** (Oct 14–17), about 24 a day, where there had been one before (by the evening of Oct 17 the census listed 110, 46 of them off until a device check).
 - **Sign:** flag count grows, duplicate helpers appear, test runtime climbs (the pilot found 123 real-clock tests waiting 977 s).
 - **Mitigation:**
   - A flag lifecycle: each flag has a task to turn it on for everyone or remove it.

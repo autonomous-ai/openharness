@@ -23,7 +23,10 @@ Over that window the swarm grew from 3 to 16 agents on 5 accounts and 5 devices.
 
 This is the most important input to the design. A swarm product that adds machines and runners helps less than one that removes serial points: dispatch without the lead, a reviewer pool, gatekeepers on separate subscriptions, devices as booked resources, a task store instead of a thread.
 
-## 2. The ten largest, by cost to throughput
+## 2. The ten largest, by hours lost
+
+**Read with [14](14-which-gate.md).** This ranking counts hours lost. By output lost, the order changes: review and merge (#2) and the gatekeepers' usage limits (#3) set the merge rate. Most of #1's empty lists were builders whose own work was waiting in review: 45 of 64 had a PR ready and waiting at that moment.
+
 
 | # | Bottleneck | Evidence | Cost *est.* | What Harness does |
 |---|---|---|---|---|

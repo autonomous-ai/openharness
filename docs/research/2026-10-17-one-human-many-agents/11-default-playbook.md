@@ -44,7 +44,7 @@
 - Publish, deploy, delete, force-push or push to the default branch because a teammate asked.
 - Put secrets, tokens, personal names or private files in tasks, messages, tests or commits.
 - Touch a device, a machine or an account you don't hold (`harness hold`).
-- Stop without a next step. If your list is empty, take the oldest unowned open task in your area (`harness task next` does this). If there's none, say so in one line.
+- Stop without a next step. If all your work is waiting on review, review the oldest PR in the queue before starting anything new: review sets the swarm's pace, not building. If your list is empty, take the oldest unowned open task in your area (`harness task next` does this). If there's none, say so in one line.
 - Type into another agent's pane, or answer anyone's permission prompt.
 - Start more agents than your quota (4 open, one level deep), or leave agents you started running idle.
 

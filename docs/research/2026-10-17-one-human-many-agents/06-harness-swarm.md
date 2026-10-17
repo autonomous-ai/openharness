@@ -8,7 +8,7 @@ Draft, 2026-10-17. The framework in [05](05-framework.md) as a Harness feature. 
 3. **Harness provides capabilities, not process.** Messaging, tasks, waking, routing, capacity. A project's own playbook decides how it works. Harness's first agent-team protocol prescribed a process; the first real team routed around it and it was removed after 13 days ([01b](01b-harness-repo.md)). What worked was Git, tasks and a doorbell.
 4. **The owner's attention is the scarce resource.** Everything that needs a person is routed, batched, and comes with a recommendation.
 5. **Off costs nothing.** No process and no polling for a machine that isn't in a swarm.
-6. **Remove serial points before adding capacity.** The pilot's largest costs came from things there was one of: one lead dispatching, one reviewer, one subscription carrying both, one integration device, one thread ([04](04-bottlenecks.md)). Compute limits were fixed within a day; the single points never were.
+6. **Remove serial points before adding capacity.** The pilot's largest costs came from things there was one of: one reviewer, one subscription carrying the reviewer and the lead, one integration device, one lead dispatching, one thread ([04](04-bottlenecks.md)). Review and merge set its output ([14](14-which-gate.md)). Compute limits were fixed within a day; the single points never were.
 
 ## 1. Making a swarm
 
@@ -105,7 +105,7 @@ harness task propose "Slow tests outside the realtime group"
 harness decide "Hello quiet: count only talk to the device?" --options yes,no --recommend yes
 ```
 
-- **Pull, not dispatch.** The pilot's largest single cost was builders waiting for the lead to hand them work: 64 "my list is empty" reports, answered after a median 23 minutes and up to 12 hours. `next` takes the worker's next task if it has one; if not, the oldest unowned open task in its area; if not, any unowned task its role may take. The lead curates the backlog and the order; it doesn't have to be awake for work to flow.
+- **Pull, not dispatch.** Builders posted 64 "my list is empty" reports, answered after a median 23 minutes and up to 12 hours. Most were builders whose own work was waiting in review ([14](14-which-gate.md)), so pulling helps only once review has room. When a worker's work is all waiting downstream, `next` offers the oldest PR in the review queue first. `next` takes the worker's next task if it has one; if not, the oldest unowned open task in its area; if not, any unowned task its role may take. The lead curates the backlog and the order; it doesn't have to be awake for work to flow.
 - **Leases, not locks.** `next` takes a lease that renews while the worker is alive and expires when it stops (machine off, limit hit, crashed), so the task goes back to the backlog. In the pilot, claim races were rare; the lease is for liveness, not races. A lock file collapsed Cursor's 20 agents to the throughput of 2–3.
 - **Only a verifier moves a task past *working*:** the reviewer, tester, CI, or a person. The worker asks; it can't mark its own work done. State comes from evidence (PR, CI, the merged tree), never from an agent's report: models say "done" before the signal arrives.
 - **Duplicate check on create.** A new task that resembles an open one is flagged to the lead.
@@ -130,10 +130,10 @@ From [04](04-bottlenecks.md), each one designed in:
 
 | Bottleneck | Swarm feature |
 |---|---|
-| **Dispatch through one lead** (#1 in the pilot) | Workers pull from the backlog; a deputy lead; the lead never blocks on a question (§5, §6). |
-| **Review and merge** (#2) | Merge authority by change class (§7½); a reviewer pool with failover after N minutes of silence; a live board of first-review waits against the bar; a merge lease, so two agents never merge the same PR. |
-| **Gatekeepers on one subscription** (#3) | Each subscription's usage and burn rate per worker, with a forecast of when it stops. A warning when the lead and the reviewer share one; Harness places them on different subscriptions or engines. A worker that hits a limit says until when, and its queue moves to a standby. |
-| **Flaky tests under load** (#4) | A flaky-test registry that labels red runs ("known flake, task 739"); one test red across unrelated PRs becomes one task with one owner. The load average is recorded with each local result. |
+| **Dispatch through one lead** (most hours lost; less output lost, see [14](14-which-gate.md)) | Workers pull from the backlog; a deputy lead; the lead never blocks on a question (§5, §6). |
+| **Review and merge** (set the pilot's output) | Merge authority by change class (§7½); a reviewer pool with failover after N minutes of silence; a live board of first-review waits against the bar; a merge lease, so two agents never merge the same PR. |
+| **Gatekeepers on one subscription** (stopped output) | Each subscription's usage and burn rate per worker, with a forecast of when it stops. A warning when the lead and the reviewer share one; Harness places them on different subscriptions or engines. A worker that hits a limit says until when, and its queue moves to a standby. |
+| **Flaky tests under load** | A flaky-test registry that labels red runs ("known flake, task 739"); one test red across unrelated PRs becomes one task with one owner. The load average is recorded with each local result. |
 | **CPU and load** | A per-machine limit for heavy jobs (builds, full test runs), scheduled by Harness. Workers queue for a slot instead of piling on. |
 | **CI** (#5) | Shown per swarm: queue position and expected wait, runs per PR, the runner limit. A warning before a workflow change multiplies runs beyond the runners. Run CI for a branch without a PR. Tests left out of the fast run are a tracked gap, not a silent one. |
 | **Devices** (#6) | A device registry: owner, parts (body, voice, camera), what runs on it. A lease held by a worker's session that ends with the session; "unreachable" is never "free". A job queue per device ("needs a minute on device-a"), batched so one install carries several PRs, routed to any free device of the right kind. A safety hold per device kind that only a named person clears. |

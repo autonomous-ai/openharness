@@ -42,7 +42,7 @@ The **facts the models can't know** section is new. In the pilot it would have s
 
 **Lead** (one agent per swarm, or per domain):
 - plans tasks with a bar for done, each about an hour of work. The 80% reliability horizon is ~1–3 h, so bigger tasks get split.
-- keeps the backlog ordered, sized and three deep for every area, so workers pull their next task without waiting for it. In the pilot, waiting for the lead to hand out work was the largest single cost ([04](04-bottlenecks.md));
+- keeps the backlog ordered, sized and three deep for every area, so workers pull their next task without waiting for it. In the pilot, builders waiting for the lead lost the most hours ([04](04-bottlenecks.md)), though review set the output ([14](14-which-gate.md));
 - checks that the work decomposes before parallelizing it (16 agents on one kernel bug is one agent's work).
 - integrates: merge order, conflicts, a green integration branch;
 - runs the whole product end to end every evening;
@@ -90,7 +90,7 @@ brief ─▶ lead plans ─▶ task ─▶ worker leases it ─▶ builds in its
          └─▶ release train ─▶ users ─▶ observations ─▶ brief
 ```
 
-**Merge behind a switch, turn it on after it's shown to work.** Merging behind a switch is what keeps a swarm fast. But the pilot found **merged is not on, and on is not working**: 89 switches, 37 still off, and work counted as done that ran nowhere. So:
+**Merge behind a switch, turn it on after it's shown to work.** Merging behind a switch is what keeps a swarm fast. But the pilot found **merged is not on, and on is not working**: 46 of 97 behaviour switches merged but off, waiting for a device check, and counted as done while they ran nowhere ([15](15-merged-not-on.md)). So:
 - **Progress** counts only what is **on and shown working with a person or on a device**.
 - **Every switch is a task** until it's on for everyone or removed.
 
@@ -109,7 +109,7 @@ brief ─▶ lead plans ─▶ task ─▶ worker leases it ─▶ builds in its
 **Paths decide the route.** Security, money, cryptography, public interfaces, safety and anything irreversible always reach a person. Docs and tests can merge on rungs 1–3.
 
 ## 5. Keeping everyone busy, without burning anything
-- **A worker is never idle while the backlog has work.** At turn end it gets its next step; with an empty list it pulls the oldest unowned task in its area; only when there is none does the lead hear. (In the pilot, builders posted 64 "list empty" reports and the lead wrote 81 comments chasing silent ones.)
+- **A worker is never idle while the backlog has work.** At turn end it gets its next step; with all its own work waiting downstream it reviews the oldest PR in the queue; with an empty list it pulls the oldest unowned task in its area; only when there is none does the lead hear. (In the pilot, builders posted 64 "list empty" reports and the lead wrote 81 comments chasing silent ones.)
 - **Assignments and messages are delivered, never polled.** No reading a 1 M-character thread to find your task.
 - **A dead worker's leases expire** (machine offline, subscription limit), and its tasks go back to the backlog.
 - **Pace never overrides safety.** "Test 24/7" and "never idle" in the pilot produced unattended motion and a full disk. Anything physical, irreversible or shared needs its owner's rule, not the swarm's clock.
@@ -150,7 +150,7 @@ See [04](04-bottlenecks.md). Each worker has a budget of compute, disk, model ca
 | **Human minutes per surviving change** | the attention budget | not measured |
 | Idle worker-hours | liveness | found by hand |
 | Cost per surviving change | economics | not measured |
-| Switches on vs off | entropy | 89 total, 37 off |
+| Switches on vs off | entropy | 110 total, 46 off until a check |
 
 ## 10. Safety and trust
 - Least privilege. Each worker runs in its home's permission mode, in its own folder, with scoped credentials and no production secrets in its workspace.

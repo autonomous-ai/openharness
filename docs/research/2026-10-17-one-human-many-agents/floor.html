@@ -99,7 +99,7 @@ const workers = [
   { n:'tests', m:'Mira', s:'work', task:'Three tests flaky under load', lines:['service_mute: privacy worker did not stop in 300 ms.','Moved onto the event, not the clock.','Full one-thread run: 0 flaky in 5.'] },
   { n:'el', m:'Tomas', s:'off', task:'machine offline', lines:['(no desk: Tomas\'s studio machine is offline)','Lease on #1155 expires in 12 min.'] },
   { n:'twelve', m:'Ines', s:'work', task:'Self-test reads the air sensor', lines:['Sensor swap failed the same way.','So not the part: I2C at 400 kHz vs its 100 kHz.','Patching the bus speed.'] },
-  { n:'gardener', m:'Mira', s:'work', task:'Retire switches that are on everywhere', lines:['89 switches, 37 still off.','Removing 6 that are on for every device.','Each removal is its own small PR.'] },
+  { n:'gardener', m:'Mira', s:'work', task:'Retire switches that are on everywhere', lines:['110 switches, 46 off until a device check.','Removing 6 that are on for every device.','Each removal is its own small PR.'] },
 ]
 const tasks = [
   ['ask','Hello quiet counts talk only','lead'], ['ask','Elbow refuses to stand','first'], ['work','Stop words stop it at once','fourth'],
@@ -144,7 +144,7 @@ function render() {
   document.getElementById('you').innerHTML = packets.map((p, i) => `<div class="pkt ${p.done ? 'done' : ''}"><span class="k">${p.k}</span> ${p.t}<div class="rec">${p.rec}</div>${p.done ? '<div class="rec">answered: ' + p.done + '</div>' : '<div class="acts">' + p.acts.map((a, j) => `<button onclick="answer(${i},${j})">${a}</button>`).join('') + '</div>'}</div>`).join('')
   document.getElementById('people').innerHTML = 'Mira (owner) 8 · Tomas 4 · Ines 4<br>✉ Ana invited you to "web-app": join with a worker?'
   const marks = workers.reduce((a, w) => (a[w.s] = (a[w.s] || 0) + 1, a), {})
-  document.getElementById('health').innerHTML = `<span>165 merged/day</span><span>PR wait p50 1.5 h</span><span>24 waiting</span><span>rework 18%</span><span>37 switches off</span><span>CI 7 running · 3 queued</span><span>$212 today</span><span class="need">${open} need you · ${marks.ask || 0} ? desks</span>`
+  document.getElementById('health').innerHTML = `<span>165 merged/day</span><span>PR wait p50 1.5 h</span><span>24 waiting</span><span>rework 18%</span><span>46 merged but off</span><span>CI 7 running · 3 queued</span><span>$212 today</span><span class="need">${open} need you · ${marks.ask || 0} ? desks</span>`
   document.getElementById('panel').classList.toggle('hidden', !panel)
 }
 function pick(i) { if (zoomed >= 0 && zoomed !== i) zoomed = -1; focus = i; render() }
@@ -168,7 +168,7 @@ const chatter = {
   reviewer: ['#1325: approved, merging (switch off).', 'Next: #1327, oldest first.'],
   twelve: ['Bus at 100 kHz: 30 reads, 0 failures.', 'Hand-back written for #1307.'],
   second: ['Hand-back: what changed, how verified, risks.', 'PR #1408 opened.'],
-  gardener: ['Removed SWITCH_HEAD_TAP: on everywhere since Oct 16.', '35 still off.'],
+  gardener: ['Removed SWITCH_HEAD_TAP: on everywhere since Oct 16.', '45 off until a check.'],
   lead: ['third: two red CI rounds on #806, I\'ll pair you with tests.', 'eighth: lease on #941.'],
 }
 setInterval(() => {
