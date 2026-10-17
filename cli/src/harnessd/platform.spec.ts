@@ -584,6 +584,26 @@ describe('PlatformService over schtasks', () => {
     expect(calls).toEqual([WHOAMI_CALL, `schtasks /Create /TN ${NAME} /XML ${service.file} /F`])
   })
 
+  it('finds this data folder\'s task by what schtasks has registered, when its file is gone', () => {
+    const query = `schtasks /Query /TN ${NAME} /XML`
+    // As schtasks prints it into a pipe: UTF-16, so NULs between the characters.
+    const registered = taskSchedulerXml(task).split('').join('\u0000')
+    const found = make({ [query]: ok(registered) })
+    expect(found.service.installed()).toBe(false)
+    expect(found.service.registeredFor(task.logFile)).toBe(true)
+    expect(found.calls).toEqual([query])
+    // Another data folder's task under the same user's name is not this one's.
+    expect(found.service.registeredFor('C:\\other\\harness.log')).toBe(false)
+    // schtasks may print an apostrophe in a path as it is, where Harness wrote &apos;.
+    const quoted = "C:\\Users\\O'Neil & Co\\.harness\\cli\\data\\harness.log"
+    expect(make({ [query]: ok(`<Description>harnessd, the Harness daemon. Its log: C:\\Users\\O'Neil &amp; Co\\.harness\\cli\\data\\harness.log</Description>`) }).service.registeredFor(quoted)).toBe(true)
+    // No task, or schtasks could not be asked: no.
+    expect(make({ [query]: fail(1, 'ERROR: The system cannot find the file specified.') }).service.registeredFor(task.logFile)).toBe(false)
+    expect(make({ [query]: { status: null, stdout: '', stderr: '', error: 'spawn schtasks ENOENT' } }).service.registeredFor(task.logFile)).toBe(false)
+    // launchd and systemd have no registration without the file.
+    expect(new PlatformService('launchd', stubDeps({}).deps).registeredFor(task.logFile)).toBe(false)
+  })
+
   it('cannot render a task when whoami cannot say who this is', () => {
     const gone = make({ whoami: { status: null, stdout: '', stderr: '', error: 'spawn whoami ENOENT' } })
     expect(() => gone.service.render(definition())).toThrow(`Harness could not tell which Windows user this is: whoami /user /fo csv /nh could not be run: spawn whoami ENOENT`)

@@ -549,6 +549,23 @@ export class PlatformService {
       : content.includes(`\nStandardOutput=append:${pathValue(logFile)}\n`)
   }
 
+  /**
+   * Task Scheduler only: the task registered under this user's name runs the daemon whose log is `logFile`, as schtasks
+   * itself has it. For a definition file that is gone while its task is not (an install that stopped half way, or a data
+   * folder emptied by hand): `harness uninstall` must still find that task, and still only this data folder's, by the
+   * same description `ownedBy` reads (B5.9 review, I3). schtasks may print a quote or an apostrophe as it is. Anything
+   * but a clear answer is no.
+   */
+  registeredFor(logFile: string): boolean {
+    if (this.platform !== 'taskscheduler') return false
+    const result = this.deps.run('schtasks', ['/Query', '/TN', this.target, '/XML'])
+    if (result.error || result.status !== 0) return false
+    // Written into a pipe, schtasks's XML may come as UTF-16: the text reads the same without the NULs.
+    const text = result.stdout.replace(/\u0000/g, '')
+    const plain = logFile.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    return [xml(logFile), plain].some((form) => text.includes(`Its log: ${form}</Description>`))
+  }
+
   /** The definition on disk is the one this install would write. */
   current(definition: ServiceDefinition): boolean {
     if (this.os) return true // the package's, not this install's to compare
