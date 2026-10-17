@@ -33,9 +33,18 @@ export function withoutPathEntry(value: string, folder: string, env: NodeJS.Proc
 /**
  * The registry key every script opens: HARNESS_PATH_KEY, unless HARNESS_UNINSTALL_ENV_KEY is set. That one is for
  * tests only, like install.ps1's HARNESS_INSTALL_ENV_KEY: a test that forgets to pass a key of its own still never
- * reaches the person's real Environment key, since the PowerShell it starts inherits the variable.
+ * reaches the person's real Environment key, since the PowerShell it starts inherits the variable. It must name a key
+ * under Software\HarnessTest that exists, or the script fails: a value left set outside a test run (or one naming
+ * Environment) is an error to see, never a quiet "not on your PATH".
  */
-const KEY = String.raw`$key = if ($env:HARNESS_UNINSTALL_ENV_KEY) { $env:HARNESS_UNINSTALL_ENV_KEY } else { $env:HARNESS_PATH_KEY }
+const KEY = String.raw`$guard = $env:HARNESS_UNINSTALL_ENV_KEY
+if ($guard) {
+  if ($guard -notmatch '^Software\\HarnessTest\\[^\\]') { throw "HARNESS_UNINSTALL_ENV_KEY is for tests, and must name a key under Software\HarnessTest (it is '$guard')" }
+  $probe = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($guard)
+  if ($null -eq $probe) { throw 'HARNESS_UNINSTALL_ENV_KEY is for tests; its key does not exist' }
+  $probe.Close()
+  $key = $guard
+} else { $key = $env:HARNESS_PATH_KEY }
 if (-not $key) { throw 'no registry key was given' }
 $name = $env:HARNESS_PATH_NAME`
 
@@ -65,7 +74,8 @@ export const ANNOUNCE_ENVIRONMENT_CHANGE = String.raw`try {
 /**
  * Sets the value (HARNESS_PATH_ACTION=set) or deletes it (delete), only while it is still exactly what was read
  * (HARNESS_PATH_EXPECTED, HARNESS_PATH_KIND): otherwise it prints `changed` and writes nothing, so a program that
- * edited the PATH in between keeps its edit. No action, or another word, writes nothing and fails: an input that went
+ * edited the PATH in between keeps its edit. The comparison is ordinal: -cne compares by culture, and on the VM took
+ * values differing by a soft hyphen, a combining mark or a NUL for equal. No action, or another word, writes nothing and fails: an input that went
  * missing must never read as "delete". It announces the change only for the real Environment key.
  */
 export const WRITE_USER_PATH = String.raw`${KEY}
@@ -77,7 +87,7 @@ $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($key, $true)
 if ($null -eq $k) { [Console]::Out.Write('changed'); exit 0 }
 try {
   $now = $k.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-  if (($now -isnot [string]) -or ($now -cne $env:HARNESS_PATH_EXPECTED) -or ($k.GetValueKind($name).ToString() -cne $env:HARNESS_PATH_KIND)) {
+  if (($now -isnot [string]) -or (-not [string]::Equals($now, $env:HARNESS_PATH_EXPECTED, [StringComparison]::Ordinal)) -or ($k.GetValueKind($name).ToString() -cne $env:HARNESS_PATH_KIND)) {
     [Console]::Out.Write('changed'); exit 0
   }
   if ($action -ceq 'set') { $k.SetValue($name, $env:HARNESS_PATH_VALUE, [Microsoft.Win32.RegistryValueKind]$env:HARNESS_PATH_KIND) }
@@ -97,6 +107,9 @@ export type PathRemoval =
 type Answer = { status: number | null; stdout: string; stderr: string; error?: Error }
 
 const why = (result: Answer): string => result.error?.message ?? (result.stderr.trim() || `exit ${result.status}`)
+
+/** Why a write gave no clear answer: PowerShell's own failure, or exit 0 with words the write never prints. */
+const unclear = (result: Answer): string => (result.status === 0 && !result.error ? 'an answer Harness does not understand' : why(result))
 
 type ReadPath = { ok: true; kind: string; value: string | null } | { ok: false; detail: string }
 
@@ -142,8 +155,9 @@ export function removeUserPathEntry(
   // No clear answer: PowerShell did not start, timed out, was killed, or printed something unexpected after it may
   // have written. The PATH itself says whether the folder is gone; Windows may not have been told.
   const after = readPath(run, where)
-  if (after.ok && (after.value === null || withoutPathEntry(after.value, folder, env) === null)) {
+  if (!after.ok) return { state: 'failed', folder, detail: `could not tell whether your PATH was changed (${unclear(written)})` }
+  if (after.value === null || withoutPathEntry(after.value, folder, env) === null) {
     return { state: 'removed', folder, note: PATH_UNANNOUNCED_NOTE }
   }
-  return { state: 'failed', folder, detail: `could not write your PATH (${why(written)})` }
+  return { state: 'failed', folder, detail: `could not write your PATH (${unclear(written)})` }
 }

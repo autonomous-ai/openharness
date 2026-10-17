@@ -132,14 +132,32 @@ describe('removeUserPathEntry', () => {
       .toEqual({ state: 'failed', folder: bin, detail: 'could not write your PATH (spawnSync powershell.exe ETIMEDOUT)' })
     const unread = runner(answer('String', bin), timedOut, timedOut)
     expect(removeUserPathEntry(bin, unread.run, env))
-      .toEqual({ state: 'failed', folder: bin, detail: 'could not write your PATH (spawnSync powershell.exe ETIMEDOUT)' })
+      .toEqual({ state: 'failed', folder: bin, detail: 'could not tell whether your PATH was changed (spawnSync powershell.exe ETIMEDOUT)' })
     const odd = runner(answer('String', bin), ok('something else'), answer('String', 'C:\\tools'))
     expect(removeUserPathEntry(bin, odd.run, env)).toEqual({ state: 'removed', folder: bin, note: PATH_UNANNOUNCED_NOTE })
+    const oddStill = runner(answer('String', bin), ok('something else'), answer('String', bin))
+    expect(removeUserPathEntry(bin, oddStill.run, env))
+      .toEqual({ state: 'failed', folder: bin, detail: 'could not write your PATH (an answer Harness does not understand)' })
+    const oddUnread = runner(answer('String', bin), ok('something else'), { status: 1, stdout: '', stderr: 'denied' })
+    expect(removeUserPathEntry(bin, oddUnread.run, env))
+      .toEqual({ state: 'failed', folder: bin, detail: 'could not tell whether your PATH was changed (an answer Harness does not understand)' })
   })
 
-  it('lets a test move every read and write off the real key, whatever it is given', () => {
-    expect(READ_USER_PATH).toContain('$env:HARNESS_UNINSTALL_ENV_KEY')
-    expect(WRITE_USER_PATH).toContain('$env:HARNESS_UNINSTALL_ENV_KEY')
+  it('lets a test move every read and write off the real key, only to a test key that exists', () => {
+    for (const script of [READ_USER_PATH, WRITE_USER_PATH]) {
+      expect(script).toContain("$guard = $env:HARNESS_UNINSTALL_ENV_KEY")
+      expect(script).toContain("if ($guard -notmatch '^Software\\\\HarnessTest\\\\[^\\\\]') { throw")
+      expect(script).toContain("throw 'HARNESS_UNINSTALL_ENV_KEY is for tests; its key does not exist'")
+    }
     expect(WRITE_USER_PATH).toMatch(/if \(\$key -ieq 'Environment'\)/)
+    // A guard the script refuses is a failure to see, never "not on your PATH".
+    const refused = { status: 1, stdout: '', stderr: 'HARNESS_UNINSTALL_ENV_KEY is for tests; its key does not exist' }
+    expect(removeUserPathEntry(bin, runner(refused).run, env))
+      .toEqual({ state: 'failed', folder: bin, detail: 'could not read your PATH (HARNESS_UNINSTALL_ENV_KEY is for tests; its key does not exist)' })
+  })
+
+  it('compares the value it read with the one it is about to replace ordinally', () => {
+    expect(WRITE_USER_PATH).toContain('[string]::Equals($now, $env:HARNESS_PATH_EXPECTED, [StringComparison]::Ordinal)')
+    expect(WRITE_USER_PATH).not.toContain('$now -cne')
   })
 })

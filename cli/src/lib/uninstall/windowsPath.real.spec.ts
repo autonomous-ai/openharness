@@ -95,6 +95,20 @@ describe.runIf(process.platform === 'win32')('removeUserPathEntry on this accoun
     expect(get()).toBe(`C:\\tools;${bin};C:\\new|String`)
   })
 
+  it('takes a value that differs only by a soft hyphen as changed, and leaves it', () => {
+    // -cne compares by culture and calls these equal; the write compares ordinally.
+    set(`C:\\tools;${bin}`, 'String')
+    const hyphened = `C:\\to\u00adols;${bin}`
+    const racing = (script: string, inputs: Record<string, string> = {}) => {
+      if (script === WRITE_USER_PATH) set(hyphened, 'String')
+      return runPowershell(script, inputs)
+    }
+    expect(removeUserPathEntry(bin, racing, process.env, 'Path', key)).toEqual({
+      state: 'failed', folder: bin, detail: 'your PATH changed while Harness was removing its folder, so Harness left it as it was',
+    })
+    expect(get()).toBe(`${hyphened}|String`)
+  })
+
   it('writes nothing when it is not told what to do', () => {
     set(bin, 'String')
     const done = runPowershell(WRITE_USER_PATH, { HARNESS_PATH_KEY: key, HARNESS_PATH_NAME: 'Path', HARNESS_PATH_KIND: 'String', HARNESS_PATH_EXPECTED: bin })
@@ -114,6 +128,24 @@ describe.runIf(process.platform === 'win32')('removeUserPathEntry on this accoun
     expect(removeUserPathEntry(bin, runPowershell, process.env, 'Path', key).state).toBe('removed')
     expect(get(guarded)).toBe('C:\\tools|String')
     expect(get()).toBe(`C:\\tools;${bin}|String`)
+  })
+
+  it('fails, and reads nothing, when HARNESS_UNINSTALL_ENV_KEY names a key outside Software\\HarnessTest or one that is not there', () => {
+    // A folder on no PATH: even a guard that let Environment through would find nothing to write.
+    const nowhere = 'C:\\harness-guard-test-not-on-any-path'
+    for (const stray of ['Environment', 'Software\\Other', 'Software\\HarnessTest', 'Software\\HarnessTestX\\1']) {
+      process.env.HARNESS_UNINSTALL_ENV_KEY = stray
+      expect(removeUserPathEntry(nowhere, runPowershell, process.env)).toEqual({
+        state: 'failed', folder: nowhere,
+        detail: `could not read your PATH (HARNESS_UNINSTALL_ENV_KEY is for tests, and must name a key under Software\\HarnessTest (it is '${stray}'))`,
+      })
+    }
+    process.env.HARNESS_UNINSTALL_ENV_KEY = `${key}\\missing`
+    expect(removeUserPathEntry(nowhere, runPowershell, process.env)).toEqual({
+      state: 'failed', folder: nowhere, detail: 'could not read your PATH (HARNESS_UNINSTALL_ENV_KEY is for tests; its key does not exist)',
+    })
+    const write = runPowershell(WRITE_USER_PATH, { HARNESS_PATH_KEY: key, HARNESS_PATH_NAME: 'Path', HARNESS_PATH_ACTION: 'delete', HARNESS_PATH_KIND: 'String', HARNESS_PATH_EXPECTED: 'x' })
+    expect([write.status, write.stderr]).toEqual([1, 'HARNESS_UNINSTALL_ENV_KEY is for tests; its key does not exist'])
   })
 
   it('announces a change in the environment without a note', () => {
