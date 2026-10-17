@@ -5,11 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const REAL_PATH = process.env.PATH
 const REAL_HOME = process.env.HOME
+const REAL_PROFILE = process.env.USERPROFILE
 const REAL_SHELL = process.env.SHELL
 
 afterEach(() => {
   process.env.PATH = REAL_PATH
   if (REAL_HOME) process.env.HOME = REAL_HOME
+  if (REAL_PROFILE === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = REAL_PROFILE
   if (REAL_SHELL) process.env.SHELL = REAL_SHELL; else delete process.env.SHELL
   vi.resetModules()
 })
@@ -31,6 +33,7 @@ describe('opencodeBin', () => {
     // on `spawn opencode ENOENT` while the same command worked fine from a terminal.
     const home = fakeHomeWithOpencode()
     process.env.HOME = home
+    process.env.USERPROFILE = process.env.HOME
     process.env.PATH = '/usr/bin:/bin'
 
     const { opencodeBin } = await import('./engineBin.js')
@@ -44,6 +47,7 @@ describe('opencodeBin', () => {
     writeFileSync(file, '#!/bin/sh\nexit 0\n')
     chmodSync(file, 0o755)
     process.env.HOME = home
+    process.env.USERPROFILE = process.env.HOME
     process.env.PATH = `${dir}:/usr/bin`
 
     const { opencodeBin } = await import('./engineBin.js')
@@ -71,6 +75,7 @@ describe('opencodeBin', () => {
     chmodSync(fakeShell, 0o755);
 
     process.env.HOME = home;
+    process.env.USERPROFILE = process.env.HOME;
     process.env.PATH = '/usr/bin:/bin';
     process.env.SHELL = fakeShell;
     const realNodeEnv = process.env.NODE_ENV;
@@ -85,6 +90,7 @@ describe('opencodeBin', () => {
 
   it('still says `opencode` when nothing is installed, so the error is the usual one', async () => {
     process.env.HOME = mkdtempSync(join(tmpdir(), 'oc-none-'))
+    process.env.USERPROFILE = process.env.HOME
     process.env.PATH = '/nonexistent'
 
     const { opencodeBin } = await import('./engineBin.js')

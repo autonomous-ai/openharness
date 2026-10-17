@@ -58,7 +58,7 @@ const RECORD = process.env.RECORD_DSH_LAUNCH_SHAPES_GOLDEN === '1'
 let root = ''
 const saved: Record<string, string | undefined> = {}
 /** The variables a launch reads of the daemon's own environment, each pinned (or cleared) for the record. */
-const VARS = ['ADAPTER_DATA_DIR', 'DSH_DIR', 'HOME', 'ZDOTDIR', 'SHELL', 'CODEX_HOME', 'CODEX_PATH', 'HARNESS_OS', 'HARNESS_GRID_BIN', 'CLAUDE_PATH',
+const VARS = ['ADAPTER_DATA_DIR', 'DSH_DIR', 'HOME', 'USERPROFILE', 'ZDOTDIR', 'SHELL', 'CODEX_HOME', 'CODEX_PATH', 'HARNESS_OS', 'HARNESS_GRID_BIN', 'CLAUDE_PATH',
   'CURSOR_PATH', 'OPENCODE_PATH', 'PI_PATH', 'HERMES_PATH', 'COMMANDCODE_PATH', 'DEVIN_PATH', 'MUSE_PATH', 'AMP_PATH', 'KILO_PATH', 'GROK_PATH',
   'AGY_PATH', 'COPILOT_PATH', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'] as const
 /** The launch scripts the cases name, by digest: most shapes share theirs with others. */
@@ -169,6 +169,7 @@ beforeAll(async () => {
   process.env.ADAPTER_DATA_DIR = join(root, 'data')
   process.env.DSH_DIR = join(root, 'dsh')
   process.env.HOME = join(root, 'home')
+  process.env.USERPROFILE = join(root, 'home')
   process.env.SHELL = '/bin/zsh'
   process.env.CODEX_HOME = join(root, 'home', '.codex')
   process.env.XDG_CONFIG_HOME = join(root, 'home', '.config')

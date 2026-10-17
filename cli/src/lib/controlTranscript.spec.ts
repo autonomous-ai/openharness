@@ -83,6 +83,7 @@ beforeEach(async () => {
     'PI_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME']) {
     const path = join(root, name); mkdirSync(path, { recursive: true, mode: 0o700 }); vi.stubEnv(name, path)
   }
+  vi.stubEnv('USERPROFILE', join(root, 'HOME'))
   vi.stubEnv('CLAUDE_PROJECTS_DIR', join(root, 'CLAUDE_CONFIG_DIR', 'projects'))
   mkdirSync(join(root, 'CODEX_HOME', 'sessions'))
   writeFileSync(join(root, 'ADAPTER_DATA_DIR', 'engine-homes.json'), '{}')

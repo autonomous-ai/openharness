@@ -46,6 +46,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
       'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME']) {
       const path = join(root, key); mkdirSync(path, { recursive: true, mode: 0o700 }); vi.stubEnv(key, path)
     }
+    vi.stubEnv('USERPROFILE', join(root, 'HOME'))
     vi.stubEnv('CLAUDE_PROJECTS_DIR', join(root, 'CLAUDE_CONFIG_DIR', 'projects'))
     vi.stubEnv('TZ', 'UTC')
     writeFileSync(join(root, 'ADAPTER_DATA_DIR', 'engine-homes.json'), '{}')

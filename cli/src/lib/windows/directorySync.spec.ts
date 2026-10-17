@@ -98,6 +98,7 @@ describe('directory flushes on Windows', () => {
   it.skipIf(REAL_WINDOWS)('a grid launch configuration is published (hook preparation\'s directory confirmations) without one', async () => {
     // The data folder is read as the module loads (config/env.ts).
     vi.stubEnv('HOME', root)
+    vi.stubEnv('USERPROFILE', root)
     vi.resetModules()
     const { publishGridConfigDir } = await import('../publishedGridConfig.js')
     const published = await asWindows(() => publishGridConfigDir('fixture-agent', [{ name: 'models.json', content: '{}\n' }]))

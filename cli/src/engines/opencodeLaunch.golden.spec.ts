@@ -57,6 +57,7 @@ beforeAll(() => {
   for (const name of ['HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'OPENCODE_DATA_DIR', 'OPENCODE_CONFIG_DIR']) {
     const path = join(root, name.toLowerCase()); mkdirSync(path, { recursive: true }); vi.stubEnv(name, path)
   }
+  vi.stubEnv('USERPROFILE', join(root, 'home'))
   vi.stubEnv('TZ', 'UTC'); vi.stubEnv('SHELL', '/bin/sh'); vi.stubEnv('ZDOTDIR', join(root, 'zdotdir'))
   vi.stubEnv('CLAUDE_PATH', '/fixture/bin/claude'); vi.stubEnv('CODEX_PATH', '/fixture/bin/codex')
   vi.stubEnv('HARNESS_OS', ''); vi.stubEnv('HARNESS_GRID_BIN', '')

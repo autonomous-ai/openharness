@@ -16,6 +16,7 @@ beforeEach(() => {
     const value = join(root, key.toLowerCase())
     mkdirSync(value, { recursive: true }); vi.stubEnv(key, value)
   }
+  vi.stubEnv('USERPROFILE', join(root, 'home'))
   for (const key of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'ZDOTDIR', 'CODEX_PATH', 'CLAUDE_CONFIG_DIR', 'HARNESS_OS']) vi.stubEnv(key, '')
   const bin = join(root, 'bin'); mkdirSync(bin)
   writeFileSync(join(bin, 'codex'), '#!/bin/sh\nif [ "$1" = --version ]; then printf "codex-cli 0.160.0\\n"; else printf "%s\\n" "--no-daemon --approve-for-me"; fi\n', { mode: 0o700 })

@@ -19,6 +19,7 @@ describe('harness tui launcher', () => {
     binary = join(home, 'hn')
     writeFileSync(binary, '#!/bin/sh\n', { mode: 0o755 })
     vi.stubEnv('HOME', home)
+    vi.stubEnv('USERPROFILE', home)
     vi.stubEnv('ADAPTER_DATA_DIR', join(home, '.harness', 'cli', 'data'))
     vi.stubEnv('HARNESS_TUI_BIN', binary)
     vi.stubEnv('PORT', '19418')

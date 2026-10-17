@@ -86,7 +86,7 @@ it('keeps the production resolver asynchronous when only the interactive shell c
   const root = roots.at(-1)!, engine = join(root, 'opencode'), shell = join(root, 'shell'), release = join(root, 'allow-shell')
   renameSync(file, engine)
   writeFileSync(shell, `#!${process.execPath}\nconst fs = require('node:fs');\nconst timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); console.log('__HARNESS_ENGINE_PATH__=' + ${JSON.stringify(root)}); } }, 10)\n`, { mode: 0o700 })
-  vi.stubEnv('HOME', root); vi.stubEnv('PATH', join(root, 'empty-path'))
+  vi.stubEnv('HOME', root); vi.stubEnv('USERPROFILE', root); vi.stubEnv('PATH', join(root, 'empty-path'))
   vi.stubEnv('SHELL', shell); vi.stubEnv('NODE_ENV', 'production'); vi.stubEnv('OPENCODE_PATH', '')
   vi.resetModules()
   const { opencodeMajorVersion } = await import('../launchControl.js')

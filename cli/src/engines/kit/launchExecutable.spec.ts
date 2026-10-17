@@ -7,7 +7,7 @@ afterEach(() => { vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, 
 async function fixture() {
   root = mkdtempSync(join(tmpdir(), 'launch-executable-'))
   const bin = join(root, 'bin'); mkdirSync(bin)
-  vi.stubEnv('HOME', root); vi.stubEnv('PATH', bin); vi.stubEnv('OPENCODE_PATH', '')
+  vi.stubEnv('HOME', root); vi.stubEnv('USERPROFILE', root); vi.stubEnv('PATH', bin); vi.stubEnv('OPENCODE_PATH', '')
   vi.resetModules()
   return { bin, ...await import('./launchExecutable.js') }
 }
