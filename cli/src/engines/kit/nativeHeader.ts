@@ -1,7 +1,7 @@
 /** A descriptor's first record, fenced again after all asynchronous ownership reads. */
 import { constants, openSync, closeSync, fstatSync, readSync, type BigIntStats } from 'node:fs'
 import { lstat } from 'node:fs/promises'
-import { posix, win32 } from 'node:path'
+import { posix } from 'node:path'
 import type { SessionStoreContract } from '../facets/sessionStore.js'
 import { identityBytes, IdentityReadUnavailable } from './identityScan.js'
 import { firstRecordMeta, type SessionMeta } from './sessionRecords.js'
@@ -26,10 +26,12 @@ export function firstLine(bytes: Buffer, maxBytes: number): string {
 }
 
 /** The same conclusive record rules serve descriptors, registry loading and hook admission. The session's folder is
- *  absolute as the platform reads a path: a drive path on Windows (as readIdentityFirstRecord's `isAbsolute`). */
+ *  absolute for the platform: a POSIX path off Windows, a drive path on Windows. A UNC share, a rooted path with no
+ *  drive, a POSIX path or a `\\?\` path is no folder an interactive Codex session starts in there: refused, with this
+ *  header's own reason (B4.15). */
 export function nativeSessionMeta(line: string, first: NativeFirstRecord, platform: NodeJS.Platform = hostPlatform()): SessionMeta {
   const meta = firstRecordMeta(line, first)
-  const absolute = (path: string) => (platform === 'win32' ? win32 : posix).isAbsolute(path)
+  const absolute = (path: string) => platform === 'win32' ? /^[A-Za-z]:[\\/]/.test(path) : posix.isAbsolute(path)
   if (!meta || (!meta.isSubagent && (!meta.id || !meta.cwd || !absolute(meta.cwd)))) return nativeUnavailable('the native rollout header is invalid')
   const record: unknown = JSON.parse(line)
   const field = (path: readonly string[]) => path.reduce((at: any, key) => at && typeof at === 'object' && !Array.isArray(at) ? at[key] : undefined, record)

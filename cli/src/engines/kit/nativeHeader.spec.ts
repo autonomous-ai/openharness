@@ -16,7 +16,10 @@ describe('a Codex rollout header', () => {
 
   it('still takes only an absolute folder of the platform it is read on', () => {
     expect(nativeSessionMeta(header('/Users/a/proj'), first, 'darwin').cwd).toBe('/Users/a/proj')
-    for (const [cwd, platform] of [['C:\\work\\proj', 'linux'], ['work\\proj', 'win32'], ['proj', 'darwin']] as const) {
+    expect(nativeSessionMeta(header('d:/work/proj'), first, 'win32').cwd).toBe('d:/work/proj')
+    // On Windows only a drive path: a UNC share, a rooted path with no drive, a POSIX path and a \\?\ path are refused.
+    for (const [cwd, platform] of [['C:\\work\\proj', 'linux'], ['work\\proj', 'win32'], ['proj', 'darwin'],
+      ['\\\\srv\\share\\p', 'win32'], ['\\p', 'win32'], ['/p', 'win32'], ['\\\\?\\C:\\p', 'win32'], ['C:p', 'win32']] as const) {
       expect(() => nativeSessionMeta(header(cwd), first, platform)).toThrow('the native rollout header is invalid')
     }
   })
