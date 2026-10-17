@@ -237,3 +237,23 @@ class ExperimentalFeaturesStore extends ChangeNotifier {
     super.dispose();
   }
 }
+
+/// One experiment's [ExperimentalFeaturesStore.choice] as a listenable: null
+/// until the account's settings are read. It notifies whenever the store does
+/// — every 30 s read among them — so a listener compares with the value it
+/// last saw.
+class ExperimentChoice implements ValueListenable<bool?> {
+  const ExperimentChoice(this.store, this.feature);
+
+  final ExperimentalFeaturesStore store;
+  final ExperimentalFeature feature;
+
+  @override
+  bool? get value => store.choice(feature);
+
+  @override
+  void addListener(VoidCallback listener) => store.addListener(listener);
+
+  @override
+  void removeListener(VoidCallback listener) => store.removeListener(listener);
+}

@@ -194,6 +194,132 @@ void main() {
     });
   });
 
+  // With the account's Agent Messages switch off (the default) every daemon
+  // refuses `shares` with MESSAGES_OFF; asking anyway was a request and an
+  // fsync'd WARN every 60 s and on each reconnect, for everyone.
+  group("the account's Agent Messages switch", () {
+    test('off: nothing is asked, by the poll or anything else, and the state is off', () {
+      fakeAsync((async) {
+        var reads = 0;
+        final front = ValueNotifier(true);
+        final on = ValueNotifier<bool?>(false);
+        final c = SharedTabsController(
+          request: (p) async {
+            reads++;
+            return shares(rosters: [roster()]);
+          },
+          foreground: front,
+          messagesSwitch: on,
+        );
+        final watch = SharedTabsWatch(controller: c, foreground: front)..start();
+        async.flushMicrotasks();
+        expect(c.state, SharedTabsState.off);
+        async.elapse(const Duration(minutes: 5));
+        c.changed(); // a reconnect, or shared_tabs_changed
+        front.value = false;
+        front.value = true;
+        async.elapse(const Duration(minutes: 5));
+        expect(reads, 0);
+        expect(c.state, SharedTabsState.off);
+        watch.dispose();
+      });
+    });
+
+    test('turned on: read at once, then every 60 s; off again: stops, and the shares are gone', () {
+      fakeAsync((async) {
+        var reads = 0;
+        final front = ValueNotifier(true);
+        final on = ValueNotifier<bool?>(false);
+        final c = SharedTabsController(
+          request: (p) async {
+            reads++;
+            return shares(rosters: [roster()]);
+          },
+          foreground: front,
+          messagesSwitch: on,
+        );
+        final watch = SharedTabsWatch(controller: c, foreground: front)..start();
+        on.value = true;
+        async.flushMicrotasks();
+        expect(reads, 1);
+        expect(c.state, SharedTabsState.ready);
+        expect(c.snapshot.tabs, hasLength(1));
+        async.elapse(const Duration(seconds: 60));
+        expect(reads, 2);
+        on.value = false;
+        expect(c.state, SharedTabsState.off);
+        expect(c.snapshot.tabs, isEmpty);
+        async.elapse(const Duration(minutes: 5));
+        expect(reads, 2);
+        watch.dispose();
+      });
+    });
+
+    test('the settings store notifying with nothing changed starts no read', () {
+      fakeAsync((async) {
+        var reads = 0;
+        final front = ValueNotifier(true);
+        final on = _Switch(true);
+        final c = SharedTabsController(
+          request: (p) async {
+            reads++;
+            return shares();
+          },
+          foreground: front,
+          messagesSwitch: on,
+        );
+        final watch = SharedTabsWatch(controller: c, foreground: front)..start();
+        async.flushMicrotasks();
+        expect(reads, 1);
+        for (var i = 0; i < 10; i++) {
+          async.elapse(const Duration(seconds: 5));
+          on.ping(); // the store's 30 s read, the same answer
+        }
+        expect(reads, 1);
+        async.elapse(const Duration(seconds: 10));
+        expect(reads, 2, reason: 'the 60 s poll keeps its own pace');
+        watch.dispose();
+      });
+    });
+
+    test('not read yet, it asks as before; bound again (null), it remembers it was off', () async {
+      var reads = 0;
+      final on = ValueNotifier<bool?>(null);
+      final c = SharedTabsController(
+        request: (p) async {
+          reads++;
+          return shares();
+        },
+        foreground: ValueNotifier(true),
+        messagesSwitch: on,
+      );
+      await c.refresh();
+      expect(reads, 1);
+      expect(c.state, SharedTabsState.ready);
+      on.value = false;
+      on.value = null;
+      on.value = true;
+      await pumpEventQueue();
+      expect(reads, 2, reason: 'off to on through an unread store is a turn-on');
+    });
+
+    test('an answer in flight when it is turned off is dropped', () async {
+      final gate = Completer<Map<String, dynamic>>();
+      final on = ValueNotifier<bool?>(true);
+      final c = SharedTabsController(
+        request: (p) => gate.future,
+        foreground: ValueNotifier(true),
+        messagesSwitch: on,
+      );
+      final read = c.refresh();
+      on.value = false;
+      gate.complete(shares(rosters: [roster()]));
+      await read;
+      expect(c.state, SharedTabsState.off);
+      expect(c.snapshot.tabs, isEmpty);
+    });
+  });
+
   test('dismiss asks the daemon', () async {
     final asked = <Map<String, dynamic>>[];
     final notice = {'id': 'n1', 'sharedTabId': id1, 'kind': 'removed', 'at': '2026-10-16T10:00:00Z'};
@@ -490,4 +616,15 @@ void main() {
     expect(c.snapshot.tabs, isEmpty);
     expect(c.state, SharedTabsState.unknown);
   });
+}
+
+/// A switch that notifies without changing, as the settings store does on
+/// every 30 s read.
+class _Switch extends ChangeNotifier implements ValueListenable<bool?> {
+  _Switch(this.value);
+
+  @override
+  bool? value;
+
+  void ping() => notifyListeners();
 }

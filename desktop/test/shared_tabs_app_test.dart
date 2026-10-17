@@ -8,6 +8,7 @@ import 'package:harness/viewer/viewer_key_store.dart';
 import 'package:harness/viewer/viewer_services.dart';
 import 'package:harness/ws/ws_conn.dart';
 
+import 'support/agent_messages_api.dart' show agentMessagesSwitch;
 import 'swarm_state_test.dart' show createApp, MemoryStore;
 
 const _tab = 'aaaaaaaaaaaaaaaaaaaaaaaa';
@@ -137,6 +138,29 @@ void main() {
     app.onMachineConnectedForTest('m');
     await Future<void>.delayed(Duration.zero);
     expect(daemon.shareReads, before + 1);
+  });
+
+  // The account default. Every daemon refuses `shares` then; asking was a
+  // WARN every 60 s and on each reconnect.
+  test('with the account\'s Agent Messages switch off, a reconnect or '
+      'shared_tabs_changed asks nothing; turned on, shares are read', () async {
+    final daemon = _Daemon('m');
+    final app = _native(daemon);
+    addTearDown(app.dispose);
+    await agentMessagesSwitch(app, false);
+    app.onMachineConnectedForTest('m');
+    await app.handleEventForTest('m', {
+      'type': 'shared_tabs_changed',
+      'payload': {'rev': 2},
+    });
+    await app.sharedTabs.refresh();
+    await Future<void>.delayed(Duration.zero);
+    expect(daemon.shareReads, 0);
+    expect(app.sharedTabs.state, SharedTabsState.off);
+    await agentMessagesSwitch(app, true);
+    await Future<void>.delayed(Duration.zero);
+    expect(daemon.shareReads, 1);
+    expect(app.sharedTabs.state, SharedTabsState.ready);
   });
 
   test('sign-out resets shared tabs', () async {

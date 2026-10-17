@@ -84,6 +84,20 @@ class FakeHub {
               },
             }),
           );
+        } else if (frame['type'] == 'agent_messages') {
+          // How a daemon answers `shares` and the rest with Agent Messages
+          // off, or, from an older CLI, for an action it does not know.
+          final request = frame['payload'] as Map;
+          ws.add(
+            jsonEncode({
+              'type': 'agent_messages_result',
+              'payload': {
+                'requestId': request['requestId'],
+                'error': request['refuseWith'] ?? 'MESSAGES_OFF',
+                'detail': 'refused by the fixture',
+              },
+            }),
+          );
         } else if (frame['type'] == 'agent_close') {
           ws.add(
             jsonEncode({
@@ -197,6 +211,57 @@ void main() {
       expect(text, isNot(contains('fixture-token')));
     },
   );
+
+  // `shares` is asked every 60 s, and with Agent Messages off (the account
+  // default) every answer is MESSAGES_OFF: at WARN that was an immediate,
+  // fsync'd app-log write each minute. Other refusals still warn.
+  test('expected refusals are logged at DEBUG, others still at WARN', () async {
+    final previousLog = appLog;
+    final stream = LogStream();
+    appLog = StreamAppLog(stream);
+    addTearDown(() => appLog = previousLog);
+    hub = await FakeHub.start();
+    conn = WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+      autonomousEnv: 'test',
+      machineId: 'fixture',
+      accessTokenProvider: (_, _) async => 'fixture-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+    );
+    await conn!.connect();
+    for (final code in ['MESSAGES_OFF', 'UNKNOWN_ACTION']) {
+      await expectLater(
+        conn!.request(
+          'agent_messages',
+          payload: {'action': 'shares', 'refuseWith': code},
+        ),
+        throwsA(isA<WsRequestFailure>()),
+      );
+    }
+    await expectLater(
+      conn!.request('agent_create'),
+      throwsA(isA<WsRequestFailure>()),
+    );
+    // The logging listener runs after the caller's own error handler.
+    await Future<void>.delayed(Duration.zero);
+    final failures = {
+      for (final e in stream.entries)
+        if (e.message.endsWith('failed')) '${e.message} ${e.error}': e.level,
+    };
+    expect(failures, {
+      '← agent_messages failed agent_messages_result: MESSAGES_OFF — '
+              'refused by the fixture':
+          AppLogLevel.debug,
+      '← agent_messages failed agent_messages_result: UNKNOWN_ACTION — '
+              'refused by the fixture':
+          AppLogLevel.debug,
+      '← agent_create failed agent_create_result: UNSUPPORTED_ON_REMOTE — '
+              'this machine cannot create agents':
+          AppLogLevel.warn,
+    });
+  });
 
   test(
     'uses SSO subprotocol, environment, readiness, and machine_select',
