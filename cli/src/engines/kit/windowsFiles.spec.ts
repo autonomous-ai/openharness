@@ -1,6 +1,7 @@
 import { constants } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
-import { journalFlushFlags, renameReplacing, unchangedFlushFlags } from './windowsFiles.js'
+import { posix, win32 } from 'node:path'
+import { isRoot, journalFlushFlags, renameReplacing, unchangedFlushFlags } from './windowsFiles.js'
 
 const held = () => Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' })
 
@@ -34,6 +35,34 @@ describe('renameReplacing', () => {
     const check = vi.fn(() => { throw new Error('the preparation expired') })
     await expect(renameReplacing('a', 'b', { platform: 'win32', rename, wait: async () => {}, check })).rejects.toThrow('the preparation expired')
     expect(rename).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('renameReplacing, more', () => {
+  it.each(['EBUSY', 'EACCES'])('retries %s as a held target', async (code) => {
+    let calls = 0
+    const rename = vi.fn(() => { if (++calls < 2) throw Object.assign(new Error(code), { code }) })
+    await renameReplacing('a', 'b', { platform: 'win32', rename, wait: async () => {} })
+    expect(rename).toHaveBeenCalledTimes(2)
+  })
+
+  it('checks after the wait, so a revoke during the wait stops the rename', async () => {
+    let expired = false
+    const rename = vi.fn(() => { throw held() })
+    const check = () => { if (expired) throw new Error('revoked') }
+    await expect(renameReplacing('a', 'b', { platform: 'win32', rename, wait: async () => { expired = true }, check })).rejects.toThrow('revoked')
+    expect(rename).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('isRoot', () => {
+  it('knows a Windows drive or share root, and a POSIX root', () => {
+    expect(isRoot('C:\\', win32)).toBe(true)
+    expect(isRoot('Z:\\', win32)).toBe(true)
+    expect(isRoot('\\\\server\\share\\', win32)).toBe(true)
+    expect(isRoot('C:\\Users', win32)).toBe(false)
+    expect(isRoot('/', posix)).toBe(true)
+    expect(isRoot('/home', posix)).toBe(false)
   })
 })
 

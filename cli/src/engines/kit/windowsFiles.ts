@@ -4,6 +4,12 @@
  * rename onto a file another process has open is EPERM until that process lets go (an engine reading its settings).
  */
 import { constants, renameSync } from 'node:fs'
+import nodePath, { type posix } from 'node:path'
+
+/** [path] is a filesystem root: `/`, a drive's `C:\`, a share's `\\server\share\`. A root is its own parent. */
+export function isRoot(path: string, pathModule: Pick<typeof posix, 'dirname'> = nodePath): boolean {
+  return pathModule.dirname(path) === path
+}
 
 const HELD = new Set(['EPERM', 'EACCES', 'EBUSY'])
 
@@ -24,8 +30,8 @@ export async function renameReplacing(from: string, to: string, deps: RenameDeps
   for (let tried = 1; ; tried++) {
     try { rename(from, to); return } catch (error) {
       if (platform !== 'win32' || tried >= attempts || !HELD.has((error as NodeJS.ErrnoException).code ?? '')) throw error
-      check?.()
       await wait(25 * tried)
+      check?.()
     }
   }
 }
