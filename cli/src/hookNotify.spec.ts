@@ -75,6 +75,7 @@ interface RunHookOpts {
 function runHook(opts: RunHookOpts): Promise<string> {
   return new Promise((resolve, reject) => {
     const env = { ...process.env }
+    delete env.HARNESS_PANE
     // The hook abandons its optional work (including the offline registry fallback) when its 4.5s
     // wall-clock budget runs out. Under a full parallel run that budget is spent on host load, not on
     // the hook, and the assertion below then reads a registry nobody wrote — measured as roughly one
@@ -1896,5 +1897,54 @@ describe('a hook reaches the daemon that made its pane', () => {
   it('looks where the daemons record by default', () => {
     // lib/hookRoutes.ts writes under env.HARNESS_HOOK_ROUTES_DIR, whose default is the product root's.
     expect(readFileSync(HOOK, 'utf8')).toContain("process.env.HARNESS_HOOK_ROUTES_DIR || join(homedir(), '.harness', 'hook-routes')")
+  })
+})
+
+describe('hook notify in a Harness pty host pane (Windows)', () => {
+  const sessionStart = () => {
+    const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/swarm-prompt-hooks.json', import.meta.url), 'utf8'))
+    return { ...recordings.claude.input, hook_event_name: 'SessionStart' }
+  }
+
+  it('names its pane by HARNESS_PANE when there is no TMUX_PANE', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, env: { HARNESS_PANE: 'p3:%1007' }, input: sessionStart() })
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-start'])
+    expect(requests[0].body.runtimeHints).toEqual([{ backend: 'ptyhost', instance: 'p3', paneId: '%1007' }])
+    expect(requests[0].body.tmuxPane).toBeUndefined()
+  })
+
+  it('keeps naming a tmux pane by TMUX_PANE, and ignores a HARNESS_PANE that is not one', async () => {
+    const { port, requests } = await collect()
+    await runHook({ port, tmuxPane: '%42', env: { HARNESS_PANE: 'p3:%1007' }, input: sessionStart() })
+    expect(requests[0].body.runtimeHints).toEqual([{ backend: 'tmux', paneId: '%42' }])
+    const bad = await collect()
+    await runHook({ port: bad.port, env: { HARNESS_PANE: 'p3:1007' }, input: sessionStart() })
+    expect(bad.requests).toEqual([])
+    const empty = await collect()
+    await runHook({ port: empty.port, env: { HARNESS_PANE: '' }, input: sessionStart() })
+    expect(empty.requests).toEqual([])
+  })
+
+  it('reads its credential on Windows, where NTFS reports no owner and no private mode', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'adapter-hook-win-')); tmpDirs.push(dataDir)
+    writeFileSync(join(dataDir, 'hook-credential'), `${'b'.repeat(43)}\n`, { mode: 0o644 })
+    const preload = join(dataDir, 'win32.mjs')
+    writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32' })\n")
+    const { port, requests } = await collect({}, 'b'.repeat(43))
+    await runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${preload}` }, input: sessionStart() })
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-start'])
+  })
+
+  it('refuses a linked credential on Windows', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'adapter-hook-win-')); tmpDirs.push(dataDir)
+    const elsewhere = mkdtempSync(join(tmpdir(), 'adapter-hook-other-')); tmpDirs.push(elsewhere)
+    writeFileSync(join(elsewhere, 'token'), `${'b'.repeat(43)}\n`)
+    symlinkSync(join(elsewhere, 'token'), join(dataDir, 'hook-credential'))
+    const preload = join(dataDir, 'win32.mjs')
+    writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32' })\n")
+    const { port, requests } = await collect({}, 'b'.repeat(43))
+    await runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${preload}` }, input: sessionStart() })
+    expect(requests).toEqual([])
   })
 })

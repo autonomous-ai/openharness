@@ -36,7 +36,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { homedir, uptime } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
@@ -401,6 +401,7 @@ function readHookCredential() {
   let fd = null
   try {
     const dataDir = paths().dataDir
+    if (process.platform === 'win32') return readWindowsHookCredential(dataDir, join(dataDir, 'hook-credential'))
     secureStateDirectory(dataDir, false)
     const uid = typeof process.getuid === 'function' ? process.getuid() : null
     const file = join(dataDir, 'hook-credential')
@@ -415,9 +416,38 @@ function readHookCredential() {
   }
 }
 
+/**
+ * Mirrors secureState.ts's Windows rules (`windowsStateRoots`, `requireInsideWindowsRoots`) and hookAuth.ts on Windows:
+ * NTFS gives Node no owner or mode bits, so the credential must be a plain file (not a link or junction, which lstat
+ * does not call a file), with a real path inside the profile or the data folder this hook was installed with.
+ */
+function readWindowsHookCredential(dataDir, file) {
+  const roots = [homedir(), dataDir].flatMap((root) => { try { return [realpathSync.native(root)] } catch { return [] } })
+  const inside = (target) => roots.some((root) => {
+    const rel = win32.relative(root, target)
+    return rel === '' || (rel !== '..' && !rel.startsWith('..\\') && !win32.isAbsolute(rel))
+  })
+  const link = lstatSync(file)
+  if (!link.isFile() || link.size > 128 || !inside(realpathSync.native(file))) return ''
+  const value = readFileSync(file, 'utf8').trim()
+  return /^[A-Za-z0-9_-]{43}$/.test(value) ? value : ''
+}
+
+/**
+ * A Harness pty host pane names itself `HARNESS_PANE=<instance>:%N` (pty/src/panes.rs), as a tmux pane has
+ * `TMUX_PANE`. It is read only when there is no TMUX_PANE: a tmux pane inside a pty host pane is still the tmux pane.
+ */
+function ptyHostPane(environment = process.env) {
+  if (environment.TMUX_PANE) return null
+  const match = /^(p\d{1,4}):(%\d{1,9})$/.exec(environment.HARNESS_PANE || '')
+  return match ? { instance: match[1], paneId: match[2] } : null
+}
+const PTY_PANE = ptyHostPane()
+
 function terminalHookFields(tmuxPane) {
   const runtimeHints = []
   if (tmuxPane) runtimeHints.push({ backend: 'tmux', paneId: tmuxPane })
+  else if (PTY_PANE) runtimeHints.push({ backend: 'ptyhost', instance: PTY_PANE.instance, paneId: PTY_PANE.paneId })
   return { tmuxPane, runtimeHints, callerPid: process.ppid }
 }
 
@@ -1620,7 +1650,9 @@ async function main() {
 
   const event = input.hook_event_name || input.hookEventName
   const tmuxPane = process.env.TMUX_PANE
-  if (!tmuxPane) return
+  // A pane is required: tmux's, or a pty host's (Windows). Routing to another daemon and the offline registry
+  // fallback read tmux; from a pty host pane they find nothing and the daemon's own scan reconciles.
+  if (!tmuxPane && !PTY_PANE) return
   // Before anything reads the data folder or posts: which daemon this pane is (routeToPaneOwner).
   if (await routeToPaneOwner(tmuxPane)) port = argPort()
   const mutationFields = { engine, ...terminalHookFields(tmuxPane) }
