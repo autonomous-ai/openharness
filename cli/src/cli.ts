@@ -45,6 +45,7 @@ import { processIfDownDeps, releaseAbandonedLock, runningDaemon, startIfDown } f
 import { isInstalledCopy } from './lib/installedCopy.js'
 import { askRuntimePort, readCgroup, takeRuntimeBack } from './lib/osUnitTakeover.js'
 import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
+import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { AUTH_DIR, AuthSessionError, AuthSessionManager, clearAuthSession, knownSsoClientId, newSignInEpoch, readAuthSession, ssoClientIdFor, writeAuthSession, type AuthSession } from './lib/authSession.js'
@@ -1424,7 +1425,8 @@ function printInfoBlock(opts: {
   // until that page went: nothing opened it.
   console.log(row('local api', `http://127.0.0.1:${daemonPort()}`))
   console.log(rule)
-  console.log('  running in background · stop with: harness stop')
+  const footer = infoBlockFooter(opts.status)
+  if (footer) console.log(footer)
   console.log('')
 }
 
