@@ -33,8 +33,11 @@ export function createNativeLaunchPreparer({ installations, inspect = inspectNat
     const downloadHold = (): NativeLaunchResult => authority.current()
       ? { ...held(`Downloading ${engineName(engine)}. The harness starts once it is downloaded.`), installing: true } : stale()
     if (!authority.current()) return stale()
-    const before = downloading(engine).catch(() => false)
-    const downloaded = async () => await before || await downloading(engine).catch(() => false)
+    // Read before the look starts, not beside it: a look that began first could see the half-written engine while
+    // the marker was there and answer after the marker had gone, and the read beside it, still opening the file,
+    // saw no marker either (PR CI, #1394). No marker costs one failed open; a live one, its `ps`.
+    const before = await downloading(engine).catch(() => false)
+    const downloaded = async () => before || await downloading(engine).catch(() => false)
     const found = await inspect(engine, source)
     if (!authority.current()) return stale()
     if (found.ok || found.refusal) {
