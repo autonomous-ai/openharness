@@ -105,5 +105,49 @@ describe('ownedBinEntries', () => {
     symlinkSync(join(root, 'runtime', 'tmux-3.7c', 'bin', 'tmux'), tmux)
     expect(ownedBinEntries(bin, join(root, 'cli', 'cli.js'), root)).toEqual([tmux])
   })
+
+  it('knows the hn that shipped from #365 to #500, and refuses it with other bytes', () => {
+    const home = mkdtempSync(join(tmpdir(), 'owned-bin-'))
+    dirs.push(home)
+    const bin = join(home, '.local', 'bin')
+    const cliJs = join(home, '.harness', 'cli', 'cli.js')
+    mkdirSync(bin, { recursive: true })
+    writeFileSync(join(bin, 'hn'), `#!/bin/sh\nexec '/n/node' '${cliJs}' tui "$@"\n`)
+    expect(ownedBinEntries(bin, cliJs, join(home, '.harness'))).toEqual([join(bin, 'hn')])
+    writeFileSync(join(bin, 'hn'), `#!/bin/sh\nexec '/n/node' '/mine/cli.js' tui "$@"\n`)
+    expect(ownedBinEntries(bin, cliJs, join(home, '.harness'))).toEqual([])
+    writeFileSync(join(bin, 'hn'), `#!/bin/sh\nexec '/n/node' '${cliJs}' tui "$@"\necho x\n`)
+    expect(ownedBinEntries(bin, cliJs, join(home, '.harness'))).toEqual([])
+  })
+
+  it('leaves a symlinked harness or hn alone', () => {
+    const home = mkdtempSync(join(tmpdir(), 'owned-bin-'))
+    dirs.push(home)
+    const bin = join(home, '.local', 'bin')
+    const cliJs = join(home, '.harness', 'cli', 'cli.js')
+    mkdirSync(bin, { recursive: true })
+    writeFileSync(join(home, 'real'), `#!/bin/sh\nexec '/n/node' '${cliJs}' "$@"\n`)
+    symlinkSync(join(home, 'real'), join(bin, 'harness'))
+    symlinkSync(join(home, 'real'), join(bin, 'hn'))
+    expect(ownedBinEntries(bin, cliJs, join(home, '.harness'))).toEqual([])
+  })
 })
 
+describe('isOwnHarnessLauncher shapes', () => {
+  it('takes bare node, and paths with spaces or quotes in either style', () => {
+    expect(isOwnHarnessLauncher(`#!/bin/sh\nexec node "${cli}" "$@"\n`, cli)).toBe(true)
+    const odd = "/Users/o'b rien/.harness/cli/cli.js"
+    expect(isOwnHarnessLauncher(`#!/bin/sh\nexec '/a b/node' '/Users/o'\\''b rien/.harness/cli/cli.js' "$@"\n`, odd)).toBe(true)
+    expect(isOwnHarnessLauncher(`#!/bin/sh\nexec "/a b/n'ode" "${odd}" "$@"\n`, odd)).toBe(true)
+    const spaced = '/Users/a b/.harness/cli/cli.js'
+    expect(isOwnHarnessLauncher(`#!/bin/sh\nexec "/a b/node" "${spaced}" "$@"\n`, spaced)).toBe(true)
+    expect(isOwnHarnessLauncher(`#!/bin/sh\nexec '/a b/node' '${spaced}' "$@"\n`, spaced)).toBe(true)
+  })
+
+  it('refuses an expanding node word and CRLF files', () => {
+    expect(isOwnHarnessLauncher(`#!/bin/sh\nexec "$(cmd)" "${cli}" "$@"\n`, cli)).toBe(false)
+    expect(isOwnHarnessLauncher('#!/bin/sh\nexec "`cmd`" "' + cli + '" "$@"\n', cli)).toBe(false)
+    expect(isOwnHarnessLauncher(`#!/bin/sh\nexec "\\x" "${cli}" "$@"\n`, cli)).toBe(false)
+    expect(isOwnHarnessLauncher(`#!/bin/sh\r\nexec '/n/node' '${cli}' "$@"\r\n`, cli)).toBe(false)
+  })
+})
