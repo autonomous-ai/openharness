@@ -225,6 +225,7 @@ export function isManagedHookCommand(value: unknown, platform: NodeJS.Platform =
 /** One hook of an engine's settings: a line, or on Windows exec form (Claude Code's `command` + `args`). */
 export function isManagedHook(hook: { type?: unknown; command?: unknown; args?: unknown } | null | undefined, platform: NodeJS.Platform = process.platform): boolean {
   if (!hook || typeof hook !== 'object') return false
+  // On win32 any `args` key (even `[]`) sends a hook to the exec-form check, so a line-form hook with a stray `args` is not ours: the safe direction.
   if (hook.args === undefined || platform !== 'win32') return isManagedHookCommand(hook.command, platform)
   return typeof hook.command === 'string' && Array.isArray(hook.args) && hook.args.length <= 64
     && hook.args.every((arg) => typeof arg === 'string' && !/[\0\r\n]/.test(arg))

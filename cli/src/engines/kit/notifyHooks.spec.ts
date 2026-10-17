@@ -143,10 +143,17 @@ describe('the hooks Harness writes on Windows', () => {
     "& 'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir 'C:\\d' $(calc)",
     "& 'C:\\node.exe' 'C:\\other\\script.mjs' --port 1 --data-dir 'C:\\d'",
     "& 'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir 'C:\\d' --engine \u2018x\u2019",
-    "'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir 'C:\\d'",
   ])('does not claim a look-alike user hook on Windows: %s', (line) => {
     expect(isManagedHookCommand(line, 'win32')).toBe(false)
     expect(isManagedHook({ type: 'command', command: line }, 'win32')).toBe(false)
+  })
+
+  it('reads a single-quoted line as the POSIX line it is, with the host\'s own path rules', () => {
+    // This is what Harness's bash runner writes on Windows (Claude Code via Git Bash). On a Windows host the POSIX
+    // branch uses the win32 path module, so `C:\\…` is absolute there and the line is ours; elsewhere it is not.
+    const line = "'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir 'C:\\d'"
+    expect(isManagedHookCommand(line, 'win32')).toBe(process.platform === 'win32')
+    expect(isManagedHook({ type: 'command', command: line }, 'win32')).toBe(process.platform === 'win32')
   })
 
   it('does not claim a look-alike exec form', () => {
