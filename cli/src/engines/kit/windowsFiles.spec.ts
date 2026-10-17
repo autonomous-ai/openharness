@@ -1,6 +1,7 @@
 import { constants } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { posix, win32 } from 'node:path'
+import { HookPreparationHeld } from './nativeHookFiles.js'
 import { isRoot, journalFlushFlags, renameReplacing, unchangedFlushFlags } from './windowsFiles.js'
 
 const held = () => Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' })
@@ -15,9 +16,11 @@ describe('renameReplacing', () => {
     expect(waits).toEqual([25, 50])
   })
 
-  it('gives up after its attempts with the last error', async () => {
-    const rename = vi.fn(() => { throw held() })
-    await expect(renameReplacing('a', 'b', { platform: 'win32', rename, wait: async () => {}, attempts: 4 })).rejects.toMatchObject({ code: 'EPERM' })
+  it.each(['EPERM', 'EBUSY', 'EACCES'])('gives up after its attempts on %s with a reason a person can read, not the errno', async (code) => {
+    const rename = vi.fn(() => { throw Object.assign(new Error(`${code}: rename`), { code }) })
+    const refusal = renameReplacing('a', 'b', { platform: 'win32', rename, wait: async () => {}, attempts: 4 })
+    await expect(refusal).rejects.toThrow(HookPreparationHeld)
+    await expect(refusal).rejects.toThrow('Hook preparation is waiting: the settings file is open in another program')
     expect(rename).toHaveBeenCalledTimes(4)
   })
 

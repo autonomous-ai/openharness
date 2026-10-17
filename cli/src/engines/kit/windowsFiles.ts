@@ -5,6 +5,8 @@
  */
 import { constants, renameSync } from 'node:fs'
 import nodePath, { sep, type posix } from 'node:path'
+// A cycle with nativeHookFiles.ts, which is safe: the class is used only when a rename gives up, never at load.
+import { HookPreparationHeld } from './nativeHookFiles.js'
 
 /**
  * Windows is decided by the path module, not process.platform: specs that fake win32 on a POSIX host keep the POSIX
@@ -29,13 +31,15 @@ export interface RenameDeps {
   check?: () => void
 }
 
-/** [from] renamed over [to]. On Windows a held target is tried again, 25 ms more each time (0.7 s for 8 tries). */
+/** [from] renamed over [to]. On Windows a held target is tried again, 25 ms more each time (0.7 s for 8 tries), then held. */
 export async function renameReplacing(from: string, to: string, deps: RenameDeps = {}): Promise<void> {
   const { platform = hostPlatform(), rename = renameSync, attempts = 8, check } = deps
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)))
   for (let tried = 1; ; tried++) {
     try { rename(from, to); return } catch (error) {
-      if (platform !== 'win32' || tried >= attempts || !HELD.has((error as NodeJS.ErrnoException).code ?? '')) throw error
+      if (platform !== 'win32' || !HELD.has((error as NodeJS.ErrnoException).code ?? '')) throw error
+      // Still held after every try: a reason a person can read, not the raw errno (B4.10 review).
+      if (tried >= attempts) throw new HookPreparationHeld('the settings file is open in another program')
       await wait(25 * tried)
       check?.()
     }
