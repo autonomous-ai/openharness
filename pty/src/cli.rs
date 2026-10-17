@@ -17,7 +17,7 @@ const USAGE: &str =
     "usage: harness-pty serve --home <dir> [--history-limit N] | version | ps --json";
 
 /// The version this host reports. A release stamps it with the CLI's version (`HARNESS_PTY_VERSION`, set by
-/// windows-pty.yml's release mode) instead of editing Cargo.toml, which would put the lockfile out of date for
+/// windows.yml's release mode) instead of editing Cargo.toml, which would put the lockfile out of date for
 /// `--locked`.
 pub const VERSION: &str = release_version(option_env!("HARNESS_PTY_VERSION"));
 

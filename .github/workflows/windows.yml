@@ -1,6 +1,6 @@
-name: Windows PTY
+name: Windows
 
-# On demand (Actions -> Windows PTY -> Run workflow): build, test and contract-test the host, and run the Windows
+# On demand (Actions -> Windows -> Run workflow): build, test and contract-test the host, and run the Windows
 # CLI specs, on each architecture's own runner.
 # Called by release.yml with `release: true`: build the release payload only, stamped with the CLI's version
 # (HARNESS_PTY_VERSION, pty/src/cli.rs), for the staging publish. A release is not a test suite
@@ -27,7 +27,7 @@ on:
 
 concurrency:
   # When called, github.workflow is the caller's name, so a release run never cancels an on-demand one, nor the reverse.
-  group: windows-pty-${{ github.workflow }}-${{ github.ref }}
+  group: windows-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -122,7 +122,7 @@ jobs:
           # installPs1.spec.ts runs the real harness.exe; a --target build is not where it looks by default.
           HARNESS_EXE_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness.exe
         run: |
-          $paths = @('src/lib/ptyHostBackend.contract.spec.ts', 'src/lib/ptyHost', 'src/lib/windows', 'src/scripts/installPs1.spec.ts')
+          $paths = @('src/lib/ptyHostBackend.contract.spec.ts', 'src/lib/ptyHost', 'src/lib/windows', 'src/scripts/installPs1.spec.ts', 'src/lib/uninstall', 'src/engines/kit/hookRemoval.spec.ts', 'src/engines/kit/windowsHooks.spec.ts', 'src/engines/kit/windowsFiles.spec.ts', 'src/engines/kit/nativePaths.windows.spec.ts', 'src/engines/kit/launchExecutable.windows.spec.ts', 'src/engines/removeHooks.spec.ts', 'src/engines/windowsHomes.spec.ts')
           npx vitest run @paths --maxWorkers=1
       - name: Collect the payload
         shell: pwsh

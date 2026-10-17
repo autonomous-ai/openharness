@@ -87,7 +87,7 @@ jobs:
           .github/workflows/ci.yml .github/workflows/cli-e2e.yml .github/workflows/ci-health.yml
           .github/workflows/website-checks.yml .github/workflows/experience-checks.yml
           .github/workflows/authoring-browser-checks.yml .github/workflows/home-assistant-checks.yml
-          .github/workflows/desktop-logging-checks.yml .github/workflows/windows-pty.yml
+          .github/workflows/desktop-logging-checks.yml .github/workflows/windows.yml
       - id: select
         env:
           CI_SCOPE: ${{ inputs.scope || 'full' }}

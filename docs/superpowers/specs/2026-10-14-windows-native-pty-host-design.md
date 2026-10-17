@@ -344,7 +344,7 @@ PR.
 
 ### Windows workflow
 
-A new manual workflow, "Windows PTY" (`.github/workflows/windows-pty.yml`), runs `cargo test` and
+A new manual workflow, "Windows" (`.github/workflows/windows.yml`, formerly windows-pty.yml), runs `cargo test` and
 then the contract suite and the Windows specs against a real host, with the pinned ConPTY payload
 beside it. It is not part of PR CI. Each target builds on its own runner: `x86_64-pc-windows-msvc`
 on `windows-latest`, `aarch64-pc-windows-msvc` on `windows-11-arm`.

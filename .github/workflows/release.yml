@@ -306,13 +306,13 @@ jobs:
           cmp cli/scripts/install.sh "$RUNNER_TEMP/cli-install.sh"
 
   # The Windows half (sub-project B). The pty payload (harness-pty.exe, harness-launch.exe, harness.exe and ConPTY)
-  # is built on each architecture's own runner by the Windows PTY workflow. The payload, this release's `cli` entry
+  # is built on each architecture's own runner by the Windows workflow. The payload, this release's `cli` entry
   # and install.ps1 then go to STAGING, never to production: production is the owner's step after the staging E2E
   # (docs/testing/windows-cli-e2e.md). These jobs are separate from `publish`, so a Windows failure never holds up
   # the macOS and Linux fleet's release. Like `publish`, they fail loudly, and the next version fixes them.
   pty-build:
     needs: version
-    uses: ./.github/workflows/windows-pty.yml
+    uses: ./.github/workflows/windows.yml
     with:
       version: ${{ needs.version.outputs.version }}
       release: true

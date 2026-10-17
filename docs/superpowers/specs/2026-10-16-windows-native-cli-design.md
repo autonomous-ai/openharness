@@ -33,7 +33,7 @@ signing and the desktop's release.
 - **Runtimes:** `cli/src/lib/runtimeInstall.ts` `platformKey()` knows darwin and linux only, and unpacks
   `.tar.gz` with a hardcoded `/usr/bin/tar`, then makes the folder read-only (`chmod 555`).
 - **Release:** `release.yml` (`v*_cli`) publishes `cli.js` and `notify.mjs` only. Nothing publishes a
-  Windows Node runtime or `harness-pty`. `windows-pty.yml` builds and tests the host, on demand.
+  Windows Node runtime or `harness-pty`. `windows.yml` builds and tests the host, on demand.
 - **harnessd:** `harnessd/platform.ts` knows launchd and systemd; `platformFor('win32')` is null. Stop,
   supervision and the update handoff use POSIX signals; `reexec.ts` replaces the master with exec.
 - **Self-update:** `lib/selfUpdate.ts` swaps files inside `~/.harness/cli` by rename, with `.prev` hard
@@ -134,7 +134,7 @@ on Windows. Errors are printed as a sentence a first-time user understands, with
 ### Publishing
 
 - **pty payload**: the CLI release builds `harness-pty.exe`, `harness-launch.exe` and the bundled
-  ConPTY files for win32-x64 and win32-arm64 (the `windows-pty.yml` jobs, called from the release), and
+  ConPTY files for win32-x64 and win32-arm64 (the `windows.yml` jobs, called from the release), and
   publishes them under `harness/pty/<version>/` with a manifest `harness/pty/metadata.json`
   (`{version, url, sha256, size}` per platform). The crate version becomes the CLI's release version.
 - **Node for Windows**: a workflow downloads the official `node-v<ver>-win-<arch>.zip`, checks it
@@ -274,7 +274,7 @@ On Windows a process cannot delete the `node.exe` it runs from: the last step ru
   resolution, Task Scheduler XML, pipe auth and proof, stop and `TerminateProcess` decisions, master
   replacement, self-update and rollback on version folders, hook quoting per runner, uninstall steps.
   harnessd keeps 100% per-file coverage.
-- **Rust**: `harness-launch` unit tests; Windows behavior in `windows-pty.yml`.
+- **Rust**: `harness-launch` unit tests; Windows behavior in `windows.yml`.
 - **Windows workflow**: `windows-pty.yml` becomes `windows.yml` and gains an install job on
   windows-latest and windows-11-arm: `install.ps1 -Manifest <local manifest of this build>`, then check
   `harness version`, the task, a running daemon, a PowerShell agent, then `harness uninstall --yes` and

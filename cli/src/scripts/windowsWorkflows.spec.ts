@@ -7,7 +7,7 @@ const read = (name: string) => readFileSync(join(workflows, name), 'utf8')
 
 describe('the Windows release workflows', () => {
   it('lets the release call the Windows PTY workflow for a payload stamped with the CLI version', () => {
-    const pty = read('windows-pty.yml')
+    const pty = read('windows.yml')
     expect(pty).toMatch(/workflow_call:\n\s+inputs:\n\s+version:/)
     expect(pty).toContain('HARNESS_PTY_VERSION: ${{ inputs.version }}')
     expect(pty).toContain("if: ${{ !inputs.release }}")
@@ -19,7 +19,7 @@ describe('the Windows release workflows', () => {
 
   it('publishes the Windows bits to staging only, beside a CLI publish that never waits for them', () => {
     const release = read('release.yml')
-    expect(release).toContain('uses: ./.github/workflows/windows-pty.yml')
+    expect(release).toContain('uses: ./.github/workflows/windows.yml')
     expect(release).toContain('staging_prefix=')
     expect(release).toContain('METADATA_PATH="$STAGING_PREFIX/pty/metadata.json"')
     expect(release).toMatch(/windows-staging:\n\s+needs: \[version, preflight, publish, pty-build\]/)
