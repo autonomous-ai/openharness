@@ -25,7 +25,7 @@ This is the most important input to the design. A swarm product that adds machin
 
 ## 2. The ten largest, by hours lost
 
-**Read with [14](14-which-gate.md).** This ranking counts hours lost. By output lost, the order changes: review and merge (#2 and #3 here) set the merge rate. Most of #1's empty lists were builders whose own work was waiting in review: 46 of 68 had a PR ready and waiting at that moment.
+**Read with [14](14-which-gate.md).** This ranking counts hours lost. By output lost, the order changes: review and merge (#2) and the gatekeepers' usage limits (#3) set the merge rate. Most of #1's empty lists were builders whose own work was waiting in review: 45 of 64 had a PR ready and waiting at that moment.
 
 
 | # | Bottleneck | Evidence | Cost *est.* | What Harness does |

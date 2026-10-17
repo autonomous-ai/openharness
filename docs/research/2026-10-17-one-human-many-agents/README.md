@@ -78,7 +78,7 @@ The owner's own limit is set by how decisions arrive. Questions in a thread cap 
 **What are the bottlenecks: compute, disk, API, subscriptions, VMs, CI?**
 - **All of them showed up, in both shapes,** but **compute was the cheap part:** runner queues and full disks were fixed within a day once named.
 - **The expensive limits were single points:** one reviewer, one subscription carrying both gatekeepers, one integration device, one lead dispatching, one thread.
-- **Review and merge set the output** ([14](14-which-gate.md)). Builders' idle time looked like the largest cost, but 46 of 68 "my list is empty" reports came from builders whose own work was waiting in review. Widen review first; faster dispatch only lengthens the queue.
+- **Review and merge set the output** ([14](14-which-gate.md)). Builders' idle time looked like the largest cost, but 45 of 64 "my list is empty" reports came from builders whose own work was waiting in review. Widen review first; faster dispatch only lengthens the queue.
 - **Each gate has a builder count where it saturates:** CI near runners ÷ 0.58, one reviewer near 15, one lead near 15. Past that, more builders only lengthen the queue ([04](04-bottlenecks.md)).
 
 **How do frontier labs and other teams build, and what do their people do?**

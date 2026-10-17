@@ -67,7 +67,7 @@ Every scaled report outside agrees: Superset says "most of our agents spend more
 | Packets with a recommendation | ~3 min | 30% | ~44 |
 | Packets, plus a standing brief that pre-decides | ~3 min | 10% | ~130 |
 
-The pilot sat near the first row: ~13 builders, with about 91 messages in 34 threads waiting on the owner over three days. **Packet quality (t) and the brief (e) move the limit by an order of magnitude;** more machines don't move it at all. That's why the YOU box and the brief are the product's core, not features.
+The pilot sat near the first row: ~13 builders, with about 91 messages in 34 threads waiting on the owner over three days. That's 34 of ~120 tasks, so e ≈ 0.3. The owner's minutes per decision aren't in the record, because the owner answered in a private chat with the lead. **Packet quality (t) and the brief (e) move the limit by an order of magnitude;** more machines don't move it at all. That's why the YOU box and the brief are the product's core, not features.
 
 ## 5. What other people add, beyond capacity
 The owner can buy machines, subscriptions and agents alone. In the pilot, value that needed another person was:

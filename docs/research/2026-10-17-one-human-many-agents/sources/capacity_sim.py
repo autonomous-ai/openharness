@@ -2,7 +2,7 @@
 
 Builders build, CI checks, a reviewer pool reviews, the lead dispatches and checks hand-backs on the
 integration device. Gatekeepers stop during usage-limit windows. Shows shape, not precise numbers.
-Usage: python3 capacity_sim.py  (prints the scenario tables used in 14-capacity-model.md)
+Usage: python3 capacity_sim.py  (prints the tables behind 14-which-gate.md §4)
 """
 import heapq, math, random, statistics as st
 

@@ -12,7 +12,9 @@ for r in prs:
     for k in ('created', 'ready', 'first_rv', 'merged'): r[k] = T(r[k])
 com = json.load(open(D + 'issues/705_comments.json'))
 rx = re.compile(r"(list (is|was|now) (empty|done)|nothing (else )?(in my list|I can do|left (in my list|that I can)|to do)|my list (now )?waits on others|list waits on others|please (fill|give me)|ready for (the |my )?next task|ready for more|I can take more|room for (a new|more|another) task|need(s)? (a|the) next task|list has nothing|out of tasks|no task(s)? (left|I can)|what('s| is) next for me|waiting for (a|my) (next )?task|my queue is empty)", re.I)
-empty = [(T(c['created_at']), c['body']) for c in com if rx.search(c.get('body') or '')]
+# builders' reports only: the lead ("First", the first builder) dispatches and isn't counted, as in 04
+empty = [(T(c['created_at']), c['body']) for c in com if rx.search(c.get('body') or '')
+         and not re.match(r"\W*first\b", (c.get('body') or '').strip(), re.I)]
 start = dt.datetime(2026, 10, 14, 10, tzinfo=dt.timezone.utc)
 end = max(r['merged'] for r in prs if r['merged'])
 
@@ -84,3 +86,25 @@ t = start
 while t + 6 * H <= end:
     print(f"  {t:%m-%d %H}h  agents {builders(t, t+6*H):2d}  merges/h {merges(t, t+6*H)/6:5.1f}  waiting first review (mid) {at(t+3*H)[0]:2d}  ready unmerged {at(t+3*H)[1]:2d}")
     t += 6 * H
+
+# 6. The reporter's own work at the moment of each empty-list report (branches are named <builder>/<topic>)
+names = {'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'nine', 'ten', 'eleven',
+         'twelve', 'thirteen', 'el', 'tests', 'reviewer'} | {w.strip().lower() for w in open(D + 'builder_names.txt') if w.strip()}
+own = []
+for t, b in empty:
+    m = re.match(r"\W*([A-Za-z]+)", b.strip()); n = m.group(1).lower() if m else ''
+    if n not in names: continue
+    mine = [r for r in prs if (r['head'] or '').lower().startswith(n + '/') and r['created'] <= t
+            and (r['merged'] is None or r['merged'] > t) and r['state'] != 'CLOSED']
+    own.append(sum(1 for r in mine if r['ready'] and r['ready'] <= t))
+print(f"\n6. Reports by a known builder: {len(own)}; with ≥1 own PR ready and waiting review or merge: "
+      f"{sum(1 for x in own if x >= 1)}; with ≥2: {sum(1 for x in own if x >= 2)}")
+
+# 7. Hourly merges at full size, against the size of the queue
+rows, t = [], dt.datetime(2026, 10, 16, 0, tzinfo=dt.timezone.utc)
+while t + H <= end:
+    rows.append((merges(t, t + H), at(t + H / 2)[1])); t += H
+m = [x for x, _ in rows]
+print(f"\n7. From 16 Oct 00:00 UTC, merges an hour: p50 {st.median(m)}, p90 {q(m, .9)}, max {max(m)} ({len(m)} hours); "
+      f"hours with ≥20 ready-unmerged: p50 {st.median([x for x, r in rows if r >= 20])}, "
+      f"with fewer: p50 {st.median([x for x, r in rows if r < 20])}")

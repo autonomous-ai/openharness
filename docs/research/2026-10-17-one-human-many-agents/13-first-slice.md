@@ -48,11 +48,11 @@ proposed ──lead/owner──▶ open ──next──▶ working ──worker
 ## 4. `next`, the pull
 ```
 harness task next   →  1. my working task, if any (resume)
-                       2. open tasks assigned to me, by order
-                       3. unowned open tasks in my areas, by order
-                       4. unowned open tasks my role may take
-                       (if all my own work is waiting downstream: the oldest PR waiting review comes first)
-                       5. nothing: "list empty" goes to the lead's inbox and the swarm-health line, once
+                       2. if all my own work is waiting downstream: the oldest PR waiting review
+                       3. open tasks assigned to me, by order
+                       4. unowned open tasks in my areas, by order
+                       5. unowned open tasks my role may take
+                       6. nothing: "list empty" goes to the lead's inbox and the swarm-health line, once
 ```
 A worker never waits on a person to start its next task. The lead's job becomes keeping the backlog ordered and sized, not handing out work one message at a time.
 

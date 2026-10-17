@@ -12,7 +12,7 @@ In order of expected gain. The record shows review and merge set the pilot's out
 | # | Change | Measure (baseline from [04](04-bottlenecks.md), [14](14-which-gate.md)) | Keep it if |
 |---|---|---|---|
 | E3 | **A reviewer pool:** a second reviewer on another engine, oldest PR first, and builders whose work is waiting review the oldest PR before opening a new one | Merges an hour at full size: ~9, flat whatever the queue; ready → first review p90 107 min | merges an hour rise with the swarm; first-review p90 under 30 min |
-| E2 | **Gatekeepers on different subscriptions:** move the reviewer to another account than the lead | Merges an hour during a usage limit: 0–2.4, against ~12 before; 4 windows of 1.2–2.4 h in 3.2 days | no window where merges stop |
+| E2 | **Gatekeepers on different subscriptions:** move the reviewer to another account than the lead | Merges an hour during a usage limit: 0–2.4, against ~12 before; 3 windows measured (04 counts 4), each 1.3–2.4 h | no window where merges stop |
 | E4 | **The lead never waits on the owner:** a question becomes a written packet, and the lead carries on | One 3.4 h stop: empty-list reports 3 → 14, merges 9.6 → 6.1 an hour | no dispatch stop longer than 15 min |
 | E1 | **Pull rule:** a builder with nothing in hand takes the oldest unowned open task in its area without waiting for the lead | Wait from "list empty" to the next task: median 23 min, mean 107, max 738 | median under 5 min, with no rise in work waiting for review |
 
