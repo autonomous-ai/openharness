@@ -50,5 +50,6 @@ describe.skipIf(process.platform !== 'win32')('the scheduled task on Windows', (
         "$s = New-Object -ComObject Schedule.Service; $s.Connect(); $s.GetFolder('\\').DeleteFolder('HarnessTest', 0)"], { encoding: 'utf8' })
       rmSync(dir, { recursive: true, force: true })
     }
-  })
+    // A ceiling, not a timing check: four schtasks calls and a PowerShell COM clean-up take ~5 s on windows-latest.
+  }, 60_000)
 })
