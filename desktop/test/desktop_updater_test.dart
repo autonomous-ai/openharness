@@ -748,7 +748,9 @@ void main() {
     // (535 ms for 45 MiB in an AOT build), so nothing else — no frame, no
     // timer — ran until it finished. The same hash timed here, twice so the
     // second is warm, is the yardstick: the longest the event loop goes
-    // unserved while the download is verified must be well under it.
+    // unserved while the download is verified must be well under it (the old
+    // code measured 0.96 of it; this one ~0.13; 0.75 leaves room for a busy CI
+    // runner slowing both alike).
     test('downloadAndStage verifies a large download off the UI isolate', () async {
       final bytes = Uint8List(24 << 20);
       for (var i = 0; i < bytes.length; i += 4093) {
@@ -785,7 +787,7 @@ void main() {
       expect(File(staged!.bundlePath).lengthSync(), bytes.length);
       expect(
         longest,
-        lessThan(onThisIsolate * 0.5),
+        lessThan(onThisIsolate * 0.75),
         reason:
             'the UI isolate went ${longest.inMilliseconds} ms without an event; '
             'hashing these bytes here takes ${onThisIsolate.inMilliseconds} ms',
