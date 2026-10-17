@@ -984,6 +984,29 @@ class AppNotifier extends ChangeNotifier {
   final Map<TerminalPane, Timer> _paneRetryTimers = {};
   final Map<TerminalPane, int> _paneRetryAttempts = {};
 
+  /// What the pane sweep saw of each session when it last ran (see [_retryPhase]).
+  final Map<TerminalSession, int> _sweptRetryPhases = {};
+  int _paneSweeps = 0;
+
+  /// How many times the pane sweep ([_schedulePaneRetries]) has run.
+  @visibleForTesting
+  int get paneSweepsForTest => _paneSweeps;
+
+  /// When [_forceRedial] last redialled each machine, on [redialClock].
+  final Map<String, Duration> _lastForcedRedial = {};
+
+  /// Machines whose socket a forced redial has taken down and not yet brought back, with when it began.
+  final Map<String, Duration> _forcedRedials = {};
+
+  /// Monotonic, so a wall-clock change can neither hold redials off nor let a burst through.
+  @visibleForTesting
+  Duration Function() redialClock = _monotonicClock();
+
+  static Duration Function() _monotonicClock() {
+    final watch = Stopwatch()..start();
+    return () => watch.elapsed;
+  }
+
   /// One reload per machine, owed after this computer's daemon was too slow to answer its list while
   /// still on the socket — the error strip says "retrying", and this is the retry.
   final Map<String, Timer> _slowReloadTimers = {};
@@ -1523,7 +1546,7 @@ class AppNotifier extends ChangeNotifier {
     orElse: () => swarms.first,
   );
   List<TerminalPane> get panes => activeSwarm.panes;
-  Iterable<TerminalPane> get allPanes => swarms.expand((s) => s.panes).toSet();
+  Set<TerminalPane> get allPanes => swarms.expand((s) => s.panes).toSet();
   String get activeSwarmId => activeSwarm.id;
 
   /// Agent Messages (docs/design/2026-10-10-agent-messages.md): whether the
@@ -3849,10 +3872,12 @@ class AppNotifier extends ChangeNotifier {
   void _measureConnection(
     String key,
     ConnectionStatus status,
-    ProductFlow flow,
-  ) {
+    ProductFlow flow, {
+    bool suppressStart = false,
+  }) {
     if (status == ConnectionStatus.connecting ||
         status == ConnectionStatus.reconnecting) {
+      if (suppressStart) return;
       if (_measurementConnections.length < 64) {
         _measurementConnections.putIfAbsent(
           key,
@@ -3935,6 +3960,9 @@ class AppNotifier extends ChangeNotifier {
     Duration(seconds: 16),
     Duration(seconds: 30),
   ];
+
+  /// At most one forced redial of a machine's link in this long (see [_forceRedial]).
+  static const forcedRedialWindow = Duration(seconds: 30);
   static const localDaemonReconnectDelay = Duration(seconds: 1);
   static const agentSyncInterval = Duration(seconds: 60);
 
@@ -7470,6 +7498,20 @@ class AppNotifier extends ChangeNotifier {
         machine.needsLink &&
         (nextStatus == ConnectionStatus.connecting ||
             nextStatus == ConnectionStatus.reconnecting);
+    // A forced redial ([_forceRedial]) takes a connected link down and dials it again: neither a
+    // person nor the app connecting, so it opens no observation of its own, and one already open
+    // still ends with it. Each one used to start a new remote_connect; the day #1378 made dead panes
+    // redial, prod's remote_connect went from 1,683 to 2,834 started and 106 to 205 unknown
+    // (2026-10-15 → 16). Bounded by the window, so a redial that never reported back cannot hide a
+    // later ordinary connection.
+    final forcedSince = _forcedRedials[machineId];
+    final forced =
+        forcedSince != null && redialClock() - forcedSince < forcedRedialWindow;
+    if (!forced ||
+        nextStatus == ConnectionStatus.connected ||
+        (nextStatus == ConnectionStatus.disconnected && !settling)) {
+      _forcedRedials.remove(machineId);
+    }
     productConnections.status(
       machineId,
       connecting:
@@ -7477,7 +7519,7 @@ class AppNotifier extends ChangeNotifier {
           nextStatus == ConnectionStatus.connecting ||
           nextStatus == ConnectionStatus.reconnecting,
       connected: nextStatus == ConnectionStatus.connected,
-      suppressStart: viewer == null && retryingLink,
+      suppressStart: (viewer == null && retryingLink) || forced,
       failure: machine.needsLink
           ? ProductHealthMeasure.connectErrorUnlinked
           : machine.nodeOnline == false
@@ -7496,6 +7538,7 @@ class AppNotifier extends ChangeNotifier {
         machine.isLocalMachine
             ? ProductFlow.workspaceConnect
             : ProductFlow.remoteConnect,
+        suppressStart: forced,
       );
     }
     machine.connectionStatus = settling
@@ -10327,6 +10370,29 @@ class AppNotifier extends ChangeNotifier {
     return connection;
   }
 
+  /// Force a fresh dial of [machineId]'s link ([WsConn.forceReconnect]), at most once per
+  /// [forcedRedialWindow].
+  ///
+  /// A redial knocks every pane on the machine over, and since #1378 each dead pane's first reattach
+  /// may ask for one when its open goes unanswered: N dead panes on one machine redialled it N times,
+  /// each knocking the others' fresh opens over again. A stalled open inside the window resends on
+  /// the link the first redial brought back instead ([TerminalSession]'s recovery polls for that).
+  Future<void> _forceRedial(String machineId, [WsConn? connection]) {
+    final now = redialClock();
+    final last = _lastForcedRedial[machineId];
+    if (last != null && now - last < forcedRedialWindow) {
+      return Future<void>.value();
+    }
+    final link = connection ?? _conn(machineId);
+    if (link.isClosed) return Future<void>.value();
+    _lastForcedRedial[machineId] = now;
+    _forcedRedials[machineId] = now;
+    return link.forceReconnect();
+  }
+
+  @visibleForTesting
+  Future<void> forceRedialForTest(String machineId) => _forceRedial(machineId);
+
   // Every machine — this computer's own, or a relayed one — now speaks the same plaintext local wire
   // protocol to the CLI (which terminates E2EE itself for relayed machines; see remoteRelay.ts in the
   // harness CLI repo). There is no per-machine branching left here at all.
@@ -10533,7 +10599,7 @@ class AppNotifier extends ChangeNotifier {
           // process restarting, which drops its in-memory session state but doesn't touch the socket.
           // Nothing else would ever notice, so force a fresh dial rather than let every future retry
           // keep timing out against the same dead session.
-          unawaited(connection.forceReconnect());
+          unawaited(_forceRedial(machine.machine.machineId, connection));
         }
       } else {
         machine.agentsLoadError = 'Could not load harnesses: $error';
@@ -16420,7 +16486,7 @@ class AppNotifier extends ChangeNotifier {
       send: (type, payload) =>
           _conn(pane.machineId).sendTerminalFrame(type, payload),
       sendBinary: (frame) => _sendTerminalBinary(pane.machineId, frame),
-      onOpenStalled: () => _conn(pane.machineId).forceReconnect(),
+      onOpenStalled: () => _forceRedial(pane.machineId),
       // A `terminal_open` can round-trip app → local CLI → (for a relayed
       // machine) the E2EE relay → the remote peer → tmux → back, possibly
       // negotiating P2P on the way, so a cold open legitimately takes several
@@ -18024,7 +18090,33 @@ class AppNotifier extends ChangeNotifier {
   /// Every session change repaints, and may mean a pane's stream just died.
   void _onSessionChanged() {
     notifyListeners();
-    _schedulePaneRetries();
+    // Sessions notify on every change — a title, a resize, a watcher band — and the sweep answers
+    // differently only when a stream dies, closes here or comes back live. Run on each notification,
+    // it rebuilt the pane set for every dead pane and every timer: with 40 panes, 10 of them dead, a
+    // notification cost ~53 µs, and ~3 µs with the set built once and this check (2026-10-17, VM test).
+    if (_retryPhasesChanged()) _schedulePaneRetries();
+  }
+
+  /// What the sweep reads of a session's status: dead (error/closed, here or not), live (which resets
+  /// the pane's backoff), or neither.
+  static int _retryPhase(TerminalSession session) => switch (session.status) {
+    TerminalSessionStatus.error ||
+    TerminalSessionStatus.closed => session.closedHere ? 1 : 2,
+    TerminalSessionStatus.controlling => 3,
+    _ => 0,
+  };
+
+  bool _retryPhasesChanged() {
+    for (final swarm in swarms) {
+      for (final pane in swarm.panes) {
+        final session = pane.session;
+        if (session != null &&
+            _sweptRetryPhases[session] != _retryPhase(session)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /// Keep one timer for each pane whose stream died while its machine stays reachable, in whichever
@@ -18032,8 +18124,14 @@ class AppNotifier extends ChangeNotifier {
   /// is cheap; an app with every terminal live holds no timer.
   void _schedulePaneRetries() {
     if (_disposed) return;
-    for (final pane in allPanes) {
-      if (!_paneRetryWanted(pane)) {
+    _paneSweeps++;
+    final all = allPanes;
+    _sweptRetryPhases.clear();
+    for (final pane in all) {
+      if (pane.session case final session?) {
+        _sweptRetryPhases[session] = _retryPhase(session);
+      }
+      if (!_paneRetryWanted(pane, all: all)) {
         _paneRetryTimers.remove(pane)?.cancel();
         if (pane.session?.status == TerminalSessionStatus.controlling) {
           _paneRetryAttempts.remove(pane);
@@ -18060,17 +18158,17 @@ class AppNotifier extends ChangeNotifier {
       });
     }
     _paneRetryTimers.removeWhere((pane, timer) {
-      if (allPanes.contains(pane)) return false;
+      if (all.contains(pane)) return false;
       timer.cancel();
       return true;
     });
-    _paneRetryAttempts.removeWhere((pane, _) => !allPanes.contains(pane));
+    _paneRetryAttempts.removeWhere((pane, _) => !all.contains(pane));
   }
 
   /// A dead stream on a machine that is up and can open terminals politely. Offline machines are left
   /// to the offline/online path, and `takenOver` panes to a person. A dead watcher is included, unlike
   /// in [_paneNeedsAttach]: the reopen is polite, so it comes back as a watcher and takes nothing.
-  bool _paneRetryWanted(TerminalPane pane) {
+  bool _paneRetryWanted(TerminalPane pane, {Set<TerminalPane>? all}) {
     final session = pane.session;
     final machine = machineStates[pane.machineId];
     return pane.agentId != null &&
@@ -18081,7 +18179,7 @@ class AppNotifier extends ChangeNotifier {
         machine != null &&
         machine.nodeOnline == true &&
         machine.terminalNoTakeoverAvailable &&
-        _canAttachPane(pane);
+        _canAttachPane(pane, all: all);
   }
 
   void _cancelPaneRetries() {
@@ -18166,8 +18264,9 @@ class AppNotifier extends ChangeNotifier {
     await Future.wait(reopening);
   }
 
-  bool _canAttachPane(TerminalPane pane) {
-    if (_disposed || !allPanes.contains(pane)) return false;
+  /// [all] is [allPanes] when the caller already holds it.
+  bool _canAttachPane(TerminalPane pane, {Set<TerminalPane>? all}) {
+    if (_disposed || !(all ?? allPanes).contains(pane)) return false;
     final machine = machineStates[pane.machineId];
     return machine != null &&
         machine.nodeOnline != false &&
