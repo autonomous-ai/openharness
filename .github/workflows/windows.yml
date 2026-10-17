@@ -136,3 +136,141 @@ jobs:
           name: ${{ matrix.artifact }}
           path: payload/
           if-no-files-found: error
+
+  # install.ps1 as a person runs it, from a manifest of this build's own files: the runtime, the CLI and the pty payload
+  # (spec section 6). Then what the install promises, and `harness uninstall --yes` leaving nothing.
+  install:
+    needs: windows-pty
+    # Not when release.yml calls this workflow for the release payload (B1.13): a release is not a test suite.
+    if: ${{ !inputs.release }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x64
+            artifact: harness-pty-windows-x64
+          - runner: windows-11-arm
+            arch: arm64
+            artifact: harness-pty-windows-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      NODE_VERSION: v22.23.2
+      CLI_VERSION: 0.0.0-dev.ci${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/pty-payload
+      - name: Bundle the CLI
+        working-directory: cli
+        shell: pwsh
+        env:
+          ADAPTER_VERSION: ${{ env.CLI_VERSION }}
+        run: |
+          npm ci
+          npm run bundle
+      - name: Fetch Node for Windows, checked against nodejs.org's SHASUMS256.txt
+        shell: pwsh
+        run: |
+          $zip = "node-$env:NODE_VERSION-win-${{ matrix.arch }}.zip"
+          Invoke-WebRequest "https://nodejs.org/dist/$env:NODE_VERSION/$zip" -OutFile "$env:RUNNER_TEMP\$zip"
+          $sums = (Invoke-WebRequest "https://nodejs.org/dist/$env:NODE_VERSION/SHASUMS256.txt").Content
+          $want = (($sums -split "`n") | Where-Object { $_ -match " $([regex]::Escape($zip))$" }) -replace ' .*', ''
+          $got = (Get-FileHash "$env:RUNNER_TEMP\$zip" -Algorithm SHA256).Hash.ToLower()
+          if (-not $want -or $got -ne $want) { throw "$zip is $got, SHASUMS256.txt says '$want'" }
+      - name: Write the install manifest of this build (B1's windows-install-manifest.mjs)
+        shell: pwsh
+        run: |
+          # Built on demand without HARNESS_PTY_VERSION, the host reports the crate's version (pty/src/cli.rs), so its
+          # version folder is named the same.
+          $ptyVersion = (Select-String -Path pty/Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          node cli/scripts/windows-install-manifest.mjs --out "$env:RUNNER_TEMP\manifest" --cli-dir cli/dist `
+            --pty-dir "$env:RUNNER_TEMP\pty-payload" --node-zip "$env:RUNNER_TEMP\node-$env:NODE_VERSION-win-${{ matrix.arch }}.zip" `
+            --version $env:CLI_VERSION --pty-version $ptyVersion
+          if ($LASTEXITCODE -ne 0) { throw "windows-install-manifest.mjs exited $LASTEXITCODE" }
+          Get-Content "$env:RUNNER_TEMP\manifest\install-manifest.json"
+      # OpenCode before Harness, as a person who has it installs Harness: in a prefix of its own, pinned, nothing global.
+      # OPENCODE_PATH names it for the daemon (lib/engineBin.ts), for the steps after this one and, at user level, for
+      # the scheduled task. On Arm it is there to be refused (B4.12 outcome C); on x64 a failed install is not a failure.
+      - name: Install OpenCode into a prefix
+        continue-on-error: ${{ matrix.arch == 'x64' }}
+        shell: pwsh
+        run: |
+          $prefix = "$env:RUNNER_TEMP\opencode"
+          npm install --global --prefix $prefix opencode-ai@1.19.3
+          if ($LASTEXITCODE -ne 0) { throw "npm install opencode-ai exited $LASTEXITCODE" }
+          $shim = Join-Path $prefix 'opencode.cmd'
+          & $shim --version
+          "OPENCODE_PATH=$shim" >> $env:GITHUB_ENV
+          [Environment]::SetEnvironmentVariable('OPENCODE_PATH', $shim, 'User')
+      - name: Install with Windows PowerShell, as a person does
+        shell: pwsh
+        run: |
+          # No update may replace the build under test (a local build never auto-updates, and this pins it anyway).
+          [Environment]::SetEnvironmentVariable('ADAPTER_UPDATE_DISABLE', 'true', 'User')
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File cli\scripts\install.ps1 -Manifest "$env:RUNNER_TEMP\manifest\install-manifest.json"
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE" }
+          # install.ps1 does not start the daemon itself: a task Task Scheduler would not run leaves it down, and the
+          # installer says to run `harness start` (B1.8). That starts it directly through harness-launch.exe (B3.15).
+          $harness = "$env:USERPROFILE\.harness\bin\harness.exe"
+          # The status row (check-install.ps1 says why): the block's last line says "running in background" even when stopped.
+          if (((& $harness status) -join "`n") -notmatch '(?m)^\s*status\s+\S+\s+running') {
+            Write-Host '::notice::the scheduled task did not start harnessd here; starting it with harness start'
+            & $harness start
+            if ($LASTEXITCODE -ne 0) { throw "harness start exited $LASTEXITCODE" }
+          }
+      - name: Check the install
+        shell: pwsh
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File cli\scripts\windows-ci\check-install.ps1 -Version $env:CLI_VERSION
+      # Whether OpenCode's plugin binds a pane's conversation (B4.15 handed this to x64). Not gating: nothing signs in, so
+      # OpenCode may have no model provider here. The step prints bound, or not bound and why.
+      - name: OpenCode binds its session through the installed daemon (x64, not gating)
+        if: matrix.arch == 'x64'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\oc-proj" | Out-Null
+          node cli/scripts/windows-ci/opencode.mjs bind "$env:RUNNER_TEMP\oc-proj"
+          if ($LASTEXITCODE -ne 0) { Write-Host '::warning::OpenCode did not bind its session on this runner (the reason is in the log above)'; exit 1 }
+      - name: OpenCode is refused on Windows on Arm before a pane opens (B4.12)
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\oc-proj" | Out-Null
+          node cli/scripts/windows-ci/opencode.mjs refused "$env:RUNNER_TEMP\oc-proj"
+          if ($LASTEXITCODE -ne 0) { throw 'OpenCode was not refused the way B4.12 says' }
+      - name: Keep the logs before the uninstall removes them
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\logs" | Out-Null
+          foreach ($dir in @("$env:USERPROFILE\.harness\cli\data", "$env:USERPROFILE\.harness\pty\logs", "$env:USERPROFILE\.local\share\opencode\log")) {
+            if (Test-Path $dir) { Get-ChildItem $dir -Filter '*.log' -Recurse | Copy-Item -Destination "$env:RUNNER_TEMP\logs" }
+          }
+      - name: Uninstall, and check nothing is left
+        shell: pwsh
+        run: |
+          # The engine files Harness wrote outside ~\.harness as the daemon started (its plugins, and Copilot's hook file),
+          # which the uninstall removes whole; check-uninstall.ps1 reads Claude Code's and Codex's settings itself.
+          $hookFiles = @('.config\opencode\plugin\launcher-register.js', '.config\opencode\plugins\launcher-register\tui.js',
+            '.config\kilo\plugin\launcher-register.js', '.pi\agent\extensions\launcher-register.ts', '.config\amp\plugins\launcher-register.ts',
+            '.copilot\hooks\harness.json') | ForEach-Object { Join-Path $env:USERPROFILE $_ }
+          foreach ($file in $hookFiles) { Write-Host "$(if (Test-Path $file) { 'written' } else { 'absent ' }) $file" }
+          Set-Location $env:USERPROFILE
+          & "$env:USERPROFILE\.harness\bin\harness.exe" uninstall --yes
+          if ($LASTEXITCODE -ne 0) { throw "harness uninstall exited $LASTEXITCODE" }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE\cli\scripts\windows-ci\check-uninstall.ps1" -HookFiles ($hookFiles -join ',')
+          if ($LASTEXITCODE -ne 0) { throw 'harness uninstall left something behind' }
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: install-logs-${{ matrix.arch }}
+          path: ${{ runner.temp }}/logs
