@@ -6,6 +6,7 @@ import * as nodePath from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const files = new Set<string>()
+const dangling = new Set<string>()
 const missing = (path: string, code = 'ENOENT') => Object.assign(new Error(`${code}: ${path}`), { code })
 vi.mock('node:path', async (original) => {
   const real = await original<typeof nodePath>()
@@ -17,11 +18,10 @@ vi.mock('node:fs', async (original) => ({
     if (!files.has(String(path).toLowerCase())) throw missing(String(path))
     return { isFile: () => true }
   }),
-  // The route as lstat sees it: the PATH folder is a link, so a NativePaths proof of absence would refuse it.
+  // lstat of a candidate leaf: only a dangling link exists (statSync cannot follow it).
   lstatSync: vi.fn((path: string) => {
-    const link = String(path).toLowerCase() === 'c:\\program files\\nodejs'
-    if (!link && !['c:\\', 'c:\\program files'].includes(String(path).toLowerCase())) throw missing(String(path))
-    return { dev: 1n, ino: 1n, mode: 0o40666n, uid: 0n, size: 0n, mtimeNs: 1n, ctimeNs: 1n, isDirectory: () => !link, isSymbolicLink: () => link }
+    if (!dangling.has(String(path).toLowerCase())) throw missing(String(path))
+    return { isSymbolicLink: () => true }
   }),
   readlinkSync: vi.fn(() => 'D:\\nodejs\\'),
   accessSync: vi.fn(),
@@ -38,7 +38,7 @@ vi.mock('./nativeVersion.js', () => ({
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
 beforeEach(() => { Object.defineProperty(process, 'platform', { ...platform, value: 'win32' }); vi.stubEnv('HOME', 'C:\\Users\\u') })
-afterEach(() => { Object.defineProperty(process, 'platform', platform); vi.unstubAllEnvs(); files.clear(); vi.mocked(fs.lstatSync).mockClear() })
+afterEach(() => { Object.defineProperty(process, 'platform', platform); vi.unstubAllEnvs(); files.clear(); dangling.clear(); vi.mocked(fs.lstatSync).mockClear() })
 
 async function capture(path: string) {
   vi.stubEnv('PATH', path)
@@ -50,12 +50,18 @@ describe('the Windows engine search', () => {
     // statSync follows the link: the folder is reached by its linked name.
     files.add('c:\\program files\\nodejs\\codex.cmd')
     expect(await capture('C:\\Program Files\\nodejs')).toMatchObject({ state: 'ready', executable: { command: 'C:\\Program Files\\nodejs\\codex.cmd' } })
-    expect(fs.lstatSync).not.toHaveBeenCalled()
+    // Only candidate leaves are lstat'ed, never the linked folder on the way.
+    expect(vi.mocked(fs.lstatSync).mock.calls.map(([path]) => String(path))).not.toContain('C:\\Program Files\\nodejs')
   })
 
   it('moves past a UNC entry and a root-relative entry to the next one', async () => {
     files.add('c:\\tools\\codex.cmd')
     expect(await capture('\\\\server\\share\\bin;\\bin;C:\\tools')).toMatchObject({ state: 'ready', executable: { command: 'C:\\tools\\codex.cmd' } })
+  })
+
+  it('holds on a dangling link, as POSIX does, instead of installing over it', async () => {
+    dangling.add('c:\\tools\\codex.exe')
+    expect(await capture('C:\\tools')).toMatchObject({ state: 'held', detail: expect.stringContaining('aliases') })
   })
 
   it('treats a missing entry as absent and holds on any other error', async () => {

@@ -33,11 +33,14 @@ export function verifyNativePathFacts(facts: readonly NativePathFact[]): void {
   }
 }
 
-/** NativePaths walks the paths node:path produces, so its default platform is the path module's (`win32` or the POSIX walk),
- * not `process.platform`: a spec that fakes win32 on a POSIX host still has POSIX paths. */
+/** NativePaths walks the paths node:path produces, so by default it walks Windows paths when the path module is
+ * Windows' and POSIX ones otherwise, not by `process.platform`: a spec that fakes win32 on a POSIX host still has POSIX paths. */
 export class NativePaths {
   private readonly parts = new Map<string, Part>()
-  constructor(private readonly budget: NativeEvidenceBudget, private readonly platform: NodeJS.Platform = sep === '\\' ? 'win32' : 'linux') {}
+  private readonly windows: boolean
+  constructor(private readonly budget: NativeEvidenceBudget, platform?: NodeJS.Platform) {
+    this.windows = platform ? platform === 'win32' : sep === '\\'
+  }
 
   async resolve(path: string, missingOkay = false): Promise<Location> {
     const steps = this.walk(path, missingOkay)
@@ -88,17 +91,17 @@ export class NativePaths {
    * Retain only immutable route facts; every later check receives a fresh bounded budget. */
   retainOutside(removedPath: string): () => void {
     this.budget.step()
-    const separator = this.platform === 'win32' ? '\\' : '/'
+    const separator = this.windows ? '\\' : '/'
     const retained = [...this.parts].filter(([path]) => path !== removedPath && !path.startsWith(removedPath + separator))
     return () => {
-      const fresh = new NativePaths(new NativeEvidenceBudget(), this.platform)
+      const fresh = new NativePaths(new NativeEvidenceBudget(), this.windows ? 'win32' : 'linux')
       for (const [path, part] of retained) fresh.parts.set(path, part)
       fresh.verify()
     }
   }
 
   private *walk(path: string, missingOkay: boolean): Generator<string, Location, Part> {
-    if (this.platform === 'win32') return yield* this.walkWindows(path, missingOkay)
+    if (this.windows) return yield* this.walkWindows(path, missingOkay)
     if (!isAbsolute(path) || path.includes('\0') || Buffer.byteLength(path) > 4096) return nativeUnavailable('a native location is invalid or exceeds its limit')
     // Follow links in component order. Normalizing bridge/../home first would skip bridge.
     let prefix = '/', pending = path.slice(1).split('/').filter(Boolean), links = 0
@@ -175,7 +178,7 @@ export class NativePaths {
    * the same directory. Only the observed physical ancestor chain proves membership. */
   within(path: string, roots: readonly BigIntStats[]): boolean {
     const keys = new Set(roots.map(nativeFileKey))
-    const parentOf = this.platform === 'win32' ? win32.dirname : dirname
+    const parentOf = this.windows ? win32.dirname : dirname
     for (let parent = parentOf(path);;) {
       this.budget.step()
       const part = this.parts.get(parent)

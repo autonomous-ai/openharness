@@ -1,6 +1,6 @@
 /** A launch resolves once, then keeps that executable through probes and dispatch. */
 import { execFile } from 'node:child_process'
-import { accessSync, closeSync, constants, openSync, readSync, statSync } from 'node:fs'
+import { accessSync, closeSync, constants, lstatSync, openSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
@@ -88,10 +88,10 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         // Windows: statSync follows links, so a PATH entry across a symlink or junction (nvm-windows, Scoop) proves
         // absence like any other. NativePaths refuses links there, which is right for hook files, not for this search.
+        // A leaf that exists though statSync cannot follow it is a dangling link: a user's choice, held as on POSIX.
         if (process.platform === 'win32') {
-          try { statSync(path) } catch (missing) {
-            const code = (missing as NodeJS.ErrnoException).code
-            if (code === 'ENOENT' || code === 'ENOTDIR') continue
+          try { lstatSync(path) } catch (leaf) {
+            if ((leaf as NodeJS.ErrnoException).code === 'ENOENT') continue
           }
           return held('Waiting to confirm the engine search path and its aliases.')
         }
