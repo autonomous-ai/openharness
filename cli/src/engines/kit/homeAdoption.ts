@@ -49,9 +49,11 @@ export function homeIsNetworkOrDevice(home: string, platform: NodeJS.Platform = 
   return platform === 'win32' && /^[\\/]{2}/.test(home)
 }
 const FOLDER_OF: Record<string, string> = { CODEX_HOME: '.codex', CLAUDE_CONFIG_DIR: '.claude' }
+const HOME_NAMES = new Set(['HOME'])
 /** The sentence a person sees when a setting names a network or device path: the setting, then what to set it to. */
 export function networkHomeSentence(variable: string, profile: string): string {
   const folder = FOLDER_OF[variable]
+  if (HOME_NAMES.has(variable)) return `${variable} names a network or device path, which Harness does not use for an engine home on Windows. Set it to your profile folder on this computer's drive, such as ${profile}.`
   return `${variable} names a network or device path, which Harness does not use for an engine home on Windows. `
     + `Set it to a folder on this computer's drive${folder ? `, such as ${winPath.join(profile, folder)}` : ''}.`
 }

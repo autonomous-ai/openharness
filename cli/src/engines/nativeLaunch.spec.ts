@@ -111,6 +111,19 @@ it.each(['codexHome', 'claudeHome'] as const)('refuses a creation whose %s is a 
     expect((result as { detail: string }).detail).toMatch(new RegExp(`^${variable} names a network or device path, which Harness does not use for an engine home on Windows\\. Set it to`))
   } finally { host.win32 = false }
 })
+it('does not let another engine\'s network setting, or its own sibling engine\'s, refuse a Codex create', async () => {
+  host.win32 = true
+  try {
+    const result = await inspectNativeLaunch('codex', {}, {})
+    expect(result).not.toMatchObject({ refusal: 'ENGINE_LAUNCH_REFUSED' })
+    vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready', executable: { command: '/fixture/engine', identity: 'fixture', current: () => true }, environment: { HOME: '/fixture/home', PATH: '/fixture/bin', OPENCODE_PLUGIN_DIR: '\\\\server\\share\\p' } } as never)
+    expect(await inspectNativeLaunch('codex')).not.toMatchObject({ refusal: 'ENGINE_LAUNCH_REFUSED' })
+    vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready', executable: { command: '/fixture/engine', identity: 'fixture', current: () => true }, environment: { HOME: '\\\\server\\share\\h', PATH: '/fixture/bin' } } as never)
+    const home = await inspectNativeLaunch('codex')
+    expect(home).toMatchObject({ refusal: 'ENGINE_LAUNCH_REFUSED' })
+    expect((home as { detail: string }).detail).toMatch(/^HOME names a network or device path.*such as /)
+  } finally { host.win32 = false }
+})
 it('does not refuse a double-slash location off Windows', async () => {
   expect(await inspectNativeLaunch('codex', { codexHome: '//server/share/x' })).not.toMatchObject({ refusal: 'ENGINE_LAUNCH_REFUSED' })
 })

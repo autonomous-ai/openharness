@@ -108,6 +108,25 @@ async function read(executable: string, args: readonly string[], environment: Re
   })
 }
 
+/** The location variables every engine's homes derive from. */
+const SHARED_LOCATIONS: ReadonlySet<string> = new Set(['HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'])
+/** The variables `nativeHookLocations` derives each engine's own homes from (kit/nativeLocations.ts). */
+const ENGINE_LOCATIONS: Partial<Record<string, readonly string[]>> = {
+  claude: ['CLAUDE_CONFIG_DIR', 'CLAUDE_PROJECTS_DIR'],
+  codex: ['CODEX_HOME'],
+  opencode: ['OPENCODE_PLUGIN_DIR', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG', 'OPENCODE_DATA_DIR', 'OPENCODE_DB'],
+  kilo: ['KILO_PLUGIN_DIR'],
+  pi: ['PI_HOME', 'PI_CODING_AGENT_DIR', 'PI_CODING_AGENT_SESSION_DIR'],
+  hermes: ['HERMES_HOME'],
+  copilot: ['COPILOT_HOME'],
+  commandcode: ['COMMANDCODE_HOME'],
+  cursor: ['CURSOR_CONFIG_DIR', 'CURSOR_DATA_DIR', 'CURSOR_HOME'],
+  grok: ['GROK_HOME'],
+  agy: ['AGY_HOME', 'AGY_CONFIG_DIR'],
+  devin: ['DEVIN_HOME', 'DEVIN_CONFIG_PATH'],
+  amp: ['AMP_PLUGIN_DIR'],
+}
+
 /** Probe only. No settings, workspace, model or process mutation occurs here. */
 export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLaunchSource = {},
   deps: { confirmHome?: (engine: 'claude' | 'codex', home: string) => void } = {},
@@ -123,8 +142,11 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   if (source.claudeHome) selected.CLAUDE_CONFIG_DIR = source.claudeHome
   if (source.hermesHome) selected.HERMES_HOME = source.hermesHome
   // Windows: a network or device path is no engine home. A creation is refused with the sentence naming the setting.
+  // Only the variables this engine's homes come from count: another engine's setting is no reason to refuse this one.
   for (const [key, path] of Object.entries(selected)) {
-    if (key !== 'PATH' && path && homeIsNetworkOrDevice(path)) return { ...waiting(networkHomeSentence(key, homedir())), refusal: 'ENGINE_LAUNCH_REFUSED' }
+    if (path && SHARED_LOCATIONS.has(key) || (path && (ENGINE_LOCATIONS[engine] ?? []).includes(key))) {
+      if (homeIsNetworkOrDevice(path)) return { ...waiting(networkHomeSentence(key, homedir())), refusal: 'ENGINE_LAUNCH_REFUSED' }
+    }
   }
   // Empty location variables use their native default. Relative locations cannot
   // be prepared independently of a changing pane cwd.
