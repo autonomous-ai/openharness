@@ -51,11 +51,13 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
     if (!entry) return hooksNotOnWindows(engine)
     return await runHookPreparation(files, async attempt => {
       await installNotifyHooks(settings, port, home, entry, attempt, platform)
-      const required = files.map(file => inspectHookFile(file))
-      const verifyRequired = () => { attempt.verify(); for (const file of required) file.verify() }
       // Windows: Agent Messages' block is a POSIX shell line, and the allowance names the POSIX launcher. Neither is
-      // installed there yet (Phase B4 notes).
-      if (platform !== 'win32' && (settings.inbox || settings.allow)) await installMessagesBlock(settings, home, attempt, verifyRequired)
+      // installed there yet (Phase B4 notes), so neither is the confirmation of the required files that stage uses.
+      if (platform !== 'win32') {
+        const required = files.map(file => inspectHookFile(file))
+        const verifyRequired = () => { attempt.verify(); for (const file of required) file.verify() }
+        if (settings.inbox || settings.allow) await installMessagesBlock(settings, home, attempt, verifyRequired)
+      }
       return true
     }, { ...options, identity: JSON.stringify([engine, identitySettings(settings, platform), port, home, entry.args ? [entry.command, entry.args] : entry.command, env.HARNESS_AGENT_MESSAGES_DIR]) })
   } catch (err) {
@@ -197,10 +199,11 @@ async function installNotifyHooks(settings: HookSettings, port: number, home: st
     name === 'file' ? file : name === 'script' ? HOOK_SCRIPT : String(port))
   // Ours as this platform reads a hook: on Windows a line for its runner, or exec form (kit/notifyHooks.ts isManagedHook).
   const isOurs = (block: HookBlock): boolean => Array.isArray(block?.hooks) && block.hooks.some(hook => isManagedHook(hook, platform))
-  // A hook already there is the current one when its line is, and its arguments: exec form keeps them in `args`, so a
-  // check of `command` alone saw any port as current (B4.2 review). A line has none, and a stray `args` is drift too.
+  // A hook already there is the current one when its line is. On Windows its arguments too: exec form keeps them in
+  // `args`, so a check of `command` alone saw any port as current (B4.2 review), and there a line with a stray `args`
+  // is drift. Off Windows the line alone decides, as it always has (mac/Linux unchanged).
   const sameHook = (hook: CommandHook | undefined): boolean => hook?.command === entry.command
-    && JSON.stringify(hook.args) === JSON.stringify(entry.args)
+    && ((platform !== 'win32' && entry.args === undefined) || JSON.stringify(hook.args) === JSON.stringify(entry.args))
   const { messages } = settings
   const observed = inspectHookFile(file)
   const current = (observed.content === null ? {} : JSON.parse(observed.content)) as Settings

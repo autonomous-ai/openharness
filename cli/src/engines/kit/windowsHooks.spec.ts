@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -14,7 +14,7 @@ import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { installHermesHooks } from '../nativeHooks.js'
 import { installHookSettings, notifyHookEntry } from './hookSettings.js'
 import { installNativeHookSettings } from './nativeHookSettings.js'
-import { hookScriptCandidates, identitySettings } from './notifyHooks.js'
+import { hookArgv, hookScriptCandidates, identitySettings } from './notifyHooks.js'
 
 const dirs: string[] = []
 afterEach(() => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -169,5 +169,70 @@ describe('an engine with no hooks on Windows', () => {
     expect(log.mock.calls).toEqual([['[hooks] hermes hooks are not installed on Windows yet']])
     expect(error).not.toHaveBeenCalled(); expect(warn).not.toHaveBeenCalled()
     expect(existsSync(join(dir, 'hermes'))).toBe(false)
+  })
+})
+
+// Fix round 1 of the B4.6 review: an install that succeeds on Windows, and is then left alone.
+describe('Codex\'s cmd.exe hook on Windows', () => {
+  it('is written as the line cmd.exe reads, and a second install writes nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const home = join(dir, 'codex'), file = join(home, codex.settings.file), config = join(home, codex.settings.reviewed!.file)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
+    const line = notifyHookEntry(codex.settings, hookArgv(19473, 'codex', home), 'win32')!
+    expect(line.args).toBeUndefined()
+    const events = JSON.parse(readFileSync(file, 'utf8')).hooks as Record<string, Array<{ hooks: Array<{ command: string; args?: string[] }> }>>
+    expect(Object.keys(events)).toEqual(codex.settings.events.map(({ event }) => event))
+    for (const blocks of Object.values(events)) expect(blocks.map(block => block.hooks)).toEqual([[expect.objectContaining({ command: line.command })]])
+    expect(JSON.stringify(events)).not.toContain('"args"')
+    const stamp = (path: string) => { const info = statSync(path, { bigint: true }); return [readFileSync(path, 'utf8'), info.ino, info.mtimeNs] }
+    const before = [stamp(file), stamp(config)]
+    log.mockClear()
+    expect(await installHookSettings('codex', codex.settings, 19473, home, {}, 'win32')).toBe(true)
+    expect(log.mock.calls[0]![0]).toBe(codex.settings.messages.current.replace('{file}', file))
+    expect([stamp(file), stamp(config)]).toEqual(before)
+  })
+})
+
+// Fix round 1 of the B4.6 review: mac and Linux do not change. Off Windows the line alone decides whether a hook of
+// ours is current, as before Windows hooks: a stray `args` beside it is not drift there, and nothing is written.
+describe('a hook of ours with a stray args key, off Windows', () => {
+  const stray = (file: string) => {
+    const settings = JSON.parse(readFileSync(file, 'utf8')) as { hooks: Record<string, Array<{ hooks: Array<{ command: string; args?: string[] }> }>> }
+    for (const blocks of Object.values(settings.hooks)) for (const block of blocks) for (const hook of block.hooks) {
+      if (hook.command.includes('notify.mjs')) hook.args = ['stray']
+    }
+    writeFileSync(file, JSON.stringify(settings, null, 2) + '\n')
+  }
+  const stamp = (path: string) => { const info = statSync(path, { bigint: true }); return [readFileSync(path, 'utf8'), info.ino, info.mtimeNs] }
+
+  it('is current for Claude Code: no write', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const home = join(dir, 'claude'), file = join(home, claude.settings.file)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'linux')).toBe(true)
+    stray(file)
+    expect(readFileSync(file, 'utf8')).toContain('"stray"')
+    const before = stamp(file)
+    log.mockClear()
+    expect(await installHookSettings('claude', claude.settings, 19473, home, {}, 'linux')).toBe(true)
+    expect(log.mock.calls.map(([line]) => line)).toContain(claude.settings.messages.current)
+    expect(stamp(file)).toEqual(before)
+  })
+
+  it('is current for Command Code\'s nested settings: no write', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'win-hooks-')); dirs.push(dir)
+    const rule = { ...COMMANDCODE_HOOK_SETTINGS, file: join(dir, 'commandcode', 'settings.json') }
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await installNativeHookSettings(rule, 19473, {}, 'linux')).toBe(true)
+    stray(rule.file)
+    expect(readFileSync(rule.file, 'utf8')).toContain('"stray"')
+    const before = stamp(rule.file)
+    log.mockClear()
+    expect(await installNativeHookSettings(rule, 19473, {}, 'linux')).toBe(true)
+    expect(log.mock.calls).toEqual([[COMMANDCODE_HOOK_SETTINGS.messages.current]])
+    expect(stamp(rule.file)).toEqual(before)
   })
 })
