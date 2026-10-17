@@ -464,8 +464,9 @@ export function engineBin(engine: AgentEngine): string {
     case 'opencode': return env.OPENCODE_PATH || ENGINE_CLI_COMMANDS.opencode
     case 'pi': return env.PI_PATH || ENGINE_CLI_COMMANDS.pi
     case 'hermes': return env.HERMES_PATH || ENGINE_CLI_COMMANDS.hermes
-    // command-code's package `bin` lists `cmd` first and its README uses it.
-    case 'commandcode': return env.COMMANDCODE_PATH || ENGINE_CLI_COMMANDS.commandcode
+    // command-code's package `bin` lists `cmd` first and its README uses it. On Windows `cmd` is the command processor,
+    // found on PATH before npm's shim (the Windows VM, F7): there it is `command-code`, from the same package.
+    case 'commandcode': return env.COMMANDCODE_PATH || (process.platform === 'win32' ? 'command-code' : ENGINE_CLI_COMMANDS.commandcode)
     case 'devin': return env.DEVIN_PATH || ENGINE_CLI_COMMANDS.devin
     case 'muse': return env.MUSE_PATH || ENGINE_CLI_COMMANDS.muse
     case 'amp': return env.AMP_PATH || ENGINE_CLI_COMMANDS.amp

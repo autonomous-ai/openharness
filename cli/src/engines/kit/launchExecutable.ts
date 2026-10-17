@@ -63,6 +63,14 @@ export async function launchEnvironment(shell?: string): Promise<NodeJS.ProcessE
   })
 }
 
+/**
+ * The names a launch looks for on PATH, the command first. On Windows `cmd` is never one: it names the command processor
+ * (C:\Windows\System32\cmd.exe, ahead of npm's folder on PATH), which every Command Code launch ran instead (F7).
+ */
+export function launchSearchNames(command: string, recipeNames: readonly string[], platform: NodeJS.Platform = process.platform): string[] {
+  return [...new Set([command, ...recipeNames])].filter((name) => platform !== 'win32' || name.toLowerCase() !== 'cmd')
+}
+
 /** A complete absence can authorize installation. Unreadable routes and failed
  * shell capture cannot: installing then would risk replacing a working engine. */
 export async function captureLaunchExecutable(engine: AgentEngine, shell?: string): Promise<LaunchExecutableResult> {
@@ -76,7 +84,7 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
   const entries = listed.filter(path => isAbsolute(path) && path.length <= 4096)
   if (entries.length === 0 || listed.length > 256) return held('Waiting for a bounded, absolute engine search path.')
   const recipe = override ? undefined : engineInstallRecipe(engine)
-  const names = [...new Set([command, ...(recipe?.executable.names ?? [])])]
+  const names = launchSearchNames(command, recipe?.executable.names ?? [])
   const candidates = command.includes('/') || isAbsolute(command) ? [resolve(command)] : names.flatMap(name => entries.map(path => join(path, name)))
   if (recipe) candidates.push(...engineInstallPaths(recipe, environment.HOME))
   for (const path of [...new Set(candidates.flatMap(windowsPrograms))]) {

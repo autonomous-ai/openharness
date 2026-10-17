@@ -264,7 +264,7 @@ this test with their recipe's command, and uninstalled afterwards. Nothing was s
 | Pi | 1.2.0, `npm install -g --ignore-scripts @earendil-works/pi-coding-agent` | **Works with caveat**: the TUI is up (it downloads `fd` and `rg`), then says "No models available. Use /login". The launch stayed `starting` (no readiness without hooks). |
 | Kilo | 7.8.12, `npm install -g @kilocode/cli` | **Works**: the TUI is up and the launch is ready. npm 11 blocked the postinstall until `--allow-scripts=@kilocode/cli` was given. |
 | GitHub Copilot CLI | 1.0.98, `npm install -g @github/copilot` | **Works with caveat**: the TUI is up at its folder-trust prompt. It needs a GitHub sign-in to be used, which was not done. |
-| Command Code | 1.82.3, `npm i -g command-code` | **Does not run on Windows**: its binary is `cmd`, which resolves to `C:\Windows\System32\cmd.exe`. The pane runs Windows cmd and the launch stays `starting` (F7). |
+| Command Code | 1.82.3, `npm i -g command-code` | **Does not run on Windows**: its binary is `cmd`, which resolves to `C:\Windows\System32\cmd.exe`. The pane runs Windows cmd and the launch stays `starting` (F7). **Fixed** (B4.13): 1.84.0, installed with `npm i --prefix`, starts as `command-code` and shows its sign-in screen; the launch is `ready`. |
 | Cursor, Hermes, Devin, Muse, Amp, Grok, Antigravity (`agy`) | — | **Not installed.** Their recipes are `curl … \| bash`. Create is refused with `NATIVE_LAUNCH_HELD`, "`<engine>` is not installed. Installing engines is not supported on Windows yet: install it, then try again" (the F2 fix). |
 
 ## Performance baseline
@@ -375,10 +375,18 @@ Each fix is a separate commit with a test that fails without it. Each was verifi
     a terminal row, which can then be deleted.
 - **F6 — Resume reopens no conversation for Claude Code or Codex** (`resumed: false`, "fresh"). Hooks are off, so no
   conversation is ever bound (sub-project B).
-- **F7 — Command Code does not start on Windows.**
-  - `ENGINE_CLI_COMMANDS.commandcode` is `cmd`, which resolves to `C:\Windows\System32\cmd.exe` before npm's `cmd.cmd`.
-  - The npm package also installs a `cmd.cmd` shim into the npm folder.
-  - Suggested fix: prefer `command-code` on win32, and check its process signature there.
+- **F7 — Command Code did not start on Windows.** Fixed (B4.13).
+  - `ENGINE_CLI_COMMANDS.commandcode` is `cmd`, which resolved to `C:\Windows\System32\cmd.exe` before npm's `cmd.cmd`.
+    Every Command Code pane opened the command processor instead.
+  - Fix: on win32 Command Code starts as `command-code`, from the same package (`engineBin`), and a launch never
+    searches PATH for a program named `cmd` there (`launchSearchNames`). macOS and Linux still start `cmd`.
+  - Verified on the VM with Command Code 1.84.0 (B4 install, hooks off): the pane shows Command Code's own sign-in
+    screen and `launch` is `ready`. The engine is `node.exe …\command-code\dist\index.mjs`, a direct child of the pty
+    host, with no `cmd.exe` (`cli/scripts/windows-pty-e2e/evidence/commandcode.log`).
+  - Hooks not verified: needs a Command Code sign-in. Hooks were off in this run; they are verified in B4.15.
+  - Command Code 1.84.0 does not read `COMMANDCODE_HOME`: it puts its files under `HOME`, or `USERPROFILE` when `HOME`
+    is unset, plus `.commandcode`. It also always writes `telemetry-install-id` and `updates.json` to
+    `%USERPROFILE%\.commandcode`, even when `HOME` is set.
 - **F8 — The "beside the bundle" host lookup misses under `harness start -f`.**
   - The master runs the core from `data\lean\<hash>\`, so `ptyHostBinary()` looks for `data\lean\<hash>\pty\` and logs
     `ptyhost: unavailable (harness-pty is not installed)`, although `dist\pty\` has it.
