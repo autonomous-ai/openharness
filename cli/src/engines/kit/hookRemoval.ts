@@ -5,10 +5,14 @@
  * not recognize is touched; a file that cannot be read as the settings it should be is reported, never rewritten.
  * Each file is written as the installers write it: inspected, staged and published under its own preparation.
  */
+import { parse as parseToml } from 'smol-toml'
+import { basename, join } from 'node:path'
+import type { HookReviewRecord } from '../facets/hooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
+import { reviewRecords, withoutReviewRecords } from './hookReview.js'
 import { IdentityReadUnavailable } from './identityScan.js'
 import { isMessagesBlock } from './messagesHook.js'
-import { foreignHookBlocks, isManagedHookCommand, isOurs, type HookBlock } from './notifyHooks.js'
+import { foreignHookBlocks, isManagedHookCommand, isOurs, type HookBlock, type Settings } from './notifyHooks.js'
 import { hostPlatform } from './windowsFiles.js'
 
 export interface HookFileRemoval {
@@ -133,5 +137,34 @@ export async function removeOwnedFile(file: string, owned: (content: string) => 
     }, { identity: JSON.stringify(['uninstall', file]) })
   } catch (error) {
     return { file, removed: 0, failed: failure(error) }
+  }
+}
+
+/**
+ * The engine's records of Harness's hooks as reviewed (hookReview.ts), out of its config file in [home]: the records
+ * [settings], the settings file before Harness's hooks were taken out of it, held them under. Only a record that holds
+ * exactly its hook's hash, and nothing else, goes (`withoutReviewRecords`); the rest of the config stays byte for byte.
+ */
+export async function removeReviewedHooks(record: HookReviewRecord, home: string, settingsFile: string, settings: Settings,
+  platform: NodeJS.Platform = hostPlatform()): Promise<HookFileRemoval> {
+  const config = join(home, record.file)
+  try {
+    return await runHookPreparation([config], async (attempt) => {
+      const observed = inspectHookFile(config, 0o600)
+      if (observed.content === null) return { file: config, removed: 0 }
+      // Keyed as prepareReviewed keys them: the config's real folder and the settings file's name.
+      const records = reviewRecords(record, join(observed.directory, basename(settingsFile)), settings, platform)
+      if (records.size === 0) return { file: config, removed: 0 }
+      try { parseToml(observed.content, { integersAsBigInt: true, maxDepth: 64 }) }
+      catch { throw new HookPreparationHeld('the hook review configuration is not complete TOML') }
+      const { text, removed } = withoutReviewRecords(observed.content, record, records)
+      if (removed === 0) return { file: config, removed: 0 }
+      try { parseToml(text, { integersAsBigInt: true, maxDepth: 64 }) }
+      catch { throw new HookPreparationHeld('the hook review configuration would not stay complete TOML') }
+      ;(await observed.replace(text, attempt)).verify()
+      return { file: config, removed }
+    }, { identity: JSON.stringify(['uninstall', config]) })
+  } catch (error) {
+    return { file: config, removed: 0, failed: failure(error) }
   }
 }

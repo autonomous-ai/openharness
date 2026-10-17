@@ -5,6 +5,7 @@ import { HookPreparationHeld, inspectHookFile, type HookFilePublication, runHook
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { isManagedHookCommand } from './notifyHooks.js'
 import { nativeHookHomes, type NativeHookHomes } from './nativeHookHomes.js'
+import type { HookFileRemoval } from './hookRemoval.js'
 
 export interface NativeYamlHooks {
   home: string
@@ -140,6 +141,57 @@ export async function installNativeYamlHooks(rule: NativeYamlHooks, commandForHo
   // starved the same tail behind the preparation pool on every healthy retry.
   await Promise.all(Array.from({ length: Math.min(4, homes.length) }, worker))
   return installed
+}
+
+/**
+ * `harness uninstall`: every block this installer owns (`stripOwnedBlocks`: the delimited one and a bare one an older
+ * release left), and Harness's approvals, out of each home's files. A foreign `hooks:` mapping is left alone, as the
+ * installer leaves it.
+ */
+export async function removeNativeYamlHooks(rule: NativeYamlHooks, homes: readonly string[]): Promise<HookFileRemoval[]> {
+  const outcomes: HookFileRemoval[] = []
+  for (const home of homes) {
+    const configPath = join(home, rule.homes.file)
+    const allowlistPath = join(home, rule.allowlist)
+    try {
+      outcomes.push(...await runHookPreparation([configPath, allowlistPath], async (attempt) => {
+        const done: HookFileRemoval[] = []
+        const observed = inspectHookFile(configPath)
+        if (observed.content !== null) {
+          const config = observed.content
+          const original = parseDocument(config, { strict: true, uniqueKeys: false, prettyErrors: false })
+          if (original.errors.length || (original.contents !== null && !isMap(original.contents))) {
+            throw new HookPreparationHeld('the YAML configuration is not a complete mapping')
+          }
+          const hookLines = new Set<number>()
+          if (isMap(original.contents)) for (const pair of original.contents.items) {
+            if (isScalar(pair.key) && pair.key.value === 'hooks' && pair.key.range) hookLines.add(config.slice(0, pair.key.range[0]).split('\n').length - 1)
+          }
+          const { cleaned, removed } = stripOwnedBlocks(rule, config, hookLines)
+          if (removed > 0) {
+            ;(await observed.replace(cleaned.replace(/\s*$/, '\n'), attempt)).verify()
+            done.push({ file: configPath, removed })
+          }
+        }
+        const approvals = inspectHookFile(allowlistPath)
+        if (approvals.content !== null) {
+          const data = JSON.parse(approvals.content) as { approvals?: Array<{ command?: string }> }
+          if (data && typeof data === 'object' && Array.isArray(data.approvals)) {
+            const kept = data.approvals.filter((a) => !(typeof a?.command === 'string' && isManagedHookCommand(a.command)
+              && rule.ownership.every((fragment) => a.command!.includes(fragment))))
+            if (kept.length !== data.approvals.length) {
+              ;(await approvals.replace(JSON.stringify({ ...data, approvals: kept }, null, 2) + '\n', attempt)).verify()
+              done.push({ file: allowlistPath, removed: data.approvals.length - kept.length })
+            }
+          }
+        }
+        return done
+      }, { identity: JSON.stringify(['uninstall', rule.begin, home]) }))
+    } catch (error) {
+      outcomes.push({ file: configPath, removed: 0, failed: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  return outcomes
 }
 
 async function installIn(rule: NativeYamlHooks, cmd: string, home: string, options: HookPreparationOptions & { createMissing?: boolean }, lines: HomeLines): Promise<boolean> {
