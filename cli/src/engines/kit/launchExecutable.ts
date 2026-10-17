@@ -89,6 +89,8 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
         // Windows: statSync follows links, so a PATH entry across a symlink or junction (nvm-windows, Scoop) proves
         // absence like any other. NativePaths refuses links there, which is right for hook files, not for this search.
         // A leaf that exists though statSync cannot follow it is a dangling link: a user's choice, held as on POSIX.
+        // Only the leaf is checked: a dangling folder on the way (nvm-windows' nodejs link after its version was
+        // removed) still reads as absent here, where POSIX holds on a dangling ancestor.
         if (process.platform === 'win32') {
           try { lstatSync(path) } catch (leaf) {
             if ((leaf as NodeJS.ErrnoException).code === 'ENOENT') continue

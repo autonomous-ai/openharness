@@ -18,10 +18,14 @@ vi.mock('node:fs', async (original) => ({
     if (!files.has(String(path).toLowerCase())) throw missing(String(path))
     return { isFile: () => true }
   }),
-  // lstat of a candidate leaf: only a dangling link exists (statSync cannot follow it).
+  // The route as lstat sees it: C:\ and C:\Program Files are folders, the PATH folder C:\Program Files\nodejs is a link
+  // (nvm-windows), a dangling leaf is a link, and anything else is absent.
   lstatSync: vi.fn((path: string) => {
-    if (!dangling.has(String(path).toLowerCase())) throw missing(String(path))
-    return { isSymbolicLink: () => true }
+    const key = String(path).toLowerCase()
+    const link = key === 'c:\\program files\\nodejs' || dangling.has(key)
+    if (!link && !['c:\\', 'c:\\program files'].includes(key)) throw missing(String(path))
+    return { dev: 1n, ino: 1n, mode: link ? 0o120666n : 0o40666n, uid: 0n, size: 0n, mtimeNs: 1n, ctimeNs: 1n,
+      isDirectory: () => !link, isSymbolicLink: () => link }
   }),
   readlinkSync: vi.fn(() => 'D:\\nodejs\\'),
   accessSync: vi.fn(),
