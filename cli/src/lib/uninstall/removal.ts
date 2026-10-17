@@ -7,7 +7,9 @@
  * mac and Linux delete a running program's files at once. Windows cannot delete the node.exe the CLI runs from, nor a
  * folder a process has open, so there the files go in a cmd.exe that waits for the CLI's process to exit, started
  * through WMI so that it is outside the CLI's job: an SSH session (OpenSSH ends every process of its job at the end of
- * the session, docs/testing/windows-pty-e2e.md F16) or a terminal closing would end it half way.
+ * the session, docs/testing/windows-pty-e2e.md F16) or a terminal closing would end it half way. WMI is the only way
+ * it starts. A cmd.exe the CLI spawns itself is in libuv's job and ends the moment the CLI exits, before it has removed
+ * anything (B5.4 review, on the VM); so when WMI fails the CLI says so and how to finish by hand.
  *
  * This code deletes a person's files, and a wrong path deletes their home. So every plan, however it was made, is
  * checked before anything is removed: its root is a full path to a folder named `.harness` that is not a drive's root,
@@ -15,7 +17,6 @@
  * symlink, or on Windows a junction) is removed as a link and never followed: on the Windows VM `del` given a
  * junction emptied the folder it pointed to (B5.4), so the last step never hands del anything that is a folder.
  */
-import { spawn } from 'node:child_process'
 import { lstatSync, readdirSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { posix, win32 } from 'node:path'
@@ -280,20 +281,29 @@ export interface FinalRemovalDeps {
   systemRoot: string
   now(): number
   write(path: string, text: string): void
+  remove(path: string): void
   powershell: PowershellRun
-  /** Starts [file] apart from this process's console, so that it outlives it. Throws when it could not start. */
-  spawnDetached(file: string, args: string[], cwd: string): void
 }
 
-export type FinalRemoval = { ok: true; script: string; log: string; via: 'wmi' | 'spawn' } | { ok: false; detail: string }
+/**
+ * The last step started; or not, and then [reason] says why and [manual] what the person does instead, both sentences
+ * to print as they are (B5.5). [detail] is for a bug report.
+ */
+export type FinalRemoval =
+  | { ok: true; script: string; log: string }
+  | { ok: false; reason: string; manual: string; detail: string }
+
+/** What the person deletes by hand: the root when the plan takes all of it, else the plan's paths, which never hold data that is kept. */
+export function manualRemoval(plan: RemovalPlan): string {
+  if (plan.removeRoot) return `Close this window, then delete ${plan.root} yourself.`
+  return `Close this window, then delete these yourself:${plan.remove.map((t) => `\n  ${t.path}`).join('')}`
+}
 
 /**
  * cmd.exe gets the script's name only, run from the temp folder: cmd /c expands a %VAR% in its command line, so a full
  * path such as C:\Users\a%OS%b\AppData\Local\Temp\… would be run as another. The name is digits and dashes. /v:off
  * keeps a `!` a `!` even where the registry turns delayed expansion on for every cmd.
  */
-const cmdArgs = (name: string): string[] => ['/d', '/v:off', '/c', `.\\${name}`]
-
 const START_OUTSIDE_JOB = String.raw`$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
 $command = '"' + $env:HARNESS_CMD + '" /d /v:off /c .\' + $env:HARNESS_UNINSTALL_SCRIPT
 $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $command; CurrentDirectory = $env:HARNESS_UNINSTALL_CWD; ProcessStartupInformation = $startup }
@@ -301,7 +311,10 @@ if ($result.ReturnValue -ne 0) { [Console]::Error.Write("Win32_Process.Create re
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
-/** Writes and starts the last step. Throws, writing and starting nothing, on a plan finalRemovalScript refuses. */
+/**
+ * Writes and starts the last step. Throws, writing and starting nothing, on a plan finalRemovalScript refuses. When it
+ * cannot start, it removes the script it wrote: the temp folder is left as it was.
+ */
 export function scheduleFinalRemoval(plan: RemovalPlan, deps: FinalRemovalDeps): FinalRemoval {
   const stamp = `${deps.pid}-${deps.now()}`
   const name = `harness-uninstall-${stamp}.cmd`
@@ -314,18 +327,16 @@ export function scheduleFinalRemoval(plan: RemovalPlan, deps: FinalRemovalDeps):
   const root = normalized('win32', plan.root)
   if (same('win32', temp, root) || inside('win32', root, temp)) refuse(plan.root, `the temp folder ${deps.tempDir} is inside it`)
   if (isLink(plan.root)) refuse(plan.root, 'it is a link to another folder')
-  try { deps.write(script, text) }
-  catch (error) { return { ok: false, detail: `could not write ${script}: ${message(error)}` } }
+  const manual = manualRemoval(plan)
+  try { deps.write(script, text) } catch (error) {
+    return { ok: false, reason: 'Harness could not save the step that removes its files once this command has ended.', manual, detail: `could not write ${script}: ${message(error)}` }
+  }
   const cmd = win32.join(deps.systemRoot, 'System32', 'cmd.exe')
   const started = deps.powershell(START_OUTSIDE_JOB, { HARNESS_CMD: cmd, HARNESS_UNINSTALL_SCRIPT: name, HARNESS_UNINSTALL_CWD: deps.tempDir })
-  if (!started.error && started.status === 0) return { ok: true, script, log, via: 'wmi' }
-  // A computer where WMI is off: a hidden console of its own, though still in this process's job.
-  try {
-    deps.spawnDetached(cmd, cmdArgs(name), deps.tempDir)
-    return { ok: true, script, log, via: 'spawn' }
-  } catch (error) {
-    return { ok: false, detail: `could not start the last step (${message(error)})` }
-  }
+  if (!started.error && started.status === 0) return { ok: true, script, log }
+  try { deps.remove(script) } catch { /* a script left in the temp folder does nothing on its own */ }
+  const detail = started.error ? message(started.error) : (started.stderr.trim() || `PowerShell exited with ${started.status}`)
+  return { ok: false, reason: 'Windows did not start the step that removes Harness\'s files once this command has ended.', manual, detail }
 }
 
 /** This computer's. */
@@ -336,18 +347,7 @@ export function finalRemovalDeps(): FinalRemovalDeps {
     systemRoot: process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows',
     now: () => Date.now(),
     write: (path, text) => writeFileSync(path, text, 'utf8'),
+    remove: (path) => rmSync(path, { force: true }),
     powershell: runPowershell,
-    // Not `detached`: on Windows that is DETACHED_PROCESS, a cmd.exe with no console at all, in which `tasklist | find`
-    // hung for 45 s and more on the VM until the session ended it, removing nothing (B5.4 review). Without it, and
-    // with stdio ignored, windowsHide makes Node start it with CREATE_NO_WINDOW: a console of its own, never shown,
-    // which a terminal closing does not end. A spawn that fails reports it later as an 'error' event, which unheard
-    // ends this process with exit 1 after the uninstall has already said it worked: so it is heard, and a child
-    // without a pid is a start that failed.
-    spawnDetached: (file, args, cwd) => {
-      const child = spawn(file, args, { cwd, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true })
-      child.on('error', () => {})
-      if (child.pid === undefined) throw new Error(`could not start ${file}`)
-      child.unref()
-    },
   }
 }

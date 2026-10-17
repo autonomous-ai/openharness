@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { finalRemovalDeps, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, type FinalRemovalDeps, type PlanInput, type RemovalPlan, type RootEntry } from './removal.js'
+import { finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, type FinalRemovalDeps, type PlanInput, type RemovalPlan, type RootEntry } from './removal.js'
 
 const d = (name: string): RootEntry => ({ name, dir: true })
 const f = (name: string): RootEntry => ({ name, dir: false })
@@ -307,40 +307,64 @@ describe('finalRemovalScript', () => {
 
 describe('scheduleFinalRemoval', () => {
   const plan = { root: 'C:\\U\\.harness', remove: [], kept: [], removeRoot: true }
+  /** A temp folder in memory: what the step wrote and what it removed again. */
   function deps(overrides: Partial<FinalRemovalDeps> = {}) {
+    const files = new Map<string, string>()
     const written: string[] = []
-    const spawned: string[][] = []
-    const cwds: string[] = []
     const scripts: Array<Record<string, string>> = []
     const base: FinalRemovalDeps = {
       pid: 77, tempDir: 'C:\\T', systemRoot: 'C:\\Windows', now: () => 1000,
-      write: (path) => { written.push(path) },
+      write: (path, text) => { written.push(path); files.set(path, text) },
+      remove: (path) => { files.delete(path) },
       powershell: (_script, inputs = {}) => { scripts.push(inputs); return { status: 0, stdout: '', stderr: '' } },
-      spawnDetached: (file, args, cwd) => { spawned.push([file, ...args]); cwds.push(cwd) },
       ...overrides,
     }
-    return { base, written, spawned, scripts, cwds }
+    return { base, files, written, scripts }
   }
+  const wmiOff = () => ({ status: 3, stdout: '', stderr: 'Win32_Process.Create returned 2' })
 
-  it('starts cmd.exe through WMI, outside this process\'s job', () => {
+  it('starts cmd.exe through WMI, outside this process\'s job, with only the script\'s name', () => {
     const t = deps()
-    expect(scheduleFinalRemoval(plan, t.base)).toEqual({ ok: true, script: 'C:\\T\\harness-uninstall-77-1000.cmd', log: 'C:\\T\\harness-uninstall-77-1000.log', via: 'wmi' })
+    expect(scheduleFinalRemoval(plan, t.base)).toEqual({ ok: true, script: 'C:\\T\\harness-uninstall-77-1000.cmd', log: 'C:\\T\\harness-uninstall-77-1000.log' })
     expect(t.written).toEqual(['C:\\T\\harness-uninstall-77-1000.cmd'])
-    expect(t.scripts[0]).toEqual({ HARNESS_CMD: 'C:\\Windows\\System32\\cmd.exe', HARNESS_UNINSTALL_SCRIPT: 'harness-uninstall-77-1000.cmd', HARNESS_UNINSTALL_CWD: 'C:\\T' })
-    expect(t.spawned).toEqual([])
-  })
-
-  it('falls back to a spawn when WMI refuses, and reports a script it could not write', () => {
-    const t = deps({ powershell: () => ({ status: 3, stdout: '', stderr: 'Win32_Process.Create returned 2' }) })
-    expect(scheduleFinalRemoval(plan, t.base)).toMatchObject({ ok: true, via: 'spawn' })
     // Only the script's name, from the temp folder: cmd /c would expand a %VAR% in a full path such as C:\Users\a%OS%b.
-    expect(t.spawned).toEqual([['C:\\Windows\\System32\\cmd.exe', '/d', '/v:off', '/c', '.\\harness-uninstall-77-1000.cmd']])
-    expect(t.cwds).toEqual(['C:\\T'])
-    const unwritable = deps({ write: () => { throw new Error('EACCES') } })
-    expect(scheduleFinalRemoval(plan, unwritable.base)).toEqual({ ok: false, detail: 'could not write C:\\T\\harness-uninstall-77-1000.cmd: EACCES' })
+    expect(t.scripts[0]).toEqual({ HARNESS_CMD: 'C:\\Windows\\System32\\cmd.exe', HARNESS_UNINSTALL_SCRIPT: 'harness-uninstall-77-1000.cmd', HARNESS_UNINSTALL_CWD: 'C:\\T' })
   })
 
-  it('refuses a bad root before writing or starting anything', () => {
+  it('when WMI fails, says so and what to do, and leaves nothing in the temp folder', () => {
+    const t = deps({ powershell: wmiOff })
+    expect(scheduleFinalRemoval(plan, t.base)).toEqual({
+      ok: false,
+      reason: 'Windows did not start the step that removes Harness\'s files once this command has ended.',
+      manual: 'Close this window, then delete C:\\U\\.harness yourself.',
+      detail: 'Win32_Process.Create returned 2',
+    })
+    expect(t.written).toEqual(['C:\\T\\harness-uninstall-77-1000.cmd'])
+    expect([...t.files.keys()]).toEqual([])
+    const thrown = deps({ powershell: () => ({ status: null, stdout: '', stderr: '', error: new Error('spawnSync powershell.exe ENOENT') }) })
+    expect(scheduleFinalRemoval(plan, thrown.base)).toMatchObject({ ok: false, detail: 'spawnSync powershell.exe ENOENT' })
+    expect([...thrown.files.keys()]).toEqual([])
+  })
+
+  it('names what to delete by hand without the root when the plan keeps something in it', () => {
+    const keep = { root: 'C:\\U\\.harness', removeRoot: false, kept: ['auth', 'cli\\data'], remove: [{ path: 'C:\\U\\.harness\\bin', dir: true }, { path: 'C:\\U\\.harness\\cli\\0.5.1', dir: true }] }
+    expect(scheduleFinalRemoval(keep, deps({ powershell: wmiOff }).base)).toMatchObject({
+      ok: false, manual: 'Close this window, then delete these yourself:\n  C:\\U\\.harness\\bin\n  C:\\U\\.harness\\cli\\0.5.1',
+    })
+  })
+
+  it('reports a script it could not write', () => {
+    const unwritable = deps({ write: () => { throw new Error('EACCES') } })
+    expect(scheduleFinalRemoval(plan, unwritable.base)).toEqual({
+      ok: false,
+      reason: 'Harness could not save the step that removes its files once this command has ended.',
+      manual: 'Close this window, then delete C:\\U\\.harness yourself.',
+      detail: 'could not write C:\\T\\harness-uninstall-77-1000.cmd: EACCES',
+    })
+    expect(unwritable.scripts).toEqual([])
+  })
+
+  it('refuses a bad root or temp folder before writing or starting anything', () => {
     const t = deps()
     expect(() => scheduleFinalRemoval({ ...plan, root: 'C:\\Users\\u' }, t.base)).toThrow(/Harness will not remove/)
     expect(() => scheduleFinalRemoval(plan, deps({ tempDir: 'T' }).base)).toThrow(/Harness will not remove/)
@@ -349,17 +373,5 @@ describe('scheduleFinalRemoval', () => {
     expect(() => scheduleFinalRemoval(plan, deps({ tempDir: 'c:\\u\\.HARNESS' }).base)).toThrow(/Harness will not remove/)
     expect(t.written).toEqual([])
     expect(t.scripts).toEqual([])
-    expect(t.spawned).toEqual([])
-  })
-})
-
-describe('finalRemovalDeps', () => {
-  it('reports a cmd.exe it could not start, and does not crash later on its error', async () => {
-    const missing = join(tmpdir(), 'no-such-folder-b54', 'cmd.exe')
-    expect(() => finalRemovalDeps().spawnDetached(missing, ['/d'], tmpdir())).toThrow(/could not start/)
-    const t = { ...finalRemovalDeps(), pid: 77, tempDir: 'C:\\T', systemRoot: 'C:\\No Such Windows', write: () => {}, powershell: () => ({ status: 3, stdout: '', stderr: 'off' }) }
-    expect(scheduleFinalRemoval({ root: 'C:\\U\\.harness', remove: [], kept: [], removeRoot: true }, t)).toMatchObject({ ok: false, detail: expect.stringMatching(/could not start the last step/) })
-    // Node raises the spawn's ENOENT afterwards, as an 'error' event: unheard, it would end the CLI with exit 1.
-    await new Promise((r) => setTimeout(r, 200))
   })
 })

@@ -1,7 +1,8 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import { finalRemovalDeps, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval } from './removal.js'
 
@@ -49,9 +50,6 @@ function canLinkFiles(): boolean {
 }
 const fileLinks = process.platform === 'win32' && canLinkFiles()
 
-/** This computer's, but with WMI refusing, as on a computer where it is off: the fallback runs. */
-const withoutWmi = (pid: number) => ({ ...finalRemovalDeps(), pid, powershell: () => ({ status: 3, stdout: '', stderr: 'Win32_Process.Create returned 2' }) })
-
 const leftovers = (pid: number) => readdirSync(tmpdir()).filter((name) => name.startsWith(`harness-uninstall-${pid}-`))
 
 describe.runIf(process.platform === 'win32')('the last step of harness uninstall', () => {
@@ -62,7 +60,7 @@ describe.runIf(process.platform === 'win32')('the last step of harness uninstall
     writeFileSync(join(root, 'cli', 'current'), '0.5.1\n')
     const cli = holder(4000, join(root, 'cli', 'current'))
     const scheduled = scheduleFinalRemoval(plan(root), { ...finalRemovalDeps(), pid: cli.pid! })
-    expect(scheduled).toMatchObject({ ok: true, via: 'wmi' })
+    expect(scheduled).toMatchObject({ ok: true })
     // It waits for that process: while it runs, the tree is all there.
     await new Promise((r) => setTimeout(r, 1500))
     expect(cli.exitCode).toBe(null)
@@ -109,47 +107,37 @@ describe.runIf(process.platform === 'win32')('the last step of harness uninstall
     expect(leftovers(cli.pid!)).toEqual([])
   }, 40_000)
 
-  it('when WMI fails, the fallback waits for the process and really removes the tree', async () => {
-    const { root } = throwaway()
+  it('removes the tree after a CLI that scheduled it has exited at once, and leaves the temp folder empty', async () => {
+    const { base, root } = throwaway()
+    const temp = join(base, 'temp')
+    mkdirSync(temp)
     mkdirSync(join(root, 'cli', '0.5.1'), { recursive: true })
+    mkdirSync(join(root, 'runtime', 'node-v24-win32-arm64'), { recursive: true })
     writeFileSync(join(root, 'cli', '0.5.1', 'cli.js'), '')
     writeFileSync(join(root, 'cli', 'current'), '0.5.1\n')
-    const cli = holder(3000)
-    expect(scheduleFinalRemoval(plan(root), withoutWmi(cli.pid!))).toMatchObject({ ok: true, via: 'spawn' })
-    await new Promise((r) => setTimeout(r, 1500))
-    expect(cli.exitCode).toBe(null)
-    expect(existsSync(join(root, 'cli', 'current'))).toBe(true)
-    await until(() => !existsSync(root))
-    expect(existsSync(root)).toBe(false)
-    await new Promise((r) => setTimeout(r, 1000))
-    expect(leftovers(cli.pid!)).toEqual([])
-  }, 40_000)
-
-  it('when WMI fails, the fallback writes its log: here a folder that became a junction while it waited', async () => {
-    const { base, root } = throwaway()
-    mkdirSync(join(root, 'cli', '0.5.1'), { recursive: true })
-    mkdirSync(join(root, 'cli', 'data'), { recursive: true })
-    writeFileSync(join(root, 'cli', '0.5.1', 'cli.js'), 'c')
-    writeFileSync(join(root, 'cli', 'data', 'd.json'), 'd')
-    const cli = holder(2000)
-    const scheduled = scheduleFinalRemoval(plan(root, true), withoutWmi(cli.pid!))
-    expect(scheduled).toMatchObject({ ok: true, via: 'spawn' })
-    if (!scheduled.ok) return
-    // While the script waits: root\cli becomes a junction to a folder outside the root, holding the same files.
-    const moved = join(base, 'moved-cli')
-    renameSync(join(root, 'cli'), moved)
-    symlinkSync(moved, join(root, 'cli'), 'junction')
-    await until(() => existsSync(scheduled.log))
+    // The CLI's stand-in: a node.exe of its own that schedules the last step for itself, through WMI, and exits.
+    const child = join(base, 'cli-stand-in.mts')
+    writeFileSync(child, [
+      `import { finalRemovalDeps, listEntries, removalPlan, scheduleFinalRemoval } from ${JSON.stringify(new URL('./removal.ts', import.meta.url).href)}`,
+      'const root = process.env.HARNESS_TEST_ROOT',
+      "const plan = removalPlan({ platform: 'win32', root, cliDir: root + '\\\\cli', dataDir: root + '\\\\cli\\\\data', entries: listEntries(root), cliEntries: listEntries(root + '\\\\cli'), keepData: false })",
+      'process.stdout.write(JSON.stringify(scheduleFinalRemoval(plan, { ...finalRemovalDeps(), tempDir: process.env.HARNESS_TEST_TEMP })))',
+      'process.exit(0)',
+    ].join('\n'))
     try {
-      expect(readFileSync(scheduled.log, 'utf8')).toContain('has become a link to another folder')
-      expect(readFileSync(join(moved, '0.5.1', 'cli.js'), 'utf8')).toBe('c')
-      expect(readFileSync(join(moved, 'data', 'd.json'), 'utf8')).toBe('d')
-      await until(() => !existsSync(scheduled.script), 5000)
-      expect(existsSync(scheduled.script)).toBe(false)
+      const ran = spawnSync(process.execPath, ['--import', 'tsx', child], {
+        cwd: fileURLToPath(new URL('../../..', import.meta.url)), encoding: 'utf8', timeout: 60_000,
+        env: { ...process.env, HARNESS_TEST_ROOT: root, HARNESS_TEST_TEMP: temp },
+      })
+      expect(ran.status, ran.stderr).toBe(0)
+      expect(JSON.parse(ran.stdout)).toMatchObject({ ok: true })
+      await until(() => !existsSync(root) && readdirSync(temp).length === 0)
+      expect(existsSync(root)).toBe(false)
+      expect(readdirSync(temp)).toEqual([])
     } finally {
-      unlinkSync(scheduled.log)
+      rmSync(base, { recursive: true, force: true })
     }
-  }, 40_000)
+  }, 90_000)
 
   it('with --keep-data leaves cli\\data and the person\'s data', async () => {
     const { root } = throwaway()
