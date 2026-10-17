@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
   opendirSync, readSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 as winPath } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { MAX_CATALOG_HOMES, readHomeCatalog, type HomeCatalog, type HomeCatalogRead } from './homeCatalog.js'
 import { IdentityReadUnavailable } from './identityScan.js'
@@ -44,9 +44,16 @@ const inspect = (info: BigIntStats, directory = false): void => inspectJournalEn
 export function homeIsAbsolute(home: string, platform: NodeJS.Platform = hostPlatform()): boolean {
   return platform === 'win32' ? /^[A-Za-z]:\\/.test(home) : home.startsWith('/')
 }
-/** A Windows home that is a network share (`\\\\server\\share`) or a device path (`\\\\?\\`, `\\\\.\\`): `homeIsAbsolute` refuses it. */
+/** A Windows home that is a network share (`\\server\share`) or a device path (`\\?\`, `\\.\`): `homeIsAbsolute` refuses it. */
 export function homeIsNetworkOrDevice(home: string, platform: NodeJS.Platform = hostPlatform()): boolean {
   return platform === 'win32' && /^[\\/]{2}/.test(home)
+}
+const FOLDER_OF: Record<string, string> = { CODEX_HOME: '.codex', CLAUDE_CONFIG_DIR: '.claude' }
+/** The sentence a person sees when a setting names a network or device path: the setting, then what to set it to. */
+export function networkHomeSentence(variable: string, profile: string): string {
+  const folder = FOLDER_OF[variable]
+  return `${variable} names a network or device path, which Harness does not use for an engine home on Windows. `
+    + `Set it to a folder on this computer's drive${folder ? `, such as ${winPath.join(profile, folder)}` : ''}.`
 }
 function read(file: string, check: () => void, max = MAX_BYTES + 1024): FileRead | null {
   check()

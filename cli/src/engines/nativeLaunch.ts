@@ -1,6 +1,7 @@
 /** Eager preparation shared by every way core starts a native engine. */
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { engineName } from '../lib/agentNames.js'
 import { failureReason } from '../lib/failureReason.js'
@@ -11,6 +12,7 @@ import { windowsEngineArgv } from '../lib/windows/launch.js'
 import { engineHooks } from './hooks.js'
 import * as hooks from './nativeHooks.js'
 import { captureLaunchExecutable, LAUNCH_LOCATION_VARIABLES } from './kit/launchExecutable.js'
+import { homeIsNetworkOrDevice, networkHomeSentence } from './kit/homeAdoption.js'
 import { startupOwnedFlag } from './kit/launchStartup.js'
 import { launchContract } from './launches.js'
 import type { HookPreparationProof } from './kit/nativeHookFiles.js'
@@ -50,7 +52,7 @@ export type NativeLaunchResult =
       /** No wait ends this by itself: the selected executable ran and failed, or this request's own installer
        *  did. A creation is refused with this code rather than held (core/agents/create.ts); a relaunch,
        *  which nobody is waiting on, still holds. */
-      refusal?: 'ENGINE_CANNOT_RUN' | 'ENGINE_INSTALL_FAILED'
+      refusal?: 'ENGINE_CANNOT_RUN' | 'ENGINE_INSTALL_FAILED' | 'ENGINE_LAUNCH_REFUSED'
       /** Harness is installing the engine for this launch (engines/prepareNativeLaunch.ts). */
       installing?: true }
 const waiting = (detail: string): Extract<NativeLaunchResult, { ok: false }> => ({ ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail })
@@ -120,6 +122,10 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
   if (source.codexHome) selected.CODEX_HOME = source.codexHome
   if (source.claudeHome) selected.CLAUDE_CONFIG_DIR = source.claudeHome
   if (source.hermesHome) selected.HERMES_HOME = source.hermesHome
+  // Windows: a network or device path is no engine home. A creation is refused with the sentence naming the setting.
+  for (const [key, path] of Object.entries(selected)) {
+    if (key !== 'PATH' && path && homeIsNetworkOrDevice(path)) return { ...waiting(networkHomeSentence(key, homedir())), refusal: 'ENGINE_LAUNCH_REFUSED' }
+  }
   // Empty location variables use their native default. Relative locations cannot
   // be prepared independently of a changing pane cwd.
   if (Object.entries(selected).some(([key, path]) => key !== 'PATH' && path && (!isAbsolute(path) || path.includes('\0') || path.length > 4096))) {

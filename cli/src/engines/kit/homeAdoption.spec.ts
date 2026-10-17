@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createHomeAdopter, homeIsAbsolute, inspectJournalEntry, readAdoptedHomes } from './homeAdoption.js'
+import { createHomeAdopter, homeIsAbsolute, homeIsNetworkOrDevice, inspectJournalEntry, networkHomeSentence, readAdoptedHomes } from './homeAdoption.js'
 import { NATIVE_EVIDENCE_MS } from './nativeEvidence.js'
 
 const clock = vi.hoisted(() => ({ now: 0, remaining: Infinity }))
@@ -336,6 +336,18 @@ describe('the adoption journal on Windows', () => {
     expect(homeIsAbsolute('/Users/u/.claude', 'win32')).toBe(false)
     expect(homeIsAbsolute('/Users/u/.claude', 'darwin')).toBe(true)
     expect(homeIsAbsolute('C:\\Users\\u\\.claude', 'linux')).toBe(false)
+  })
+
+  it('catches a network or device path on Windows alone', () => {
+    for (const home of ['\\\\server\\share\\.codex', '\\\\?\\C:\\Users\\u', '\\\\.\\pipe\\x', '//server/share']) expect(homeIsNetworkOrDevice(home, 'win32')).toBe(true)
+    for (const home of ['C:\\Users\\u\\.codex', 'C:/Users/u/.codex', '/Users/u/.codex', '']) expect(homeIsNetworkOrDevice(home, 'win32')).toBe(false)
+    for (const platform of ['darwin', 'linux'] as const) expect(homeIsNetworkOrDevice('\\\\server\\share', platform)).toBe(false)
+  })
+
+  it('names the setting and a folder in the person\'s own profile', () => {
+    expect(networkHomeSentence('CODEX_HOME', 'C:\\Users\\ann')).toBe('CODEX_HOME names a network or device path, which Harness does not use for an engine home on Windows. Set it to a folder on this computer\'s drive, such as C:\\Users\\ann\\.codex.')
+    expect(networkHomeSentence('CLAUDE_CONFIG_DIR', 'C:\\Users\\ann')).toContain('such as C:\\Users\\ann\\.claude.')
+    expect(networkHomeSentence('HERMES_HOME', 'C:\\Users\\ann')).toMatch(/drive\.$/)
   })
 
   it('round-trips a home built from the real temp folder through seal and inspect on this host', () => {

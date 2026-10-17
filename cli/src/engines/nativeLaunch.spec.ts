@@ -97,6 +97,23 @@ it('keeps installer-only work distinct from a confirmed executable', async () =>
   expect(await inspectNativeLaunch('opencode')).toMatchObject({ ok: false, unavailable: 'native', install: recipe })
   expect(hooks.installOpencodePlugin).not.toHaveBeenCalled()
 })
+const host = vi.hoisted(() => ({ win32: false }))
+vi.mock('./kit/windowsFiles.js', async original => {
+  const actual = await original<typeof import('./kit/windowsFiles.js')>()
+  return { ...actual, hostPlatform: () => host.win32 ? 'win32' : actual.hostPlatform() }
+})
+it.each(['codexHome', 'claudeHome'] as const)('refuses a creation whose %s is a network path on Windows, with the sentence naming the setting', async key => {
+  host.win32 = true
+  try {
+    const result = await inspectNativeLaunch(key === 'codexHome' ? 'codex' : 'claude', { [key]: '\\\\server\\share\\x' })
+    const variable = key === 'codexHome' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'
+    expect(result).toMatchObject({ ok: false, refusal: 'ENGINE_LAUNCH_REFUSED' })
+    expect((result as { detail: string }).detail).toMatch(new RegExp(`^${variable} names a network or device path, which Harness does not use for an engine home on Windows\\. Set it to`))
+  } finally { host.win32 = false }
+})
+it('does not refuse a double-slash location off Windows', async () => {
+  expect(await inspectNativeLaunch('codex', { codexHome: '//server/share/x' })).not.toMatchObject({ refusal: 'ENGINE_LAUNCH_REFUSED' })
+})
 it('holds incomplete capture and relative homes', async () => {
   vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'held', detail: 'fixture shell unavailable' })
   expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: false, detail: 'fixture shell unavailable' })

@@ -59,17 +59,29 @@ describe('the homes the person moved', () => {
   })
 
   it.each(['\\\\server\\share\\.claude', '\\\\?\\C:\\Users\\u\\.claude', '//server/share/.claude', '\\\\.\\pipe\\x'])(
-    'on Windows refuses the network or device path %s by naming the setting, and writes nothing', (path) => {
+    'on Windows drops the network or device path %s for that engine alone, says so once, and writes nothing', (path) => {
       host.win32 = true
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       try {
-        expect(() => adoptEngineHomes({ CODEX_HOME: path }, defaults)).toThrow('CODEX_HOME names a network or device path, which Harness does not use for an engine home on Windows')
-        expect(() => adoptEngineHomes({ CLAUDE_CONFIG_DIR: path }, defaults)).toThrow(/^CLAUDE_CONFIG_DIR names a network or device path/)
-        expect(() => confirmHomes({ CODEX_HOME: path })).toThrow(/CODEX_HOME names a network/)
-        expect(() => launchCodexHome(null, { CODEX_HOME: path })).toThrow(/CODEX_HOME names a network/)
-        expect(() => launchClaudeConfigDir({ CLAUDE_CONFIG_DIR: path })).toThrow(/CLAUDE_CONFIG_DIR names a network/)
+        expect(adoptEngineHomes({ CODEX_HOME: path }, defaults)).toEqual({ claude: null, codex: null })
+        expect(adoptEngineHomes({ CODEX_HOME: path }, defaults)).toEqual({ claude: null, codex: null })
+        expect(confirmHomes({ CODEX_HOME: path })).toEqual({ claude: null, codex: null })
+        expect(warn).toHaveBeenCalledTimes(1)
+        expect(String(warn.mock.calls[0][0])).toContain('CODEX_HOME names a network or device path, which Harness does not use for an engine home on Windows. Set it to')
         expect(existsSync(saved())).toBe(false)
-      } finally { host.win32 = false }
+      } finally { host.win32 = false; warn.mockRestore() }
     })
+
+  it('reads stay lenient on Windows: a network CODEX_HOME never throws from the read paths', () => {
+    host.win32 = true
+    try {
+      const environment = { CODEX_HOME: '\\\\server\\share\\x', CLAUDE_CONFIG_DIR: '\\\\server\\share\\y' }
+      expect(() => sessionCodexHome({})).not.toThrow()
+      expect(() => sessionClaudeHome({})).not.toThrow()
+      expect(() => launchCodexHome(null, environment)).not.toThrow()
+      expect(() => launchClaudeConfigDir(environment)).not.toThrow()
+    } finally { host.win32 = false }
+  })
 
   it('does not change on mac or Linux: a leading double slash is an ordinary path there', () => {
     const odd = '//server/share/.codex'

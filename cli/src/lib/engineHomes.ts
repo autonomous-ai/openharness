@@ -29,7 +29,7 @@ import { sessionStoreContracts, sessionStoreOf, type SessionStoreEngine } from '
 import type { AgentEngine } from '../engines/types.js'
 import { loginShellEnvironment } from './loginShellEnv.js'
 import { MAX_CATALOG_HOMES, readHomeCatalog, type HomeCatalog } from '../engines/kit/homeCatalog.js'
-import { createHomeAdopter, homeIsNetworkOrDevice, readAdoptedHomes } from '../engines/kit/homeAdoption.js'
+import { createHomeAdopter, homeIsNetworkOrDevice, networkHomeSentence, readAdoptedHomes } from '../engines/kit/homeAdoption.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 
 /** The homes each engine's person moved (its session store's `sessions.moved.variable`), by engine, as saved. */
@@ -42,6 +42,8 @@ let nativeKnownHomes: HomeCatalog = { claude: [], codex: [] }
 let nativeCatalogOverflow = false
 let pendingCatalogFile = ''
 let pendingHomes: HomeCatalog = { claude: [], codex: [] }
+/** Refused-home sentences already logged (the adoption retries every second). */
+const refusedHomes = new Set<string>()
 let pendingAdopter: ReturnType<typeof createHomeAdopter> | undefined
 
 const savedFile = (): string => join(env.ADAPTER_DATA_DIR, 'engine-homes.json')
@@ -124,7 +126,12 @@ function adopt(environment: NodeJS.ProcessEnv, own: Partial<Record<SessionStoreE
   const writer = adopter(file)
   const requested = (value: string | undefined, home: string, variable: string): string | null => {
     const dir = value?.trim()
-    refuseNetworkHome(dir, variable)
+    if (dir && homeIsNetworkOrDevice(dir)) {
+      // Refused for this engine alone, and said once: the others still adopt, and a retry does not repeat it.
+      const sentence = networkHomeSentence(variable, homedir())
+      if (!refusedHomes.has(sentence)) { refusedHomes.add(sentence); console.warn(`[hooks] ${sentence}`) }
+      return null
+    }
     // A relative or `~` path is not a folder the engine resolves the same way from every directory.
     if (!dir || !isAbsolute(dir)) return null
     const moved = resolve(dir)
@@ -285,16 +292,10 @@ function launchEnvironment(): NodeJS.ProcessEnv {
   return { ...process.env, ...loginShellEnvironment() }
 }
 
-/** On Windows a moved home on a network share or a device path is refused, naming the setting: before anything is written. */
-function refuseNetworkHome(dir: string | undefined, variable: string): void {
-  if (dir && homeIsNetworkOrDevice(dir)) throw new Error(`${variable} names a network or device path, which Harness does not use for an engine home on Windows`)
-}
-
 /** A home an environment moves, absolute; null for none, or for one the engine would not resolve the
  *  same way from every folder (relative, `~`). */
-function movedHome(value: string | undefined, variable?: string): string | null {
+function movedHome(value: string | undefined): string | null {
   const dir = value?.trim()
-  if (variable) refuseNetworkHome(dir, variable)
   return dir && isAbsolute(dir) ? resolve(dir) : null
 }
 
@@ -311,7 +312,7 @@ export function launchCodexHome(codexHome: string | null | undefined, environmen
 
 /** The same, for the home any daemon setting names (an engine's launch contract declares which: engines/launches.ts). */
 export function launchHome(setting: FolderSetting, profile: string | null | undefined, environment: NodeJS.ProcessEnv = launchEnvironment()): string {
-  return profile || movedHome(environment[setting], setting) || env[setting]
+  return profile || movedHome(environment[setting]) || env[setting]
 }
 
 /** Found by QA on a quiet machine: activity, close and Monitor looked at another server when the process's
@@ -369,7 +370,7 @@ export function launchClaudeConfigDir(environment: NodeJS.ProcessEnv = launchEnv
 export function launchHomeOf(home: LaunchHome, profile: string | null | undefined, environment: NodeJS.ProcessEnv = launchEnvironment()): string {
   if ('setting' in home) return launchHome(home.setting, profile, environment)
   const personal = launchPersonalHome(environment)
-  return movedHome(environment[home.variable], home.variable) || (home.otherwise === 'home' ? personal : join(personal, home.otherwise.folder))
+  return movedHome(environment[home.variable]) || (home.otherwise === 'home' ? personal : join(personal, home.otherwise.folder))
 }
 
 /** The person's home folder for a launch made now: the HOME its shell sets, else this process's. */
@@ -394,5 +395,6 @@ export function resetEngineHomes(): void {
   nativeCatalogOverflow = false
   pendingCatalogFile = ''
   pendingAdopter = undefined
+  refusedHomes.clear()
   pendingHomes = { claude: [], codex: [] }
 }

@@ -11,7 +11,7 @@ describe('engine homes on Windows', () => {
   it('has an entry for every engine Harness reaches through hooks or a plugin on Windows', () => {
     const hooked = [
       ...Object.entries(hookContracts).filter(([, contract]) => contract.settings.win32Runner).map(([engine]) => engine),
-      ...[COPILOT_HOOK_SETTINGS, COMMANDCODE_HOOK_SETTINGS].map((rule) => rule.engine),
+      ...[COPILOT_HOOK_SETTINGS, COMMANDCODE_HOOK_SETTINGS].filter((rule) => rule.win32Runner).map((rule) => rule.engine),
       'opencode', 'kilo', 'pi',
     ]
     expect(Object.keys(WINDOWS_ENGINE_HOMES).sort()).toEqual([...new Set(hooked)].sort())
