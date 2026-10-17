@@ -34,7 +34,7 @@ import { TMUX_KEYS } from './terminalKeys.js'
 import { processIdentityOf, sameProcessIdentity, terminalRouteKey } from './terminalRuntime.js'
 import { windowsProcessRows } from './windows/processTable.js'
 import { defaultWindowsShell } from './windows/shell.js'
-import { taskkillTree, type TreeKillOutcome } from './windows/taskkill.js'
+import { endProcessTree, processTreeKillDeps, type TreeKillOutcome } from './windows/treeKill.js'
 import {
   TERMINAL_ACTION_SUCCEEDED,
   terminalActionNotStarted,
@@ -94,8 +94,8 @@ export interface PtyHostBackendOptions {
   owner?: () => string
   /** The platform it runs on (`process.platform`); a seam for the Windows wiring's tests. */
   platform?: NodeJS.Platform
-  /** `taskkill` on a process tree (windows/taskkill.ts); a seam for tests. */
-  taskkill?: (pid: number, force: boolean) => Promise<TreeKillOutcome>
+  /** End a process and its descendants (windows/treeKill.ts `endProcessTree`); a seam for tests. */
+  endTree?: (pid: number) => Promise<TreeKillOutcome>
 }
 
 /**
@@ -158,7 +158,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
   private hostIdentity: ProcessIdentity | null = null
   private readonly owner: () => string
   private readonly platform: NodeJS.Platform
-  private readonly taskkill: (pid: number, force: boolean) => Promise<TreeKillOutcome>
+  private readonly endTree: (pid: number) => Promise<TreeKillOutcome>
   /** Whether this backend set the process table source and the agent signaller (Windows), for `dispose`. */
   private windowsSeams = false
   private client: PtyHostClient | null = null
@@ -196,7 +196,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     this.launch = options.launch ?? (this.draining
       ? ((home) => reachPtyHost(home, protocol, liveness))
       : ((home) => ensurePtyHost(home, { liveness })))
-    this.taskkill = options.taskkill ?? ((pid, force) => taskkillTree(pid, force))
+    this.endTree = options.endTree ?? ((pid) => this.endTreeOf(pid))
   }
 
   /** `ptyhost:<instance>`, the instance being the host's (`p<protocol>`), known once `prepare` reached it. */
@@ -354,7 +354,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
   /**
    * Windows has no `ps` and no signals. The process table is the host's (windows/processTable.ts): asked of
    * whichever client is connected at each read, so a reconnect is followed, and of `harness-pty ps` while none
-   * is. An agent's process is ended with `taskkill` (`signalProcess`).
+   * is. An agent's process is ended with its descendants by TerminateProcess (`signalProcess`).
    */
   private installWindowsSeams(): void {
     this.windowsSeams = true
@@ -363,13 +363,14 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
   }
 
   /**
-   * `process.kill` on Windows, for `signalAgentProcess`: `taskkill /PID <pid> /T /F`, fire and forget, as a
-   * signal is. Its caller has just checked [pid]'s identity (`terminateDeletedAgent`), and checks again for
-   * the outcome, escalating as it does on Unix.
+   * `process.kill` on Windows, for `signalAgentProcess`: [pid] and every process under it in the host's table end by
+   * TerminateProcess, leaves first (windows/treeKill.ts), fire and forget, as a signal is. Its caller has just
+   * checked [pid]'s identity (`terminateDeletedAgent`), and checks again for the outcome, escalating as it does on
+   * Unix. Not `taskkill /T /F`: Windows refused it to a standard user in an SSH session (treeKill.ts).
    *
-   * SIGTERM is forced too. Windows has no graceful signal for a console process: `taskkill` without /F only
-   * asks its windows to close, which a console engine has none of, and Node's own `process.kill` is
-   * `TerminateProcess` whatever the signal.
+   * SIGTERM ends the tree too. Windows has no graceful signal for a console process: there is no window to ask to
+   * close (all `taskkill` without /F does), and Node's own `process.kill` is TerminateProcess whatever the
+   * signal.
    *
    * The pane is never closed here, even when [pid] is its root (the engine is, in a pty host pane). A restart or
    * a swap holds the pane open, ends its engine through this, then respawns in the same pane
@@ -378,10 +379,31 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
    * remain-on-exit.
    */
   signalProcess(pid: number, signal: AgentSignal): void {
-    void this.taskkill(pid, true).then((outcome) => {
-      if (outcome === 'failed') console.error(`[terminal] ptyhost: taskkill could not end pid ${pid} (${signal})`)
+    void this.endTree(pid).then((outcome) => {
+      if (outcome === 'failed') console.error(`[terminal] ptyhost: could not end pid ${pid} (${signal})`)
     }).catch((error: unknown) => {
       console.error(`[terminal] ptyhost: could not ${signal} pid ${pid}: ${error instanceof Error ? error.message : String(error)}`)
+    })
+  }
+
+  /**
+   * `endProcessTree` over the connected host's table (`harness-pty ps` while none is). A descendant that would not
+   * end is said here, as the walk goes on past it; one already gone is not.
+   */
+  private endTreeOf(pid: number): Promise<TreeKillOutcome> {
+    const deps = processTreeKillDeps(this.client)
+    return endProcessTree(pid, {
+      ...deps,
+      kill: (target) => {
+        try {
+          deps.kill(target)
+        } catch (error) {
+          if (target !== pid && (error as NodeJS.ErrnoException).code !== 'ESRCH') {
+            console.error(`[terminal] ptyhost: could not end pid ${target}, under pid ${pid}: ${(error as Error).message}`)
+          }
+          throw error
+        }
+      },
     })
   }
 

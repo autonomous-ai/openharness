@@ -33,7 +33,7 @@ interface BackendOptions {
   owner?: string
   stream?: () => Promise<unknown>
   platform?: NodeJS.Platform
-  taskkill?: (pid: number, force: boolean) => Promise<'sent' | 'gone' | 'failed'>
+  endTree?: (pid: number) => Promise<'sent' | 'gone' | 'failed'>
 }
 
 function backendWith(replies: Record<string, Reply>, options: BackendOptions = {}) {
@@ -57,7 +57,7 @@ function backendWith(replies: Record<string, Reply>, options: BackendOptions = {
     owner: () => options.owner ?? 'me',
     // The platform is the test's, not the machine's: off Windows unless it says otherwise.
     platform: options.platform ?? 'linux',
-    ...(options.taskkill ? { taskkill: options.taskkill } : {}),
+    ...(options.endTree ? { endTree: options.endTree } : {}),
   })
   const emit = (event: PtyEvent) => { for (const listener of listeners) listener(event) }
   return { backend, calls, emit }
@@ -681,34 +681,71 @@ describe('PtyHostBackend on Windows: the process table and the agent signaller',
     expect(setAgentSignaller).not.toHaveBeenCalled()
   })
 
-  it('ends every pid with taskkill /T /F, a pane root too, and never closes the pane', async () => {
-    const taskkill = vi.fn(async () => 'sent' as const)
-    const { calls } = await ready({ inventory: inventory([{ pane: '%3', rootPid: 900 }]) }, { platform: 'win32', taskkill })
+  it('ends every pid\'s tree, a pane root too, for SIGTERM and SIGKILL alike, and never closes the pane', async () => {
+    const endTree = vi.fn(async () => 'sent' as const)
+    const { calls } = await ready({ inventory: inventory([{ pane: '%3', rootPid: 900 }]) }, { platform: 'win32', endTree })
     // The root of a pane (a restart's held pane must survive its engine) and any other process alike.
     for (const [pid, signal] of [[900, 'SIGTERM'], [900, 'SIGKILL'], [905, 'SIGTERM'], [905, 'SIGKILL']] as const) {
-      taskkill.mockClear()
+      endTree.mockClear()
       signalAgentProcess(pid, signal)
-      await vi.waitFor(() => expect(taskkill).toHaveBeenCalledExactlyOnceWith(pid, true))
+      await vi.waitFor(() => expect(endTree).toHaveBeenCalledExactlyOnceWith(pid))
     }
     expect(calls.some((op) => op.op === 'kill' || op.op === 'inventory')).toBe(false)
   })
 
-  it('says when taskkill could not end the process', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    await ready({}, { platform: 'win32', taskkill: vi.fn(async () => 'failed' as const) })
+  it('ends the tree with TerminateProcess over the host\'s table, leaves first, and never with taskkill', async () => {
+    const rows = [
+      { ...ROW, pid: 900, parentPid: 4, startMarker: 'w:100' },
+      { ...ROW, pid: 901, parentPid: 900, startMarker: 'w:110' },
+      { ...ROW, pid: 902, parentPid: 901, startMarker: 'w:120' },
+      // A parent pid reused: started before the root, so not the root's.
+      { ...ROW, pid: 700, parentPid: 900, startMarker: 'w:99' },
+    ]
+    const { calls } = await ready({ processes: { state: 'ok', value: { rows } } }, { platform: 'win32' })
+    const killed: Array<[number, unknown]> = []
+    const kill = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal: unknown) => { killed.push([pid, signal]); return true }) as typeof process.kill)
     signalAgentProcess(900, 'SIGTERM')
-    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: taskkill could not end pid 900 (SIGTERM)'))
+    await vi.waitFor(() => expect(killed).toEqual([[902, 'SIGKILL'], [901, 'SIGKILL'], [900, 'SIGKILL']]))
+    expect(calls.filter((op) => op.op === 'processes')).toHaveLength(1)
+    kill.mockRestore()
+  })
+
+  it('says which descendant would not end, and goes on to the root; a gone one it says nothing of', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const rows = [
+      { ...ROW, pid: 900, parentPid: 4, startMarker: 'w:100' },
+      { ...ROW, pid: 901, parentPid: 900, startMarker: 'w:110' },
+      { ...ROW, pid: 902, parentPid: 900, startMarker: 'w:120' },
+    ]
+    await ready({ processes: { state: 'ok', value: { rows } } }, { platform: 'win32' })
+    const killed: number[] = []
+    vi.spyOn(process, 'kill').mockImplementation(((pid: number) => {
+      killed.push(pid)
+      if (pid === 901) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' })
+      if (pid === 902) throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' })
+      return true
+    }) as typeof process.kill)
+    signalAgentProcess(900, 'SIGKILL')
+    await vi.waitFor(() => expect(killed).toEqual([901, 902, 900]))
+    expect(error.mock.calls).toEqual([['[terminal] ptyhost: could not end pid 901, under pid 900: kill EPERM']])
+  })
+
+  it('says when it could not end the process', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await ready({}, { platform: 'win32', endTree: vi.fn(async () => 'failed' as const) })
+    signalAgentProcess(900, 'SIGTERM')
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not end pid 900 (SIGTERM)'))
   })
 
   it('logs a signal it could not send at all', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const taskkill = vi.fn(async () => { throw new Error('spawn failed') })
-    const { backend } = await ready({}, { platform: 'win32', taskkill })
+    const endTree = vi.fn(async () => { throw new Error('spawn failed') })
+    const { backend } = await ready({}, { platform: 'win32', endTree })
     backend.dispose()
     backend.signalProcess(77, 'SIGTERM')
     await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not SIGTERM pid 77: spawn failed'))
     const odd = vi.fn(async () => { throw 'odd' })
-    const other = (await ready({}, { platform: 'win32', taskkill: odd })).backend
+    const other = (await ready({}, { platform: 'win32', endTree: odd })).backend
     other.dispose()
     other.signalProcess(78, 'SIGKILL')
     await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[terminal] ptyhost: could not SIGKILL pid 78: odd'))

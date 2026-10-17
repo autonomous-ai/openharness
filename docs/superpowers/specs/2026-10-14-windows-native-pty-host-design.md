@@ -194,11 +194,17 @@ pid therefore cannot pass, even with a colliding start time. Orca documents this
   `cli/src/lib/processSignals.ts`. Callers check the process's identity first, as before. Daemon and
   service kills are sub-project B.
   - Unix keeps `process.kill`.
-  - Windows (the ptyhost backend installs the signaller) runs `taskkill /PID <pid> /T /F` for both
-    SIGTERM and SIGKILL: a console engine has no window for a graceful `taskkill` to close. It never
-    closes a pane, even when the pid is the pane's root: a restart or swap holds the pane open, ends
-    its engine through the seam and respawns in the same pane (`windows/taskkill.ts`, adapted from
-    Orca's tree kill).
+  - Windows (the ptyhost backend installs the signaller) ends the pid and its descendants with
+    TerminateProcess, for both SIGTERM and SIGKILL: a console engine has no window to ask to close.
+    The descendants come from one read of the host's process table, by parent pid, a child taken only
+    when its start marker is no earlier than its parent's (a reused parent pid names a newer process),
+    and they end leaves first, the pid last (`windows/treeKill.ts` `endProcessTree`). It never closes
+    a pane, even when the pid is the pane's root: a restart or swap holds the pane open, ends its
+    engine through the seam and respawns in the same pane.
+  - Ruling 2026-10-16: this replaced `taskkill /PID <pid> /T /F` (adapted from Orca's tree kill).
+    Windows refuses `taskkill` to a standard user in an SSH session, even for that user's own
+    processes (it goes through WMI, which turns down a non-admin network-logon token), while
+    TerminateProcess works.
   - The liveness probe (signal 0) is unchanged.
 - **Process groups** (pgid/tpgid, negative-pid kills) have no Windows equivalent. The pane's Job takes
   the "whole group" role.
@@ -361,7 +367,7 @@ remote machine, which tests the remote-machine use before sub-project C exists. 
 
 | Orca source | Use |
 |---|---|
-| `src/main/windows-process-tree-kill.ts` | The `taskkill /T /F` tree kill behind the agent signaller (A, section 3). `src/main/windows-pty-root-identity.ts` was read for its identity gap (section 3, Identity), not reused |
+| `src/main/windows-process-tree-kill.ts` | Was the `taskkill /T /F` tree kill behind the agent signaller (A, section 3); ruling 2026-10-16 replaced it with a TerminateProcess walk of the host's process table (`windows/treeKill.ts`, not adapted). `src/main/windows-pty-root-identity.ts` was read for its identity gap (section 3, Identity), not reused |
 | `src/main/git-bash.ts`, `src/main/pwsh.ts`, `src/main/providers/windows-powershell-executable.ts`, `src/main/providers/windows-shell-args.ts`, `src/main/providers/windows-shell-fallback-chain.ts` | Shell detection; A needs a PowerShell default, B the rest |
 | `src/main/pty/windows-environment-path.ts` and the registry PATH reader/merge | Engine environment (B) |
 | Two-role connections, versioned hello, batched output with backpressure, Job per shell (Orca's is not kill-on-close; ours is, see section 3), OSC 7 cwd, bundled `conpty.dll`/OpenConsole | Design ideas only, reimplemented |

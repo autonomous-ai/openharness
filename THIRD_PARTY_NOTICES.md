@@ -6,10 +6,8 @@ also names its source in a header comment.
 
 ## Orca
 
-The Harness CLI's Windows process control is adapted from Orca (https://github.com/stablyai/orca):
+Part of the Harness CLI's Windows support is adapted from Orca (https://github.com/stablyai/orca):
 
-- `cli/src/lib/windows/taskkill.ts`, from `src/main/windows-process-tree-kill.ts` (the `taskkill /T`
-  tree kill and its bounds: a timeout, never the calling process).
 - `cli/src/lib/windows/shell.ts`, from `src/main/providers/windows-shell-fallback-chain.ts` (the order of
   the Windows shells a pane falls back through: PowerShell 7, Windows PowerShell, the command processor).
 
