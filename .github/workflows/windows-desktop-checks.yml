@@ -1,0 +1,65 @@
+name: Windows desktop checks
+
+# Experimental Windows 11 / WSL2 hosting (see desktop/WINDOWS_QUICKSTART.md).
+# Only manual and reusable invocations for now, matching the house pattern in
+# authoring-browser-checks.yml: automatic selection can be wired into ci.yml by
+# maintainers once the Windows build is qualified on a real machine.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-desktop:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      # Same toolchain resolution as ci.yml: the Flutter pin lives in
+      # release-desktop.yml and is bumped deliberately.
+      - id: toolchain
+        run: |
+          $version = (Select-String -Path .github/workflows/release-desktop.yml -Pattern "FLUTTER_VERSION: '([^']+)'").Matches[0].Groups[1].Value
+          if (-not $version) { throw 'FLUTTER_VERSION not found in release-desktop.yml' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - uses: ./.github/actions/desktop-flutter
+        with:
+          version: ${{ steps.toolchain.outputs.version }}
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Resolve desktop packages
+        working-directory: desktop
+        run: flutter pub get
+
+      - name: Analyze desktop
+        working-directory: desktop
+        run: flutter analyze
+
+      - name: Test desktop
+        working-directory: desktop
+        run: flutter test --concurrency 4
+
+      - name: Build Windows release
+        working-directory: desktop
+        run: flutter build windows --release
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22.23.2'
+
+      - name: Typecheck the CLI the Windows host runs in WSL2
+        working-directory: cli
+        run: |
+          npm ci --ignore-scripts
+          npm run typecheck

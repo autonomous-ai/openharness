@@ -1003,7 +1003,9 @@ class TerminalSession extends ChangeNotifier {
   Terminal _newTerminal({bool bindCallbacks = true}) {
     final result = Terminal(
       maxLines: 10000,
-      platform: defaultTargetPlatform == TargetPlatform.linux
+      platform: defaultTargetPlatform == TargetPlatform.windows
+          ? TerminalTargetPlatform.windows
+          : defaultTargetPlatform == TargetPlatform.linux
           ? TerminalTargetPlatform.linux
           : TerminalTargetPlatform.macos,
       // ⌥⏎ and ⌥⌫ have to become Meta-prefixed before they reach the pty, or the engine's prompt

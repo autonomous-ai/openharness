@@ -16,6 +16,8 @@ import 'web_release.dart';
 /// `version.txt` next to the built executable; this reads that back when it
 /// exists and falls through to [PackageInfo] everywhere else — macOS,
 /// Windows, or a Linux dev build with no packaged `version.txt`.
+/// Windows previews use the same file to retain the prerelease suffix
+/// that cannot be stamped into numeric PE version resources.
 ///
 /// A browser reads its host's `release.json` instead, the version a deploy is
 /// checked against; `flutter run` serves none and falls through as well.
@@ -27,7 +29,7 @@ Future<String> runningAppVersion({
     final released = await webReleaseVersion();
     if (released != null) return released;
   }
-  if (RuntimePlatform.isLinux) {
+  if (RuntimePlatform.isLinux || RuntimePlatform.isWindows) {
     final exe = File(executablePath ?? RuntimePlatform.resolvedExecutable);
     final versionFile = File('${exe.parent.path}/version.txt');
     try {

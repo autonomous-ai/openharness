@@ -517,8 +517,8 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
             ? widget.notifier.retryEnvironmentSetup
             : widget.notifier.startEnvironmentSetup;
       case EnvironmentSetupPhase.failed:
-        label = 'Retry';
-        action = manual || !widget.notifier.environmentInstallRequested
+        label = state.windowsHost ? 'Recheck' : 'Retry';
+        action = manual || state.windowsHost || !widget.notifier.environmentInstallRequested
             ? widget.notifier.retryEnvironmentSetup
             : widget.notifier.startEnvironmentSetup;
       case EnvironmentSetupPhase.ready:
@@ -787,6 +787,9 @@ class EnvironmentCheckList extends StatelessWidget {
 
   static String _tmuxDetail(EnvironmentReadiness state) {
     const base = 'Required for every harness';
+    if (state.windowsHost) {
+      return '$base · inside the selected WSL2 distribution';
+    }
     final steps = state.planFor(EnvironmentStep.tmux);
     if (steps.isEmpty) {
       return Platform.isLinux ? '$base · tmux, ps' : base;
