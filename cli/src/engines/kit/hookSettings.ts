@@ -133,7 +133,7 @@ async function installMessagesBlock(settings: HookSettings, home: string, attemp
  * `{verb}` or `{tool}` once for each agent verb. In groups that are added together or not at all: the rules naming no
  * verb, then each verb's rules of one kind (`Bash(…)`, `mcp__…`), its spellings of the same command.
  */
-function harnessRules(rules: readonly string[], quote: (path: string) => string = (path) => path): string[][] {
+export function harnessRules(rules: readonly string[], quote: (path: string) => string = (path) => path): string[][] {
   const paths: Record<string, string> = {
     launcher: join(env.HARNESS_BIN_DIR, 'harness'), node: managedNodePath(), cli: join(env.ADAPTER_CLI_DIR, 'cli.js'),
   }
@@ -180,7 +180,7 @@ function touches(theirs: string, ours: string): boolean {
 }
 
 /** The head of Harness's rules file: what it is for, and that Harness keeps it. */
-const RULES_HEADER = `# Written by Harness, which rewrites it: do not edit. Its agent commands (harness ${HARNESS_AGENT_VERBS.join(', ')})\n`
+export const RULES_HEADER = `# Written by Harness, which rewrites it: do not edit. Its agent commands (harness ${HARNESS_AGENT_VERBS.join(', ')})\n`
   + "# need Harness's daemon, which Codex's sandbox cannot reach, so they run outside it without asking. What each\n"
   + '# may do is for Harness to decide: Settings > Experimental, and an agent gives work to and closes only what it started.\n'
 
