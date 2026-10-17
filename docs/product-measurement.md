@@ -8,9 +8,9 @@ automatically proven improvement. Changes still need review, tests and a deliber
 
 | Question | Signal | Interpretation |
 | --- | --- | --- |
-| Does first measured use lead to work? | First-launch installation cohorts; work and first text response within 24 hours | Same participating installation, not signup conversion, same-task success or unique people. Existing users enter when updated; mature only after the full follow-up day ends. |
-| Where does a launch stall or fail? | Pending install/model/native waits; observed launch created/failed/cancelled/unconfirmed; fixed failure categories and duration buckets | Polls are not attempts. Missing outcomes, daemon restarts and the 15-minute observation bound reduce coverage. Inspect unknowns alongside failures. |
-| Which actions break? | Create, resume, restart, model-change, history, fork, close, delete, search, history paging, Store list/install/update/remove, model list/download/start/stop and browser-open requests, fixed outcomes/errors and latency buckets | Request acceptance is not task success. Pending/unknown requests are separate from completed replies. Requests are also counted by source: `app`, `tool`, `automatic` (fixed polls, whichever app makes them), `unknown` and `phone` — the phone marks the requests the daemon measures (`usageSurface: 'phone'`, inside the E2EE payload); older phones still count as `app`. |
+| Does first measured use lead to work? | First-launch installation cohorts; work and first text response within 24 hours; the first launch's engine (`first_launch_engine_opencode`, `_claude`, `_codex`, `_other`) and, for Claude Code and Codex, whether that engine had a credential here (`first_launch_<engine>_signed_in`, `_signed_out`, `_unknown`) | Same participating installation, not signup conversion, same-task success or unique people. Existing users enter when updated; mature only after the full follow-up day ends. The credential is one presence check per installation, in the gateway (`cli/src/lib/engineAccount.ts`: a file stat'ed or parsed for a token, a Keychain item looked up without its secret); it reads the gateway's own environment and starts no login shell, so a key only a shell profile exports reads as signed out on a daemon launchd or systemd started. `unknown` is a Codex that keeps its tokens in the OS keyring, or a check that failed. An answer lost to a stop or a choice change leaves the engine count without one. |
+| Where does a launch stall or fail? | Pending install/model/native waits; observed launch created/failed/cancelled/unconfirmed; fixed failure categories and duration buckets; an `other` failure's code (`launch_failed_code_<code>`); a created launch whose engine then did not start (`launch_late_failed`, by code in `launch_late_failed_code_<code>`) | Polls are not attempts. Missing outcomes, daemon restarts and the 15-minute observation bound reduce coverage. Inspect unknowns alongside failures. Codes are the daemon's own fixed names, lower-cased (`LAUNCH_ERROR_CODES`); `unlisted` is a code not in the list and `none` a failure that named none, so the codes add up to `launch_failed_other`. A late failure (the new-pane watcher's ENGINE_DID_NOT_START, ENGINE_NOT_INSTALLED or START_TIMEOUT, set after the reply said created) is one of the `launch_created`, never a `launch_failed`; the gateway reads it from the agent's own announcement for 15 minutes after the launch was created, and earlier CLI releases counted these only as created (compare releases separately). |
+| Which actions break? | Create, resume, restart, model-change, history, fork, close, delete, search, history paging, Store list/install/update/remove, model list/download/start/stop and browser-open requests, fixed outcomes/errors and latency buckets; the code of an `other` create or resume refusal (`create_error_code_<code>`, `resume_error_code_<code>`) | Request acceptance is not task success. Pending/unknown requests are separate from completed replies. Requests are also counted by source: `app`, `tool`, `automatic` (fixed polls, whichever app makes them), `unknown` and `phone` — the phone marks the requests the daemon measures (`usageSurface: 'phone'`, inside the E2EE payload); older phones still count as `app`. Each code family adds up to its `create_error_other` or `resume_error_other`. |
 | Does work get a response promptly? | First text response buckets; over-one-minute waits; error events; matched ends without text; interruptions | Includes automation. Tool-only turns, interruptions and missing lifecycle events can explain missing text. No message is inspected. |
 | Do installations return to work? | D1/D7/D28 working-day cohorts, consecutive complete-week and calendar-month returns, return after a seven-day gap | Any working day can be a cohort; not new-signup retention. Local date flags produce unlinked totals. Opt-outs, reinstallations, resets and missing uploads affect results. |
 | Was the task useful? | Optional Completed / Partly completed / Not completed plus five fixed reason choices from clients that offer feedback; current Desktop Settings no longer exposes feedback controls | Voluntary and self-selected; not representative success or satisfaction. There is no free-text input. |
@@ -85,8 +85,9 @@ counters do not count affected people. Retry suppression adds no identifiers or 
 The startup bucket measures launch to the first consented observation of a connected workspace,
 including preference/sign-in delay. One in 60 rendered frames supplies a coarse duration bucket;
 it cannot reliably detect an idle freeze. Error hooks pass only framework/async categories.
-Desktop RSS and gateway RSS/CPU sample once per minute; they describe those processes, not the
-whole machine or agents. Sampling adds no core timer, process enumeration, or subprocess.
+Desktop RSS samples once per minute and gateway RSS/CPU once per report tick (45 to 75 seconds, a
+minute on average); they describe those processes, not the whole machine or agents. Sampling adds
+no core timer, process enumeration, or subprocess.
 
 Desktop keeps its setup-sharing preference and pending opt-out booleans, plus the last sharing-enabled run's version, clean-exit/update flags, choice
 revision and a local-only account-scope hash. One serialized asynchronous write plus one latest
@@ -107,10 +108,27 @@ Unmeasured RPCs return a shared no-op immediately. The `HARNESSD_SERVICES=none` 
 runs services inline; it does not provide process isolation.
 
 The gateway coalesces asynchronous disk writes, caps its local queue at 256 KiB / 35 UTC days,
-and bounds in-memory turn/launch observations at 1,000 each. Reports contain at most 64 counters
-and stay below 8 KiB. One sync runs at a time, with five-second network deadlines and a one-minute
-report interval. Unknown or failed preference checks stop collection. Slow or failed reporting can
+and bounds in-memory turn/launch observations at 1,000 each (and the created launches' agents it
+watches for a late failure, for 15 minutes each). Reports contain at most 64 counters and stay below
+8 KiB. One sync runs at a time, with five-second network deadlines. The gateway reads the sharing
+choice as it starts, so collection starts with it, and sends its first report a random 10 to 60
+seconds later; each later tick comes a random 45 to 75 seconds after the last. Every daemon of a
+release updated at the same second, and a report at start then one each minute made the fleet report
+together: backend write conflicts and `USAGE_BUSY` refusals (41 and 48 on 2026-10-16). A report the
+backend refuses as busy or failing (429, 5xx, a timeout) waits for a full-jitter backoff whose ceiling
+doubles from two minutes to half an hour with each such refusal in a row, and never less than the
+answer's Retry-After (held to the same half hour); any other answer resets it. Ticks still read the
+choice meanwhile. Unknown or failed preference checks stop collection. Slow or failed reporting can
 lose counts and cannot become a product dependency. A failed disk write also disables collection.
+
+Stopping the gateway writes the collector's final, clean state synchronously before it returns
+(a temporary file and a rename, at most the 256 KiB queue), and its process stops the gateway before
+it closes the core's link and exits. A write still on its way cannot put an older state over it.
+Earlier releases wrote the clean exit asynchronously and their process exited first, so `harness
+stop`, updates, sign-in and sign-out restarts, service installs and OS logouts all counted as
+`health_cli_unclean_restart` (69, then 170 on 2026-10-16, production counters). Compare that counter
+by release across this change; now it counts a process that ended without stopping (a crash, a kill,
+power loss, a stop that outlasted its five-second grace).
 
 `health_cli_report_rejected` counts unsuccessful delivery attempts, including retries; it is not
 a count of lost reports. New `health_cli_report_failure_*` counters split those attempts into fixed
@@ -174,6 +192,9 @@ image build can be distinguished from the version actually serving requests.
 Resume diagnostics add fixed conditions by request source: runtime unavailable, saved state missing,
 project missing, harness missing, credentials missing, busy, changed, unconfirmed, preparation failed,
 launch failed, invalid and other. These come only from known error codes, never error text or paths.
+An engine of a resumed harness that did not start (ENGINE_DID_NOT_START, ENGINE_NOT_INSTALLED,
+START_TIMEOUT) is a launch failure, a resume while the harness is being deleted is busy, and a request
+that named no harness is invalid; earlier releases counted these as `other`.
 From CLI 0.4.3, an unconfirmed runtime counts as unknown and a concurrently changed harness as
 cancelled (legacy aggregate: unknown), rather than failed. Compare releases separately across this
 definition change; a lower failure rate alone is not proof the product improved.
@@ -219,7 +240,9 @@ Decision: keep | revise | revert | inconclusive
 Next review date:
 ```
 
-The `review` output proposes investigations, not code changes or automatic deployments. Feedback
+The `review` output proposes investigations, not code changes or automatic deployments. Its unknown
+launch refusals and its engines that did not start after a create each name their five most frequent
+codes; a large `unlisted` share means a code is missing from `LAUNCH_ERROR_CODES`. Feedback
 is one source of evidence; a missing response does not identify why a person stopped using Harness.
 
 ## Rollout and privacy controls
@@ -228,7 +251,7 @@ Deploy backend schema and the singleton worker first, including unique indexes a
 Use synthetic data to verify duplicate receipts, transaction rollback/retry, off/on revision fencing
 and expiry. Then release CLI, desktop and phone together. An older backend refuses a whole report
 carrying a counter it does not know (a phone page opening, a `request_phone_*` count, a phone
-`sharing: "default"` setup report), so the backend always goes first. Check that the switch saves and that reports
+`sharing: "default"` setup report, a launch code or a first launch's engine), so the backend always goes first. Check that the switch saves and that reports
 stop when it is off. Old clients stop contributing individual daily histories when the backend changes;
 the historical reporting command will no longer be a current-usage source.
 

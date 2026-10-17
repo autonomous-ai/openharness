@@ -836,7 +836,7 @@ export class BackendSocket {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const launchMeasured = productUsageLaunch(type, (frame.payload as { creationId?: unknown } | undefined)?.creationId,
-      signal => this.toGateway('usage', gateway => gateway.usageLaunch?.(signal)))
+      signal => this.toGateway('usage', gateway => gateway.usageLaunch?.(signal)), (frame.payload as { engine?: unknown } | undefined)?.engine)
     const usageSource = productUsageSource(local, !!connId && this.toolClients.has(connId), role, frame.payload)
     const measured = productUsageRequest(type, (metric) => this.toGateway('usage', (gateway) => gateway.usageCounter?.(metric)), Date.now, usageSource,
       (frame.payload as { userAction?: unknown } | undefined)?.userAction === true)
@@ -846,7 +846,8 @@ export class BackendSocket {
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => {
       if (t === type) {
         measured(p.error ?? (p.failure as { code?: unknown } | undefined)?.code, p.state, !!p.agent, p.ok)
-        launchMeasured(p.error ?? (p.failure as { code?: unknown } | undefined)?.code, p.state, !!p.agent, (p.held as { service?: unknown } | undefined)?.service)
+        // The agent frame itself: a created launch's agent is watched until it starts (gateway/productUsage.ts).
+        launchMeasured(p.error ?? (p.failure as { code?: unknown } | undefined)?.code, p.state, p.agent, (p.held as { service?: unknown } | undefined)?.service)
       }
       this.emitReply(connId, t, rid, p)
     }

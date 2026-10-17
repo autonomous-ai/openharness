@@ -15,8 +15,8 @@
  */
 import { env } from '../config/env.js'
 import type { GatewayEvents, GatewayPort, RemoteRole, RemoteTransport } from '../core/api.js'
-import type { ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
-import type { ProductUsageMetric } from '../lib/productUsageContract.js'
+import { launchErrorCode, type ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
+import type { LaunchErrorCode, ProductUsageMetric } from '../lib/productUsageContract.js'
 import { WINDOW_SURFACES, type LocalWindows, type WindowSurface } from '../lib/windowSurfaces.js'
 import { deviceDump } from '../lib/autonomous-device/dump.js'
 import type { AuthSessionManager } from '../lib/authSession.js'
@@ -58,6 +58,8 @@ export class RelayGateway implements GatewayPort {
     presence(active: boolean): void
     opened(surface: WindowSurface): void
     observe(type: 'turn_started' | 'turn_ended' | 'text_delta' | 'error', agent: string, replay: boolean, interrupted?: boolean): void
+    /** An agent's launch state as its `agent_synced` frame says it, the failure's code a listed name only. */
+    launchState?(agent: string, state: 'starting' | 'ready' | 'failed' | 'held' | 'other', code?: LaunchErrorCode): void
   }
   /** Web↔adapter E2EE: group-encrypts user events, runs the CPace pairing, holds per-conn sessions. */
   readonly e2ee: E2eeManager
@@ -245,6 +247,19 @@ export class RelayGateway implements GatewayPort {
     if ((frame.type === 'turn_started' || frame.type === 'turn_ended' || frame.type === 'text_delta' || frame.type === 'error') && typeof frame.agentId === 'string') {
       const interrupted = frame.type === 'turn_ended' && (frame.payload as { aborted?: unknown } | undefined)?.aborted === true
       try { this.productUsage?.observe(frame.type, frame.agentId, frame.replay === true, interrupted) } catch { /* Work continues without metrics. */ }
+    }
+    // A created harness whose engine then did not start is announced, not replied: the reply already said
+    // created (core/agents/newPane.ts), so these were counted as launches that worked (production counters,
+    // 2026-10-16). The core says it to every remote client in this frame; the gateway reads its launch state.
+    if (frame.type === 'agent_synced' && this.productUsage?.launchState) {
+      try {
+        const agent = (frame.payload as { agent?: { id?: unknown; launch?: { state?: unknown; error?: unknown } } } | undefined)?.agent
+        const state = agent?.launch?.state
+        if (typeof agent?.id === 'string') {
+          this.productUsage.launchState(agent.id, state === 'starting' || state === 'ready' || state === 'failed' || state === 'held' ? state : 'other',
+            state === 'failed' ? launchErrorCode(agent.launch?.error) : undefined)
+        }
+      } catch { /* Work continues without metrics. */ }
     }
     if (this.link.servesThisComputerOnly()) return
     this.link.enqueue({ t: 'up', frame: this.e2ee.wrapUp(frame) })

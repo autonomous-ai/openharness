@@ -21,13 +21,24 @@ interface AccountHttpDeps {
 const failure = (status: number, code: string, message: string): HttpAnswer =>
   ({ status, body: { success: false, error: { code, message } } })
 
+/** A Retry-After header as milliseconds from [now]: delta-seconds or an HTTP date; null when absent or unreadable. */
+export function retryAfterMs(header: string | null, now = Date.now()): number | null {
+  const value = header?.trim()
+  if (!value) return null
+  if (/^\d{1,9}$/.test(value)) return Number(value) * 1000
+  const at = Date.parse(value)
+  return Number.isFinite(at) ? Math.max(0, at - now) : null
+}
+
 export function createAccountHttp(deps: AccountHttpDeps) {
   const request = deps.request ?? fetch
   const accountFence = () => {
     const account = deps.account()
     return [account.machineId, account.autonomousEnv, account.signIn?.epoch, account.signIn?.acct]
   }
-  async function backend(method: string, path: string, body?: unknown, timeoutMs = PROXY_BACKEND_TIMEOUT_MS): Promise<HttpAnswer> {
+  /** `retryAfterMs` comes with a busy or failing answer (429, 5xx) that says when to try again: the usage
+   *  reports' backoff honours it (gateway/productUsage.ts). */
+  async function backend(method: string, path: string, body?: unknown, timeoutMs = PROXY_BACKEND_TIMEOUT_MS): Promise<HttpAnswer & { retryAfterMs?: number }> {
     const owner = accountFence()
     let accessToken: string
     try { accessToken = await deps.tokens.accessToken() } catch (error) {
@@ -55,7 +66,8 @@ export function createAccountHttp(deps: AccountHttpDeps) {
       }
       return failure(502, 'BACKEND_UNREACHABLE', `Could not reach the Harness backend (${e.cause?.message ?? e.message}). Check the connection and try again.`)
     }
-    return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, unknown> }
+    const retry = res.status === 429 || res.status >= 500 ? retryAfterMs(res.headers?.get?.('retry-after') ?? null) : null
+    return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, unknown>, ...(retry !== null ? { retryAfterMs: retry } : {}) }
   }
 
   const cache = new MachineListCache(() => backend('GET', '/api/machines'), () => deps.computer.id,

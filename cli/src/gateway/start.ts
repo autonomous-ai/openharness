@@ -148,7 +148,9 @@ export function startGateway(host: GatewayHost): StartedGateway {
     context: { surface: 'cli', release: VERSION, platform: process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : process.platform === 'win32' ? 'windows' : 'other', channel: host.autonomousEnv === 'prod' && IS_RELEASE_BUILD ? 'production' : 'development' },
     sample: gatewayResourceSample(),
   }) : null
-  if (usage) { gateway.productUsage = usage; void usage.sync() }
+  // The choice is read at once, so collection starts with the gateway; its first report waits for its first
+  // tick, a random 10 to 60 seconds on (gateway/productUsage.ts), rather than the second a release started it.
+  if (usage) { gateway.productUsage = usage; void usage.sync(false) }
 
   /** The identity this machine was removed under is never used again: the next start mints a new one. */
   const spendIdentity = (): void => {
@@ -558,7 +560,8 @@ export function startGateway(host: GatewayHost): StartedGateway {
     ops,
     windowRelay,
     stop: async () => {
-      // Shutdown never waits for the optional disk queue. The stopped collector cannot upload.
+      // Shutdown never waits for the optional disk queue. The stopped collector cannot upload. Its final, clean
+      // state is on disk when stop() returns (written synchronously), so a process that exits next keeps it.
       void usage?.stop()
       clearInterval(devlogTimer)
       syncer.stop()

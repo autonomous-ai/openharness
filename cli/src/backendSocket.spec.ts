@@ -2058,6 +2058,42 @@ describe('BackendSocket outbound queue', () => {
     }
   })
 
+  it('tells the gateway a launch\'s engine and the agent it created, and then that agent\'s start failing', async () => {
+    // A create whose engine then did not start was counted as a launch that worked: the reply had said created
+    // (core/agents/newPane.ts; production counters, 2026-10-16). Only fixed names and the agent's id leave here.
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
+    const signals: unknown[] = []
+    vi.spyOn(gatewayOf(socket), 'usageLaunch').mockImplementation((signal) => { signals.push(signal) })
+    const states: unknown[][] = []
+    gatewayOf(socket).productUsage = { observe: vi.fn(), opened: vi.fn(), presence: vi.fn(), launchState: (...args) => { states.push(args) } }
+    socket.registerLocalClient('local:measured', { sendFrame: () => true, sendBinary: () => true })
+    const session: RegisteredSession = {
+      schemaVersion: 2, active: true, launch: { state: 'starting' },
+      agentId: 'measured-agent', sessionId: '', boundAt: null, engine: 'claude',
+      transcriptPath: null, projectDir: 'work', cwd: '/tmp/work',
+      runtimes: [{ backend: 'tmux', paneId: '%measured' }], primaryRuntimeKey: 'tmux/%measured', tmuxPane: '%measured',
+      source: null, title: 'PRIVATE_CANARY', model: null, cliVersion: null, processIdentity: null,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    }
+    vi.spyOn(registry, 'byAgent').mockReturnValue(session)
+    socket.onCreateAgent = vi.fn(async () => ({ ok: true as const, session }))
+    const creationId = randomUUID()
+    try {
+      socket.handleLocalFrame('local:measured', { type: 'agent_create', payload: { requestId: 'measured', creationId, engine: 'claude', cwd: '/tmp/work' } })
+      await vi.waitFor(() => expect(signals).toHaveLength(2))
+      expect(signals).toEqual([{ id: creationId, phase: 'start', engine: 'claude' }, { id: creationId, phase: 'created', agent: 'measured-agent' }])
+      socket.send({ type: 'agent_synced', payload: { agent: { ...await socket.toProject(session),
+        launch: { state: 'failed', error: 'ENGINE_DID_NOT_START', detail: 'PRIVATE_CANARY could not start' } } } })
+      socket.send({ type: 'agent_synced', payload: { agent: await socket.toProject({ ...session, launch: { state: 'ready' } }) } })
+      expect(states).toEqual([['measured-agent', 'failed', 'engine_did_not_start'], ['measured-agent', 'ready', undefined]])
+      expect(JSON.stringify([signals, states])).not.toContain('PRIVATE_CANARY')
+    } finally {
+      await socket.unregisterLocalClient('local:measured')
+      await socket.stop()
+    }
+  })
+
   it('explains invalid repository choices without echoing credentials or preparing a folder', async () => {
     const socket = relaySocket('token')
     bindLaunchRequests(socket)

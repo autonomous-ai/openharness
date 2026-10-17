@@ -109,6 +109,25 @@ it('the complete vocabulary fits bounded chunks, including the longest metric ke
   }
 })
 
+it('takes the CLI\'s launch codes, late launch failures and first launches by engine, and still no name outside the list', async () => {
+  const context = { surface: 'cli', release: '0.4.9', platform: 'macos', channel: 'production' }
+  const counters = { launch_failed_other: 2, launch_failed_code_invalid_prompt: 1, launch_failed_code_unlisted: 1,
+    launch_late_failed: 1, launch_late_failed_code_engine_did_not_start: 1, create_error_code_none: 1,
+    resume_error_code_session_not_found: 1, first_launch_engine_claude: 1, first_launch_claude_signed_in: 1,
+    first_launch_engine_other: 1, first_launch_codex_unknown: 1 }
+  expect((await submit({ ...good, context, counters })).statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledWith('account', expect.objectContaining({ counters }))
+  methods.ingestProductUsage.mockClear()
+  // One unknown name refuses the whole report: the reason every new name goes into the contract first.
+  for (const name of ['launch_failed_code_PRIVATE_CANARY', 'launch_failed_code_ENGINE_DID_NOT_START', 'restart_error_code_internal',
+    'first_launch_engine_cursor', 'first_launch_opencode_signed_in', 'launch_late_failed_other']) {
+    const response = await submit({ ...good, context, counters: { launch_late_failed: 1, [name]: 1 } })
+    expect(response.statusCode, name).toBe(400)
+    expect(response.body).not.toContain('PRIVATE_CANARY')
+  }
+  expect(methods.ingestProductUsage).not.toHaveBeenCalled()
+})
+
 it('takes a phone build context: its release and iOS or Android, nothing finer', async () => {
   for (const platform of ['ios', 'android']) {
     const response = await submit({ ...good, context: { surface: 'phone', release: '1.0.3', platform, channel: 'production' } })

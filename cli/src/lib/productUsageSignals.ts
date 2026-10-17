@@ -1,5 +1,6 @@
 import { HEALTH_MEASURES, type HealthSource, type ResumeReason } from './productHealthContract.js'
-import { PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_USER_OPENED_ACTIONS, type ProductUsageMetric } from './productUsageContract.js'
+import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_LAUNCH_ENGINES, PRODUCT_USAGE_USER_OPENED_ACTIONS,
+  type LaunchErrorCode, type ProductUsageLaunchEngine, type ProductUsageMetric } from './productUsageContract.js'
 
 const actions = { agent_create: 'create', agent_resume: 'resume', agent_restart: 'restart',
   agent_retarget: 'model_change', agent_recent: 'history',
@@ -28,12 +29,30 @@ const resumeReasons = new Map<string, ResumeReason>([
   ['AGENT_CHANGED', 'changed'], ['RESUME_UNCONFIRMED', 'unconfirmed'],
   ['RESUME_PREPARATION_FAILED', 'preparation_failed'], ['RESUME_FAILED', 'launch_failed'],
   ['INVALID_PERMISSION_MODE', 'invalid'], ['INVALID_CREATION_ID', 'invalid'],
+  // Codes a resume reply carries that fell to `other` (production counters, 2026-10-16): the engine of a resumed
+  // harness that did not start (lib/restoreAgents.ts), a resume while the harness is being deleted (backendSocket.ts)
+  // and a request that named no harness.
+  ['ENGINE_DID_NOT_START', 'launch_failed'], ['ENGINE_NOT_INSTALLED', 'launch_failed'], ['START_TIMEOUT', 'launch_failed'],
+  ['DELETE_IN_PROGRESS', 'busy'], ['MISSING_AGENT_ID', 'invalid'],
 ])
 
 type Failure = 'setup' | 'auth' | 'unavailable' | 'invalid' | 'other'
-function failureKind(error: unknown): Failure {
+/** The fixed kind of a refusal; exported for the guard that keeps every code of core/agents named somewhere. */
+export function failureKind(error: unknown): Failure {
   return typeof error !== 'string' ? 'other' : setup.has(error) ? 'setup' : auth.has(error) ? 'auth'
     : unavailable.has(error) ? 'unavailable' : invalid.has(error) ? 'invalid' : 'other'
+}
+const listedCodes = new Set<string>(LAUNCH_ERROR_CODES.filter(code => code !== 'unlisted' && code !== 'none'))
+/** Which listed code an `other` refusal had (`LAUNCH_ERROR_CODES`): the daemon's own name lower-cased, `unlisted`
+ * for any other string and `none` for no code at all. Only a name from the fixed list leaves here. */
+export function launchErrorCode(error: unknown): LaunchErrorCode {
+  if (typeof error !== 'string') return 'none'
+  const code = error.length <= 64 ? error.toLowerCase() : ''
+  return listedCodes.has(code) ? code as LaunchErrorCode : 'unlisted'
+}
+/** The engine a launch asked for, as one of the fixed names. */
+export function launchEngine(engine: unknown): ProductUsageLaunchEngine {
+  return (PRODUCT_USAGE_LAUNCH_ENGINES as readonly unknown[]).includes(engine) ? engine as ProductUsageLaunchEngine : 'other'
 }
 export interface ProductUsageLaunchSignal {
   /** Local RAM only, discarded on stop/choice change; never part of a report or persisted queue. */
@@ -41,21 +60,44 @@ export interface ProductUsageLaunchSignal {
   phase: 'start' | 'pending' | 'created' | 'failed' | 'cancelled' | 'unconfirmed' | 'work_requested'
   origin?: 'interactive' | 'tool'
   failure?: Failure
+  /** The listed code of an `other` failure, or of a created launch's late one (`late`). */
+  code?: LaunchErrorCode
   wait?: 'install' | 'model' | 'native' | 'other'
+  /** The engine a new launch asked for (`start`), as a fixed name: an installation's first launch counts it. */
+  engine?: ProductUsageLaunchEngine
+  /** The agent a created launch made, still starting: local RAM only, like `id`, so that the gateway can tell its
+   *  start failing later (core/agents/newPane.ts) from the agent's other frames. */
+  agent?: string
+  /** A created launch whose start had already failed when the reply that said so was read (a status poll). */
+  late?: true
 }
 
-/** Observe an actual new-harness receipt through subsequent status polls. Polling adds no attempts. */
-export function productUsageLaunch(type: string, id: unknown, emit: (signal: ProductUsageLaunchSignal) => void) {
+/** A created launch, as its reply's agent frame shows it: still starting (watched by its agent), already
+ *  failed (`late`), or ready. The frame is read here and nothing of it but those leaves. */
+function createdSignal(agent: unknown): Omit<ProductUsageLaunchSignal, 'id'> {
+  const frame = agent && typeof agent === 'object' ? agent as { id?: unknown; launch?: { state?: unknown; error?: unknown } } : null
+  const launch = frame?.launch && typeof frame.launch === 'object' ? frame.launch : null
+  if (launch?.state === 'failed') return { phase: 'created', late: true, code: launchErrorCode(launch.error) }
+  const id = frame?.id
+  return { phase: 'created', ...(typeof id === 'string' && id.length > 0 && id.length <= 256 && launch?.state !== 'ready' ? { agent: id } : {}) }
+}
+
+/** Observe an actual new-harness receipt through subsequent status polls. Polling adds no attempts.
+ * [engine] is the request's `engine`; the reply's [agent] is its agent frame, or whether it had one. */
+export function productUsageLaunch(type: string, id: unknown, emit: (signal: ProductUsageLaunchSignal) => void, engine?: unknown) {
   const known = ['agent_create', 'agent_create_status', 'agent_create_cancel'].includes(type)
     && typeof id === 'string' && /^[a-zA-Z0-9_-]{16,96}$/.test(id)
   if (!known) return unmeasured
   const send = (signal: Omit<ProductUsageLaunchSignal, 'id'>) => {
     if (known) { try { emit({ id: id as string, ...signal }) } catch { /* Optional measurement. */ } }
   }
-  if (type === 'agent_create') send({ phase: 'start' })
-  return (error: unknown, state: unknown, hasAgent: boolean, held: unknown) => {
-    if (error != null || state === 'failed') send({ phase: 'failed', failure: failureKind(error) })
-    else if (state === 'created' || hasAgent) send({ phase: 'created' })
+  if (type === 'agent_create') send({ phase: 'start', engine: launchEngine(engine) })
+  return (error: unknown, state: unknown, agent: unknown, held: unknown) => {
+    if (error != null || state === 'failed') {
+      const failure = failureKind(error)
+      send({ phase: 'failed', failure, ...(failure === 'other' ? { code: launchErrorCode(error) } : {}) })
+    }
+    else if (state === 'created' || agent) send(createdSignal(agent))
     else if (state === 'pending') send({ phase: 'pending', wait: held === 'install' ? 'install' : held === 'models' ? 'model' : held === 'native' ? 'native' : 'other' })
     else if (state === 'cancelled') send({ phase: 'cancelled' })
     else if (state === 'unconfirmed' || state === 'unavailable' || state === 'missing') send({ phase: 'unconfirmed' })
@@ -106,7 +148,11 @@ export function productUsageRequest(type: string, emit: (metric: ProductUsageMet
       count('unknown'); detail(error === 'AGENT_CHANGED' ? 'cancelled' : 'unknown')
     } else if (error != null || state === 'failed' || ok === false) {
       count('failed'); detail('failed')
-      count(`error_${failureKind(error)}`)
+      const kind = failureKind(error)
+      count(`error_${kind}`)
+      // Which code an `other` refusal of a create or a resume had: 22 creates and 9 resumes were `other` on
+      // 2026-10-16 (production counters), with nothing to say why. A fixed name from the list, or unlisted.
+      if (kind === 'other' && (action === 'create' || action === 'resume')) count(`error_code_${launchErrorCode(error)}`)
       detail(`error_${error === 'TIMEOUT' ? 'timeout' : typeof error === 'string' && ['AGENT_NOT_FOUND', 'SESSION_NOT_FOUND', 'NOT_FOUND'].includes(error) ? 'not_found' : typeof error === 'string' && ['DELETE_IN_PROGRESS', 'WORKTREE_BUSY', 'BUSY'].includes(error) ? 'conflict' : failureKind(error)}`)
     } else if (state === 'pending' || state === 'preparing' || state === 'starting') { count('pending'); detail('pending') }
     else if (state === 'unconfirmed' || state === 'unavailable' || state === 'cancelled') { count('unknown'); detail(state === 'cancelled' ? 'cancelled' : 'unknown') }
