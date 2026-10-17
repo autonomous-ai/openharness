@@ -17,19 +17,30 @@ export function encodedCommandArgs(script: string): string[] {
 }
 
 /**
- * [script], printing UTF-8. Into a pipe Windows PowerShell 5.1 writes the console's OEM code page, which Node would
- * decode as UTF-8: a PATH entry under a profile named `Jö` or `日` would never match, and one written back would hold
- * U+FFFD. Every script runPowershell runs starts with this line.
+ * The lines every script runPowershell runs starts with.
+ * - UTF-8 output. Into a pipe Windows PowerShell 5.1 writes the console's OEM code page, which Node would decode as
+ *   UTF-8: a PATH entry under a profile named `Jö` or `日` would never match, and one written back would hold U+FFFD.
+ * - Stop on the first error, and leave with exit 1 and its message alone on stderr. Without them a failed SetValue is
+ *   a printed error and exit 0, which the B5.3 review saw report a PATH as edited when it was not, and the error comes
+ *   out serialized as CLIXML.
+ * - No progress records: 5.1's "Preparing modules for first use" otherwise reaches stderr as CLIXML.
  */
-export function withUtf8Output(script: string): string {
-  return `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n${script}`
+export const POWERSHELL_PRELUDE = [
+  '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+  "$ErrorActionPreference = 'Stop'",
+  "$ProgressPreference = 'SilentlyContinue'",
+  'trap { [Console]::Error.Write($_.Exception.Message); exit 1 }',
+].join('\n')
+
+export function withPrelude(script: string): string {
+  return `${POWERSHELL_PRELUDE}\n${script}`
 }
 
 export interface PowershellResult { status: number | null; stdout: string; stderr: string; error?: Error }
 export type PowershellRun = (script: string, inputs?: Record<string, string>) => PowershellResult
 
 export const runPowershell: PowershellRun = (script, inputs = {}) => {
-  const result = spawnSync(powershellPath(), encodedCommandArgs(withUtf8Output(script)), {
+  const result = spawnSync(powershellPath(), encodedCommandArgs(withPrelude(script)), {
     env: { ...process.env, ...inputs }, encoding: 'utf8', timeout: POWERSHELL_TIMEOUT_MS, windowsHide: true,
   })
   return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '', ...(result.error ? { error: result.error } : {}) }
