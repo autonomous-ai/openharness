@@ -44,6 +44,10 @@ const inspect = (info: BigIntStats, directory = false): void => inspectJournalEn
 export function homeIsAbsolute(home: string, platform: NodeJS.Platform = hostPlatform()): boolean {
   return platform === 'win32' ? /^[A-Za-z]:\\/.test(home) : home.startsWith('/')
 }
+/** A Windows home that is a network share (`\\\\server\\share`) or a device path (`\\\\?\\`, `\\\\.\\`): `homeIsAbsolute` refuses it. */
+export function homeIsNetworkOrDevice(home: string, platform: NodeJS.Platform = hostPlatform()): boolean {
+  return platform === 'win32' && /^[\\/]{2}/.test(home)
+}
 function read(file: string, check: () => void, max = MAX_BYTES + 1024): FileRead | null {
   check()
   let before: BigIntStats

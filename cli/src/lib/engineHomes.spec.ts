@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import {
@@ -13,6 +13,11 @@ import {
 // The login shell's environment, as the daemon captured it at start-up: none, unless a test says so.
 const shell = vi.hoisted(() => ({ env: {} as NodeJS.ProcessEnv }))
 vi.mock('./loginShellEnv.js', () => ({ loginShellEnvironment: () => shell.env }))
+const host = vi.hoisted(() => ({ win32: false }))
+vi.mock('../engines/kit/windowsFiles.js', async original => {
+  const actual = await original<typeof import('../engines/kit/windowsFiles.js')>()
+  return { ...actual, hostPlatform: () => host.win32 ? 'win32' : actual.hostPlatform() }
+})
 const clock = vi.hoisted(() => ({ remaining: Infinity }))
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => --clock.remaining < 0 ? 3_001 : 0 } })) // past NATIVE_EVIDENCE_MS
 vi.mock('node:fs', async original => {
@@ -51,6 +56,24 @@ describe('the homes the person moved', () => {
     expect(claudeProjectsRoots('/own/projects')).toEqual(['/own/projects', join(claude, 'projects')])
     expect(codexHomeRoots('/own/codex')).toEqual(['/own/codex', codex])
     expect(movedEngineHomes()).toEqual({ claude: [claude], codex: [codex] })
+  })
+
+  it.each(['\\\\server\\share\\.claude', '\\\\?\\C:\\Users\\u\\.claude', '//server/share/.claude', '\\\\.\\pipe\\x'])(
+    'on Windows refuses the network or device path %s by naming the setting, and writes nothing', (path) => {
+      host.win32 = true
+      try {
+        expect(() => adoptEngineHomes({ CODEX_HOME: path }, defaults)).toThrow('CODEX_HOME names a network or device path, which Harness does not use for an engine home on Windows')
+        expect(() => adoptEngineHomes({ CLAUDE_CONFIG_DIR: path }, defaults)).toThrow(/^CLAUDE_CONFIG_DIR names a network or device path/)
+        expect(() => confirmHomes({ CODEX_HOME: path })).toThrow(/CODEX_HOME names a network/)
+        expect(() => launchCodexHome(null, { CODEX_HOME: path })).toThrow(/CODEX_HOME names a network/)
+        expect(() => launchClaudeConfigDir({ CLAUDE_CONFIG_DIR: path })).toThrow(/CLAUDE_CONFIG_DIR names a network/)
+        expect(existsSync(saved())).toBe(false)
+      } finally { host.win32 = false }
+    })
+
+  it('does not change on mac or Linux: a leading double slash is an ordinary path there', () => {
+    const odd = '//server/share/.codex'
+    expect(adoptEngineHomes({ CODEX_HOME: odd }, defaults).codex).toBe(resolve(odd))
   })
 
   it('takes no relative, `~`, empty or unset path, and not the daemon\'s own home', () => {
