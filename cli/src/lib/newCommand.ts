@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { readdir, readFile, realpath } from 'node:fs/promises'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import { step, VIA_MCP_ENV } from '../agentClient/commands.js'
 import { folderTrust } from '../engines/launchPrep.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
@@ -72,10 +72,16 @@ export const NEW_USAGE = [
 ].join('\n')
 
 const MODES = new Set(['auto', 'ask', 'plan', 'full'])
-const looksLikePath = (word: string): boolean =>
+/** On Windows also `C:\x`, `C:/x`, `\\server\share`, `.\x`, `..\x` and `~\x`: the paths PowerShell and cmd.exe hand over.
+ *  Read as a project name, `harness new terminal C:\Users\me\proj` was refused ("a terminal … does not make a project")
+ *  and `harness new codex C:\code\api` made ~\harnesses\<slug> instead (the Windows install job, B5.12, on the VM). */
+const looksLikePath = (word: string, windows: boolean): boolean =>
   word === '.' || word === '..' || word === '~' || /^(\/|~\/|\.\/|\.\.\/)/.test(word)
+  || (windows && /^([A-Za-z]:[\\/]|\\\\|~\\|\.\\|\.\.\\)/.test(word))
 
-export function parseNewArgs(argv: string[], env: { cwd: string; home: string }): NewArgs {
+export function parseNewArgs(argv: string[], env: { cwd: string; home: string; platform?: NodeJS.Platform }): NewArgs {
+  const windows = (env.platform ?? process.platform) === 'win32'
+  const path = windows ? win32 : posix
   const words: string[] = []
   let machine: string | null = null
   let folder: string | null = null
@@ -106,7 +112,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
     else if (word === '--name') { name = value(word, i); i++ }
     else if (word === '--new') {
       const next = argv[i + 1]
-      if (next !== undefined && !next.startsWith('-') && !next.startsWith('@') && !looksLikePath(next)) { projectName = next; i++ }
+      if (next !== undefined && !next.startsWith('-') && !next.startsWith('@') && !looksLikePath(next, windows)) { projectName = next; i++ }
       else projectName = ''
     }
     // Any dash: `-x` read as an agent called "-x" turns a typo into a confusing refusal from the machine.
@@ -116,7 +122,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
       if (machine !== null) throw new NewUsageError('Name one machine.')
       machine = word.slice(1)
     }
-    else if (looksLikePath(word)) {
+    else if (looksLikePath(word, windows)) {
       if (folder !== null) throw new NewUsageError('Name one folder.')
       folder = word
     }
@@ -142,13 +148,15 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
   if (folder !== null) {
     // `~` is this machine's home only when this machine is the target; for another machine it is
     // resolved there (resolveRemoteHome), so it is kept as typed until then.
-    cwd = folder === '~' || folder.startsWith('~/')
-      ? (machine === null ? join(env.home, folder.slice(2)) : folder)
+    // Another machine reads `~\x` typed on Windows as its own `~/x`: it may not be Windows, and the home is resolved there.
+    const home = (rest: string) => `~${windows ? rest.replace(/\\/g, '/') : rest}`
+    cwd = folder === '~' || folder.startsWith('~/') || (windows && folder.startsWith('~\\'))
+      ? (machine === null ? path.join(env.home, folder.slice(2)) : home(folder.slice(1)))
       // An unquoted ~/x reaches us as /Users/you/x: the shell expanded it against THIS machine. For
       // another machine that path means nothing, and what was typed was its home — so give it back.
-      : machine !== null && (folder === env.home || folder.startsWith(`${env.home}/`)) ? `~${folder.slice(env.home.length)}`
-      : isAbsolute(folder) ? folder
-      : machine === null ? resolve(env.cwd, folder)
+      : machine !== null && (folder === env.home || folder.startsWith(`${env.home}${path.sep}`) || folder.startsWith(`${env.home}/`)) ? home(folder.slice(env.home.length))
+      : path.isAbsolute(folder) ? folder
+      : machine === null ? path.resolve(env.cwd, folder)
       : (() => { throw new NewUsageError('A folder on another machine is an absolute path or starts with ~/.') })()
   } else if (projectName === null) {
     // Nothing named: here, on this machine — and a new project on another, where "here" means nothing.

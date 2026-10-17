@@ -49,6 +49,26 @@ describe('harness new: the words', () => {
     expect(parseNewArgs(['codex', '/home/me/code/auth'], env).cwd).toBe('/home/me/code/auth')
   })
 
+  it('reads the paths a Windows shell hands over as folders, not as a project name', () => {
+    const windows = { cwd: 'C:\\work\\repo', home: 'C:\\Users\\me', platform: 'win32' as const }
+    // The install job's check (B5.12): `harness new terminal $env:TEMP\harness-check-proj --json`.
+    expect(parseNewArgs(['terminal', 'C:\\Users\\me\\AppData\\Local\\Temp\\harness-check-proj', '--json'], windows))
+      .toMatchObject({ agent: 'terminal', cwd: 'C:\\Users\\me\\AppData\\Local\\Temp\\harness-check-proj', projectName: null })
+    expect(parseNewArgs(['codex', 'C:/code/api'], windows)).toMatchObject({ cwd: 'C:/code/api', projectName: null })
+    expect(parseNewArgs(['codex', '\\\\server\\share\\api'], windows).cwd).toBe('\\\\server\\share\\api')
+    expect(parseNewArgs(['codex', '.\\api'], windows).cwd).toBe('C:\\work\\repo\\api')
+    expect(parseNewArgs(['codex', '..\\other'], windows).cwd).toBe('C:\\work\\other')
+    expect(parseNewArgs(['codex', '~\\code\\auth'], windows).cwd).toBe('C:\\Users\\me\\code\\auth')
+    // `--new` never takes a path as the new project's name.
+    expect(() => parseNewArgs(['--new', 'C:\\x', 'codex'], windows)).toThrow(/not both/)
+    // Another machine resolves its own home, and may not be Windows.
+    expect(parseNewArgs(['codex', '@mini', '~\\code\\auth'], windows).cwd).toBe('~/code/auth')
+    expect(parseNewArgs(['codex', '@mini', 'C:\\Users\\me\\code\\auth'], windows).cwd).toBe('~/code/auth')
+    // A plain second word is still a new project, and off Windows a drive path is a name as before.
+    expect(parseNewArgs(['codex', 'my-game'], windows)).toMatchObject({ cwd: null, projectName: 'my-game' })
+    expect(parseNewArgs(['codex', 'C:\\x'], { ...env, platform: 'darwin' })).toMatchObject({ cwd: null, projectName: 'C:\\x' })
+  })
+
   it('says what is wrong instead of guessing', () => {
     for (const argv of [['a', 'b', 'c'], ['@'], ['@a', '@b'], ['/x', '/y'], ['codex', 'game', '/x'], ['--mode', 'yolo'], ['--prompt'], ['--wat'], ['-x'], ['codex', '..'], ['codex', '@mini', './rel']]) {
       // `codex ..` is a folder, not an error; every other row must throw.
