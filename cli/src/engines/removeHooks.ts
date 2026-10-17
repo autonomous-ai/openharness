@@ -14,12 +14,13 @@ import { homeIsNetworkOrDevice } from './kit/homeAdoption.js'
 import { hookContracts } from './hooks.js'
 import { inspectHookFile } from './kit/nativeHookFiles.js'
 import { removeJsonHooks, removeOwnedFile, removeReviewedHooks, type HookFileRemoval } from './kit/hookRemoval.js'
-import { defaultHookHome, harnessRules, RULES_HEADER } from './kit/hookSettings.js'
+import { defaultHookHome, harnessRules, notifyHookEntry, RULES_HEADER } from './kit/hookSettings.js'
+import { messagesCommand } from './kit/messagesHook.js'
 import { nativeHookHomes } from './kit/nativeHookHomes.js'
 import type { NativeHookSettings } from './kit/nativeHookSettings.js'
 import { removeNativeYamlHooks, type NativeYamlHooks } from './kit/nativeHookYaml.js'
 import { nativePluginSource, type NativePlugin } from './kit/nativePlugin.js'
-import type { Settings } from './kit/notifyHooks.js'
+import { hookArgv, type HookBlock, type Settings } from './kit/notifyHooks.js'
 import { hostPlatform } from './kit/windowsFiles.js'
 import { WINDOWS_ENGINE_HOMES } from './windowsHomes.js'
 import { AGY_HOOK_SETTINGS } from './agy/contract.js'
@@ -61,8 +62,9 @@ function profileHomes(dataDir: string): { codex: string[]; hermes: string[] } {
   }
 }
 
-/** This computer's, as the daemon would install them now. */
-export function defaultHookTargets(dataDir: string = env.ADAPTER_DATA_DIR, adopted: () => HomeCatalog = durableEngineHomes): HookTargets {
+/** This computer's, as the daemon would install them now. [platform]: whose engines' homes (`commandCodeProfile`). */
+export function defaultHookTargets(dataDir: string = env.ADAPTER_DATA_DIR, adopted: () => HomeCatalog = durableEngineHomes,
+  platform: NodeJS.Platform = hostPlatform()): HookTargets {
   let moved: HomeCatalog = { claude: [], codex: [] }
   let unread: string | undefined
   try { moved = adopted() } catch (error) { unread = error instanceof Error ? error.message : String(error) }
@@ -72,7 +74,7 @@ export function defaultHookTargets(dataDir: string = env.ADAPTER_DATA_DIR, adopt
   return {
     claude: { homes: unique([defaultHookHome(claude), ...moved.claude]), allowRules },
     codex: { homes: unique([defaultHookHome(hookContracts.codex.settings), ...moved.codex, ...profiles.codex]) },
-    native: [GROK_HOOK_SETTINGS, AGY_HOOK_SETTINGS, COPILOT_HOOK_SETTINGS, CURSOR_HOOK_SETTINGS, COMMANDCODE_HOOK_SETTINGS, ...commandCodeProfile(), DEVIN_HOOK_SETTINGS],
+    native: [GROK_HOOK_SETTINGS, AGY_HOOK_SETTINGS, COPILOT_HOOK_SETTINGS, CURSOR_HOOK_SETTINGS, COMMANDCODE_HOOK_SETTINGS, ...commandCodeProfile(platform), DEVIN_HOOK_SETTINGS],
     plugins: [KILO_PLUGIN, PI_EXTENSION, AMP_PLUGIN, OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN],
     // A Hermes home on a share is not listed for its profiles: listing it opens it (removeEngineHooks reports it).
     hermes: { rule: HERMES_HOOK_SETTINGS, homes: unique([...(homeIsNetworkOrDevice(HERMES_HOOK_SETTINGS.home) ? [HERMES_HOOK_SETTINGS.home]
@@ -82,11 +84,13 @@ export function defaultHookTargets(dataDir: string = env.ADAPTER_DATA_DIR, adopt
 }
 
 /**
- * Command Code reads its settings from the profile's `.commandcode` whatever COMMANDCODE_HOME says (measured on the
- * Windows VM, B4.13): Harness installed where COMMANDCODE_HOME points, and an engine that ran there may have been
- * given the same hooks by hand or by an older release. That folder is looked in too, with the same recognizers.
+ * On Windows, Command Code reads its settings from the profile's `.commandcode` whatever COMMANDCODE_HOME says
+ * (measured on the Windows VM, B4.13 and B4.15; not measured elsewhere, so a Mac or Linux looks only where
+ * COMMANDCODE_HOME points). Harness installed where COMMANDCODE_HOME points; the profile's folder is looked in too, with
+ * the same recognizers, for hooks of Harness's that reached it another way.
  */
-function commandCodeProfile(): NativeHookSettings[] {
+function commandCodeProfile(platform: NodeJS.Platform): NativeHookSettings[] {
+  if (platform !== 'win32') return []
   const file = join(homedir(), ...WINDOWS_ENGINE_HOMES.commandcode.folder, basename(COMMANDCODE_HOOK_SETTINGS.file))
   return file === COMMANDCODE_HOOK_SETTINGS.file ? [] : [{ ...COMMANDCODE_HOOK_SETTINGS, file }]
 }
@@ -103,11 +107,48 @@ function settingsBefore(file: string): Settings | null {
   } catch { return null }
 }
 
-/** A plugin is Harness's when it starts with the generated first line (nativePlugin.ts `prepareNativePlugin`). */
-export function pluginOwned(rule: NativePlugin): (content: string) => boolean {
+/**
+ * The hooks Harness writes into a Codex home now (hookSettings.ts `installNotifyHooks`, `installMessagesBlock`): what
+ * their review records hold the hashes of, for a record whose hook is no longer in the file.
+ */
+function codexHooksNow(home: string): Settings {
+  const settings = hookContracts.codex.settings
+  const entry = notifyHookEntry(settings, hookArgv(env.PORT, 'codex', settings.commandNamesHome ? home : undefined))
+  const hooks: Record<string, HookBlock[]> = {}
+  if (entry) for (const { event, matcher } of settings.events) {
+    hooks[event] = [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: entry.command, ...(entry.args ? { args: entry.args } : {}), timeout: settings.timeout }] }]
+  }
+  if (settings.inbox) (hooks[settings.inbox.event] ??= []).push({ hooks: [{ type: 'command', command: messagesCommand(env.HARNESS_AGENT_MESSAGES_DIR), timeout: settings.timeout }] })
+  return { hooks }
+}
+
+/** Why a plugin of Harness's is kept: its first line is Harness's, the rest is not what Harness writes. */
+export const PLUGIN_CHANGED = "Harness's plugin, changed since Harness wrote it; delete it yourself if you no longer need it."
+/** What a value of a plugin's template can be: a port, or one JSON string (nativePlugin.ts `NativePluginValues`). */
+const SLOTS = {
+  port: String.raw`\d{1,5}`,
+  credential: String.raw`"(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"`,
+  version: String.raw`"(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"`,
+} as const
+const literal = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * A plugin is Harness's when it is exactly the current template (nativePlugin.ts `nativePluginSource`): every literal
+ * part, and each value a port or a JSON string, the same one wherever the template uses it again. A file with
+ * Harness's generated first line (`prepareNativePlugin`'s mark) and anything else is Harness's plugin changed since,
+ * kept with [PLUGIN_CHANGED]; any other file is another author's (false).
+ */
+export function pluginOwned(rule: NativePlugin): (content: string) => boolean | string {
   const source = nativePluginSource(rule, { port: '0', credential: '""', version: '""' })
   const first = source.slice(0, source.indexOf('\n') + 1)
-  return (content) => first.length > 1 && content.startsWith(first)
+  const seen = new Set<string>()
+  const exact = new RegExp(`^${rule.template.map((part) => {
+    if (typeof part === 'string') return literal(part)
+    if (seen.has(part.argument)) return `\\k<${part.argument}>`
+    seen.add(part.argument)
+    return `(?<${part.argument}>${SLOTS[part.argument]})`
+  }).join('')}$`)
+  return (content) => !(first.length > 1 && content.startsWith(first)) ? false : exact.test(content) || PLUGIN_CHANGED
 }
 
 /**
@@ -137,8 +178,8 @@ export async function removeEngineHooks(targets: HookTargets, platform: NodeJS.P
     const before = codex.reviewed ? settingsBefore(settingsFile) : null
     const hooks = await removeJsonHooks(settingsFile, { schema: 'nested', messages: true })
     out.push(hooks)
-    // Only once the hooks are out: a record taken away from a hook still there makes Codex ask about it again.
-    if (codex.reviewed && before && hooks.removed && !hooks.failed) out.push(await removeReviewedHooks(codex.reviewed, home, settingsFile, before))
+    // Only once the hooks are out (or were already, on a second uninstall): a record taken away from a hook still there makes Codex ask about it again.
+    if (codex.reviewed && !hooks.failed) out.push(await removeReviewedHooks(codex.reviewed, home, settingsFile, { before, now: codexHooksNow(home) }))
     if (codex.allow && 'file' in codex.allow) out.push(await removeOwnedFile(join(home, codex.allow.file), (content) => content.startsWith(RULES_HEADER)))
   }
   for (const rule of targets.native) {

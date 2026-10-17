@@ -186,12 +186,13 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
 })
 
 describe('Harness’s review records, taken out for harness uninstall', () => {
-  const records = new Map([['/h/hooks.json:session_start:0:0', 'sha256:ours']])
+  const map = new Map([['/h/hooks.json:session_start:0:0', 'sha256:ours']])
+  const records = (key: string, hash: string) => map.get(key) === hash
   const ours = '[hooks.state."/h/hooks.json:session_start:0:0"]\ntrusted_hash = "sha256:ours"\n'
 
   it('takes out the table Harness appended, leaving the text as it was before it', () => {
     const before = 'model = "o3"\r\n[hooks.state]\n'
-    const after = withReviewRecords(before, record, records) as string
+    const after = withReviewRecords(before, record, map) as string
     expect(withoutReviewRecords(after, record, records)).toEqual({ text: before.replace(/\s*$/, '\n'), removed: 1 })
     expect(withoutReviewRecords(ours, record, records)).toEqual({ text: '', removed: 1 })
   })

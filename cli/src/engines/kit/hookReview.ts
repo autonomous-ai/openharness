@@ -176,12 +176,12 @@ export function withReviewRecords(text: string, record: HookReviewRecord, record
 }
 
 /**
- * `harness uninstall`: the config file's text without each of [records] in the one form Harness, and the engine on
- * "Trust all", writes it: its own table holding that hook's hash and nothing else. The table goes with the blank lines
- * after it, up to the next header; every other byte stays. A record with another hash, or more in its table, is the
- * engine's or the person's and is kept.
+ * `harness uninstall`: the config file's text without each record [owned] calls Harness's (its key and hash), in the
+ * one form Harness, and the engine on "Trust all", writes it: its own table holding the hash and nothing else. The
+ * table goes with the blank lines after it, up to the next header; every other byte stays. A record with more in its
+ * table is the engine's or the person's and is kept.
  */
-export function withoutReviewRecords(text: string, record: HookReviewRecord, records: Map<string, string>): { text: string; removed: number } {
+export function withoutReviewRecords(text: string, record: HookReviewRecord, owned: (key: string, hash: string) => boolean): { text: string; removed: number } {
   const shape = structure(text)
   const list = headers(shape)
   const header = new RegExp(String.raw`^[ \t]*\[[ \t]*${tablePath(record.table)}[ \t]*\.[ \t]*("(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*')[ \t]*\][ \t]*\r?$`)
@@ -190,16 +190,17 @@ export function withoutReviewRecords(text: string, record: HookReviewRecord, rec
   for (const [i, line] of list.entries()) {
     const match = header.exec(line.text)
     const key = match ? tomlKey(match[1]) : null
-    if (key === null || !records.has(key)) continue
+    if (key === null) continue
     const end = list[i + 1]?.start ?? text.length
     const body = only.exec(shape.slice(line.end, end))
-    if (body && tomlKey(body[1]) === records.get(key)) spans.push([line.start, end])
+    const hash = body ? tomlKey(body[1]) : null
+    if (hash !== null && owned(key, hash)) spans.push([line.start, end])
   }
   let next = text
-  for (const [start, end] of spans.reverse()) next = next.slice(0, start) + next.slice(end)
+  for (const [start, end] of [...spans].reverse()) next = next.slice(0, start) + next.slice(end)
   // The installer appended a record after the text's trailing space, trimmed: taking the last one out ends the
   // text where the person's did.
-  if (spans.length && spans[0][1] === text.length) next = next.trim() ? next.replace(/\s*$/, '\n') : ''
+  if (spans.at(-1)?.[1] === text.length) next = next.trim() ? next.replace(/\s*$/, '\n') : ''
   return { text: next, removed: spans.length }
 }
 

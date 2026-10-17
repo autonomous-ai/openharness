@@ -1,7 +1,8 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { env } from '../config/env.js'
 import { COMMANDCODE_HOOK_SETTINGS } from './commandcode/contract.js'
 import { hookContracts } from './hooks.js'
 import { HERMES_HOOK_SETTINGS } from './hermes/contract.js'
@@ -9,9 +10,21 @@ import { KILO_PLUGIN } from './kilo/contract.js'
 import { OPENCODE_TUI_PLUGIN } from './opencode/contract.js'
 import { CURSOR_HOOK_SETTINGS } from './cursor/contract.js'
 import { reviewRecords, withReviewRecords } from './kit/hookReview.js'
-import { RULES_HEADER } from './kit/hookSettings.js'
+import { homeIsNetworkOrDevice } from './kit/homeAdoption.js'
+import { installHookSettings, RULES_HEADER } from './kit/hookSettings.js'
+import { nativeHookHomes } from './kit/nativeHookHomes.js'
+import { removeNativeYamlHooks } from './kit/nativeHookYaml.js'
 import { nativePluginSource } from './kit/nativePlugin.js'
 import { defaultHookTargets, pluginOwned, removeEngineHooks, type HookTargets } from './removeHooks.js'
+
+vi.mock('./kit/homeAdoption.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./kit/homeAdoption.js')>()
+  return { ...actual, homeIsNetworkOrDevice: vi.fn(actual.homeIsNetworkOrDevice) }
+})
+vi.mock('./kit/nativeHookHomes.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./kit/nativeHookHomes.js')>()
+  return { ...actual, nativeHookHomes: vi.fn(actual.nativeHookHomes) }
+})
 
 const OURS = "'/opt/harness/node/bin/node' '/home/u/.harness/cli/notify.mjs' --port 18473 --data-dir '/home/u/.harness/cli/data'"
 const values = { port: '18473', credential: '"/home/u/.harness/cli/data/hook-credential"', version: '"0.5.0"' }
@@ -189,7 +202,7 @@ describe('Command Code\'s profile folder', () => {
     process.env.HOME = profile
     process.env.USERPROFILE = profile
     const settings = join(profile, '.commandcode', 'settings.json')
-    const native = defaultHookTargets(join(root, 'data'), () => ({ claude: [], codex: [] })).native
+    const native = defaultHookTargets(join(root, 'data'), () => ({ claude: [], codex: [] }), 'win32').native
     expect(native.map((rule) => rule.file)).toEqual(expect.arrayContaining([COMMANDCODE_HOOK_SETTINGS.file, settings]))
     expect(native.filter((rule) => rule.file === settings)).toEqual([{ ...COMMANDCODE_HOOK_SETTINGS, file: settings }])
 
@@ -199,12 +212,154 @@ describe('Command Code\'s profile folder', () => {
     expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual({ theme: 'dark', hooks: { Stop: [{ hooks: [{ type: 'command', command: '/mine' }] }] } })
   })
 
+  it('is Windows\' alone: on a Mac or Linux only COMMANDCODE_HOME is', () => {
+    const { root } = machine()
+    process.env.HOME = join(root, 'profile')
+    process.env.USERPROFILE = join(root, 'profile')
+    const native = defaultHookTargets(join(root, 'data'), () => ({ claude: [], codex: [] }), 'linux').native
+    expect(native.filter((rule) => rule.file.includes('.commandcode'))).toEqual([COMMANDCODE_HOOK_SETTINGS])
+  })
+
   it('is looked in once when COMMANDCODE_HOME is that folder', () => {
     const home = dirname(dirname(COMMANDCODE_HOOK_SETTINGS.file))
     process.env.HOME = home
     process.env.USERPROFILE = home
-    const native = defaultHookTargets(join(machine().root, 'data'), () => ({ claude: [], codex: [] })).native
+    const native = defaultHookTargets(join(machine().root, 'data'), () => ({ claude: [], codex: [] }), 'win32').native
     expect(native.filter((rule) => rule.file === COMMANDCODE_HOOK_SETTINGS.file)).toHaveLength(1)
     expect(native).toHaveLength(6)
+  })
+})
+
+describe('a plugin changed since Harness wrote it', () => {
+  const CHANGED = "Harness's plugin, changed since Harness wrote it; delete it yourself if you no longer need it."
+
+  it('is kept, and the person is told it is theirs to delete', async () => {
+    const { targets } = machine()
+    const file = targets.plugins[0].file
+    const edited = nativePluginSource(targets.plugins[0], values).replace('process.env.TMUX_PANE', 'process.env.MY_PANE')
+    write(file, edited)
+    const outcomes = await removeEngineHooks(targets)
+    expect(outcomes).toContainEqual({ file, removed: 0, kept: CHANGED })
+    expect(readFileSync(file, 'utf8')).toBe(edited)
+  })
+
+  it('is any content but the current template with a port, and a JSON string for each other value, the same at every use', () => {
+    for (const rule of [KILO_PLUGIN, OPENCODE_TUI_PLUGIN]) {
+      const owned = pluginOwned(rule)
+      expect(owned(nativePluginSource(rule, { port: '9', credential: '"C:\\\\Users\\\\a \\"b\\"\\\\hook-credential"', version: '"1.2.3"' }))).toBe(true)
+      expect(owned(nativePluginSource(rule, { ...values, port: '123456' }))).toBe(CHANGED)
+      expect(owned(nativePluginSource(rule, { ...values, version: '0.5.0' }))).toBe(CHANGED)
+      expect(owned(nativePluginSource(rule, { ...values, credential: '"a"; evil()//"' }))).toBe(CHANGED)
+      expect(owned(`${nativePluginSource(rule, values)}\n`)).toBe(CHANGED)
+    }
+    const source = nativePluginSource(KILO_PLUGIN, values)
+    const second = source.indexOf('18473', source.indexOf('18473') + 1)
+    expect(second).toBeGreaterThan(0)
+    expect(pluginOwned(KILO_PLUGIN)(`${source.slice(0, second)}18474${source.slice(second + 5)}`)).toBe(CHANGED)
+  })
+})
+
+describe('Hermes\'s YAML hooks, taken out', () => {
+  const hermesCommand = JSON.stringify(`${OURS} --engine hermes`)
+  const block = `${HERMES_HOOK_SETTINGS.begin}\nhooks:\n  on_session_start:\n    - command: ${hermesCommand}\n      timeout: 10\n${HERMES_HOOK_SETTINGS.end}\n`
+  function hermes() {
+    const { root, targets } = machine()
+    const home = join(root, 'hermes')
+    return { rule: { ...HERMES_HOOK_SETTINGS, home }, home, config: join(home, 'config.yaml'), allowlist: join(home, 'shell-hooks-allowlist.json'), targets }
+  }
+  const approvals = JSON.stringify({ approvals: [{ event: 'on_session_start', command: `${OURS} --engine hermes` }] })
+
+  it('writes nothing while the approvals cannot be read, and names that file', async () => {
+    for (const broken of ['{ not json', JSON.stringify({ approvals: 5 })]) {
+      const { rule, home, config, allowlist } = hermes()
+      write(config, `model: x\n\n${block}`)
+      write(allowlist, broken)
+      const outcomes = await removeNativeYamlHooks(rule, [home])
+      expect(outcomes).toEqual([{ file: allowlist, removed: 0, failed: expect.any(String) }])
+      expect(readFileSync(config, 'utf8')).toBe(`model: x\n\n${block}`)
+      expect(readFileSync(allowlist, 'utf8')).toBe(broken)
+    }
+  })
+
+  it('writes nothing while the approvals are read-only, and names that file', async () => {
+    const { rule, home, config, allowlist } = hermes()
+    write(config, `model: x\n\n${block}`)
+    write(allowlist, approvals)
+    chmodSync(allowlist, 0o444)
+    const outcomes = await removeNativeYamlHooks(rule, [home])
+    expect(outcomes).toEqual([{ file: allowlist, removed: 0, failed: 'the settings file is read-only' }])
+    expect(readFileSync(config, 'utf8')).toBe(`model: x\n\n${block}`)
+  })
+
+  it('says when Harness\'s commands are in a hooks: mapping Harness did not write, and leaves it', async () => {
+    const { rule, home, config } = hermes()
+    const theirs = `model: x\nhooks:\n  on_session_start:\n    - command: ${hermesCommand}\n      timeout: 10\n    - command: "/mine"\n`
+    write(config, theirs)
+    expect(await removeNativeYamlHooks(rule, [home])).toEqual([{ file: config, removed: 0, kept: "Harness's hook commands are in a hooks: mapping Harness did not write; remove them by hand." }])
+    expect(readFileSync(config, 'utf8')).toBe(theirs)
+  })
+
+  it('reads a file with CRLF line ends throughout, and writes it back with them', async () => {
+    const { rule, home, config } = hermes()
+    write(config, `model: x\n\n${block}other: y\n`.replace(/\n/g, '\r\n'))
+    expect(await removeNativeYamlHooks(rule, [home])).toEqual([{ file: config, removed: 1 }])
+    expect(readFileSync(config, 'utf8')).toBe('model: x\r\nother: y\r\n')
+  })
+
+  it('takes out only the blank line Harness put before its block, and keeps the person\'s', async () => {
+    const { rule, home, config } = hermes()
+    write(config, `model: x\n\n\n${block}other: y\n\n\n`)
+    await removeNativeYamlHooks(rule, [home])
+    expect(readFileSync(config, 'utf8')).toBe('model: x\n\nother: y\n\n\n')
+  })
+
+  it('writes nothing when what is left would not be a complete mapping', async () => {
+    const { rule, home, config } = hermes()
+    const text = `model: a\nmodel: b\n\n${block}`
+    write(config, text)
+    expect(await removeNativeYamlHooks(rule, [home])).toEqual([{ file: config, removed: 0, failed: 'the YAML configuration would not stay a complete mapping' }])
+    expect(readFileSync(config, 'utf8')).toBe(text)
+  })
+
+  it('reports a held file by its reason, without the installers\' wording', async () => {
+    const { rule, home, config } = hermes()
+    write(config, `model: x\n\n${HERMES_HOOK_SETTINGS.begin}\nhooks:\n`)
+    expect(await removeNativeYamlHooks(rule, [home])).toEqual([{ file: config, removed: 0, failed: 'the managed YAML block has no closing marker' }])
+  })
+})
+
+describe('Codex\'s review records on a second uninstall', () => {
+  it('are found by the settings file and the hash of the hooks Harness writes there now', async () => {
+    const { root, targets } = machine()
+    const home = realpathSync(join(root))
+    targets.codex.homes = [home]
+    const settings = hookContracts.codex.settings
+    expect(await installHookSettings('codex', settings, env.PORT, home)).toBe(true)
+    const config = readFileSync(join(home, 'config.toml'), 'utf8')
+    expect(config.match(/^\[hooks\.state\./gm)?.length).toBeGreaterThan(0)
+    // An earlier uninstall took the hooks out and stopped before their records.
+    writeFileSync(join(home, 'hooks.json'), JSON.stringify({ hooks: {} }))
+    const stale = `[hooks.state.${JSON.stringify(`${join(home, 'hooks.json')}:stop:7:0`)}]\ntrusted_hash = "sha256:theirs"\n`
+    writeFileSync(join(home, 'config.toml'), `model = "o3"\n\n${stale}\n${config}`)
+
+    const outcomes = await removeEngineHooks(targets)
+
+    expect(outcomes).toContainEqual({ file: join(home, 'config.toml'), removed: config.match(/^\[hooks\.state\./gm)!.length })
+    expect(readFileSync(join(home, 'config.toml'), 'utf8')).toBe(`model = "o3"\n\n${stale}`)
+  })
+})
+
+describe('a Hermes home on a network share', () => {
+  it('is not listed for its profiles, which would open it', () => {
+    const { root } = machine()
+    vi.mocked(homeIsNetworkOrDevice).mockImplementation((home) => home === HERMES_HOOK_SETTINGS.home)
+    vi.mocked(nativeHookHomes).mockClear()
+    try {
+      const targets = defaultHookTargets(join(root, 'data'), () => ({ claude: [], codex: [] }))
+      expect(targets.hermes.homes).toEqual([HERMES_HOOK_SETTINGS.home])
+      expect(nativeHookHomes).not.toHaveBeenCalled()
+    } finally {
+      vi.mocked(homeIsNetworkOrDevice).mockReset()
+    }
   })
 })

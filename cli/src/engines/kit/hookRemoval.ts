@@ -103,7 +103,7 @@ export function withoutHarnessHooks(text: string | null, rule: JsonHookRemoval, 
  * without its "Hook preparation is waiting" prefix, which is the installers' wording, and a refused route's reason
  * without the identity reader's.
  */
-function failure(error: unknown): string {
+export function failure(error: unknown): string {
   if (error instanceof HookPreparationHeld) return error.reason
   if (error instanceof IdentityReadUnavailable) return error.message.replace(/^Conversation identity is held: (.*?)\.?$/s, '$1')
   return error instanceof Error ? error.message : String(error)
@@ -125,13 +125,17 @@ export async function removeJsonHooks(file: string, rule: JsonHookRemoval): Prom
   }
 }
 
-/** A file Harness writes whole (a plugin, a rules file): deleted when [owned] recognizes it, kept otherwise. */
-export async function removeOwnedFile(file: string, owned: (content: string) => boolean): Promise<HookFileRemoval> {
+/**
+ * A file Harness writes whole (a plugin, a rules file): deleted when [owned] recognizes it (true), kept otherwise; a
+ * string from [owned] is why it is kept, for a file that is Harness's but not as Harness wrote it.
+ */
+export async function removeOwnedFile(file: string, owned: (content: string) => boolean | string): Promise<HookFileRemoval> {
   try {
     return await runHookPreparation([file], async (attempt) => {
       const observed = inspectHookFile(file)
       if (observed.content === null) return { file, removed: 0 }
-      if (!owned(observed.content)) return { file, removed: 0, kept: 'another author’s file' }
+      const verdict = owned(observed.content)
+      if (verdict !== true) return { file, removed: 0, kept: verdict === false ? 'another author’s file' : verdict }
       ;(await observed.remove(attempt)).verify()
       return { file, removed: 1 }
     }, { identity: JSON.stringify(['uninstall', file]) })
@@ -141,23 +145,32 @@ export async function removeOwnedFile(file: string, owned: (content: string) => 
 }
 
 /**
- * The engine's records of Harness's hooks as reviewed (hookReview.ts), out of its config file in [home]: the records
- * [settings], the settings file before Harness's hooks were taken out of it, held them under. Only a record that holds
- * exactly its hook's hash, and nothing else, goes (`withoutReviewRecords`); the rest of the config stays byte for byte.
+ * The engine's records of Harness's hooks as reviewed (hookReview.ts), out of its config file in [home]. A record goes
+ * when it holds exactly the hash of one of Harness's hooks, and nothing else (`withoutReviewRecords`): the hook at its
+ * place in [held.before], the settings file before Harness's hooks were taken out of it, or, by the settings file
+ * alone, any of the hooks Harness writes there now ([held.now]), which finds them again on a second uninstall after
+ * one that stopped between the hooks and their records. The rest of the config stays byte for byte.
+ *
+ * The limit: Codex keys a record by the hook's place in the settings file (block, hook) and holds its hash, which
+ * covers the whole command. A record for a hook of Harness's that is no longer in the file, written by another
+ * release, another port or another install folder, matches neither and stays: a stale entry Codex no longer uses.
  */
-export async function removeReviewedHooks(record: HookReviewRecord, home: string, settingsFile: string, settings: Settings,
-  platform: NodeJS.Platform = hostPlatform()): Promise<HookFileRemoval> {
+export async function removeReviewedHooks(record: HookReviewRecord, home: string, settingsFile: string,
+  held: { before: Settings | null; now: Settings }, platform: NodeJS.Platform = hostPlatform()): Promise<HookFileRemoval> {
   const config = join(home, record.file)
   try {
     return await runHookPreparation([config], async (attempt) => {
       const observed = inspectHookFile(config, 0o600)
       if (observed.content === null) return { file: config, removed: 0 }
       // Keyed as prepareReviewed keys them: the config's real folder and the settings file's name.
-      const records = reviewRecords(record, join(observed.directory, basename(settingsFile)), settings, platform)
-      if (records.size === 0) return { file: config, removed: 0 }
+      const keyed = join(observed.directory, basename(settingsFile))
+      const before = held.before ? reviewRecords(record, keyed, held.before, platform) : new Map<string, string>()
+      const now = new Set(reviewRecords(record, keyed, held.now, platform).values())
+      if (before.size === 0 && now.size === 0) return { file: config, removed: 0 }
+      const owned = (key: string, hash: string) => before.get(key) === hash || (key.startsWith(`${keyed}:`) && now.has(hash))
       try { parseToml(observed.content, { integersAsBigInt: true, maxDepth: 64 }) }
       catch { throw new HookPreparationHeld('the hook review configuration is not complete TOML') }
-      const { text, removed } = withoutReviewRecords(observed.content, record, records)
+      const { text, removed } = withoutReviewRecords(observed.content, record, owned)
       if (removed === 0) return { file: config, removed: 0 }
       try { parseToml(text, { integersAsBigInt: true, maxDepth: 64 }) }
       catch { throw new HookPreparationHeld('the hook review configuration would not stay complete TOML') }
