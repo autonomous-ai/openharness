@@ -115,6 +115,8 @@ class ProductMeasurement extends ChangeNotifier {
   final _pending = <String, Map<String, dynamic>>{};
   final _setup = <ProductFlow, void Function(ProductOutcome)>{};
   final _setupFacts = <ProductFlow, String>{};
+  // Steps whose tool was missing at a check during the span now open; counted once per span.
+  final _setupMissing = <ProductFlow>{};
 
   bool get sharing =>
       _account != null &&
@@ -165,6 +167,7 @@ class ProductMeasurement extends ChangeNotifier {
       choiceLoaded = true;
       _clear('setup');
       _setup.clear();
+      _setupMissing.clear();
       if (enabled) _observeSetupFacts();
       notifyListeners();
     }
@@ -201,6 +204,7 @@ class ProductMeasurement extends ChangeNotifier {
       if (surface != 'desktop') signedOutSharing = false;
       _clear('setup');
       _setup.clear();
+      _setupMissing.clear();
     }
     _account = scope;
     _enabled = null;
@@ -250,6 +254,7 @@ class ProductMeasurement extends ChangeNotifier {
       signedOutSharing = false;
       _clear('setup');
       _setup.clear();
+      _setupMissing.clear();
     }
     notifyListeners();
   }
@@ -432,14 +437,23 @@ class ProductMeasurement extends ChangeNotifier {
     if (!_setupAllowed && !sharing) return;
     for (final entry in _setupFacts.entries) {
       if (!entry.key.beforeSignIn || entry.key == ProductFlow.signIn) continue;
-      if (const ['pending', 'running', 'needsTerminal'].contains(entry.value)) {
+      // `missing`: a check found the step's tool not installed yet, so setup goes on to install it.
+      // The step stays open until the install ends; only a setup that ends failed fails it.
+      if (const [
+        'pending',
+        'running',
+        'needsTerminal',
+        'missing',
+      ].contains(entry.value)) {
         _setup.putIfAbsent(entry.key, () => begin(entry.key));
+        if (entry.value == 'missing') _countSetupMissing(entry.key);
       } else if (const [
         'ready',
         'notApplicable',
         'failed',
         'unavailable',
       ].contains(entry.value)) {
+        _setupMissing.remove(entry.key);
         _setup
             .remove(entry.key)
             ?.call(
@@ -449,6 +463,18 @@ class ProductMeasurement extends ChangeNotifier {
             );
       }
     }
+  }
+
+  /// How many new computers needed a tool installed: a signed-out setup count only, because a
+  /// signed-in report goes through the local CLI, whose copy of the contract may be older.
+  void _countSetupMissing(ProductFlow flow) {
+    if (sharing || !_setupAllowed || surface != 'desktop' || _disposed) return;
+    if (!_setupMissing.add(flow)) return;
+    _count(
+      'setup',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'setup_${surface}_${flow.wire}_missing',
+    );
   }
 
   void _count(String channel, String day, String metric) {
@@ -611,6 +637,7 @@ class ProductMeasurement extends ChangeNotifier {
     _days.clear();
     _pending.clear();
     _setup.clear();
+    _setupMissing.clear();
     _active.clear();
     _expires.clear();
     _expire.clear();

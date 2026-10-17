@@ -376,6 +376,32 @@ void main() {
       expect(setup.length, 1);
     },
   );
+  test('a missing tool keeps its setup step open and is marked once', () async {
+    usage.setupFacts({ProductFlow.setupHarness: 'pending'});
+    usage.setupFacts({ProductFlow.setupHarness: 'missing'});
+    usage.setupFacts({ProductFlow.setupHarness: 'missing'});
+    usage.setupFacts({ProductFlow.setupHarness: 'running'});
+    usage.setupFacts({ProductFlow.setupHarness: 'ready'});
+    await usage.flush();
+    expect(setup.single['counters'], {
+      'setup_desktop_setup_harness_started': 1,
+      'setup_desktop_setup_harness_missing': 1,
+      'setup_desktop_setup_harness_ok': 1,
+      'setup_desktop_setup_harness_under_1s': 1,
+    });
+  });
+  test('a signed-in setup step counts no missing mark', () async {
+    await account();
+    usage.setupFacts({ProductFlow.setupTmux: 'missing'});
+    usage.setupFacts({ProductFlow.setupTmux: 'ready'});
+    await usage.flush();
+    expect(reports.last['counters'], {
+      'ui_desktop_setup_tmux_started': 1,
+      'ui_desktop_setup_tmux_ok': 1,
+      'ui_desktop_setup_tmux_under_1s': 1,
+    });
+    expect(setup, isEmpty);
+  });
   test(
     'flow observations are bounded and unknown operations never upload content',
     () async {

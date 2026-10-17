@@ -59,6 +59,8 @@ export const PRODUCT_USAGE_FLOW_MEASURES = ['started', 'ok', 'failed', 'cancelle
   'under_1s', '1s_to_10s', '10s_to_1m', 'over_1m'] as const
 export const PRODUCT_USAGE_UI_METRICS = PRODUCT_USAGE_UI_SURFACES.flatMap(surface =>
   PRODUCT_USAGE_FLOWS.flatMap(flow => PRODUCT_USAGE_FLOW_MEASURES.map(measure => `ui_${surface}_${flow}_${measure}` as const)))
+export const PRODUCT_USAGE_SETUP_DOWNLOADS = ['opencode', 'codex', 'claude'] as const
+export const PRODUCT_USAGE_SETUP_DOWNLOAD_MEASURES = ['started', 'ok', 'failed', 'under_1m', '1m_to_5m', 'over_5m'] as const
 // A signed-out report is explicitly enabled on this app. It cannot carry account/work metrics.
 export const PRODUCT_USAGE_SETUP_METRICS = [...PRODUCT_USAGE_SURFACES.flatMap(surface =>
   PRODUCT_USAGE_SETUP_FLOWS.flatMap(flow =>
@@ -66,6 +68,13 @@ export const PRODUCT_USAGE_SETUP_METRICS = [...PRODUCT_USAGE_SURFACES.flatMap(su
   ...(['funnel_setup_seen', 'funnel_sign_in_seen', 'funnel_workspace_ready', 'funnel_first_work', 'funnel_first_response',
     'first_work_under_1m', 'first_work_1m_to_5m', 'first_work_over_5m',
     'first_response_under_1m', 'first_response_1m_to_5m', 'first_response_over_5m'] as const).map(m => `setup_desktop_${m}` as const),
+  // A step's tool was not installed yet when Desktop checked, so setup installed it: once per step per
+  // setup, beside the step's own outcome. Signed-out only (a signed-in report passes an older CLI).
+  ...(['setup_harness', 'setup_tmux', 'setup_clipboard'] as const).map(flow => `setup_desktop_${flow}_missing` as const),
+  // The agents a new computer downloads beside setup (desktop/lib/bootstrap/agent_prefetch.dart): whether each
+  // download put its agent in place, and how long it took. Engine names only, never a path or log line.
+  ...PRODUCT_USAGE_SETUP_DOWNLOADS.flatMap(engine => PRODUCT_USAGE_SETUP_DOWNLOAD_MEASURES
+    .map(measure => `setup_desktop_agent_download_${engine}_${measure}` as const)),
 ] as const
 export const PRODUCT_USAGE_ACTION_MEASURES = ['requests', 'ok', 'failed', 'pending', 'unknown',
   'error_setup', 'error_auth', 'error_unavailable', 'error_invalid', 'error_other',
