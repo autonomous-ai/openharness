@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -42,6 +42,16 @@ async function until(done: () => boolean, ms = 30_000): Promise<void> {
   while (!done() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 250))
 }
 
+/** Whether this account can make a file symlink: a standard user without Developer Mode cannot. */
+function canLinkFiles(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), 'removal-probe-'))
+  try { writeFileSync(join(dir, 'f'), ''); symlinkSync(join(dir, 'f'), join(dir, 'l'), 'file'); return true } catch { return false } finally { rmSync(dir, { recursive: true, force: true }) }
+}
+const fileLinks = process.platform === 'win32' && canLinkFiles()
+
+/** This computer's, but with WMI refusing, as on a computer where it is off: the fallback runs. */
+const withoutWmi = (pid: number) => ({ ...finalRemovalDeps(), pid, powershell: () => ({ status: 3, stdout: '', stderr: 'Win32_Process.Create returned 2' }) })
+
 const leftovers = (pid: number) => readdirSync(tmpdir()).filter((name) => name.startsWith(`harness-uninstall-${pid}-`))
 
 describe.runIf(process.platform === 'win32')('the last step of harness uninstall', () => {
@@ -63,7 +73,7 @@ describe.runIf(process.platform === 'win32')('the last step of harness uninstall
     expect(leftovers(cli.pid!)).toEqual([])
   }, 40_000)
 
-  it('removes a junction and a file link, never what they point to', async () => {
+  it('removes a junction, never what it points to', async () => {
     const { base, root } = throwaway()
     const outside = outsideFolder(base)
     mkdirSync(join(root, 'bin'), { recursive: true })
@@ -71,7 +81,6 @@ describe.runIf(process.platform === 'win32')('the last step of harness uninstall
     symlinkSync(outside.dir, join(root, 'linked'), 'junction')
     symlinkSync(outside.dir, join(root, 'bin', 'linked'), 'junction')
     symlinkSync(outside.dir, join(root, 'cli', 'linked'), 'junction')
-    symlinkSync(outside.file, join(root, 'cli', 'current'), 'file')
     const p = plan(root)
     expect(p.remove).toContainEqual({ path: join(root, 'linked'), dir: false, link: true })
     const cli = holder(500)
@@ -82,6 +91,64 @@ describe.runIf(process.platform === 'win32')('the last step of harness uninstall
     expect(readFileSync(outside.file, 'utf8')).toBe('k')
     await new Promise((r) => setTimeout(r, 1000))
     expect(leftovers(cli.pid!)).toEqual([])
+  }, 40_000)
+
+  // Skipped where this account cannot make a file symlink (a standard user without Developer Mode).
+  it.skipIf(!fileLinks)('removes a file link, never the file it points to', async () => {
+    const { base, root } = throwaway()
+    const outside = outsideFolder(base)
+    mkdirSync(join(root, 'cli'), { recursive: true })
+    symlinkSync(outside.file, join(root, 'cli', 'current'), 'file')
+    symlinkSync(outside.file, join(root, 'current-link'), 'file')
+    const cli = holder(500)
+    expect(scheduleFinalRemoval(plan(root), { ...finalRemovalDeps(), pid: cli.pid! })).toMatchObject({ ok: true })
+    await until(() => !existsSync(root))
+    expect(existsSync(root)).toBe(false)
+    expect(readFileSync(outside.file, 'utf8')).toBe('k')
+    await new Promise((r) => setTimeout(r, 1000))
+    expect(leftovers(cli.pid!)).toEqual([])
+  }, 40_000)
+
+  it('when WMI fails, the fallback waits for the process and really removes the tree', async () => {
+    const { root } = throwaway()
+    mkdirSync(join(root, 'cli', '0.5.1'), { recursive: true })
+    writeFileSync(join(root, 'cli', '0.5.1', 'cli.js'), '')
+    writeFileSync(join(root, 'cli', 'current'), '0.5.1\n')
+    const cli = holder(3000)
+    expect(scheduleFinalRemoval(plan(root), withoutWmi(cli.pid!))).toMatchObject({ ok: true, via: 'spawn' })
+    await new Promise((r) => setTimeout(r, 1500))
+    expect(cli.exitCode).toBe(null)
+    expect(existsSync(join(root, 'cli', 'current'))).toBe(true)
+    await until(() => !existsSync(root))
+    expect(existsSync(root)).toBe(false)
+    await new Promise((r) => setTimeout(r, 1000))
+    expect(leftovers(cli.pid!)).toEqual([])
+  }, 40_000)
+
+  it('when WMI fails, the fallback writes its log: here a folder that became a junction while it waited', async () => {
+    const { base, root } = throwaway()
+    mkdirSync(join(root, 'cli', '0.5.1'), { recursive: true })
+    mkdirSync(join(root, 'cli', 'data'), { recursive: true })
+    writeFileSync(join(root, 'cli', '0.5.1', 'cli.js'), 'c')
+    writeFileSync(join(root, 'cli', 'data', 'd.json'), 'd')
+    const cli = holder(2000)
+    const scheduled = scheduleFinalRemoval(plan(root, true), withoutWmi(cli.pid!))
+    expect(scheduled).toMatchObject({ ok: true, via: 'spawn' })
+    if (!scheduled.ok) return
+    // While the script waits: root\cli becomes a junction to a folder outside the root, holding the same files.
+    const moved = join(base, 'moved-cli')
+    renameSync(join(root, 'cli'), moved)
+    symlinkSync(moved, join(root, 'cli'), 'junction')
+    await until(() => existsSync(scheduled.log))
+    try {
+      expect(readFileSync(scheduled.log, 'utf8')).toContain('has become a link to another folder')
+      expect(readFileSync(join(moved, '0.5.1', 'cli.js'), 'utf8')).toBe('c')
+      expect(readFileSync(join(moved, 'data', 'd.json'), 'utf8')).toBe('d')
+      await until(() => !existsSync(scheduled.script), 5000)
+      expect(existsSync(scheduled.script)).toBe(false)
+    } finally {
+      unlinkSync(scheduled.log)
+    }
   }, 40_000)
 
   it('with --keep-data leaves cli\\data and the person\'s data', async () => {

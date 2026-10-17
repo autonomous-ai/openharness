@@ -252,6 +252,9 @@ export function finalRemovalScript(o: { pid: number; plan: RemovalPlan; log: str
     'set pass=0',
     ':again',
     ...targets.flatMap(remove),
+    // `if exist` follows a link: a link whose far side is gone reads as removed even when it is still there, and is
+    // neither retried nor listed in the log. Accepted (B5.4 review): what stays is a dangling link inside the root,
+    // which points nowhere and which a later uninstall or a person deleting the folder takes.
     'set left=0',
     ...targets.map((t) => `if exist ${quoted(t.path)} set left=1`),
     'if %left%==0 goto done',
@@ -278,13 +281,21 @@ export interface FinalRemovalDeps {
   now(): number
   write(path: string, text: string): void
   powershell: PowershellRun
+  /** Starts [file] apart from this process's console, so that it outlives it. Throws when it could not start. */
   spawnDetached(file: string, args: string[], cwd: string): void
 }
 
 export type FinalRemoval = { ok: true; script: string; log: string; via: 'wmi' | 'spawn' } | { ok: false; detail: string }
 
+/**
+ * cmd.exe gets the script's name only, run from the temp folder: cmd /c expands a %VAR% in its command line, so a full
+ * path such as C:\Users\a%OS%b\AppData\Local\Temp\… would be run as another. The name is digits and dashes. /v:off
+ * keeps a `!` a `!` even where the registry turns delayed expansion on for every cmd.
+ */
+const cmdArgs = (name: string): string[] => ['/d', '/v:off', '/c', `.\\${name}`]
+
 const START_OUTSIDE_JOB = String.raw`$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
-$command = '"' + $env:HARNESS_CMD + '" /d /s /c ""' + $env:HARNESS_UNINSTALL_SCRIPT + '""'
+$command = '"' + $env:HARNESS_CMD + '" /d /v:off /c .\' + $env:HARNESS_UNINSTALL_SCRIPT
 $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $command; CurrentDirectory = $env:HARNESS_UNINSTALL_CWD; ProcessStartupInformation = $startup }
 if ($result.ReturnValue -ne 0) { [Console]::Error.Write("Win32_Process.Create returned $($result.ReturnValue)"); exit 3 }`
 
@@ -293,19 +304,24 @@ const message = (error: unknown): string => (error instanceof Error ? error.mess
 /** Writes and starts the last step. Throws, writing and starting nothing, on a plan finalRemovalScript refuses. */
 export function scheduleFinalRemoval(plan: RemovalPlan, deps: FinalRemovalDeps): FinalRemoval {
   const stamp = `${deps.pid}-${deps.now()}`
-  const script = win32.join(deps.tempDir, `harness-uninstall-${stamp}.cmd`)
+  const name = `harness-uninstall-${stamp}.cmd`
+  const script = win32.join(deps.tempDir, name)
   const log = win32.join(deps.tempDir, `harness-uninstall-${stamp}.log`)
   checkPathText('win32', script)
   const text = finalRemovalScript({ pid: deps.pid, plan, log, systemRoot: deps.systemRoot })
+  // The script and its log must outlive the removal, and the script must not remove the folder it runs from.
+  const temp = normalized('win32', deps.tempDir)
+  const root = normalized('win32', plan.root)
+  if (same('win32', temp, root) || inside('win32', root, temp)) refuse(plan.root, `the temp folder ${deps.tempDir} is inside it`)
   if (isLink(plan.root)) refuse(plan.root, 'it is a link to another folder')
   try { deps.write(script, text) }
   catch (error) { return { ok: false, detail: `could not write ${script}: ${message(error)}` } }
   const cmd = win32.join(deps.systemRoot, 'System32', 'cmd.exe')
-  const started = deps.powershell(START_OUTSIDE_JOB, { HARNESS_CMD: cmd, HARNESS_UNINSTALL_SCRIPT: script, HARNESS_UNINSTALL_CWD: deps.tempDir })
+  const started = deps.powershell(START_OUTSIDE_JOB, { HARNESS_CMD: cmd, HARNESS_UNINSTALL_SCRIPT: name, HARNESS_UNINSTALL_CWD: deps.tempDir })
   if (!started.error && started.status === 0) return { ok: true, script, log, via: 'wmi' }
-  // A computer where WMI is off: detached from this console, though still in this process's job.
+  // A computer where WMI is off: a hidden console of its own, though still in this process's job.
   try {
-    deps.spawnDetached(cmd, ['/d', '/s', '/c', `""${script}""`], deps.tempDir)
+    deps.spawnDetached(cmd, cmdArgs(name), deps.tempDir)
     return { ok: true, script, log, via: 'spawn' }
   } catch (error) {
     return { ok: false, detail: `could not start the last step (${message(error)})` }
@@ -321,8 +337,17 @@ export function finalRemovalDeps(): FinalRemovalDeps {
     now: () => Date.now(),
     write: (path, text) => writeFileSync(path, text, 'utf8'),
     powershell: runPowershell,
+    // Not `detached`: on Windows that is DETACHED_PROCESS, a cmd.exe with no console at all, in which `tasklist | find`
+    // hung for 45 s and more on the VM until the session ended it, removing nothing (B5.4 review). Without it, and
+    // with stdio ignored, windowsHide makes Node start it with CREATE_NO_WINDOW: a console of its own, never shown,
+    // which a terminal closing does not end. A spawn that fails reports it later as an 'error' event, which unheard
+    // ends this process with exit 1 after the uninstall has already said it worked: so it is heard, and a child
+    // without a pid is a start that failed.
     spawnDetached: (file, args, cwd) => {
-      spawn(file, args, { cwd, detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true }).unref()
+      const child = spawn(file, args, { cwd, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true })
+      child.on('error', () => {})
+      if (child.pid === undefined) throw new Error(`could not start ${file}`)
+      child.unref()
     },
   }
 }
