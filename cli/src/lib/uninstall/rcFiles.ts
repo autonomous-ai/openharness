@@ -5,7 +5,8 @@
  * Only the installer's exact pair goes: the marker and, on the next line, the line it wrote. A marker whose next line
  * the person changed is theirs now, and stays, as does every other line of the file.
  */
-import { lstatSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { chmodSync, lstatSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** install.sh `marker`. */
@@ -29,7 +30,11 @@ export function rcFiles(home: string): RcFile[] {
 
 export interface RcEdit { text: string; removed: number; changedByPerson: number }
 
-/** [text] without the installer's pairs, and the blank line it printed before each one. */
+/**
+ * Matching is by exact line: a heredoc or comment holding the very marker line and PATH line is removed too. It cannot be
+ * told apart from the installer's own pair, as with install.sh's grep.
+ *
+ * [text] without the installer's pairs, and the blank line it printed before each one. */
 export function withoutHarnessPathLines(text: string, line: string): RcEdit {
   const lines = text.split('\n')
   const out: string[] = []
@@ -52,38 +57,43 @@ export function withoutHarnessPathLines(text: string, line: string): RcEdit {
 export interface RcOutcome { file: string; removed: number; changedByPerson: number; failed?: string }
 
 /**
- * Take the installer's lines out of each startup file in [home]. A file that is a link is written through the link:
- * the installer's `>>` followed it, and a rename would replace somebody's dotfiles link with a copy.
+ * Take the installer's lines out of each startup file in [home].
+ *
+ * Files are read and written as latin1, so every byte outside the lines removed survives as it was, valid UTF-8 or not;
+ * the lines looked for are converted the same way. A link is followed: the edit is written to a temporary file next to
+ * the link's target and renamed onto the target, so the link stays a link and nothing is truncated. The mode is kept.
+ * Ownership, ACLs and hardlinks of the file are not kept by the rename. A file that is not there is skipped; any other
+ * problem (unreadable file, dangling link, failed write) is reported as `failed` and the next file is still handled.
  */
 export function removeHarnessPathLines(home: string): RcOutcome[] {
   const outcomes: RcOutcome[] = []
   for (const { file, line } of rcFiles(home)) {
-    let text: string
-    let link: boolean
-    let mode: number
+    let temporary: string | undefined
+    let changedByPerson = 0
     try {
-      const info = lstatSync(file)
-      link = info.isSymbolicLink()
-      mode = info.mode & 0o777
-      text = readFileSync(file, 'utf8')
-    } catch {
-      continue
-    }
-    const edit = withoutHarnessPathLines(text, line)
-    if (edit.removed === 0) {
-      if (edit.changedByPerson) outcomes.push({ file, removed: 0, changedByPerson: edit.changedByPerson })
-      continue
-    }
-    try {
-      if (link) writeFileSync(file, edit.text)
-      else {
-        const temporary = `${file}.harness-uninstall-${process.pid}`
-        writeFileSync(temporary, edit.text, { mode })
-        renameSync(temporary, file)
+      try {
+        lstatSync(file)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+        throw error
       }
-      outcomes.push({ file, removed: edit.removed, changedByPerson: edit.changedByPerson })
+      const target = realpathSync(file) // a dangling link throws here: reported, not skipped
+      const mode = statSync(target).mode & 0o777
+      const text = readFileSync(target, 'latin1')
+      const edit = withoutHarnessPathLines(text, Buffer.from(line, 'utf8').toString('latin1'))
+      changedByPerson = edit.changedByPerson
+      if (edit.removed === 0) {
+        if (changedByPerson) outcomes.push({ file, removed: 0, changedByPerson })
+        continue
+      }
+      temporary = `${target}.harness-uninstall-${randomBytes(6).toString('hex')}`
+      writeFileSync(temporary, edit.text, { encoding: 'latin1', flag: 'wx', mode })
+      chmodSync(temporary, mode) // the umask masks the mode given above
+      renameSync(temporary, target)
+      outcomes.push({ file, removed: edit.removed, changedByPerson })
     } catch (error) {
-      outcomes.push({ file, removed: 0, changedByPerson: edit.changedByPerson, failed: error instanceof Error ? error.message : String(error) })
+      if (temporary) rmSync(temporary, { force: true })
+      outcomes.push({ file, removed: 0, changedByPerson, failed: error instanceof Error ? error.message : String(error) })
     }
   }
   return outcomes
