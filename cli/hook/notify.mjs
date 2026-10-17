@@ -417,9 +417,11 @@ function readHookCredential() {
 }
 
 /**
- * Mirrors secureState.ts's Windows rules (`windowsStateRoots`, `requireInsideWindowsRoots`) and hookAuth.ts on Windows:
- * NTFS gives Node no owner or mode bits, so the credential must be a plain file (not a link or junction, which lstat
- * does not call a file), with a real path inside the profile or the data folder this hook was installed with.
+ * NTFS gives Node no owner or mode bits, so on Windows the hook trusts its own data folder (the --data-dir it was
+ * installed with) and the profile. Below the data folder, the credential must be a plain file, not a link or
+ * junction (lstat does not call one a file): that check is what protects it. Its real path must also lie inside the
+ * profile or the data folder, as defence in depth. The file is opened and must be the very file lstat saw, so it
+ * cannot be swapped between the check and the read.
  */
 function readWindowsHookCredential(dataDir, file) {
   const roots = [homedir(), dataDir].flatMap((root) => { try { return [realpathSync.native(root)] } catch { return [] } })
@@ -427,10 +429,18 @@ function readWindowsHookCredential(dataDir, file) {
     const rel = win32.relative(root, target)
     return rel === '' || (rel !== '..' && !rel.startsWith('..\\') && !win32.isAbsolute(rel))
   })
-  const link = lstatSync(file)
-  if (!link.isFile() || link.size > 128 || !inside(realpathSync.native(file))) return ''
-  const value = readFileSync(file, 'utf8').trim()
-  return /^[A-Za-z0-9_-]{43}$/.test(value) ? value : ''
+  const link = lstatSync(file, { bigint: true })
+  if (!link.isFile() || link.size > 128n || !inside(realpathSync.native(file))) return ''
+  let fd = null
+  try {
+    fd = openSync(file, 'r')
+    const opened = fstatSync(fd, { bigint: true })
+    if (!opened.isFile() || opened.dev !== link.dev || opened.ino !== link.ino) return ''
+    const value = readFileSync(fd, 'utf8').trim()
+    return /^[A-Za-z0-9_-]{43}$/.test(value) ? value : ''
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
 }
 
 /**

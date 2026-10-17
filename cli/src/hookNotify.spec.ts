@@ -1947,4 +1947,15 @@ describe('hook notify in a Harness pty host pane (Windows)', () => {
     await runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` }, input: sessionStart() })
     expect(requests).toEqual([])
   })
+
+  it('refuses a credential that links to a file inside the data folder: the link itself is refused', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'adapter-hook-win-')); tmpDirs.push(dataDir)
+    writeFileSync(join(dataDir, 'token'), `${'b'.repeat(43)}\n`)
+    symlinkSync(join(dataDir, 'token'), join(dataDir, 'hook-credential'))
+    const preload = join(dataDir, 'win32.mjs')
+    writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32' })\n")
+    const { port, requests } = await collect({}, 'b'.repeat(43))
+    await runHook({ port, dataDir, env: { HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` }, input: sessionStart() })
+    expect(requests).toEqual([])
+  })
 })
