@@ -205,7 +205,7 @@ export const HAND_OVER_GRACE_MS = 45_000
 
 /**
  * A child's exit code as its platform means it. Windows' is a DWORD, which Node gives unsigned: a process ended by
- * TerminateProcess(-1) (Stop-Process, Node's own kill) showed as `code 4294967295`, and an NTSTATUS crash as a
+ * TerminateProcess(-1) (Stop-Process, .NET's Process.Kill) showed as `code 4294967295`, and an NTSTATUS crash as a
  * ten-digit number nobody looks up. Signed, they read as Windows' own tools print them. A Unix code is under 256.
  */
 export const signedExitCode = (code: number | null): number | null =>

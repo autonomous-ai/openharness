@@ -437,7 +437,6 @@ describe('starting the master', () => {
     expect(masterEnv(given, null, (line) => logs.push(line), 'win32')).toEqual({ HOME: '/home/someone', HARNESSD_SERVICES: 'none' })
     expect(logs).toEqual([expect.stringMatching(/ \[harnessd\] on Windows the services run in the core's process$/)])
     expect(logs[0]).not.toMatch(/socket|deep/)
-    logs.length = 1
     // Already none: nothing to change or say.
     const none = { HARNESSD_SERVICES: 'none' }
     expect(masterEnv(none, null, (line) => logs.push(line))).toBe(none)
