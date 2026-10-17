@@ -1,0 +1,136 @@
+import { spawn, spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join, relative } from 'node:path'
+import { afterAll, describe, expect, it } from 'vitest'
+import { finalRemovalDeps, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval } from './removal.js'
+
+// The real last step, on Windows only: a cmd.exe that waits for a process (a node.exe standing in for the CLI, holding
+// a file open in the tree) to exit, then removes the tree and itself. Every root here is a throwaway one under the
+// temp folder, its path made hard to quote (a space, a %, an &, a ^, a !, brackets, a non-ASCII letter): never the
+// person's own %USERPROFILE%\.harness, which each case checks before it starts.
+const realRoot = join(homedir(), '.harness')
+const bases: string[] = []
+afterAll(() => { for (const base of bases.splice(0)) rmSync(base, { recursive: true, force: true }) })
+
+function throwaway(): { base: string; root: string } {
+  const base = mkdtempSync(join(tmpdir(), `harness-removal-${process.pid} Jö 100% &^!()-`))
+  bases.push(base)
+  const root = join(base, '.harness')
+  const rel = relative(tmpdir(), root)
+  if (rel.startsWith('..') || root.toLowerCase() === realRoot.toLowerCase()) throw new Error(`not a throwaway root: ${root}`)
+  return { base, root }
+}
+
+/** A folder outside the root, with a file in it, that a link inside the root points to. */
+function outsideFolder(base: string): { dir: string; file: string } {
+  const dir = join(base, 'outside')
+  mkdirSync(dir)
+  writeFileSync(join(dir, 'keep.txt'), 'k')
+  return { dir, file: join(dir, 'keep.txt') }
+}
+
+const plan = (root: string, keepData = false) => removalPlan({
+  platform: 'win32', root, cliDir: join(root, 'cli'), dataDir: join(root, 'cli', 'data'), entries: listEntries(root), cliEntries: listEntries(join(root, 'cli')), keepData,
+})
+
+/** A node.exe that stands in for the CLI for [ms]. */
+const holder = (ms: number, open?: string) => spawn(process.execPath, ['-e', `${open ? `require('fs').openSync(${JSON.stringify(open)}, 'r'); ` : ''}setTimeout(() => {}, ${ms})`], { stdio: 'ignore' })
+
+async function until(done: () => boolean, ms = 30_000): Promise<void> {
+  const deadline = Date.now() + ms
+  while (!done() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 250))
+}
+
+const leftovers = (pid: number) => readdirSync(tmpdir()).filter((name) => name.startsWith(`harness-uninstall-${pid}-`))
+
+describe.runIf(process.platform === 'win32')('the last step of harness uninstall', () => {
+  it('removes the tree once the process has exited, and leaves no script or log', async () => {
+    const { root } = throwaway()
+    mkdirSync(join(root, 'cli', '0.5.1'), { recursive: true })
+    writeFileSync(join(root, 'cli', '0.5.1', 'cli.js'), '')
+    writeFileSync(join(root, 'cli', 'current'), '0.5.1\n')
+    const cli = holder(4000, join(root, 'cli', 'current'))
+    const scheduled = scheduleFinalRemoval(plan(root), { ...finalRemovalDeps(), pid: cli.pid! })
+    expect(scheduled).toMatchObject({ ok: true, via: 'wmi' })
+    // It waits for that process: while it runs, the tree is all there.
+    await new Promise((r) => setTimeout(r, 1500))
+    expect(cli.exitCode).toBe(null)
+    expect(existsSync(join(root, 'cli', 'current'))).toBe(true)
+    await until(() => !existsSync(root))
+    expect(existsSync(root)).toBe(false)
+    await new Promise((r) => setTimeout(r, 1000))
+    expect(leftovers(cli.pid!)).toEqual([])
+  }, 40_000)
+
+  it('removes a junction and a file link, never what they point to', async () => {
+    const { base, root } = throwaway()
+    const outside = outsideFolder(base)
+    mkdirSync(join(root, 'bin'), { recursive: true })
+    mkdirSync(join(root, 'cli'), { recursive: true })
+    symlinkSync(outside.dir, join(root, 'linked'), 'junction')
+    symlinkSync(outside.dir, join(root, 'bin', 'linked'), 'junction')
+    symlinkSync(outside.dir, join(root, 'cli', 'linked'), 'junction')
+    symlinkSync(outside.file, join(root, 'cli', 'current'), 'file')
+    const p = plan(root)
+    expect(p.remove).toContainEqual({ path: join(root, 'linked'), dir: false, link: true })
+    const cli = holder(500)
+    expect(scheduleFinalRemoval(p, { ...finalRemovalDeps(), pid: cli.pid! })).toMatchObject({ ok: true })
+    await until(() => !existsSync(root))
+    expect(existsSync(root)).toBe(false)
+    expect(readdirSync(outside.dir)).toEqual(['keep.txt'])
+    expect(readFileSync(outside.file, 'utf8')).toBe('k')
+    await new Promise((r) => setTimeout(r, 1000))
+    expect(leftovers(cli.pid!)).toEqual([])
+  }, 40_000)
+
+  it('with --keep-data leaves cli\\data and the person\'s data', async () => {
+    const { root } = throwaway()
+    mkdirSync(join(root, 'cli', 'data', 'sessions'), { recursive: true })
+    mkdirSync(join(root, 'cli', '0.5.1'), { recursive: true })
+    mkdirSync(join(root, 'bin'), { recursive: true })
+    mkdirSync(join(root, 'auth'), { recursive: true })
+    writeFileSync(join(root, 'cli', 'data', 'sessions', 's.json'), 's')
+    writeFileSync(join(root, 'auth', 'session.json'), 'a')
+    writeFileSync(join(root, 'cli', 'current'), '0.5.1\n')
+    writeFileSync(join(root, 'bin', 'harness.cmd'), '')
+    const cli = holder(500)
+    expect(scheduleFinalRemoval(plan(root, true), { ...finalRemovalDeps(), pid: cli.pid! })).toMatchObject({ ok: true })
+    await until(() => !existsSync(join(root, 'bin')) && !existsSync(join(root, 'cli', '0.5.1')) && !existsSync(join(root, 'cli', 'current')))
+    expect(listEntries(root).map((e) => e.name).sort()).toEqual(['auth', 'cli'])
+    expect(listEntries(join(root, 'cli')).map((e) => e.name)).toEqual(['data'])
+    expect(readFileSync(join(root, 'cli', 'data', 'sessions', 's.json'), 'utf8')).toBe('s')
+    expect(readFileSync(join(root, 'auth', 'session.json'), 'utf8')).toBe('a')
+  }, 40_000)
+
+  it('removeNow removes a junction, never what it points to', () => {
+    const { base, root } = throwaway()
+    const outside = outsideFolder(base)
+    mkdirSync(join(root, 'cli'), { recursive: true })
+    symlinkSync(outside.dir, join(root, 'linked'), 'junction')
+    symlinkSync(outside.dir, join(root, 'cli', 'linked'), 'junction')
+    expect(removeNow(plan(root))).toEqual([])
+    expect(existsSync(root)).toBe(false)
+    expect(readdirSync(outside.dir)).toEqual(['keep.txt'])
+  })
+
+  it('refuses a root that is a junction, in the CLI and in the script itself', () => {
+    const { base, root } = throwaway()
+    const real = join(base, 'real', '.harness')
+    mkdirSync(join(real, 'bin'), { recursive: true })
+    writeFileSync(join(real, 'bin', 'harness.cmd'), 'h')
+    symlinkSync(real, root, 'junction')
+    const p = plan(root)
+    expect(() => removeNow(p)).toThrow(/link/)
+    expect(() => scheduleFinalRemoval(p, { ...finalRemovalDeps(), pid: 1 })).toThrow(/link/)
+    // The script on its own, as if the root had become a junction after the CLI made the plan.
+    const exited = spawnSync(process.execPath, ['-e', '']).pid
+    const script = join(base, 'last-step.cmd')
+    const log = join(base, 'last-step.log')
+    writeFileSync(script, finalRemovalScript({ pid: exited, plan: p, log, systemRoot: process.env.SystemRoot ?? 'C:\\Windows' }), 'utf8')
+    spawnSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe'), ['/d', '/s', '/c', `""${script}""`], { windowsVerbatimArguments: true, timeout: 30_000 })
+    expect(readFileSync(join(real, 'bin', 'harness.cmd'), 'utf8')).toBe('h')
+    expect(readFileSync(log, 'utf8')).toContain('has become a link to another folder')
+    expect(existsSync(script)).toBe(false)
+  }, 40_000)
+})
