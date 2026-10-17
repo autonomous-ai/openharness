@@ -86,6 +86,15 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
       accessSync(path, constants.X_OK)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        // Windows: statSync follows links, so a PATH entry across a symlink or junction (nvm-windows, Scoop) proves
+        // absence like any other. NativePaths refuses links there, which is right for hook files, not for this search.
+        if (process.platform === 'win32') {
+          try { statSync(path) } catch (missing) {
+            const code = (missing as NodeJS.ErrnoException).code
+            if (code === 'ENOENT' || code === 'ENOTDIR') continue
+          }
+          return held('Waiting to confirm the engine search path and its aliases.')
+        }
         try {
           const paths = new NativePaths(new NativeEvidenceBudget())
           if (paths.resolveSync(path, true)) return held('Waiting for the engine search path to stop changing.')

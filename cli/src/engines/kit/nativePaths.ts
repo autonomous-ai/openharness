@@ -1,7 +1,7 @@
 /** Canonical path evidence for a bounded native descriptor pool, including excluded candidates. */
 import { lstatSync, readlinkSync, type BigIntStats } from 'node:fs'
 import { lstat, readlink } from 'node:fs/promises'
-import { dirname, isAbsolute, join, win32 } from 'node:path'
+import { dirname, isAbsolute, join, sep, win32 } from 'node:path'
 import { NativeEvidenceBudget, nativeUnavailable } from './nativeEvidence.js'
 
 export const nativeFileKey = (info: Pick<BigIntStats, 'dev' | 'ino'>) => `${info.dev}:${info.ino}`
@@ -33,9 +33,11 @@ export function verifyNativePathFacts(facts: readonly NativePathFact[]): void {
   }
 }
 
+/** NativePaths walks the paths node:path produces, so its default platform is the path module's (`win32` or the POSIX walk),
+ * not `process.platform`: a spec that fakes win32 on a POSIX host still has POSIX paths. */
 export class NativePaths {
   private readonly parts = new Map<string, Part>()
-  constructor(private readonly budget: NativeEvidenceBudget, private readonly platform: NodeJS.Platform = process.platform) {}
+  constructor(private readonly budget: NativeEvidenceBudget, private readonly platform: NodeJS.Platform = sep === '\\' ? 'win32' : 'linux') {}
 
   async resolve(path: string, missingOkay = false): Promise<Location> {
     const steps = this.walk(path, missingOkay)
@@ -136,8 +138,9 @@ export class NativePaths {
   /**
    * A Windows path: drive-absolute only (`C:\…`), never a UNC share, a device path (`\\?\`, `\\.\`) or a drive-relative
    * one. NTFS gives Node no owner or mode bits to trust a hook file by. What protects it is the profile's ACL and the
-   * route itself, so no step may be a reparse point: a symlink or a junction, both of which Node reports as a
-   * symbolic link. One is refused, never followed (spec section 4). `..` is then lexical.
+   * route itself, so no step may be a link: Harness refuses what Node reports as a symbolic link (symlinks and
+   * junctions), and never follows it (spec section 4). `..` is then lexical. A `:` after the drive (an alternate data
+   * stream) is refused.
    */
   private *walkWindows(path: string, missingOkay: boolean): Generator<string, Location, Part> {
     if (!/^[A-Za-z]:[\\/]/.test(path) || path.includes('\0') || Buffer.byteLength(path) > 4096) {
@@ -146,6 +149,7 @@ export class NativePaths {
     const steps = [`${path[0].toUpperCase()}:\\`]
     for (const part of path.slice(3).split(/[\\/]/).filter(Boolean)) {
       if (steps.length > 256) return nativeUnavailable('the native path component limit was reached')
+      if (part.includes(':')) return nativeUnavailable('a native location is invalid or exceeds its limit')
       if (part === '.') continue
       if (part === '..') { if (steps.length > 1) steps.pop(); continue }
       steps.push(win32.join(steps.at(-1)!, part))

@@ -2,15 +2,6 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync }
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-// Some specs here fake `process.platform` as win32 on a POSIX host, whose paths stay POSIX. NativePaths picks its walk by
-// platform, so give it the platform the host's path module really has.
-vi.mock('./nativePaths.js', async (original) => {
-  const { sep } = await import('node:path')
-  const real = await original<typeof import('./nativePaths.js')>()
-  return { ...real, NativePaths: class extends real.NativePaths {
-    constructor(budget: ConstructorParameters<typeof real.NativePaths>[0]) { super(budget, sep === '\\' ? 'win32' : 'linux') }
-  } }
-})
 let root = ''
 afterEach(() => { vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, { recursive: true, force: true }); root = '' })
 async function fixture() {

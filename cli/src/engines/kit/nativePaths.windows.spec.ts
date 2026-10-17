@@ -55,7 +55,8 @@ describe('NativePaths on Windows', () => {
     expect(fs.readlinkSync).toHaveBeenCalledTimes(1)
   })
 
-  it.each(['\\\\server\\share\\settings.json', '\\\\?\\C:\\Users\\u', 'C:relative\\settings.json', '/Users/u/.claude'])(
+  it.each(['\\\\server\\share\\settings.json', '\\\\?\\C:\\Users\\u', 'C:relative\\settings.json', '/Users/u/.claude',
+    '\\\\.\\C:\\Users\\u', '\\Users\\u\\.claude', 'C:\\Users\\u\\.claude\\settings.json:stream', 'C:\\Users\\u\\.claude\\settings.json::$DATA'])(
     'refuses a path that is not on a drive: %s', (path) => {
       expect(() => paths().resolveSync(path, true)).toThrow(IdentityReadUnavailable)
     })
@@ -65,5 +66,29 @@ describe('NativePaths on Windows', () => {
     walker.resolveSync('C:\\Users\\u\\.claude\\settings.json')
     expect(walker.within('C:\\Users\\u\\.claude\\settings.json', [stat('dir', 99) as never])).toBe(false)
     expect(walker.within('C:\\Users\\u\\.claude\\settings.json', [stat('dir', 3) as never])).toBe(true)
+  })
+
+  it('resolves . and .. lexically and stops .. at the drive root', () => {
+    expect(paths().resolveSync('C:\\Users\\.\\u\\..\\u\\.claude')?.path).toBe('C:\\Users\\u\\.claude')
+    expect(paths().resolveSync('C:\\..\\..\\Users')?.path).toBe('C:\\Users')
+    expect(paths().resolveSync('C:\\..')?.path).toBe('C:\\')
+  })
+
+  it('retains the route outside a removed subtree and re-verifies only that', () => {
+    const walker = paths()
+    walker.resolveSync('C:\\Users\\u\\.claude\\settings.json')
+    const verify = walker.retainOutside('C:\\Users\\u\\.claude')
+    const removed = tree.get('C:\\Users\\u\\.claude\\settings.json')!
+    tree.delete('C:\\Users\\u\\.claude\\settings.json')
+    try { expect(() => verify()).not.toThrow() } finally { tree.set('C:\\Users\\u\\.claude\\settings.json', removed) }
+    const ancestor = tree.get('C:\\Users\\u')!
+    tree.set('C:\\Users\\u', { kind: 'dir', ino: 42 })
+    try { expect(() => verify()).toThrow(/changed/) } finally { tree.set('C:\\Users\\u', ancestor) }
+  })
+
+  it('does not take a step across a link as proof of membership', () => {
+    const walker = paths()
+    expect(() => walker.resolveSync('C:\\Users\\u\\dotfiles\\settings.json', true)).toThrow(/reparse point/)
+    expect(() => walker.within('C:\\Users\\u\\dotfiles\\settings.json', [stat('dir', 99) as never])).toThrow(IdentityReadUnavailable)
   })
 })
