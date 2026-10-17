@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OS_SYSTEMD_UNIT, OS_UNIT_FILE, PlatformService, SYSTEMD_UNIT, defaultPlatformDeps, taskName, type CommandResult, type PlatformName } from '../harnessd/platform.js'
 import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
 import { serviceDefinition } from './platformDaemon.js'
-import { SERVICE_USAGE, WINDOWS_SERVICE_USAGE, serviceCommand, serviceCommandDeps, type ServiceCommandDeps } from './serviceCommand.js'
+import {
+  SERVICE_USAGE, USER_ENVIRONMENT_TIMEOUT_MS, WINDOWS_SERVICE_USAGE, readUserEnvironment, serviceCommand, serviceCommandDeps, type RegRun, type ServiceCommandDeps,
+} from './serviceCommand.js'
 
 /**
  * A computer in a temporary folder: a home, a data folder, an installed bundle, a pid file, and fake
@@ -322,7 +324,7 @@ describe.each(['launchd', 'systemd'] as const)('harness service under %s', (plat
 describe('harness service with Task Scheduler', () => {
   /** What schtasks and whoami answer, by the start of the call; the rest succeed. */
   type Answers = Record<string, CommandResult>
-  function windows(over: { registered?: boolean; pid?: number | null; carried?: Record<string, string>; answers?: Answers } = {}) {
+  function windows(over: { registered?: boolean; pid?: number | null; carried?: Record<string, string>; answers?: Answers; userEnvironment?: ServiceCommandDeps['userEnvironment'] } = {}) {
     const dir = mkdtempSync(join(tmpdir(), 'service-task-'))
     const data = join(dir, 'data')
     const launcher = join(dir, 'bin', 'harness-launch.exe')
@@ -359,6 +361,7 @@ describe('harness service with Task Scheduler', () => {
       stopDaemon: async () => { throw new Error('the task never stops the daemon') },
       withLock: async (purpose, fn) => { locks.push(purpose); const result = await fn(); locks.push(`${purpose} released`); return result },
       relaunch: async () => {}, out: (line) => out.push(line), err: (line) => err.push(line), tildify: (path) => path, startWaitMs: 1_000,
+      ...(over.userEnvironment ? { userEnvironment: over.userEnvironment } : {}),
     }
     return { dir, data, calls, out, err, locks, deps, setPid: (next: number | null) => { pid = next } }
   }
@@ -405,6 +408,29 @@ describe('harness service with Task Scheduler', () => {
         expect(two.out).toContain('  ! the task starts harness with your Windows user environment, not this shell\'s: ADAPTER_DATA_DIR, PORT set only here do not reach it')
       } finally { rmSync(two.dir, { recursive: true, force: true }) }
     } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  it('says nothing of a PORT the Windows user has set to the same (setx), and still of one that differs or is not set', async () => {
+    const WARNED = (names: string, verb: string) => `  ! the task starts harness with your Windows user environment, not this shell's: ${names} set only here ${verb} not reach it`
+    const install = async (carried: Record<string, string>, user: string | null) => {
+      const asked: string[] = []
+      const w = windows({ registered: true, pid: 4040, carried, userEnvironment: async (name) => { asked.push(name); return user } })
+      try {
+        await serviceCommand(['install'], w.deps)
+        return { out: w.out, asked }
+      } finally { rmSync(w.dir, { recursive: true, force: true }) }
+    }
+    // The same as the user's: it reaches the task. Nothing to say at all.
+    const same = await install({ PORT: '18621' }, '18621')
+    expect(same.asked).toEqual(['PORT'])
+    expect(same.out.some((line) => line.includes('! the task starts harness'))).toBe(false)
+    // Another value, or none for the user (or none that could be read): the warning, as before.
+    expect((await install({ PORT: '18621' }, '18473')).out).toContain(WARNED('PORT', 'does'))
+    expect((await install({ PORT: '18621' }, null)).out).toContain(WARNED('PORT', 'does'))
+    // PORT the user's, the data folder this shell's alone: only that one is said.
+    expect((await install({ ADAPTER_DATA_DIR: 'C:\\elsewhere', PORT: '18621' }, '18621')).out).toContain(WARNED('ADAPTER_DATA_DIR', 'does'))
+    // No PORT in this shell: the user's is not asked for.
+    expect((await install({ ADAPTER_DATA_DIR: 'C:\\elsewhere' }, '18621')).asked).toEqual([])
   })
 
   it('registers a task someone turned off in Task Scheduler again, turned on, and says it is off in status', async () => {
@@ -551,6 +577,27 @@ describe('harness service with Task Scheduler', () => {
   })
 })
 
+describe('readUserEnvironment', () => {
+  /** A `reg` that answers [stdout], or fails with [error]; recording what it was asked. */
+  const reg = (stdout: string, error: Error | null = null) => vi.fn<RegRun>((_file, _args, _options, done) => { done(error, stdout) })
+
+  it('reads a value from HKCU\\Environment with reg query, bounded and with no window', async () => {
+    const run = reg('\r\nHKEY_CURRENT_USER\\Environment\r\n    PORT    REG_SZ    18621\r\n\r\n')
+    await expect(readUserEnvironment('PORT', run)).resolves.toBe('18621')
+    expect(run).toHaveBeenCalledWith('reg', ['query', 'HKCU\\Environment', '/v', 'PORT'], { timeout: USER_ENVIRONMENT_TIMEOUT_MS, windowsHide: true }, expect.any(Function))
+    expect(USER_ENVIRONMENT_TIMEOUT_MS).toBe(3_000)
+    // Its name in any case, as Windows reads names; an expandable string as it is written.
+    await expect(readUserEnvironment('PORT', reg('    Port    REG_EXPAND_SZ    18622\n'))).resolves.toBe('18622')
+  })
+
+  it('is null for a value that is not there, a read that failed or timed out, and a reg that could not run', async () => {
+    await expect(readUserEnvironment('PORT', reg('', new Error('ERROR: The system was unable to find the specified registry key or value.')))).resolves.toBeNull()
+    await expect(readUserEnvironment('PORT', reg('HKEY_CURRENT_USER\\Environment\r\n    Path    REG_EXPAND_SZ    C:\\x\r\n'))).resolves.toBeNull()
+    await expect(readUserEnvironment('PORT', reg('    PORT    REG_DWORD    0x4945\r\n'))).resolves.toBeNull()
+    await expect(readUserEnvironment('PORT', () => { throw new Error('spawn reg ENOENT') })).resolves.toBeNull()
+  })
+})
+
 describe('this computer\'s command dependencies', () => {
   it('build the definition from this install, make folders, hold the spawn lock and print to the console', async () => {
     const deps = serviceCommandDeps({ relaunch: async () => {}, tildify: (path) => path })
@@ -563,6 +610,8 @@ describe('this computer\'s command dependencies', () => {
       expect(deps.bundleExists(join(dir, 'none'))).toBe(false)
     } finally { rmSync(dir, { recursive: true, force: true }) }
     await expect(deps.withLock('start', async () => 'held')).resolves.toBe('held')
+    // A name nobody sets: null, from reg on Windows, and from a reg that is not there elsewhere.
+    await expect(deps.userEnvironment!('HARNESS_SERVICE_SPEC_NEVER_SET')).resolves.toBeNull()
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {

@@ -203,8 +203,17 @@ type TimerName = 'bindTimer' | 'readyTimer' | 'heartbeatTimer' | 'killTimer' | '
  */
 export const HAND_OVER_GRACE_MS = 45_000
 
-const describeExit = (code: number | null, signal: NodeJS.Signals | null): string =>
-  signal ? `signal ${signal}` : `code ${code}`
+/**
+ * A child's exit code as its platform means it. Windows' is a DWORD, which Node gives unsigned: a process ended by
+ * TerminateProcess(-1) (Stop-Process, Node's own kill) showed as `code 4294967295`, and an NTSTATUS crash as a
+ * ten-digit number nobody looks up. Signed, they read as Windows' own tools print them. A Unix code is under 256.
+ */
+export const signedExitCode = (code: number | null): number | null =>
+  code !== null && code > 0x7fff_ffff ? code - 0x1_0000_0000 : code
+
+/** How a child ended, for the log and the status: `signal SIGKILL`, `code 1`, `code -1`. */
+export const describeExit = (code: number | null, signal: NodeJS.Signals | null): string =>
+  signal ? `signal ${signal}` : `code ${signedExitCode(code)}`
 
 /**
  * Whether why a core could not start names the disk rather than the build: no space left, a quota

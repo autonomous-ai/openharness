@@ -13,7 +13,7 @@
  * system is injected, so every decision here is tested without one.
  */
 import { SERVICE_EXIT_RESTART, heartbeatGraceMs, isCoreMessage, isUpdaterMessage } from './protocol.js'
-import type { CoreHandle } from './supervisor.js'
+import { describeExit, type CoreHandle } from './supervisor.js'
 
 export interface ServiceSpec {
   /** The process's name: what the master logs it as and the process is titled (`harnessd <name>`). */
@@ -96,8 +96,6 @@ export interface ServiceStatus {
 }
 
 const MIB = 1024 * 1024
-const describeExit = (code: number | null, signal: NodeJS.Signals | null): string =>
-  signal ? `signal ${signal}` : `code ${code}`
 
 /** One service's process, restarted for as long as the master runs. */
 class Service {

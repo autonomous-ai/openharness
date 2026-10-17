@@ -29,7 +29,7 @@ import { createHash } from 'node:crypto'
 import { closeSync, linkSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { PROBE_ANSWER, PROBE_COMMAND, PROBE_HANDOVER, PROBE_TIMEOUT_MS } from './protocol.js'
-import type { ExitReason, ReexecOutcome, ResumeState } from './supervisor.js'
+import { signedExitCode, type ExitReason, type ReexecOutcome, type ResumeState } from './supervisor.js'
 
 /** The environment variable that hands a master's state to the one it re-executes as. */
 export const RESUME_ENV = 'HARNESSD_RESUME'
@@ -290,7 +290,7 @@ export function runProbe(
     child.on('error', (error) => done(false, error.message))
     child.on('close', (code, signal) => {
       const ok = code === 0 && out.includes(PROBE_ANSWER)
-      done(ok, lastLine(err) || lastLine(out) || (signal ? `signal ${signal}` : `exit ${code}`), ok && out.includes(PROBE_HANDOVER))
+      done(ok, lastLine(err) || lastLine(out) || (signal ? `signal ${signal}` : `exit ${signedExitCode(code)}`), ok && out.includes(PROBE_HANDOVER))
     })
   })
   return { result, cancel: () => { try { child.kill('SIGKILL') } catch { /* gone */ } } }

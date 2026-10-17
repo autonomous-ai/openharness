@@ -141,6 +141,15 @@ describe('ServiceSupervisor', () => {
     expect(supervisor.status()[0].state).toBe('parked')
   })
 
+  it('says a Windows exit code signed: a service TerminateProcess ended exited -1', () => {
+    const supervisor = make([search], { parkCrashes: 99 })
+    supervisor.start()
+    latest().beat()
+    latest().exit(0xffff_ffff)
+    expect(supervisor.status()[0]).toMatchObject({ lastExit: 'code -1', lastExitReason: 'crashed' })
+    expect(lines.some((line) => line.includes('exited (code -1, crashed) — restarting in'))).toBe(true)
+  })
+
   it('restarts a crashed service with a backoff that doubles, caps, and is forgiven after a long run', () => {
     const supervisor = make([search], { parkCrashes: 99 })
     supervisor.start()

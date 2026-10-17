@@ -214,16 +214,59 @@ N by then, and its folder was gone when the updater of N+3's master started: `cl
   are refused the same way: an SSH key logon is a network logon, and WMI turns down a network-logon token that is
   not an administrator's. `lib/windows/taskkill.ts` `taskkillTree` (the agent signaller in `ptyHostBackend.ts`)
   will therefore fail in a daemon a standard user started over SSH. Deleting a PowerShell agent still worked here,
-  because its processes ended when its console closed.
+  because its processes ended when its console closed. Fixed in B3.22: the signaller ends the tree with
+  TerminateProcess over the host's process table (`lib/windows/treeKill.ts`); see "B3.22" below.
 - **F2. On Windows every service runs in the core's process, and the log gives the wrong reason.** `masterEnv`
   gets no socket path on win32, sets `HARNESSD_SERVICES=none`, and logs the Unix-socket line at every start. Only
-  the updater, which belongs to the master, ran in a process of its own.
+  the updater, which belongs to the master, ran in a process of its own. Fixed in B3.22: the line says `on Windows the services run in the core's process`.
 - **F3. Engine hooks are never installed on Windows.** At every core start, `[hooks] failed to write …:
   HookPreparationHeld: Hook preparation is waiting: the configuration directory exceeds its path limit` is logged
   with a stack trace, for 12 engines' files (over 100 lines per start). `nativeHookFiles.ts` `directoryPath` and
   `syncDirectoryChain` walk up to `/`. This is outside B3.
 - **F4. Minor.**
-  - A core ended by TerminateProcess is logged as `code 4294967295`, which is -1 read as unsigned.
+  - A core ended by TerminateProcess is logged as `code 4294967295`, which is -1 read as unsigned. Fixed in B3.22.
   - `harness service install` warns that `PORT` is "set only here" even when it is set for the Windows user with
-    `setx` (the code says it cannot tell the two apart).
+    `setx` (the code says it cannot tell the two apart). Fixed in B3.22 for `PORT`.
   - B1.9's concern did not come back: no `harness service install exited 1` under `-NoService`.
+
+## B3.22: an agent's tree ended without taskkill
+
+Date: 2026-10-17. Branch `feat/windows-native-cli` on `a5339f101` with B3.22's changes. Same VM. The pty host is the
+release build B3.21 made (0.4.91); the CLI bundle `0.4.95-b22` was built on the Mac from this tree and installed from
+a local manifest (`windows-install-manifest.mjs`, the B1 payload's `conpty.dll` and `OpenConsole.exe`).
+
+**Who ran it.** A fresh standard user `hb22`, made as in B3 (`New-LocalUser -PasswordNeverExpires`, `Users`,
+userenv `CreateProfile`, the admin key copied). Over SSH its token is a network logon (`NT AUTHORITY\NETWORK`), not an
+administrator's. It set `PORT=18622` and `ADAPTER_UPDATE_DISABLE=1` with `setx`. Install: `install.ps1 -Manifest …
+-NoService`.
+
+**F1 reproduced, then gone.**
+- As `hb22`, `taskkill /PID <its own ping> /T /F` gave `ERROR: Access denied` (exit 1); `Stop-Process` ended it.
+- As `hb22`, over SSH, with the real pty host: `treeKill.real.spec.ts`, `processControl.real.spec.ts` (a pane's
+  engine ended through `signalAgentProcess`, and a restart that respawns in the same pane) and
+  `terminate.real.spec.ts`: **4 passed (3 files)**.
+- The control: the same `processControl.real.spec.ts` from `a5339f101` (the taskkill signaller), run as `hb22`:
+  **2 failed**, each with `[terminal] ptyhost: taskkill could not end pid … (SIGKILL|SIGTERM)` and the engine still
+  running after 30 s.
+- As admin: `treeKill.real.spec.ts` (node → cmd → ping: ping, then cmd, then node; a bystander lives),
+  `terminate.real.spec.ts`, `taskScheduler.real.spec.ts` (with its new disabled control) and
+  `processControl.real.spec.ts`: all passed.
+
+**The daemon, as `hb22`.** `harness start` came up on 18622. Its master's first line was
+`[harnessd] on Windows the services run in the core's process`. A PowerShell agent was made over the local
+WebSocket and ran `ping -t`. `agent_restart` ended the shell and its ping (`[restart] … terminal · fresh shell`) and
+`agent_delete` left no ping. A terminal agent's restart and delete go through the host's respawn and pane kill (the
+pane's Job), not the agent signaller: the signaller is for engine agents, which the real specs above cover on the
+same host. An engine agent through the daemon was not reached: a stand-in `opencode.exe` was held at create with
+`NATIVE_LAUNCH_HELD` ("Waiting for the selected engine executable to stop changing"), not looked into further.
+
+**F4.** `Stop-Process` on the core, as `hb22`: `[harnessd] core exited (code -1, crashed) — restarting in 500 ms`,
+then `core started … restart 1` and `core ready`. `harness service install` with this shell's `PORT` the same as the
+user's: no `PORT` warning; with `PORT=18623` in the shell: `PORT, ADAPTER_UPDATE_DISABLE set only here do not reach
+it`. `ADAPTER_UPDATE_DISABLE`, also set with `setx`, is still warned of: only `PORT` is read back.
+
+**Clean-up.** As `hb22`: `harness service uninstall`, `harness stop`, its pty host ended, `PORT` and
+`ADAPTER_UPDATE_DISABLE` deleted. As admin: the user removed; its profile removed after a forced unload of its two
+hives (a service held them, as in B3); `C:\work\b22` removed. Afterwards: no `hb22`, no `C:\Users\hb22`, no
+ProfileList key, no Harness or `HarnessTest` task, no Harness process. `C:\work\e2e` and the admin profile were not
+touched.

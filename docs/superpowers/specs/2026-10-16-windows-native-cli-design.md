@@ -299,6 +299,9 @@ separately); WSL.
   signed in has no daemon until someone signs in (or Windows autologon is set). Running without a
   logon (an S4U task or a service) needs a right a standard user lacks, so B does not do it.
 - **`hn` is not available on Windows**; `harness tui` says so.
+- **On Windows the services run in the core's process** (no separate service processes yet): a service
+  process reaches the core over a Unix socket, which Windows does not have here, so the master runs them
+  with `HARNESSD_SERVICES=none` and says so at start. Only the updater, the master's own, has a process.
 
 ## Risks
 

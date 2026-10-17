@@ -272,6 +272,8 @@ describe('the master on Windows', () => {
       runMaster.mockClear()
       startMaster({ scriptPath: '/cli/cli.js' }, () => {}, 'win32', () => { order.push('redirect'); return {} })
       expect(order).toEqual(['redirect', 'log'])
+      // In the words for Windows: startMaster hands masterEnv its platform.
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/\[harnessd\] on Windows the services run in the core's process$/))
     } finally { log.mockRestore(); socket.none = false }
   })
 
@@ -424,9 +426,18 @@ describe('starting the master', () => {
     // A socket: the master runs on its environment as it is, the services in their own processes.
     expect(masterEnv(given, '/data/daemon-18473.sock', (line) => logs.push(line))).toBe(given)
     // None (a data folder too deep for one): every service in the core's process, and the log says why.
-    expect(masterEnv(given, null, (line) => logs.push(line))).toEqual({ HOME: '/home/someone', HARNESSD_SERVICES: 'none' })
-    expect(given).toEqual({ HOME: '/home/someone' })
-    expect(logs).toEqual([expect.stringMatching(/\[harnessd\] this data folder is too deep for the daemon's local socket/)])
+    for (const platform of ['darwin', 'linux'] as const) {
+      logs.length = 0
+      expect(masterEnv(given, null, (line) => logs.push(line), platform)).toEqual({ HOME: '/home/someone', HARNESSD_SERVICES: 'none' })
+      expect(given).toEqual({ HOME: '/home/someone' })
+      expect(logs).toEqual([expect.stringMatching(/\[harnessd\] this data folder is too deep for the daemon's local socket — the services run in the core's process$/)])
+    }
+    // Windows has no socket for them at all: the same, said as it is there, with no word of a socket or a depth.
+    logs.length = 0
+    expect(masterEnv(given, null, (line) => logs.push(line), 'win32')).toEqual({ HOME: '/home/someone', HARNESSD_SERVICES: 'none' })
+    expect(logs).toEqual([expect.stringMatching(/ \[harnessd\] on Windows the services run in the core's process$/)])
+    expect(logs[0]).not.toMatch(/socket|deep/)
+    logs.length = 1
     // Already none: nothing to change or say.
     const none = { HARNESSD_SERVICES: 'none' }
     expect(masterEnv(none, null, (line) => logs.push(line))).toBe(none)

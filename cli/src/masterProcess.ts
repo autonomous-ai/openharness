@@ -63,10 +63,18 @@ export interface MasterStart {
  * bytes) or the platform has none. Every service process reaches the core only through that socket, and one
  * started without it exits at once, again and again until the master parks it: on such a machine search, the
  * viewers, the gateway and every other service answered SERVICE_UNAVAILABLE for good (e2e/noSocket.e2e.ts).
+ *
+ * Windows has none every time (no service processes there yet), and its log line says only that: the socket's
+ * depth, which is the reason elsewhere, read as a fault at every Windows start (task-B3.21 finding F2).
  */
-export function masterEnv(given: NodeJS.ProcessEnv, socketPath: string | null, log: (line: string) => void = (line) => console.log(line)): NodeJS.ProcessEnv {
+export function masterEnv(
+  given: NodeJS.ProcessEnv, socketPath: string | null, log: (line: string) => void = (line) => console.log(line),
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
   if (socketPath !== null || given.HARNESSD_SERVICES === 'none') return given
-  log(`${ts()} [harnessd] this data folder is too deep for the daemon's local socket — the services run in the core's process`)
+  log(platform === 'win32'
+    ? `${ts()} [harnessd] on Windows the services run in the core's process`
+    : `${ts()} [harnessd] this data folder is too deep for the daemon's local socket — the services run in the core's process`)
   return { ...given, HARNESSD_SERVICES: 'none' }
 }
 
@@ -234,7 +242,7 @@ export function startMaster(
   // from here on, `masterEnv`'s line among the rest.
   const windowsConfig = platform === 'win32' ? windows() : {}
   return runMaster({
-    env: masterEnv(process.env, unixSocketPath(env.ADAPTER_DATA_DIR, env.PORT)),
+    env: masterEnv(process.env, unixSocketPath(env.ADAPTER_DATA_DIR, env.PORT), undefined, platform),
     nodePath: baseNode(process.execPath),
     execArgv: process.execArgv,
     runtimeDir: env.ADAPTER_RUNTIME_DIR,

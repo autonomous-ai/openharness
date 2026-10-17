@@ -25,6 +25,9 @@ describe('the windowless launcher', () => {
   it('says why it could not start them: an exit code and where it logged, a launcher that cannot run, one that hangs', async () => {
     const failed = await launchDetached('C:\\h\\bin\\harness-launch.exe', 'C:\\h', ['__harnessd'], {}, fakeRun((child) => child.emit('exit', 3, null)).run)
     expect(failed).toEqual({ ok: false, detail: `C:\\h\\bin\\harness-launch.exe exited 3 — see ${join('C:\\h', 'cli', 'data', 'logs', 'launch.log')}` })
+    // Ended by TerminateProcess: Windows' -1, not Node's unsigned 4294967295.
+    const ended = await launchDetached('L', 'C:\\h', ['__harnessd'], {}, fakeRun((child) => child.emit('exit', 0xffff_ffff, null)).run)
+    expect(ended).toEqual({ ok: false, detail: `L exited -1 — see ${join('C:\\h', 'cli', 'data', 'logs', 'launch.log')}` })
     const missing = await launchDetached('L', 'C:\\h', [], {}, fakeRun((child) => child.emit('error', new Error('spawn L ENOENT'))).run)
     expect(missing).toEqual({ ok: false, detail: 'L could not be run: spawn L ENOENT' })
     const thrown = await launchDetached('L', 'C:\\h', [], {}, () => { throw new Error('EMFILE') })

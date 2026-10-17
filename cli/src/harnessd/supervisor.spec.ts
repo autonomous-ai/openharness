@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, HARNESSD_PROTOCOL, type MasterMessage } from './protocol.js'
 import {
-  DEFAULT_SUPERVISOR_OPTIONS, HAND_OVER_GRACE_MS, Supervisor, namesTheDisk, type CoreHandle, type ReexecOutcome, type ResumeState, type SupervisorDeps, type SupervisorOptions,
+  DEFAULT_SUPERVISOR_OPTIONS, HAND_OVER_GRACE_MS, Supervisor, describeExit, namesTheDisk, type CoreHandle, type ReexecOutcome, type ResumeState, type SupervisorDeps, type SupervisorOptions,
   type SupervisorStatus,
 } from './supervisor.js'
 
@@ -217,6 +217,27 @@ describe('Supervisor', () => {
     live(30_000)
     expect(core().kills).toEqual([])
     expect(supervisor.status()).toMatchObject({ state: 'running', restarts: 0 })
+  })
+
+  it('says a Windows exit code signed: a core TerminateProcess ended exited -1, not 4294967295', () => {
+    const supervisor = make()
+    supervisor.start()
+    core().exit(0xffff_ffff)
+    expect(lines).toContain('[harnessd] core exited (code -1, crashed) — restarting in 500 ms')
+    expect(supervisor.status()).toMatchObject({ lastExit: 'code -1', lastExitReason: 'crashed' })
+    vi.advanceTimersByTime(500)
+    expect(core().env).toMatchObject({ HARNESSD_LAST_EXIT: 'code -1' })
+  })
+
+  it('describes an exit: a signal by name, a code signed as Windows means it, a Unix code as it is', () => {
+    expect(describeExit(null, 'SIGKILL')).toBe('signal SIGKILL')
+    expect(describeExit(1, null)).toBe('code 1')
+    expect(describeExit(255, null)).toBe('code 255')
+    expect(describeExit(0x7fff_ffff, null)).toBe('code 2147483647')
+    expect(describeExit(0x8000_0000, null)).toBe('code -2147483648')
+    // STATUS_CONTROL_C_EXIT, as a console process ended by Ctrl+C exits.
+    expect(describeExit(0xc000_013a, null)).toBe('code -1073741510')
+    expect(describeExit(null, null)).toBe('code null')
   })
 
   it('backs off crash after crash, up to its cap, and starts over after a good run', () => {

@@ -8,6 +8,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
+import { signedExitCode } from '../../harnessd/supervisor.js'
 
 /** It resolves two pointers and starts a process: a launcher that has not returned by then is stuck. */
 export const LAUNCH_TIMEOUT_MS = 30_000
@@ -40,6 +41,6 @@ export function launchDetached(
       return
     }
     child.once('error', (error) => settle({ ok: false, detail: `${launcher} could not be run: ${error.message}` }))
-    child.once('exit', (code) => settle(code === 0 ? { ok: true } : { ok: false, detail: `${launcher} exited ${code} — see ${join(root, 'cli', 'data', 'logs', 'launch.log')}` }))
+    child.once('exit', (code) => settle(code === 0 ? { ok: true } : { ok: false, detail: `${launcher} exited ${signedExitCode(code)} — see ${join(root, 'cli', 'data', 'logs', 'launch.log')}` }))
   })
 }

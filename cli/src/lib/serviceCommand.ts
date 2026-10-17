@@ -10,6 +10,7 @@
  * `harness start` and `harness stop` act through the platform (./platformDaemon.ts), so there is one
  * supervisor per machine. The definitions themselves are ../harnessd/platform.ts.
  */
+import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { PLATFORM_LABEL, type PlatformState, type ServiceDefinition } from '../harnessd/platform.js'
@@ -38,6 +39,39 @@ export interface ServiceCommandDeps extends PlatformDaemonDeps {
   tildify(path: string): string
   /** How long to wait for the master to come up. */
   startWaitMs?: number
+  /** Windows: [name] as set for the Windows user (`HKCU\Environment`, what `setx` writes), null when it is not or
+   *  could not be read (`readUserEnvironment`). */
+  userEnvironment?(name: string): Promise<string | null>
+}
+
+/** As long as `reg query` is given: it reads one value. */
+export const USER_ENVIRONMENT_TIMEOUT_MS = 3_000
+
+/** `execFile`'s shape, as far as `readUserEnvironment` uses it. */
+export type RegRun = (
+  file: string, args: string[], options: { timeout: number; windowsHide: boolean }, done: (error: Error | null, stdout: string) => void,
+) => unknown
+
+/**
+ * [name] from the Windows user's environment (`reg query HKCU\Environment /v <name>`, 3 s): a text value as it is
+ * written, or null when there is none, it is not text, or reg failed, timed out or could not run. Never rejects.
+ */
+export function readUserEnvironment(name: string, run: RegRun = execFile as unknown as RegRun): Promise<string | null> {
+  return new Promise((resolve) => {
+    try {
+      run('reg', ['query', 'HKCU\\Environment', '/v', name], { timeout: USER_ENVIRONMENT_TIMEOUT_MS, windowsHide: true }, (error, stdout) => {
+        if (error) { resolve(null); return }
+        // `    PORT    REG_SZ    18621`: names are case-insensitive on Windows.
+        for (const line of String(stdout).split(/\r?\n/)) {
+          const match = /^\s+(\S+)\s+REG_(?:EXPAND_)?SZ\s+(.*)$/.exec(line)
+          if (match && match[1]!.toLowerCase() === name.toLowerCase()) { resolve(match[2]!); return }
+        }
+        resolve(null)
+      })
+    } catch {
+      resolve(null)
+    }
+  })
 }
 
 export const SERVICE_USAGE = [
@@ -298,8 +332,12 @@ async function installTask(deps: ServiceCommandDeps): Promise<number> {
   }
   // A task's action has no environment of its own (harnessd/platform.ts): it runs with the user's logon environment,
   // and the task is the user's one, whatever data folder this shell names. Reported rather than refused: a value set
-  // for the Windows user as well reaches it, and the CLI cannot tell the two apart.
-  const carried = Object.keys(definition.env).filter((name) => (CARRIED_ENV as readonly string[]).includes(name))
+  // for the Windows user as well reaches it. PORT is read back from the user's environment: one set with `setx`
+  // reaches the task, and was warned of all the same (task-B3.21 finding F4). A read that fails warns, as before.
+  let carried = Object.keys(definition.env).filter((name) => (CARRIED_ENV as readonly string[]).includes(name))
+  if (carried.includes('PORT') && deps.userEnvironment && await deps.userEnvironment('PORT') === definition.env.PORT) {
+    carried = carried.filter((name) => name !== 'PORT')
+  }
   if (carried.length) {
     deps.out(`  ! the task starts harness with your Windows user environment, not this shell's: ${carried.join(', ')} set only here ${carried.length > 1 ? 'do' : 'does'} not reach it`)
     deps.out('    so the daemon it starts uses your user settings. Set these for your Windows user, or run this from a shell without them.')
@@ -330,5 +368,6 @@ export function serviceCommandDeps(options: { relaunch: () => Promise<void>; til
     out: (line) => console.log(line),
     err: (line) => console.error(line),
     tildify: options.tildify,
+    userEnvironment: (name) => readUserEnvironment(name),
   }
 }
