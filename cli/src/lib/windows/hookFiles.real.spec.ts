@@ -14,7 +14,7 @@ import { COPILOT_HOOK_SETTINGS } from '../../engines/copilot/contract.js'
 import { engineHooks } from '../../engines/hooks.js'
 import { createHomeAdopter, readAdoptedHomes } from '../../engines/kit/homeAdoption.js'
 import { NativeEvidenceBudget } from '../../engines/kit/nativeEvidence.js'
-import { inspectHookFile, runHookPreparation } from '../../engines/kit/nativeHookFiles.js'
+import { HookPreparationHeld, inspectHookFile, runHookPreparation } from '../../engines/kit/nativeHookFiles.js'
 import { NativePaths } from '../../engines/kit/nativePaths.js'
 import { HOOK_SCRIPT, hookArgv, isOurs, quoteHookCommand } from '../../engines/kit/notifyHooks.js'
 import { installCommandCodeHooks, installCopilotHooks } from '../../engines/nativeHooks.js'
@@ -60,16 +60,19 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
     mkdirSync(real)
     writeFileSync(join(real, 'settings.json'), '{}')
     execFileSync('cmd.exe', ['/d', '/c', 'mklink', '/J', link, real], { stdio: 'ignore' })
-    expect(new NativePaths(new NativeEvidenceBudget()).resolveSync(join(real, 'settings.json'))?.path).toBe(join(real, 'settings.json'))
-    expect(() => new NativePaths(new NativeEvidenceBudget()).resolveSync(join(link, 'settings.json'), true)).toThrow(/reparse point/)
+    try {
+      expect(new NativePaths(new NativeEvidenceBudget()).resolveSync(join(real, 'settings.json'))?.path).toBe(join(real, 'settings.json'))
+      expect(() => new NativePaths(new NativeEvidenceBudget()).resolveSync(join(link, 'settings.json'), true)).toThrow(/reparse point/)
+    } finally { rmSync(link) } // the junction only, never what it points to
   })
 
   it('installs Claude Code exec form and a Codex line for cmd.exe, and finds both current the second time', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const claudeHome = join(root, 'claude'), codexHome = join(root, 'codex')
-    expect(await engineHooks.claude.installIn(PORT, claudeHome)).toBe(true)
-    expect(await engineHooks.codex.installIn(PORT, codexHome)).toBe(true)
+    // An explicit profile, so no engine home of the real USERPROFILE is named in the lines.
+    const { home, environment } = profile('defaults'), claudeHome = join(home, '.claude'), codexHome = join(home, '.codex')
+    expect(await engineHooks.claude.installIn(PORT, claudeHome, { environment })).toBe(true)
+    expect(await engineHooks.codex.installIn(PORT, codexHome, { environment })).toBe(true)
     const claude = JSON.parse(readFileSync(join(claudeHome, 'settings.json'), 'utf8'))
     const hook = claude.hooks.SessionStart[0].hooks[0]
     expect(hook.command).toMatch(/\\node\.exe$/i)
@@ -80,12 +83,15 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
     const codex = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8'))
     expect(codex.hooks.SessionStart[0].hooks[0].command).toMatch(new RegExp(`^"[^"]+node\\.exe" "[^"]+notify\\.mjs" --port ${PORT} `, 'i'))
     expect(isOurs(codex.hooks.SessionStart[0])).toBe(true)
+    // No ~\.grok, ~\.cursor, … of the person running the spec.
+    const realHomes = `${process.env.USERPROFILE}\\.`
+    expect([...hook.args, codex.hooks.SessionStart[0].hooks[0].command].filter((text: string) => text.includes(realHomes))).toEqual([])
     expect(readFileSync(join(codexHome, 'config.toml'), 'utf8')).toContain('trusted_hash')
     const files = [join(claudeHome, 'settings.json'), join(codexHome, 'hooks.json'), join(codexHome, 'config.toml')]
     const before = files.map(stamp)
     log.mockClear()
-    expect(await engineHooks.claude.installIn(PORT, claudeHome)).toBe(true)
-    expect(await engineHooks.codex.installIn(PORT, codexHome)).toBe(true)
+    expect(await engineHooks.claude.installIn(PORT, claudeHome, { environment })).toBe(true)
+    expect(await engineHooks.codex.installIn(PORT, codexHome, { environment })).toBe(true)
     expect(files.map(stamp)).toEqual(before)
     expect(log).toHaveBeenCalledWith('[hooks] Claude session + turn (Stop/StopFailure) hooks already installed')
     expect(log).toHaveBeenCalledWith(codexContract.settings.messages.current.replace('{file}', join(codexHome, 'hooks.json')))
@@ -131,7 +137,7 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
     expect(delivered(commandCodeRuns(withEcho(read('.commandcode\\settings.json').SessionStart[0].hooks[0].command, echo)))).toEqual(flags('commandcode'))
     expect(delivered(copilotRuns(withEcho(read('.copilot\\hooks\\harness.json').sessionStart[0].command, echo))))
       .toEqual([...flags('copilot'), '--copilot-event', 'sessionStart'])
-  })
+  }, 60_000) // a ceiling for the slow arm64 runner's process starts, not a timing assertion
 
   it('refuses a home with & ( ) for the cmd.exe engines with its reason, and PowerShell passes it whole', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -140,9 +146,10 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
     const { home, echo, environment } = profile('Thảo & co (1)')
     expect(await engineHooks.codex.installIn(PORT, join(home, '.codex'), { environment })).toBe(false)
     expect(await installCommandCodeHooks(PORT, { environment })).toBe(false)
-    expect(error.mock.calls.map(([line, reason]) => [line, (reason as Error).message])).toEqual([
-      [codexContract.settings.messages.failed, 'Hook preparation is waiting: a hook argument holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text'],
-      [COMMANDCODE_HOOK_SETTINGS.messages.failed, 'Hook preparation is waiting: a hook argument holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text'],
+    // One line each, no stack.
+    expect(error.mock.calls).toEqual([
+      ['[hooks] Codex hooks are not installed: a hook argument holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text'],
+      ['[hooks] Command Code hooks are not installed: a hook argument holds one of " % ! & | < > ^ ( ), which cmd.exe reads as more than text'],
     ])
     expect([existsSync(join(home, '.codex')), existsSync(join(home, '.commandcode'))]).toEqual([false, false])
     // Inside PowerShell's single quotes these are text.
@@ -150,18 +157,19 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
     const line = JSON.parse(readFileSync(join(home, '.copilot', 'hooks', 'harness.json'), 'utf8')).hooks.agentStop[0].command
     expect(delivered(copilotRuns(withEcho(line, echo))))
       .toEqual([...hookArgv(PORT, 'copilot', undefined, undefined, environment).slice(2), '--copilot-event', 'agentStop'])
-  })
+  }, 60_000)
 
   it('replaces a settings file another handle holds open once it lets go, and keeps it whole while it does not', async () => {
     mkdirSync(join(root, 'held'))
     const file = join(root, 'held', 'settings.json'), leftovers = () => readdirSync(join(root, 'held')).filter(name => name.endsWith('.tmp'))
     writeFileSync(file, '{}\n')
-    // An open handle, as an engine reading its settings has: Node opens files without FILE_SHARE_DELETE, so a rename
-    // over it is refused (EPERM) until it closes.
+    // An open handle, as an engine reading its settings has. Observed on the VM: a rename over an open handle fails
+    // (EPERM on Windows 11), from another process or this one, until it closes.
     let held: number | null = openSync(file, 'r')
     try {
+      // Still held after every try: the reason, not the errno (any of EPERM, EACCES, EBUSY can be the last one).
       await expect(runHookPreparation([file], async (attempt) => (await inspectHookFile(file).replace('{"held":true}\n', attempt)).verify()))
-        .rejects.toMatchObject({ code: 'EPERM' })
+        .rejects.toThrow(new HookPreparationHeld('the settings file is open in another program'))
       expect([readFileSync(file, 'utf8'), leftovers()]).toEqual(['{}\n', []])
       // Let go at the first retry: verify runs once before the rename after the flush, and again before each retry.
       let flushed = false, checks = 0, released = false
@@ -176,7 +184,7 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
       expect(released).toBe(true)
       expect([readFileSync(file, 'utf8'), leftovers()]).toEqual(['{"ok":true}\n', []])
     } finally { if (held !== null) closeSync(held) }
-  })
+  }, 60_000)
 
   it('adopts a moved Claude Code home with a Windows path', () => {
     const file = join(root, 'engine-homes.json'), home = join(root, 'claude-work')
