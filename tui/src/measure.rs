@@ -195,14 +195,17 @@ pub fn resume_failed(app: &mut App, machine: &str, agent: &str) {
 }
 
 /// hn dials [machine]: this computer's daemon (workspace_connect) or another machine (remote_connect).
-/// hn's own shells are not a connection.
+/// hn's own shells are not a connection. A redial while the connection is still open here (its
+/// last dial failed and hn tried again) is the same connection, not another: counted per dial, the
+/// backoff's retries made prod's first day (2026-10-16) read remote_connect 51 started, 30 failed.
 pub fn dialling(app: &mut App, machine: &str) {
     if !recording(app) || crate::local::is_local(machine) || app.measure.dialling.len() >= OPEN_CAP || app.measure.dialling.contains_key(machine) { return }
-    let flow = begin(app, if machine == app.fleet.local_id { "workspace_connect" } else { "remote_connect" });
+    let flow = begin(app, if app.this_computer(machine) { "workspace_connect" } else { "remote_connect" });
     app.measure.dialling.insert(machine.into(), flow);
 }
 
-/// [machine]'s link connected, or failed before it did.
+/// [machine]'s link connected, or hn stopped dialling it before it did (app.rs `on_machine`: a
+/// failure it dials again after is not an answer).
 pub fn dialled(app: &mut App, machine: &str, connected: bool) {
     if let Some(flow) = app.measure.dialling.remove(machine) { flow.finish(app, if connected { Outcome::Ok } else { Outcome::Failed }) }
 }
@@ -437,6 +440,24 @@ mod tests {
         tick(&mut app);
         let dials: Vec<(&str, &str)> = flows(&app).into_iter().filter(|(f, _)| f.ends_with("_connect")).collect();
         assert_eq!(dials, [("workspace_connect", "ok"), ("remote_connect", "failed"), ("remote_connect", "ok")]);
+    }
+
+    /// While the daemon is down hn's own shells are `local_id` (app.rs `boot`): this computer's dials
+    /// were counted as remote_connect then, and failed DAEMON_UNREACHABLE (prod, 2026-10-16).
+    #[tokio::test]
+    async fn a_dial_of_this_computer_while_the_daemon_is_down_is_still_its_workspace_connect() {
+        let mut app = fixture();
+        sign_in(&mut app);
+        app.fleet.local_id = crate::local::MACHINE.into();
+        dialling(&mut app, "this-computer");
+        dialling(&mut app, "peer");
+        dialled(&mut app, "this-computer", true);
+        dialled(&mut app, "peer", true);
+        app.fleet.local_id = "this-computer".into();
+        connected(&mut app);
+        tick(&mut app);
+        let dials: Vec<(&str, &str)> = flows(&app).into_iter().filter(|(f, _)| f.ends_with("_connect")).collect();
+        assert_eq!(dials, [("workspace_connect", "ok"), ("remote_connect", "ok")]);
     }
 
     #[tokio::test]

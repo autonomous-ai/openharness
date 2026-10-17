@@ -1262,30 +1262,7 @@ impl App {
         self.spawn(async move { http_json(port, "GET", "/api/status", None).await }, move |app, status| {
             if request != app.boot_request { return }
             match status {
-            Ok(status) => {
-                app.daemon_down = false;
-                app.viewer_web_url = status.get("webUrl").and_then(Value::as_str).unwrap_or("").to_string();
-                let id = status.get("machineId").and_then(Value::as_str).unwrap_or("").to_string();
-                if id.is_empty() { return }
-                app.adopt_daemon_identity(&status);
-                if app.fleet.agents.is_empty() && app.fleet.machines.is_empty() { app.fleet.load_cache(&id) }
-                app.fleet.local_id = id.clone();
-                for machine in &mut app.fleet.machines { machine.local = machine.id == id || crate::local::is_local(&machine.id); }
-                if app.fleet.machine(&id).is_none() {
-                    app.fleet.machines.insert(0, Machine { shared: false, id: id.clone(), name: fleet::machine_display_name(&id, None), local: true, status: "running".into(), reach: Reach::Unknown });
-                }
-                // Signed out, this computer is its computer id; signed in, the account's machine id.
-                // Windows saved under the other one stayed `Connecting…` (after a sign-in) or `not
-                // linked` (after a sign-out) to a machine that no longer answers to it.
-                let computer = status.get("computerId").and_then(Value::as_str).unwrap_or("").to_string();
-                for old in [computer, app.saved_local.take().unwrap_or_default()] {
-                    if !old.is_empty() && old != id && !crate::local::is_local(&old) { app.move_machine(&old, &id) }
-                }
-                app.follow_account(status.get("signedIn").and_then(Value::as_bool).unwrap_or(false));
-                app.connect(&id);
-                app.refresh_machines();
-                crate::account::daemon_status(app, &status);
-            }
+            Ok(status) => app.booted(&status),
             Err(_) => {
                 app.daemon_down = true;
                 app.fleet.local_id = crate::local::MACHINE.into();
@@ -1301,6 +1278,41 @@ impl App {
                 app.retry_boot();
             }
         }});
+    }
+
+    /// This computer's daemon answered `/api/status`: who it is now, and its link.
+    fn booted(&mut self, status: &Value) {
+        self.daemon_down = false;
+        self.viewer_web_url = status.get("webUrl").and_then(Value::as_str).unwrap_or("").to_string();
+        let id = status.get("machineId").and_then(Value::as_str).unwrap_or("").to_string();
+        if id.is_empty() { return }
+        self.adopt_daemon_identity(status);
+        if self.fleet.agents.is_empty() && self.fleet.machines.is_empty() { self.fleet.load_cache(&id) }
+        self.fleet.local_id = id.clone();
+        for machine in &mut self.fleet.machines { machine.local = machine.id == id || crate::local::is_local(&machine.id); }
+        if self.fleet.machine(&id).is_none() {
+            self.fleet.machines.insert(0, Machine { shared: false, id: id.clone(), name: fleet::machine_display_name(&id, None), local: true, status: "running".into(), reach: Reach::Unknown });
+        }
+        // Signed out, this computer is its computer id; signed in, the account's machine id.
+        // Windows saved under the other one stayed `Connecting…` (after a sign-in) or `not
+        // linked` (after a sign-out) to a machine that no longer answers to it.
+        let computer = status.get("computerId").and_then(Value::as_str).unwrap_or("").to_string();
+        for old in [computer, self.saved_local.take().unwrap_or_default()] {
+            if !old.is_empty() && old != id && !crate::local::is_local(&old) { self.move_machine(&old, &id) }
+        }
+        self.follow_account(status.get("signedIn").and_then(Value::as_bool).unwrap_or(false));
+        // Every failure of this computer's link asks the daemon who it is (recheck_local_identity).
+        // Dialled here at once, the link skipped its backoff and was redialled as fast as /api/status
+        // answered, one of the dials behind prod's first day (2026-10-16) reading workspace_connect
+        // 43 started, 21 failed. A link waiting out its backoff is dialled when that ends (redial_due).
+        if !self.retry_waiting(&id) { self.connect(&id) }
+        self.refresh_machines();
+        crate::account::daemon_status(self, status);
+    }
+
+    /// [machine]'s link failed and its next dial is scheduled.
+    fn retry_waiting(&self, machine: &str) -> bool {
+        self.links.get(machine).is_some_and(|s| s.link.is_none() && s.retry_at.is_some())
     }
 
     /// Once a desk window contains a local PTY, keep this client's windows as an ordinary
@@ -1424,12 +1436,35 @@ impl App {
         }
     }
 
-    fn schedule_reconnect(&mut self, machine_id: &str) {
+    /// [refused_share]: a machine shared with this account refused (NO_PEER_LINK) until one of the two
+    /// daemons reads the sharing, which they do within seconds of a change and every 2 minutes besides
+    /// (cli/src/services/sharedMachines.ts BUSY_MS). Redialled on the usual backoff (15 s at most) it is
+    /// refused ~240 times an hour for nothing; 30 s, then 60 s, still gets in within a minute of the read.
+    fn schedule_reconnect(&mut self, machine_id: &str, refused_share: bool) {
         let Some(state) = self.links.get_mut(machine_id) else { return };
         if let Some(link) = state.link.take() { link.close(); }
         state.attempts += 1;
-        let wait = Duration::from_millis((500 * 2u64.pow(state.attempts.min(5))).min(15_000));
+        let wait = if refused_share { Duration::from_secs(if state.attempts > 1 { 60 } else { 30 }) }
+            else { Duration::from_millis((500 * 2u64.pow(state.attempts.min(5))).min(15_000)) };
         state.retry_at = Some(Instant::now() + wait);
+    }
+
+    /// The links whose backoff is over are dialled again. One whose machine went offline meanwhile
+    /// is given up: that connection failed.
+    fn redial_due(&mut self) {
+        let now = Instant::now();
+        // Every link but hn's own shells goes through this computer's daemon socket, so while it is
+        // down a dial can only fail (DAEMON_UNREACHABLE), every machine's at once after one daemon
+        // restart. They wait for boot to find the daemon again (retry_boot) and go at the tick after.
+        let down = self.daemon_down;
+        let due: Vec<String> = self.links.iter()
+            .filter(|(id, s)| s.link.is_none() && s.retry_at.is_some_and(|t| t <= now) && (!down || crate::local::is_local(id)))
+            .map(|(id, _)| id.clone()).collect();
+        for id in due {
+            if let Some(state) = self.links.get_mut(&id) { state.retry_at = None }
+            if id == self.fleet.local_id || self.fleet.machine(&id).map(Machine::online).unwrap_or(false) { self.connect(&id) }
+            else { crate::measure::dialled(self, &id, false) }
+        }
     }
 
     /// Tell every connected machine's daemon the terminal's own colours (`theme_set`), so it
@@ -1460,12 +1495,9 @@ impl App {
         // before the replacement connection has a new generation.
         let current = self.links.get(&machine_id).is_some_and(|s| s.generation == generation && s.link.is_some());
         if !current { return }
-        // A dial's answer (a link closing after it connected is not one).
-        match &event {
-            MachineEvent::Connected => crate::measure::dialled(self, &machine_id, true),
-            MachineEvent::Failed(_) => crate::measure::dialled(self, &machine_id, false),
-            _ => {}
-        }
+        // A dial's answer. A failure is one only where hn stops dialling below: one it dials again
+        // after is the same connection still being made (measure.rs `dialling`).
+        if matches!(event, MachineEvent::Connected) { crate::measure::dialled(self, &machine_id, true) }
         match event {
             MachineEvent::Connected => {
                 if let Some(state) = self.links.get_mut(&machine_id) { state.attempts = 0 }
@@ -1523,6 +1555,7 @@ impl App {
                             pane.dirty = true;
                         }
                         if let Some(state) = self.links.get_mut(&machine_id) { if let Some(link) = state.link.take() { link.close(); } state.retry_at = None; }
+                        crate::measure::dialled(self, &machine_id, false);
                         self.say(format!("{} stopped sharing {name} with you", share.owner), crate::theme::WARN);
                         self.refresh_machines();
                         return;
@@ -1553,8 +1586,13 @@ impl App {
                     }
                     pane.dirty = true;
                 }
-                if needs_link { if let Some(state) = self.links.get_mut(&machine_id) { if let Some(link) = state.link.take() { link.close(); } state.retry_at = None; } }
-                else { self.schedule_reconnect(&machine_id) }
+                if needs_link {
+                    if let Some(state) = self.links.get_mut(&machine_id) { if let Some(link) = state.link.take() { link.close(); } state.retry_at = None; }
+                    crate::measure::dialled(self, &machine_id, false);
+                } else {
+                    let refused_share = error.code == "NO_PEER_LINK" && self.fleet.shares.contains_key(&machine_id);
+                    self.schedule_reconnect(&machine_id, refused_share)
+                }
             }
             MachineEvent::Terminal(frame) => self.on_terminal(frame),
             MachineEvent::Frame { ty, payload } => self.on_frame(&machine_id, &ty, payload),
@@ -6494,11 +6532,7 @@ impl App {
                 agent.working = false; agent.activity.unknown = true;
             }
         }
-        let due: Vec<String> = self.links.iter().filter(|(_, s)| s.link.is_none() && s.retry_at.map(|t| t <= now).unwrap_or(false)).map(|(id, _)| id.clone()).collect();
-        for id in due {
-            if let Some(state) = self.links.get_mut(&id) { state.retry_at = None }
-            if id == self.fleet.local_id || self.fleet.machine(&id).map(Machine::online).unwrap_or(false) { self.connect(&id) }
-        }
+        self.redial_due();
         if self.tick % 120 == 0 { self.refresh_machines() }
         if self.tick % 80 == 40 { self.fleet.save_cache() }
         if self.tick % 20 == 10 { self.save_seen() }
@@ -7246,6 +7280,173 @@ mod recovery_tests {
         assert_eq!(app.fleet.machines[0].reach, Reach::NeedsLink);
         assert!(app.links["test-peer"].retry_at.is_none());
         assert!(matches!(&app.panes[&1].phase, Phase::Card { title, .. } if title == "This machine is not linked here"));
+    }
+
+    // ── connections as measured (measure.rs): one per connection, not one per dial ──
+
+    /// Signed in, with this computer listed and connected so what is measured is sent.
+    fn measured(app: &mut App) {
+        app.fleet.local_id = "this-computer".into();
+        app.fleet.machines.push(Machine { shared: false, id: "this-computer".into(), name: "Mac".into(), local: true, status: "running".into(), reach: Reach::Ready });
+        app.signed_in = true;
+        crate::measure::account_changed(app);
+    }
+    /// The test peer's fixture link dropped, so the next connect is a fresh dial of its own.
+    fn undialled(app: &mut App) {
+        if let Some(link) = app.links.remove("test-peer").and_then(|state| state.link) { link.close() }
+    }
+    /// What was counted of workspace_connect and remote_connect: (flow, "started" or its outcome).
+    fn connects(app: &mut App) -> Vec<(String, String)> {
+        crate::measure::tick(app);
+        app.measure.sent.iter().filter(|v| v["flow"].as_str().is_some_and(|f| f.ends_with("_connect")))
+            .map(|v| (v["flow"].as_str().unwrap().to_string(), v["outcome"].as_str().unwrap_or("started").to_string())).collect()
+    }
+    fn fail(app: &mut App, machine: &str, code: &str) {
+        let generation = app.links[machine].generation;
+        app.on_machine(machine.into(), generation, MachineEvent::Failed(RpcError::new(code, "")));
+    }
+    /// Its backoff over: the tick dials it again.
+    fn redial(app: &mut App, machine: &str) {
+        app.links.get_mut(machine).unwrap().retry_at = Some(Instant::now());
+        app.redial_due();
+    }
+    fn pair(flow: &str, what: &str) -> (String, String) { (flow.into(), what.into()) }
+
+    /// Each backoff retry was counted as a connection started and failed: prod's first day
+    /// (2026-10-16) read remote_connect 51 started, 30 failed, 22 ok.
+    #[tokio::test]
+    async fn a_dial_retried_until_it_connects_is_one_connection() {
+        let mut app = fixture();
+        measured(&mut app);
+        undialled(&mut app);
+        app.connect("test-peer");
+        for code in ["TIMEOUT", "DISCONNECTED", "DAEMON_UNREACHABLE", "MACHINE_UNAVAILABLE"] {
+            fail(&mut app, "test-peer", code);
+            assert!(app.retry_waiting("test-peer"), "{code}: dialled again after its backoff");
+            redial(&mut app, "test-peer");
+            assert!(app.links["test-peer"].link.is_some(), "{code}: dialled again");
+        }
+        assert_eq!(connects(&mut app), [pair("remote_connect", "started")], "still being made");
+        let generation = app.links["test-peer"].generation;
+        app.on_machine("test-peer".into(), generation, MachineEvent::Connected);
+        assert_eq!(connects(&mut app), [pair("remote_connect", "started"), pair("remote_connect", "ok")]);
+        app.links["test-peer"].link.as_ref().unwrap().close();
+    }
+
+    /// The connection fails once, when hn stops dialling: the machine went offline meanwhile, is not
+    /// linked here, or its owner stopped sharing it.
+    #[tokio::test]
+    async fn a_connection_hn_stops_dialling_fails_once() {
+        for case in ["offline", "NO_PEER_LINK", "NOT_YOUR_MACHINE"] {
+            let mut app = fixture();
+            measured(&mut app);
+            undialled(&mut app);
+            if case == "NOT_YOUR_MACHINE" {
+                app.fleet.shares.insert("test-peer".into(), crate::fleet::MachineShare { owner: "Dee".into(), email: "dee@acme.io".into(), team: false });
+            }
+            app.connect("test-peer");
+            fail(&mut app, "test-peer", "TIMEOUT");
+            redial(&mut app, "test-peer");
+            if case == "offline" {
+                fail(&mut app, "test-peer", "TIMEOUT");
+                app.fleet.machine_mut("test-peer").unwrap().status = "offline".into();
+                redial(&mut app, "test-peer");
+            } else {
+                fail(&mut app, "test-peer", case);
+            }
+            assert!(app.links["test-peer"].link.is_none() && app.links["test-peer"].retry_at.is_none(), "{case}: no longer dialled");
+            assert_eq!(connects(&mut app), [pair("remote_connect", "started"), pair("remote_connect", "failed")], "{case}");
+        }
+    }
+
+    /// A shared machine refused until one of the two daemons reads the sharing (#1381) was redialled
+    /// on the 15 s backoff for good, each refusal a remote_connect failed (2026-10-16).
+    #[tokio::test]
+    async fn a_shared_machine_refused_until_its_sharing_is_read_is_one_connection_tried_every_30_to_60_s() {
+        let mut app = fixture();
+        measured(&mut app);
+        undialled(&mut app);
+        app.fleet.shares.insert("test-peer".into(), crate::fleet::MachineShare { owner: "Dee".into(), email: "dee@acme.io".into(), team: false });
+        app.connect("test-peer");
+        for refusal in 1..=6 {
+            fail(&mut app, "test-peer", "NO_PEER_LINK");
+            let wait = app.links["test-peer"].retry_at.unwrap().saturating_duration_since(Instant::now());
+            assert!(wait > Duration::from_secs(29) && wait <= Duration::from_secs(60), "refusal {refusal}: {wait:?}");
+            redial(&mut app, "test-peer");
+        }
+        assert_eq!(connects(&mut app), [pair("remote_connect", "started")], "no failure: hn is still dialling it");
+        let generation = app.links["test-peer"].generation;
+        app.on_machine("test-peer".into(), generation, MachineEvent::Connected);
+        assert_eq!(connects(&mut app), [pair("remote_connect", "started"), pair("remote_connect", "ok")]);
+        app.links["test-peer"].link.as_ref().unwrap().close();
+    }
+
+    /// Every link goes through this computer's daemon socket: one restart closed them all, and each
+    /// redial failed DAEMON_UNREACHABLE until it was back, this computer's counted as remote_connect
+    /// (its id is hn's own shells meanwhile). They wait for the daemon now.
+    #[tokio::test]
+    async fn while_this_computers_daemon_is_down_no_machine_is_dialled() {
+        let mut app = fixture();
+        measured(&mut app);
+        app.generation = 2;
+        app.links.insert("this-computer".into(), LinkState { link: Some(Link::spawn(app.port, "this-computer", 2, app.sink.clone())), generation: 2, attempts: 0, retry_at: None });
+        app.on_machine("this-computer".into(), 2, MachineEvent::Closed(RpcError::new("DISCONNECTED", "")));
+        app.on_machine("test-peer".into(), 1, MachineEvent::Closed(RpcError::new("DISCONNECTED", "")));
+        assert!(app.daemon_down);
+        // boot found no daemon (`/api/status` unreachable).
+        app.fleet.local_id = crate::local::MACHINE.into();
+        for id in ["this-computer", "test-peer"] { redial(&mut app, id) }
+        for id in ["this-computer", "test-peer"] {
+            assert!(app.links[id].link.is_none(), "{id} is not dialled while the daemon is down");
+            assert!(app.retry_waiting(id), "{id} still waits");
+        }
+        // It answers: dialled at the next tick, this computer's as its own.
+        app.booted(&json!({"machineId":"this-computer","computerId":"this-computer","signedIn":true}));
+        assert!(!app.daemon_down);
+        app.redial_due();
+        for id in ["this-computer", "test-peer"] {
+            assert!(app.links[id].link.is_some(), "{id} is dialled once the daemon is back");
+            let generation = app.links[id].generation;
+            app.on_machine(id.into(), generation, MachineEvent::Connected);
+        }
+        let mut counted = connects(&mut app);
+        counted.sort();
+        assert_eq!(counted, [pair("remote_connect", "ok"), pair("remote_connect", "started"), pair("workspace_connect", "ok"), pair("workspace_connect", "started")]);
+        for id in ["this-computer", "test-peer"] { app.links[id].link.as_ref().unwrap().close() }
+    }
+
+    /// A failure of this computer's link asks the daemon who it is (recheck_local_identity); its
+    /// answer dialled the same machine at once, skipping the backoff.
+    #[tokio::test]
+    async fn this_computers_link_waits_out_its_backoff_when_the_daemon_says_who_it_is() {
+        let mut app = fixture();
+        measured(&mut app);
+        app.connect("this-computer");
+        fail(&mut app, "this-computer", "TIMEOUT");
+        assert!(!app.daemon_down);
+        let retry = app.links["this-computer"].retry_at;
+        assert!(retry.is_some());
+        app.booted(&json!({"machineId":"this-computer","computerId":"this-computer","signedIn":true}));
+        assert!(app.links["this-computer"].link.is_none(), "not dialled before its backoff is over");
+        assert_eq!(app.links["this-computer"].retry_at, retry);
+        redial(&mut app, "this-computer");
+        assert!(app.links["this-computer"].link.is_some());
+        let generation = app.links["this-computer"].generation;
+        app.on_machine("this-computer".into(), generation, MachineEvent::Connected);
+        assert_eq!(connects(&mut app), [pair("workspace_connect", "started"), pair("workspace_connect", "ok")]);
+        app.links["this-computer"].link.as_ref().unwrap().close();
+    }
+
+    #[tokio::test]
+    async fn this_computer_is_the_daemons_machine_whatever_local_id_says() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19814, sink, (80, 24));
+        app.adopt_daemon_identity(&json!({"machineId":"account-a","computerId":"computer","signedIn":true}));
+        // The daemon down: `local_id` is hn's own shells, and this computer may not be listed yet.
+        app.fleet.local_id = crate::local::MACHINE.into();
+        assert!(app.this_computer("account-a"));
+        assert!(!app.this_computer("peer"));
+        assert!(!app.this_computer(crate::local::MACHINE), "hn's own shells are no connection");
     }
 
     #[tokio::test]

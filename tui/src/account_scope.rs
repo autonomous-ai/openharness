@@ -28,6 +28,15 @@ fn remove_views(tabs: &mut Vec<Tab>, removed: &HashSet<u64>) {
 impl App {
     pub(crate) fn saved_identity(&self) -> Value { json!(self.daemon_identity) }
 
+    /// [machine] is this computer's daemon: the machine it last said it is, or the one listed as this
+    /// computer. Not `fleet.local_id` alone, which is hn's own shells while the daemon is down: this
+    /// computer's own redials were counted as remote_connect then (measure.rs).
+    pub(crate) fn this_computer(&self, machine: &str) -> bool {
+        if crate::local::is_local(machine) { return false }
+        machine == self.fleet.local_id || self.daemon_identity.as_ref().is_some_and(|id| id.machine == machine)
+            || self.fleet.machine(machine).is_some_and(|m| m.local)
+    }
+
     pub(super) fn reconcile_account_machines(&mut self, rows: &[Value], stale: bool) {
         // An older outage cache cannot prove a removal or undo a confirmed one.
         // Keep live views until a fresh inventory supplies the authoritative list.

@@ -48,7 +48,9 @@ It counts `tui_opens` and active days from `machine_select {client:'tui'}`.
      though its link is then shown, while over SSH showing the link is `ok`), `workspace_ready` (sign-in to a machine connected),
      `app_start` (launch to that same moment), `resume_recovery` (ok at the harness's next live turn;
      failed when the daemon refuses; cancelled by another resume; unknown after 15 minutes). Any flow
-     open 15 minutes is unknown. hn's first-run OpenCode task is not the Desktop's `setup` and is
+     open 15 minutes is unknown. A connection hn redials after a failed
+     dial is still one connection: ok when it connects, failed only when hn stops dialling (not
+     linked, no longer shared, offline). hn's first-run OpenCode task is not the Desktop's `setup` and is
      not measured.
    - milestones, once per app session (sign-in) as on the Desktop: `funnel_workspace_ready`,
      `funnel_first_work` (the first live `turn_started` of any kind), `funnel_first_response` (the
