@@ -42,7 +42,9 @@ function Processes([string]$filter) {
   try { if ($filter) { @(Get-CimInstance Win32_Process -Filter $filter) } else { @(Get-CimInstance Win32_Process) } }
   catch { Fail "could not list processes through WMI ($($_.Exception.Message)); run this at the desktop or as a batch logon" }
 }
-do { $hosts = Processes "Name='harness-pty.exe'"; if ($hosts.Count) { break }; Start-Sleep 1 } while ((Get-Date) -lt $deadline)
+# @( ): a function's array comes back unrolled, and one CimInstance has no .Count in Windows PowerShell 5.1, so a lone
+# host would never count (seen on the VM, task B5.14).
+do { $hosts = @(Processes "Name='harness-pty.exe'"); if ($hosts.Count) { break }; Start-Sleep 1 } while ((Get-Date) -lt $deadline)
 if (-not $hosts.Count) { Fail 'no harness-pty.exe runs after creating a terminal' }
 # The PowerShell the terminal runs, a child of the host: what the install promises, so none is a failure.
 $deadline = (Get-Date).AddSeconds(30)
