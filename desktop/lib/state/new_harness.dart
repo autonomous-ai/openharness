@@ -3464,6 +3464,35 @@ class NewHarnessController extends ChangeNotifier {
       _attempt?.awaitingConfirmation == true || integration?.pending == true;
   bool get canCancelPending => _attempt?.canCancelPending == true;
 
+  /// The folder a new project's typed name found already there
+  /// (`PROJECT_EXISTS`), with the project and machine it was refused for.
+  (String, NewHarnessProject, String)? _existing;
+
+  /// That folder, while the same name on the same machine is still the
+  /// choice: what "Use the existing folder" starts in ([useExistingFolder]).
+  /// A name somebody chose is never quietly changed, so nothing starts there
+  /// until they press it; the refusal alone left them to retype the name as
+  /// a path (PROJECT_EXISTS was 4 of 7 failed starts on Oct 18).
+  String? get existingFolder => switch (_existing) {
+    (final folder, final project, final machine)
+        when !busy && project == _project && machine == _machineId =>
+      folder,
+    _ => null,
+  };
+
+  /// Switches Project to [existingFolder] on the same machine and starts the
+  /// harness there, as if the person had picked that folder.
+  Future<NewHarnessOutcome> useExistingFolder({bool? resendAttachments}) {
+    final folder = existingFolder;
+    if (folder == null || locked) return Future.value(NewHarnessOutcome.failed);
+    _existing = null;
+    _project = NewHarnessProject.folder(folder, exact: true);
+    if (_desktopChoices) _syncGitProject();
+    error = null;
+    notifyListeners();
+    return create(resendAttachments: resendAttachments);
+  }
+
   /// The check [followHeld] is making. Nobody pressed for it, so it shows
   /// nothing until it has an answer.
   Future<NewHarnessOutcome>? _following;
@@ -3678,6 +3707,7 @@ class NewHarnessController extends ChangeNotifier {
         background: integration != null,
         beforeSubmit: integration?.beforeSubmit,
       );
+      _existing = null;
       _warnedAboutClosing = false;
       _installing = null;
     }
@@ -3862,6 +3892,18 @@ class NewHarnessController extends ChangeNotifier {
         _gitProject = const GitProjectInfo();
         _gitFuture = _readGitProject(_gitKey!);
       }
+      final project = _project;
+      _existing =
+          attempt.refusal == 'PROJECT_EXISTS' &&
+              project.isNew &&
+              project.repository == null &&
+              project.generated == null &&
+              project.name != null
+          ? switch (attempt.existingFolder) {
+              final folder? => (folder, project, _machineId),
+              null => null,
+            }
+          : null;
       return _fail(failure);
     }
     busy = false;

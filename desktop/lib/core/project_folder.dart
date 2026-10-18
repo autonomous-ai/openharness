@@ -5,6 +5,15 @@ import 'package:path/path.dart' as p;
 import 'repository_clone.dart';
 import 'git_worktree.dart';
 
+/// A new project's name the person typed whose folder is already there. Its
+/// name is never quietly changed, so it is refused like the machine's
+/// `PROJECT_EXISTS`, with [folder] when what is there is a folder to start in
+/// — offered as "Use the existing folder", used only once they choose it.
+class ProjectExistsException extends RepositoryCloneException {
+  const ProjectExistsException(super.message, {this.folder});
+  final String? folder;
+}
+
 /// Folder preparation is explicit and runs only when New Agent is submitted.
 /// Existing folders continue to use the ordinary agent_create cwd payload.
 class ProjectFolderRequest {
@@ -243,8 +252,13 @@ class ProjectFolderRequest {
               candidate = nextGeneratedName(candidate);
               continue;
             }
-            throw RepositoryCloneException(
+            throw ProjectExistsException(
               '“$named” already exists. Choose it as an existing project.',
+              folder:
+                  await FileSystemEntity.type(folder) ==
+                      FileSystemEntityType.directory
+                  ? folder
+                  : null,
             );
           }
           throw FileSystemException('Could not create folder', folder);

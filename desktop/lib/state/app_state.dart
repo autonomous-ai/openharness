@@ -330,6 +330,13 @@ class AgentCreationAttempt {
   /// agent choice does not clone or create the same project again.
   String? get preparedFolder => _preparedFolder;
 
+  /// On `PROJECT_EXISTS` for a new project's name the person typed: the
+  /// folder already there, when it is one to start in. Unlike
+  /// [preparedFolder] it is only offered ("Use the existing folder"), never
+  /// used until the person chooses it.
+  String? _existingFolder;
+  String? get existingFolder => _existingFolder;
+
   String? _complete(String? error) {
     _finished = true;
     _awaitingConfirmation = false;
@@ -13245,6 +13252,18 @@ class AppNotifier extends ChangeNotifier {
     _ => 'Could not start harness: ${detail ?? code}',
   };
 
+  /// A typed new project's name that [folder] on [machine] already has. The
+  /// machine's own words ("Select that folder from your projects") left
+  /// nothing to press: PROJECT_EXISTS was 4 of 7 failed starts on Oct 18, all
+  /// from the apps. The form offers "Use the existing folder" beside this.
+  String _projectExistsMessage(String folder, String machine) {
+    final name = folder
+        .split('/')
+        .lastWhere((part) => part.isNotEmpty, orElse: () => folder);
+    return '“$name” already exists on $machine. '
+        'Choose another name, or use the existing folder.';
+  }
+
   /// A confirmed name collision happens before any process starts. Only then
   /// may an automatic suggestion advance to another name with a fresh receipt.
   /// Uncertain replies always keep their original receipt and never retry.
@@ -13296,6 +13315,7 @@ class AppNotifier extends ChangeNotifier {
     // Only this answer says whether it is starting; one that never reaches
     // the machine (it went offline) must not be followed as if it were.
     creation._starting = false;
+    creation._existingFolder = null;
     final machineId = creation._machineId!;
     var targetId = creation._targetId!;
     final split = creation._split;
@@ -13379,6 +13399,15 @@ class AppNotifier extends ChangeNotifier {
                     engineIdentity(dshId).label)
               : engineIdentity(choices['engine'] as String?).label,
         );
+      } on ProjectExistsException catch (error) {
+        // This computer's own folder refuses a typed name as the machine
+        // does, so the form offers the folder the same way.
+        creation._refusal = 'PROJECT_EXISTS';
+        if (error.folder case final folder?) {
+          creation._existingFolder = folder;
+          return creation._complete(_projectExistsMessage(folder, machineName));
+        }
+        return creation._complete(error.message);
       } on RepositoryCloneException catch (error) {
         return creation._complete(error.message);
       } catch (_) {
@@ -13609,6 +13638,14 @@ class AppNotifier extends ChangeNotifier {
           creation._preparedFolder = folder;
         }
         creation._refusal = failure['code'] as String;
+        // A typed name the machine found already there, as a folder it can
+        // open (CLI `existingFolder`): said so, and offered to the person.
+        if (failure['existingFolder'] case final String folder
+            when failure['code'] == 'PROJECT_EXISTS' &&
+                folder.startsWith('/')) {
+          creation._existingFolder = folder;
+          return creation._complete(_projectExistsMessage(folder, machineName));
+        }
         return creation._complete(
           _creationFailureMessage(
             failure['code'] as String,
