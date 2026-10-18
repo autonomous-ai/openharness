@@ -9,6 +9,7 @@
 
 #include "win32_window.h"
 #include "notifications.h"
+#include "tray.h"
 
 // A window that hosts a Flutter view, and the Harness features the runner
 // adds. Each feature's channel is registered in OnCreate.
@@ -44,6 +45,7 @@ class FlutterWindow : public Win32Window {
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
   std::unique_ptr<HarnessNotifications> notifications_;
+  std::unique_ptr<HarnessTray> tray_;
 
   bool quitting_ = false;
 };

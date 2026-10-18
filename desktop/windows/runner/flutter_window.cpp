@@ -63,6 +63,8 @@ bool FlutterWindow::OnCreate() {
       flutter_controller_->engine()->messenger();
   HarnessCommunityLinks::Instance().Attach(messenger);
   notifications_ = std::make_unique<HarnessNotifications>(messenger);
+  tray_ = std::make_unique<HarnessTray>(
+      messenger, GetHandle(), [this]() { RequestQuit(); });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -81,6 +83,7 @@ void FlutterWindow::OnDestroy() {
   // Every feature's channel goes before the engine its messenger belongs to.
   HarnessCommunityLinks::Instance().Detach();
   notifications_ = nullptr;
+  tray_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -96,6 +99,22 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   // through its main window, before an uninstall or an install over it.
   if (IsHarnessQuitMessage(message)) {
     RequestQuit();
+    return 0;
+  }
+
+  if (tray_) {
+    LRESULT tray_result = 0;
+    if (tray_->HandleMessage(message, wparam, lparam, &tray_result)) {
+      return tray_result;
+    }
+  }
+
+  // Decide before Flutter and window_manager see WM_CLOSE. A real Quit has
+  // already set quitting_, so Flutter still saves the layout on its exit path.
+  // Without a usable tray, closing must never leave an inaccessible window.
+  if (message == WM_CLOSE && !quitting_ && tray_ && tray_->installed()) {
+    ::ShowWindow(hwnd, SW_HIDE);
+    tray_->OnHidden();
     return 0;
   }
 

@@ -16,6 +16,9 @@ import 'package:flutter_web_plugins/url_strategy.dart';
 import 'core/crash_log.dart';
 import 'core/desktop_window.dart';
 import 'core/linux_app_image.dart';
+import 'core/runtime_platform.dart';
+import 'core/test_run.dart';
+import 'core/windows_status_tray.dart';
 import 'settings/settings_screen.dart';
 import 'settings/settings_section.dart';
 import 'screens/login_screen.dart';
@@ -224,6 +227,8 @@ class _RootShellState extends ConsumerState<RootShell>
     if (kIsWeb) _sharedLocation = SharedAgentLocation.parse(Uri.base);
     WidgetsBinding.instance.addObserver(this);
     _appMenuChannel.setMethodCallHandler(_onAppMenu);
+    // Available from startup, including sign-in and setup.
+    if (RuntimePlatform.isWindows && !kUnderTest) windowsStatusTray.install();
   }
 
   @override

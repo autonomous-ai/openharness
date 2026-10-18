@@ -121,4 +121,31 @@ void main() {
     expect(cmake, contains('"windowsapp.lib"'));
     expect(cmake, contains('set_source_files_properties("notifications.cpp"'));
   });
+
+  test('the tray mirrors the macOS status menu, and the close button hides '
+      'to it', () {
+    final tray = runner('tray.cpp');
+    for (final text in [
+      '"harness/status_menu"',
+      '"update"',
+      '"quit"',
+      '"selected"',
+      '"openApp"',
+      '"hidden"',
+      'L"All caught up"',
+      'L"Open Harness to get started"',
+      'L"Open Harness"',
+      'L"Quit"',
+    ]) {
+      expect(tray, contains(text));
+    }
+    final window = runner('flutter_window.cpp');
+    final close = window.indexOf('message == WM_CLOSE && !quitting_');
+    expect(close, isNonNegative);
+    expect(
+      close,
+      lessThan(window.indexOf('HandleTopLevelWindowProc')),
+      reason: 'decided before Flutter and window_manager see WM_CLOSE',
+    );
+  });
 }
