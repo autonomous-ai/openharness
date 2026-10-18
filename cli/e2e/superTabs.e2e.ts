@@ -8,7 +8,7 @@ import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { superTabCommand } from '../src/superTabs/command.js'
 import { object } from '../src/superTabs/wire.js'
 import { LocalClient } from './harness/client.js'
-import { IsolatedDaemon, until } from './harness/daemon.js'
+import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 
 const ME: FakeMachine = { machineId: 'b8'.repeat(16), computerId: 'e2e-super-tab-computer', name: 'Fixture', token: 'e2e-super-tab-token' }
@@ -27,6 +27,7 @@ it('starts either engine once, posts to its captured group and delivers shared i
     BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId,
     ANTHROPIC_API_KEY: 'fixture-not-a-credential', OPENAI_API_KEY: 'fixture-not-a-credential',
   } }); daemon = d
+  writeFileSync(join(d.engineConfig.codexHome, 'models_cache.json'), readFileSync(join(CLI_ROOT, 'src/lib/__fixtures__/codex-home-0.160/models_cache.json')))
   writeFileSync(join(d.root, 'auth', 'session.json'), JSON.stringify({ version: 1, accessToken: ME.token,
     autonomousEnv: 'prod', computerId: ME.computerId, machineId: ME.machineId,
     expiresAt: Date.now() + 30 * 24 * 3600_000, updatedAt: Date.now(), signInEpoch: 'e2e',
@@ -65,6 +66,12 @@ it('starts either engine once, posts to its captured group and delivers shared i
         if (!agents.some(a => a.id === id)) agents.push({ id, harnessId: command.harnessId, machineId: ME.machineId, configuration: command.configuration })
         return { data: { result: { agentId: id } } }
       } else if (command.type === 'message.send') posts.push(command)
+      else if (command.type === 'agent.configuration') {
+        const agent = agents.find(a => a.id === body.asAgentId)!
+        if ((agent.configurationVersion ?? null) !== command.previousVersion) throw new Error('Stale configuration')
+        agent.configuration = command.configuration
+        agent.configurationVersion = body.operationId
+      }
       else if (command.type === 'agent.startFailed') start!.error = command.error
       else throw new Error(`Unexpected command ${command.type}`)
       revision++
@@ -125,6 +132,20 @@ it('starts either engine once, posts to its captured group and delivers shared i
     await until('native input acknowledgement', () => pending.get(target)?.status === 'delivered' || null, 60_000, 250)
     const submitted = readFileSync(join(d.root, 'submitted-prompts'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as string)
     expect(submitted.filter(prompt => prompt.includes(`verify-super-tab-${engine}`))).toHaveLength(1)
+    const model = engine === 'claude' ? 'sonnet' : 'gpt-6-luna'
+    // Wait for the native turn to settle before using the app's existing model controls.
+    await until('worker idle before its model change', async () => {
+      const rows = await client.request('agents_list')
+      const ended = client.frames.filter(frame => frame.type === 'turn_ended' && frame.agentId === started.answer.harnessId && !frame.replay)
+      return ended.length >= 2 && rows.agents.some((a: Record<string, any>) => a.id === started.answer.harnessId && a.activity?.state === 'idle') || null
+    }, 30_000, 250)
+    const changed = await client.request('agent_update', { agentId: started.answer.harnessId,
+      selectedModel: `runtime-v1:${started.answer.harnessId}:${engine}:${model}@high` }, 45_000)
+    expect(changed.error, JSON.stringify(changed)).toBeUndefined()
+    await until('shared roster to reflect the observed native runtime', () => {
+      const config = agents.find(a => a.id === target)?.configuration
+      return config?.model === model && config.effort === 'high' || null
+    }, 20_000, 250)
   }
   // The backend survived, but this host has no local intent/receipt. It must
   // surface the missing evidence without creating a new claim or typing again.

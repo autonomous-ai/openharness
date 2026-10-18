@@ -69,6 +69,35 @@ afterAll(async () => {
 })
 
 describe('Super Tabs on a real Mongo replica set', () => {
+  it('keeps an ordered configuration history, rejects stale observations and authorizes the execution host alone', async () => {
+    const { tab, lead } = await fixture()
+    await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'A measured result', checks: [{ description: 'Verified evidence', independent: false }] })
+    const assigned = await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: lead })
+    const before = (await store.read(owner, tab)).state.agents[0]!.configurationVersion!
+    const command: Command = { type: 'agent.configuration', previousVersion: before,
+      configuration: { ...config, model: 'observed-model', effort: 'max', contextWindow: null } }
+    await expect(run(tab, command)).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
+    await expect(run(tab, command, peer, lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    const id = randomUUID()
+    const first = await run(tab, command, host, lead, id)
+    expect(await run(tab, command, host, lead, id)).toEqual(first)
+    await expect(run(tab, command, host, lead)).rejects.toMatchObject({ code: 'STALE_CONFIGURATION' })
+    const current = (await store.read(owner, tab)).state.agents[0]!
+    await run(tab, { ...command, previousVersion: current.configurationVersion! }, host, lead)
+    const records = await db.superTabConfiguration.findMany({ where: { tabId: tab, agentId: lead }, orderBy: { revision: 'asc' } })
+    expect(records).toHaveLength(2)
+    expect(records[0]!.configuration).toEqual(config)
+    expect(records[1]).toMatchObject({ configuration: command.configuration, actorKey: `agent:${lead}`, assignmentIds: [assigned.result.assignmentId] })
+    expect((await store.read(owner, tab)).state.conversations[0]!.assignment!.configuration).toEqual(config)
+    const next = { ...command, previousVersion: current.configurationVersion!, configuration: config }
+    const race = await Promise.allSettled([run(tab, next, host, lead), run(tab, { ...next, configuration: { ...config, effort: 'low' } }, host, lead)])
+    expect(race.filter(r => r.status === 'fulfilled')).toHaveLength(1)
+    expect(await db.superTabConfiguration.count({ where: { tabId: tab } })).toBe(3)
+    await run(tab, { type: 'agent.remove', agentId: lead })
+    await expect(run(tab, next, host, lead)).rejects.toMatchObject({ code: 'AGENT_UNAVAILABLE' })
+    expect(await db.superTabConfiguration.count({ where: { tabId: tab } })).toBe(3)
+  })
+
   it('a withdrawn host can retire its receipt without regaining conversation access', async () => {
     const { tab, lead } = await fixture()
     await run(tab, message('Keep the execution receipt after removal.'))

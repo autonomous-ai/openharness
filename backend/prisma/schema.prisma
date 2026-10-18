@@ -1081,6 +1081,21 @@ model SuperTabStopReceipt {
   @@unique([tabId, assignmentId])
 }
 
+// Configuration observations stay outside the tab snapshot so a long-running
+// assignment keeps its complete history without making every tab read grow.
+model SuperTabConfiguration {
+  id             String   @id @map("_id")
+  tabId          String
+  agentId        String
+  revision       Int
+  configuration  Json
+  assignmentIds  String[]
+  actorKey       String
+  observedAt     DateTime
+
+  @@index([tabId, agentId, revision])
+}
+
 model ExperimentalSettings {
   id               String  @id @map("_id") @db.ObjectId
   userId           String

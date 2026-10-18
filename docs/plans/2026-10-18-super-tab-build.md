@@ -32,12 +32,13 @@ This is a new tab type. Existing tabs and running sessions are not converted.
 - Recent-harness navigation consumes an empty Super Tab draft only after opening work; ordinary search opens native work outside completed Super Tabs and preserves their conversations and terminal selection.
 - Definitive native-start refusals are reconciled through durable cancellation receipts. Lost cancellation or backend replies resume the same identity, and unknown/storage/conflict failures never become permission to launch again.
 - Add agent uses the existing desktop picker with a focused conversation title, sharing scope and one action. A teammate's contributed agent can join another conversation without machine access or another native pane. The participants dialog hands focus over after closing; creating a new harness retains the captured conversation. Membership and archive changes update or dismiss an open picker.
+- Runtime model/effort observations follow the native profile into the shared roster. Per-agent versions fence delayed updates and re-contributions. A separate configuration history records the initial configuration and observed changes against active assignment IDs; an assignment's starting configuration stays intact. Unknown context size is not inferred from a model name.
 - Experimental settings cleanup and retired PR branding, preserving compatibility fields and usage controls.
 
 The desktop surface is connected, but the complete workflow is not ready. Scoped autonomous
 agent starts and capacity checks are connected through the existing native creation protocol.
 Terminal access, native stop reconciliation and explicit uncertain-delivery recovery are connected.
-Shared recording of native interventions and the capacity/configuration gaps remain. The PR stays a draft until these are implemented and
+Shared recording of native interventions and simultaneous-start capacity reservation remain. The PR stays a draft until these are implemented and
 the complete workflow is tested and reviewed.
 
 ## Validation plan
@@ -125,6 +126,20 @@ Focused checks completed during implementation (18 October):
   human review, and later host polls verified not to type the instruction. Unit checks also cover another lost
   backend acknowledgement/restart and preservation of an existing uncertain native receipt. No claim is stolen
   or automatically replayed. The backend's existing transactional acknowledgement/resolution path is unchanged.
+- Runtime observations: backend and CLI typechecks passed; 13 backend policy tests, 16 disposable replica-set
+  integration tests and 18 CLI configuration/host/service tests passed. The integration test verifies host-only
+  authority, immutable starting configuration, ordered history, duplicate/lost replies, concurrent/stale updates
+  and withdrawal. A slow configuration write does not hold up native delivery or its leases.
+  The expanded native fixture passed in 21.86 seconds, switching both fake Claude Code and Codex through the app's
+  existing `agent_update` controls and observing the changed model/effort through the separate service process.
+  The fixture waits for both actual turns to finish before switching; an idle snapshot from the prior turn was
+  insufficient. The generic runtime projection is isolated in `f7ab9240ca`; its 42 focused API/process/architecture
+  checks passed with 100% statements, branches, functions and lines for the two changed boundary files.
+- Runtime observation microbenchmark: Node 22.23.1, 100 unchanged agents, 5,000 passes after warm-up, same synthetic
+  native roster on this Mac. Existing traversal averaged 0.00076 ms/pass and 0.90 µs CPU; traversal plus observations
+  averaged 0.0729 ms/pass and 72.76 µs CPU. Neither retained additional RSS after collection. Observations run at most
+  once every five seconds on the existing roster read. This isolates local parsing/comparison cost, excludes network
+  writes and is not a full-daemon or customer workload performance result.
 
 These establish individual boundaries, not the complete customer workflow. Full component suites,
 two-machine/two-account integration, real-engine/native desktop validation, full-app visual inspection,
@@ -141,7 +156,7 @@ Local commits and validation are preserved. The original research worktree's mer
 
 - Reflect native terminal interventions and answers in the appropriate shared conversation with reliable attribution.
   The current agent instructions explicitly require posting questions/results through the shared conversation CLI.
-- Check simultaneous starts against shared machine capacity and update recorded configuration when a running agent changes it.
+- Reserve shared machine capacity across simultaneous starts.
 - Run the complete component suites, required coverage gates and isolated multi-account/machine journey, then review the final head.
 - Once the Mac is unlocked, finish native terminal, physical shortcut/IME and full-app visual acceptance on an official review build.
   Publish only after the remaining implementation and validation pass, following the normal release schedule.

@@ -19,6 +19,8 @@ export interface Agent {
   hostGrant?: string | null
   name: string
   configuration: AgentConfiguration
+  /** The last configuration operation fences delayed observations, including re-contribution. */
+  configurationVersion?: string
 }
 export interface AgentStartRequest {
   conversationId: string

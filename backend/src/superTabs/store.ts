@@ -206,6 +206,19 @@ export class SuperTabStore {
       }
       const effects = applyCommand(original, actor, command, context)
       const revision = row.revision + 1
+      if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration') {
+        for (const target of effects.state.agents) {
+          if (target.configurationVersion !== receiptId) continue
+          const previous = original.agents.find(a => a.id === target.id)
+          if (previous?.configurationVersion === target.configurationVersion) continue
+          await tx.superTabConfiguration.create({ data: {
+            id: stableId(tabId, target.id, operationId), tabId, agentId: target.id, revision,
+            configuration: json(target.configuration), actorKey: actorKey(actor), observedAt: new Date(context.now),
+            assignmentIds: effects.state.conversations.filter(group => activeWork(group) && group.assignment?.agentId === target.id)
+              .map(group => group.assignment!.id),
+          } })
+        }
+      }
       for (const message of effects.messages) conversation(effects.state, message.conversationId).lastMessageSequence = revision
       if (command.type === 'work.assign') {
         const assigned = conversation(effects.state, command.conversationId).assignment!

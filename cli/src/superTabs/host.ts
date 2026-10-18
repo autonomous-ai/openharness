@@ -1,4 +1,5 @@
 import { publishObservers } from './observers.js'
+import { configurationObservation } from './configuration.js'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -69,6 +70,8 @@ export class SuperTabHost {
   private receiptsRunning: Promise<void> | null = null
   private nextReceiptsAt = 0
   private receiptCursor = 0
+  private configurationsRunning: Promise<void> | null = null
+  private nextConfigurationsAt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
@@ -186,6 +189,14 @@ export class SuperTabHost {
     if (this.stopped) return
     if (!Array.isArray(data)) throw new Error('Invalid Super Tab host roster.')
     this.observers(this.core.dataDir, this.machineId, data, requestedAt + 2500)
+    // Runtime observations cannot delay the live input leases. A stale host
+    // observation is fenced by the backend's per-agent configuration version.
+    if (!this.configurationsRunning && this.now() >= this.nextConfigurationsAt) {
+      this.configurationsRunning = this.recordConfigurations(data).finally(() => {
+        this.configurationsRunning = null
+        this.nextConfigurationsAt = this.now() + 5_000
+      })
+    }
     const seen = new Set<string>()
     for (const item of data) {
       const row = object(item), agent = object(row.agent)
@@ -274,6 +285,18 @@ export class SuperTabHost {
     this.persist()
     this.active.add(id)
     this.core.turns.deliver(entry.harnessId, this.prompt(entry, message), id)
+  }
+
+  private async recordConfigurations(rows: unknown[]): Promise<void> {
+    for (const row of rows) {
+      if (this.stopped) return
+      try {
+        const observation = configurationObservation(this.core, this.machineId, row)
+        if (observation) await backend(this.core, 'POST', observation.path, observation.body)
+      } catch (error) {
+        this.log(error instanceof Error ? error.message : String(error))
+      }
+    }
   }
 
   private prompt(entry: Entry, message: Json): string {

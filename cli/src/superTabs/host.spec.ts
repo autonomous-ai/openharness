@@ -43,6 +43,29 @@ function setup() {
 }
 
 describe('Super Tab native delivery handoff', () => {
+  it('keeps a slow configuration observation out of the native delivery and lease path', async () => {
+    const t = setup(), host = t.open()
+    vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', engine: 'claude' } as never)
+    vi.mocked(t.core.agents.runtimeProfile).mockReturnValue('runtime-v1:harness:claude:sonnet@high')
+    const original = vi.mocked(t.call).getMockImplementation()!
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let observations = 0
+    vi.mocked(t.call).mockImplementation(async (...args) => {
+      if (args[1].endsWith('/commands')) {
+        observations++
+        await gate
+        return { status: 200, body: { data: {} } }
+      }
+      return original(...args)
+    })
+    await host.tick(); await host.tick()
+    expect(observations).toBe(1)
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.core.turns.leaseDeliveries).toHaveBeenCalled()
+    host.stop(); release()
+    await Promise.resolve()
+  })
   it('retires a human-resolved journal entry without resubmitting its native input', async () => {
     const t = setup(), host = t.open()
     await host.tick(); t.event('unknown', 'lost acknowledgement'); await host.tick()

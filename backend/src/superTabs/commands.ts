@@ -36,6 +36,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration }).strict(),
   z.object({ type: z.literal('agent.startFailed'), startId: id, error: text }).strict(),
   z.object({ type: z.literal('agent.remove'), agentId: id }).strict(),
+  z.object({ type: z.literal('agent.configuration'), previousVersion: id.nullable(), configuration }).strict(),
   z.object({ type: z.literal('conversation.agent'), conversationId: id, agentId: id, present: z.boolean(), lead: z.boolean() }).strict(),
   z.object({ type: z.literal('invite.create'), email: z.email().max(320), role: z.enum(['collaborator', 'viewer']), conversationId: id }).strict(),
   z.object({ type: z.literal('invite.revoke'), inviteId: id }).strict(),
@@ -168,7 +169,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!existing) state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId,
         machineOwnerId: grant.machineOwnerId, contributorId: grant.contributorId, membershipGeneration: contributor.generation,
         hostGrant: grant.hostGrant ?? null,
-        name: command.name, configuration: command.configuration })
+        name: command.name, configuration: command.configuration, configurationVersion: operationId })
       if (existing && (existing.machineOwnerId !== grant.machineOwnerId || existing.contributorId !== grant.contributorId)) {
         fail('ALREADY_SHARED', 'This session already has a contributor. Use the existing tab agent.')
       }
@@ -241,11 +242,23 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.agents.some(a => a.id === agentId)) fail('ALREADY_SHARED', 'This native harness is already in the tab.')
       state.agents.push({ id: agentId, machineId: start.request.machineId, harnessId: command.harnessId,
         machineOwnerId: start.machineOwnerId, contributorId: start.contributorId, membershipGeneration: start.membershipGeneration,
-        hostGrant: start.hostGrant, name: start.request.name, configuration: command.configuration })
+        hostGrant: start.hostGrant, name: start.request.name, configuration: command.configuration, configurationVersion: operationId })
       group.agentIds.push(agentId)
       start.harnessId = command.harnessId
       result.agentId = agentId
       message(group.id, `${start.request.name} joined. Ready for an assignment.`)
+      break
+    }
+    case 'agent.configuration': {
+      if (actor.kind !== 'agent') fail('HOST_REQUIRED', 'Only the execution host can record an observed configuration.', 403)
+      const target = agent(state, actor.agentId)
+      if ((target.configurationVersion ?? null) !== command.previousVersion) {
+        fail('STALE_CONFIGURATION', 'Read the current agent configuration before reporting another observation.')
+      }
+      if (Object.entries(command.configuration).some(([key, value]) => target.configuration[key as keyof typeof target.configuration] !== value)) {
+        target.configuration = command.configuration
+        target.configurationVersion = operationId
+      }
       break
     }
     case 'agent.remove': {

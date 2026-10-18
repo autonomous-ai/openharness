@@ -29,6 +29,36 @@ function fixture() {
 }
 
 describe('Super Tab collaboration policy', () => {
+  it('records host-observed runtime changes without rewriting an assignment\'s starting configuration', () => {
+    const f = fixture(), group = f.group(), worker = f.add('worker', 'owner', group)
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    const before = f.state.agents[0]!.configurationVersion!
+    const observed = { ...config, model: 'another-model', effort: 'max', contextWindow: null }
+    const command: Command = { type: 'agent.configuration', previousVersion: before, configuration: observed }
+    expect(() => f.run(command)).toThrow('Only the execution host')
+    const actor: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
+    const changed = f.run(command, actor)
+    expect(changed.messages).toEqual([])
+    expect(f.state.agents[0]!.configuration).toEqual(observed)
+    expect(f.state.conversations[1]!.assignment!.configuration).toEqual(config)
+    expect(() => f.run(command, actor)).toThrow('current agent configuration')
+    const version = f.state.agents[0]!.configurationVersion!
+    f.run({ ...command, previousVersion: version }, actor)
+    expect(f.state.agents[0]!.configurationVersion).toBe(version)
+    f.run({ ...command, configuration: config, previousVersion: version }, actor)
+    expect(f.state.agents[0]!.configurationVersion).not.toBe(before)
+  })
+
+  it('fences observations from an earlier contribution of the same native harness', () => {
+    const f = fixture(), worker = f.add('worker')
+    const before = f.state.agents[0]!.configurationVersion!
+    f.run({ type: 'agent.remove', agentId: worker })
+    expect(f.add('worker')).toBe(worker)
+    expect(f.state.agents[0]!.configurationVersion).not.toBe(before)
+    expect(() => f.run({ type: 'agent.configuration', previousVersion: before, configuration: { ...config, model: 'old observation' } },
+      { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' })).toThrow('current agent configuration')
+  })
+
   it('records the native launch request without dispatching it a second time', () => {
     const f = fixture()
     const result = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'lead',
