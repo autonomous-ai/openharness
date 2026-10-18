@@ -2,7 +2,7 @@
 # The fake HTTPS CDN the Windows end to end installs from (docs/testing/windows-cli-e2e.md, step 1): this Mac answers
 # as cdn.autonomous.ai and storage.googleapis.com for the VM, once vm-cdn.ps1 -Enable points the VM's hosts file here,
 # so the real `irm https://cdn.autonomous.ai/harness/staging/cli/install.ps1 | iex` installs this tree's build.
-#   fake-cdn.sh make-ca            a throwaway CA and a leaf for both names, in $FAKE_CDN_DIR/ca (kept if present)
+#   fake-cdn.sh make-ca            a throwaway CA (30 days, both names only) and its leaf in $FAKE_CDN_DIR/ca; kept if present
 #   fake-cdn.sh pty-from-vm        copy the VM's own pty build (C:\work\oh\pty, arm64) into $FAKE_CDN_DIR/pty/win32-arm64
 #   fake-cdn.sh stage <version>    lay out harness/staging/ as the staging publish would, from this tree (B1 scripts)
 #   fake-cdn.sh serve              serve $FAKE_CDN_DIR/root on https://$VM_BIND:443 until stopped
@@ -29,14 +29,17 @@ make_ca() {
   else
     mkdir -p "$ca" && chmod 700 "$ca"
     ( umask 077
-      openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 90 -keyout "$ca/fake-cdn-ca.key" -out "$ca/fake-cdn-ca.pem" \
+      # Name-constrained: a leaked key can vouch for these two names only, never for any other site the VM (or a
+      # machine that kept the CA by mistake) visits. 30 days, so a CA nobody removed stops being trusted soon.
+      openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 30 -keyout "$ca/fake-cdn-ca.key" -out "$ca/fake-cdn-ca.pem" \
         -subj "/CN=Harness fake CDN test CA $(date +%Y-%m-%d)" \
-        -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' 2>/dev/null
+        -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+        -addext 'nameConstraints=critical,permitted;DNS:cdn.autonomous.ai,permitted;DNS:storage.googleapis.com' 2>/dev/null
       openssl req -newkey rsa:2048 -nodes -sha256 -keyout "$ca/leaf.key" -out "$ca/leaf.csr" -subj '/CN=cdn.autonomous.ai' 2>/dev/null
       printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature,keyEncipherment' \
         'extendedKeyUsage=serverAuth' 'subjectAltName=DNS:cdn.autonomous.ai,DNS:storage.googleapis.com' > "$ca/leaf.ext"
       openssl x509 -req -in "$ca/leaf.csr" -CA "$ca/fake-cdn-ca.pem" -CAkey "$ca/fake-cdn-ca.key" -CAcreateserial \
-        -days 90 -sha256 -extfile "$ca/leaf.ext" -out "$ca/leaf.pem" 2>/dev/null )
+        -days 30 -sha256 -extfile "$ca/leaf.ext" -out "$ca/leaf.pem" 2>/dev/null )
     rm -f "$ca/leaf.csr" "$ca/leaf.ext"
     echo "CA made: $ca/fake-cdn-ca.pem"
   fi
