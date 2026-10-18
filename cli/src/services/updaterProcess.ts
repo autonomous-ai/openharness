@@ -16,11 +16,13 @@
 import { env } from '../config/env.js'
 import { SERVICE_EXIT_RESTART, type UpdaterMessage } from '../harnessd/protocol.js'
 import { describeSpawnLockOwner, withSpawnLock } from '../lib/daemonSpawnLock.js'
-import { DOWNLOAD_LIMITS, retireCliVersions, startSelfUpdater } from '../lib/selfUpdate.js'
+import { DOWNLOAD_LIMITS, isLocalDevBuild, retireCliVersions, startSelfUpdater } from '../lib/selfUpdate.js'
+import { currentCli } from '../lib/windows/installLayout.js'
 import { processRetireDeps } from '../lib/windows/cliVersions.js'
 import { startTuiUpdater } from '../tui/update.js'
 import { VERSION } from '../version.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
+import { dirname } from 'node:path'
 import type { ServiceProcess } from './process.js'
 
 export interface UpdaterServiceDeps {
@@ -33,6 +35,9 @@ export interface UpdaterServiceDeps {
   /** Windows: retire the older CLI builds (lib/selfUpdate.ts `retireCliVersions`), once as the updater starts — it
    *  starts again after every build it stages, and with every master. Left out elsewhere. */
   retire?: () => Promise<unknown>
+  /** The build that is installed, which the start line names: on Windows the one `cli\current` points to, which after a
+   *  rollback is not the build this process runs from. This process's VERSION when left out. */
+  installedVersion?: () => string
 }
 
 /** [cliDir]: the CLI folder the retirement looks at, this user's own unless a test names one of its own. */
@@ -48,7 +53,10 @@ export const processUpdaterDeps = (platform: NodeJS.Platform = process.platform,
   log: (line) => console.log(line),
   // Under the lock every stage takes: a `harness update` that renames a build's folder into place and then moves the
   // pointer to it must not find the folder gone in between.
-  ...(platform === 'win32' ? { retire: () => withSpawnLock('update', () => retireCliVersions(cliDir, processRetireDeps())) } : {}),
+  ...(platform === 'win32' ? {
+    retire: () => withSpawnLock('update', () => retireCliVersions(cliDir, processRetireDeps())),
+    installedVersion: () => currentCli(dirname(cliDir))?.version ?? VERSION,
+  } : {}),
 })
 
 export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps = processUpdaterDeps()): ServiceProcess {
@@ -88,6 +96,10 @@ export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps =
   })
   // Never in the way of the update itself: a pass that fails is the next start's to repeat.
   void deps.retire?.().catch((error: unknown) => deps.log(`[update] retiring older CLI builds failed: ${error instanceof Error ? error.message : String(error)}`))
-  deps.log(`[update] self-update on · v${VERSION} · every ${Math.round(env.ADAPTER_UPDATE_CHECK_MS / 1000)}s`)
+  // A development build is never replaced (lib/selfUpdate.ts isLocalDevBuild): it said "on" and polled in silence (G5).
+  const installed = deps.installedVersion?.() ?? VERSION
+  deps.log(isLocalDevBuild(installed)
+    ? `[update] self-update off · v${installed} is a development build, which never takes an update`
+    : `[update] self-update on · v${installed} · every ${Math.round(env.ADAPTER_UPDATE_CHECK_MS / 1000)}s`)
   return { stop: () => { cli.stop(); hn.stop() } }
 }

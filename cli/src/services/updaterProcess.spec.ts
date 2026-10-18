@@ -54,6 +54,17 @@ describe('the updater in its own process', () => {
     expect(m.calls.slice(-2)).toEqual(['stop cli', 'stop hn'])
   })
 
+  // G5 / final review R1b-4: a -dev install logged "self-update on" and polled, but never takes an update; after a
+  // rollback it named the build it had rolled back. It says which build is installed, and that a development one stays.
+  it('says that a development build never takes an update, and names the installed build', () => {
+    const dev = make()
+    runUpdaterService(undefined, { ...dev.deps, installedVersion: () => '0.4.18-dev.win1' }).stop()
+    expect(dev.calls[0]).toBe('[update] self-update off · v0.4.18-dev.win1 is a development build, which never takes an update')
+    const pointed = make()
+    runUpdaterService(undefined, { ...pointed.deps, installedVersion: () => '9.9.8' }).stop()
+    expect(pointed.calls[0]).toMatch(/^\[update\] self-update on · v9\.9\.8 · every \d+s$/)
+  })
+
   it('beside a core, stages over a build on probation only under a master that judges that itself', () => {
     const saved = { beside: process.env.HARNESSD_UPDATER_BESIDE_CORE, judges: process.env.HARNESSD_JUDGES_SUPERSEDED }
     try {
@@ -113,6 +124,9 @@ describe('the updater in its own process', () => {
       mkdirSync(join(cli, '0.4.0'), { recursive: true })
       locked.length = 0
       await expect(processUpdaterDeps('win32', cli).retire!()).resolves.toEqual([])
+      // No pointer: the installed build is this process's.
+      expect(processUpdaterDeps('win32', cli).installedVersion!()).toBe(VERSION)
+      expect(processUpdaterDeps('linux').installedVersion).toBeUndefined()
       // Under the lock a stage takes, so no `harness update` moves the pointer to a folder it removes.
       expect(locked).toEqual(['update'])
       for (const version of ['0.5.0', '0.4.0', '0.3.0']) {
@@ -122,6 +136,8 @@ describe('the updater in its own process', () => {
       writeFileSync(join(cli, 'current'), '0.5.0\n')
       await expect(processUpdaterDeps('win32', cli).retire!()).resolves.toEqual(['0.3.0'])
       expect(readdirSync(cli).sort()).toEqual(['0.4.0', '0.5.0', 'current'])
+      // The build cli\current points to is the installed one, whichever this process runs from.
+      expect(processUpdaterDeps('win32', cli).installedVersion!()).toBe('0.5.0')
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
