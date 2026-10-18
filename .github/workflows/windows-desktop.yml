@@ -114,3 +114,26 @@ jobs:
           # Exercise Debug's executable-relative DLL loader, not the unit override.
           Remove-Item Env:HARNESS_DESKTOP_PIPE_IO_DLL -ErrorAction SilentlyContinue
           flutter test --no-pub -d windows integration_test/windows_pipe_test.dart
+      - name: Runner channels and single instance (integration)
+        working-directory: desktop
+        env:
+          FLUTTER_TEST: '1'
+          HARNESS_DESKTOP_INSTANCE: ci-${{ matrix.arch }}-${{ github.run_id }}
+        run: |
+          # The runner and every child use owned profiles, never installed app state.
+          $root = Join-Path $env:RUNNER_TEMP ("harness-runner-" + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+          try {
+            $env:USERPROFILE = Join-Path $root 'profile'
+            $env:HOME = $env:USERPROFILE
+            $env:APPDATA = Join-Path $env:USERPROFILE 'AppData\Roaming'
+            $env:LOCALAPPDATA = Join-Path $env:USERPROFILE 'AppData\Local'
+            $env:TEMP = Join-Path $root 'temp'
+            $env:TMP = $env:TEMP
+            New-Item -ItemType Directory -Path $env:APPDATA,$env:LOCALAPPDATA,$env:TEMP -Force -ErrorAction Stop | Out-Null
+            Remove-Item Env:HARNESS_DESKTOP_PIPE_IO_DLL -ErrorAction SilentlyContinue
+            flutter test -d windows --no-pub integration_test/windows_runner_test.dart
+            if ($LASTEXITCODE -ne 0) { throw "Runner integration failed ($LASTEXITCODE)" }
+          } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+          }
