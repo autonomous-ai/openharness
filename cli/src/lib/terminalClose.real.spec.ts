@@ -56,9 +56,9 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
     }
     const actualKill = backend.kill.bind(backend)
     const kill = vi.spyOn(backend, 'kill')
-    kill.mockImplementation(async runtime => {
+    kill.mockImplementation(async (runtime, allowed) => {
       await savedScreen() // The backup must exist before the pane is killed.
-      return actualKill(runtime)
+      return actualKill(runtime, allowed)
     })
     const stop = createStopAgentService({ registry, stoppedAgents,
       restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), tmuxBackend: backend,
@@ -76,7 +76,7 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
     expect(await close.request({ ...request, mode: 'idle' })).toMatchObject({ error: 'SESSION_NOT_IDLE' })
     expect(kill).not.toHaveBeenCalled()
     expect(await close.request({ ...request, mode: 'now' })).toEqual({ closed: true })
-    expect(kill).toHaveBeenCalledExactlyOnceWith({ backend: 'tmux', paneId: pane })
+    expect(kill).toHaveBeenCalledExactlyOnceWith({ backend: 'tmux', paneId: pane }, expect.any(Function))
     expect(registry.byAgent(row.agentId)).toBeUndefined()
     await savedScreen()
     expect(await server.run('list-panes', '-t', 'terminal-close', '-F', '#{pane_id}')).toBe(neighbor)
