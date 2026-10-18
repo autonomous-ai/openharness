@@ -20,6 +20,16 @@ describe('check-install.ps1', () => {
     for (const line of calls) expect(line, line).toMatch(/@\(\s*Processes\s/)
   })
 
+  // The VM end to end (task B5.14) again: with a second Windows user's Harness running, the check printed "ok terminal …
+  // on harness-pty pid 5028", the OTHER user's host, and counted that host's shell too. WMI lists every user's
+  // processes by name, so the check would pass with this install's host missing. It now counts only hosts that run
+  // from this install's own folder.
+  it('counts only the terminal hosts that run from this install', () => {
+    const hosts = checkInstall.split('\n').find((line) => /\$hosts = @\(Processes/.test(line)) ?? ''
+    expect(hosts).toMatch(/ExecutablePath/)
+    expect(hosts).toContain('StartsWith("$root\\"')
+  })
+
   it.runIf(process.platform === 'win32')('counts one process as one under Windows PowerShell', () => {
     const fn = checkInstall.match(/^function Processes[\s\S]*?^}\n/m)?.[0]
     expect(fn).toBeTruthy()
