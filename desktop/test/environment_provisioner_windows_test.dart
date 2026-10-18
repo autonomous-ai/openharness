@@ -1,5 +1,8 @@
+import 'dart:async';
+import 'dart:ffi';
 import 'dart:io';
 
+import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/bootstrap/environment_provisioner.dart';
@@ -8,6 +11,63 @@ import 'package:harness/widgets/environment_setup_screen.dart';
 import 'package:path/path.dart' as p;
 
 import 'support/windows_test_node.dart';
+import 'support/windows_scratch_cleanup.dart';
+
+/// An owned Windows file handle that deliberately denies delete sharing.
+class _NoDeleteShareHandle {
+  _NoDeleteShareHandle._(this._value, this._close);
+
+  final int _value;
+  final int Function(int) _close;
+  bool _closed = false;
+
+  static _NoDeleteShareHandle open(String path) {
+    final kernel = DynamicLibrary.open('kernel32.dll');
+    final createFile = kernel
+        .lookupFunction<
+          IntPtr Function(
+            Pointer<Utf16>,
+            Uint32,
+            Uint32,
+            Pointer<Void>,
+            Uint32,
+            Uint32,
+            IntPtr,
+          ),
+          int Function(Pointer<Utf16>, int, int, Pointer<Void>, int, int, int)
+        >('CreateFileW');
+    final close = kernel
+        .lookupFunction<Int32 Function(IntPtr), int Function(int)>(
+          'CloseHandle',
+        );
+    final nativePath = path.toNativeUtf16(allocator: calloc);
+    try {
+      final handle = createFile(
+        nativePath,
+        0x80000000, // GENERIC_READ
+        0x00000001, // FILE_SHARE_READ, deliberately no FILE_SHARE_DELETE
+        nullptr,
+        3, // OPEN_EXISTING
+        0x00000080, // FILE_ATTRIBUTE_NORMAL
+        0,
+      );
+      if (handle == -1) {
+        throw StateError('CreateFileW failed for owned fixture');
+      }
+      return _NoDeleteShareHandle._(handle, close);
+    } finally {
+      calloc.free(nativePath);
+    }
+  }
+
+  void close() {
+    if (_closed) return;
+    if (_close(_value) == 0) {
+      throw StateError('CloseHandle failed for owned fixture');
+    }
+    _closed = true;
+  }
+}
 
 ProcessResult _result(int code, {String stdout = '', String stderr = ''}) =>
     ProcessResult(1, code, stdout, stderr);
@@ -81,7 +141,7 @@ void main() {
   });
 
   tearDown(() async {
-    if (await scratch.exists()) await scratch.delete(recursive: true);
+    if (await scratch.exists()) await deleteWindowsScratch(scratch);
   });
 
   String nodePath() =>
@@ -448,6 +508,83 @@ void main() {
   });
 
   group('on a real Windows', () {
+    test(
+      'fixture cleanup retries real sharing32 until its owned handle closes',
+      () async {
+        final owned = await Directory.systemTemp.createTemp(
+          'harness-cleanup-release-',
+        );
+        final target = File(
+          p.join(owned.path, _profileName, '.harness', 'node.exe'),
+        );
+        await target.create(recursive: true);
+        final handle = _NoDeleteShareHandle.open(target.path);
+        final firstSharing = Completer<FileSystemException?>();
+        try {
+          final deletion = deleteWindowsScratch(
+            owned,
+            onSharingViolation: (error) {
+              if (!firstSharing.isCompleted) firstSharing.complete(error);
+            },
+          );
+          unawaited(
+            deletion.then(
+              (_) {
+                if (!firstSharing.isCompleted) firstSharing.complete(null);
+              },
+              onError: (Object error, StackTrace stack) {
+                if (!firstSharing.isCompleted) {
+                  firstSharing.completeError(error, stack);
+                }
+              },
+            ),
+          );
+          final error = await firstSharing.future;
+          expect(error?.osError?.errorCode, 32);
+          expect(await owned.exists(), isTrue);
+          handle.close();
+          await deletion;
+          expect(await owned.exists(), isFalse);
+        } finally {
+          handle.close();
+          if (await owned.exists()) await owned.delete(recursive: true);
+        }
+      },
+    );
+
+    test('fixture cleanup fails sharing32 at deadline while its owned handle remains open', () async {
+      final owned = await Directory.systemTemp.createTemp(
+        'harness-cleanup-held-',
+      );
+      final target = File(
+        p.join(owned.path, _profileName, '.harness', 'node.exe'),
+      );
+      await target.create(recursive: true);
+      final handle = _NoDeleteShareHandle.open(target.path);
+      try {
+        await expectLater(
+          deleteWindowsScratch(
+            owned,
+            timeout: const Duration(milliseconds: 80),
+          ),
+          throwsA(
+            isA<FileSystemException>().having(
+              (error) => error.osError?.errorCode,
+              'Windows error',
+              32,
+            ),
+          ),
+        );
+        expect(await owned.exists(), isTrue);
+        handle.close();
+        await owned.delete(recursive: true);
+        expect(await owned.exists(), isFalse);
+      } finally {
+        handle.close();
+        if (await owned.exists()) await owned.delete(recursive: true);
+      }
+    });
+
     Future<HttpServer> serve(
       Map<String, String> scripts, {
       List<Uri>? requests,
