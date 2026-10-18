@@ -1,6 +1,7 @@
 pub mod breakaway;
 pub mod cli;
 pub mod command;
+pub mod desktop;
 pub mod discovery;
 mod files;
 pub mod host_lock;

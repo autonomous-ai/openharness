@@ -41,6 +41,15 @@ jobs:
         working-directory: desktop
     steps:
       - uses: actions/checkout@v7
+      # Each runner tests its own native Harness.exe launcher and stand-in app.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Harness.exe tests
+        working-directory: pty
+        run: |
+          cargo test --locked --lib desktop
+          if ($LASTEXITCODE -ne 0) { throw "Desktop launcher unit tests failed ($LASTEXITCODE)" }
+          cargo test --locked --test desktop_launch
+          if ($LASTEXITCODE -ne 0) { throw "Desktop launcher integration tests failed ($LASTEXITCODE)" }
       # A real node.exe for the tests that run one (harness_cli_runner_windows_test.dart,
       # environment_provisioner_windows_test.dart). Same runtime pin as windows.yml.
       - uses: actions/setup-node@v7

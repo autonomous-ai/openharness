@@ -75,7 +75,7 @@ pub fn single_segment(value: &str) -> bool {
     !value.is_empty() && value != "." && !value.contains("..") && !value.contains(['/', '\\', ':', '\0'])
 }
 
-fn read_pointer(file: &Path) -> Result<String, String> {
+pub(crate) fn read_pointer(file: &Path) -> Result<String, String> {
     let text = fs::read_to_string(file).map_err(|err| format!("cannot read {}: {err}", file.display()))?;
     // A leading byte order mark, as Notepad and Windows PowerShell 5.1 write one: Node's trim() drops it, so must this.
     let line = text.strip_prefix('\u{feff}').unwrap_or(&text).lines().next().unwrap_or("").trim().to_owned();
