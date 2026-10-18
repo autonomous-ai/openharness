@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -76,6 +77,28 @@ const _absent = (handle: invalidPipeHandle, error: errorFileNotFound);
     (bytes: Uint8List(0), error: error);
 
 void main() {
+  test(
+    'the first native pipe open recognizes an unused name as absent',
+    () async {
+      final random = Random.secure();
+      final id = List.generate(
+        16,
+        (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+      ).join();
+      final path = r'\\.\pipe\harness-' + id;
+      // open creates a fresh reader isolate, so no earlier test can initialize
+      // its bindings. A random name needs no daemon, record, token or home.
+      await expectLater(
+        WindowsPipeConnection.open(path)
+            .then((connection) => connection.close()),
+        throwsA(
+          isA<PipeAbsent>().having((error) => error.pipePath, 'path', path),
+        ),
+      );
+    },
+    skip: Platform.isWindows ? false : 'kernel32 needs native Windows',
+  );
+
   group('WindowsPipeConnection', () {
     late Directory dir;
     late ReceivePort events;

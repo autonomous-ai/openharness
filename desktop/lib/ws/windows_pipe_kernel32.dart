@@ -132,6 +132,13 @@ final _waitForSingleObject = _kernel32
 final _nothing = Uint8List(0);
 
 final class _Kernel32PipeIo implements PipeIo {
+  _Kernel32PipeIo() {
+    // Top-level bindings are lazy, separately in each isolate. Resolve and
+    // invoke this accessor before any I/O: its first lookup/call setup must
+    // never run between a failing native call and its last-error capture.
+    _getLastError();
+  }
+
   _Operation? _reading;
   _Operation? _writing;
 
