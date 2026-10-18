@@ -170,7 +170,12 @@ fn register(paths: &Paths, version: &str, system: &mut impl System) -> Result<()
 }
 
 /// Steps 1 to 3.
-fn copy_in(paths: &Paths, version: &str, installed: Option<&str>) -> Result<(), String> {
+fn copy_in(
+    paths: &Paths,
+    version: &str,
+    installed: Option<&str>,
+    guard: &launch::HistoryGuard,
+) -> Result<(), String> {
     let app = paths.install.join(APP_DIR);
     fs::create_dir_all(&app).map_err(|err| format!("could not create {}: {err}", app.display()))?;
     let source = paths.own.join(APP_DIR).join(version);
@@ -184,6 +189,20 @@ fn copy_in(paths: &Paths, version: &str, installed: Option<&str>) -> Result<(), 
             "could not copy {} into {}: {err}",
             source.display(),
             staging.display()
+        ));
+    }
+    // Success belongs to a physical version folder, never to the extracted zip.
+    let reset = (|| {
+        match fs::remove_file(staging.join(STARTED_MARKER)) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+        guard.write(&launch::State::default())
+    })();
+    if let Err(error) = reset {
+        let _ = remove_folder(&staging);
+        return Err(format!(
+            "could not clear the recorded starts before replacing {version}: {error}"
         ));
     }
     // A folder of this version that is not in use (a half-done earlier install) makes way.
@@ -205,11 +224,7 @@ fn copy_in(paths: &Paths, version: &str, installed: Option<&str>) -> Result<(), 
         .map_err(|err| format!("could not write current: {err}"))
 }
 
-pub fn run(
-    paths: &Paths,
-    wait_pid: Option<u32>,
-    system: &mut impl System,
-) -> Result<Outcome, String> {
+fn source_version(paths: &Paths) -> Result<String, String> {
     let version = pointer::read(&paths.own.join(CURRENT))?;
     for (needed, directory) in [
         (paths.own.join(APP_DIR), true),
@@ -232,12 +247,35 @@ pub fn run(
                 .map_err(|error| format!("could not use {ICON}: {error}"))?;
         }
     }
+    Ok(version)
+}
+
+pub fn run(
+    paths: &Paths,
+    wait_pid: Option<u32>,
+    system: &mut impl System,
+) -> Result<Outcome, String> {
+    let mut version = source_version(paths)?;
     launch::wait_for_replaced(wait_pid, system)?;
-    let installed = if paths.running_installed() {
-        Some(version.clone())
-    } else {
-        installed_version(&paths.install)
-    };
+    if !paths
+        .install
+        .try_exists()
+        .map_err(|err| format!("could not inspect the install folder: {err}"))?
+    {
+        // First install is allowed to create its root, only after the quit precondition.
+        system.quit_app(&paths.install, QUIT_WAIT).map_err(|err| {
+            format!("could not quit Harness before installing: {err}. Close Harness and try again")
+        })?;
+        fs::create_dir_all(&paths.install)
+            .map_err(|err| format!("could not create the install folder: {err}"))?;
+    }
+    let guard = launch::HistoryGuard::acquire(&paths.install)
+        .map_err(|err| format!("could not coordinate this install: {err}"))?;
+    // An own-installed pointer may have changed while waiting for another launch.
+    if paths.running_installed() {
+        version = source_version(paths)?;
+    }
+    let installed = installed_version(&paths.install);
     let outcome = match installed.as_deref() {
         Some(same) if same == version => Outcome::AlreadyInstalled {
             version: version.clone(),
@@ -252,7 +290,7 @@ pub fn run(
                     "could not quit Harness before installing: {err}. Close Harness and try again"
                 )
             })?;
-            copy_in(paths, &version, installed.as_deref())?;
+            copy_in(paths, &version, installed.as_deref(), &guard)?;
             Outcome::Installed {
                 version: version.clone(),
             }
@@ -370,7 +408,10 @@ mod tests {
         );
         assert!(!paths.install.join(PREVIOUS).exists());
         assert_eq!(system.waited, vec![9]);
-        assert_eq!(system.quit, vec![paths.install.clone()]);
+        assert_eq!(
+            system.quit,
+            vec![paths.install.clone(), paths.install.clone()]
+        );
         let icon = paths.install.join(ICON);
         assert_eq!(
             system.shortcuts,
@@ -452,6 +493,7 @@ mod tests {
         let World { _dir, paths } = world("1.2.3");
         let mut system = Fake::default();
         run(&paths, None, &mut system).unwrap();
+        let quits_before_open = system.quit.len();
         fs::write(paths.install.join(APP_DIR).join("1.2.3").join("mine"), b"").unwrap();
         assert_eq!(
             run(&paths, None, &mut system).unwrap(),
@@ -471,7 +513,7 @@ mod tests {
         assert_eq!(system.shortcuts.len(), 2);
         assert_eq!(
             system.quit.len(),
-            1,
+            quits_before_open,
             "an app running the same version is left alone"
         );
     }
@@ -744,5 +786,136 @@ mod tests {
         assert!(replace_file(&file, &destination).is_err());
         assert_eq!(fs::read(destination).unwrap(), b"installed");
         assert_eq!(fs::read(external.join("sentinel")).unwrap(), b"external");
+    }
+    fn old_failures(paths: &Paths) {
+        let start = |pid| crate::desktop::rollback::Start {
+            version: "1.2.3".into(),
+            at_ms: 1_000,
+            pid,
+            created: 1,
+        };
+        launch::write_state(
+            &paths.install,
+            &launch::State {
+                starts: vec![start(10), start(11)],
+            },
+        )
+        .unwrap();
+    }
+    #[test]
+    fn repaired_folder_forgets_old_failures_and_does_not_inherit_the_zip_marker() {
+        let World { _dir, paths } = world("1.2.3");
+        run(&paths, None, &mut Fake::default()).unwrap();
+        old_failures(&paths);
+        let previous = paths.install.join(APP_DIR).join("1.0.0");
+        fs::create_dir(&previous).unwrap();
+        fs::write(previous.join(APP_EXE), b"old").unwrap();
+        pointer::write(&paths.install.join(PREVIOUS), "1.0.0").unwrap();
+        fs::remove_file(paths.install.join(APP_DIR).join("1.2.3").join(APP_EXE)).unwrap();
+        run(&paths, None, &mut Fake::default()).unwrap();
+        assert!(launch::read_state(&paths.install).starts.is_empty());
+        assert!(
+            !paths
+                .install
+                .join(APP_DIR)
+                .join("1.2.3")
+                .join(STARTED_MARKER)
+                .exists()
+        );
+        let mut sys = Fake {
+            liveness: crate::desktop::rollback::Liveness::Ended,
+            ..Default::default()
+        };
+        assert_eq!(launch::run(&paths.install, None, &[], &mut sys), EXIT_OK);
+        assert_eq!(
+            pointer::read(&paths.install.join(CURRENT)).unwrap(),
+            "1.2.3"
+        );
+        assert_eq!(launch::read_state(&paths.install).starts.len(), 1);
+    }
+    #[test]
+    fn same_and_older_zip_open_without_resetting_history() {
+        let World { _dir, paths } = world("1.2.3");
+        run(&paths, None, &mut Fake::default()).unwrap();
+        old_failures(&paths);
+        let before = fs::read(paths.install.join(launch::STATE)).unwrap();
+        run(&paths, None, &mut Fake::default()).unwrap();
+        zip(&paths.own, "1.0.0");
+        run(&paths, None, &mut Fake::default()).unwrap();
+        assert_eq!(fs::read(paths.install.join(launch::STATE)).unwrap(), before);
+    }
+    #[test]
+    fn failed_history_reset_prevents_folder_and_pointer_publication() {
+        let World { _dir, paths } = world("1.2.3");
+        run(&paths, None, &mut Fake::default()).unwrap();
+        let state = paths.install.join(launch::STATE);
+        if state.exists() {
+            fs::remove_file(&state).unwrap();
+        }
+        fs::create_dir(&state).unwrap();
+        fs::write(state.join("sentinel"), b"retained").unwrap();
+        zip(&paths.own, "1.3.0");
+        let mut sys = Fake::default();
+        assert!(
+            run(&paths, None, &mut sys)
+                .unwrap_err()
+                .contains("recorded starts")
+        );
+        assert_eq!(
+            pointer::read(&paths.install.join(CURRENT)).unwrap(),
+            "1.2.3"
+        );
+        assert_eq!(
+            text(&paths.install.join(APP_DIR).join("1.2.3").join(APP_EXE)),
+            "1.2.3"
+        );
+        assert!(!paths.install.join(APP_DIR).join("1.3.0").exists());
+        assert_eq!(fs::read(state.join("sentinel")).unwrap(), b"retained");
+        assert!(sys.started.is_empty() && sys.shortcuts.is_empty());
+        assert_eq!(sys.writes, 0);
+    }
+    #[test]
+    fn initial_quit_failure_does_not_create_the_install_root() {
+        let World { _dir, paths } = world("1.2.3");
+        let mut sys = Fake {
+            fail_quit: true,
+            ..Default::default()
+        };
+        assert!(run(&paths, None, &mut sys).is_err());
+        assert!(!paths.install.exists());
+    }
+    #[test]
+    fn contended_install_never_publishes_or_quits_and_recovers_after_release() {
+        let World { _dir, paths } = world("1.2.3");
+        run(&paths, None, &mut Fake::default()).unwrap();
+        old_failures(&paths);
+        let before = fs::read(paths.install.join(launch::STATE)).unwrap();
+        zip(&paths.own, "1.3.0");
+        let guard = launch::HistoryGuard::acquire(&paths.install).unwrap();
+        let mut sys = Fake::default();
+        let began = std::time::Instant::now();
+        assert!(
+            run(&paths, None, &mut sys)
+                .unwrap_err()
+                .contains("still finishing")
+        );
+        assert!(
+            began.elapsed() >= Duration::from_secs(9) && began.elapsed() < Duration::from_secs(20)
+        );
+        assert!(sys.quit.is_empty() && sys.started.is_empty() && sys.shortcuts.is_empty());
+        assert_eq!(sys.writes, 0);
+        assert_eq!(fs::read(paths.install.join(launch::STATE)).unwrap(), before);
+        assert_eq!(
+            pointer::read(&paths.install.join(CURRENT)).unwrap(),
+            "1.2.3"
+        );
+        assert!(!paths.install.join(APP_DIR).join("1.3.0").exists());
+        drop(guard);
+        run(&paths, None, &mut sys).unwrap();
+        assert!(launch::read_state(&paths.install).starts.is_empty());
+        assert_eq!(
+            pointer::read(&paths.install.join(CURRENT)).unwrap(),
+            "1.3.0"
+        );
     }
 }

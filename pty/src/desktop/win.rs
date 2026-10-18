@@ -194,6 +194,55 @@ fn process_exists(pid: u32) -> io::Result<bool> {
     result
 }
 
+/// Confirmed exit/reuse is Ended; unavailable creation identity stays Unknown.
+fn observed_liveness(
+    recorded: u64,
+    actual: u64,
+    exited: Option<bool>,
+) -> super::rollback::Liveness {
+    use super::rollback::Liveness;
+    if exited == Some(true) || (recorded != 0 && actual != 0 && recorded != actual) {
+        Liveness::Ended
+    } else if exited == Some(false) && recorded != 0 && recorded == actual {
+        Liveness::Running
+    } else {
+        Liveness::Unknown
+    }
+}
+
+/// Observe the recorded PID and creation time without waiting or terminating.
+pub fn liveness(pid: u32, recorded: u64) -> super::rollback::Liveness {
+    use super::rollback::Liveness;
+    if pid == 0 {
+        return Liveness::Unknown;
+    }
+    let process = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            pid,
+        )
+    };
+    if process.is_null() {
+        let error = io::Error::last_os_error();
+        return if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32)
+            && matches!(process_exists(pid), Ok(false))
+        {
+            Liveness::Ended
+        } else {
+            Liveness::Unknown
+        };
+    }
+    let actual = created(process);
+    let exited = match unsafe { WaitForSingleObject(process, 0) } {
+        WAIT_OBJECT_0 => Some(true),
+        WAIT_TIMEOUT => Some(false),
+        _ => None,
+    };
+    unsafe { CloseHandle(process) };
+    observed_liveness(recorded, actual, exited)
+}
+
 pub fn wait_for_exit(pid: u32, wait: Duration) -> io::Result<()> {
     if pid == 0 {
         return Err(io::Error::new(
@@ -670,5 +719,56 @@ mod tests {
                 r#"a\"b"#.into()
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod liveness_tests {
+    use super::*;
+    use crate::desktop::rollback::Liveness;
+
+    #[test]
+    fn uncertain_creation_time_keeps_the_ten_second_unknown_policy() {
+        for (recorded, actual, exited, want) in [
+            (1, 1, Some(false), Liveness::Running),
+            (1, 2, Some(false), Liveness::Ended),
+            (1, 0, Some(false), Liveness::Unknown),
+            (0, 1, Some(false), Liveness::Unknown),
+            (0, 0, Some(false), Liveness::Unknown),
+            (1, 1, None, Liveness::Unknown),
+            (1, 2, None, Liveness::Ended),
+            (0, 0, Some(true), Liveness::Ended),
+        ] {
+            assert_eq!(observed_liveness(recorded, actual, exited), want);
+        }
+    }
+    #[test]
+    fn actual_process_identity_and_exit_are_observed() {
+        let pid = std::process::id();
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        assert!(!handle.is_null());
+        let mine = created(handle);
+        unsafe { CloseHandle(handle) };
+        assert_ne!(mine, 0);
+        assert_eq!(liveness(pid, mine), Liveness::Running);
+        assert_eq!(liveness(pid, mine + 1), Liveness::Ended);
+        assert_eq!(liveness(pid, 0), Liveness::Unknown);
+        assert_eq!(liveness(0, 0), Liveness::Unknown);
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        let captured = if handle.is_null() {
+            0
+        } else {
+            let time = created(handle);
+            unsafe { CloseHandle(handle) };
+            time
+        };
+        assert!(child.wait().unwrap().success());
+        assert_eq!(liveness(pid, captured), Liveness::Ended);
     }
 }

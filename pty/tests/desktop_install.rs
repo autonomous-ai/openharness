@@ -50,6 +50,10 @@ mod windows {
         }
         run_cases(&[
             (
+                "repaired_version_resets_old_process_history_before_launch",
+                repaired_version_resets_old_process_history_before_launch,
+            ),
+            (
                 "uninstall_quits_the_app_and_leaves_the_cli",
                 uninstall_quits_the_app_and_leaves_the_cli,
             ),
@@ -1028,5 +1032,78 @@ mod windows {
     }
     fn uninstall_ends_only_owned_noncooperating_app_after_ten_seconds() {
         uninstall_window_case(true);
+    }
+    fn repaired_version_resets_old_process_history_before_launch() {
+        use harness_pty::desktop::{launch, rollback::Start};
+        let world = world();
+        run(
+            &world,
+            &world.zip.join("Harness.exe"),
+            &["--install"],
+            "before-repair",
+        );
+        put_app(&world.install, "1.0.0");
+        world
+            .owned
+            .allow(
+                &world
+                    .install
+                    .join("app")
+                    .join("1.0.0")
+                    .join("harness-desktop.exe"),
+            )
+            .unwrap();
+        point(&world.install, "previous", "1.0.0");
+        let start = |pid| Start {
+            version: "1.2.3".into(),
+            at_ms: 1,
+            pid,
+            created: 1,
+        };
+        launch::write_state(
+            &world.install,
+            &launch::State {
+                starts: vec![start(10), start(11)],
+            },
+        )
+        .unwrap();
+        fs::write(
+            world.zip.join("app").join("1.2.3").join(".started"),
+            b"zip success is not installed success",
+        )
+        .unwrap();
+        fs::remove_file(
+            world
+                .install
+                .join("app")
+                .join("1.2.3")
+                .join("harness-desktop.exe"),
+        )
+        .unwrap();
+        let (_, app) = run(
+            &world,
+            &world.zip.join("Harness.exe"),
+            &["--install"],
+            "after-repair",
+        );
+        assert!(same(
+            Path::new(app["cwd"].as_str().unwrap()),
+            &world.install.join("app").join("1.2.3")
+        ));
+        assert_eq!(
+            fs::read(world.install.join("current")).unwrap(),
+            b"1.2.3\r\n"
+        );
+        assert!(
+            !world
+                .install
+                .join("app")
+                .join("1.2.3")
+                .join(".started")
+                .exists()
+        );
+        let starts = launch::read_state(&world.install).starts;
+        assert_eq!(starts.len(), 1);
+        assert_eq!(starts[0].version, "1.2.3");
     }
 }

@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use super::registry::Key;
+use super::rollback::Liveness;
 
 pub trait System {
     /// Start `exe` from `dir` with `args`: its process id and creation time.
@@ -15,6 +16,10 @@ pub trait System {
     /// Wait up to `wait` for `pid` to end. A timeout or inaccessible process is an error,
     /// never permission to start a replacement while the old app still holds its mutex.
     fn wait_for_exit(&mut self, pid: u32, wait: Duration) -> io::Result<()>;
+    /// Observe a recorded process identity; inspection failures are Unknown.
+    fn liveness(&mut self, pid: u32, created: u64) -> Liveness;
+    /// Best-effort observation of this install's running app windows.
+    fn app_processes(&mut self, root: &Path) -> Vec<u32>;
     /// Ask the apps from `root` (`<root>\app\*\harness-desktop.exe`) to quit (`WM_HARNESS_QUIT`), wait up to `wait`,
     /// then end any still there. Return their count only after confirmed exit; errors prevent replacement.
     fn quit_app(&mut self, root: &Path, wait: Duration) -> io::Result<usize>;
@@ -56,6 +61,29 @@ pub fn say(text: &str) {
 }
 
 impl System for Real {
+    fn liveness(&mut self, pid: u32, created: u64) -> Liveness {
+        #[cfg(windows)]
+        {
+            super::win::liveness(pid, created)
+        }
+        #[cfg(unix)]
+        {
+            let _ = (pid, created);
+            Liveness::Unknown
+        }
+    }
+    fn app_processes(&mut self, root: &Path) -> Vec<u32> {
+        #[cfg(windows)]
+        {
+            super::win::app_processes(root)
+        }
+        #[cfg(unix)]
+        {
+            let _ = root;
+            Vec::new()
+        }
+    }
+
     fn start_script_logged(&mut self, script: &Path, install: &Path) -> io::Result<()> {
         #[cfg(windows)]
         {
@@ -244,7 +272,8 @@ pub struct Fake {
     pub fail_start: bool,
     pub waited: Vec<u32>,
     pub fail_wait: Option<io::ErrorKind>,
-    /// What quit_app finds running (and ends).
+    pub liveness: Liveness,
+    /// What app_processes observes and quit_app ends.
     pub running: Vec<u32>,
     pub quit: Vec<std::path::PathBuf>,
     /// (registry root, key, value name) -> value.
@@ -267,7 +296,20 @@ pub struct Fake {
 }
 
 #[cfg(test)]
+impl Default for Liveness {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+#[cfg(test)]
 impl System for Fake {
+    fn liveness(&mut self, _pid: u32, _created: u64) -> Liveness {
+        self.liveness
+    }
+    fn app_processes(&mut self, _root: &Path) -> Vec<u32> {
+        self.running.clone()
+    }
     fn start_script_logged(&mut self, script: &Path, install: &Path) -> io::Result<()> {
         self.script_roots.push(install.to_owned());
         self.start_script(script)

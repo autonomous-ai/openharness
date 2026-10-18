@@ -25,6 +25,7 @@ pub mod install;
 pub mod launch;
 pub mod pointer;
 pub mod registry;
+pub mod rollback;
 pub mod shortcut;
 pub mod system;
 pub mod uninstall;
@@ -269,10 +270,8 @@ fn launch_from(
     if !launch::wait_before_launch(root, wait_pid, system) {
         return EXIT_FAILED;
     }
-    if let Some(paths) = paths.filter(|p| p.running_installed() && same_folder(root, &p.install)) {
-        launch::heal_protocol_key(root, &paths.registry, system);
-    }
-    launch::run(root, None, args, system)
+    let heal = paths.filter(|p| p.running_installed() && same_folder(root, &p.install));
+    launch::run_after_wait(root, args, heal.map(|p| p.registry.as_str()), system)
 }
 
 /// The program: see the module comment.

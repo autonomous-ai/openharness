@@ -51,6 +51,21 @@ fn main() {
             "empty_overrides_keep_portable_launch",
             empty_overrides_keep_portable_launch,
         ),
+        #[cfg(windows)]
+        (
+            "two_starts_without_a_window_go_back_to_previous",
+            windows_rollback::two_starts_without_a_window_go_back_to_previous,
+        ),
+        #[cfg(windows)]
+        (
+            "slow_starts_stay_current_and_a_marker_forgets_old_failures",
+            windows_rollback::slow_starts_stay_current_and_a_marker_forgets_old_failures,
+        ),
+        #[cfg(windows)]
+        (
+            "contended_history_does_not_spawn_then_recovers",
+            windows_rollback::contended_history_does_not_spawn_then_recovers,
+        ),
     ]);
 }
 
@@ -100,10 +115,15 @@ fn starts_the_current_version_with_the_link_from_its_folder() {
         report["cwd"].as_str().unwrap().as_ref(),
         &root.join("app").join("1.2.3")
     ));
-    // The one line allowed is a job's refused breakaway: an SSH session's job is one, and the app then starts in it.
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("launch-state.json")).unwrap()).unwrap();
+    assert_eq!(state["starts"][0]["version"], "1.2.3");
+    // Success and B's refused-breakaway warning are bounded launcher diagnostics.
     let log = fs::read_to_string(root.join("launch.log")).unwrap_or_default();
     assert!(
-        log.lines().all(|line| line.contains("refuses a breakaway")),
+        log.lines()
+            .all(|line| line.contains("refuses a breakaway")
+                || line.contains("started 1.2.3 (process ")),
         "{log}"
     );
 }
@@ -350,4 +370,205 @@ fn empty_overrides_keep_portable_launch() {
         .unwrap();
     assert!(output.status.success());
     finish_app(&report(&out));
+}
+
+/// Windows-only real-binary rollback with positively owned app/launcher lifetimes.
+#[cfg(windows)]
+mod windows_rollback {
+    use super::*;
+    use desktop_common::owned_windows::OwnedProcesses;
+    use harness_pty::desktop::{launch, pointer, win};
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Output, Stdio};
+
+    struct World {
+        owned: OwnedProcesses,
+        dir: tempfile::TempDir,
+        root: PathBuf,
+        profile: PathBuf,
+        id: String,
+    }
+    impl Drop for World {
+        fn drop(&mut self) {
+            if let Err(error) = self.owned.cleanup(Duration::from_secs(5)) {
+                self.dir.disable_cleanup(true);
+                eprintln!(
+                    "owned rollback cleanup uncertain; retained {}: {error}",
+                    self.dir.path().display()
+                );
+                if !std::thread::panicking() {
+                    panic!("owned rollback cleanup: {error}");
+                }
+                return;
+            }
+            win::delete_key(r"Software\HarnessTest", &self.id).unwrap();
+        }
+    }
+    impl World {
+        fn new() -> Self {
+            let dir = tempfile::Builder::new().prefix(ODD_NAME).tempdir().unwrap();
+            let profile = dir.path().join(ODD_NAME);
+            let root = profile
+                .join("AppData")
+                .join("Local")
+                .join("Programs")
+                .join("Harness");
+            for v in ["1.0.0", "2.0.0"] {
+                put_app(&root, v);
+            }
+            point(&root, "current", "2.0.0");
+            point(&root, "previous", "1.0.0");
+            fs::write(root.join("app").join("1.0.0").join(".started"), b"once").unwrap();
+            fs::copy(LAUNCHER, root.join("Harness.exe")).unwrap();
+            for path in [
+                profile.join("AppData").join("Roaming"),
+                profile.join("Temp"),
+            ] {
+                fs::create_dir_all(path).unwrap();
+            }
+            let world = Self {
+                owned: OwnedProcesses::new(dir.path()),
+                dir,
+                root,
+                profile,
+                id: uuid::Uuid::new_v4().simple().to_string(),
+            };
+            world.owned.allow(&world.root.join("Harness.exe")).unwrap();
+            for v in ["1.0.0", "2.0.0"] {
+                world.owned.allow(&world.app(v)).unwrap();
+            }
+            world
+        }
+        fn app(&self, v: &str) -> PathBuf {
+            self.root.join("app").join(v).join("harness-desktop.exe")
+        }
+        fn command(&self, out: &Path, sleep_ms: u32) -> Command {
+            let mut cmd = isolated_command(self.root.join("Harness.exe"));
+            cmd.env("USERPROFILE", &self.profile)
+                .env("HOME", &self.profile)
+                .env("APPDATA", self.profile.join("AppData").join("Roaming"))
+                .env("LOCALAPPDATA", self.profile.join("AppData").join("Local"))
+                .env("TEMP", self.profile.join("Temp"))
+                .env("TMP", self.profile.join("Temp"))
+                .env("HARNESS_DESKTOP_INSTALL_ROOT", &self.root)
+                .env(
+                    "HARNESS_DESKTOP_PROGRAMS_DIR",
+                    self.profile.join("Start Menu").join("Programs"),
+                )
+                .env(
+                    "HARNESS_DESKTOP_REGISTRY_ROOT",
+                    format!(r"Software\HarnessTest\{}", self.id),
+                )
+                .env("HARNESS_DESKTOP_INSTANCE", &self.id)
+                .env(STANDIN_OUT, out)
+                .env(STANDIN_SLEEP_MS, sleep_ms.to_string());
+            cmd
+        }
+        fn output(&self, cmd: &mut Command) -> Output {
+            let mut child = cmd
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            self.owned
+                .observe_child(&child, &self.root.join("Harness.exe"), &[])
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while child.try_wait().unwrap().is_none() {
+                assert!(Instant::now() < deadline, "owned launcher timed out");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            child.wait_with_output().unwrap()
+        }
+        fn start(&self, name: &str, sleep: u32) -> serde_json::Value {
+            let out = self.dir.path().join(format!("{name}.json"));
+            let output = self.output(&mut self.command(&out, sleep));
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let value = report(&out);
+            let exe = Path::new(value["exe"].as_str().unwrap());
+            assert!(same(exe, &self.app("1.0.0")) || same(exe, &self.app("2.0.0")));
+            assert!(same(
+                Path::new(value["env"]["USERPROFILE"].as_str().unwrap()),
+                &self.profile
+            ));
+            assert_eq!(value["env"]["HARNESS_DESKTOP_INSTANCE"], self.id);
+            self.owned
+                .await_observed(exe, Duration::from_secs(5))
+                .unwrap();
+            value
+        }
+    }
+
+    pub fn two_starts_without_a_window_go_back_to_previous() {
+        let world = World::new();
+        let mut versions = Vec::new();
+        for n in 0..3 {
+            let value = world.start(&format!("rollback-{n}"), 500);
+            versions.push(
+                Path::new(value["cwd"].as_str().unwrap())
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            finish_app(&value);
+        }
+        assert_eq!(versions, ["2.0.0", "2.0.0", "1.0.0"]);
+        assert_eq!(fs::read(world.root.join("current")).unwrap(), b"1.0.0\r\n");
+        assert!(!world.root.join("previous").exists());
+        assert!(launch::read_state(&world.root).starts.is_empty());
+        assert!(
+            fs::read_to_string(world.root.join("launch.log"))
+                .unwrap()
+                .contains("went back to 1.0.0")
+        );
+    }
+    pub fn slow_starts_stay_current_and_a_marker_forgets_old_failures() {
+        let world = World::new();
+        let mut values = Vec::new();
+        for n in 0..3 {
+            values.push(world.start(&format!("slow-{n}"), 3000));
+        }
+        assert_eq!(pointer::read(&world.root.join("current")).unwrap(), "2.0.0");
+        assert_eq!(launch::read_state(&world.root).starts.len(), 2);
+        for value in &values {
+            finish_app(value);
+        }
+        fs::write(
+            world.root.join("app").join("2.0.0").join(".started"),
+            b"once",
+        )
+        .unwrap();
+        finish_app(&world.start("marked", 500));
+        assert_eq!(pointer::read(&world.root.join("current")).unwrap(), "2.0.0");
+        assert!(launch::read_state(&world.root).starts.is_empty());
+    }
+    pub fn contended_history_does_not_spawn_then_recovers() {
+        let world = World::new();
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(world.root.join("launch-state.lock"))
+            .unwrap();
+        lock.try_lock().unwrap();
+        let out = world.dir.path().join("blocked.json");
+        let began = Instant::now();
+        let output = world.output(&mut world.command(&out, 500));
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            began.elapsed() >= Duration::from_secs(9) && began.elapsed() < Duration::from_secs(25)
+        );
+        assert!(!out.exists());
+        assert!(!world.root.join("launch-state.json").exists());
+        assert_eq!(pointer::read(&world.root.join("current")).unwrap(), "2.0.0");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("still finishing"));
+        drop(lock);
+        finish_app(&world.start("after-lock", 500));
+    }
 }
