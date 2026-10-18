@@ -46,6 +46,8 @@ export interface DataFolderClaimDeps {
   /** How long a start waits for the core of a master that is gone to give the claim up. */
   waitMs?: number
   pollMs?: number
+  /** Ask the holder of a taken name (`askHolder`); a spec stands in for a name that reads as gone. */
+  ask?: (path: string, token: Buffer, timeoutMs: number) => Promise<ClaimHolder | 'gone' | null>
 }
 
 const ASK_TIMEOUT_MS = 3_000
@@ -149,7 +151,7 @@ export async function claimDataFolder(dataDir: string, token: Buffer, deps: Data
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error
     }
-    const found = await askHolder(path, token, deps.askTimeoutMs ?? ASK_TIMEOUT_MS)
+    const found = await (deps.ask ?? askHolder)(path, token, deps.askTimeoutMs ?? ASK_TIMEOUT_MS)
     if (found === null) {
       log(`[cli] something that is not Harness holds ${path}; starting without the data folder claim`)
       return { path, held: false, release: () => { /* nothing held */ } }
@@ -160,8 +162,11 @@ export async function claimDataFolder(dataDir: string, token: Buffer, deps: Data
       orphanSeen = true
       if (performance.now() >= deadline) throw orphanStillServing(dataDir, found.corePid)
     } else if (performance.now() >= deadline) {
-      throw alreadyServing(dataDir)
+      // Taken at every listen, gone at every ask: nothing that proves the token holds it, so nothing here may keep this
+      // daemon down (re-review N2).
+      log(`[cli] ${path} stays taken by something that does not answer; starting without the data folder claim`)
+      return { path, held: false, release: () => { /* nothing held */ } }
     }
-    await new Promise((resolve) => setTimeout(resolve, found === 'gone' ? 0 : deps.pollMs ?? POLL_MS))
+    await new Promise((resolve) => setTimeout(resolve, deps.pollMs ?? POLL_MS))
   }
 }

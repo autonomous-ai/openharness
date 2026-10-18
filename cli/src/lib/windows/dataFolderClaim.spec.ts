@@ -140,6 +140,20 @@ describe.skipIf(process.platform === 'win32')('the data folder claim, a Unix soc
     await expect(claimDataFolder(dataDir, TOKEN, deps)).rejects.toMatchObject({ code: 'ORPHAN_STILL_SERVING' })
   })
 
+  // Re-review N2: a name that kept reading as taken at the listen and as absent at the ask ended the start as "already
+  // serving" after a busy loop. It is tried again at the poll interval, and at the deadline the start goes on without it.
+  it('starts without the claim when its name keeps reading as taken, then gone, until the deadline, asking at the poll interval', async () => {
+    const { dataDir, deps } = folder({ waitMs: 200, pollMs: 50 })
+    const path = deps.pipeFor!(dataDir)
+    await squat(path, (socket) => socket.destroy())
+    let asked = 0
+    const claim = await take(dataDir, TOKEN, { ...deps, ask: async () => { asked++; return 'gone' } })
+    expect(claim).toMatchObject({ path, held: false })
+    expect(asked).toBeGreaterThanOrEqual(2)
+    expect(asked).toBeLessThanOrEqual(6)
+    expect(lines.at(-1)).toBe(`[cli] ${path} stays taken by something that does not answer; starting without the data folder claim`)
+  })
+
   it('fails the start on any other error', async () => {
     const { dataDir } = folder()
     await expect(claimDataFolder(dataDir, TOKEN, { realpath: (dir) => dir, pipeFor: (real) => join(real, 'missing', 'claim.sock') }))
