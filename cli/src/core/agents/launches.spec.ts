@@ -533,6 +533,17 @@ describe('agent_create with a receipt', () => {
     expect(create).not.toHaveBeenCalled()
   })
 
+  it('records the folder a typed name found already there, so the apps can offer to start in it', async () => {
+    const { ask, status, create, replies } = setup()
+    vi.mocked(prepareProjectFolder).mockRejectedValueOnce(new ProjectFolderError('PROJECT_EXISTS', '“payments” already exists.', '/projects/payments'))
+    await ask({ engine: 'claude', projectSource: 'new', projectName: 'payments', creationId: CREATION })
+    const refused = { creationId: CREATION, state: 'failed', failure: { code: 'PROJECT_EXISTS', detail: '“payments” already exists.', existingFolder: '/projects/payments' } }
+    await vi.waitFor(() => expect(replies).toStrictEqual([refused]))
+    // Kept with the receipt: asked again, the answer is the same.
+    expect(await status({ creationId: CREATION })).toStrictEqual(refused)
+    expect(create).not.toHaveBeenCalled()
+  })
+
   it('records the prepared folder of a launch that then failed, so the person can open it', async () => {
     const { ask, replies } = setup({}, { create: vi.fn(async () => ({ ok: false as const, error: 'ENGINE_MISSING' })) })
     await ask({ engine: 'claude', projectSource: 'new', creationId: CREATION })

@@ -421,6 +421,30 @@ describe('harness new: the daemon', () => {
     expect(claimed.err.at(-1)).toBe('Harness could not confirm the harness started (unconfirmed). Check with `harness ps --machine "Mac mini"` before starting another.')
   })
 
+  // PROJECT_EXISTS was 4 of 7 failed starts on Oct 18: "Name its folder instead" said neither where nor how.
+  it('says where a typed project already is and the command that starts in it, or to choose another name', async () => {
+    const exists = (existingFolder?: string) => new FakeSocket((frame) => frame.type === 'agent_create' ? { creationId: 'c1', state: 'failed',
+      failure: { code: 'PROJECT_EXISTS', detail: '“payments” already exists. Select that folder from your projects.', ...(existingFolder ? { existingFolder } : {}) } } : null)
+    const here = deps(['codex', 'payments', '--name', 'pay', '--', 'add refunds'], exists('/home/me/harnesses/payments'))
+    expect(await newCommand(here)).toBe(1)
+    expect(here.err).toEqual(['“payments” already exists on this computer: ~/harnesses/payments. Choose another name for the new project, '
+      + 'or start in that folder: harness new codex ~/harnesses/payments --name pay -- …'])
+    // On another machine its path is that machine's, named as it is.
+    const there = deps(['codex', '--machine', 'Mac mini', 'payments'], exists('/home/lee/Harness Projects/payments'))
+    expect(await newCommand(there)).toBe(1)
+    expect(there.err).toEqual(['“payments” already exists on Mac mini: /home/lee/Harness Projects/payments. Choose another name for the new project, '
+      + 'or start in that folder: harness new codex --machine "Mac mini" "/home/lee/Harness Projects/payments"'])
+    const mcp = deps(['codex', '--new', 'payments', '--name', 'pay', '--task', 'add refunds'], exists('/home/me/harnesses/payments'),
+      { env: { HARNESS_VIA_MCP: '1', HOME: '/nonexistent/home', CODEX_HOME: '/nonexistent/codex' } })
+    expect(await newCommand(mcp)).toBe(1)
+    expect(mcp.err.at(-1)).toBe('“payments” already exists on this computer: ~/harnesses/payments. Choose another name for the new project, '
+      + 'or start in that folder: harness_start (folder: "~/harnesses/payments", …)')
+    // A file has that name, or the machine predates naming the folder: only another name helps.
+    const file = deps(['codex', 'payments', '--json'], exists())
+    expect(await newCommand(file)).toBe(1)
+    expect(JSON.parse(file.out[0]!)).toEqual({ ok: false, error: '“payments” already exists on this computer. Choose another name for the new project.' })
+  })
+
   it('says why the machine refused an engine that cannot run, in the machine\'s words', async () => {
     const d = deps(['codex'], new FakeSocket((frame) => frame.type === 'agent_create' ? { creationId: 'c1', state: 'failed',
       failure: { code: 'ENGINE_CANNOT_RUN', detail: 'Codex is installed but cannot run: /usr/bin/env: ‘node’: No such file or directory' } } : null))
