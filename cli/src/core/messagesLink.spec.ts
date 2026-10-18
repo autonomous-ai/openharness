@@ -41,7 +41,7 @@ describe('Agent Messages in its own process, as the core keeps it', () => {
       daemon: { command: `'node' 'cli.js'`, port: 18473, machineId: () => 'machine-7', autonomousEnv: 'prod' },
       account: { signedIn: () => signedIn },
     })
-    expect(await l.answer('shown', {})).toEqual({ agents: [{ ...agent('a1'), displayName: 'name of a1', terminalAvailable: true, dshContext: null }] })
+    expect(await l.answer('shown', {})).toEqual({ agents: [{ ...agent('a1'), displayName: 'name of a1', terminalAvailable: true, selectedModel: null, dshContext: null }] })
     expect(await l.answer('daemon', {})).toEqual({ command: `'node' 'cli.js'`, port: 18473, machineId: 'machine-7', autonomousEnv: 'prod', signedIn: true })
     signedIn = false
     expect(await l.answer('daemon', {})).toMatchObject({ signedIn: false })

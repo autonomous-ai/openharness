@@ -189,7 +189,7 @@ import { createDeliveries } from './deliveries.js'
 import { createTerminalWatch } from './terminalWatch.js'
 import { createSharingLink } from './sharingLink.js'
 import { createAgentSettingsSync, createExperimentHooks, wakeExperiments } from './experiments.js'
-import { answerExperimentQuery, createForExperiment } from './experimentQueries.js'
+import { answerExperimentQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
 import { answerConnectorsQuery } from './connectorsQueries.js'
 import { answerSharedMachinesQuery } from './sharedMachinesQueries.js'
 import { inlineSharedMachinesPort } from '../lib/sharedMachinesPort.js'
@@ -873,6 +873,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     // The window's `agent_create` for an experiment's agents (core/experimentQueries.ts).
     create: (request) => createForExperiment(backendRef?.onCreateAgent ?? null, request),
+    creationStatus: creationId => creationForExperiment(backendRef?.createStatusProvider ?? null, creationId),
     // The window's `agent_close`, for the agent cleanup (services/agentCleanup.ts): createCoreApi lets it close only
     // a harness another agent started. Read when it closes one, never now: the close service is built further down.
     closeAgent: (request) => backendRef?.closeAgentService?.request(request) ?? Promise.resolve({ error: 'UNSUPPORTED' }),

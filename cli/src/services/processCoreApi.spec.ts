@@ -20,6 +20,20 @@ import { usageTarget } from '../lib/agentUsageWire.js'
 const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/work/${agentId}`, ...over }) as RegisteredSession
 
 describe('the core API a light service runs on in its own process', () => {
+  it('accepts only the requested native creation receipt from the core', async () => {
+    const id = 'creation-fixture-1234', observation = { creationId: id, state: 'cancelled' }
+    const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ observation }))
+    const api = processCoreApi('/data', 'worker', { ask })
+    expect(await api.agents.creationStatus!(id)).toEqual(observation)
+    expect(ask).toHaveBeenCalledWith('creation_status', { creationId: id })
+    ask.mockResolvedValueOnce({ observation: { ...observation, creationId: 'other' } })
+    expect(await api.agents.creationStatus!(id)).toBeNull()
+    ask.mockResolvedValueOnce({})
+    expect(await api.agents.creationStatus!(id)).toBeNull()
+    ask.mockRejectedValueOnce(new Error('Core unavailable'))
+    expect(await api.agents.creationStatus!(id)).toBeNull()
+    expect(await processCoreApi('/data', 'worker').agents.creationStatus!(id)).toBeNull()
+  })
   it('retains the observed runtime profile and treats absent or malformed older projections as unknown', () => {
     const api = processCoreApi('/data', 'worker')
     const selectedModel = 'runtime-v1:a1:claude:opus@high'

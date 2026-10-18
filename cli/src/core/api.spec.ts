@@ -6,6 +6,12 @@ import { FAIL, readFallback } from './serviceHost.js'
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
 describe('the core API services stand on', () => {
+  it('carries the existing native creation-status provider without inventing one for an older core', async () => {
+    const creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'cancelled' as const }))
+    const core = createCoreApi({ ...coreDeps(), creationStatus })
+    expect(await core.agents.creationStatus!('creation-fixture-1234')).toEqual({ creationId: 'creation-fixture-1234', state: 'cancelled' })
+    expect(createCoreApi(coreDeps()).agents.creationStatus).toBeUndefined()
+  })
   it('gives a service with no lane of the core\'s nothing to seal with, and never its frame back in the clear', async () => {
     await expect(LANE_OFF.hello('m', 'pub')).rejects.toThrow(/no E2EE identity/)
     expect(await LANE_OFF.welcome('m', {})).toBe(false)

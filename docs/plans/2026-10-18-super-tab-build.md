@@ -140,6 +140,11 @@ Focused checks completed during implementation (18 October):
   averaged 0.0729 ms/pass and 72.76 µs CPU. Neither retained additional RSS after collection. Observations run at most
   once every five seconds on the existing roster read. This isolates local parsing/comparison cost, excludes network
   writes and is not a full-daemon or customer workload performance result.
+- Prepared a generic native-creation observation seam for resource reservation recovery. It projects only an
+  exact creation ID, state and created harness ID through the existing receipt provider and service boundary;
+  unavailable, malformed or older-core replies stay unknown. CLI typecheck passed. The 94 affected API, query,
+  process, parser and architecture tests passed with 100% statements, branches, functions and lines for all four
+  included boundary/parser files. The new reservation caller and its real-daemon integration remain to implement.
 
 These establish individual boundaries, not the complete customer workflow. Full component suites,
 two-machine/two-account integration, real-engine/native desktop validation, full-app visual inspection,
@@ -157,6 +162,11 @@ Local commits and validation are preserved. The original research worktree's mer
 - Reflect native terminal interventions and answers in the appropriate shared conversation with reliable attribution.
   The current agent instructions explicitly require posting questions/results through the shared conversation CLI.
 - Reserve shared machine capacity across simultaneous starts.
+  Use one durable reservation book on each execution host, serialized across all callers and Super Tabs. Keep
+  pending/unknown launches reserved; release only after the native creation receipt says cancelled/failed or the
+  recorded harness has a confirmed stop. Account for requested memory and the destination filesystem's disk
+  budget. Worktrees use the managed workspace filesystem, which can differ from their source repository. Keep
+  reservation state in the Super Tab service; the core supplies only its existing native lifecycle facts.
 - Run the complete component suites, required coverage gates and isolated multi-account/machine journey, then review the final head.
 - Once the Mac is unlocked, finish native terminal, physical shortcut/IME and full-app visual acceptance on an official review build.
   Publish only after the remaining implementation and validation pass, following the normal release schedule.

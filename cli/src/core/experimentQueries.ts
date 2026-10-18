@@ -6,6 +6,7 @@
  * - `shown`: the live agents as the apps are shown them: each with its name, whether its terminal is there,
  *   and what its frame says about its harness (its viewer);
  * - `create`: create an agent, as the window's `agent_create` does;
+ * - `creation_status`: read the exact native receipt without exposing its launch request;
  * - `stop_turn`: stop an agent's turn;
  * - `windows`: a change notice for every window on this computer (`orchestrator_changed`);
  * - `daemon`: how an agent's shell reaches this daemon, for the prompts the experiment writes;
@@ -25,11 +26,12 @@
  */
 import type { BackendSocket } from '../backendSocket.js'
 import type { AgentCreateRequest, CoreApi } from './api.js'
+import { creationObservation } from '../lib/creationObservation.js'
 
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'stopped', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'stopped', 'creation_status', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -65,6 +67,8 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       return shownAgents(core)
     case 'stopped':
       return { stopped: !!text(payload.agentId) && await core.agents.stopped?.(text(payload.agentId)) === true }
+    case 'creation_status':
+      return { observation: await core.agents.creationStatus?.(text(payload.creationId)) ?? null }
     case 'create': {
       if (!text(payload.engine) || !text(payload.cwd) || typeof payload.prompt !== 'string' || typeof payload.name !== 'string') return { ok: false, error: 'INVALID_REQUEST' }
       const request: AgentCreateRequest = {
@@ -130,4 +134,15 @@ export async function createForExperiment(create: BackendSocket['onCreateAgent']
   if (!create) return { ok: false, error: 'UNSUPPORTED', detail: 'This daemon cannot create agents.' }
   const result = await create({ ...request, grid: null, codexHome: null, agent: null, permissionMode: null })
   return result.ok ? { ok: true, agentId: result.session.agentId } : { ok: false, error: result.error, ...(result.detail ? { detail: result.detail } : {}) }
+}
+
+/** Read the window's receipt through its existing provider; never infer a
+ * cancelled launch from a missing callback, an old core or a failed read. */
+export async function creationForExperiment(read: BackendSocket['createStatusProvider'], creationId: string) {
+  if (!read || !/^[A-Za-z0-9_-]{16,96}$/.test(creationId)) return null
+  let reply: Record<string, unknown> | null = null
+  try { await read({ creationId }, value => { reply = value }) } catch { return null }
+  const frame = reply as Record<string, unknown> | null
+  const agent = frame?.agent as { id?: unknown } | undefined
+  return creationObservation(creationId, { ...frame, agentId: agent?.id })
 }

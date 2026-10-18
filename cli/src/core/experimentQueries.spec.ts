@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { answerExperimentQuery, createForExperiment } from './experimentQueries.js'
+import { answerExperimentQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
 
 const agent = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/w' }) as RegisteredSession
 const experiments = new Set(['orchestrator'])
@@ -27,6 +27,22 @@ describe('the cloud agents\' doors', () => {
 })
 
 describe('what an experiment in its own process may ask of the core', () => {
+  it('reads exact creation observations without treating an unavailable provider as an absent launch', async () => {
+    const id = 'creation-fixture-1234'
+    const known = { creationId: id, state: 'cancelled' as const }
+    const core = fakeCore({ agents: { creationStatus: async () => known } })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'creation_status', { creationId: id })).toEqual({ observation: known })
+    expect(await answerExperimentQuery(fakeCore(), experiments, 'orchestrator', 'creation_status', {})).toEqual({ observation: null })
+    expect(await creationForExperiment(null, id)).toBeNull()
+    const read = vi.fn(async (input, reply) => { reply({ ...input, state: 'created', agent: { id: 'native', private: 'not projected' } }) })
+    expect(await creationForExperiment(read, 'invalid')).toBeNull()
+    expect(read).not.toHaveBeenCalled()
+    expect(await creationForExperiment(read, id)).toEqual({ creationId: id, state: 'created', agentId: 'native' })
+    expect(await creationForExperiment(async () => {}, id)).toBeNull()
+    expect(await creationForExperiment(async () => { throw new Error('Disk unavailable') }, id)).toBeNull()
+    expect(await creationForExperiment(async (input, reply) => { reply({ ...input, state: 'cancelled' }) }, id)).toEqual(known)
+    expect(await creationForExperiment(async (_, reply) => { reply({ creationId: 'other', state: 'cancelled' }) }, id)).toBeNull()
+  })
   it('requires fresh native stop evidence, including when a core is older', async () => {
     const core = fakeCore({ agents: { stopped: async id => id === 'stopped' } })
     expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'stopped', { agentId: 'stopped' })).toEqual({ stopped: true })

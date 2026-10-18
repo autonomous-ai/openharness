@@ -18,6 +18,7 @@ import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF,
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { turnsLink } from './turnsLink.js'
+import { creationObservation } from '../lib/creationObservation.js'
 
 type Payload = Record<string, unknown>
 
@@ -112,6 +113,8 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       displayName: (session) => (session as ShownAgent).displayName ?? '',
       byAgent: (agentId) => live().find((session) => session.agentId === agentId),
       stopped: async agentId => (await ask?.('stopped', { agentId }).catch(() => null))?.stopped === true,
+      creationStatus: async creationId => creationObservation(creationId,
+        (await ask?.('creation_status', { creationId }).catch(() => null))?.observation),
       resolve: (id) => resolveAgent(live(), id),
       advertised: () => view.advertised?.() ?? [],
       terminalAvailable: (agentId) => live().find((session) => session.agentId === agentId)?.terminalAvailable === true,

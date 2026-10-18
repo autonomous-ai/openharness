@@ -34,6 +34,7 @@ import { GRID_FLEET_MAX_TIMEOUT_MS } from '../lib/gridFleetProtocol.js'
 import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '../lib/gridLaunchWire.js'
 import type { NewAgentModel } from '../lib/newAgentModel.js'
 import type { LastTurnText, LiveEvent } from '../engines/kit/events.js'
+import type { CreationObservation } from '../lib/creationObservation.js'
 import type { SessionRecaps } from '../lib/recapReads.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import type { AgentCloseRequest, AgentCloseResult } from '../lib/closeAgentService.js'
@@ -162,6 +163,9 @@ export interface CoreApi {
     /** Fresh native lifecycle evidence. Absence from a live snapshot alone is
      * not a stop: a saved stopped record must also exist in the core. */
     stopped?(agentId: string): Promise<boolean>
+    /** The exact durable native creation receipt. Null means unavailable, never
+     * proof that a launch was missing, cancelled or failed. */
+    creationStatus?(creationId: string): Promise<CreationObservation | null>
     /** Send the agent's frame to the apps again. */
     sync(session: RegisteredSession): void
     /** The Model/Effort choices an agent's engine offers (opaque `runtime-v1` ids): one agent's, or
@@ -1654,6 +1658,7 @@ export interface CoreApiDeps {
   backend: CoreApi['account']['backend']
   onNotice: CoreApi['account']['onNotice']
   create: CoreApi['agents']['create']
+  creationStatus?: CoreApi['agents']['creationStatus']
   dsh: CoreApi['agents']['dsh']
   windows: CoreApi['clients']['windows']
   daemon: DaemonAddress
@@ -1699,7 +1704,7 @@ export interface CoreApiDeps {
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
-  runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
+  runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, cloudRows, lastTurn, turnCard, turnSummary,
   log = (line) => console.warn(line),
@@ -1732,6 +1737,7 @@ export function createCoreApi({
       setRuntime,
       fork,
       create,
+      ...(creationStatus ? { creationStatus } : {}),
       dsh,
       activityText,
       activitySnapshot,
