@@ -77,7 +77,8 @@ pub fn single_segment(value: &str) -> bool {
 
 fn read_pointer(file: &Path) -> Result<String, String> {
     let text = fs::read_to_string(file).map_err(|err| format!("cannot read {}: {err}", file.display()))?;
-    let line = text.lines().next().unwrap_or("").trim().to_owned();
+    // A leading byte order mark, as Notepad and Windows PowerShell 5.1 write one: Node's trim() drops it, so must this.
+    let line = text.strip_prefix('\u{feff}').unwrap_or(&text).lines().next().unwrap_or("").trim().to_owned();
     if line.is_empty() {
         return Err(format!("{} is empty", file.display()));
     }
@@ -349,6 +350,21 @@ mod tests {
         );
         // What follows `--` is the CLI's, even another `--root` or `--`.
         assert_eq!(parse(&os(&["--", "--root", "x", "--"])).unwrap().args, os(&["--root", "x", "--"]));
+    }
+
+    /// Final review R1a-4: a pointer saved with a BOM (Notepad, `Set-Content -Encoding UTF8` on PowerShell 5.1) worked
+    /// for the daemon, whose JS trim() drops U+FEFF, but not here: harness.exe said "not installed completely" and the
+    /// scheduled task's launcher exited 3. Read as Node reads it.
+    #[test]
+    fn reads_a_pointer_saved_with_a_byte_order_mark_as_node_does() {
+        let dir = std::env::temp_dir().join(format!("harness-launch-bom-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("current");
+        fs::write(&file, "\u{feff}0.5.0\r\n").unwrap();
+        assert_eq!(read_pointer(&file).unwrap(), "0.5.0");
+        fs::write(&file, "\u{feff}\r\n").unwrap();
+        assert!(read_pointer(&file).unwrap_err().contains("is empty"));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
