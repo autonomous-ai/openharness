@@ -542,6 +542,9 @@ add a kind there, not at the call site.
   sha256(`<provider>:<id>`), `usageAccountKey` here and `accountKey` there, both suites pinning one
   vector — decides whether a remote subscription is this one again (folded in, unlabelled) or
   another (its own figure, labelled with the machine). Hashed because RPC replies are logged.
+  Subscription headings show the provider login's email when available; older readings without
+  an email show only the provider. Email is display metadata, redacted from structured logs.
+  Account grouping, search identity and model selection continue to use the full hashed key.
   ⚠️ A null key never matches, itself included, and a remote reading folds into this computer's
   only when this computer HAS figures — otherwise a token that expired here would swallow a live
   reading of the same account taken there. `readings` stays this computer's alone and `accounts`

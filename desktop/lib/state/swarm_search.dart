@@ -9,6 +9,7 @@ import '../models/api_connections_controller.dart'
     show ApiConnection, ApiModel, agentOnApiModel;
 import '../models/local_model.dart';
 import '../models/model_search_catalog.dart';
+import '../usage/models_menu_controller.dart' show subscriptionSearchId;
 import '../core/dsh_catalog.dart';
 import '../store/experimental_harnesses.dart';
 import '../core/machine_resources.dart';
@@ -600,7 +601,7 @@ class SwarmSearchController extends ChangeNotifier {
       );
       return available != null &&
           available['status'] != 'Not signed in' &&
-          available['account'] == subscription['account'];
+          subscriptionSearchId(available) == subscriptionSearchId(subscription);
     }
     return selectableGridModel(row) != null ||
         selectableApiModel(row) != null ||

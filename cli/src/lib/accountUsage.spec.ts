@@ -74,7 +74,7 @@ describe('readAccountUsage', () => {
     expect(calls).toHaveLength(0)
   })
 
-  it('asks Claude the way Claude Code does, and names the account without sending it', async () => {
+  it('asks Claude the way Claude Code does, with email display metadata and an opaque identity', async () => {
     write('.claude/.credentials.json', { claudeAiOauth: { accessToken: CLAUDE_TOKEN } })
     write('.claude.json', { oauthAccount: { accountUuid: 'uuid-1', emailAddress: 'a@b.c' } })
     const { calls, fetchImpl } = vendor(200, { seven_day: { utilization: 42 } })
@@ -84,6 +84,7 @@ describe('readAccountUsage', () => {
     expect(claude).toEqual({
       provider: 'claude',
       account: accountKey('claude', 'uuid-1'),
+      email: 'a@b.c',
       outcome: 'answered',
       httpStatus: 200,
       body: { seven_day: { utilization: 42 } },
@@ -96,8 +97,8 @@ describe('readAccountUsage', () => {
     })
   })
 
-  it('never puts a token, an id or an email in what goes back', async () => {
-    // The reply crosses the relay and the desktop logs it. Only the hashed key may name the account.
+  it('returns display email without exposing tokens or raw account ids', async () => {
+    // The encrypted reply includes email for display; identity still uses the hashed key.
     write('.claude/.credentials.json', { claudeAiOauth: { accessToken: CLAUDE_TOKEN } })
     write('.claude.json', { oauthAccount: { accountUuid: 'uuid-1', emailAddress: 'person@example.com' } })
     write('.codex/auth.json', { tokens: { access_token: CODEX_TOKEN, account_id: 'codex-acct' } })
@@ -105,7 +106,8 @@ describe('readAccountUsage', () => {
 
     const wire = JSON.stringify(await readAccountUsage(deps({ fetchImpl })))
 
-    for (const secret of [CLAUDE_TOKEN, CODEX_TOKEN, 'uuid-1', 'person@example.com', 'codex-acct']) {
+    expect(wire).toContain('person@example.com')
+    for (const secret of [CLAUDE_TOKEN, CODEX_TOKEN, 'uuid-1', 'codex-acct']) {
       expect(wire).not.toContain(secret)
     }
   })
@@ -134,12 +136,15 @@ describe('readAccountUsage', () => {
   })
 
   it('scopes the Codex reading to its account', async () => {
-    write('.codex/auth.json', { tokens: { access_token: CODEX_TOKEN, account_id: 'codex-acct' } })
+    const idToken = `e30.${Buffer.from(JSON.stringify({ email: 'codex@example.com' })).toString('base64url')}.signature`
+    write('.codex/auth.json', { tokens: { access_token: CODEX_TOKEN, account_id: 'codex-acct', id_token: idToken } })
     const { calls, fetchImpl } = vendor()
 
     const [, codex] = await readAccountUsage(deps({ fetchImpl }))
 
     expect(codex).toMatchObject({ outcome: 'answered', account: accountKey('codex', 'codex-acct') })
+    expect(codex.email).toBe('codex@example.com')
+    expect(JSON.stringify(codex)).not.toContain(idToken)
     const call = calls.find((c) => c.url === CODEX_USAGE_URL)
     expect(call?.headers).toEqual({
       Authorization: `Bearer ${CODEX_TOKEN}`,
@@ -157,6 +162,15 @@ describe('readAccountUsage', () => {
 
     expect(codex).toMatchObject({ outcome: 'answered', httpStatus: 401, account: null })
   })
+
+  it.each([null, '', 42, 'not-a-jwt', 'a.%%%.b', 'a.bnVsbA.b', 'a.eyJlbWFpbCI6NDJ9.b'])(
+    'keeps Codex usage readable with malformed ID-token metadata: %s', async (idToken) => {
+      write('.codex/auth.json', { tokens: { access_token: CODEX_TOKEN, account_id: 'codex-acct', id_token: idToken } })
+      const [, codex] = await readAccountUsage(deps({ fetchImpl: vendor().fetchImpl }))
+      expect(codex.outcome).toBe('answered')
+      expect(codex.email).toBeUndefined()
+    },
+  )
 
   it('a vendor that cannot be reached is an outcome, not a throw', async () => {
     write('.codex/auth.json', { tokens: { access_token: CODEX_TOKEN } })

@@ -8,8 +8,8 @@
  * answer to `usage_read`.
  *
  * **The credential never leaves this machine.** The vendor is called from here, and what goes back
- * over the relay is the vendor's answer — its HTTP status and body — plus an opaque account key.
- * Never the token, never the account's email or id.
+ * over the encrypted relay is the vendor's answer, an opaque account key and an optional email
+ * for display. Never the token or raw account id. Clients redact email metadata from logs.
  *
  * **Deliberately a thin proxy, not a parser.** The body is returned as the vendor sent it, and the
  * client interprets it with the SAME code that interprets its own local reading
@@ -48,6 +48,8 @@ export interface AccountUsageReading {
    * as. The client compares these to show one figure per ACCOUNT rather than one per machine.
    */
   account: string | null
+  /** Display label only; account identity and deduplication still use `account`. */
+  email?: string
   outcome: UsageOutcome
   httpStatus?: number
   body?: unknown
@@ -65,8 +67,8 @@ const FETCH_TIMEOUT_MS = 8_000
  * An account, as the wire names it: the first 16 hex characters of sha256(`<provider>:<id>`).
  *
  * Hashed rather than sent raw because the reply is LOGGED — the desktop writes every RPC answer to
- * `~/.harness/logs` — and an account id or email has no business there. Equality survives hashing,
- * which is all the client needs.
+ * `~/.harness/logs` — and a raw account id has no business there. Email display metadata is separate
+ * and redacted by clients; equality uses this stable key rather than a display label.
  *
  * ⚠️ **A cross-language contract.** The desktop computes the same key for its own account
  * (`lib/usage/usage_account_key.dart`) and the two must agree byte for byte, or every remote reading
@@ -103,6 +105,7 @@ async function readClaude(deps: AccountUsageDeps): Promise<AccountUsageReading> 
   // records who it is signed in as, on every platform.
   const profile = asRecord(asRecord(parseJson(await readText(join(home, '.claude.json'))))?.oauthAccount)
   const accountId = stringField(profile?.accountUuid)
+  const email = emailField(profile?.emailAddress)
   const account = accountId ? accountKey('claude', accountId) : null
   if (!token) return { provider: 'claude', account, outcome: 'signedOut' }
 
@@ -121,7 +124,7 @@ async function readClaude(deps: AccountUsageDeps): Promise<AccountUsageReading> 
     Authorization: `Bearer ${token}`,
     'anthropic-beta': 'oauth-2025-04-20',
     'User-Agent': 'claude-code/2.1.0',
-  }, deps)
+  }, deps, email)
 }
 
 async function readCodex(deps: AccountUsageDeps): Promise<AccountUsageReading> {
@@ -130,11 +133,12 @@ async function readCodex(deps: AccountUsageDeps): Promise<AccountUsageReading> {
   const token = stringField(tokens?.access_token)
   const accountId = stringField(tokens?.account_id)
   const account = accountId ? accountKey('codex', accountId) : null
+  const email = tokenEmail(tokens?.id_token)
   if (!token) return { provider: 'codex', account, outcome: 'signedOut' }
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` }
   // The account the backend scopes the reading to — the same id the key above is made from.
   if (accountId) headers['ChatGPT-Account-Id'] = accountId
-  return ask('codex', account, CODEX_USAGE_URL, headers, deps)
+  return ask('codex', account, CODEX_USAGE_URL, headers, deps, email)
 }
 
 async function ask(
@@ -143,12 +147,13 @@ async function ask(
   url: string,
   headers: Record<string, string>,
   deps: AccountUsageDeps,
+  email: string | null,
 ): Promise<AccountUsageReading> {
   const fetchImpl = deps.fetchImpl ?? fetch
   try {
     const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
     const text = await response.text()
-    return { provider, account, outcome: 'answered', httpStatus: response.status, body: parseJson(text) }
+    return { provider, account, ...(email ? { email } : {}), outcome: 'answered', httpStatus: response.status, body: parseJson(text) }
   } catch {
     // No detail on purpose: a network error's message can carry the URL, and the client already
     // knows which vendor it asked.
@@ -201,4 +206,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function stringField(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function emailField(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+}
+
+/** ID-token claims supply a display label only, never an authentication decision. */
+function tokenEmail(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const parts = value.split('.')
+  if (parts.length !== 3) return null
+  return emailField(asRecord(parseJson(Buffer.from(parts[1]!, 'base64url').toString('utf8')))?.email)
 }

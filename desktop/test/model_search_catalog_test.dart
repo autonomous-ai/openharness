@@ -30,13 +30,15 @@ class _MachineSubscriptions extends ModelsMenuController {
     {
       'engine': 'codex',
       'title': 'OpenAI',
-      'account': 'local-account',
+      'account': 'same@example.com',
+      'accountKey': 'local-account',
       'status': signedOut ? 'Not signed in' : '50% remaining',
     },
     {
       'engine': 'codex',
       'title': 'OpenAI',
-      'account': 'remote-account',
+      'account': 'same@example.com',
+      'accountKey': 'remote-account',
       'status': '75% remaining',
     },
   ];
@@ -374,7 +376,7 @@ void main() {
         machineId: 'm',
       );
       final own = search.rows.singleWhere(
-        (row) => row.title == 'OpenAI · local-account',
+        (row) => grouped.entries[row.modelId]?.subscription?['accountKey'] == 'local-account',
       );
       expect(search.canSelectModel(own), isTrue);
       expect(search.modelRowStatus(own), '50% remaining');
@@ -525,7 +527,7 @@ void main() {
     expect(catalog.entries.values.single.source, 'Shared · home');
   });
 
-  test('Use identifies only the subscription available on the pane host', () {
+  test('Use keeps accounts with the same email scoped to the pane host', () {
     final usage = _MachineSubscriptions();
     final accounts = ModelSearchCatalog(
       app.modelManager,
@@ -538,12 +540,12 @@ void main() {
     try {
       final local = search.rows.firstWhere(
         (row) =>
-            accounts.entries[row.modelId]?.subscription?['account'] ==
+            accounts.entries[row.modelId]?.subscription?['accountKey'] ==
             'local-account',
       );
       final remote = search.rows.firstWhere(
         (row) =>
-            accounts.entries[row.modelId]?.subscription?['account'] ==
+            accounts.entries[row.modelId]?.subscription?['accountKey'] ==
             'remote-account',
       );
       expect(search.modelRowAction(local), 'Use');
