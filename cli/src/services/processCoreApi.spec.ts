@@ -20,6 +20,20 @@ import { usageTarget } from '../lib/agentUsageWire.js'
 const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/work/${agentId}`, ...over }) as RegisteredSession
 
 describe('the core API a light service runs on in its own process', () => {
+  it('validates native observation pages and never advances a cursor on an unavailable core', async () => {
+    const cursor = { epoch: 'fixture-observation-epoch', sequence: 0 }, page = { cursor, observations: [], gap: false }
+    const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ page }))
+    const api = processCoreApi('/data', 'worker', { ask })
+    expect(await api.transcripts.nativeTurns!('native')).toEqual(page)
+    expect(ask).toHaveBeenLastCalledWith('native_turns', { agentId: 'native' })
+    expect(await api.transcripts.nativeTurns!('native', cursor)).toEqual(page)
+    expect(ask).toHaveBeenLastCalledWith('native_turns', { agentId: 'native', cursor })
+    ask.mockResolvedValueOnce({ page: { ...page, observations: [{}] } })
+    expect(await api.transcripts.nativeTurns!('native', cursor)).toBeNull()
+    ask.mockRejectedValueOnce(new Error('Disconnected'))
+    expect(await api.transcripts.nativeTurns!('native', cursor)).toBeNull()
+    expect(await processCoreApi('/data', 'worker').transcripts.nativeTurns!('native')).toBeNull()
+  })
   it('accepts only the requested native creation receipt from the core', async () => {
     const id = 'creation-fixture-1234', observation = { creationId: id, state: 'cancelled' }
     const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ observation }))

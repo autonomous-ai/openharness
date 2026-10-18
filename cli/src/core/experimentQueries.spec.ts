@@ -54,6 +54,20 @@ describe('what an experiment in its own process may ask of the core', () => {
     expect(await answerExperimentQuery(fakeCore(), experiments, 'orchestrator', 'stopped', { agentId: 'unknown' })).toEqual({ stopped: false })
   })
 
+  it('bounds native observation queries and keeps an older core unavailable', async () => {
+    const cursor = { epoch: 'fixture-observation-epoch', sequence: 0 }
+    const page = { cursor, observations: [], gap: false }, nativeTurns = vi.fn(async () => page)
+    const core = fakeCore({ transcripts: { nativeTurns } })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'native_turns', { agentId: 'native' })).toEqual({ page })
+    expect(nativeTurns).toHaveBeenLastCalledWith('native', undefined)
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'native_turns', { agentId: 'native', cursor })).toEqual({ page })
+    expect(nativeTurns).toHaveBeenLastCalledWith('native', cursor)
+    for (const payload of [{}, { agentId: 'native', cursor: null }, { agentId: 'native', cursor: { ...cursor, sequence: -1 } }]) {
+      expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'native_turns', payload)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(await answerExperimentQuery(fakeCore(), experiments, 'orchestrator', 'native_turns', { agentId: 'native' })).toEqual({ page: null })
+  })
+
   it('shows the live agents as the apps are shown them: name, terminal and harness', async () => {
     const core = fakeCore({
       agents: {

@@ -27,11 +27,12 @@
 import type { BackendSocket } from '../backendSocket.js'
 import type { AgentCreateRequest, CoreApi } from './api.js'
 import { creationObservation } from '../lib/creationObservation.js'
+import { nativeTurnCursorIn } from '../lib/nativeTurnObservations.js'
 
 type Payload = Record<string, unknown>
-type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud'>
+type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'transcripts'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'stopped', 'creation_status', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'stopped', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -69,6 +70,11 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       return { stopped: !!text(payload.agentId) && await core.agents.stopped?.(text(payload.agentId)) === true }
     case 'creation_status':
       return { observation: await core.agents.creationStatus?.(text(payload.creationId)) ?? null }
+    case 'native_turns': {
+      const cursor = payload.cursor === undefined ? undefined : nativeTurnCursorIn(payload.cursor)
+      if (!/^[A-Za-z0-9_-]{1,160}$/.test(text(payload.agentId)) || cursor === null) return { error: 'INVALID_REQUEST' }
+      return { page: await core.transcripts.nativeTurns?.(text(payload.agentId), cursor) ?? null }
+    }
     case 'create': {
       if (!text(payload.engine) || !text(payload.cwd) || typeof payload.prompt !== 'string' || typeof payload.name !== 'string') return { ok: false, error: 'INVALID_REQUEST' }
       const request: AgentCreateRequest = {

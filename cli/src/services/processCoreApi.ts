@@ -19,6 +19,7 @@ import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { turnsLink } from './turnsLink.js'
 import { creationObservation } from '../lib/creationObservation.js'
+import { nativeTurnPageIn } from '../lib/nativeTurnObservations.js'
 
 type Payload = Record<string, unknown>
 
@@ -161,7 +162,10 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
         (await ask?.('lease_deliveries', { leases }).catch(() => null))?.leased === true,
     },
     questions: { answer: () => {}, answerReviewed: async () => false },
-    transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn },
+    transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn,
+      nativeTurns: async (agentId, cursor) => nativeTurnPageIn(
+        (await ask?.('native_turns', { agentId, ...(cursor ? { cursor } : {}) }).catch(() => null))?.page),
+    },
 
     account: {
       mintGridName: async () => null,

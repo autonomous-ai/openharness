@@ -6,6 +6,11 @@ import { FAIL, readFallback } from './serviceHost.js'
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
 describe('the core API services stand on', () => {
+  it('exposes an optional native-turn observer without importing feature state', () => {
+    const nativeTurns = vi.fn(async () => null)
+    expect(createCoreApi({ ...coreDeps(), nativeTurns }).transcripts.nativeTurns).toBe(nativeTurns)
+    expect(createCoreApi(coreDeps()).transcripts.nativeTurns).toBeUndefined()
+  })
   it('carries the existing native creation-status provider without inventing one for an older core', async () => {
     const creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'cancelled' as const }))
     const core = createCoreApi({ ...coreDeps(), creationStatus })

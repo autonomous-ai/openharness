@@ -81,6 +81,7 @@ import { createKeepAbandonedConversation } from '../lib/keepAbandonedConversatio
 import { RESUME_READINESS_BUDGET_MS } from '../lib/resumeStoppedAgent.js'
 import { createConversationOwners } from './agents/conversationOwners.js'
 import { OpenTabProtection } from '../lib/openTabProtection.js'
+import { createNativeTurnObservations, nativeTurnBinding } from '../lib/nativeTurnObservations.js'
 import { sessionCheckpoints } from '../lib/sessionCheckpoint.js'
 import { repairProjectCwds } from '../lib/cwdRepair.js'
 import { stoppedAgents } from '../lib/stoppedAgents.js'
@@ -771,7 +772,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const tabRelay = tabRelayOf(() => gatewayOps.tabRelay)
   // The prompt of each agent's last turn start: what the one-line summary of a working agent says (turns/summaries.ts).
   const turnPrompts = new Map<string, string>()
+  const nativeTurns = createNativeTurnObservations({ resolve: id => nativeTurnBinding(registry.byAgent(id)) })
   const coreApi = createCoreApi({
+    nativeTurns: async (agentId, cursor) => nativeTurns.read(agentId, cursor),
     cloud: cloudDoors,
     cloudRows: () => (cloudAgents?.dialRows() ?? []) as unknown as RegisteredSession[],
     // Agents' terminals: a literal-argv launch, and a read-only view for Share's observers (core/terminalWatch.ts).
@@ -1074,6 +1077,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // an older desktop and typing from a phone get it too; an agent on its own login has no `grid`.
     onInput: (agentId, typed, from) => {
       if (typed) browser.typed(agentId, from)
+      if (typed) nativeTurns.typed(agentId, from.inputContext, from.submitted === true)
       const grid = registry.resolve(agentId)?.grid
       if (grid) ports.models?.prewarm(grid)
       // The person typing into a harness another agent started makes it theirs (services/agentCleanup.ts).
@@ -1224,7 +1228,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Reassigned further down (the funnel): always the current one.
     emit: (sessionId, events) => emitSessionEvents(sessionId, events),
     // Declared further down: read as a prompt is typed, never now.
-    promptTyped: (session, capture, screen) => { if (session.sessionId) questionWatcher.notePrompt(session.sessionId, capture, screen.question) },
+    promptTyped: (session, capture, screen) => {
+      nativeTurns.submitting(session.agentId)
+      if (session.sessionId) questionWatcher.notePrompt(session.sessionId, capture, screen.question)
+    },
     // The person sent a harness text from a window or the phone (services/agentCleanup.ts).
     typed: (id) => ports.agentCleanup?.typed(id),
   })
@@ -1645,6 +1652,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     search: sessionSearch,
     turnStartedAt,
     prompts: turnPrompts,
+    nativeTurns,
     input,
     deviceInput,
     submission: submissions,

@@ -18,6 +18,7 @@ import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAss
  * returns. The core routes them to it; a port is only for what the core itself must ask.
  */
 import type { RecentTurn } from '../cable/cableHost.js'
+import type { NativeTurnRead } from '../lib/nativeTurnObservations.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { AppSwarms } from '../cable/cableSession.js'
@@ -246,6 +247,9 @@ export interface CoreApi {
     /** A session's last turn as its engine recorded it: what was asked and the final answer; null when
      *  there is none yet. Read from the end of its transcript, bounded (core/transcripts/lastTurn.ts). */
     lastTurn(sessionId: string): Promise<LastTurnText | null>
+    /** Bounded live prompt/answer observations, starting at a requested cursor.
+     * An omitted cursor establishes the current boundary, without past history. */
+    nativeTurns?: NativeTurnRead
   }
   /** The sign-in the core holds for every service: a service never holds a credential itself. */
   account: {
@@ -1695,6 +1699,7 @@ export interface CoreApiDeps {
   /** The running cloud harnesses as list rows (`agents.cloud`). */
   cloudRows?: () => RegisteredSession[]
   lastTurn: CoreApi['transcripts']['lastTurn']
+  nativeTurns?: NativeTurnRead
   /** Where a turn's cards and recaps go: the devices, and the apps. Only their own frame types reach these. */
   turnCard: CoreApi['clients']['turnCard']
   turnSummary: CoreApi['clients']['turnSummary']
@@ -1706,7 +1711,7 @@ export function createCoreApi({
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt,
-  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, cloudRows, lastTurn, turnCard, turnSummary,
+  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, cloudRows, lastTurn, nativeTurns, turnCard, turnSummary,
   log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The devices reach the windows through these alone, and only with their own frames: a devices process
@@ -1759,7 +1764,7 @@ export function createCoreApi({
     },
     turns,
     questions,
-    transcripts: { databaseHistory, lastTurn },
+    transcripts: { databaseHistory, lastTurn, ...(nativeTurns ? { nativeTurns } : {}) },
     account: { mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, privateGridName, machineName, backend,
       identity: accountIdentity(backend), onNotice, signedIn, environment, machines },
     clients: {
