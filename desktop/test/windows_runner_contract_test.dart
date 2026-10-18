@@ -148,4 +148,31 @@ void main() {
       reason: 'decided before Flutter and window_manager see WM_CLOSE',
     );
   });
+  test('the clipboard and fonts answer the names Dart calls', () {
+    final clipboard = runner('clipboard_image.cpp');
+    for (final text in [
+      '"harness/clipboard_image"',
+      '"readImagePng"',
+      '"writeImagePng"',
+      '"readFilePaths"',
+      'L"PNG"',
+      'CF_DIBV5',
+      'CF_HDROP',
+      'GUID_ContainerFormatPng',
+    ]) {
+      expect(clipboard, contains(text));
+    }
+    final fonts = runner('fonts.cpp');
+    for (final text in [
+      '"harness/fonts"',
+      '"listFonts"',
+      'EnumFontFamiliesExW',
+      'RASTER_FONTTYPE',
+      '"family"',
+      '"mono"',
+    ]) {
+      expect(fonts, contains(text));
+    }
+    expect(runner('CMakeLists.txt'), contains('"windowscodecs.lib"'));
+  });
 }

@@ -7,8 +7,10 @@ project(runner LANGUAGES CXX)
 #
 # Any new source files that you add to the application should be added here.
 add_executable(${BINARY_NAME} WIN32
+  "clipboard_image.cpp"
   "community_links.cpp"
   "flutter_window.cpp"
+  "fonts.cpp"
   "main.cpp"
   "notifications.cpp"
   "single_instance.cpp"
@@ -46,6 +48,8 @@ target_link_libraries(${BINARY_NAME} PRIVATE "advapi32.lib" "shell32.lib")
 # Windows SDK (Include\<version>\cppwinrt, on every Visual Studio include
 # path). windowsapp.lib is the WinRT umbrella library for x64 and arm64.
 target_link_libraries(${BINARY_NAME} PRIVATE "windowsapp.lib")
+# WIC encodes/decodes clipboard PNGs and keeps them in a COM stream.
+target_link_libraries(${BINARY_NAME} PRIVATE "windowscodecs.lib" "ole32.lib")
 set_source_files_properties("notifications.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj;/permissive-")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 

@@ -76,6 +76,10 @@ bool FlutterWindow::OnCreate() {
   if (!flutter_controller_) {
     return false;
   }
+  clipboard_image_ =
+      std::make_unique<HarnessClipboardImage>(messenger, GetHandle());
+  fonts_ = std::make_shared<HarnessFonts>(messenger, GetHandle());
+  fonts_->Start();
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -97,6 +101,11 @@ void FlutterWindow::OnDestroy() {
   if (tray) {
     tray->Shutdown();
   }
+  const auto fonts = std::move(fonts_);
+  if (fonts) {
+    fonts->Shutdown();
+  }
+  clipboard_image_ = nullptr;
   // Every feature's channel goes before the engine its messenger belongs to.
   HarnessCommunityLinks::Instance().Detach();
   notifications_ = nullptr;
@@ -139,6 +148,11 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
   // The availability check's recovery may have reentered OnDestroy.
   if (GetHandle() == nullptr) {
+    return 0;
+  }
+
+  const auto fonts = fonts_;
+  if (fonts && fonts->HandleMessage(message, wparam)) {
     return 0;
   }
 
