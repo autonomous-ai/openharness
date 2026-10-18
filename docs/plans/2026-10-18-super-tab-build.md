@@ -208,20 +208,48 @@ Focused checks completed during implementation (18 October):
   RSS rose about 16.8 MiB. This measures input classification and bounded observation only, excluding transport,
   network, backend and the rest of the core; it is not a full-daemon benchmark.
 
-These establish individual boundaries, not the complete customer workflow. Full component suites,
-two-machine/two-account integration, real-engine/native desktop validation, full-app visual inspection,
-independent review, merge, official build and release remain.
+- Two-account/two-machine E2E passed in 14.43 seconds. A lead on the starter's real isolated daemon
+  launches a worker on a teammate's explicitly shared machine over the encrypted relay. The agents exchange
+  work, the worker joins a second group without restarting, and native terminal observations retain the
+  starter's identity as opener while the teammate's host records execution. Revoking the machine grant
+  disconnects the remote client without stopping the worker. Coordination HTTP and engines are fixtures;
+  database authorization is covered separately by the replica-set integration above.
+- That journey found an account-authority bug: a shared machine controller could use the execution host's
+  account proxy. The gateway now conveys verified account authority separately from machine control,
+  and the Super Tab service requires it for account-backed requests. Forged payload flags do not affect it.
+  The generic boundary is committed separately as `2a976f84f7`; the feature guard and E2E are `a23509e729`.
+  Gateway/transport/service checks passed 497 tests; one unrelated fake-Grid subprocess test timed out at
+  five seconds and passed when isolated. The complete affected API/process coverage scope passed 73 tests
+  with 100% statements, branches, functions and lines. The wider unchanged core gate evidence remains valid.
+- Final appearance and keyboard pass (`85df17ec14`): 13 conversation/native-message Flutter checks passed,
+  including keyboard containment in the collapsed sidebar, Escape returning to the preserved draft and
+  selecting a group without losing that draft. Focused Dart analysis found no issues. Conversation links
+  now refresh with the app appearance; composer geometry and the sidebar backdrop use the shared tokens.
+  Light/dark and 200% text system-font renders were inspected again. These remain widget fixtures.
+- Local macOS review app rebuilt successfully from the final UI source with the repository's renderer/signing
+  script. The CLI release bundle built with the private Darwin helper; its probe and all 56 packaged service
+  modules loaded in a disposable home. These artifacts have not been installed over a live app or daemon,
+  and the app is not an official signed/notarized internal build. Backend rollout is still required.
+- Required real-tmux suite: 60 passed, six failed, seven installed-engine rows unavailable (86.32 seconds).
+  The failures were stale expectations in unchanged tests: Codex's existing inline-transcript launch flag
+  and the existing guarded-kill callback. Both production contracts match the base commit. The fixtures now
+  check the complete launch arguments and forward the kill guard; all six affected cases passed in 10 seconds.
+  The original full run remains recorded as failed. The remaining 27 cases in the focused follow-up were
+  filtered out, not newly unavailable. Every terminal/server and home belonged to the disposable fixtures.
+
+Broad component runs and their targeted corrections are recorded above. Real-engine/native desktop
+acceptance, full-app visual inspection, final review, CI, merge, official build and release remain.
 No production deployment has occurred.
 
-Implementation remains on `feat/super-tab`, draft PR #1405. Native refusal recovery is committed as `239a094bd4`
-and ordinary navigation as `1c30d01ca9`, following the earlier recovery/UI commits. Earlier pushes failed with
-connection resets. The latest push exceeded its 45-second bound and was terminated; a remote-head lookup also
-timed out after 25 seconds, so upload of the local commits is unconfirmed.
+Implementation remains on `feat/super-tab`, draft PR #1405. Earlier pushes failed with connection resets.
+The latest push exceeded its 45-second bound and was terminated; a remote-head lookup also timed out after
+25 seconds. A subsequent bounded IPv4 request to the GitHub API failed during its TLS handshake.
+Upload of the local commits is unconfirmed, and no extra CI run has been requested.
 Local commits and validation are preserved. The original research worktree's merge remains untouched.
 
 ## Remaining implementation and acceptance
 
-- Finish the isolated multi-account/machine journey and review the final stable head. Preserve the broad-suite
+- Review the final stable head. Preserve the broad-suite
   results and targeted corrections above; CI must still validate the pushed head before merge.
 - Once the Mac is unlocked, finish native terminal, physical shortcut/IME and full-app visual acceptance on an official review build.
   Publish only after the remaining implementation and validation pass, following the normal release schedule.
