@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../logging/cli_transcript.dart';
+import 'hidden_process.dart';
 import 'home_dir.dart';
 import 'windows_layout.dart';
 
@@ -84,8 +85,8 @@ class HarnessCliRunner {
                '.harness',
              ),
            ),
-       _runProcess = runProcess ?? Process.run,
-       _startProcess = startProcess ?? Process.start;
+       _runProcess = runProcess ?? runHidden,
+       _startProcess = startProcess ?? startHidden;
 
   Directory get _runtimeDirectory =>
       Directory('${harnessHome.path}${Platform.pathSeparator}runtime');

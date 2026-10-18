@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 
 import '../core/harness_cli_runner.dart';
+import '../core/hidden_process.dart';
 import '../core/staging_build.dart';
 import '../core/windows_layout.dart';
 import '../update/desktop_updater.dart' show semverGt;
@@ -443,13 +444,13 @@ Future<ProcessResult> _defaultRun(
   String executable,
   List<String> arguments, {
   Map<String, String>? environment,
-}) => Process.run(executable, arguments, environment: environment);
+}) => runHidden(executable, arguments, environment: environment);
 
 Future<Process> _defaultStart(
   String executable,
   List<String> arguments, {
   Map<String, String>? environment,
-}) => Process.start(executable, arguments, environment: environment);
+}) => startHidden(executable, arguments, environment: environment);
 
 /// macOS opens a real Terminal.app window. Linux has no single canonical
 /// terminal, so this tries the Debian/Ubuntu `update-alternatives` target
