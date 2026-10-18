@@ -131,12 +131,8 @@ test/terminal_panel_links_test.dart::TargetPlatform.macOS remote preview shows p
 test/connection_review_render_test.dart::(setUpAll)
 test/desktop_welcome_composer_test.dart::(setUpAll)
 
-# POSIX-shell-or-installer-fixture (56)
+# POSIX-shell-or-installer-fixture (47)
 # These fixtures exercise POSIX setup/agent recipes, shell/tmux probes or Terminal/apt flows, rather than Windows terminal-host/PowerShell setup.
-test/agent_prefetch_test.dart::starting it a setup that needs Terminal (Linux apt) starts it too, and opens the first tab on the agents
-test/agent_prefetch_test.dart::starting it an unattended setup installing the Harness CLI starts it
-test/agent_prefetch_test.dart::starting it and lets it open once they have settled
-test/agent_prefetch_test.dart::starting it the tour waits for OpenCode only; Codex and Claude Code go on behind it
 test/environment_probe_lifecycle_test.dart::a process that starts after timeout is stopped without updating UI
 test/environment_probe_lifecycle_test.dart::an injected run-only check also has a bounded wait
 test/environment_probe_lifecycle_test.dart::an unreadable output pipe stops the owned check and offers retry
@@ -179,16 +175,11 @@ test/environment_provisioner_test.dart::missing tmux and X11 clipboard share one
 test/environment_provisioner_test.dart::missing tmux opens a real terminal before the CLI installer
 test/environment_provisioner_test.dart::non-apt Linux returns package-manager guidance
 test/environment_provisioner_test.dart::without tmux the plan is one in-app step, worded by whether Homebrew is here
-test/environment_recheck_timer_test.dart::automatic Terminal setup rechecks after five seconds
-test/environment_recheck_timer_test.dart::failed automatic rechecks stop before another install
-test/environment_setup_screen_test.dart::Enter installs and retries once before reaching the guest workspace
 test/environment_setup_screen_test.dart::setup details and recovery text have readable contrast in dark
 test/environment_setup_screen_test.dart::setup details and recovery text have readable contrast in light
 test/harness_cli_runner_test.dart::remote-password status invokes cli.js as direct argv and reads its JSON result
 test/harness_cli_runner_test.dart::uses the explicit legacy launcher before PATH
 test/harness_cli_runner_test.dart::uses the managed Node runtime and CLI bundle without a shell
-test/setup_step_measurement_test.dart::a new computer whose missing tools install counts no failed step
-test/setup_step_measurement_test.dart::a setup that ends failed still fails the step that failed
 
 # POSIX-unix-socket-fixture (9)
 # test/local_daemon_transport_test.dart creates /tmp Unix sockets; the Windows fixture cannot create that POSIX root.
@@ -202,7 +193,7 @@ test/local_daemon_transport_test.dart::local WebSocket dials the socket when dis
 test/local_daemon_transport_test.dart::local WebSocket falls back to the port when the socket is not there
 test/local_daemon_transport_test.dart::local WebSocket goes back to the socket once it is there again
 
-# POSIX-updater-or-appimage (28)
+# POSIX-updater-or-appimage (8)
 # These tests exercise macOS updater keys/staging, or Linux AppImage Exec/chmod/install behavior; Windows updater is added later in C4.
 test/about_section_test.dart::names the app and version without claiming an untested update status
 test/desktop_updater_test.dart::Linux architecture packaging downloadAndStage stages the AppImage as-is and makes it executable
@@ -212,311 +203,11 @@ test/linux_app_image_test.dart::an AppImage started from Downloads lands in the 
 test/linux_app_image_test.dart::an entry for a copy still on disk is not taken over
 test/linux_app_image_test.dart::an entry whose AppImage is gone follows the one running
 test/linux_app_image_test.dart::an existing launcher for this copy gains the fork protocol
-test/manual_update_check_test.dart::About can retry a failed check and report the recovered result
-test/manual_update_check_test.dart::Update does not jump to a version the person skipped
-test/manual_update_check_test.dart::Update installs the newest build, not the one that was on screen
-test/manual_update_check_test.dart::a build pulled from the channel is not installed
-test/manual_update_check_test.dart::a disposed app ignores an in-flight update result
-test/manual_update_check_test.dart::a failed recheck keeps the known offer and install error
-test/manual_update_check_test.dart::a manifest that cannot be read installs what was offered
-test/manual_update_check_test.dart::a manifest that went backwards cannot downgrade the offer
-test/manual_update_check_test.dart::a valid current manifest clears a withdrawn offer
-test/manual_update_check_test.dart::an unreachable update service is not up to date
-test/manual_update_check_test.dart::closing a retry leaves no late dialog behind
-test/manual_update_check_test.dart::manual checks can offer a skipped version again
-test/manual_update_check_test.dart::the dialog says you are up to date when the build was pulled
-test/manual_update_check_test.dart::the manual result explains a failed check
-test/manual_update_check_test.dart::two manual checks wait for the same answer
-test/update_progress_test.dart::Settings says the same number as the band
-test/update_progress_test.dart::one repaint per whole percent, not per chunk
-test/update_progress_test.dart::records the next-version flag during download and clears a failed stage
-test/update_progress_test.dart::the banner counts the download, then goes quiet to unpack
-test/update_progress_test.dart::the dialog counts along with the band behind it
 
-# intermediate-forced-Windows-viewer-default (282)
-# Existing tests expect full local desktop/guest/daemon capabilities; viewer_mode.dart:15-20 still forces Windows viewer and AppNotifier constructor creates ViewerClient (app_state.dart:3731). Controller explicitly permits this intermediate group; C1.6 removes entries after lifting the default.
-test/add_phone_dialog_test.dart::App Store · Google Play one code, for either store, in the Harness code's place; Back brings it back
-test/add_phone_dialog_test.dart::a computer with no account signed in while it is open: the code comes up in the same dialog, with its sign-in code
-test/add_phone_dialog_test.dart::a computer with no account the sign-in's ways in, with no words around them: nothing is armed and there is no code
-test/add_phone_dialog_test.dart::arming the daemon a code that did not match is replaced quietly, QR and all
-test/add_phone_dialog_test.dart::arming the daemon a daemon that cannot pair stops the loop
-test/add_phone_dialog_test.dart::arming the daemon a long poll that ends after closing touches nothing
-test/add_phone_dialog_test.dart::arming the daemon a mismatch also takes away what an earlier answer said
-test/add_phone_dialog_test.dart::arming the daemon rate limited waits a minute before asking again
-test/add_phone_dialog_test.dart::arming the daemon retries while no phone is waiting; paired, it is ready
-test/add_phone_dialog_test.dart::signed in, the code is the dialog See your phones closes it and hands Machines to the caller
-test/add_phone_dialog_test.dart::signed in, the code is the dialog a computer joining the account is not the phone
-test/add_phone_dialog_test.dart::signed in, the code is the dialog a phone that signs in to the account is ready; Done closes
-test/add_phone_dialog_test.dart::signed in, the code is the dialog it is up and armed at once, under one line and the stores — nothing else to read
-test/add_phone_dialog_test.dart::signed in, the code is the dialog waiting says nothing more: no status after minutes, and nothing keeps the frames busy
-test/add_phone_dialog_test.dart::signed in, the code is the dialog without a way to Machines, ready says so with Done alone
-test/add_phone_dialog_test.dart::the sign-in code is in the QR, and a new one replaces it every minute
-test/add_phone_dialog_test.dart::the sign-in code the stores' code in its place, the code lets its renewal lapse; back, a fresh one is asked for
-test/add_phone_dialog_test.dart::the sign-in code without one the QR still pairs — the phone emails a code
-test/agent_change_test.dart::Devices switches to agy while retaining its dashboard and split
-test/agent_change_test.dart::Devices switches to amp while retaining its dashboard and split
-test/agent_change_test.dart::Devices switches to claude while retaining its dashboard and split
-test/agent_change_test.dart::Devices switches to commandcode while retaining its dashboard and split
-test/agent_change_test.dart::Devices switches to copilot while retaining its dashboard and split
-test/agent_change_test.dart::Devices switches to cursor while retaining its dashboard and split
-test/agent_change_test.dart::Devices switches to devin while retaining its dashboard and split
-test/agent_change_test.dart::Devices switches to grok while retaining its dashboard and split
-test/agent_change_test.dart::Devices switches to hermes while retaining its dashboard and split
-test/agent_change_test.dart::Devices switches to kilo while retaining its dashboard and split
-test/agent_change_test.dart::Devices switches to muse while retaining its dashboard and split
-test/agent_change_test.dart::Devices switches to opencode while retaining its dashboard and split
-test/agent_change_test.dart::Devices switches to pi while retaining its dashboard and split
-test/boot_flow_widget_test.dart::Linux system-only Terminal waiting polls without starting another install
-test/boot_flow_widget_test.dart::Settings exposes the signed-in account and sign-out
-test/boot_flow_widget_test.dart::a failed install at launch leaves Retry and Switch to Manual usable
-test/boot_flow_widget_test.dart::a failed install under the tour offers Retry, which installs again
-test/boot_flow_widget_test.dart::a failed launch check never starts an install
-test/boot_flow_widget_test.dart::a failed unattended install stops on the failure screen
-test/boot_flow_widget_test.dart::a fresh install runs under the tour, then requires sign-in before opening Harness
-test/boot_flow_widget_test.dart::a legacy setup version never bypasses the live readiness probe
-test/boot_flow_widget_test.dart::a successful readiness probe does not persist a setup version
-test/boot_flow_widget_test.dart::an unattended install that ends waiting for Terminal polls, then carries on
-test/boot_flow_widget_test.dart::automatic Terminal polling keeps the waiting UI phase stable
-test/boot_flow_widget_test.dart::boot installs an in-app plan without asking
-test/boot_flow_widget_test.dart::boot waits for the Install action when the plan needs Terminal
-test/boot_flow_widget_test.dart::config-store failure falls back without resetting auth preferences
-test/boot_flow_widget_test.dart::nothing re-enters setup while the launch install is running
-test/boot_flow_widget_test.dart::one explicit install action reaches sign-in without an extra review
-test/boot_flow_widget_test.dart::ready pre-flight is visible while auth resolves, then opens login
-test/boot_flow_widget_test.dart::recheckEnvironmentStep still stuck keeps polling instead of advancing
-test/boot_flow_widget_test.dart::recheckEnvironmentStep succeeds and continues past environment setup
-test/coding_memory_owner_lifecycle_test.dart::discovery refresh preserves the same owner, account replacement invalidates it immediately
-test/coding_memory_owner_lifecycle_test.dart::endpoint replacement and app disposal cannot retain owner access
-test/connect_trusted_test.dart::repeated Connect joins the active dial
-test/daemon_off_test.dart::Cmd-P dismisses the pending Flutter daemon hover preview
-test/daemon_off_test.dart::Cmd-P dismisses the visible Flutter daemon hover preview
-test/daemon_off_test.dart::Cmd-P dismisses the visible native daemon hover preview
-test/daemon_off_test.dart::Companions opens its own DSH terminal and switches identities without an extra tab
-test/daemon_off_test.dart::DAEMONS_OFF from harnessd takes everything away at once, and native hears the slot go
-test/daemon_off_test.dart::Settings switches the creature on and off without leaving Settings
-test/daemon_off_test.dart::a 404 is off: no slot and the disabled-feature bar, at every width
-test/daemon_off_test.dart::a guest can still exercise the durable-zoo test seam
-test/daemon_off_test.dart::a saved companion tab stays inert while the experiment is off
-test/daemon_off_test.dart::account opt-out stays hidden after pushes and reconnects
-test/daemon_off_test.dart::disabling the experiment also closes an egg reveal
-test/daemon_off_test.dart::illustrated Tim lives in the footer and hover preserves focus
-test/daemon_off_test.dart::on, the same chord is the daemon's
-test/daemon_off_test.dart::the account collection and its name survive a new window and off/on
-test/daemon_off_test.dart::the account egg earns and saves its first hatch from workspace activity
-test/daemon_off_test.dart::the experiment updates the native focus bar without a shortcut
-test/daemon_off_test.dart::the slot never arrives under a click: it waits for the button, the pointer off the bar and a quiet moment
-test/daemon_off_test.dart::while the first read has no answer nothing is kept for the slot
-test/daemon_readiness_test.dart::a daemon nobody answers for is still "did not start"
-test/daemon_readiness_test.dart::a daemon that answers but is still scanning is reported as such, and supervised
-test/daemon_readiness_test.dart::a daemon that predates the pending list is asked once, not on every recovery tick
-test/daemon_readiness_test.dart::a daemon with no backend is READY: this computer works over the loopback
-test/daemon_readiness_test.dart::a retry that gets through reads again which devices are still waiting to be seen
-test/daemon_readiness_test.dart::local folder snapshots refresh projects without leaking to peers or changing membership
-test/daemon_readiness_test.dart::recovery ticks read the pending devices only until one read has succeeded
-test/daemon_readiness_test.dart::the socket that just connected restores a cleared local endpoint
-test/daemon_readiness_test.dart::the supervisor reporting ready after a not-ready boot retries the machines without a click
-test/daemon_workspace_test.dart::"Not now" watches nothing; the now tab asks again, and settings says so
-test/daemon_workspace_test.dart::Reduce Motion goes straight to the card
-test/daemon_workspace_test.dart::a failed turn in an open harness is a failure
-test/daemon_workspace_test.dart::a guest earns from its own live turns
-test/daemon_workspace_test.dart::a guest who turned on the preview has a local zoo at once
-test/daemon_workspace_test.dart::a machine that is asleep or out of reach is calm: the face never fails for it, the panel says so
-test/daemon_workspace_test.dart::after the first hatch: what the daemon sees, "Let it watch" or "Not now", then suggest as a second step
-test/daemon_workspace_test.dart::after the third hatch, any key skips to the card
-test/daemon_workspace_test.dart::agent events step the work frame, at most twice a second; a quiet agent is a still baton
-test/daemon_workspace_test.dart::command search opens the companion home as "Daemon"
-test/daemon_workspace_test.dart::finished turns keep the creature alone and still in the bar; Quiet and Motion are switches in the panel
-test/daemon_workspace_test.dart::habits come from real signals and are reported once
-test/daemon_workspace_test.dart::native hears only the ten cells, without count labels
-test/daemon_workspace_test.dart::native never hears the hatchling before the reveal ends
-test/daemon_workspace_test.dart::nothing shows until the profile and the zoo have loaded
-test/daemon_workspace_test.dart::the nest lists what this computer can do first; a second computer is never needed
-test/daemon_workspace_test.dart::the nest says how far along it is, and a ready egg hatches into a reveal that returns focus when closed
-test/daemon_workspace_test.dart::the pair brain Talk opens the collection viewer and real terminal without sending a model turn
-test/daemon_workspace_test.dart::the pair brain a lesson proposal is keys first with [s]; its whole text shows under the line before its keys arm; show is a brief
-test/daemon_workspace_test.dart::the pair brain a line with a detail shows the harness and the exact command under the status line; the pair speaking is its nick, keyless
-test/daemon_workspace_test.dart::the pair brain a pair.jsonc waiting for a yes lists what it turns on, learning opt-ins included
-test/daemon_workspace_test.dart::the pair brain a second line in the same words is still a new line: it is acknowledged and arms on its own
-test/daemon_workspace_test.dart::the pair brain an unavailable companion engine explains setup and retries in the same DSH
-test/daemon_workspace_test.dart::the pair brain autonomy: four levels, the floor, the rules file; a raise waits for a yes the panel asks, and the badge shows above suggest
-test/daemon_workspace_test.dart::the pair brain done is the brain's count of finished turns; a look sends doneSeen; auto is done and journaled; asleep is calm
-test/daemon_workspace_test.dart::the pair brain its state drives the face; its line offers answers
-test/daemon_workspace_test.dart::the pair brain keys first: [g] opens the harness here; the asks list keeps what waits, and y answers it
-test/daemon_workspace_test.dart::the pair brain lessons: listed through the pair request; taught only by the live line's key after its whole text; skip and revert
-test/daemon_workspace_test.dart::the pair brain presence follows the window; the brief shows on return
-test/daemon_workspace_test.dart::the pair brain presence: the pane in front (none clears it), and idle is away with how long
-test/daemon_workspace_test.dart::the pair brain what tim did: its journal and the lessons it taught; a lesson reverts, an answer cannot
-test/daemon_workspace_test.dart::the panel: portrait, lore, zoo, pair, rename and nap by keyboard
-test/daemon_workspace_test.dart::xyzzy in Cmd-O: "Nothing happens." and one zoo.easter
-test/daemon_workspace_test.dart::zoo_changed refetches; the voice replaces the context
-test/desktop_account_transition_test.dart::a failed guest layout write preserves the old identity and can retry
-test/desktop_account_transition_test.dart::a sign-in made elsewhere (hn, a terminal) is followed, not left as "Not signed in"
-test/desktop_account_transition_test.dart::a sign-out made elsewhere turns the window into a guest
-test/desktop_account_transition_test.dart::cancelling a guest sign-in keeps the local workspace available
-test/desktop_account_transition_test.dart::desktop expiry preserves local work
-test/desktop_account_transition_test.dart::desktop sign-in cancels during guest teardown
-test/desktop_account_transition_test.dart::desktop sign-out preserves local work
-test/desktop_account_transition_test.dart::expiry hides remote panes even when the guest daemon is unavailable
-test/desktop_account_transition_test.dart::failed guest sign-in keeps the local workspace available
-test/desktop_account_transition_test.dart::sign-in waits for a guest layout write and follows its committed identity
-test/desktop_search_edges_test.dart::discovered models explain pending controls and keep the stable row when inventory arrives
-test/desktop_search_edges_test.dart::served model IDs resolve inventory even when the display name differs
-test/device_carry_test.dart::carried passage survives latest, an alert, and a reading return
-test/device_carry_test.dart::carry freezes source text before Finder changes recipients
-test/device_daemon_wire_test.dart::a desktop build turns the daemon’s payloads into its banner, bands and history
-test/device_finder_test.dart::offline results cannot be opened from a stale highlight
-test/device_finder_test.dart::spoken lookup goes to an existing pane in another tab without duplicating it
-test/device_finder_test.dart::typing, navigation, disposal and cancellation defeat late speech
-test/device_pending_sync_test.dart::"Got it" on the baseline panel is written to the daemon
-test/device_pending_sync_test.dart::"It's mine" asks the daemon to tell the other devices; opening the list and "Got it" do not
-test/device_pending_sync_test.dart::Got it on a band of several clears them all in one write to the daemon
-test/device_pending_sync_test.dart::Got it on a departed key is written to the daemon as seen, and a read from before cannot bring it back
-test/device_pending_sync_test.dart::Trust again hands the previewed head to the confirm; a changed list is reported, not applied
-test/device_pending_sync_test.dart::Trust again on another account's list (OTHER_ACCOUNT) is reported, not applied
-test/device_pending_sync_test.dart::a daemon without pending counts as read: the recovery tick does not ask again
-test/device_pending_sync_test.dart::a daemon without pending leaves the in-memory notices exactly as they were
-test/device_pending_sync_test.dart::a device another of the person's devices confirmed leaves the banner, and says where
-test/device_pending_sync_test.dart::a device that joined after the list was read is not marked seen with it
-test/device_pending_sync_test.dart::a fork-suspended entry is marked so on the banner, and follows the listing
-test/device_pending_sync_test.dart::a key that joined and left before anyone looked is read from the daemon, and outlasts a restart
-test/device_pending_sync_test.dart::a read answering after the account was left is dropped
-test/device_pending_sync_test.dart::a read in flight when the account signs out does not write the old listing
-test/device_pending_sync_test.dart::a read that started before "It’s mine" cannot bring the device back
-test/device_pending_sync_test.dart::a read that started before the list was opened cannot bring a seen device back
-test/device_pending_sync_test.dart::an older read answering last cannot take back a device the newer read reported
-test/device_pending_sync_test.dart::opening the list writes back what it read as pending even with no banner up
-test/device_pending_sync_test.dart::red when the key that took it out is itself new, or itself left unseen; never for its own sign-out
-test/device_pending_sync_test.dart::seen is written to the daemon, one device or all; a daemon that cannot keeps it in memory
-test/device_pending_sync_test.dart::the boot read is kept when the profile arrives while it is in flight
-test/device_pending_sync_test.dart::the device page lifts a suspension (single pub); the banner does not
-test/device_pending_sync_test.dart::the history is the daemon’s; a daemon that predates it answers null
-test/device_pending_sync_test.dart::the link to this computer's own daemon coming back reads the listing again: what arose while it was down shows
-test/device_pending_sync_test.dart::this computer's machine healed from "offline" by a live local socket reads the listing again too
-test/device_pending_sync_test.dart::what the daemon kept as pending becomes the new devices, oldest first, with their key codes
-test/device_visit_test.dart::a replaced stream returns to its pane without claiming its old text
-test/device_visit_test.dart::cross-machine return stays with its window and survives a target disconnect
-test/device_visit_test.dart::dialogs and stale commands cannot navigate behind a picker
-test/device_visit_test.dart::latest output keeps a reading return through repeated peeks
-test/device_visit_test.dart::latest refuses stale recipients and application-owned scrolling
-test/device_visit_test.dart::latest then another alert still returns to the original line
-test/device_visit_test.dart::return never reopens a closed origin or a replaced tile
-test/device_visit_test.dart::visit and return retain the pane and reading line after output
-test/device_visit_test.dart::visiting several alerts returns to the original work, never the last alert
-test/device_window_activation_test.dart::local navigation, notification taps and scroll starts request the window
-test/devices_harness_test.dart::concurrent opens and an ambiguous creation reuse one durable request
-test/devices_harness_test.dart::missing bundle keeps chat at 30 percent and recovers in the same tab
-test/devices_harness_test.dart::opens the bundled DSH beside its dashboard and reuses its conversation
-test/devices_harness_test.dart::startup reserves chat and respects resizing while the launch is pending
-test/devices_harness_test.dart::waits for the existing inventory before deciding to create a conversation
-test/devices_hosts_test.dart::account devices discover and address the right owned host; offline and shared hosts are read-only
-test/devices_hosts_test.dart::late replies cannot cross an account change; old remote daemons never fall back to a local cable
-test/devices_tab_test.dart::Devices is there without an experiment and owns focus (composerInBox=false)
-test/devices_tab_test.dart::Devices is there without an experiment and owns focus (composerInBox=true)
-test/devices_tab_test.dart::restoring a Devices tab reserves chat before its conversation loads
-test/grid_on_demand_test.dart::the Model Manager controller a sign-in cancelled leaves nothing waiting to set Grid up behind a later one
-test/grid_on_demand_test.dart::the Model Manager controller signed out of Harness, Set up signs in first, then sets Grid up by itself
-test/grid_picture_test.dart::the Model Manager timer a background app runs none of it, and one refresh runs on return
-test/grid_picture_test.dart::the Model Manager timer a push reaches the manager with no read of its own
-test/guest_window_test.dart::what a guest window is a desktop window without an account is a guest; a viewer never is
-test/link_machine_dialog_widget_test.dart::links remain separate; unlink failure is visible and keyboard retryable
-test/link_machine_widget_test.dart::a failed link process unlocks the prompt for keyboard retry
-test/link_machine_widget_test.dart::closing and reopening joins the pending link without another request
-test/link_machine_widget_test.dart::link prompt accepts typing immediately and submits only once
-test/link_machine_widget_test.dart::links to different machines progress and finish independently
-test/link_machine_widget_test.dart::pending handshakes coalesce by machine and ignore a disposed session
-test/link_machine_widget_test.dart::shows the CLI error inline and keeps needsLink on failure
-test/link_machine_widget_test.dart::submitting a password calls connectWithPassword and clears needsLink on success
-test/link_retry_test.dart::a ConnectionStatus.connecting handshake is never closed by the link retry
-test/link_retry_test.dart::a ConnectionStatus.reconnecting handshake is never closed by the link retry
-test/link_retry_test.dart::a slow socket close is joined and cannot redial a removed machine
-test/link_retry_test.dart::manual Connect bypasses backoff and is not replaced by a retry
-test/link_retry_test.dart::native refused retries back off to 30 seconds and stop after linking
-test/link_retry_test.dart::password linking owns its handshake until it finishes
-test/link_retry_transport_test.dart::a real native link handshake survives the old five-second retry tick
-test/machine_devices_picker_test.dart::See your phones, once Add Phone has its phone, opens Machines at its phones
-test/machine_list_outage_test.dart::a daemon serving another machine id is adopted, and the stale row says why it is dark
-test/machine_list_outage_test.dart::a failed machine list still applies the loopback endpoint to the local machine
-test/machine_list_outage_test.dart::a probe that misses while the socket is live does not take the local terminal dark
-test/machine_list_outage_test.dart::a successful list still resolves the local endpoint as before
-test/machine_list_outage_test.dart::offline with nothing cached: this computer stands in from the daemon, quietly
-test/machine_list_outage_test.dart::the daemon losing its cloud link leaves the local terminal alone
-test/machine_list_outage_test.dart::this computer, while its daemon is on the socket keeps its endpoint when a refresh applies a missed probe over a stale status
-test/machine_list_push_test.dart::what is left on a timer is a safety net, minutes apart — not a poll
-test/machines_manager_keyboard_test.dart::link entry returns to the same action query and machine
-test/machines_panel_test.dart::guest sees sign-in and remains on the same panel when signed in
-test/machines_panel_test.dart::required sign-in stays open until an account arrives, then returns to machines
-test/model_manager_controller_test.dart::an unavailable local connection shows a next step and cannot act
-test/model_manager_controller_test.dart::discovery invites a supported session once and remembers dismissal
-test/model_search_catalog_test.dart::a catalog model running here is one row, matched to the name grid serves it under
-test/model_search_catalog_test.dart::a model shared from another machine reads as it does there, without its quant
-test/model_search_catalog_test.dart::legacy own-grid replies remain visible in models
-test/model_search_catalog_test.dart::matching model names never hide hosts or grant local controls
-test/model_search_catalog_test.dart::own model states use the existing offline and resting wording
-test/model_search_catalog_test.dart::own models precede shared models even without local inventory
-test/model_search_catalog_test.dart::sections separate your models from downloads, and fold the catalog past five
-test/model_search_catalog_test.dart::selection follows the target pane machine model capabilities
-test/model_search_catalog_test.dart::the desktop list names its action rows for what they do, and keeps who shares a model on its line
-test/model_use_test.dart::Enter starts installed weights once and waits for serving readiness
-test/native_toolbar_sync_test.dart::shared tabs (1c) a shared tab sends its count and role, an unshared tab sends nothing
-test/native_toolbar_sync_test.dart::shared tabs (1c) the palette reaches each by role, for the active tab
-test/native_toolbar_sync_test.dart::shared tabs (1c) the tab and File menus open the shared tab dialogs
-test/notification_parity_test.dart::the desk frames stay on this computer this computer's daemon hears them
-test/notification_parity_test.dart::what this window tells the daemon looking at a marked harness is announced, so the dial drops its row
+# clipboard-and-POSIX-project-fixture (2)
+# Image-drop fixture expects a native clipboard write; route-card fixture selects /work/analytics. These two still fail after removing forced Windows viewer mode.
 test/pane_file_drop_test.dart::one image drop reaches only the visible pane across tabs
-test/pane_needs_link_test.dart::the password links the machine and the card closes itself
-test/phone_offer_test.dart::on the workspace the card stands in the top-right, and Add Phone opens from it
-test/phone_offer_test.dart::on the workspace × puts it away for good
-test/phone_offer_test.dart::the offer a computer that opens signed in has had its first sign-in
-test/phone_offer_test.dart::the offer a guest is offered it at the first launch, and only that once
-test/phone_offer_test.dart::the offer an account with a phone or a browser on it is not offered it, ever again here
-test/phone_offer_test.dart::the offer the first sign-in by hand offers it on an account with no phone
-test/profile_startup_test.dart::a late profile publishes account details without reloading agents
-test/profile_startup_test.dart::a late profile response cannot restore a signed-out account
-test/profile_startup_test.dart::close discards a late agents_list reply
-test/profile_startup_test.dart::close discards a late terminal_capabilities reply
-test/profile_startup_test.dart::closing the app discards pending profile and machine responses
-test/profile_startup_test.dart::invitation discovery recovers from network failures without losing machines
-test/profile_startup_test.dart::launch loads agents while profile is pending
-test/profile_startup_test.dart::old sign-in completion cannot replace a new account or its loading state
-test/profile_startup_test.dart::sign-in loads agents while profile is pending
-test/profile_startup_test.dart::sign-out cancels pending machine recovery
-test/profile_startup_test.dart::sign-out discards a late agents_list reply
-test/profile_startup_test.dart::sign-out discards a late terminal_capabilities reply
-test/profile_startup_test.dart::signing out during daemon readiness prevents workspace loading
-test/profile_startup_test.dart::startup recovers a backend timeout even while the daemon stays ready
-test/remote_connect_measurement_test.dart::a machine refused for want of a link counts one failure, not one per retry
-test/remote_password_state_test.dart::linked machine refresh joins its request and keeps known rows on failure
-test/remote_password_state_test.dart::unlink joins its request and does not restore removed rows on refresh failure
 test/route_card_test.dart::new work closes the card with the setup the models chose
-test/settings_screen_test.dart::Experimental is searchable and its labelled switch works by keyboard
-test/shared_tab_panel_test.dart::another computer of the owner hides those, with where they can be done
-test/shared_tabs_app_test.dart::a reconnect reads shares again, not 60 s later (Review Focus 3)
-test/shared_tabs_app_test.dart::shared_activity marks another account's harness working, and the lease runs out
-test/shared_tabs_app_test.dart::shared_activity one harness in two shared tabs keeps following the first after a frame from the second (final review of 1c, M2)
-test/shared_tabs_app_test.dart::shared_tabs_changed from this computer reads shares again
-test/shared_tabs_app_test.dart::with the account's Agent Messages switch off, a reconnect or shared_tabs_changed asks nothing; turned on, shares are read
-test/sign_in_step_flow_test.dart::a cancelled sign-in cannot open the workspace with a late reply
-test/sign_in_step_flow_test.dart::a computer new to Harness must sign in after the tour
-test/sign_in_step_flow_test.dart::a new computer that is signed in already is not asked
-test/sign_in_step_flow_test.dart::a repaired CLI skips the tour but still requires sign-in
-test/sign_in_step_flow_test.dart::a sign-in that fails leaves the page up, with why
-test/sign_in_step_flow_test.dart::an existing signed-out installation must sign in too
-test/sign_in_step_flow_test.dart::every way in stays live while the browser is open
-test/sign_in_step_flow_test.dart::explicit sign-out requires sign-in again
-test/sign_in_step_flow_test.dart::first arrival waits for an account before starting agents
-test/sign_in_step_flow_test.dart::relaunching after setup cannot bypass sign-in
-test/sign_in_step_flow_test.dart::runtime expiry requires sign-in again while restoring saved local work
-test/sign_in_step_flow_test.dart::signing in from the step opens Harness signed in, and the page stays up until the account has arrived
-test/sign_in_step_flow_test.dart::without a tour — setup that needed the person — the step follows setup
-test/signin_recovery_test.dart::completed browser sign-in clears recovery before restoring the workspace
-test/system_notifications_test.dart::device notices a conflict frame is only a hint: the conflict is re-read from the daemon, and stays dismissed
-test/system_notifications_test.dart::device notices a device the daemon announces reaches the system, naming the device and where to remove it
-test/system_notifications_test.dart::device notices a red removal is never softened by a later plain one for the same device
-test/system_notifications_test.dart::device notices a removal the daemon reports reaches the system and the band; a red one opens the signer
-test/system_notifications_test.dart::device notices device frames from any machine but this computer’s own daemon raise nothing
-test/workspace_start_guide_test.dart::welcome review uses New Tab and preserves live work (native=false)
-test/workspace_start_guide_test.dart::welcome review uses New Tab and preserves live work (native=true)
-test/workspace_status_test.dart::top navigation and bottom context stay separate while switching workspaces
 
 # macOS-explicit-keyboard-clipboard-test (2)
 # These tests explicitly select TargetPlatform.macOS/iOS and require the existing Mac image-paste channel path; actual Windows clipboard support is added in C3.5.
