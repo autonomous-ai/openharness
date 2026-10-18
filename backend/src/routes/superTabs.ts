@@ -6,6 +6,7 @@ import { sendError, sendSuccess } from '../utils/response.js'
 import { operationSchema } from '../superTabs/commands.js'
 import { SuperTabError } from '../superTabs/model.js'
 import { SuperTabStore } from '../superTabs/store.js'
+import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
@@ -14,6 +15,7 @@ const create = z.object({ operationId: id, name: z.string().trim().min(1).max(16
 const operation = operationSchema.extend({ asAgentId: id.optional() })
 const listQuery = z.object({ after: id.optional() }).strict()
 const startParams = tabParams.extend({ startId: id })
+const nativeParams = tabParams.extend({ contextId: id })
 const messageParams = tabParams.extend({ conversationId: id })
 const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegative().safe().optional(),
   before: z.coerce.number().int().nonnegative().safe().optional() }).refine(q => q.after === undefined || q.before === undefined, 'Choose one message cursor.')
@@ -36,6 +38,15 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
 /** Uses the normal authenticated control API. It never accepts caller-provided host/contributor identities. */
 export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore } = {}) {
   const store = options.store ?? new SuperTabStore(prisma)
+  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof openNativeSchema> }>('/api/super-tabs/:tabId/native',
+    { preHandler: [validateParams(tabParams), validateBody(openNativeSchema)] },
+    (req, reply) => respond(reply, () => store.native.open(req.user!, req.params.tabId, req.body)))
+  app.get<{ Params: z.infer<typeof nativeParams> }>('/api/super-tabs/:tabId/native/:contextId',
+    { preHandler: validateParams(nativeParams) },
+    (req, reply) => respond(reply, () => store.native.read(req.user!, req.params.tabId, req.params.contextId)))
+  app.post<{ Params: z.infer<typeof nativeParams>; Body: z.infer<typeof nativeEventSchema> }>('/api/super-tabs/:tabId/native/:contextId',
+    { preHandler: [validateParams(nativeParams), validateBody(nativeEventSchema)] },
+    (req, reply) => respond(reply, () => store.native.append(req.user!, req.params.tabId, req.params.contextId, req.body)))
   app.get<{ Querystring: z.infer<typeof listQuery> }>('/api/super-tabs', { preHandler: validateQuery(listQuery) },
     (req, reply) => respond(reply, () => store.list(req.user!, req.query.after)))
   app.post<{ Body: z.infer<typeof create> }>('/api/super-tabs', { preHandler: validateBody(create) },

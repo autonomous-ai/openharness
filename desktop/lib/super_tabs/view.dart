@@ -896,6 +896,8 @@ class _SuperTabViewState extends State<SuperTabView> {
                 TimeOfDay.fromDateTime(time.toLocal()).format(context),
                 style: DesktopChrome.metadata(),
               ),
+            if (c.canWrite && message.createdAt != null)
+              const SizedBox(width: 8),
             if (c.canWrite)
               TextButton(
                 onPressed: () {
@@ -907,7 +909,23 @@ class _SuperTabViewState extends State<SuperTabView> {
           ],
         ),
         const SizedBox(height: 4),
+        if (message.terminalNote case final note?)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text(note, style: DesktopChrome.metadata()),
+          ),
         SuperTabMessageText(message.text),
+        if (message.source['truncated'] == true ||
+            message.source['interrupted'] == true)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              message.source['truncated'] == true
+                  ? 'Excerpt · open the terminal for the full response'
+                  : 'Response interrupted',
+              style: DesktopChrome.metadata(),
+            ),
+          ),
         if (message.queued)
           Padding(
             padding: const EdgeInsets.only(top: 6),

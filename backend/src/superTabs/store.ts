@@ -5,6 +5,7 @@ import { machineAlive } from '../lib/prisma.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { applyCommand, operationSchema, type Command, type CommandContext } from './commands.js'
+import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import {
   activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState,
   SuperTabError, type Actor, type Agent, type Author, type SuperTabState,
@@ -36,7 +37,15 @@ async function transaction<T>(db: PrismaClient, body: (tx: Transaction) => Promi
 
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
 export class SuperTabStore {
-  constructor(private readonly db: PrismaClient, private readonly now: () => number = Date.now) {}
+  readonly native: SuperTabNativeStore
+  constructor(private readonly db: PrismaClient, private readonly now: () => number = Date.now) {
+    this.native = new SuperTabNativeStore({
+      transaction: body => transaction(db, body),
+      row: async (tx, user, tabId) => { const row = await this.row(tx, user, tabId); return { row, state: stateOf(row) } },
+      agentGrant: (tx, state, target) => this.agentGrant(tx, state, target),
+      contribution: (tx, state, actor, command) => this.contribution(tx, state, actor, command),
+    })
+  }
 
   private async row(tx: Transaction, user: AuthUser, tabId: string) {
     return await tx.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv } }) ??
@@ -205,6 +214,7 @@ export class SuperTabStore {
           proof.harnessId === execution.harnessId && proof.machineOwnerId === execution.machineOwnerId
       }
       const effects = applyCommand(original, actor, command, context)
+      await revokeNativeContexts(tx, original, effects.state)
       const revision = row.revision + 1
       if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration') {
         for (const target of effects.state.agents) {
@@ -351,6 +361,7 @@ export class SuperTabStore {
   }
 
   private async senderAllowed(tx: Transaction, state: SuperTabState, delivery: SuperTabDelivery): Promise<boolean> {
+    if (delivery.nativeContextId && !await this.native.allowsDelivery(tx, state, delivery.nativeContextId)) return false
     if (delivery.authorKind !== 'agent') return true
     try { await this.agentGrant(tx, state, agent(state, delivery.authorId)); return true }
     catch (error) { if (error instanceof SuperTabError) return false; throw error }

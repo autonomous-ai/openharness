@@ -1005,6 +1005,7 @@ model SuperTabMessage {
   conversationId  String
   sequence        Int
   author          Json
+  source          Json?
   text            String
   replyTo         String?
   recipientIds    String[]
@@ -1025,11 +1026,29 @@ model SuperTabOperation {
   @@index([tabId])
 }
 
+// A conversation-scoped provenance receipt. It grants no terminal access.
+// Only the recorded execution host can append observations, and every append
+// rechecks the person's membership and both machine grants.
+model SuperTabNativeContext {
+  id              String   @id @map("_id")
+  tabId           String
+  conversationId  String
+  agentId         String
+  userId          String
+  binding         Json
+  lastEventId     String?
+  revoked         Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@index([tabId, revoked])
+}
+
 model SuperTabDelivery {
   id                    String   @id @map("_id")
   tabId                 String
   conversationId        String
   messageId             String
+  nativeContextId       String?
   assignmentId          String?
   agentId               String
   machineId             String

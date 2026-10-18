@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
+import '../state/terminal_pane.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
@@ -31,8 +32,35 @@ class SuperTabWorkspace extends StatefulWidget {
 class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
   final _canvasKey = GlobalKey();
   AppNotifier get app => widget.app;
-  (String, String, String?, String)? _terminalRequest;
+  (String, String, String?, String, bool)? _terminalRequest;
+  (String, String, String?, String, bool)? _readyRequest;
   Future<void> _terminalChange = Future.value();
+  TerminalPane? _nativePane;
+  Timer? _nativeHeartbeat;
+
+  void _clearNativeContext() {
+    _nativeHeartbeat?.cancel();
+    _nativeHeartbeat = null;
+    final pane = _nativePane;
+    _nativePane = null;
+    _readyRequest = null;
+    if (pane == null || (pane.inputContext == null && !pane.watchOnly)) return;
+    pane.inputContext = null;
+    pane.watchOnly = false;
+    final session = pane.session;
+    session?.stageInputContext(null);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (pane.inputContext == null && !pane.watchOnly) {
+        unawaited(session?.setInputContext(null));
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _clearNativeContext();
+    super.dispose();
+  }
 
   void _syncTerminal(SuperTabController controller, String swarmId) {
     final agent = controller.terminalAgent(controller.selectedId);
@@ -41,14 +69,17 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       controller.selectedId,
       agent?.id,
       controller.accountId,
+      controller.canWrite,
     );
     if (_terminalRequest == request) return;
+    _clearNativeContext();
     _terminalRequest = request;
     bool current() =>
         mounted &&
         _terminalRequest == request &&
         app.activeSwarmId == swarmId &&
-        app.currentUser?.id == controller.accountId;
+        app.currentUser?.id == controller.accountId &&
+        controller.canWrite == request.$5;
     // Native attachment may wait for machine discovery. Serialize replacements
     // and discard any request superseded by another group or account.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -57,7 +88,8 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       ) async {
         if (!current()) return;
         if (agent != null) {
-          await _open(agent, swarmId, current);
+          await _open(agent, controller, swarmId, request.$2, current);
+          if (current()) setState(() => _readyRequest = request);
         } else {
           final tab = app.swarms.where((s) => s.id == swarmId).firstOrNull;
           for (final pane in tab?.panes.toList() ?? const []) {
@@ -71,7 +103,9 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
 
   Future<void> _open(
     SuperTabAgent agent,
+    SuperTabController controller,
     String swarmId,
+    String conversationId,
     bool Function() current,
   ) async {
     try {
@@ -90,17 +124,87 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
         );
       }
       if (!current()) return;
+      String? inputContext;
+      // A narrowly shared harness remains its existing read-only observer.
+      // Controlling a machine and joining a Super Tab are separate grants.
+      if (controller.canWrite && machine?.machine.isShared != true) {
+        final issued = await controller.request(
+          'POST',
+          '/api/super-tabs/${controller.tabId}/native',
+          body: {
+            'operationId': superTabOperationId(),
+            'conversationId': conversationId,
+            'agentId': agent.id,
+          },
+        );
+        if (!current()) return;
+        inputContext = issued['contextId'] as String?;
+        if (inputContext == null ||
+            !RegExp(r'^[A-Za-z0-9_-]{16,160}$').hasMatch(inputContext)) {
+          throw const SuperTabFailure(
+            'NATIVE_UNAVAILABLE',
+            'Could not prepare terminal sharing. Try opening it again.',
+          );
+        }
+        final prepared = await app.superTabMachineRequest(agent.machineId, {
+          'action': 'prepareNative',
+          'tabId': controller.tabId,
+          'contextId': inputContext,
+        });
+        if (!current()) return;
+        if (prepared['inputContext'] != inputContext) {
+          throw const SuperTabFailure(
+            'NATIVE_UNAVAILABLE',
+            'This machine could not confirm terminal sharing.',
+          );
+        }
+      }
       await app.assignAgentToPane(
         tab.panes.firstOrNull?.id,
         agent.machineId,
         agent.harnessId,
         swarmId: swarmId,
+        inputContext: inputContext,
+        watchOnly: !controller.canWrite,
       );
+      if (!current()) return;
       if (tab.panes.firstOrNull case final pane?) {
         pane.composerVisible = false;
+        _nativePane = pane;
+      }
+      if (inputContext != null) {
+        var renewing = false;
+        _nativeHeartbeat = Timer.periodic(const Duration(seconds: 20), (
+          timer,
+        ) async {
+          if (!current()) {
+            timer.cancel();
+            return;
+          }
+          if (renewing) return;
+          renewing = true;
+          try {
+            await app.superTabMachineRequest(agent.machineId, {
+              'action': 'renewNative',
+              'tabId': controller.tabId,
+              'contextId': inputContext,
+            });
+          } catch (failure) {
+            if (mounted && current()) {
+              controller.selectTerminal(conversationId, null);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Terminal sharing paused. $failure')),
+              );
+            }
+            timer.cancel();
+          } finally {
+            renewing = false;
+          }
+        });
       }
     } catch (failure) {
       if (mounted && current()) {
+        controller.selectTerminal(conversationId, null);
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(failure.toString())));
       }
@@ -113,6 +217,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     final tab = app.activeSwarm;
     final id = tab.superTabId;
     if (!tab.isSuperTab || id == null) {
+      _clearNativeContext();
       _terminalRequest = null;
       return canvas;
     }
@@ -142,6 +247,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
               controller.selectedId,
             );
             final showTerminal =
+                _readyRequest == _terminalRequest &&
                 selectedTerminal != null &&
                 tab.panes.any(
                   (pane) =>

@@ -1,6 +1,6 @@
 # Super Tab MVP interaction spec
 
-18 October 2026, review revision 08. Implementation authorized 18 October 2026. This replaces earlier UI proposals in this research folder and incorporates the subsequent corrections: a new tab type, no migration flow, and Invite in the sidebar footer.
+18 October 2026, review revision 09. Implementation authorized 18 October 2026. This replaces earlier UI proposals in this research folder and incorporates the subsequent corrections: a new tab type, no migration flow, and Invite in the sidebar footer.
 
 **A Super Tab is a Harness tab where people work with a lead and member agents. Open it, talk to the lead, and watch delegated work become shared group conversations.** All conversations appear in one flat sidebar. Questions, decisions and results stay with the conversation that produced them.
 
@@ -76,6 +76,10 @@ The shared conversation shows human messages, agent explanations, decisions, que
 **ST-007 — Human help stays in the conversation.** An agent asks where the work is happening: in the lead conversation or the relevant group. Include enough context to answer, a recommendation when useful, and a result to try when applicable. Any collaborator can reply there. The answer reaches the waiting agents and remains attached to the work. A dependency can wait while unrelated work continues. There is no global human-request list, bottom strip or separate human-approval room.
 
 **ST-006 — Native terminals.** Choose Open terminal on an agent's row in the participant list. Its existing native terminal opens **to the right of the conversation, inside this Super Tab's content area**. The sidebar stays in place, and the conversation keeps its own composer. The terminal header identifies the agent and machine and retains the existing engine controls and keyboard behavior. The shared conversation and terminal use the same running harness. Inputs are ordered, attributed and reflected in the shared record when they affect the work. Closing the terminal pane returns that space to the conversation and does not stop the harness.
+
+Direct terminal prompts and their answers are recorded in the conversation from which the terminal was opened. The record identifies the observing agent and the authenticated person who opened the session; it does not claim that the machine owner authored the text. A visible interruption replaces content whose conversation cannot be established. Tool output, private history from before opening, and unknown input are not imported. A viewer can inspect the shared terminal but cannot type through it. Loss of recording authority closes this terminal view with an explanation while the harness continues running.
+
+The conversation's lead is informed of recorded work from its member agents. The observed input is never replayed into the agent that already received it. Agents still post questions and results for ordinary delivered group instructions through the shared conversation command, as instructed when they receive that work.
 
 ```text
 Same Super Tab, after Open terminal:

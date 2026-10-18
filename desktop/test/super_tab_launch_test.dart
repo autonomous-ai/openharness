@@ -35,6 +35,7 @@ class SuperTabFixtureConnection extends WsConn {
   final calls = <(String, Map<String, dynamic>)>[];
   final joins = <Map<String, dynamic>>[];
   bool loseCreate = false, loseJoin = false;
+  bool failNative = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
   late AppNotifier app;
   final sentFiles = <Uint8List>[];
@@ -111,6 +112,22 @@ class SuperTabFixtureConnection extends WsConn {
     calls.add((type, Map.of(payload)));
     if (type == 'super_tabs') {
       if (payload['action'] == 'wake') return {'ok': true};
+      if (payload['action'] == 'prepareNative' ||
+          payload['action'] == 'renewNative') {
+        return failNative
+            ? {
+                'error': 'NATIVE_UNAVAILABLE',
+                'detail': 'Fixture recording unavailable.',
+              }
+            : {'ok': true, 'inputContext': payload['contextId']};
+      }
+      if (payload['method'] == 'POST' &&
+          (payload['path'] as String?)?.endsWith('/native') == true) {
+        return {
+          'ok': true,
+          'value': {'contextId': (payload['body'] as Map)['operationId']},
+        };
+      }
       if (payload['path'] == '/api/super-tabs' && payload['method'] == 'POST') {
         return {
           'ok': true,

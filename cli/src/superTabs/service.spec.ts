@@ -69,3 +69,15 @@ it('keeps host capacity separate from account authority and closes it on disconn
   expect(factory).toHaveBeenLastCalledWith(core, 'changed-machine')
   service.port.stop(); expect(stop).toHaveBeenCalledTimes(3)
 })
+
+it('lets a machine client prepare only a backend-verified terminal context', async () => {
+  const core = fakeCore(), prepareNative = vi.fn(async () => ({ ok: true, inputContext: 'context_1234567890' }))
+  const service = superTabService(core, { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn(), prepareNative }) as unknown as SuperTabHost })
+  const signal = new AbortController().signal
+  expect(await service.requests.super_tabs({ action: 'prepareNative', tabId: 'tab', contextId: 'context_1234567890' }, visitor, signal))
+    .toEqual({ ok: true, inputContext: 'context_1234567890' })
+  expect(prepareNative).toHaveBeenLastCalledWith('tab', 'context_1234567890', false, signal)
+  await service.requests.super_tabs({ action: 'renewNative', tabId: 'tab', contextId: 'context_1234567890' }, visitor)
+  expect(prepareNative).toHaveBeenLastCalledWith('tab', 'context_1234567890', true, undefined)
+  expect(core.account.backend).not.toHaveBeenCalled()
+})

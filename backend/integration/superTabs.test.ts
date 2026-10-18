@@ -69,6 +69,100 @@ afterAll(async () => {
 })
 
 describe('Super Tabs on a real Mongo replica set', () => {
+  it('records native turns once, in order, with verified source metadata and no input echo', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const request = { operationId: randomUUID(), conversationId: 'lead', agentId: lead }
+    const { contextId } = await store.native.open(peer, tab, request)
+    expect(await store.native.open(peer, tab, request)).toEqual({ contextId })
+    await expect(store.native.read(peer, tab, contextId)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect(await store.native.read(host, tab, contextId)).toMatchObject({ agentId: lead, machineId: 'test-host',
+      operator: { id: peer.sub, kind: 'person' }, lastEventId: null })
+    const prompt = { turnId: randomUUID(), kind: 'prompt' as const, previousEventId: null,
+      text: 'A native intervention', truncated: false, interrupted: false }
+    await expect(store.native.append(owner, tab, contextId, prompt)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    const posted = await Promise.all(Array.from({ length: 3 }, () => store.native.append(host, tab, contextId, prompt)))
+    expect(posted[1]).toEqual(posted[0])
+    await expect(store.native.append(host, tab, contextId, { ...prompt, text: 'Changed content' })).rejects.toMatchObject({ code: 'OPERATION_REUSED' })
+    const first = posted[0] as { eventId: string }
+    const answer = { ...prompt, kind: 'answer' as const, text: 'A native answer', interrupted: true }
+    await expect(store.native.append(host, tab, contextId, answer)).rejects.toMatchObject({ code: 'NATIVE_ORDER_CHANGED' })
+    await expect(store.native.append(host, tab, contextId, { ...answer, turnId: randomUUID(), previousEventId: first.eventId }))
+      .rejects.toMatchObject({ code: 'NATIVE_PROMPT_MISSING' })
+    const second = await store.native.append(host, tab, contextId, { ...answer, previousEventId: first.eventId })
+    expect(await store.native.append(host, tab, contextId, prompt)).toEqual(first)
+    const rows = (await store.messages(owner, tab, 'lead', {})).messages
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ text: prompt.text, author: { kind: 'agent', id: lead },
+      source: { kind: 'native', phase: 'prompt', operator: { id: peer.sub, kind: 'person' } } })
+    expect(rows[1]).toMatchObject({ replyTo: first.eventId, text: answer.text, source: { interrupted: true, phase: 'answer' } })
+    expect(rows[0]!.source).not.toHaveProperty('contextId')
+    expect(rows[1]!.sequence).toBeGreaterThan(rows[0]!.sequence)
+    expect((await store.native.read(host, tab, contextId)).lastEventId).toBe((second as { eventId: string }).eventId)
+    expect(await store.deliveries(host, tab, lead)).toEqual([])
+    const forged = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/native/${contextId}`,
+      headers: { authorization: `Bearer ${host.sub}` }, payload: { ...prompt, operator: { id: owner.sub } } })
+    expect(forged.statusCode).toBe(400)
+  })
+
+  it('keeps native observations in the chosen group and informs its lead without reviving a withdrawn context', async () => {
+    const { tab, lead } = await fixture()
+    const group = (await run(tab, { type: 'conversation.create', title: 'Implementation', brief: '', checks: [] })).result.conversationId as string
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Builder', configuration: config, lead: false })).result.agentId as string
+    const request = { operationId: randomUUID(), conversationId: group, agentId: worker }
+    const { contextId } = await store.native.open(owner, tab, request)
+    await expect(store.native.open(owner, tab, { ...request, conversationId: 'lead' })).rejects.toMatchObject({ code: 'AGENT_UNAVAILABLE' })
+    const event = { turnId: randomUUID(), kind: 'prompt' as const, previousEventId: null,
+      text: 'Change this implementation', truncated: false, interrupted: false }
+    const receipt = await store.native.append(host, tab, contextId, event) as { eventId: string }
+    expect((await store.messages(owner, tab, 'lead', {})).messages).toHaveLength(0)
+    expect((await store.messages(owner, tab, group, {})).messages).toHaveLength(1)
+    expect(await store.deliveries(host, tab, worker)).toEqual([])
+    const notifications = await store.deliveries(host, tab, lead)
+    expect(notifications).toHaveLength(1)
+    expect(notifications[0]).toMatchObject({ conversationId: group, nativeContextId: contextId, messageId: receipt.eventId })
+    await run(tab, { type: 'conversation.agent', conversationId: group, agentId: worker, present: false, lead: false })
+    await run(tab, { type: 'conversation.agent', conversationId: group, agentId: worker, present: true, lead: false })
+    await expect(store.native.read(host, tab, contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+    await expect(store.native.open(owner, tab, request)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+    expect(await store.deliveries(host, tab, lead)).toEqual([])
+    expect((await db.superTabDelivery.findUnique({ where: { id: notifications[0]!.id } }))!.status).toBe('cancelled')
+    expect(await store.native.open(owner, tab, { ...request, operationId: randomUUID() })).not.toEqual({ contextId })
+  })
+
+  it('requires machine control as well as collaboration and fences removal, re-invitation and changed machine grants', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab, 'viewer')
+    const request = { operationId: randomUUID(), conversationId: 'lead', agentId: lead }
+    await expect(store.native.open(peer, tab, request)).rejects.toMatchObject({ code: 'READ_ONLY' })
+    await run(tab, { type: 'member.remove', userId: peer.sub })
+    await invite(tab)
+    const { contextId } = await store.native.open(peer, tab, request)
+    const event = { turnId: randomUUID(), kind: 'gap' as const, previousEventId: null,
+      text: 'Caller text must not impersonate a gap explanation', truncated: false, interrupted: false }
+    await store.native.append(host, tab, contextId, event)
+    expect((await store.messages(owner, tab, 'lead', {})).messages[0]!.text).toContain('Some terminal activity could not be recorded')
+    const original = (await db.machineShare.findUnique({ where: { machineId: 'test-host' } }))!
+    await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [owner.email],
+      grantVersions: nextMachineShareGrants(original, [owner.email], null) } })
+    try {
+      await expect(store.native.open(peer, tab, { ...request, operationId: randomUUID() })).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
+      await expect(store.native.read(host, tab, contextId)).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
+      await db.machineShare.update({ where: { machineId: 'test-host' }, data: {
+        emails: original.emails, grantVersions: nextMachineShareGrants({ ...original, emails: [owner.email] }, original.emails, null),
+      } })
+      await expect(store.native.read(host, tab, contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+    } finally {
+      const current = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
+      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: original.emails,
+        grantVersions: nextMachineShareGrants(current, original.emails, null) } })
+    }
+    await run(tab, { type: 'member.remove', userId: peer.sub })
+    await invite(tab)
+    await expect(store.native.read(host, tab, contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+  })
+
   it('keeps an ordered configuration history, rejects stale observations and authorizes the execution host alone', async () => {
     const { tab, lead } = await fixture()
     await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'A measured result', checks: [{ description: 'Verified evidence', independent: false }] })

@@ -98,6 +98,7 @@ class SuperTabMessage {
       text = _text(row, 'text'),
       sequence = (row['sequence'] as num).toInt(),
       author = Map.unmodifiable(superTabMap(row['author'])),
+      source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
       deliveries = _list(
         row['deliveries'] ?? const [],
@@ -106,11 +107,24 @@ class SuperTabMessage {
   final String id, conversationId, text;
   final int sequence;
   final Map<String, dynamic> author;
+  final Map<String, dynamic> source;
   final DateTime? createdAt;
   final List<Map<String, dynamic>> deliveries;
   String get authorName => author['name'] as String? ?? 'Unknown';
   String get authorId => author['id'] as String? ?? '';
   bool get fromAgent => author['kind'] == 'agent';
+  bool get fromTerminal => source['kind'] == 'native';
+  String? get terminalNote {
+    if (!fromTerminal) return null;
+    final phase = source['phase'];
+    if (phase == 'gap') return 'Terminal recording interrupted';
+    final operator =
+        superTabMap(source['operator'] ?? const {})['name'] as String?;
+    return phase == 'prompt' && operator != null
+        ? 'Terminal input · session opened by $operator'
+        : 'Terminal answer';
+  }
+
   bool get queued => deliveries.any(
     (d) => d['status'] == 'queued' || d['status'] == 'claimed',
   );

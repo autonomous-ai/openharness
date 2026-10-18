@@ -1,5 +1,6 @@
 import { publishObservers } from './observers.js'
 import { configurationObservation } from './configuration.js'
+import { NativeRecorder, nativeJournalFile } from './native.js'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -73,6 +74,7 @@ export class SuperTabHost {
   private configurationsRunning: Promise<void> | null = null
   private nextConfigurationsAt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
+  private native: NativeRecorder | null = null
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
@@ -104,27 +106,42 @@ export class SuperTabHost {
     }
     this.persist()
     this.stopHearing = core.turns.onDelivery(event => this.heard(event))
+    if (existsSync(nativeJournalFile(core.dataDir, machineId))) {
+      try { this.native = new NativeRecorder(core, machineId) } catch (error) { this.log(String(error)) }
+    }
   }
 
   private persist(): void { this.write(this.file, this.journal) }
   start(): void {
     if (this.stopped || this.timer) return
-    this.timer = setInterval(() => { void this.tick(); void this.reconcileStops(); void this.reconcileReceipts() }, 1_000)
+    this.timer = setInterval(() => { void this.tick(); void this.reconcileStops(); void this.reconcileReceipts(); this.recordNative() }, 1_000)
     this.timer.unref?.()
     void this.tick()
     void this.reconcileStops()
     void this.reconcileReceipts()
+    this.recordNative()
   }
   stop(): void {
     this.stopped = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.stopHearing()
+    this.native?.stop()
     this.authorized.clear()
     try { this.observers(this.core.dataDir, this.machineId, [], 0) } catch { /* The old snapshot expires. */ }
     void this.core.turns.leaseDeliveries('superTabs', {})
     for (const id of this.active) this.core.turns.cancelDelivery(id)
     this.active.clear()
+  }
+  prepareNative(tabId: unknown, contextId: unknown, renew: boolean, closed?: AbortSignal) {
+    this.native ??= new NativeRecorder(this.core, this.machineId)
+    return this.native.prepare(tabId, contextId, renew, closed)
+  }
+  private recordNative(): void {
+    if (!this.native?.hasWork || this.stopped) return
+    const failed = (error: unknown) => this.log(error instanceof Error ? error.message : String(error))
+    void this.native.capture().catch(failed)
+    void this.native.flush().catch(failed)
   }
   tick(): Promise<void> {
     if (this.stopped) return Promise.resolve()
@@ -302,12 +319,16 @@ export class SuperTabHost {
   private prompt(entry: Entry, message: Json): string {
     const command = `${this.core.daemon.command} super-tab --port ${this.core.daemon.port} --machine ${shellQuote(this.machineId)} --tab ${shellQuote(entry.tabId)} --agent ${shellQuote(entry.agentId)}`
     const group = message.conversationId as string
+    const source = object(message.source)
+    const native = source.kind === 'native'
+      ? `This is an observed native ${String(source.phase)} in ${String(object(message.author).name ?? 'an agent')}’s terminal, opened by ${String(object(source.operator).name ?? 'a collaborator')}. The input already reached that agent. Keep the shared work coordinated; do not replay the same instruction.\n\n`
+      : ''
     return `You are participating in a shared Super Tab conversation (${group}). Other humans and agents see messages posted there.\n`
       + `Read its state: ${command} status\nRead this conversation: ${command} messages ${shellQuote(group)}\n`
       + `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID\n`
       + `Manage agreed work and delegation: ${command} help. Use independently verifiable outcomes; local helper subagents need no separate group.\n`
-      + `Ask questions and post results in this conversation. Include the exact revision, evidence and usable output links. Native terminal answers are not automatically shared.\n\n`
-      + `Message ${String(message.id)} from ${String(object(message.author).name ?? 'a collaborator')}:\n${message.text}`
+      + `Ask questions and post results in this conversation. Include the exact revision, evidence and usable output links. Replies to these delivered instructions must be posted here explicitly.\n\n`
+      + native + `Message ${String(message.id)} from ${String(object(message.author).name ?? 'a collaborator')}:\n${message.text}`
   }
 
   private heard(event: TurnDelivery): void {

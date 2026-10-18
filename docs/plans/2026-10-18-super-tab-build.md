@@ -35,12 +35,17 @@ This is a new tab type. Existing tabs and running sessions are not converted.
 - Runtime model/effort observations follow the native profile into the shared roster. Per-agent versions fence delayed updates and re-contributions. A separate configuration history records the initial configuration and observed changes against active assignment IDs; an assignment's starting configuration stays intact. Unknown context size is not inferred from a model name.
 - Autonomous starts reserve declared memory and destination disk budgets in one durable ledger on the execution host, shared across Super Tabs and concurrent service instances. A retry retains its reservation. Pending or unknown launches keep capacity; only a native failed/cancelled receipt or a confirmed stop releases it. Worktrees sample the managed workspace's filesystem, and a retry refuses a changed destination volume. Current CPU/memory pressure and known quota checks remain in admission.
 - Experimental settings cleanup and retired PR branding, preserving compatibility fields and usage controls.
+- Shared native prompt/answer recording with an authenticated conversation context, ordered durable receipts,
+  bounded core observations, and explicit gaps when provenance or continuity cannot be established.
+  Raw terminal input and composed/queued messages retain the same context. No private pre-open history is imported.
+- Native terminal viewers use the existing watch-only protocol. Account, membership, contribution and machine-grant
+  changes invalidate recording authority; the UI closes a failed recording view without stopping its harness.
 
 The desktop surface is connected, but the complete workflow is not ready. Scoped autonomous
 agent starts and capacity checks are connected through the existing native creation protocol.
 Terminal access, native stop reconciliation and explicit uncertain-delivery recovery are connected.
-Shared recording of native interventions remains. The PR stays a draft until that is implemented and
-the complete workflow is tested and reviewed.
+Shared recording of native interventions is connected and covered by isolated fixtures. The PR stays a draft
+until the complete workflow is tested and reviewed.
 
 ## Validation plan
 
@@ -166,6 +171,43 @@ Focused checks completed during implementation (18 October):
   memory, cross-process/network latency, native launch, or full-daemon performance. Reservation runs on demand;
   it adds no polling timer. Declared budgets are conservative admission allowances, not OS-enforced quotas.
 
+- Native recording backend: 19 replica-set integration tests passed in 8.75 seconds, including ordered retries,
+  lost acknowledgements, forged source rejection, group isolation, lead notification without echo, viewer denial,
+  removal/rejoin fencing and machine-grant changes. Backend and CLI typechecks passed.
+- Native host recording: 48 focused host/service/architecture tests passed, including independent capture during
+  slow backend writes, journal recovery, lost replies, access revocation, visible gaps after expiry and retirement
+  of expired views while another remains open. The private outbox advances its cursor only with durable content.
+- Generic input observation boundaries: 223 tests passed with 100% per-file statements, branches, functions and
+  lines for the changed API/query/funnel/process wrapper/observer files. The composed-input follow-up passed
+  168 tests with 100% in all four measures for `core/input.ts` and `lib/nativeTurnObservations.ts`.
+- Real-daemon native recording fixture passed in 37.95 seconds for both fake engines: raw and composed prompts,
+  matching answers, a lost backend reply, and ambiguous input that produces a gap without exporting its contents.
+  This exercises the real daemon/service/terminal paths, not a signed desktop build or live engine subscriptions.
+- Desktop native recording checks: 114 affected Flutter tests passed; the composed-message follow-up passed all
+  77 terminal session tests. Focused analysis found no issues. Three system-font fixture renders were inspected in
+  light/dark appearance and at 200% text. Metadata and actions use the existing design tokens and control family.
+  These renders establish layout evidence, not physical keyboard, IME or full-app acceptance.
+- Complete core/service coverage gate: 2,770 tests passed, 100% per-file coverage in all four measures.
+  Daemon supervisor gate: 273 passed, one platform-specific systemd check skipped on macOS; 100% coverage.
+  Machine sharing gate: 75 passed, 100% coverage, including expiring Super Tab authority while preserving unread legacy rosters.
+- Full backend unit run: 1,543 passed, one stale backend-frame expectation failed, 11 external-provider tests skipped.
+  The unchanged production refusal list already included `connectors_changed`; its expectation was corrected and
+  both frame-contract tests passed. Combined evidence covers all enabled backend unit tests; the original full run was not green.
+- Full CLI unit run: 16,107 passed, six failed, 106 skipped. The new sharing fixture was corrected and its entire
+  coverage gate passed. A symlink-loop expectation now accepts whichever of the two explicit bounded-path limits is
+  reached first on the host's temporary path. Unchanged loopback/tmux tests passed when isolated. The private Darwin
+  helper was built and verified for native identity tests; 131 native/path checks passed, one transient process probe
+  failed and then passed in isolation. Original full-run failures and targeted follow-ups remain separate evidence.
+- Full macOS Flutter run: 6,880 passed, 46 failed, 12 skipped. It exposed two unnecessary waits introduced around
+  ordinary creation and initial pane attachment; both were removed. Follow-ups passed 105 creation/recovery checks
+  and 44 pane/Super Tab checks. Nine files initially failed to connect to Flutter's test process; their serial rerun
+  completed 176 checks with five configured skips and found the pane timing issue fixed in the subsequent 44-test batch.
+  Focused feature analysis is clean; `app_state.dart` retains 12 pre-existing brace-style info diagnostics.
+- Native observation microbenchmark (Node 22.23.1, 10,000 turns after 1,000 warm-ups): baseline 0.156 µs wall time
+  per turn, unobserved 0.468 µs, observed 3.757 µs. The observed case retained about 64 KB more heap after collection;
+  RSS rose about 16.8 MiB. This measures input classification and bounded observation only, excluding transport,
+  network, backend and the rest of the core; it is not a full-daemon benchmark.
+
 These establish individual boundaries, not the complete customer workflow. Full component suites,
 two-machine/two-account integration, real-engine/native desktop validation, full-app visual inspection,
 independent review, merge, official build and release remain.
@@ -179,9 +221,8 @@ Local commits and validation are preserved. The original research worktree's mer
 
 ## Remaining implementation and acceptance
 
-- Reflect native terminal interventions and answers in the appropriate shared conversation with reliable attribution.
-  The current agent instructions explicitly require posting questions/results through the shared conversation CLI.
-- Run the complete component suites, required coverage gates and isolated multi-account/machine journey, then review the final head.
+- Finish the isolated multi-account/machine journey and review the final stable head. Preserve the broad-suite
+  results and targeted corrections above; CI must still validate the pushed head before merge.
 - Once the Mac is unlocked, finish native terminal, physical shortcut/IME and full-app visual acceptance on an official review build.
   Publish only after the remaining implementation and validation pass, following the normal release schedule.
 

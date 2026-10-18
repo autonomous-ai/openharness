@@ -8,6 +8,54 @@ import 'package:harness/super_tabs/view.dart';
 import 'support/super_tab_fixture.dart';
 
 void main() {
+  testWidgets(
+    'native observations keep their agent author and show source and truncation clearly',
+    (tester) async {
+      final server = ConversationServer();
+      server.append('Adjust the native implementation.');
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'builder',
+        'name': 'Builder',
+      };
+      server.messages.last['source'] = {
+        'kind': 'native',
+        'phase': 'prompt',
+        'operator': {'name': 'peer@example.com'},
+        'truncated': true,
+      };
+      final controller = server.controller();
+      await controller.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabView(
+              controller: controller,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Team Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Builder'), findsOneWidget);
+      expect(
+        find.text('Terminal input · session opened by peer@example.com'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Excerpt · open the terminal for the full response'),
+        findsOneWidget,
+      );
+      expect(find.text('Adjust the native implementation.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await controller.flush();
+      controller.dispose();
+    },
+  );
   testWidgets('archived conversations remain searchable and can be reopened', (
     tester,
   ) async {

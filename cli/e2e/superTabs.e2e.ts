@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { superTabCommand } from '../src/superTabs/command.js'
 import { object } from '../src/superTabs/wire.js'
+import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
@@ -39,6 +40,10 @@ it('starts either engine once, posts to its captured group and delivers shared i
   const pending = new Map<string, Record<string, any>>()
   const assignments: Array<Record<string, string>> = []
   const stopReceipts: Array<Record<string, any>> = []
+  const nativeContexts = new Map<string, Record<string, any>>()
+  const nativeRecords = new Map<string, Record<string, any>>()
+  const nativeSends: Array<Record<string, any>> = []
+  let loseNativeReply = true
   let revision = 0, allowed = true, deliveryReads = 0
   const idFor = (harnessId: string) => createHash('sha256').update(JSON.stringify([ME.machineId, harnessId])).digest('hex').slice(0, 24)
   relay.superTabs = async (method, raw, body) => {
@@ -47,6 +52,26 @@ it('starts either engine once, posts to its captured group and delivers shared i
     if (path.endsWith('/stopped')) { stopReceipts.push(body); assignments.length = 0; return { data: { confirmed: true } } }
     if (path === `/api/super-tabs/hosts/${ME.machineId}`) return { data: allowed ? agents.map(agent => ({ tabId: TAB, agent, observers: [] })) : [] }
     if (!allowed) return { status: 403, error: { code: 'FORBIDDEN', message: 'The contribution was withdrawn.' } }
+    if (path === `/api/super-tabs/${TAB}/native` && method === 'POST') {
+      const agent = agents.find(a => a.id === body.agentId)!
+      const contextId = body.operationId
+      nativeContexts.set(contextId, { contextId, tabId: TAB, conversationId: body.conversationId,
+        machineId: ME.machineId, harnessId: agent.harnessId, lastEventId: null })
+      return { data: { contextId } }
+    }
+    if (path.startsWith(`/api/super-tabs/${TAB}/native/`)) {
+      const contextId = path.split('/').at(-1)!, context = nativeContexts.get(contextId)!
+      if (method === 'GET') return { data: context }
+      nativeSends.push({ ...body, contextId })
+      const eventId = createHash('sha256').update(JSON.stringify(['native-event', contextId, body.turnId, body.kind])).digest('hex').slice(0, 24)
+      if (nativeRecords.has(eventId)) expect(nativeRecords.get(eventId)).toEqual({ ...body, contextId })
+      else {
+        expect(body.previousEventId).toBe(context.lastEventId)
+        nativeRecords.set(eventId, { ...body, contextId }); context.lastEventId = eventId
+      }
+      if (loseNativeReply) { loseNativeReply = false; return { status: 503, error: { code: 'BACKEND_UNAVAILABLE', message: 'Lost fixture reply' } } }
+      return { data: { eventId } }
+    }
     if (path === `/api/super-tabs/${TAB}`) return { data: { revision, state: { id: TAB, agents } } }
     if (path.startsWith(`/api/super-tabs/${TAB}/starts/`)) return { data: starts.get(path.split('/').at(-1)!) }
     if (path.endsWith('/commands')) {
@@ -146,7 +171,55 @@ it('starts either engine once, posts to its captured group and delivers shared i
       const config = agents.find(a => a.id === target)?.configuration
       return config?.model === model && config.effort === 'high' || null
     }, 20_000, 250)
+    // The same route as Desktop: authenticated conversation context, host
+    // preparation, then bytes typed into the real native terminal stream.
+    const contextId = `native-${engine}-context-fixture`
+    expect(await client.request('super_tabs', { action: 'backend', method: 'POST', path: `/api/super-tabs/${TAB}/native`,
+      body: { operationId: contextId, conversationId: 'feature', agentId: target } })).toMatchObject({ value: { contextId } })
+    expect(await client.request('super_tabs', { action: 'prepareNative', tabId: TAB, contextId }))
+      .toMatchObject({ ok: true, inputContext: contextId })
+    const openId = `terminal-${engine}`, terminal = client.next(frame => frame.type === 'terminal_ready' && frame.payload?.requestId === openId)
+    client.send('terminal_open', { requestId: openId, protocolVersion: 3, agentId: started.answer.harnessId,
+      cols: 100, rows: 30, inputContext: contextId })
+    const streamId = (await terminal).payload!.streamId as string
+    await client.waitForBinary(frame => frame.streamId === streamId && frame.kind === TerminalBinaryKind.keyframe)
+    const intervention = `native-intervention-${engine}`
+    client.sendBinary({ kind: TerminalBinaryKind.input, streamId, seq: 0, compressed: false, bytes: Buffer.from(intervention) })
+    client.sendBinary({ kind: TerminalBinaryKind.input, streamId, seq: 1, compressed: false, bytes: Buffer.from('\r') })
+    await until('native prompt and answer in the correct conversation', () => {
+      const rows = [...nativeRecords.values()].filter(row => row.contextId === contextId)
+      return rows.length >= 2 ? rows : null
+    }, 30_000, 100)
+    const observed = [...nativeRecords.values()].filter(row => row.contextId === contextId)
+    expect(observed.map(row => row.kind)).toEqual(['prompt', 'answer'])
+    expect(observed[0]!.text).toBe(intervention)
+    expect(observed[1]!.text).toContain(intervention)
+    expect(observed[0]!.turnId).toBe(observed[1]!.turnId)
+    const composed = `native-composed-intervention-${engine}`
+    client.send('message', { agentId: started.answer.harnessId, content: composed, inputContext: contextId })
+    await until('composed native input to retain the same conversation context', () => {
+      const rows = [...nativeRecords.values()].filter(row => row.contextId === contextId)
+      return rows.length >= 4 ? rows : null
+    }, 30_000, 100)
+    const composedRows = [...nativeRecords.values()].filter(row => row.contextId === contextId).slice(2)
+    expect(composedRows.map(row => row.kind)).toEqual(['prompt', 'answer'])
+    expect(composedRows[0]!.text).toBe(composed)
+    expect(composedRows[1]!.text).toContain(composed)
+    client.send('terminal_close', { streamId })
+    const unknownId = `unattributed-${engine}`
+    const unknownReady = client.next(frame => frame.type === 'terminal_ready' && frame.payload?.requestId === unknownId)
+    client.send('terminal_open', { requestId: unknownId, protocolVersion: 3, agentId: started.answer.harnessId, cols: 100, rows: 30 })
+    const unknownStream = (await unknownReady).payload!.streamId as string
+    await client.waitForBinary(frame => frame.streamId === unknownStream && frame.kind === TerminalBinaryKind.keyframe)
+    const privateInput = `unattributed-intervention-${engine}`
+    client.sendBinary({ kind: TerminalBinaryKind.input, streamId: unknownStream, seq: 0, compressed: false, bytes: Buffer.from(privateInput) })
+    client.sendBinary({ kind: TerminalBinaryKind.input, streamId: unknownStream, seq: 1, compressed: false, bytes: Buffer.from('\r') })
+    await until('an explicit gap instead of guessed attribution', () => [...nativeRecords.values()].some(row => row.contextId === contextId && row.kind === 'gap') || null, 20_000, 100)
+    expect([...nativeRecords.values()].some(row => String(row.text).includes(privateInput))).toBe(false)
+    expect(readFileSync(join(d.dataDir, 'super-tabs', `native-${ME.machineId}.json`), 'utf8')).not.toContain(privateInput)
+    client.send('terminal_close', { streamId: unknownStream })
   }
+  expect(nativeSends.length).toBeGreaterThan(nativeRecords.size)
   // The backend survived, but this host has no local intent/receipt. It must
   // surface the missing evidence without creating a new claim or typing again.
   const orphan = { id: 'delivery-without-journal', status: 'claimed', claimId: 'original-claim', receipt: '',

@@ -45,6 +45,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     if (host?.machineId !== machine) { host?.stop(); host = null }
     host ??= (options.host ?? ((api, id) => new SuperTabHost(api, id)))(core, machine)
     host.start()
+    return host
   }
   const disconnect = () => { host?.stop(); host = null; book?.stop(); book = null; bookMachine = null }
   const port = {
@@ -65,6 +66,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // only that host's admission/receipt, never its account or private roster.
         if (payload.action === 'reserveCapacity') return await reservations().reserve(payload, closed)
         if (payload.action === 'observeCapacity') return await reservations().observe(payload.creationId, closed)
+        // A backend-issued context scopes provenance only. Existing machine
+        // control is still required to open/write the native terminal itself.
+        if (payload.action === 'prepareNative' || payload.action === 'renewNative') {
+          return await wake().prepareNative(payload.tabId, payload.contextId, payload.action === 'renewNative', closed)
+        }
         if (!asker.owner) return { error: 'OWNER_REQUIRED' }
         if (payload.action === 'backend') {
           const { method, path } = payload
