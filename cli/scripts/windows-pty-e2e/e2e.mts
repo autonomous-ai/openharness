@@ -4,14 +4,14 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { Client, log, sleep, tail } from './driver.mts'
 import * as scenarios from './scenarios.mts'
 
-const STATE = 'C:\\work\\e2e\\state.json'
+const STATE = process.env.E2E_STATE ?? 'C:\\work\\e2e\\state.json'
 const state: Record<string, any> = existsSync(STATE) ? JSON.parse(readFileSync(STATE, 'utf8')) : {}
 const save = () => writeFileSync(STATE, JSON.stringify(state, null, 2))
 const [cmd, ...args] = process.argv.slice(2)
 const c = await new Client().connect()
 const brief = (a: any) => ({ id: a.id, engine: a.engine, status: a.status, launch: a.launch?.state, pane: a.tmuxPane, name: a.name, cwd: a.project?.cwd ?? a.cwd, resumeMode: a.resumeMode, sessionId: a.sessionId })
 
-async function create(engine: string, cwd = 'C:\\work\\e2e\\proj', extra: Record<string, unknown> = {}) {
+async function create(engine: string, cwd = process.env.E2E_PROJECT ?? 'C:\\work\\e2e\\proj', extra: Record<string, unknown> = {}) {
   const t0 = Date.now()
   const r = await c.rpc('agent_create', { engine, cwd, bypassPermission: false, ...extra }, 120_000)
   if (r.error) { log(`create ${engine} → ${r.error} ${r.detail ?? ''} ${JSON.stringify(r).slice(0, 600)}`); return null }

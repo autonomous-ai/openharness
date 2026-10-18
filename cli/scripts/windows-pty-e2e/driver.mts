@@ -17,6 +17,8 @@ export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
  * Sending the computer id to a signed-in daemon closed the socket with NO_PEER_LINK (the B4 install, 2026-10-17).
  */
 export function machineId(): string {
+  // E2E_MACHINE_ID first: the caller names the machine (docs/testing/windows-cli-e2e.md, a second Windows user).
+  if (process.env.E2E_MACHINE_ID) return process.env.E2E_MACHINE_ID
   const auth = process.env.HARNESS_AUTH_DIR?.trim() || join(homedir(), '.harness', 'auth')
   try {
     const signedIn = JSON.parse(readFileSync(join(auth, 'session.json'), 'utf8')).machineId
@@ -52,7 +54,7 @@ export class Client {
   closed = false
   timer?: NodeJS.Timeout
 
-  async connect(url = 'ws://127.0.0.1:18473/api/local-ws'): Promise<this> {
+  async connect(url = `ws://127.0.0.1:${process.env.E2E_PORT ?? '18473'}/api/local-ws`): Promise<this> {
     this.ws = new WebSocket(url)
     this.ws.binaryType = 'arraybuffer'
     this.ws.onclose = (e) => { this.closed = true; if (process.env.E2E_VERBOSE) log(`ws closed ${e.code} ${e.reason}`) }
