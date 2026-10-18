@@ -138,6 +138,7 @@ export interface LinkedPeer {
   machineId?: string   // set when kind is 'machine'
   kind?: PeerKind      // absent for an older joiner that did not say
   label: string
+  shared?: boolean     // another account's machine this one is shared with (gateway/sharedTrust.ts)
 }
 
 const MACHINE_ID_RE = /^[a-f0-9]{32}$/
@@ -194,8 +195,9 @@ export class E2eeManager {
    *  for members learned from a trust-group sync. */
   trustPeer(peer: LinkedPeer, at = this.now()): void {
     const existing = this.store.pairedPeer(peer.pub)
-    if (existing && existing.label === peer.label && existing.machineId === peer.machineId && existing.kind === peer.kind) return
-    this.store.addPaired(peer.pub, peer.label, existing?.pairedAt ?? at, existing?.role ?? 'web', { machineId: peer.machineId, kind: peer.kind })
+    if (existing && existing.label === peer.label && existing.machineId === peer.machineId && existing.kind === peer.kind
+      && !!existing.shared === !!peer.shared) return
+    this.store.addPaired(peer.pub, peer.label, existing?.pairedAt ?? at, existing?.role ?? 'web', { machineId: peer.machineId, kind: peer.kind, shared: peer.shared })
   }
   /** Stop trusting `pub` (a no-op when it is not paired): the same path as `harness unpair`. */
   untrustPeer(pub: string): boolean {

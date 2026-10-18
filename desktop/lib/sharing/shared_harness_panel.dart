@@ -15,6 +15,8 @@ import '../terminal/terminal_session.dart';
 import '../widgets/terminal_panel.dart';
 import '../ws/ws_conn.dart';
 import '../viewer/observer_relay_codec.dart';
+import '../agent_messages/pane_shared_chips.dart';
+import '../agent_messages/shared_tab_placement.dart' show plainSharedText;
 import 'harness_comments.dart';
 import 'shared_harness_bar.dart';
 import 'shared_terminal_watch.dart';
@@ -186,7 +188,7 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
       unawaited(_connection.connect());
     } else {
       _ended = true;
-      _failure = 'Access removed or invitation expired.';
+      _failure = 'Sharing ended';
     }
   }
 
@@ -247,7 +249,7 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
   void didUpdateWidget(SharedHarnessPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!widget.hasAccess && !_ended) {
-      _end('Access removed or invitation expired.');
+      _end('Sharing ended');
     } else if (widget.hasAccess &&
         (!oldWidget.hasAccess ||
             widget.grant.id != oldWidget.grant.id ||
@@ -293,9 +295,11 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
   });
 
   String? get _detail {
+    // The owner's name is another account's string: plain, one line.
+    final owner = widget.pane.sharedOwnerName;
     final parts = [
       widget.grant.engine,
-      widget.pane.sharedOwnerName,
+      if (owner != null) plainSharedText(owner),
     ].whereType<String>().where((part) => part.isNotEmpty);
     return parts.isEmpty ? null : parts.join(' · ');
   }
@@ -309,7 +313,9 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
       connected: _status == ConnectionStatus.connected,
       terminalStopped: _watch.stopped,
     );
-    final notice = _failure ?? status.notice;
+    // The bar already says "Sharing ended"; the notice repeats nothing.
+    final failure = _failure == status.label ? null : _failure;
+    final notice = failure ?? status.notice;
     return LayoutBuilder(
       builder: (context, size) {
         final commentsBeside = size.maxWidth >= _commentsBesideWidth;
@@ -332,6 +338,12 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
               viewerSelected: _hasViewer && !split ? _viewerSelected : null,
               onSelectViewer: _selectViewer,
               onRetry: _ended && widget.hasAccess ? _retry : null,
+              onRemove: _ended && !widget.hasAccess ? widget.onClose : null,
+              leader: sharedPaneChipState(
+                widget.notifier,
+                widget.pane.machineId,
+                widget.grant.agentId,
+              ).leader,
             ),
             if (notice != null) SharedHarnessNotice(notice),
             Expanded(

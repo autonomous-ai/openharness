@@ -6,6 +6,15 @@ import 'package:xterm/xterm.dart';
 
 import 'agent_pager_fixture.dart';
 
+/// [PagerConn] with its handshake already done. A swipe opens the agent it
+/// lands on, and an open waits for the handshake (`_sendTerminalFrame` in
+/// `state/app_state.dart`) — on a fake with no socket, for its whole budget,
+/// a timer still pending when the tree is torn down.
+class _HandshakenConn extends PagerConn {
+  @override
+  Future<void> waitUntilReady({required Duration timeout}) async {}
+}
+
 /// The pager puts the keyboard away for a swipe between agents — and for nothing else.
 void main() {
   bool terminalHasFocus(WidgetTester tester) =>
@@ -14,7 +23,7 @@ void main() {
       null;
 
   Future<AppNotifier> pumpPager(WidgetTester tester) async {
-    final app = pagerApp(PagerConn());
+    final app = pagerApp(_HandshakenConn());
     addTearDown(app.dispose);
     final session = await liveAgent(app, 'b');
     for (var line = 0; line < 400; line++) {

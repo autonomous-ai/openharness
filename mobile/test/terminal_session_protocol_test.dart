@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/terminal/terminal_binary.dart';
 import 'package:harness_mobile/terminal/terminal_session.dart';
 import 'package:harness_mobile/terminal/terminal_viewport.dart';
+import 'package:xterm/xterm.dart' show Terminal;
 
 /// The terminal stream protocol a phone speaks with a machine's daemon, frame
 /// by frame: an open and its answer, a screen and the output after it, gaps
@@ -22,6 +23,8 @@ void main() {
     String engine = 'claude',
     bool takeover = true,
     Future<bool> Function()? onOpenStalled,
+    DateTime? Function()? lastHeardFromMachine,
+    bool Function()? onTransportSilent,
     Duration resync = const Duration(milliseconds: 40),
     bool disposeAtEnd = true,
   }) {
@@ -34,6 +37,8 @@ void main() {
       sendBinary: wire.sendBinary,
       client: const TerminalClientDescriptor(kind: 'phone', name: 'Pat'),
       onOpenStalled: onOpenStalled,
+      lastHeardFromMachine: lastHeardFromMachine,
+      onTransportSilent: onTransportSilent,
       resyncTimeout: resync,
       takeover: takeover,
     );
@@ -373,6 +378,71 @@ void main() {
     );
 
     test(
+      'heartbeats and resyncs ask the daemon to report a stream it no longer has',
+      () {
+        fakeAsync((async) {
+          final s = session(
+            disposeAtEnd: false,
+            resync: const Duration(seconds: 30),
+          );
+          s.open();
+          async.flushMicrotasks();
+          final streamId = _streamId();
+          s.handleFrame('terminal_ready', {
+            'requestId': wire.last('terminal_open')['requestId'],
+            'agentId': 'a',
+            'protocolVersion': TerminalSession.protocolVersion,
+            'streamId': streamId,
+          });
+          s.handleBinary(_keyframe(streamId));
+          async.flushMicrotasks();
+
+          async.elapse(const Duration(seconds: 5));
+          expect(wire.last('terminal_alive'), {
+            'streamId': streamId,
+            'reportMissing': true,
+          });
+
+          s.handleBinary(_output(streamId, 2, 'gap'));
+          async.flushMicrotasks();
+          expect(wire.last('terminal_resync')['reportMissing'], isTrue);
+          s.dispose();
+        });
+      },
+    );
+
+    test('a stream the daemon no longer has is reopened in place at once', () async {
+      final s = session();
+      final opening = s.open();
+      final streamId = await ready(s);
+      await opening;
+      await s.handleBinary(_keyframe(streamId));
+
+      await s.handleFrame('terminal_error', {
+        'streamId': streamId,
+        'code': 'TERMINAL_STREAM_NOT_FOUND',
+      });
+      await until(() => wire.of('terminal_open').length == 2);
+
+      expect(s.status, TerminalSessionStatus.opening);
+    });
+
+    test('a missing-stream report about another stream is ignored', () async {
+      final s = session();
+      final opening = s.open();
+      await ready(s);
+      await opening;
+
+      await s.handleFrame('terminal_error', {
+        'streamId': _streamId(),
+        'code': 'TERMINAL_STREAM_NOT_FOUND',
+      });
+
+      expect(wire.of('terminal_open'), hasLength(1));
+      expect(s.status, isNot(TerminalSessionStatus.error));
+    });
+
+    test(
       'heartbeats keep a live stream alive, and a failed one is a lost stream',
       () {
         fakeAsync((async) {
@@ -399,6 +469,235 @@ void main() {
         });
       },
     );
+
+    /// An open answered, its first screen drawn, on [async]'s clock — a stream the session holds.
+    String liveOn(
+      FakeAsync async,
+      TerminalSession s, {
+      bool readOnly = false,
+    }) {
+      s.open();
+      async.flushMicrotasks();
+      final streamId = _streamId();
+      s.handleFrame('terminal_ready', {
+        'requestId': wire.last('terminal_open')['requestId'],
+        'agentId': 'a',
+        'protocolVersion': TerminalSession.protocolVersion,
+        'streamId': streamId,
+        if (readOnly) 'readOnly': true,
+      });
+      s.handleBinary(_keyframe(streamId));
+      async.flushMicrotasks();
+      return streamId;
+    }
+
+    // A socket left half-open (Wi-Fi giving way to 4G while the app was away) takes every send and
+    // brings nothing back: the heartbeat goes out, and the terminal looked live while taking no
+    // input for minutes. The daemon sends a sync frame every five seconds, so silence is the sign.
+    test(
+      'a stream quiet for 15s is resynced, and reopened once the resync '
+      'gets no answer',
+      () {
+        fakeAsync((async) {
+          final s = session(disposeAtEnd: false);
+          final streamId = liveOn(async, s);
+
+          // Three beats that heard nothing: the last frame may have landed just before the first.
+          async.elapse(const Duration(seconds: 15));
+          expect(wire.of('terminal_resync'), isEmpty);
+          expect(s.acceptsInput, isTrue);
+
+          // The fourth: at least fifteen seconds without the sync the daemon sends every five.
+          async.elapse(const Duration(seconds: 5));
+          expect(s.status, TerminalSessionStatus.resyncing);
+          expect(s.errorCode, 'TERMINAL_STREAM_TIMEOUT');
+          expect(wire.of('terminal_resync'), hasLength(1));
+
+          // Unanswered: two more tries, then the stream is opened again and the old one closed.
+          final opens = wire.of('terminal_open').length;
+          async.elapse(const Duration(milliseconds: 200));
+          expect(wire.of('terminal_resync'), hasLength(3));
+          expect(wire.of('terminal_open'), hasLength(opens + 1));
+          expect(wire.last('terminal_close')['streamId'], streamId);
+          s.dispose();
+        });
+      },
+    );
+
+    test('the sync frames an idle stream sends keep it from a resync', () {
+      fakeAsync((async) {
+        final s = session(disposeAtEnd: false);
+        final streamId = liveOn(async, s);
+
+        for (var seq = 1; seq <= 12; seq++) {
+          async.elapse(const Duration(seconds: 5));
+          s.handleBinary(_sync(streamId, seq));
+          async.flushMicrotasks();
+        }
+
+        expect(wire.of('terminal_alive'), hasLength(12));
+        expect(wire.of('terminal_resync'), isEmpty);
+        expect(s.acceptsInput, isTrue);
+        s.dispose();
+      });
+    });
+
+    test('a terminal only watched is not resynced for being quiet', () {
+      fakeAsync((async) {
+        final s = session(disposeAtEnd: false);
+        liveOn(async, s, readOnly: true);
+
+        async.elapse(const Duration(seconds: 60));
+
+        expect(s.watching, isTrue);
+        expect(wire.of('terminal_resync'), isEmpty);
+        s.dispose();
+      });
+    });
+
+    // The socket heard nothing from the machine for as long as the stream was quiet: the socket is
+    // what died (a half-open line after a network switch), and a resync over it would only wait
+    // out three unanswered tries and an open's patience before anything redialled.
+    group('quiet on a socket that is quiet too', () {
+      /// The socket's last word from the machine, [heard], as the hook reports it; and every call
+      /// of the redial hook, answered [redials].
+      ({TerminalSession s, List<void> asked}) quietOn(
+        FakeAsync async, {
+        required DateTime? heard,
+        bool redials = true,
+        bool hook = true,
+      }) {
+        final asked = <void>[];
+        final s = session(
+          disposeAtEnd: false,
+          lastHeardFromMachine: () => heard,
+          onTransportSilent: hook
+              ? () {
+                  asked.add(null);
+                  return redials;
+                }
+              : null,
+        );
+        liveOn(async, s);
+        return (s: s, asked: asked);
+      }
+
+      test('the socket is dialled again at once, the stream not resynced', () {
+        fakeAsync((async) {
+          final (:s, :asked) = quietOn(async, heard: DateTime(2000));
+
+          async.elapse(const Duration(seconds: 15));
+          expect(asked, isEmpty, reason: 'three beats are not yet a silence');
+
+          async.elapse(const Duration(seconds: 5));
+          expect(asked, hasLength(1));
+          expect(wire.of('terminal_resync'), isEmpty);
+          s.dispose();
+        });
+      });
+
+      test('a socket that still hears the machine leaves the repair to the '
+          'stream: resynced, nothing redialled', () {
+        fakeAsync((async) {
+          // Heard after this stream's last frame: another agent's output, a reply.
+          final (:s, :asked) = quietOn(
+            async,
+            heard: DateTime.now().add(const Duration(hours: 1)),
+          );
+
+          async.elapse(const Duration(seconds: 20));
+
+          expect(asked, isEmpty);
+          expect(s.errorCode, 'TERMINAL_STREAM_TIMEOUT');
+          expect(wire.of('terminal_resync'), hasLength(1));
+          s.dispose();
+        });
+      });
+
+      test('a redial the app declines leaves the stream to its resync', () {
+        fakeAsync((async) {
+          final (:s, :asked) = quietOn(
+            async,
+            heard: DateTime(2000),
+            redials: false,
+          );
+
+          async.elapse(const Duration(seconds: 20));
+
+          expect(asked, hasLength(1));
+          expect(wire.of('terminal_resync'), hasLength(1));
+          s.dispose();
+        });
+      });
+
+      test('a socket that never heard the machine is no proof: resynced', () {
+        fakeAsync((async) {
+          final (:s, :asked) = quietOn(async, heard: null);
+
+          async.elapse(const Duration(seconds: 20));
+
+          expect(asked, isEmpty);
+          expect(wire.of('terminal_resync'), hasLength(1));
+          s.dispose();
+        });
+      });
+
+      test('with no redial hook, the stream is resynced as before', () {
+        fakeAsync((async) {
+          final (:s, asked: _) = quietOn(
+            async,
+            heard: DateTime(2000),
+            hook: false,
+          );
+
+          async.elapse(const Duration(seconds: 20));
+
+          expect(wire.of('terminal_resync'), hasLength(1));
+          s.dispose();
+        });
+      });
+
+      test('a redial that took the session down meanwhile is not followed by '
+          'a resync over its "Connection lost"', () {
+        fakeAsync((async) {
+          late TerminalSession s;
+          s = session(
+            disposeAtEnd: false,
+            lastHeardFromMachine: () => DateTime(2000),
+            // Declined for this stream, but another stream of the machine got there first and
+            // the app took every session of it down.
+            onTransportSilent: () {
+              s.transportLost('Connection lost. Reconnecting…');
+              return false;
+            },
+          );
+          liveOn(async, s);
+
+          async.elapse(const Duration(seconds: 20));
+
+          expect(wire.of('terminal_resync'), isEmpty);
+          expect(s.errorMessage, 'Connection lost. Reconnecting…');
+          s.dispose();
+        });
+      });
+
+      test('the stream heard from again resets it: no redial for a quiet '
+          'that ended', () {
+        fakeAsync((async) {
+          final (:s, :asked) = quietOn(async, heard: DateTime(2000));
+          final streamId = s.streamId!;
+
+          async.elapse(const Duration(seconds: 15));
+          s.handleBinary(_sync(streamId, 1));
+          async.flushMicrotasks();
+          async.elapse(const Duration(seconds: 15));
+
+          expect(asked, isEmpty);
+          expect(wire.of('terminal_resync'), isEmpty);
+          s.dispose();
+        });
+      });
+    });
   });
 
   group('the screen and the output after it', () {
@@ -424,6 +723,7 @@ void main() {
         'streamId': streamId,
         'attempt': 1,
         'reason': 'TERMINAL_KEYFRAME_TIMEOUT',
+        'reportMissing': true,
       });
 
       await s.handleBinary(_keyframe(streamId, seq: 5));
@@ -972,6 +1272,82 @@ void main() {
       expect(s.agentName, 'api');
       expect(told, 1);
     });
+
+    // What the page reads to keep a screen up under a spinner while it is brought back, rather
+    // than covering it with the attaching skeleton — which made a terminal vanish into a skeleton
+    // and come back, every time the phone returned from a network switch.
+    group('a screen kept through a reopen', () {
+      test('a first open has no earlier screen to keep', () async {
+        final s = session();
+        await s.open();
+
+        expect(s.hasScreen, isFalse);
+        expect(s.showsEarlierScreen, isFalse);
+      });
+
+      test('lost with its socket, the screen stays and the stream says why', () async {
+        final (s, _) = await live(screen: 'what was read');
+
+        s.transportLost('Connection lost. Reconnecting…');
+
+        expect(s.lostWithTransport, isTrue);
+        expect(s.hasScreen, isTrue);
+        expect(_screen(s), contains('what was read'));
+      });
+
+      test('reopened, it is an earlier screen until the new one lands', () async {
+        final (s, _) = await live(screen: 'what was read');
+        s.transportLost('Connection lost. Reconnecting…');
+
+        await s.reopen();
+
+        expect(s.hasScreen, isFalse, reason: 'the new stream has no frame yet');
+        expect(s.showsEarlierScreen, isTrue);
+        expect(s.lostWithTransport, isFalse);
+        expect(_screen(s), contains('what was read'));
+
+        final next = await ready(s);
+        await s.handleBinary(_keyframe(next, text: 'what is now'));
+
+        expect(s.showsEarlierScreen, isFalse);
+        expect(s.hasScreen, isTrue);
+        expect(_screen(s), contains('what is now'));
+      });
+
+      test('an open that starts on a blank terminal forgets the earlier '
+          'screen', () async {
+        final (s, _) = await live(screen: 'what was read');
+
+        await s.open();
+
+        expect(s.showsEarlierScreen, isFalse);
+        expect(_screen(s), isNot(contains('what was read')));
+      });
+
+      test('a kept screen seeded from elsewhere is a screen already, and no '
+          'earlier one', () async {
+        final s = session();
+        s.seedScreen(Terminal()..write('kept from the pager'));
+
+        await s.open();
+
+        expect(s.hasScreen, isTrue);
+        expect(s.showsEarlierScreen, isFalse);
+      });
+
+      test('an error of another kind is not a loss with the socket', () async {
+        final s = session();
+        await s.open();
+        await s.handleFrame('terminal_ready', {
+          'requestId': wire.last('terminal_open')['requestId'],
+          'agentId': 'a',
+          'protocolVersion': TerminalSession.protocolVersion,
+        });
+
+        expect(s.status, TerminalSessionStatus.error);
+        expect(s.lostWithTransport, isFalse);
+      });
+    });
   });
 
   group('what is typed', () {
@@ -1008,16 +1384,22 @@ void main() {
     });
 
     test(
-      'clearing the prompt is ctrl-E then ctrl-U, and the keyboard\'s buffer',
+      'clearing the prompt is ctrl-K then ctrl-U, and the keyboard\'s buffer',
       () async {
-        final (s, _) = await live();
+        // A prompt two rows from the foot of the screen, its footer under it
+        // and the cursor back in it, as Claude Code draws one.
+        final (s, _) = await live(
+          screen: '${'\r\n' * 22}❯ fix it\r\n  ? for shortcuts\x1b[23;9H',
+        );
         final viewport = _Viewport();
         s.attachViewport(viewport);
 
         s.clearPrompt();
-        await until(() => _typed(wire).length == 2);
+        await until(() => _typed(wire).length == 8);
 
-        expect(_typed(wire), '\x05\x15');
+        // One kill is one row as wrapped, and a kill past the prompt's ends
+        // does nothing — so two each way for each of its two rows.
+        expect(_typed(wire), '${'\x0b' * 4}${'\x15' * 4}');
         expect(viewport.cleared, 1);
         s.detachViewport(_Viewport());
         s.resetInputBuffer();
@@ -1084,6 +1466,38 @@ void main() {
 
       expect(await s.sendComposerText('hi'), isFalse);
       expect(await s.pasteText('hi'), isFalse);
+    });
+
+    test('a line sent — a Return, or a message that went — is said, once each', () async {
+      final (s, _) = await live();
+      var sent = 0;
+      s.onLineSent = () => sent++;
+
+      s.terminal.textInput('l');
+      s.terminal.textInput('s');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(sent, 0, reason: 'keys typed are not a line sent');
+      s.terminal.textInput('\r');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(sent, 1);
+
+      expect(await s.sendComposerText('  '), isFalse);
+      expect(sent, 1, reason: 'nothing went');
+      expect(await s.sendComposerText('fix it'), isTrue);
+      expect(sent, 2);
+    });
+
+    test('a line that cannot go is not said', () async {
+      final s = session();
+      await s.open();
+      await ready(s, readOnly: true);
+      var sent = 0;
+      s.onLineSent = () => sent++;
+
+      s.terminal.textInput('ls\r');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(await s.sendComposerText('hi'), isFalse);
+      expect(sent, 0);
     });
 
     test(
@@ -1183,6 +1597,67 @@ void main() {
 
       expect(await pasting, isFalse);
       expect(s.uploadProgress, isNull);
+    });
+
+    /// The rows the terminal shows, as text.
+    String screenOf(TerminalSession s) => [
+      for (var i = 0; i < s.terminal.buffer.lines.length; i++)
+        s.terminal.buffer.lines[i].getText(),
+    ].join('\n');
+
+    // The daemon no longer has the stream: it takes no input and no upload, and only this answer
+    // says so. Left alone, the picture failed and the terminal sat on as if live.
+    for (final (name, refusal) in [
+      (
+        'refused because the stream is gone',
+        {
+          'code': 'TERMINAL_STREAM_NOT_FOUND',
+          'reason':
+              'no live terminal stream for this pane (reopen it and try again)',
+        },
+      ),
+      (
+        'refused in an older daemon\'s words only',
+        {
+          'reason':
+              'no live terminal stream for this pane (reopen it and try again)',
+        },
+      ),
+    ]) {
+      test('$name: the terminal is opened again, its screen kept and the '
+          'picture not sent twice', () async {
+        final (s, streamId) = await live(screen: 'kept screen');
+        final opens = wire.of('terminal_open').length;
+
+        final pasting = s.pasteImage(Uint8List(3));
+        await Future<void>.delayed(Duration.zero);
+        await answer(s, 'terminal_chunked_upload_begin_result', {
+          'accepted': false,
+          ...refusal,
+        });
+
+        expect(await pasting, isFalse);
+        expect(wire.of('terminal_open'), hasLength(opens + 1));
+        expect(wire.last('terminal_close')['streamId'], streamId);
+        expect(screenOf(s), contains('kept screen'));
+        expect(wire.of('terminal_chunked_upload_begin'), hasLength(1));
+      });
+    }
+
+    test('refused for another reason: the stream stays as it is', () async {
+      final (s, streamId) = await live();
+      final opens = wire.of('terminal_open').length;
+
+      final pasting = s.pasteImage(Uint8List(3));
+      await Future<void>.delayed(Duration.zero);
+      await answer(s, 'terminal_chunked_upload_begin_result', {
+        'accepted': false,
+        'code': 'TERMINAL_UPLOAD_TOO_LARGE',
+      });
+
+      expect(await pasting, isFalse);
+      expect(wire.of('terminal_open'), hasLength(opens));
+      expect(s.streamId, streamId);
     });
 
     test('one at a time, and cancelling says so', () async {

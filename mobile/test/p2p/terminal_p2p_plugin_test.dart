@@ -32,6 +32,17 @@ void main() {
       b.plugin.dispose();
     });
 
+    test('starts on the first terminal, not when the session comes up', () {
+      final b = bootPlugin(firstTerminal: false);
+      expect(b.links.created, isEmpty);
+      b.host.sendTerminalFrame('terminal_open', {'requestId': 'r0'});
+      expect(b.links.created, hasLength(1));
+      // Once only: a second open finds it started.
+      b.host.sendTerminalFrame('terminal_open', {'requestId': 'r1'});
+      expect(b.links.created, hasLength(1));
+      b.plugin.dispose();
+    });
+
     test(
       'signals go out sealed over the socket, answers reach the link',
       () async {
@@ -129,7 +140,7 @@ void main() {
       });
     });
 
-    test('waits openWaitMs, then falls back to the socket', () {
+    test('an open before the channel is up rides the socket at once', () {
       fakeAsync((async) {
         final b = bootPlugin(async: async);
         var done = false;
@@ -137,14 +148,11 @@ void main() {
             .sendTerminalFrame('terminal_open', {'requestId': 'r1'})
             .then((_) => done = true);
         flush(async);
-        expect(b.host.wsFrames, isEmpty, reason: 'still waiting');
-        async.elapse(const Duration(milliseconds: 1500));
-        flush(async);
+        // No wait for the channel (`prepareOpen`), and so no
+        // `open_wait_elapsed` either: nothing ran out.
         expect(done, isTrue);
         expect(b.host.wsTypes, ['terminal_open']);
-        final result = p2pResults(b.host).single;
-        expect(result['outcome'], 'relay');
-        expect(result['reason'], 'open_wait_elapsed');
+        expect(p2pResults(b.host), isEmpty);
         b.plugin.dispose();
       });
     });

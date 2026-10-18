@@ -24,7 +24,7 @@ export function dailyProductHealth(rows: Row[], now: Date) {
     if (readable.has(row.metric)) {
       const c = days.get(day) ?? {}; c[row.metric] = (c[row.metric] ?? 0) + row.value; days.set(day, c)
     } else {
-      const m = /^breakdown:(release|platform):(cli|desktop):([^:]+):(.+)$/.exec(row.metric)
+      const m = /^breakdown:(release|platform):(cli|desktop|phone):([^:]+):(.+)$/.exec(row.metric)
       if (!m || !allowed.has(m[4])) continue
       const context = cleanUsageContext({ surface: m[2], release: m[1] === 'release' ? m[3] : 'unknown',
         platform: m[1] === 'platform' ? m[3] : 'other', channel: 'production' })
@@ -36,7 +36,8 @@ export function dailyProductHealth(rows: Row[], now: Date) {
   }
   const daily = [...days].sort(([a], [b]) => a.localeCompare(b)).map(([day, c]) => ({
     day, complete: day < today,
-    coverage: { cli: c.health_cli_collector_days ?? null, desktopSessions: c.health_desktop_collector_days ?? null },
+    coverage: { cli: c.health_cli_collector_days ?? null, desktopSessions: c.health_desktop_collector_days ?? null,
+      phoneSessions: c.health_phone_collector_days ?? null },
     requestReconciliation: PRODUCT_USAGE_ACTIONS.map(action => {
       const starts = c[`${action}_requests`] ?? null
       const outcomes = ['ok', 'failed', 'pending', 'unknown'].reduce((sum, outcome) => sum + (c[`${action}_${outcome}`] ?? 0), 0)
@@ -45,8 +46,9 @@ export function dailyProductHealth(rows: Row[], now: Date) {
         interpretation: 'Start and result reports can arrive separately or cross a choice/day boundary. A difference is incomplete observation, not a failed action.' }
     }),
     signals: Object.fromEntries(Object.entries(c).filter(([k]) => k.startsWith('health_') || k.startsWith('request_'))),
-    activation: ['setup_desktop', 'health_desktop'].map(prefix => ({
-      population: prefix === 'setup_desktop' ? 'Voluntary signed-out setup episodes' : 'Consented signed-in app sessions',
+    activation: ['setup_desktop', 'health_desktop', 'health_tui'].map(prefix => ({
+      population: prefix === 'setup_desktop' ? 'Voluntary signed-out setup episodes'
+        : prefix === 'health_tui' ? 'Consented signed-in hn sessions' : 'Consented signed-in app sessions',
       milestones: Object.fromEntries(['setup_seen', 'sign_in_seen', 'workspace_ready', 'first_work', 'first_response'].map(step => [step, c[`${prefix}_funnel_${step}`] ?? null])),
       waitBuckets: Object.fromEntries(['first_work', 'first_response'].flatMap(step => ['under_1m', '1m_to_5m', 'over_5m'].map(bucket => [`${step}_${bucket}`, c[`${prefix}_${step}_${bucket}`] ?? null]))),
       definition: 'Locally deduplicated episodes, not a joined per-person funnel. Stages can cross UTC days; no daily conversion ratio is inferred.',

@@ -25,9 +25,11 @@ export const INSTRUCTIONS = `Harness runs coding agents (Claude Code, Codex) in 
 
 Every harness spends the person's tokens. Start one (harness_start) only for work that can run in parallel with yours, needs another model's view (a review, a second opinion from Codex), takes long, or belongs in its own folder. Do quick work yourself. For scratch or new work give it a project name (project), not a folder of your own: Claude Code and Codex ask the person to trust a folder Harness did not make.
 
-List first (harness_list). Put everything in the task: starting a harness does not let you message it. A follow-up goes by harness_send only to a teammate in your tab, while Agent Messages are on; otherwise start a new harness with the fuller task. Never give work to, or close, a harness you did not start: those are the person's.
+Call harness_whoami first: it says whether you may start harnesses now. Then list (harness_list). Put everything in the task: starting a harness does not let you message it. A follow-up goes by harness_send only to a teammate in your tab, while Agent Messages are on; otherwise start a new harness with the fuller task. Never give work to, or close, a harness you did not start: those are the person's.
 
-Name every harness. Then wait for it (harness_wait), read its answer (harness_read), and close it once you have its answer (harness_close). At most 4 of yours at once, and a harness another agent started may not start harnesses itself. Never ask a harness to publish, deploy, delete or push.`
+Name every harness. Then wait for it (harness_wait), read its answer (harness_read), and close it once you have its answer (harness_close). At most 4 of yours at once, and a harness another agent started may not start harnesses itself. Never ask a harness to publish, deploy, delete or push.
+
+Each answer ends with Next: the call to make next. A refusal is final: do not retry it; tell the person, or do the work yourself.`
 
 /** How long `harness_wait` waits when not told: within what MCP clients allow a call. Codex ends one at 60 s unless its
  *  config says otherwise (`tool_timeout_sec`, developers.openai.com/codex/mcp), so 120 s ended every long wait as an
@@ -49,8 +51,15 @@ const schema = (properties: Record<string, unknown>, required: string[] = []) =>
 
 export const TOOLS: Tool[] = [
   {
+    name: 'harness_whoami',
+    description: 'Who you are to Harness: which agent, on which machine, inside Harness or not; whether you may start harnesses now and, if not, who can change that; how many of yours are open and how many starts are left. Call it first, and whenever a start is refused.',
+    inputSchema: schema({}),
+    annotations: { readOnlyHint: true },
+    argv: () => ['whoami'],
+  },
+  {
     name: 'harness_list',
-    description: 'The harnesses on this machine: name, agent, state (working, idle, needs-input), who started each ("you" for yours), when it was last active, its folder, and what it is about.',
+    description: 'The harnesses on this machine: name, agent, state (working, idle, needs the person), who started each ("you" for yours), when it was last active, its folder, and what it is about.',
     inputSchema: schema({ all: { type: 'boolean', description: 'Also the ones stopped in the last week.' } }),
     annotations: { readOnlyHint: true },
     argv: (a) => ['ps', ...(a.all === true ? ['--all'] : [])],
@@ -78,7 +87,7 @@ export const TOOLS: Tool[] = [
       // (a clean VM, CLI 0.3.75, 2026-10-11). Both given, `harness new` says to name one.
       const folder = str(a.folder), project = str(a.project)
       const where = folder ? [isAbsolute(folder) || folder.startsWith('~') ? folder : resolve(cwd, folder)] : []
-      return ['new', str(a.agent) || 'claude', ...(str(a.machine) ? [`@${str(a.machine)}`] : []), ...where,
+      return ['new', str(a.agent) || 'claude', ...(str(a.machine) ? ['--machine', str(a.machine)] : []), ...where,
         ...(project || !folder ? ['--new', ...(project ? [project] : [])] : []),
         '--name', str(a.name), '--task', typeof a.task === 'string' ? a.task : '']
     },
@@ -149,6 +158,8 @@ export interface McpDeps {
   session?: string
   /** Messages reach only a harness's pane, and an agent outside Harness has none to answer from. */
   inPane?: boolean
+  /** How long `initialize` waits for `harness whoami` before it answers without it (5 s). */
+  whoamiMs?: number
 }
 
 type Message = { jsonrpc?: string; id?: string | number | null; method?: string; params?: Record<string, unknown> }
@@ -166,11 +177,19 @@ export async function answer(message: Message, deps: McpDeps, state: { client?: 
       const asked = str(message.params?.protocolVersion)
       const info = message.params?.clientInfo as { name?: unknown } | undefined
       state.client = str(info?.name)
+      // Where the agent is and what it may do, as it connects: the block `harness whoami` prints. It never holds the
+      // connection up: without it in time, the instructions alone.
+      let timer: NodeJS.Timeout | undefined
+      const here = await Promise.race([
+        deps.run(['whoami'], callerEnv(deps, state.client)).catch(() => null),
+        new Promise<null>((done) => { timer = setTimeout(() => done(null), deps.whoamiMs ?? 5_000); timer.unref?.() }),
+      ]).finally(() => clearTimeout(timer))
+      const now = here && here.code === EXIT.ok && here.out.trim() ? `Right now:\n${here.out.trim()}\n\n` : ''
       return reply({
         protocolVersion: (PROTOCOL_VERSIONS as readonly string[]).includes(asked) ? asked : PROTOCOL_VERSIONS[0],
         capabilities: { tools: {} },
         serverInfo: { name: 'harness', title: 'Harness', version: VERSION },
-        instructions: INSTRUCTIONS,
+        instructions: `${now}${INSTRUCTIONS}`,
       })
     }
     case 'ping': return reply({})
@@ -217,7 +236,8 @@ export function result(tool: string, ran: Ran): { content: Array<{ type: 'text';
   if (tool === 'harness_wait' && ran.code === EXIT.timeout) {
     return { content: [{ type: 'text', text: `${text ? `${text}\n` : ''}Still working. Call harness_wait again to keep waiting.` }] }
   }
-  const answered = ran.code === EXIT.ok || (tool === 'harness_wait' && (ran.code === EXIT.needsInput || ran.code === EXIT.stopped))
+  // A refusal is an answer too: an error invites a retry, and a refusal is not retried.
+  const answered = ran.code === EXIT.ok || ran.code === EXIT.refused || (tool === 'harness_wait' && (ran.code === EXIT.needsInput || ran.code === EXIT.stopped))
   return answered ? { content: [{ type: 'text', text: text || 'Done.' }] } : { content: [{ type: 'text', text: text || `harness exited ${ran.code}` }], isError: true }
 }
 

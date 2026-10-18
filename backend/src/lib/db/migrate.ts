@@ -336,8 +336,8 @@ export async function migrateMachineRename(): Promise<void> {
  *  CursorNotFound on the first getMore). So ask for everything in the first batch and REFUSE (throw)
  *  if the server still left a cursor open — a bounded backfill can afford a retry on the next boot,
  *  it cannot afford a partial write. */
-const RAW_SINGLE_BATCH = 100_000
-async function readSingleBatchRaw<T>(command: Record<string, unknown>): Promise<T[]> {
+export const RAW_SINGLE_BATCH = 100_000
+export async function readSingleBatchRaw<T>(command: Record<string, unknown>): Promise<T[]> {
   type Batch = { cursor?: { id?: number | { $numberLong?: string }; firstBatch?: T[] } }
   const res = (await prisma.$runCommandRaw(command as never)) as Batch
   const id = res.cursor?.id

@@ -95,7 +95,7 @@ void config_load_voicelang(char *out, size_t cap) { snprintf(out, cap, "vi"); }
 void ram_telemetry_periodic(const char *tag) { (void)tag; }
 bool fw_was_updated(char *version, size_t cap) { (void)version; (void)cap; return false; }
 void pro_frame_init(void) {}
-uint32_t pro_frame_present(const ht_scene_t *p, const ht_scene_t *n) { (void)p; (void)n; return 0; }
+uint32_t pro_frame_present(const ht_scene_t *p, const ht_scene_t *n, uint32_t *px) { (void)p; (void)n; if (px) *px = 1; return 0; }
 void pro_display_set_brightness(uint8_t l) { (void)l; }
 void pro_display_power(bool on) { (void)on; }
 uint32_t esp_random(void) { static uint32_t n = 0x1000; return n++; }
@@ -159,8 +159,23 @@ static pod_out_t tap_at_(int x, int y) {
     render();
     return (pod_out_t){0};
 }
+// No screen draws a Talk button or a tab's agent list: a still press on an agent starts the recording (the lift keeps it, hands
+// free; a later tap sends), and a tab's agents open through the nav, as a tap on one would.
+static void hold_press(void) {
+    now += 16;
+    CHECK(pro_app_touch(true, 360, 400));
+    now += 450;
+    CHECK(pro_app_touch(true, 360, 400));   // the still sample that finds the deadline
+    now += 16;
+    CHECK(pro_app_touch(false, 360, 400));
+    CHECK(LOCK_DEPTH == 0);
+    render();
+}
 static void tap(pod_action_t a, int arg) {
     const pod_hit_t *h = hit(a, arg);
+    if (!h && a == POD_A_BACK) { pro_app_button_press(); render(); return; }   // the side button: back one level, a recording discarded
+    if (!h && (a == POD_A_OPEN_TAB || a == POD_A_OPEN_AGENT)) { pod_nav_act(&U.nav, &U.model, a, arg, now); render(); return; }
+    if (!h && a == POD_A_TALK && (top() == POD_V_AGENT || top() == POD_V_RECAP)) { hold_press(); return; }
     CHECK(h);
     tap_at_(h->x + h->w / 2, h->y + h->h / 2);
 }
@@ -208,11 +223,11 @@ static void to_agent(int n) {
 static void press(void) {
     tap(POD_A_TALK, 0);
 }
-// Classic dims Talk (no hit) while an agent asks. A stale TALK hit, drawn before that, still
+// No Talk button is drawn. A stale TALK hit, drawn before the agent asked, still
 // reaches the app's voice gate, which is what these replays check.
 static void press_stale(void) {
     CHECK(U.frame.hit_count < 32);
-    U.frame.hits[U.frame.hit_count++] = (pod_hit_t){32, 624, 656, 88, POD_A_TALK, 0, {0}};
+    U.frame.hits[U.frame.hit_count++] = (pod_hit_t){0, 0, 720, 720, POD_A_TALK, 0, {0}};
     tap(POD_A_TALK, 0);
 }
 static_assert(A_VOICE == 9, "A_VOICE value 9 is Pod's plain voice");
@@ -271,7 +286,7 @@ static void busy_cable_says_why(void) {   // the cable is still carrying the las
     mic_opens();
     tap(POD_A_TALK, 0);                   // Done: the clip goes; its reply is awaited
     CHECK(pro_voice_waiting() && top() == POD_V_TALK && U.nav.sending);
-    tap_at_(360, 400);                    // the voice screen is sending: a tap on it starts nothing (Classic draws no TALK hit then)
+    tap_at_(360, 400);                    // the voice screen is sending: a tap on it starts nothing
     CHECK(REC.starts == 1 && top() == POD_V_TALK && !U.notice_on);
     pro_app_turn("a1", "started", "", 0); // the turn begins before the reply: back on the Agent screen
     CHECK(top() == POD_V_AGENT);
@@ -524,7 +539,7 @@ with tempfile.TemporaryDirectory(prefix="harness-pro-voice-") as directory:
     source = directory / "pro_voice_test.c"
     source.write_text(code)
     modules = sorted(POD.glob("*.c")) + sorted(POD.glob("*/*.c")) + [APP / "pod_glue.c", APP / "pro_app.c", APP / "pro_touch.c", AUDIO / "pro_voice.c", DISP / "scroll.c",
-                                         DISP / "pro_canvas.c", DISP / "terminal.c", DISP / "pro_turn.c", fonts]
+                                         DISP / "pro_canvas.c", DISP / "terminal.c", fonts]
     # The voice state machine runs on the touch, render and cable_link tasks (6 KB stack): no frame past 1 KB.
     subprocess.run([cc, "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror", "-Wframe-larger-than=1024", "-O1", "-DHT_FACE_PX=720",
                     "-DPRO_VOICE_TEST_HOOK", *include, "-c", str(AUDIO / "pro_voice.c"), "-o", os.devnull], check=True)

@@ -53,6 +53,7 @@ class DirectAuth implements AccessTokenSource {
       autonomousEnv: tokens.autonomousEnv ?? api.config.autonomousEnv,
       expiresIn: tokens.expiresIn,
       issuer: issuer,
+      ssoClientId: tokens.clientId,
     );
   }
 
@@ -124,7 +125,13 @@ class DirectAuth implements AccessTokenSource {
       // A refresh token only renews where it was issued.
       final tokens = switch (await session.issuer()) {
         SessionIssuer.emailCode => await emailCodes.refresh(refreshToken),
-        SessionIssuer.sso || SessionIssuer.harness => await api.refresh(
+        // An SSO session names the client it was issued to, or auth-service refuses it.
+        SessionIssuer.sso => await api.refresh(
+          refreshToken,
+          autonomousEnv: autonomousEnv,
+          clientId: await session.ssoClientId(),
+        ),
+        SessionIssuer.harness => await api.refresh(
           refreshToken,
           autonomousEnv: autonomousEnv,
         ),

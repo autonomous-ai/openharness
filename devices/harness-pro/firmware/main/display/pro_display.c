@@ -1,5 +1,4 @@
 #include "pro_display.h"
-#include "pro_turn.h"
 
 #include <assert.h>
 #include <string.h>
@@ -23,7 +22,7 @@ static const char *TAG = "pro_display";
 _Static_assert(PRO_DISPLAY_PX == BSP_LCD_H_RES && PRO_DISPLAY_PX == BSP_LCD_V_RES, "square 720 glass");
 
 /* Two internal DMA-capable strip buffers (PRO_STRIP_PX pixels each): the renderer fills one while the other is on the
- * wire, and the turn is done in place, so nothing is copied. */
+ * wire. */
 
 static esp_lcd_panel_handle_t s_panel;
 static SemaphoreHandle_t      s_dma_done;
@@ -65,24 +64,17 @@ void pro_display_init(void)
         s_touch_retry_at = esp_timer_get_time() + 5000000;
         ESP_LOGW(TAG, "touch not up; pro_touch_read() will retry");
     }
-    ESP_LOGI(TAG, "%dx%d glass up, turn=%d", PRO_DISPLAY_PX, PRO_DISPLAY_PX, pro_turn_get() ? 180 : 0);
+    ESP_LOGI(TAG, "%dx%d glass up", PRO_DISPLAY_PX, PRO_DISPLAY_PX);
 }
 
 uint16_t *pro_panel_strip(int which) { return s_strip[which & 1]; }
-
-void pro_panel_prepare(uint16_t *buf, int w, int h)
-{
-    pro_turn_pixels(buf, (size_t)w * (size_t)h);   /* the panel is mounted upside down: reverse the block (only while the screen is turned) */
-}
 
 void pro_panel_submit(int x, int y, int w, int h, const uint16_t *buf)
 {
     assert(s_panel && w > 0 && h > 0 && x >= 0 && y >= 0 && x + w <= PRO_DISPLAY_PX && y + h <= PRO_DISPLAY_PX);
     assert(buf == s_strip[0] || buf == s_strip[1]);
-    int px, py;
-    pro_turn_rect(x, y, w, h, &px, &py);
     xSemaphoreTake(s_dma_done, 0);   /* drop a stale give from an earlier timed-out push */
-    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(s_panel, px, py, px + w, py + h, buf));
+    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(s_panel, x, y, x + w, y + h, buf));
     s_in_flight = true;
 }
 
@@ -134,7 +126,6 @@ pro_touch_sample_t pro_touch_poll(int *x, int *y)
     if (count != 1) return PRO_TOUCH_BAD;
     int tx = data[0].x, ty = data[0].y;
     if (tx < 0 || ty < 0 || tx >= PRO_DISPLAY_PX || ty >= PRO_DISPLAY_PX) return PRO_TOUCH_BAD;
-    pro_turn_point(&tx, &ty);   /* the contact is turned here, once (one read of the flag for both axes) */
     if (x) *x = tx;
     if (y) *y = ty;
     return PRO_TOUCH_ONE;

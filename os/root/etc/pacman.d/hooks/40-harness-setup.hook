@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/lib/systemd/system/harness-setup.service
+
+[Action]
+Description = Enabling phone setup for when Harness has no network
+When = PostTransaction
+Exec = /usr/bin/sh -c 'test -e /etc/harness-live || systemctl enable --now harness-setup.service'

@@ -1084,7 +1084,7 @@ class SwarmSearchController extends ChangeNotifier {
 
   /// What the create row's preview says, in full: the steps, for Add machine.
   String get createDescription => isMachineMode
-      ? 'On the other computer:\n\n1. Install the app or CLI.\n2. Sign in to the same account.\n\nIt appears here and connects on its own.'
+      ? 'On the other computer:\n\n1. Install the app or CLI.\n2. Sign in to the same account.\n\nIt appears here and connects on its own.\n\nA machine someone shares with you appears here too.'
       : isModelMode
       ? 'Add an API key\n\n'
             'OpenRouter or a Custom API: Use its models to run a harness.\n'

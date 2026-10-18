@@ -161,6 +161,13 @@ model changes and history. Only exact known error codes select a fixed failure c
 are never read. The response timer measures the first text event after an observed turn start,
 not model tokens or output quality; tool-only turns can have no text response.
 
+hn (the `tui` surface) adds fixed `ui_tui_*` flow and `health_tui_*` milestone counters through its
+local daemon's queue, under the same account choice: connections, computer linking, viewer opening,
+app start, workspace ready, resume recovery, and once-per-session workspace-ready, first-work and
+first-response milestones. It records only while signed in and sends nothing observed before sign-in.
+Its counters go in reports of their own, so a backend without the `tui` names rejects only those; the
+daemon then drops them until the next UTC day or its restart, and records no delivery failure for it.
+
 No prompt, response text, transcript, code, file or project name, path, tool argument, error text,
 engine name, or stable user/device/agent identifier is a report field. Agent and launch identifiers
 exist only in bounded in-memory maps (1,000 entries each) and never enter disk queues or HTTP reports.

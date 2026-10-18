@@ -103,6 +103,17 @@ describe('what an experiment in its own process may ask of the core', () => {
     expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'observer_key', { op: 'public' })).toEqual({ error: 'odd' })
   })
 
+  it('tells Share which account is signed in here, which its tabs\' observers are derived for, and no other experiment', async () => {
+    const identity = vi.fn(async (): Promise<{ accountId: string; email: string } | null> => ({ accountId: 'u-bob', email: 'bob@x.io' }))
+    const core = fakeCore({ account: { identity } })
+    const withShare = new Set(['orchestrator', 'sharing'])
+    expect(await answerExperimentQuery(core, withShare, 'sharing', 'account', {})).toEqual({ accountId: 'u-bob', email: 'bob@x.io' })
+    identity.mockResolvedValueOnce(null)
+    expect(await answerExperimentQuery(core, withShare, 'sharing', 'account', {})).toEqual({ error: 'ACCOUNT_UNAVAILABLE' })
+    expect(await answerExperimentQuery(core, withShare, 'orchestrator', 'account', {})).toEqual({ error: 'NOT_SHARING' })
+    expect(identity).toHaveBeenCalledTimes(2)
+  })
+
   it('sends Share\'s sealed frame to one of its observers, and nothing that is not one', async () => {
     const observer = vi.fn(() => true)
     const core = fakeCore({ clients: { observer } })

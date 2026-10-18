@@ -56,6 +56,7 @@ class ProductConnections {
     required bool connecting,
     required bool connected,
     ProductHealthMeasure? failure,
+    bool suppressStart = false,
   }) {
     _choiceChanged();
     if (!measurement.healthEnabled || !measurement.sharing) {
@@ -64,6 +65,10 @@ class ProductConnections {
     }
     if (_manual.containsKey(key)) return;
     if (connecting) {
+      // A known unlinked computer's background probes are the same blocked
+      // episode. Preserve an already-open observation, but do not start one
+      // for every probe. Explicit Connect has its separate manual observation.
+      if (suppressStart) return;
       if (_pending.length >= 64 && !_pending.containsKey(key)) {
         measurement.health(ProductHealthMeasure.observationOverflow);
         return;

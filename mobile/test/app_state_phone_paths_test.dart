@@ -572,6 +572,12 @@ void main() {
         rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
         async.flushMicrotasks();
         final lists = rig.conn('m').payloadsOf('agents_list').length;
+        // A tick waits until the list is an interval old on the real clock
+        // (`DateTime.now()`), which fakeAsync does not move: age the list by
+        // the interval the fake clock is about to pass.
+        rig.app.stateOf('m')!.agentsListedAt = DateTime.now().subtract(
+          AppNotifier.agentSyncInterval,
+        );
 
         async.elapse(AppNotifier.agentSyncInterval);
         expect(rig.conn('m').payloadsOf('agents_list'), hasLength(lists + 1));

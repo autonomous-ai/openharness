@@ -19,11 +19,13 @@ beforeAll(async () => {
 
 afterEach(() => { vi.useRealTimers() })
 
-interface Pin { machineId: string; pub: string; label: string; linkedAt: number }
+interface Pin { machineId: string; pub: string; label: string; linkedAt: number; shared?: true }
 class MemPeers {
   pins = new Map<string, Pin>()
   get(id: string): Pin | null { return this.pins.get(id) ?? null }
-  pin(machineId: string, pub: string, label: string, at = 1): void { this.pins.set(machineId, { machineId, pub, label, linkedAt: at }) }
+  pin(machineId: string, pub: string, label: string, at = 1, shared = false): void {
+    this.pins.set(machineId, { machineId, pub, label, linkedAt: at, ...(shared ? { shared: true as const } : {}) })
+  }
   unlink(id: string): boolean { return this.pins.delete(id) }
   list(): Array<Pin & { fingerprint: string }> { return [...this.pins.values()].map((p) => ({ ...p, fingerprint: 'fp' })) }
 }
@@ -33,7 +35,7 @@ interface Node {
   pub: string
   machineId: string | null
   peers: MemPeers
-  trusted: Map<string, { kind?: string; machineId?: string }>
+  trusted: Map<string, { kind?: string; machineId?: string; shared?: boolean }>
   syncer: InstanceType<typeof S.GroupSyncer>
   online: boolean
   /** What `ready` answers: the device key log is this sign-in's. */
@@ -72,7 +74,8 @@ function fleet(): { add: (name: string, machine?: boolean) => Node; link: (joine
       self: () => ({ pub: node.pub, kind: machine ? 'machine' : 'viewer', label: name, at: S.SELF_STAMP, ...(node.machineId ? { machineId: node.machineId } : {}) }),
       trust: (p) => { node.trusted.set(p.pub, { kind: p.kind, machineId: p.machineId }) },
       untrust: (p) => { node.trusted.delete(p) },
-      paired: () => [...node.trusted].map(([identityPub, t]) => ({ identityPub, label: 'x', pairedAt: 1, role: 'web' as const, ...(t.kind ? { kind: t.kind as 'machine' } : {}), ...(t.machineId ? { machineId: t.machineId } : {}) })),
+      paired: () => [...node.trusted].map(([identityPub, t]) => ({ identityPub, label: 'x', pairedAt: 1, role: 'web' as const, ...(t.kind ? { kind: t.kind as 'machine' } : {}), ...(t.machineId ? { machineId: t.machineId } : {}), ...(t.shared ? { shared: true as const } : {}) })),
+      shared: (pub) => node.trusted.get(pub)?.shared === true,
       request: async (machineId, frame: Frame) => {
         const target = nodes.find((n) => n.machineId === machineId)
         if (!target?.online) return null
@@ -104,6 +107,41 @@ function fleet(): { add: (name: string, machine?: boolean) => Node; link: (joine
 }
 
 describe('GroupSyncer', () => {
+  it('never makes a machine shared across accounts part of the group, either way', async () => {
+    vi.useFakeTimers()
+    const f = fleet()
+    // Dee's two machines, linked; Kim's machine and phone, another account.
+    const [dee, dee2, kim] = [f.add('d'), f.add('e'), f.add('k')]
+    const kimPhone = f.add('p', false)
+    f.link(dee, dee2)
+    f.link(kimPhone, kim)
+    await dee.syncer.syncAll()
+    await kim.syncer.syncAll()
+    // Dee shares her machine with Kim (gateway/sharedTrust.ts): Kim pins it, it trusts Kim's machine.
+    kim.peers.pin(dee.machineId!, dee.pub, 'Dee’s machine', 1, true)
+    dee.trusted.set(kim.pub, { kind: 'machine', machineId: kim.machineId!, shared: true })
+
+    // Kim's rounds never dial it, and an exchange with it is refused before anything is sent.
+    expect(await kim.syncer.syncWith(dee.machineId!)).toBe(false)
+    await kim.syncer.syncAll()
+    // A group_sync from Kim's machine is refused by Dee's.
+    expect(dee.syncer.handle(kim.pub, { self: { pub: kim.pub, kind: 'machine', label: 'k', machineId: kim.machineId, at: S.SELF_STAMP },
+      members: [{ pub: kimPhone.pub, kind: 'viewer', label: 'p', at: 5 }], removed: [] })).toEqual({ error: 'SHARED' })
+    await dee.syncer.syncAll()
+
+    expect(dee.trusted.has(kimPhone.pub)).toBe(false)
+    expect(dee2.trusted.has(kim.pub)).toBe(false)
+    expect(kim.trusted.has(dee.pub)).toBe(false)
+    expect(kim.trusted.has(dee2.pub)).toBe(false)
+    expect(dee.syncer.roster().members.map((m) => m.pub)).not.toContain(kim.pub)
+    expect(kim.syncer.roster().members.map((m) => m.pub)).not.toContain(dee.pub)
+    // Nor is either seeded from the other as the daemon starts again.
+    kim.syncer.start(); dee.syncer.start()
+    expect(kim.syncer.roster().members.map((m) => m.pub)).not.toContain(dee.pub)
+    expect(dee.syncer.roster().members.map((m) => m.pub)).not.toContain(kim.pub)
+    for (const n of f.nodes) n.syncer.stop()
+  })
+
   it('A links B, A links C ⇒ B and C reach each other both ways, no password', async () => {
     vi.useFakeTimers()
     const f = fleet()

@@ -76,6 +76,21 @@ export function parsePiFooterProfile(capture: string): { model: string; effort: 
 }
 
 /**
+ * The model at the right of Pi 1.0's usage line (`0.0%/256k (auto)          Qwen/Qwen3.8-27B`), which no
+ * longer says the thinking level. The window's edge clips a long name (`DeepSeek-V4-Fla`), so only a name
+ * that is exactly one of [known] (the `pi --list-models` catalog) is taken: a clipped one is no model at
+ * all. A Pi that has not answered yet has no session record to say it, so this is all there is then.
+ */
+export function parsePi1FooterModel(capture: string, known: ReadonlySet<string>): string | null {
+  const lines = capture.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const match = /\d%\/\d+(?:\.\d+)?[kKmM]\b.*?\s{2,}(\S+)\s*$/.exec(lines[i])
+    if (match) return known.has(match[1]) ? match[1] : null
+  }
+  return null
+}
+
+/**
  * Steps to walk pi's "Thinking Level" list from one level to another: positive means Down. Null when
  * either end is not on the ladder, which the caller must treat as "do not drive the list blind".
  */

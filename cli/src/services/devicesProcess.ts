@@ -26,7 +26,7 @@ import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { accountLink } from './accountLink.js'
 import { startDevices, type DevicesDeps } from './devices.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
-import { processCoreApi } from './processCoreApi.js'
+import { processCoreApi, UNASKED } from './processCoreApi.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
 
 /** An agent as the core lists it for the dial: with the name the apps show and the model it runs. */
@@ -144,6 +144,9 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
         const text = (await ask('activityText', { agentId })).text
         return typeof text === 'string' && text ? { text } : null
       },
+      // Whether harnesses work is asked by Agent Messages alone.
+      activity: UNASKED.activity,
+      summaries: UNASKED.summaries,
       // The devices make no agent of their own and show no harness's viewer.
       ...AGENT_ACTIONS_OFF,
     },

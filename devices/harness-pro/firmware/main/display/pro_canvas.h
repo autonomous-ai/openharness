@@ -15,7 +15,7 @@ static inline int ht_pro_vietnamese_index(uint32_t cp)
     return -1;
 }
 // Position of cp in the face's extras table (the marks baked after the Vietnamese entries), or -1. The atlas
-// index is 102 + position. The table is per face (gen_fonts.py): Console 9 marks, Classic ci_* 2, old faces none.
+// index is 102 + position. The table is per face (gen_fonts.py): Pets 9 marks, old faces none.
 static inline int ht_pro_extra_pos(const ht_pro_font_t *f, uint32_t cp)
 {
     for (unsigned i = 0; f && f->extras && i < f->extra_count; i++)

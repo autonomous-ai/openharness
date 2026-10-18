@@ -10,13 +10,11 @@ Needs ESP-IDF 5.5.4 (installed at `~/esp/esp-idf-5.5.4`) and Python with Pillow 
 ```sh
 . ~/esp/esp-idf-5.5.4/export.sh
 cd devices/harness-pro/firmware
-idf.py -B build -DPROJECT_VER=0.0.99-pod -DPOD_PANEL_TURN=180 build
+idf.py -B build -DPROJECT_VER=0.0.99-pod build
 ```
 
 - `PROJECT_VER=0.0.99-pod` keeps a dev build from being overwritten by the daemon's OTA update.
-- `POD_PANEL_TURN=180` sets the **default** turn (picture and touch together) for a unit that has never been set.
-  Each unit keeps its own choice in NVS: the app's "Rotate screen 180°" switch (`settings.set {"screenTurned"}`)
-  turns it at run time, no rebuild. Release images use 180.
+- The picture and touch are drawn in the panel's own orientation; there is no turn and no setting.
 
 ## Flash
 
@@ -39,7 +37,7 @@ python3 devices/harness-pro/firmware/test/test_tree_isolation.py
 python3 devices/harness-pro/firmware/test/test_fonts.py
 ```
 
-`run.sh` also runs the app, hello and voice-gate tests. It can also check the Console render time (`test/test_cs_perf.sh`: each screen within 85% of its recorded host time in `test/cs_perf_baseline.txt`). That check is opt-in, because absolute microseconds recorded on a Mac are flaky on shared or Linux CI machines: run it with `CS_PERF=1` (`CS_PERF_RECORD=1` prints fresh numbers).
+`run.sh` also runs the app, hello and voice-gate tests. It can also check the Pets render time (`test/test_ph_perf.sh`: each screen within 85% of its recorded host time in `test/ph_perf_baseline.txt`). That check is opt-in, because absolute microseconds recorded on a Mac are flaky on shared or Linux CI machines: run it with `PH_PERF=1` (`PH_PERF_RECORD=1` prints fresh numbers).
 
 Golden screens: `firmware/test/golden.sh --check` renders every Pod screen at five instants and compares hashes with
 `test/golden.txt` (or `golden-liberation.txt` when `PRO_FONT` is Liberation). Run it after any change to drawing or

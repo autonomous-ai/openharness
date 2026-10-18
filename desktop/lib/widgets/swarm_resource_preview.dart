@@ -28,6 +28,7 @@ import '../terminal/terminal_theme_store.dart';
 import 'account_device_detail.dart'
     show confirmDeviceAction, removeDeviceDetail;
 import 'machine_picker_form.dart';
+import 'machine_sharing_form.dart';
 import 'api_picker_form.dart';
 import 'swarm_search_preview.dart';
 import 'swarm_preview_scroll.dart';
@@ -126,6 +127,9 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   MachinePickerFormKind? _machineForm;
   String? _formResource;
   var _formKey = GlobalKey<MachinePickerFormState>();
+  // The machine's sharing (MachineSharingForm), open in place of a machine form.
+  bool _sharing = false;
+  var _sharingKey = GlobalKey<MachineSharingFormState>();
   final _messages = <String, String>{};
   bool _apiFormOpen = false, _apiRemoving = false;
   String? _apiResource, _apiConnectionId;
@@ -181,21 +185,38 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
   }
 
   void _mine(AccountDevice device) => _devices?.mine(device);
-  bool get _editingMachine => _machineForm != null && _formResource == row?.id;
+  bool get _editingMachine =>
+      (_machineForm != null || _sharing) && _formResource == row?.id;
 
   void _editMachine(MachinePickerFormKind kind) {
     setState(() {
       _formKey = GlobalKey<MachinePickerFormState>();
       _machineForm = kind;
+      _sharing = false;
       _formResource = row?.id;
     });
   }
+
+  void _shareMachine() {
+    setState(() {
+      _sharingKey = GlobalKey<MachineSharingFormState>();
+      _machineForm = null;
+      _sharing = true;
+      _formResource = row?.id;
+    });
+  }
+
+  /// Add a machine shared with this account's domain, from Add machine. A machine shared with this
+  /// account, by its domain or by email alike, is never taken back off its list from here.
+  void _addSharedMachine(Machine machine) =>
+      unawaited(_run(() => app.addSharedMachine(machine.machineId)));
 
   void _closeMachineForm(String? message) {
     if (!mounted) return;
     setState(() {
       if (message != null && row != null) _messages[row!.id] = message;
       _machineForm = null;
+      _sharing = false;
       _formResource = null;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -292,9 +313,10 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         if (mounted) widget.onRefocus();
       });
     }
-    if (_machineForm != null && _formResource != row?.id) {
+    if ((_machineForm != null || _sharing) && _formResource != row?.id) {
       // A click/query change closes the old editor before any later reply.
       _machineForm = null;
+      _sharing = false;
       _formResource = null;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) widget.onRefocus();
@@ -402,7 +424,10 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     }
     if (_editingMachine &&
         widget.search.managing &&
-        _formKey.currentState?.handle(command) == true) {
+        (_sharing
+                ? _sharingKey.currentState?.handle(command)
+                : _formKey.currentState?.handle(command)) ==
+            true) {
       return true;
     }
     if (command == 'picker.resource_add_api' && widget.search.isModelMode) {
@@ -491,7 +516,9 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     if (_editingApi) {
       _apiFormKey.currentState?.focus();
     } else if (_editingMachine) {
-      _formKey.currentState?.focus();
+      _sharing
+          ? _sharingKey.currentState?.focus()
+          : _formKey.currentState?.focus();
     } else {
       _focusActions();
     }
@@ -862,6 +889,13 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
             () => _editMachine(MachinePickerFormKind.cli),
             command: 'picker.machine_cli',
           ),
+          // Machines shared with this account's domain: one click adds each.
+          for (final shared in app.machinesToAdd)
+            _ResourceAction(
+              'Add ${shared.displayName}',
+              busy ? null : () => _addSharedMachine(shared),
+              command: 'picker.machine_add_shared:${shared.machineId}',
+            ),
         ];
       }
       if (search.isModelMode) {
@@ -1031,11 +1065,20 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           ),
         ...secondary.where((a) => a.command == 'picker.resource_connect'),
         ...secondary.where((a) => a.command == 'picker.resource_settings'),
-        if (!machine.machine.isShared)
+        if (!machine.machine.isShared && !machine.machine.isSharedMachine)
           _ResourceAction(
             'Rename',
             busy ? null : () => _editMachine(MachinePickerFormKind.rename),
             command: 'picker.resource_rename',
+          ),
+        // Sharing it with other accounts is its owner's, signed in.
+        if (!machine.machine.isShared &&
+            !machine.machine.isSharedMachine &&
+            !app.isGuest)
+          _ResourceAction(
+            'Share',
+            busy ? null : _shareMachine,
+            command: 'picker.resource_share',
           ),
         ...secondary.where((a) => a.command == 'picker.resource_remove'),
         ...secondary.where((a) => a.command == 'picker.device_mine'),
@@ -1150,7 +1193,10 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           ),
         ],
       ] else if (selected?.isMachine == true && machine != null) ...[
+        // A machine shared with this account is reached by its key, never a password: it links as
+        // soon as both daemons have read the sharing.
         if (!machine.isLocalMachine &&
+            !machine.machine.isSharedMachine &&
             machine.needsLink &&
             machine.nodeOnline != false)
           _ResourceAction(
@@ -1164,7 +1210,9 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
             () => _editMachine(MachinePickerFormKind.password),
             command: 'picker.resource_settings',
           ),
-        if (!machine.isLocalMachine && !machine.machine.isShared)
+        if (!machine.isLocalMachine &&
+            !machine.machine.isShared &&
+            !machine.machine.isSharedMachine)
           _ResourceAction(
             'Remove',
             () => _editMachine(MachinePickerFormKind.delete),
@@ -1640,8 +1688,14 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         status,
         if (machine.isLocalMachine) 'This computer',
         if (machine.machine.isShared) 'View only',
+        if (machine.machine.machineShare case final share?)
+          'Shared by ${share.owner}',
       ].join(' · '),
       '',
+      if (machine.machine.machineShare case final share?) ...[
+        'You use it as your own. Only ${share.owner} can rename, remove or share it.',
+        '',
+      ],
       if (resources?.cpuPercent case final cpu?) 'CPU ${cpu.round()}%',
       if (resources?.memoryUsedBytes != null &&
           resources?.memoryTotalBytes != null)
@@ -2016,6 +2070,15 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                         onFocusChanged: widget.search.setManaging,
                         onSwitchPane: _switchPane,
                       )
+                    : _editingMachine && _sharing
+                    ? MachineSharingForm(
+                        key: _sharingKey,
+                        app: app,
+                        machineId: row!.machineId!,
+                        onClose: _closeMachineForm,
+                        onFocusChanged: widget.search.setManaging,
+                        onSwitchPane: _switchPane,
+                      )
                     : _editingMachine
                     ? MachinePickerForm(
                         key: _formKey,
@@ -2052,6 +2115,12 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                     : row?.isCreate == true
                     ? _details([
                         ...widget.search.createDescription.split('\n'),
+                        if (_machineSetup && app.machinesToAdd.isNotEmpty) ...[
+                          '',
+                          'Shared with your team:',
+                          for (final shared in app.machinesToAdd)
+                            '${shared.displayName} · ${shared.machineShare?.owner ?? ''}',
+                        ],
                       ], controls: _machineSetup)
                     : widget.search.isStoreMode
                     ? _details([

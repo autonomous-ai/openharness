@@ -79,7 +79,7 @@ class AgentModelController extends ChangeNotifier {
   /// or leave a grid between two openings, and an offer nobody is serving any
   /// more is worse than a moment's wait.
   Future<void> _load() async {
-    final answer = await notifier.gridModels(machineId);
+    final answer = await notifier.gridModels(machineId, userAction: true);
     if (_disposed) return;
     _answer = answer;
     _changed();

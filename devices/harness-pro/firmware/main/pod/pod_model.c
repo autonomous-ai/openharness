@@ -36,6 +36,9 @@ static bool same(const char *a, const char *b) { return a && b && !strcmp(a, b);
 
 void pod_model_reset(pod_model_t *m) { memset(m, 0, sizeof *m); }
 
+static uint32_t (*s_random)(void);
+void pod_model_random(uint32_t (*rnd)(void)) { s_random = rnd; }
+
 // The model's own idea of "now": the newest now_ms any feed or the renderer has shown it. It only moves forward
 // (by signed difference, so it survives the uint32 wrap), and lets every reader apply the same stale rule.
 void pod_model_clock(pod_model_t *m, uint32_t now_ms) {
@@ -239,7 +242,6 @@ static pod_state_t state_of_status(const char *status) {
 // A sentence the agent has moved on from joins the turn's steps (newest first, no repeats, the oldest falls off).
 // Each keeps the seconds into the turn it arrived at (0xFFFF when no turn.started was seen: a rebuilt list has no times).
 static void drop_step(pod_agent_t *a, int at) {
-    if (at < a->fresh_steps) a->fresh_steps--;
     for (int i = at; i + 1 < a->step_count; i++) {
         memcpy(a->steps[i], a->steps[i + 1], POD_STEP_BYTES);
         a->step_at_s[i] = a->step_at_s[i + 1];
@@ -251,7 +253,7 @@ static void push_step(pod_agent_t *a, const char *old, uint32_t now_ms) {
     char cut[POD_STEP_BYTES];
     copy_str(cut, sizeof cut, old);
     for (int i = 0; i < a->step_count; i++) if (!strcmp(a->steps[i], cut)) { drop_step(a, i); break; }
-    if (a->step_count == POD_STEPS_MAX) { a->step_count--; if (a->fresh_steps > a->step_count) a->fresh_steps = a->step_count; }
+    if (a->step_count == POD_STEPS_MAX) { a->step_count--; }
     for (int i = a->step_count; i > 0; i--) {
         memcpy(a->steps[i], a->steps[i - 1], POD_STEP_BYTES);
         a->step_at_s[i] = a->step_at_s[i - 1];
@@ -260,7 +262,6 @@ static void push_step(pod_agent_t *a, const char *old, uint32_t now_ms) {
     const uint32_t s = (now_ms - a->since_ms) / 1000;   // unsigned: the clock wraps
     a->step_at_s[0] = !a->turn_started ? 0xFFFF : s > 0xFFFE ? 0xFFFE : (uint16_t)s;
     a->step_count++;
-    if (a->fresh_steps < a->step_count) a->fresh_steps++;
     if (a->step_total >= 0 && a->step_total < INT16_MAX) a->step_total++;
 }
 
@@ -450,8 +451,9 @@ static void set_state(pod_agent_t *a, pod_state_t s, uint32_t now_ms) {
     if (s == POD_WORKING && a->state != POD_WORKING && a->state != POD_ASKING) {   // a new turn without a turn.started
         a->failed = false;
         a->step_total = -1;
+        a->work_alt = s_random && (s_random() & 1u);   // chef or builder, for the whole turn
     }
-    if (s != POD_WORKING) { a->activity[0] = 0; a->verb[0] = 0; a->step_count = a->fresh_steps = 0; a->turn_started = false; }
+    if (s != POD_WORKING) { a->activity[0] = 0; a->verb[0] = 0; a->step_count = 0; a->turn_started = false; }
     // A task starting or ending is news; idle <-> done <-> offline from a sweep (a machine back, a boot's first look) is not.
     bool busy_now = s == POD_WORKING || s == POD_ASKING, busy_was = a->state == POD_WORKING || a->state == POD_ASKING;
     if (a->state != s && (busy_now || busy_was)) { a->act_ms = now_ms; a->has_act = true; }
@@ -486,7 +488,7 @@ void pod_model_turn(pod_model_t *m, const char *id, const char *kind, const char
         a->elapsed_s = 0;
         a->activity[0] = 0;
         a->verb[0] = 0;
-        a->step_count = a->fresh_steps = 0;
+        a->step_count = 0;
         a->step_total = 0;
         a->turn_started = true;
         a->failed = false;
@@ -565,7 +567,6 @@ void pod_model_question(pod_model_t *m, const char *id, const char *text) {
     a->sent = false;
     a->state = POD_ASKING;
     a->activity[0] = 0;
-    a->fresh_steps = 0;   // the steps stay for Console's LEADING UP TO IT; Classic never showed them after a question
     copy_str(a->question, sizeof a->question, text);
     if (before != agent_sig(a, true)) m->revision++;
 }
@@ -773,6 +774,16 @@ void pod_model_unread_add(pod_model_t *m, const char *agent, const char *name, c
     u->kind = a && a->failed ? POD_UNREAD_FAILED : POD_UNREAD_FINISHED;
     m->unread_count++;
     m->revision++;
+}
+
+int pod_notice_count(const pod_model_t *m) {
+    int n = 0;
+    for (int i = 0; i < m->agent_count; i++) n += pod_model_eff(m, &m->agents[i]) == POD_ASKING;
+    for (int i = 0; i < m->unread_count; i++) {
+        const pod_agent_t *ag = pod_model_find(m, m->unread[i].agent);
+        n += !(ag && pod_model_eff(m, ag) == POD_ASKING);   // an asking agent is listed by its question; its entry waits
+    }
+    return n;
 }
 
 void pod_model_unread_clear(pod_model_t *m) {

@@ -2,13 +2,18 @@
 """A full-page Wi-Fi step backed by NetworkManager, with no resident UI service."""
 import argparse
 import curses
+import json
 import os
+from pathlib import Path
 import subprocess
 import time
 import uuid
 import unicodedata
 
 WORDMARK = ('█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀', '█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█')
+# setup.py's hotspot for a phone, and the Wi-Fi it saw before taking the radio.
+SETUP_HOTSPOT = 'harness-setup'
+SETUP_NETWORKS = '/run/harness-os/setup-networks.json'
 
 
 def nmcli(*args, secret=None, wait=8):
@@ -36,15 +41,44 @@ def fields(line):
     return [*values, value]
 
 
+def setup_hotspot_up():
+    """Whether the radio hosts setup.py's hotspot for a phone. It is not a network this computer is
+    on, and while it is up the radio cannot scan: the list shown is the one setup.py read first."""
+    try:
+        result = nmcli('-t', '-e', 'yes', '-f', 'NAME', 'connection', 'show', '--active', wait=3)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and SETUP_HOTSPOT in [fields(line)[0] for line in result.stdout.splitlines()]
+
+
 def connected():
     try:
         result = nmcli('-t', '-f', 'STATE', 'general', wait=2)
-        return result.returncode == 0 and result.stdout.strip().startswith('connected')
+        if result.returncode or not result.stdout.strip().startswith('connected'):
+            return False
     except (OSError, subprocess.TimeoutExpired):
         return False
+    # The setup hotspot alone makes NetworkManager say connected (local only): not online.
+    if not setup_hotspot_up():
+        return True
+    return any(row[1] == 'ethernet' and row[2] == 'connected' for row in wired_devices())
+
+
+def setup_networks():
+    """What the radio saw before it became the setup hotspot (os/setup.py)."""
+    try:
+        rows = json.loads(Path(SETUP_NETWORKS).read_text())
+    except (OSError, ValueError):
+        return []
+    networks = [dict(ssid=row['ssid'], signal=int(row['signal']), security=row.get('security') or '--',
+                     device=row['device'], bssid='', active=False)
+                for row in rows if isinstance(row, dict) and row.get('ssid') and row.get('device')]
+    return sorted(networks, key=lambda row: (-row['signal'], row['ssid']))
 
 
 def scan(rescan=None):
+    if setup_hotspot_up():
+        return setup_networks()
     # Opening the page should reuse a recent scan, especially just after a
     # reconnect. NetworkManager refreshes results older than 30 seconds in auto
     # mode. Force a scan only when the user chooses Rescan.
@@ -128,9 +162,17 @@ def saved_connection(network):
     return None
 
 
+def leave_setup_hotspot():
+    # Chosen here, on the screen: the radio stops hosting the phone's setup hotspot to join it, and
+    # setup.py, seeing this computer online, stops waiting for the phone.
+    if setup_hotspot_up():
+        nmcli('connection', 'down', 'id', SETUP_HOTSPOT, wait=10)
+
+
 def connect(network, password=None):
     saved = saved_connection(network) if password is None else None
     if saved:
+        leave_setup_hotspot()
         return nmcli('connection', 'up', 'uuid', saved, 'ifname', network['device'], wait=30).returncode == 0
     security = network['security']
     protected = bool(security and security != '--')
@@ -147,6 +189,7 @@ def connect(network, password=None):
     if protected:
         key = 'sae' if 'WPA3' in security and 'WPA2' not in security else 'wpa-psk'
         arguments += ['wifi-sec.key-mgmt', key, 'wifi-sec.psk-flags', '0']
+    leave_setup_hotspot()
     created = nmcli(*arguments)
     if created.returncode:
         raise ValueError('Could not configure Wi-Fi. Choose Rescan and try again.')
@@ -300,12 +343,18 @@ class NetworkPage:
                 value += key
 
     def run(self):
-        if self.first_use and connected():
+        online = connected()
+        if self.first_use and online:
             return 0
+        # Opened while offline (hn brings it forward when the network has been gone a while): done
+        # once the network is back, however it came back — chosen here, by a phone through setup.py,
+        # or a router back on. Left open, it held the first tab and OpenCode never opened there.
+        # Opened while online, to change networks, it stays until closed.
+        until_online = self.first_use or not online
         self.refresh()
         checked = time.monotonic()
         while True:
-            if self.first_use and time.monotonic() - checked >= 2:
+            if until_online and time.monotonic() - checked >= 2:
                 if connected():
                     return 0
                 checked = time.monotonic()

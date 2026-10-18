@@ -136,7 +136,11 @@ class ForkTestApp extends ModelManagerTestApp {
   String? viewerUse;
   bool viewerInstalled = false;
   @override
-  Future<void> probeDsh(String machineId, {bool force = false}) async {
+  Future<void> probeDsh(
+    String machineId, {
+    bool force = false,
+    bool userAction = false,
+  }) async {
     stateOf(machineId)!.dsh.replace([
       DshEntry(
         id: 'forks/test',

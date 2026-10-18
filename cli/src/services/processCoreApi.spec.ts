@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { TAB_KEY_OFF, TAB_RELAY_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { agentsIn, daemonIn, isSession, processCoreApi, type ShownAgent } from './processCoreApi.js'
+import { agentsIn, daemonIn, isSession, processCoreApi, UNASKED, type ShownAgent } from './processCoreApi.js'
 import { turnsLink } from './turnsLink.js'
 import { usageTarget } from '../lib/agentUsageWire.js'
 
@@ -67,6 +68,33 @@ describe('the core API a light service runs on in its own process', () => {
     // What only the devices ask (services/devices.ts): nothing, from every other service.
     expect([api.machine.id(), api.machine.computerId(), api.machine.name()]).toEqual(['', '', ''])
     await expect(api.agents.activityText('a1')).resolves.toBeNull()
+    await expect(UNASKED.activity()).resolves.toEqual({})
+    // With no link to the core it reports no activity; with one, what the core answered, and only valid states.
+    await expect(api.agents.activity(['a1'])).resolves.toEqual({})
+    const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ activity: { a1: 'working', a2: 'idle', a3: 'unknown', a4: 'bogus', a5: 7 } }))
+    const linked = processCoreApi('/data', 'messages', { ask })
+    await expect(linked.agents.activity(['a1', 'a2'])).resolves.toEqual({ a1: 'working', a2: 'idle', a3: 'unknown' })
+    expect(ask).toHaveBeenCalledWith('activity', { agentIds: ['a1', 'a2'] })
+    for (const answer of [{}, { activity: 'x' }, { activity: null }]) {
+      ask.mockResolvedValueOnce(answer)
+      await expect(linked.agents.activity(['a1'])).resolves.toEqual({})
+    }
+    ask.mockRejectedValueOnce(new Error('offline'))
+    await expect(linked.agents.activity(['a1'])).resolves.toEqual({})
+    // The one-line summaries: none without a link; with one, the core's strings under the agents asked about. An older core
+    // answers `activity` without `summaries`, and that reads as none.
+    await expect(UNASKED.summaries()).resolves.toEqual({})
+    await expect(api.agents.summaries(['a1'])).resolves.toEqual({})
+    const askSummaries = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ activity: {}, summaries: { a1: 'Fix the login', a2: 7, a3: '' } }))
+    const withSummaries = processCoreApi('/data', 'messages', { ask: askSummaries })
+    await expect(withSummaries.agents.summaries(['a1', 'a2'])).resolves.toEqual({ a1: 'Fix the login' })
+    expect(askSummaries).toHaveBeenCalledWith('activity', { agentIds: ['a1', 'a2'], summaries: true })
+    for (const answer of [{ activity: {} }, { summaries: 'x' }, { summaries: null }]) {
+      askSummaries.mockResolvedValueOnce(answer)
+      await expect(withSummaries.agents.summaries(['a1'])).resolves.toEqual({})
+    }
+    askSummaries.mockRejectedValueOnce(new Error('offline'))
+    await expect(withSummaries.agents.summaries(['a1'])).resolves.toEqual({})
     expect(api.account.signedIn()).toBe(false)
     expect(api.account.environment()).toBe('')
     await expect(api.account.machines()).resolves.toEqual({ status: 503, body: {} })
@@ -89,6 +117,8 @@ describe('the core API a light service runs on in its own process', () => {
     expect(api.daemon).toMatchObject({ command: 'harness', port: 0 })
     expect(api.daemon.machineId()).toBe('')
     expect(await api.account.backend('GET', '/api/agent-messages')).toEqual({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } })
+    // With no core to ask, no account either.
+    expect(await api.account.identity()).toBeNull()
     expect(api.account.onNotice(() => {})()).toBeUndefined()
   })
 
@@ -175,6 +205,21 @@ describe('the core API a light service runs on in its own process', () => {
     const watch = { frame: vi.fn(async () => {}), close: vi.fn(async () => {}), onOutput: vi.fn(() => () => {}) }
     const api = processCoreApi('/data', 'sharing', { ask, watch, daemon: () => ({ command: 'x', port: 1, machineId: () => 'm', autonomousEnv: 'staging' }) })
     expect(await api.account.observerKey.publicKey()).toBe('a2V5')
+    // Only Agent Messages is given shared tabs' keys (services/messagesProcess.ts): an experiment holds none, asker or not.
+    expect(api.account.tabKey).toBe(TAB_KEY_OFF)
+    expect(api.account.tabRelay).toBe(TAB_RELAY_OFF)
+    // The account signed in here, asked of the core (core/experimentQueries.ts `account`): Share derives its tabs'
+    // observers for it. A core that cannot say, or says something else, answers none.
+    expect(await api.account.identity()).toBeNull()
+    expect(ask).toHaveBeenCalledWith('account', {})
+    answers.account = { accountId: 'u-bob', email: 'bob@x.io', extra: 1 }
+    expect(await api.account.identity()).toEqual({ accountId: 'u-bob', email: 'bob@x.io' })
+    for (const odd of [{ accountId: '', email: 'bob@x.io' }, { accountId: 'u-bob', email: '' }, { accountId: 7, email: 'bob@x.io' }, { accountId: 'u-bob' }, { error: 'NOT_SHARING' }]) {
+      answers.account = odd
+      expect(await api.account.identity()).toBeNull()
+    }
+    answers.account = new Error('the link went')
+    expect(await api.account.identity()).toBeNull()
     expect(await api.account.observerKey.signWelcome('m', 's', 'cA==', 'ZQ==')).toBe('a2V5')
     expect(ask).toHaveBeenCalledWith('observer_key', { op: 'public' })
     expect(ask).toHaveBeenCalledWith('observer_key', { op: 'sign', machineId: 'm', shareId: 's', peer: 'cA==', ephemeral: 'ZQ==' })

@@ -29,6 +29,18 @@ String phoneAgentId(String machineId, String agentId) =>
 /// the [MachineState] they hold, so `working` and `4m` stay current without the
 /// catalog being rebuilt — and the ranking no longer depends on them at all.
 class PhoneSearchCatalogCache {
+  /// The cache [notifier]'s search boxes share.
+  ///
+  /// ⚠️ **One per notifier, not one per box.** Find is opened and closed all day, and a cache
+  /// that lived and died with each box built the account's catalog afresh on every opening —
+  /// every agent's strings normalized, on the frame the sheet starts to slide up — for a fleet
+  /// that had not changed since the last time. Shared, an opening reads the catalog the last one
+  /// left, and rebuilds only what [read] finds changed. The rows are ranked against the live
+  /// state on every filter either way, as they always were while one box stayed open.
+  static PhoneSearchCatalogCache of(AppNotifier notifier) =>
+      _shared[notifier] ??= PhoneSearchCatalogCache();
+  static final _shared = Expando<PhoneSearchCatalogCache>();
+
   List<Object?>? _presentation;
   List<PhoneDestination> _entries = const [];
 
@@ -158,6 +170,16 @@ PhoneDestination _agent(
 /// Every machine, unlike [agentIndex], which lists only the ones that can hand
 /// over an agent: a machine that is off or locked is exactly the thing somebody
 /// searches for when its agents are missing, and the row says which it is.
+///
+/// The state itself is the word at the row's right edge, as a harness row's is
+/// (`PhoneSearchResults._machineStateOf`); the line under the name says what it
+/// means — see [_machineDetail].
+///
+/// ⚠️ **The ones that answer first**, each group in the account's order — see
+/// [_machineRank]. With nothing typed after `@` this IS the list's order
+/// (`rankPhoneDestinations` keeps the catalog's order for rows that are not
+/// agents), and the one computer that answered used to sit wherever the account
+/// listed it, under every machine that was switched off.
 List<PhoneDestination> _machines(
   AppNotifier notifier,
   Map<String, PhoneDestination> agents,
@@ -166,32 +188,66 @@ List<PhoneDestination> _machines(
   for (final row in agents.values) {
     (members[row.machineId!] ??= {}).add(row.id);
   }
-  return [
-    for (final machine in notifier.machines)
-      if (notifier.stateOf(machine.machineId) case final state?)
-        PhoneDestination(
-          id: 'machine:${machine.machineId}',
-          kind: PhoneDestinationKind.machine,
-          title: state.machine.displayName,
-          detail: [
-            'Machine',
-            _countLabel(members[machine.machineId]?.length ?? 0, 'harness'),
-            switch (phoneMachineStatusOf(state)) {
-              PhoneMachineStatus.needsPassword => 'Link required',
-              PhoneMachineStatus.offline => 'Offline',
-              PhoneMachineStatus.connecting => 'Connecting',
-              PhoneMachineStatus.ready => null,
-            },
-          ].whereType<String>().join(' · '),
-          machineId: machine.machineId,
-          machineLabel: state.machine.displayName,
-          machine: state,
-          members: Set.unmodifiable(
-            members[machine.machineId] ?? const <String>{},
-          ),
-        ),
-  ];
+  final rows = <({PhoneDestination row, int rank, int index})>[];
+  for (final (index, machine) in notifier.machines.indexed) {
+    final state = notifier.stateOf(machine.machineId);
+    if (state == null) continue;
+    final status = phoneMachineStatusOf(state);
+    final ids = members[machine.machineId] ?? const <String>{};
+    rows.add((
+      row: PhoneDestination(
+        id: 'machine:${machine.machineId}',
+        kind: PhoneDestinationKind.machine,
+        title: state.machine.displayName,
+        detail: _machineDetail(status, ids.length),
+        machineId: machine.machineId,
+        machineLabel: state.machine.displayName,
+        machine: state,
+        members: Set.unmodifiable(ids),
+      ),
+      rank: _machineRank(status),
+      index: index,
+    ));
+  }
+  // `List.sort` is not stable: the account's order is the tie-break, spelled out.
+  rows.sort(
+    (a, b) => a.rank != b.rank
+        ? a.rank.compareTo(b.rank)
+        : a.index.compareTo(b.index),
+  );
+  return [for (final entry in rows) entry.row];
 }
+
+/// Where a machine sits in `@`: the ones that answer, then a locked one, then
+/// the ones that are off.
+///
+/// ⚠️ **Connecting ranks WITH answering, not after it.** Every machine passes
+/// through connecting on the way up — on launch, and on every return to the
+/// app — so ranking the two apart moved each row the moment its socket came up,
+/// under a thumb already on its way to it.
+int _machineRank(PhoneMachineStatus status) => switch (status) {
+  PhoneMachineStatus.ready || PhoneMachineStatus.connecting => 0,
+  PhoneMachineStatus.needsPassword => 1,
+  PhoneMachineStatus.offline => 2,
+};
+
+/// The line under a machine's name: what its state means, with the state
+/// itself left to the word at the row's right edge.
+///
+/// ⚠️ **A count only where one is known.** A machine that is off or locked has
+/// told this phone nothing, and `0 harnesses` under it said it had none. One
+/// still connecting shows the list it had last — a warm start's, or the one
+/// from before the socket dropped — and says it is waiting when it has none.
+String _machineDetail(PhoneMachineStatus status, int harnesses) =>
+    switch (status) {
+      PhoneMachineStatus.ready => _countLabel(harnesses, 'harness'),
+      PhoneMachineStatus.connecting =>
+        harnesses > 0
+            ? _countLabel(harnesses, 'harness')
+            : 'Waiting for its harnesses',
+      PhoneMachineStatus.needsPassword => 'Needs its password',
+      PhoneMachineStatus.offline => 'Harness isn’t running there',
+    };
 
 /// One row per repository or folder, agents grouped by [AgentProject.identity].
 ///

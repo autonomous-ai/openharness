@@ -13,7 +13,8 @@ import tarfile
 import tempfile
 
 
-DEPENDENCIES = ('nodejs-lts-jod', 'tmux', 'foot', 'gtklock', 'grim', 'slurp')
+# dnsmasq: NetworkManager's shared mode hands the setup hotspot's phone an address with it.
+DEPENDENCIES = ('nodejs-lts-jod', 'tmux', 'foot', 'gtklock', 'grim', 'slurp', 'dnsmasq')
 
 
 def package_info(version, timestamp, size, compositor_dependencies=()):
@@ -63,6 +64,7 @@ def stage(source, runtime, destination, commit):
         'os/installer.py': 'usr/lib/harness-os/install.py',
         'os/onboarding.py': 'usr/lib/harness-os/onboarding.py',
         'os/network.py': 'usr/lib/harness-os/network.py',
+        'os/setup.py': 'usr/lib/harness-os/setup.py',
         'os/projects.py': 'usr/lib/harness-os/projects.py',
         'os/trial_projects.py': 'usr/lib/harness-os/trial_projects.py',
         'os/system.py': 'usr/lib/harness-os/system.py',

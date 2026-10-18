@@ -5,7 +5,9 @@ import { isAgentSessionVariable } from '../lib/agentSessionEnv.js'
  * an agent running the tests: its harnesses would all look like that agent (agentClient/model.ts `outsideCaller`), and
  * only on the developer's machine, never in CI.
  */
+/** A GitHub login in the environment would let a test daemon's `gh` act as the developer. */
+const GITHUB_CREDENTIALS = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']
 export function daemonEnvironment(inherited: NodeJS.ProcessEnv, own: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const clean = Object.fromEntries(Object.entries(inherited).filter(([key]) => !key.startsWith('HARNESSD_') && !isAgentSessionVariable(key)))
+  const clean = Object.fromEntries(Object.entries(inherited).filter(([key]) => !key.startsWith('HARNESSD_') && !isAgentSessionVariable(key) && !GITHUB_CREDENTIALS.includes(key)))
   return { ...clean, ...own }
 }

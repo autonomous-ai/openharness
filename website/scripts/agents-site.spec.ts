@@ -51,6 +51,76 @@ describe("the pages and skill agents read", () => {
     for (const verb of verbs) expect(cliVerbs.has(verb), `harness ${verb}`).toBe(true);
   });
 
+  // The agent commands each page must teach, and where each command's usage (its options) is written.
+  const AGENT_VERBS = ["whoami", "ps", "new", "wait", "show", "send", "close"];
+  const usageSources: Record<string, [string, string]> = {
+    whoami: ["cli/src/agentClient/commands.ts", "WHOAMI_USAGE"],
+    ps: ["cli/src/agentClient/commands.ts", "PS_USAGE"],
+    show: ["cli/src/agentClient/commands.ts", "SHOW_USAGE"],
+    wait: ["cli/src/agentClient/commands.ts", "WAIT_USAGE"],
+    close: ["cli/src/agentClient/commands.ts", "CLOSE_USAGE"],
+    new: ["cli/src/lib/newCommand.ts", "NEW_USAGE"],
+    send: ["cli/src/messages/command.ts", "SEND_USAGE"],
+  };
+  /** The options a verb's usage names: every `--word` from `export const X` to the next export. */
+  function usageFlags(verb: string): Set<string> {
+    const [file, name] = usageSources[verb];
+    const source = readFileSync(join(repo, file), "utf8");
+    const start = source.indexOf(`export const ${name}`);
+    expect(start, `${name} in ${file}`).toBeGreaterThanOrEqual(0);
+    const end = source.indexOf("\nexport ", start + 1);
+    const block = source.slice(start, end === -1 ? undefined : end);
+    const flags = new Set([...block.matchAll(/--[a-z][a-z-]*/g)].map((m) => m[0]));
+    // `${ON_MACHINE}` stands for the --machine line the four verbs share.
+    if (block.includes("${ON_MACHINE}")) flags.add("--machine");
+    for (const always of ["--json", "--help"]) flags.add(always);
+    return flags;
+  }
+  /** Each `harness <agent verb> …` in a page's code, with the options it uses (the task after ` -- ` left out). */
+  function agentCalls(text: string, html: boolean): Array<{ verb: string; flags: string[]; line: string }> {
+    const calls: Array<{ verb: string; flags: string[]; line: string }> = [];
+    for (const code of codeIn(text, html)) {
+      for (const m of code.matchAll(/(?:^|[\s;&|(])harness ([a-z][a-z-]*)([^\n]*)/gm)) {
+        if (!AGENT_VERBS.includes(m[1]) && m[1] !== "whoami") continue;
+        const rest = m[2].split(/\s--\s|&&|\|\||;|\|/)[0];
+        calls.push({ verb: m[1], flags: [...rest.matchAll(/(?:^|[\s[(|])(--[a-z][a-z-]*)/g)].map((f) => f[1]), line: `harness ${m[1]}${m[2]}` });
+      }
+    }
+    return calls;
+  }
+
+  it.each([
+    ["/agents", page, true],
+    ["/llms.txt", llms, false],
+    ["SKILL.md", skill, false],
+  ] as const)("%s teaches every agent command", (_, text, html) => {
+    const verbs = verbsIn(text, html);
+    for (const verb of AGENT_VERBS) expect(verbs.has(verb), `harness ${verb}`).toBe(true);
+  });
+
+  it.each([
+    ["/agents", page, true],
+    ["/llms.txt", llms, false],
+    ["SKILL.md", skill, false],
+  ] as const)("%s uses only options the agent commands take", (_, text, html) => {
+    const calls = agentCalls(text, html);
+    expect(calls.length).toBeGreaterThan(5);
+    for (const call of calls) {
+      if (!usageSources[call.verb]) continue;
+      const known = usageFlags(call.verb);
+      for (const flag of call.flags) expect(known.has(flag), `${flag} in: ${call.line}`).toBe(true);
+    }
+  });
+
+  it.each([
+    ["/agents", page, true],
+    ["/llms.txt", llms, false],
+    ["SKILL.md", skill, false],
+  ] as const)("%s names machines with --machine, never @", (_, text, html) => {
+    // `harness new claude @office` became a project called "@office" on this machine; the CLI refuses it (#1333).
+    for (const call of agentCalls(text, html)) expect(call.line.split(/\s--\s/)[0], call.line).not.toMatch(/\s@[A-Za-z]/);
+  });
+
   it("gives the exit codes the agent commands return", () => {
     const literal = agentVerbs.match(/export const EXIT = \{([^}]*)\}/);
     expect(literal).not.toBeNull();
@@ -115,8 +185,7 @@ describe("the pages and skill agents read", () => {
     // The formats, as each editor documents them on 2026-10-11: Cursor (cursor.com/docs/mcp/install-links) and
     // LM Studio (lmstudio.ai/docs/app/mcp/deeplink) take a name and the base64 of the server's config; VS Code
     // (code.visualstudio.com/docs/copilot/guides/mcp-developer-guide) the URL-encoded config with its name in it,
-    // and its mcp.json reference marks `type` required; goose (its docs, getting-started/using-extensions) only
-    // commands such as npx, an `arg` per argument.
+    // and its mcp.json reference marks `type` required.
     const server = (JSON.parse(readFileSync(join(repo, "plugins", "harness", ".mcp.json"), "utf8")) as { mcpServers: Record<string, unknown> }).mcpServers.harness;
     const links = [...page.matchAll(/href="((?:cursor|vscode|vscode-insiders|lmstudio|goose):[^"]+)"/g)].map((m) => decode(m[1]));
     const base64 = (value: string | null) => JSON.parse(Buffer.from(value ?? "", "base64").toString("utf8"));
@@ -125,9 +194,8 @@ describe("the pages and skill agents read", () => {
     const cursor = links.filter((link) => link.startsWith("cursor://anysphere.cursor-deeplink/mcp/install?"));
     const vscode = links.filter((link) => /^vscode(-insiders)?:mcp\/install\?/.test(link));
     const lmstudio = links.filter((link) => link.startsWith("lmstudio://add_mcp?"));
-    const goose = links.filter((link) => link.startsWith("goose://extension?"));
-    expect([cursor.length, vscode.length, lmstudio.length, goose.length]).toEqual([1, 2, 1, 1]);
-    expect(links).toHaveLength(5);
+    expect([cursor.length, vscode.length, lmstudio.length]).toEqual([1, 2, 1]);
+    expect(links).toHaveLength(4);
 
     expect(query(cursor[0]).get("name")).toBe("harness");
     expect(base64(query(cursor[0]).get("config"))).toEqual(server);
@@ -135,18 +203,18 @@ describe("the pages and skill agents read", () => {
     expect(query(lmstudio[0]).get("name")).toBe("harness");
     expect(base64(query(lmstudio[0]).get("config"))).toEqual(server);
 
-    // goose runs the npm package, as the npx form beside it does, which server.json lists for the MCP Registry.
+  });
+
+  it("does not send agents to the npm package until it is published", () => {
+    // npm answered 404 for @autonomous-ai/harness-mcp on 2026-10-15, and an agent that runs `npx` on it gets only an
+    // error. Phase 10 of docs/design/2026-10-15-agent-experience.md publishes it and brings these back, with goose's
+    // link (goose runs only commands such as npx).
     const npm = (JSON.parse(readFileSync(join(repo, "server.json"), "utf8")) as { packages: { registryType: string; identifier: string }[] })
       .packages.find((pkg) => pkg.registryType === "npm")!.identifier;
-    const g = query(goose[0]);
-    expect([g.get("cmd"), ...g.getAll("arg")]).toEqual(["npx", "-y", npm]);
-    expect(g.get("id")).toBe("harness");
-    expect(page).toContain(`{"command": "npx", "args": ["-y", "${npm}"]}`);
-    expect(page).toContain(`claude mcp add harness -- npx -y ${npm}`);
-    expect(llms).toContain(`npx -y ${npm}`);
-    // goose ends a call after `timeout` seconds; harness_wait may wait up to its maximum.
-    const waitMax = Number(readFileSync(join(repo, "cli", "src", "agentClient", "mcp.ts"), "utf8").match(/const WAIT_MAX_S = (\d+)/)![1]);
-    expect(Number(g.get("timeout"))).toBeGreaterThan(waitMax);
+    for (const text of [page, llms, skill]) {
+      expect(text).not.toContain(npm);
+      expect(text).not.toContain("goose://");
+    }
   });
 
   it("links the skill where it is in this repository", () => {
@@ -178,5 +246,18 @@ describe("the pages and skill agents read", () => {
     const redirects = await nextConfig.redirects();
     expect(redirects.find((entry) => entry.source === "/cli/install.sh")?.destination).toMatch(/^https:\/\/cdn\.autonomous\.ai\//);
     for (const text of [page, llms, skill]) expect(text).toContain("curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash");
+  });
+
+  // Nothing else on the site links to /agents or /llms.txt (/ is the web app): a search engine, or an agent searching
+  // the web, finds them through the sitemap robots.txt names.
+  it("can be found: robots.txt names a sitemap that lists /agents and /llms.txt", () => {
+    const robots = readFileSync(join(site, "public", "robots.txt"), "utf8");
+    expect(robots).toMatch(/^User-agent: \*$/m);
+    expect(robots).not.toMatch(/^Disallow: \/\s*$/m);
+    expect(robots).toMatch(/^Sitemap: https:\/\/harness\.autonomous\.ai\/sitemap\.xml$/m);
+    const sitemap = readFileSync(join(site, "public", "sitemap.xml"), "utf8");
+    for (const url of ["https://harness.autonomous.ai/agents", "https://harness.autonomous.ai/llms.txt"]) {
+      expect(sitemap).toContain(`<loc>${url}</loc>`);
+    }
   });
 });

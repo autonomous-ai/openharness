@@ -33,13 +33,23 @@ class RelaySessionCrypto {
     required List<int> peerPub,
     Ephemeral? ephemeral,
   }) async {
-    final eph = ephemeral ?? await Ephemeral.generate();
+    if (ephemeral != null) {
+      return RelaySessionCrypto._(
+        machineId,
+        identity,
+        Uint8List.fromList(peerPub),
+        ephemeral,
+        await helloSig(identity, machineId, ephemeral.pub),
+      );
+    }
+    // The key and its signature on a background isolate — see [mintHello].
+    final minted = await mintHello(identity, machineId);
     return RelaySessionCrypto._(
       machineId,
       identity,
       Uint8List.fromList(peerPub),
-      eph,
-      await helloSig(identity, machineId, eph.pub),
+      minted.eph,
+      minted.sig,
     );
   }
 
@@ -96,11 +106,19 @@ class RelaySessionCrypto {
       final sig = _bytesField(payload, 'sig');
       final enc = _bytesField(payload, 'enc');
       if (adapterEphPub == null || sig == null || enc == null) return false;
-      if (!await welcomeVerify(_peerPub, machineId, _eph.pub, adapterEphPub, sig)) {
-        return false;
-      }
-      final keys = sessionKeys(_eph, adapterEphPub, machineId, _eph.pub, adapterEphPub);
-      final opened = aeadOpen(keys.s2c, 0, utf8Bytes('e2e-welcome'), enc);
+      // Verified, keyed and opened on a background isolate — see [openWelcome].
+      final keys = await openWelcome(
+        eph: _eph,
+        peerPub: _peerPub,
+        machineId: machineId,
+        adapterEphPub: adapterEphPub,
+        sig: sig,
+        enc: enc,
+      );
+      if (keys == null) return false;
+      // Still the one welcome: nothing else can have made the session while that was away.
+      if (ready) return false;
+      final opened = keys.initial;
       final initial = opened == null ? null : jsonObjectOf(opened);
       final groupKey = initial?['groupKey'], epoch = initial?['epoch'];
       if (groupKey is! String || groupKey.isEmpty || epoch is! String || epoch.isEmpty) {
@@ -188,6 +206,48 @@ class RelaySessionCrypto {
     if (s2c == null || !_s2cRecv.allows(n)) return null;
     final clear = unwrapPayload(s2c, env, type, dbSessionId);
     if (clear == null) return null;
+    _s2cRecv.commit(n);
+    return {...frame, 'payload': clear};
+  }
+
+  /// [unwrapIncoming], with a large envelope opened on a background isolate
+  /// ([unwrapPayloadOffThread]) — a machine's agent list, a transcript. Anything smaller is
+  /// [unwrapIncoming] itself.
+  ///
+  /// ⚠️ **The replay window is checked before and again after.** Before, so a stale or replayed
+  /// frame is not worth an isolate; after, because only an opened frame may be committed. Frames
+  /// reach this one at a time (`WsConn`'s inbound chain awaits each), so nothing else moves the
+  /// window or the epoch in between — the second check is a guard, not a race being won.
+  Future<Map<String, dynamic>?> unwrapIncomingOffThread(
+    Map<String, dynamic> frame,
+  ) async {
+    final payload = frame['payload'];
+    if (payload is! Map || !isWrapped(payload)) return frame;
+    final env = payload['__e2e'], type = frame['type'];
+    if (!opensOffThread(env)) return unwrapIncoming(frame);
+    if (env is! Map<String, dynamic> || type is! String) return null;
+    final n = env['n'];
+    if (n is! int) return null;
+    final dbSessionId = frame['dbSessionId'] as String?;
+    if (env['k'] == 'g') {
+      final groupKey = _groupKey, epoch = env['epoch'];
+      if (groupKey == null || epoch != _epoch) return null;
+      if (n <= (_groupRecv[_epoch] ?? -1)) return null;
+      final clear = await unwrapPayloadOffThread(
+        groupKey,
+        env,
+        type,
+        dbSessionId,
+      );
+      if (clear == null || epoch != _epoch) return null;
+      if (n <= (_groupRecv[_epoch] ?? -1)) return null;
+      _groupRecv[_epoch] = n;
+      return {...frame, 'payload': clear};
+    }
+    final s2c = _s2c;
+    if (s2c == null || !_s2cRecv.allows(n)) return null;
+    final clear = await unwrapPayloadOffThread(s2c, env, type, dbSessionId);
+    if (clear == null || !_s2cRecv.allows(n)) return null;
     _s2cRecv.commit(n);
     return {...frame, 'payload': clear};
   }

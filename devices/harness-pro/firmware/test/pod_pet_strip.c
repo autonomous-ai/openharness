@@ -24,7 +24,7 @@ int main(int argc, char **argv)
         for (int k = 0; k < 6; k++)
             for (int c = 0; c < COLS; c++) {
                 ht_scene_t s; ht_scene_clear(&s, 0);
-                pod_pet_draw(&s, c * S, (e * 6 + k) * S, S, eng[e], (pod_scene_t)k, at[c], 0);
+                pod_pet_draw(&s, c * S, (e * 6 + k) * S, S, eng[e], (pod_scene_t)k, at[c], 0, 8);
                 ht_rect_t clip = {c * S, (e * 6 + k) * S, S, S};
                 uint16_t *tile = calloc((size_t)S * S, 2);
                 for (int i = 0; i < s.count; i++) {

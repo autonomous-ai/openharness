@@ -301,7 +301,7 @@ void main() {
       ('UNSUPPORTED', 'Update the harness CLI'),
       ('PTY_HOST_UNAVAILABLE', 'could not open a terminal'),
       ('ENGINE_LAUNCH_REFUSED', 'cannot start on'),
-      ('INVALID_ENGINE', 'Create harness failed'),
+      ('INVALID_ENGINE', 'Update the harness CLI on Machine m'),
     ]) {
       test('$code is worded for a person', () async {
         final rig = await signedInWith({'m': []});
@@ -338,6 +338,289 @@ void main() {
         contains('cannot start on'),
       );
     });
+
+    test('an engine refused with its own reason says it', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      // The sample's machine runs two engines, and says so.
+      rig.conn('m').answers['agent_create'] = (_) => throw refusal(
+        'INVALID_ENGINE',
+        detail: 'The sample runs Claude Code and Codex.',
+      );
+
+      expect(
+        await rig.app.createAgent('m', engine: 'cursor', folder: '/work'),
+        'The sample runs Claude Code and Codex.',
+      );
+    });
+
+    // Every refusal the CLI makes before a pane exists that the phone used to
+    // read as a lost reply, with what the machine says and what the phone then
+    // says. Machine m is the rig's machine's name.
+    for (final (code, detail, says) in <(String, String?, String)>[
+      ('INVALID_PROJECT_SOURCE', 'Choose a project.', 'Choose a project.'),
+      (
+        'INVALID_REPOSITORY',
+        'Enter a GitHub URL or owner/repository.',
+        'Enter a GitHub URL or owner/repository.',
+      ),
+      (
+        'PROJECT_EXISTS',
+        '“app” already exists. Select that folder from your projects.',
+        '“app” already exists. Select that folder from your projects.',
+      ),
+      (
+        'GRID_UNAVAILABLE',
+        'The selected model is unavailable. Choose another model or refresh '
+            'the list.',
+        'Create harness failed: The selected model is unavailable. Choose '
+            'another model or refresh the list.',
+      ),
+      (
+        'INVALID_DSH',
+        'blender is not installed on this machine',
+        'This harness is not installed on Machine m. blender is not installed '
+            'on this machine',
+      ),
+      (
+        'PROMPT_UNSUPPORTED',
+        'cursor cannot be started with a first message',
+        'This engine cannot be opened with a first message on Machine m.',
+      ),
+      (
+        'PROMPT_TOO_LONG',
+        'prompt is longer than 2000 characters',
+        'This first task is too long for Machine m. Shorten it and try again.',
+      ),
+      (
+        'INVALID_PROMPT',
+        'prompt must be a string',
+        'Create harness failed: prompt must be a string',
+      ),
+      (
+        'AGENT_UNSUPPORTED',
+        null,
+        'This engine cannot be opened as a named agent on Machine m.',
+      ),
+      (
+        'INVALID_AGENT',
+        'agent must be 1-64 letters, digits, `-` or `_`',
+        'This engine cannot be opened as that named agent on Machine m.',
+      ),
+      (
+        'INVALID_PERMISSION_MODE',
+        'claude has no permission mode "yolo"',
+        'This engine has no such permission mode on Machine m.',
+      ),
+      (
+        'CODEX_CLI_TOO_OLD',
+        'The codex CLI on this machine does not support --ask-for-approval, '
+            'which Harness uses for this permission mode.',
+        'The codex CLI on this machine does not support --ask-for-approval, '
+            'which Harness uses for this permission mode.',
+      ),
+    ]) {
+      test('$code is a refusal, said and final', () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        rig.conn('m').answers['agent_create'] = (_) =>
+            throw refusal(code, detail: detail);
+        final attempt = AgentCreationAttempt();
+
+        final error = await rig.app.createAgent(
+          'm',
+          engine: 'claude',
+          folder: '/work',
+          attempt: attempt,
+        );
+
+        expect(error, says);
+        expect(error, isNot(contains('has not confirmed')));
+        expect(
+          attempt.awaitingConfirmation,
+          isFalse,
+          reason: 'nothing started, so there is nothing to check on',
+        );
+        // The same attempt again answers the same, without asking the machine.
+        expect(
+          await rig.app.createAgent(
+            'm',
+            engine: 'claude',
+            folder: '/work',
+            attempt: attempt,
+          ),
+          says,
+        );
+        expect(rig.conn('m').payloadsOf('agent_create'), hasLength(1));
+        expect(rig.conn('m').payloadsOf('agent_create_status'), isEmpty);
+      });
+
+      test('$code in a failed receipt is said the same way', () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        rig.conn('m').answers['agent_create'] = (p) => {
+          'creationId': p['creationId'],
+          'state': 'failed',
+          'failure': {'code': code, 'detail': ?detail},
+        };
+        final attempt = AgentCreationAttempt();
+
+        expect(
+          await rig.app.createAgent(
+            'm',
+            engine: 'claude',
+            folder: '/work',
+            attempt: attempt,
+          ),
+          says,
+        );
+        expect(attempt.awaitingConfirmation, isFalse);
+      });
+    }
+
+    // Making the folder itself, which only a receipt reports: the machine's
+    // sentence names what to change.
+    for (final code in [
+      'PROJECT_PREPARATION_FAILED',
+      'CLONE_FAILED',
+      'CLONE_TIMEOUT',
+      'GIT_PROJECT_UNAVAILABLE',
+      'INVALID_BRANCH',
+      'BRANCH_SWITCH_FAILED',
+      'WORKTREE_FAILED',
+      'GIT_UNAVAILABLE',
+    ]) {
+      test('$code says why the project folder was not made', () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        String? detail = 'Check the URL and connection, then retry.';
+        rig.conn('m').answers['agent_create'] = (p) => {
+          'creationId': p['creationId'],
+          'state': 'failed',
+          'failure': {'code': code, 'detail': ?detail},
+        };
+        final request = ProjectFolderRequest.remote(
+          GitHubRepository.parse('owner/app')!,
+        );
+
+        expect(
+          await rig.app.createAgent(
+            'm',
+            engine: 'claude',
+            folder: '',
+            projectFolder: request,
+          ),
+          'Check the URL and connection, then retry.',
+        );
+        detail = null;
+        expect(
+          await rig.app.createAgent(
+            'm',
+            engine: 'claude',
+            folder: '',
+            projectFolder: request,
+          ),
+          'Could not prepare the project folder on Machine m.',
+        );
+      });
+    }
+
+    test(
+      'a folder named after the task, taken on an older machine, says how to get a new one',
+      () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        // A machine that predates `projectNameMode` refuses the name the phone
+        // made up, in words written for a name somebody typed.
+        const taken =
+            '“robot-talks-to-gemini” already exists. Select that folder from '
+            'your projects.';
+        rig.conn('m').answers['agent_create'] = (_) =>
+            throw refusal('PROJECT_EXISTS', detail: taken);
+        final attempt = AgentCreationAttempt();
+
+        final error = await rig.app.createAgent(
+          'm',
+          engine: 'claude',
+          folder: '',
+          projectFolder: ProjectFolderRequest.forTask('Robot talks to Gemini'),
+          prompt: 'Robot talks to Gemini',
+          attempt: attempt,
+        );
+
+        expect(error, contains('named after this task already exists'));
+        expect(error, contains('update Harness there'));
+        expect(attempt.awaitingConfirmation, isFalse);
+        expect(
+          rig.conn('m').payloadsOf('agent_create').single['projectNameMode'],
+          'suggested',
+        );
+
+        // The same, when the refusal arrives as the receipt.
+        rig.conn('m').answers['agent_create'] = (p) => {
+          'creationId': p['creationId'],
+          'state': 'failed',
+          'failure': {'code': 'PROJECT_EXISTS', 'detail': taken},
+        };
+        expect(
+          await rig.app.createAgent(
+            'm',
+            engine: 'claude',
+            folder: '',
+            projectFolder: ProjectFolderRequest.forTask(
+              'Robot talks to Gemini',
+            ),
+            prompt: 'Robot talks to Gemini',
+          ),
+          error,
+        );
+      },
+    );
+
+    test('an old engine with no reason names the way out', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.conn('m').answers['agent_create'] = (_) =>
+          throw refusal('CODEX_CLI_TOO_OLD');
+
+      final error = await rig.app.createAgent(
+        'm',
+        engine: 'codex',
+        folder: '/work',
+        permissionMode: 'auto',
+      );
+      expect(error, contains('too old for Auto-approve'));
+      expect(error, contains('Ask first under Approvals'));
+    });
+
+    // Nothing proves that these did not start a harness, so each is checked
+    // rather than called final.
+    for (final (name, failure) in <(String, Object)>[
+      ('INTERNAL', refusal('INTERNAL')),
+      ('CREATION_CONFLICT', refusal('CREATION_CONFLICT')),
+      ('a code no machine sends yet', refusal('SOMETHING_NEW')),
+      ('a timeout', const WsRequestTimeout('agent_create')),
+      ('a dropped socket', StateError('socket closed')),
+    ]) {
+      test('$name leaves the harness unconfirmed', () async {
+        final rig = await signedInWith({'m': []});
+        addTearDown(rig.app.dispose);
+        rig.conn('m').answers['agent_create'] = (_) => throw failure;
+        final attempt = AgentCreationAttempt();
+
+        expect(
+          await rig.app.createAgent(
+            'm',
+            engine: 'claude',
+            folder: '/work',
+            attempt: attempt,
+          ),
+          'Machine m has not confirmed the new harness yet. '
+          'Check status before creating another.',
+        );
+        expect(attempt.awaitingConfirmation, isTrue);
+      });
+    }
 
     test('a lost reply is checked, never sent twice', () async {
       final rig = await signedInWith({'m': []});
@@ -403,6 +686,61 @@ void main() {
         );
       },
     );
+
+    test('Check status asks about the request as it was made', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.conn('m').answers['agent_create'] = (_) =>
+          throw const WsRequestTimeout('agent_create');
+      final attempt = AgentCreationAttempt();
+      await rig.app.createAgent(
+        'm',
+        engine: 'claude',
+        folder: '/work',
+        attempt: attempt,
+      );
+
+      rig.conn('m').answers['agent_create_status'] = (p) => created(p, 'new');
+      expect(
+        await measured(rig, 'm', rig.app.checkAgentCreation(attempt)),
+        isNull,
+      );
+      expect(rig.conn('m').payloadsOf('agent_create'), hasLength(1));
+      expect(rig.conn('m').payloadsOf('agent_create_status').single, {
+        'creationId': rig
+            .conn('m')
+            .payloadsOf('agent_create')
+            .single['creationId'],
+      });
+      expect(attempt.agentId, 'new');
+    });
+
+    test('Check status never makes a harness', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      rig.conn('m').answers['agent_create'] = (_) =>
+          throw refusal('CWD_NOT_FOUND');
+
+      // Never sent: there is nothing to ask about, and asking must not send it.
+      expect(
+        await rig.app.checkAgentCreation(AgentCreationAttempt()),
+        contains('never sent'),
+      );
+      expect(rig.conn('m').payloadsOf('agent_create'), isEmpty);
+      expect(rig.conn('m').payloadsOf('agent_create_status'), isEmpty);
+
+      // Refused for good: the answer stands, and the machine is not asked again.
+      final refused = AgentCreationAttempt();
+      final error = await rig.app.createAgent(
+        'm',
+        engine: 'claude',
+        folder: '/gone',
+        attempt: refused,
+      );
+      expect(await rig.app.checkAgentCreation(refused), error);
+      expect(rig.conn('m').payloadsOf('agent_create'), hasLength(1));
+      expect(rig.conn('m').payloadsOf('agent_create_status'), isEmpty);
+    });
 
     test('two presses of one request share one answer', () async {
       final rig = await signedInWith({'m': []});
@@ -1449,7 +1787,10 @@ void main() {
       expect(rig.app.machines.single.displayName, 'Studio');
 
       expect(await rig.app.renameMachine('m', ' '), 'Name cannot be empty');
-      expect(await rig.app.renameMachine('ghost', 'x'), 'Machine not found');
+      expect(
+        await rig.app.renameMachine('ghost', 'x'),
+        'This computer is no longer on your account.',
+      );
       rig.api.renameFailure = StateError('403');
       expect(
         await rig.app.renameMachine('m', 'x'),
@@ -1466,9 +1807,15 @@ void main() {
       await openAgent(rig, 'm', 'a');
 
       rig.api.deleteFailure = StateError('403');
-      expect(await rig.app.deleteMachine('m'), startsWith('Delete failed'));
+      expect(
+        await rig.app.deleteMachine('m'),
+        startsWith('Could not remove it'),
+      );
       rig.api.deleteFailure = null;
-      expect(await rig.app.deleteMachine('ghost'), 'Machine not found');
+      expect(
+        await rig.app.deleteMachine('ghost'),
+        'This computer is no longer on your account.',
+      );
 
       expect(await rig.app.deleteMachine('m'), isNull);
       expect(rig.api.deleted, ['m']);

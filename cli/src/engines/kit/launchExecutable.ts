@@ -7,6 +7,7 @@ import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallPaths, engineInstallRecipe, type EngineInstallRecipe } from '../../lib/engineInstall.js'
 import { engineShellArgv, interactiveEngineShell } from '../../lib/engineLaunch.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
+import { probeExecFile } from '../../lib/offThreadExec.js'
 import { shellSingleQuote } from '../../lib/shellQuote.js'
 import { LAUNCH_LOCATION_VARIABLES } from './nativeLocations.js'
 import type { AgentEngine } from '../types.js'
@@ -34,19 +35,48 @@ function withWindowsHome(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 let probing = 0
 const MAX_PROBES = 8
+/** How long a captured launch environment answers again. Each capture is a login shell (rc files, then Node),
+ *  spawned synchronously from the core: a held launch's pass asked about four times, every pass (measured
+ *  2026-10-15). A few seconds joins those; an rc file edited since is read on the next launch after it. */
+const ENVIRONMENT_TTL_MS = 10_000
+const captured = new Map<string, { at: number; environment: NodeJS.ProcessEnv }>()
+const capturing = new Map<string, Promise<NodeJS.ProcessEnv | null>>()
+
+/** Test seam. */
+export function clearLaunchEnvironmentCache(): void {
+  captured.clear()
+  capturing.clear()
+}
 
 /** No unavailable or negative shell answer is cached. A slot belongs to the
- * actual child until its callback, including timeout/oversized-output kills. */
+ * actual child until its callback, including timeout/oversized-output kills.
+ * A capture still running is joined; one taken in the last ENVIRONMENT_TTL_MS is answered again. */
 export async function launchEnvironment(shell?: string): Promise<NodeJS.ProcessEnv | null> {
   const interactive = interactiveEngineShell(shell)
   if (!interactive) return withWindowsHome(pickLocations(process.env))
+  // Keyed by the shell, not its argv: a shell that is not POSIX gets a one-time script file in its argv.
+  const key = JSON.stringify([interactive.path, interactive.args, managedNodePath()])
+  const hit = captured.get(key)
+  if (hit && Date.now() - hit.at < ENVIRONMENT_TTL_MS) return { ...hit.environment }
+  const running = capturing.get(key)
+  if (running) return running.then(environment => environment && { ...environment })
   if (probing >= MAX_PROBES) return null
   const code = `process.stdout.write(${JSON.stringify(ENV_MARKER)}+JSON.stringify(Object.fromEntries(${JSON.stringify(LAUNCH_LOCATION_VARIABLES)}.filter(k=>process.env[k]!==undefined).map(k=>[k,process.env[k]]))))`
   const argv = engineShellArgv(interactive, [`exec ${shellSingleQuote(managedNodePath())} -e ${shellSingleQuote(code)}`, 'harness-launch-environment'])
+  const capture = captureEnvironment(argv).then(environment => {
+    capturing.delete(key)
+    if (environment) captured.set(key, { at: Date.now(), environment })
+    return environment
+  })
+  capturing.set(key, capture)
+  return capture.then(environment => environment && { ...environment })
+}
+
+function captureEnvironment(argv: string[]): Promise<NodeJS.ProcessEnv | null> {
   probing++
   return new Promise(done => {
     try {
-      const child = execFile(argv[0], argv.slice(1), { encoding: 'utf8', timeout: 5_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 }, (error, output) => {
+      const child = probeExecFile(execFile)(argv[0], argv.slice(1), { timeout: 5_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 }, (error, output) => {
         probing--
         if (error) { done(null); return }
         try {
@@ -58,7 +88,7 @@ export async function launchEnvironment(shell?: string): Promise<NodeJS.ProcessE
           done(pickLocations(value as NodeJS.ProcessEnv))
         } catch { done(null) }
       })
-      child.stdin?.end()
+      child?.stdin?.end()
     } catch { probing--; done(null) }
   })
 }

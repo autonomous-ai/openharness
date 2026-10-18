@@ -333,7 +333,7 @@ void main() {
         hasAccess = false;
         await draw();
         expect(
-          find.text('Access removed or invitation expired.'),
+          find.text('Sharing ended'),
           findsOneWidget,
         );
         await tester.tap(find.byTooltip('Close shared harness'));
@@ -383,10 +383,6 @@ void main() {
         ),
       );
       expect(find.text('Sharing ended'), findsOneWidget);
-      expect(
-        find.text('Access removed or invitation expired.'),
-        findsOneWidget,
-      );
       await tester.pumpWidget(const SizedBox());
       app.dispose();
     },

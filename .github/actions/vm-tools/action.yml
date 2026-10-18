@@ -1,0 +1,39 @@
+name: Install VM test tools
+description: Install the QEMU, firmware and OCR packages the OS VM tests drive, reusing downloaded packages
+inputs:
+  packages:
+    description: Packages beyond the shared VM set
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    # An Ubuntu mirror once served these 55 MB at 150 kB/s (6 minutes, Actions
+    # 38690409147) while another job fetched them in seconds. Keep the downloaded
+    # packages in the Actions cache, per runner image, so apt only fetches changes.
+    - id: key
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        prefix="vm-apt-$ImageOS-"
+        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+        echo "key=$prefix$ImageVersion-$(printf '%s' "$PACKAGES" | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/vm-apt
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+    - shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        mkdir -p ~/.cache/vm-apt/partial
+        sudo apt-get update -qq
+        # shellcheck disable=SC2086 # PACKAGES is a space-separated list.
+        sudo apt-get install -y --no-install-recommends -o APT::Sandbox::User=root \
+          -o Dir::Cache::Archives="$HOME/.cache/vm-apt" \
+          qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr $PACKAGES
+        sudo rm -f ~/.cache/vm-apt/lock
+        sudo chown -R "$(id -u):$(id -g)" ~/.cache/vm-apt
+        if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi

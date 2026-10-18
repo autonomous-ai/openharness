@@ -2,12 +2,15 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 
 import '../clipboard/native_clipboard.dart';
+import '../logging/typing_trace.dart';
 import '../state/app_state.dart';
 
 import '../terminal/terminal_snapshot.dart';
@@ -15,7 +18,9 @@ import '../terminal/terminal_binary.dart';
 import '../terminal/terminal_font_store.dart';
 import '../terminal/terminal_link_opener.dart';
 import '../terminal/remote_media_download.dart';
+import '../terminal/remote_scroll_physics.dart';
 import '../terminal/terminal_links.dart';
+import '../terminal/output_blocks.dart';
 import '../terminal/terminal_prompt_zone.dart';
 import '../phone/tty.dart';
 import '../terminal/terminal_session.dart';
@@ -24,6 +29,21 @@ import '../terminal/terminal_theme_store.dart';
 import '../terminal/terminal_viewport.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import 'terminal_pane_badges.dart';
+
+/// A run of output rows drawn and pressed as one — [TerminalPanel.lineBands]. [first] and [last]
+/// are absolute buffer lines, inclusive; [key] is the host's own name for it, and [label] is what a
+/// screen reader says.
+///
+/// [columns] narrows the band to cells `start` (inclusive) to `end` (exclusive) of its rows, for
+/// answers drawn side by side on one line — Claude Code's `❯ Accept    Decline`. Null spans the
+/// full width, as an answer on rows of its own does.
+typedef TerminalLineBand = ({
+  String key,
+  int first,
+  int last,
+  String label,
+  ({int start, int end})? columns,
+});
 
 /// One agent's terminal: xterm, its input, its scrollback and its links.
 ///
@@ -89,6 +109,19 @@ class TerminalPanel extends StatefulWidget {
   /// when the host took it: on the phone, an answer's own line while a question is open.
   final bool Function(String line)? onLineTap;
 
+  /// Runs of output rows drawn on a faint band, each one tap target — on the phone, an open
+  /// question's answers. Asked again on every paint and every tap rather than held, so a band
+  /// stays on its lines as the pane scrolls and repaints. Null draws none.
+  final List<TerminalLineBand> Function(Terminal terminal)? lineBands;
+
+  /// A tap anywhere on a [lineBands] band, its description lines included. Taken before
+  /// [onLineTap], and whether or not [onInputTap] is set: a band is drawn to be pressed.
+  final void Function(TerminalLineBand band)? onBandTap;
+
+  /// Pastes the phone's clipboard into the session — the Paste of a long press on the prompt
+  /// (see `_TerminalPanelState._openPromptMenu`). Null offers no Paste there.
+  final VoidCallback? onPaste;
+
   /// Test seam for OS actions; normal panes use the platform launcher.
   final TerminalLinkOpener? linkOpener;
   final RemoteMediaDownloader? mediaDownloader;
@@ -105,6 +138,9 @@ class TerminalPanel extends StatefulWidget {
     this.jumpToEndRequest = 0,
     this.onInputTap,
     this.onLineTap,
+    this.lineBands,
+    this.onBandTap,
+    this.onPaste,
     this.linkOpener,
     this.mediaDownloader,
   });
@@ -156,6 +192,38 @@ class _TerminalPanelState extends State<TerminalPanel>
   );
   String? _pressedLink;
 
+  /// The [TerminalLineBand.key] under a finger that is down on it: drawn brighter until the finger
+  /// lifts or the pane scrolls. A notifier for the reason [_hoveredLink] is one — a press repaints
+  /// the bands, not the pane.
+  final ValueNotifier<String?> _pressedBand = ValueNotifier(null);
+
+  /// The bands' own box, which a band's rect is measured into — see [_bandRect].
+  final GlobalKey _bandsKey = GlobalKey();
+
+  /// Whether [_releaseBandOnUp] is on the pointer router, waiting for the pressing finger to lift.
+  bool _bandReleaseRouted = false;
+
+  /// The selection handles' own box, which their positions are measured into — see
+  /// [_selectionEnds].
+  final GlobalKey _handlesKey = GlobalKey();
+
+  /// The end of the selection the finger on a handle is moving, or null while none is.
+  _SelectionEnd? _draggingEnd;
+
+  /// From the finger to the middle of the row its handle marks, held for the drag: the finger is
+  /// on the knob, not on the text, and the end must not jump to where the finger is.
+  Offset _handleGrab = Offset.zero;
+
+  /// The pane's menu while it is on screen — see [_syncMenu].
+  ContextMenuController? _menu;
+
+  /// Whether [_syncMenu] is already due after this frame.
+  bool _menuPending = false;
+
+  /// The cell a long press on the prompt opened its menu at, or null while that menu is closed —
+  /// see [_openPromptMenu].
+  CellOffset? _promptMenuCell;
+
   /// Whether the tap in progress was claimed for [TerminalPanel.onInputTap].
   bool _inputTapClaimed = false;
   bool _openingLink = false;
@@ -172,6 +240,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     _viewTerminal = widget.session.terminal;
     _viewTerminal.addListener(_scheduleLinkRefresh);
     _scrollController.addListener(_onScrollChanged);
+    _controller.addListener(_scheduleMenu);
     _terminalViewKey = GlobalKey<TerminalViewState>();
     _linkOpener = widget.linkOpener ?? TerminalLinkOpener();
     _mediaDownloader = widget.mediaDownloader ?? RemoteMediaDownloader();
@@ -192,6 +261,8 @@ class _TerminalPanelState extends State<TerminalPanel>
   void didChangeDependencies() {
     super.didChangeDependencies();
     _updateTickerMode();
+    // A sheet pushed over the page, or taken off it — see [_syncMenu].
+    _scheduleMenu();
   }
 
   @override
@@ -242,6 +313,8 @@ class _TerminalPanelState extends State<TerminalPanel>
       }
       _cancelDialInertia();
       _controller.clearSelection();
+      _draggingEnd = null;
+      _promptMenuCell = null;
       _viewTerminal.removeListener(_scheduleLinkRefresh);
       _viewTerminal = widget.session.terminal;
       _viewTerminal.addListener(_scheduleLinkRefresh);
@@ -255,6 +328,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       _afterTerminalMounted();
     }
     if (oldWidget.visible && !widget.visible) {
+      _promptMenuCell = null;
       _rememberFollowTail();
       _focusNode.unfocus();
       _cancelDialInertia();
@@ -279,6 +353,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       _claimFocusAfterFrame();
     }
     _syncCursorBlink();
+    if (oldWidget.visible != widget.visible) _scheduleMenu();
   }
 
   @override
@@ -298,12 +373,16 @@ class _TerminalPanelState extends State<TerminalPanel>
     _cancelDialInertia();
     _cursorBlinkTimer?.cancel();
     _focusNode.removeListener(_handleFocusChange);
+    _hideMenu();
+    _controller.removeListener(_scheduleMenu);
     _controller.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
     _hoveredLink.dispose();
     _linkModifierDown.dispose();
     _previewProgress.dispose();
+    _unrouteBandRelease();
+    _pressedBand.dispose();
     super.dispose();
   }
 
@@ -387,6 +466,7 @@ class _TerminalPanelState extends State<TerminalPanel>
 
   void _syncTerminal(Terminal terminal) {
     if (identical(_viewTerminal, terminal)) return;
+    if (kTypingTrace) typingEvent('panel view → the new terminal');
 
     final previous = _viewTerminal.buffer;
     final next = terminal.buffer;
@@ -415,6 +495,8 @@ class _TerminalPanelState extends State<TerminalPanel>
     // Selection anchors belong to a specific circular buffer. Detach them
     // before the TerminalView starts laying out the replacement terminal.
     _controller.clearSelection();
+    // The prompt's menu points at a cell of the screen just replaced.
+    _promptMenuCell = null;
     _viewTerminal.removeListener(_scheduleLinkRefresh);
     _viewTerminal = terminal;
     _viewTerminal.addListener(_scheduleLinkRefresh);
@@ -449,10 +531,18 @@ class _TerminalPanelState extends State<TerminalPanel>
       }
     }
     _followTail = atEnd;
-    _afterTerminalMounted(scrollToEnd: atEnd);
+    // ⚠️ **The keyboard is claimed only by a view that does not hold the focus.** One that does kept
+    // its input connection across the swap (`keepsInputAcrossTerminals`), so claiming it again can
+    // only `show()` the keyboard — and the keyboard Back had just put away was up again within
+    // 66–239ms, the resize keyframe that answered its rising landing as it slid down, while the page
+    // still read it as up (a Galaxy S23, 6 of 19 dismissals, 2026-10-14; each bounce one more resize,
+    // a full reprint by Codex and a 165 KB keyframe). A view without the focus still claims it, as
+    // before: a claim that found no laid-out view gets its second chance here.
+    _afterTerminalMounted(scrollToEnd: atEnd, claimFocus: !_focusNode.hasFocus);
   }
 
   void _handleFocusChange() {
+    if (kTypingTrace) typingEvent('panel focus=${_focusNode.hasFocus}');
     _syncCursorBlink();
   }
 
@@ -468,6 +558,9 @@ class _TerminalPanelState extends State<TerminalPanel>
     if (!_canClaimInput ||
         (!navigating && (!widget.focused || !widget.visible))) {
       return false;
+    }
+    if (kTypingTrace) {
+      typingEvent('panel claims the keyboard (navigating=$navigating)');
     }
     view.requestKeyboard();
     return true;
@@ -726,17 +819,363 @@ class _TerminalPanelState extends State<TerminalPanel>
   Future<void> _copySelection() async {
     final selection = _controller.selection;
     if (selection == null) return;
-    final text = widget.session.terminal.buffer.getText(selection);
+    final text = _selectedText(widget.session.terminal.buffer, selection);
     _controller.clearSelection();
     await Clipboard.setData(ClipboardData(text: text));
     HapticFeedback.lightImpact();
+  }
+
+  /// What [selection] copies as. A whole message, as a long press selected it, copies as the agent
+  /// wrote it ([outputBlockText]: no mark, no hang, the TUI's own wraps joined). Anything else — a
+  /// word, ends moved by a handle — copies exactly as marked.
+  String _selectedText(Buffer buffer, BufferRange selection) {
+    final range = selection.normalized;
+    final block = outputBlockAt(buffer, range.begin.y);
+    if (block != null && outputBlockRange(buffer, block) == range) {
+      return outputBlockText(buffer, block);
+    }
+    return buffer.getText(range);
+  }
+
+  /// A long press on an agent's message selects all of it — the `⏺` block, mark to last line —
+  /// rather than the word under the finger: the message is what anybody copies from a phone, and
+  /// a word at a time it took a dozen drags. The handles then move either end.
+  ///
+  /// A long press on the prompt opens its menu instead — Paste, Select — the menu a long press in
+  /// any text field opens: see [_openPromptMenu]. Anywhere else (a plain shell's output) xterm
+  /// selects the word, as it always did.
+  bool _onTerminalLongPressStart(
+    LongPressStartDetails details,
+    CellOffset cell,
+  ) {
+    _promptMenuCell = null;
+    final buffer = _viewTerminal.buffer;
+    final block = outputBlockAt(buffer, cell.y);
+    if (block != null) {
+      _select(outputBlockRange(buffer, block));
+      HapticFeedback.selectionClick();
+      return true;
+    }
+    if (isPromptTap(buffer, cell.y) && _openPromptMenu(cell)) {
+      HapticFeedback.selectionClick();
+      return true;
+    }
+    return false;
+  }
+
+  /// Opens the prompt's menu at [cell], when it would hold anything: Select while there is a word
+  /// under the finger, Select All and Remove while something is typed (see [promptInputRange]),
+  /// Paste while the session takes input.
+  ///
+  /// ⚠️ **Paste is the page's, not the panel's.** What it reads and how it sends lives in
+  /// `phone/terminal_paste.dart`, behind [TerminalPanel.onPaste]: the panel's own [_paste] is the
+  /// desktop's ⌘V, whose last resort is a Ctrl+V for the engine to read ITS clipboard — on a
+  /// phone that is the far machine's clipboard, not the one the person just copied to.
+  bool _openPromptMenu(CellOffset cell) {
+    final buffer = _viewTerminal.buffer;
+    if (!_canPasteHere &&
+        buffer.getWordBoundary(cell) == null &&
+        promptInputRange(buffer) == null) {
+      return false;
+    }
+    _controller.clearSelection();
+    _promptMenuCell = cell;
+    _scheduleMenu();
+    return true;
+  }
+
+  bool get _canPasteHere =>
+      widget.onPaste != null && widget.session.acceptsInput;
+
+  void _closePromptMenu() {
+    if (_promptMenuCell == null) return;
+    _promptMenuCell = null;
+    _scheduleMenu();
+  }
+
+  void _select(BufferRange range) {
+    final buffer = _viewTerminal.buffer;
+    _controller.setSelection(
+      buffer.createAnchorFromOffset(range.begin),
+      buffer.createAnchorFromOffset(range.end),
+      mode: SelectionMode.line,
+    );
+  }
+
+  /// What the selection menu's Select All selects: the next whole thing around the selection —
+  /// the text typed into the prompt when the selection is inside it, the message it lies in, then
+  /// everything the terminal holds. Null once the selection is already all there is.
+  BufferRange? _selectAllTarget() {
+    final selection = _controller.selection?.normalized;
+    if (selection == null) return null;
+    final buffer = _viewTerminal.buffer;
+    final input = promptInputRange(buffer);
+    if (input != null &&
+        input.contains(selection.begin) &&
+        input.contains(selection.end)) {
+      return input == selection ? null : input;
+    }
+    final message = _wholeMessage();
+    if (message != null) return message;
+    final all = _allText(buffer);
+    return all == null || all == selection ? null : all;
+  }
+
+  /// Everything the terminal holds, its history included: from its first row with text to the end
+  /// of its last. Null for a terminal with nothing on it.
+  BufferRangeLine? _allText(Buffer buffer) {
+    final lines = buffer.lines;
+    var first = 0;
+    while (first < lines.length && lines[first].getTrimmedLength() == 0) {
+      first++;
+    }
+    if (first >= lines.length) return null;
+    var last = lines.length - 1;
+    while (last > first && lines[last].getTrimmedLength() == 0) {
+      last--;
+    }
+    return BufferRangeLine(
+      CellOffset(0, first),
+      CellOffset(lines[last].getTrimmedLength(), last),
+    );
+  }
+
+  /// The message the selection lies in, while the selection is not already all of it. Null for a
+  /// selection outside any message, or across two.
+  BufferRange? _wholeMessage() {
+    final selection = _controller.selection?.normalized;
+    if (selection == null) return null;
+    final buffer = _viewTerminal.buffer;
+    final block = outputBlockAt(buffer, selection.begin.y);
+    if (block == null || outputBlockAt(buffer, selection.end.y) != block) {
+      return null;
+    }
+    final range = outputBlockRange(buffer, block);
+    return range == selection ? null : range;
+  }
+
+  /// Brings the pane's menu in line with it after this frame — once, however many selection
+  /// changes, scrolls and output chunks ask in it.
+  ///
+  /// After the frame because the menu reads where its rows were laid out, and because what asks
+  /// can be mid-build (a route's status) or mid-layout (a scroll the renderer corrected).
+  void _scheduleMenu() {
+    if (_menuPending) return;
+    if (_menu == null &&
+        _controller.selection == null &&
+        _promptMenuCell == null) {
+      return;
+    }
+    _menuPending = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _menuPending = false;
+      if (mounted) _syncMenu();
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  /// Shows the pane's menu — the selection's (Copy, Select All), or the prompt's (Paste, Select) —
+  /// at what it is about, or moves it along; hides it when there is neither.
+  ///
+  /// ⚠️ **Hidden while anything covers the page.** The menu lives in the app's root overlay, above
+  /// every route, so a sheet pushed over this page (its `…` actions) would open UNDER it. Hidden
+  /// too while a handle is being dragged, as the system's own is, and on a page swiped away.
+  void _syncMenu() {
+    final show =
+        widget.visible &&
+        _draggingEnd == null &&
+        (_controller.selection != null || _promptMenuCell != null) &&
+        (ModalRoute.of(context)?.isCurrent ?? true);
+    if (!show) {
+      _hideMenu();
+      return;
+    }
+    final menu = _menu;
+    if (menu != null && menu.isShown) {
+      menu.markNeedsBuild();
+      return;
+    }
+    _menu = ContextMenuController()
+      ..show(context: context, contextMenuBuilder: _buildMenu);
+  }
+
+  void _hideMenu() {
+    _menu?.remove();
+    _menu = null;
+  }
+
+  /// The system's own text toolbar ([AdaptiveTextSelectionToolbar]: iOS's dark bar on an
+  /// iPhone), pointed the way Flutter points it at text — above the first row, or under the last
+  /// when there is no room above. Nothing while those rows are scrolled out of the pane.
+  Widget _buildMenu(BuildContext context) {
+    final selection = _controller.selection?.normalized;
+    final prompt = _promptMenuCell;
+    final render = _laidOutTerminalView()?.renderTerminal;
+    if ((selection == null && prompt == null) ||
+        render == null ||
+        !render.attached ||
+        !render.hasSize) {
+      return const SizedBox.shrink();
+    }
+    final row = render.lineHeight;
+    final from = selection?.begin ?? prompt!;
+    final to = selection?.end ?? CellOffset(prompt!.x + 1, prompt.y);
+    final begin = render.getOffset(from);
+    final end = render.getOffset(to) + Offset(0, row);
+    if (end.dy <= 0 || begin.dy >= render.size.height) {
+      return const SizedBox.shrink();
+    }
+    final anchors = TextSelectionToolbarAnchors.fromSelection(
+      renderBox: render,
+      startGlyphHeight: row,
+      endGlyphHeight: row,
+      selectionEndpoints: [
+        TextSelectionPoint(begin + Offset(0, row), null),
+        TextSelectionPoint(end, null),
+      ],
+    );
+    if (selection != null) {
+      final all = _selectAllTarget();
+      return AdaptiveTextSelectionToolbar.buttonItems(
+        anchors: anchors,
+        buttonItems: [
+          ContextMenuButtonItem(
+            type: ContextMenuButtonType.copy,
+            onPressed: () => unawaited(_copySelection()),
+          ),
+          if (all != null)
+            ContextMenuButtonItem(
+              type: ContextMenuButtonType.selectAll,
+              onPressed: () => _select(all),
+            ),
+        ],
+      );
+    }
+    final buffer = _viewTerminal.buffer;
+    final word = buffer.getWordBoundary(prompt!);
+    final input = promptInputRange(buffer);
+    // Closed by a touch anywhere else, as a text field's is: nothing is selected to tap away.
+    return TapRegion(
+      onTapOutside: (_) => _closePromptMenu(),
+      child: AdaptiveTextSelectionToolbar.buttonItems(
+        anchors: anchors,
+        buttonItems: [
+          if (word != null)
+            ContextMenuButtonItem(
+              label: 'Select',
+              onPressed: () {
+                _closePromptMenu();
+                _select(word);
+              },
+            ),
+          if (input != null)
+            ContextMenuButtonItem(
+              type: ContextMenuButtonType.selectAll,
+              onPressed: () {
+                _closePromptMenu();
+                _select(input);
+              },
+            ),
+          if (_canPasteHere)
+            ContextMenuButtonItem(
+              type: ContextMenuButtonType.paste,
+              onPressed: () {
+                _closePromptMenu();
+                widget.onPaste?.call();
+              },
+            ),
+          // Empties what is typed: Ctrl+K, then Ctrl+U — see [TerminalSession.clearPrompt]. Only
+          // while something is typed and the prompt is this phone's to type into.
+          if (input != null && widget.session.acceptsInput)
+            ContextMenuButtonItem(
+              label: 'Remove',
+              onPressed: () {
+                _closePromptMenu();
+                widget.session.clearPrompt();
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Where the selection's ends are drawn, in the handles' own box: the top of the first selected
+  /// cell's left edge, and the top of the cell after the last one. Null with no selection, or
+  /// before layout.
+  ///
+  /// Measured through the terminal's render box, as [_bandRect] is, so the scroll offset and
+  /// xterm's padding are counted exactly as the selection's own paint counts them.
+  ({Offset begin, Offset end, double row})? _selectionEnds() {
+    final selection = _controller.selection?.normalized;
+    final render = _laidOutTerminalView()?.renderTerminal;
+    final box = _handlesKey.currentContext?.findRenderObject();
+    if (selection == null || render == null || !render.attached) return null;
+    if (box is! RenderBox || !box.attached || !box.hasSize) return null;
+    Offset at(CellOffset cell) =>
+        box.globalToLocal(render.localToGlobal(render.getOffset(cell)));
+    return (
+      begin: at(selection.begin),
+      end: at(selection.end),
+      row: render.lineHeight,
+    );
+  }
+
+  void _onHandleDragStart(DragStartDetails details) {
+    _draggingEnd = null;
+    final ends = _selectionEnds();
+    final box = _handlesKey.currentContext?.findRenderObject();
+    if (ends == null || box is! RenderBox) return;
+    final local = box.globalToLocal(details.globalPosition);
+    final end = _SelectionHandlesPainter.handleAt(local, ends);
+    if (end == null) return;
+    final marked = switch (end) {
+      _SelectionEnd.begin => ends.begin,
+      _SelectionEnd.end => ends.end,
+    };
+    _handleGrab = marked + Offset(0, ends.row / 2) - local;
+    _draggingEnd = end;
+    _scheduleMenu();
+    HapticFeedback.selectionClick();
+  }
+
+  /// Moves the dragged end to the cell boundary nearest the finger (less [_handleGrab]). The two
+  /// ends never cross: at least one cell stays selected, and a drag past the other end stops there.
+  void _onHandleDragUpdate(DragUpdateDetails details) {
+    final dragging = _draggingEnd;
+    if (dragging == null) return;
+    final selection = _controller.selection?.normalized;
+    final render = _laidOutTerminalView()?.renderTerminal;
+    if (selection == null || render == null || !render.attached) return;
+    final buffer = _viewTerminal.buffer;
+    final local = render.globalToLocal(details.globalPosition + _handleGrab);
+    final row = render.getCellOffset(local).y;
+    final rowLeft = render.getOffset(CellOffset(0, row)).dx;
+    final column = ((local.dx - rowLeft) / render.cellSize.width).round().clamp(
+      0,
+      buffer.viewWidth,
+    );
+    final moved = CellOffset(column, row);
+    final begin = dragging == _SelectionEnd.begin ? moved : selection.begin;
+    final end = dragging == _SelectionEnd.end ? moved : selection.end;
+    if (!begin.isBefore(end)) return;
+    if (begin == selection.begin && end == selection.end) return;
+    _controller.setSelection(
+      buffer.createAnchorFromOffset(begin),
+      buffer.createAnchorFromOffset(end),
+      mode: SelectionMode.line,
+    );
+  }
+
+  void _onHandleDragEnd([DragEndDetails? _]) {
+    _draggingEnd = null;
+    _scheduleMenu();
   }
 
   Future<void> _copyOrPaste() async {
     final terminal = widget.session.terminal;
     final selection = _controller.selection;
     if (selection != null) {
-      final text = terminal.buffer.getText(selection);
+      final text = _selectedText(terminal.buffer, selection);
       _controller.clearSelection();
       await Clipboard.setData(ClipboardData(text: text));
       return;
@@ -750,7 +1189,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// text at all, so a naive body finds `null` and returns, silently: the single
   /// most common thing anyone pastes into a coding agent did nothing, with no
   /// error and nothing in a log. [NativeClipboard] closes that gap with a native
-  /// platform-channel read for an actual image (macOS/Linux only; see its doc).
+  /// platform-channel read for an actual image (all but Windows; see its doc).
   ///
   /// The engines running in these panes read the system clipboard THEMSELVES —
   /// Claude Code attaches an image on Ctrl+V — so on a LOCAL pane that is already
@@ -762,10 +1201,10 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// clipboard than this one — which, on a phone, is every pane.
   /// An image handed over by the software keyboard's own clipboard.
   ///
-  /// This is the phone's ONLY way to get an image into a pane: Flutter's
-  /// [Clipboard] reads `text/plain` and nothing else, and the native reader
-  /// [_paste] falls back on is macOS/Linux. Gboard hands the bytes over directly,
-  /// so there is no clipboard to read at all.
+  /// Flutter's [Clipboard] reads `text/plain` and nothing else, and Gboard hands
+  /// the bytes over directly, so there is no clipboard to read at all. (The
+  /// actions sheet's Paste reads the system clipboard's image instead, through
+  /// [NativeClipboard]: see `phone/terminal_paste.dart`.)
   ///
   /// ⚠️ A pane on a phone is ALWAYS remote — the agent runs on another machine,
   /// whose engine reads a different OS clipboard — so unlike the desktop there is
@@ -922,6 +1361,8 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// Output arrived. Below a reader scrolled up in the history the view holds still, and the
   /// position counts the new lines — once per frame, after the layout that placed them.
   void _onOutput() {
+    // Output can move a selection's lines, and the menu pointing at them.
+    if (_controller.selection != null) _scheduleMenu();
     if (_followTail || !widget.visible || widget.scrollback == null) return;
     if (_scrollbackPending) return;
     _scrollbackPending = true;
@@ -952,8 +1393,11 @@ class _TerminalPanelState extends State<TerminalPanel>
   }
 
   void _onScrollChanged() {
+    _scheduleMenu();
     _rememberFollowTail();
     _scheduleLinkRefresh();
+    // A press that turned into a scroll is no longer a press.
+    _pressedBand.value = null;
   }
 
   String? _linkAtPointer(Offset globalPosition) {
@@ -977,10 +1421,29 @@ class _TerminalPanelState extends State<TerminalPanel>
   bool _onTerminalTapDown(TapDownDetails details, CellOffset cell) {
     _inputTapClaimed = false;
     if (_onLinkTapDown(details, cell)) return true;
-    if (widget.onInputTap == null || _controller.selection != null) {
-      return false;
+    if (_controller.selection != null) return false;
+    final band = _bandAt(cell);
+    if (band == null && widget.onInputTap == null) return false;
+    _pressedBand.value = band?.key;
+    if (band != null && !_bandReleaseRouted) {
+      _bandReleaseRouted = true;
+      GestureBinding.instance.pointerRouter.addGlobalRoute(_releaseBandOnUp);
     }
     return _inputTapClaimed = true;
+  }
+
+  /// Up or gone, the finger is off the band — whatever xterm makes of it. Its tap has no cancel,
+  /// and a press that became a long press, or a drag with nothing to scroll, would stay lit.
+  void _releaseBandOnUp(PointerEvent event) {
+    if (event is! PointerUpEvent && event is! PointerCancelEvent) return;
+    _unrouteBandRelease();
+    _pressedBand.value = null;
+  }
+
+  void _unrouteBandRelease() {
+    if (!_bandReleaseRouted) return;
+    _bandReleaseRouted = false;
+    GestureBinding.instance.pointerRouter.removeGlobalRoute(_releaseBandOnUp);
   }
 
   void _onTerminalTapUp(TapUpDetails details, CellOffset cell) {
@@ -989,14 +1452,74 @@ class _TerminalPanelState extends State<TerminalPanel>
       return;
     }
     _inputTapClaimed = false;
+    _pressedBand.value = null;
+    // Read again, not remembered from the press: what is under the finger now is what it meant.
+    if (_bandAt(cell) case final band?) {
+      widget.onBandTap?.call(band);
+      return;
+    }
     final buffer = _viewTerminal.buffer;
     if (cell.y >= 0 &&
         cell.y < buffer.lines.length &&
         (widget.onLineTap?.call(buffer.lines[cell.y].getText()) ?? false)) {
       return;
     }
-    if (!isPromptTap(buffer, cell.y)) return;
+    // A dialog whose answers are bands keeps the taps beside them for reading; any other dialog
+    // takes a tap anywhere on it as asking for the keys it needs — see [isPromptTap].
+    if (!isPromptTap(buffer, cell.y, wholeDialog: _bands().isEmpty)) return;
     widget.onInputTap?.call();
+  }
+
+  /// The bands the host asks for now, or none when there is nothing to press them with.
+  List<TerminalLineBand> _bands() {
+    if (widget.onBandTap == null) return const [];
+    return widget.lineBands?.call(_viewTerminal) ?? const [];
+  }
+
+  /// The band drawn over [cell], if any.
+  TerminalLineBand? _bandAt(CellOffset cell) {
+    for (final band in _bands()) {
+      if (cell.y < band.first || cell.y > band.last) continue;
+      final columns = band.columns;
+      if (columns != null && (cell.x < columns.start || cell.x >= columns.end)) {
+        continue;
+      }
+      return band;
+    }
+    return null;
+  }
+
+  /// Where [band] is drawn, in the bands' own box: the full width — or its [TerminalLineBand
+  /// .columns], less a point each side so two answers on one line read as two — and its rows'
+  /// height less a point top and bottom, so two answers on adjacent rows read as two. Null before
+  /// layout.
+  ///
+  /// Measured through the terminal's render box rather than worked out from the line height, so
+  /// the scroll offset and xterm's own padding are counted exactly as its text is.
+  Rect? _bandRect(TerminalLineBand band) {
+    final render = _laidOutTerminalView()?.renderTerminal;
+    final box = _bandsKey.currentContext?.findRenderObject();
+    if (render == null || box is! RenderBox || !render.attached) return null;
+    if (!box.attached || !box.hasSize) return null;
+    final origin = box.globalToLocal(render.localToGlobal(Offset.zero));
+    final top = render.getOffset(CellOffset(0, band.first)).dy;
+    final bottom =
+        render.getOffset(CellOffset(0, band.last)).dy + render.lineHeight;
+    final columns = band.columns;
+    return Rect.fromLTRB(
+      columns == null
+          ? 0
+          : origin.dx +
+                render.getOffset(CellOffset(columns.start, band.first)).dx +
+                1,
+      origin.dy + top + 1,
+      columns == null
+          ? box.size.width
+          : origin.dx +
+                render.getOffset(CellOffset(columns.end, band.first)).dx -
+                1,
+      origin.dy + bottom - 1,
+    );
   }
 
   /// Whether a tap on a link opens it. On a phone, always: there is no ⌘ or ctrl to hold, and a
@@ -1081,9 +1604,15 @@ class _TerminalPanelState extends State<TerminalPanel>
 
   @override
   Widget build(BuildContext context) {
+    if (kTypingTrace) typingCount('panel.build');
     grid.AppTheme.watch(context);
     final session = widget.session;
     _syncTerminal(session.terminal);
+    final colors = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    );
+    final foreground = colors.foreground;
     return ColoredBox(
       color: grid.AppPalette.windowBg,
       child: Column(
@@ -1122,6 +1651,16 @@ class _TerminalPanelState extends State<TerminalPanel>
                         // (cb47ba35 → TestFlight build 11), which is why
                         // test/terminal_panel_backspace_test.dart pins it.
                         deleteDetection: true,
+                        // This view is only ever handed the next screen of its
+                        // own session — a keyframe — since another session gets
+                        // a view of its own (a fresh `_terminalViewKey`): what
+                        // the keyboard holds is still the line being typed.
+                        keepsInputAcrossTerminals: true,
+                        // What is typed shows at once, ahead of the machine's echo a
+                        // round trip away (owner's call, 2026-10-05) — only once this
+                        // terminal has been seen echoing, so a password prompt
+                        // shows nothing. See xterm's `TerminalView.predictsEcho`.
+                        predictsEcho: true,
                         theme: terminalScreenThemeFor(
                           grid.AppTheme.palette.value,
                           terminalThemeStore.value,
@@ -1170,6 +1709,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                         onKeyEvent: _onTerminalKey,
                         onTapDown: _onTerminalTapDown,
                         onTapUp: _onTerminalTapUp,
+                        onLongPressStart: _onTerminalLongPressStart,
                         // Constant on purpose. The click cursor is applied by
                         // [_LinkTooltip]'s own MouseRegion, which repaints
                         // without rebuilding this view.
@@ -1179,6 +1719,89 @@ class _TerminalPanelState extends State<TerminalPanel>
                         onAltBufferScroll: session.scrollViaTmuxCopyMode
                             ? (up) => session.sendScrollCommand(up, 1)
                             : null,
+                        altBufferScrollPhysics: const RemoteScrollPhysics(),
+                        altBufferScrollPaced: true,
+                        altBufferScrollAnimated: true,
+                        // The finger moves the screen; the program only fills
+                        // it in — `RemoteScrollMirror`. The slide above is
+                        // what is left when it is off.
+                        altBufferScrollMirror: true,
+                        // Claude Code takes Page Up/Down as half a screen of its
+                        // transcript at once, past its wheel's ~150 rows a
+                        // second; another program may take them otherwise.
+                        altBufferScrollPageKeys: session.engineId == 'claude',
+                        // What the mirror knew of this agent's rows, kept by the
+                        // app across keyframes and reopens.
+                        altBufferScrollMemory: session.scrollMemory,
+                        // How many redraws slid and how many jumped — the
+                        // scroll's smoothness, for the trace.
+                        onAltBufferScrollShift: kTypingTrace
+                            ? (rows) => typingCount(
+                                rows == 0 ? 'scroll.jumped' : 'scroll.slid',
+                              )
+                            : null,
+                      ),
+                    ),
+                  ),
+                ),
+                // The bands the host asks for — on the phone, an open question's answers. They
+                // take no hit themselves: a tap goes through to xterm, which hands it to [_bandAt].
+                if (widget.lineBands != null && widget.onBandTap != null)
+                  Positioned.fill(
+                    child: CustomPaint(
+                      key: _bandsKey,
+                      painter: _LineBandPainter(
+                        bands: _bands,
+                        rectOf: _bandRect,
+                        pressed: _pressedBand,
+                        color: foreground.withValues(alpha: 0.06),
+                        pressedColor: foreground.withValues(alpha: 0.16),
+                        onTap: (band) => widget.onBandTap?.call(band),
+                        // Output, a scroll and a press are what move or light a band; a new
+                        // question rebuilds the page, and with it this painter.
+                        repaint: Listenable.merge([
+                          session.outputTicks,
+                          _scrollController,
+                          _pressedBand,
+                        ]),
+                      ),
+                    ),
+                  ),
+                // The selection's two ends, green, each with a knob to drag it by. Only the knobs and
+                // their rows take a touch ([_SelectionHandlesPainter.hitTest]); everywhere else the
+                // touch goes through to xterm, so a tap still clears the selection and a drag still
+                // scrolls.
+                //
+                // ⚠️ **The drag is claimed on touch-down** ([_EagerPanGestureRecognizer]). The page
+                // swipes between agents on a horizontal drag, and its recognizer would otherwise win
+                // every sideways move of a handle before the handle's own pan saw it.
+                Positioned.fill(
+                  child: RawGestureDetector(
+                    behavior: HitTestBehavior.deferToChild,
+                    gestures: {
+                      _EagerPanGestureRecognizer:
+                          GestureRecognizerFactoryWithHandlers<
+                            _EagerPanGestureRecognizer
+                          >(_EagerPanGestureRecognizer.new, (recognizer) {
+                            recognizer
+                              ..dragStartBehavior = DragStartBehavior.down
+                              ..onStart = _onHandleDragStart
+                              ..onUpdate = _onHandleDragUpdate
+                              ..onEnd = _onHandleDragEnd
+                              ..onCancel = _onHandleDragEnd;
+                          }),
+                    },
+                    child: CustomPaint(
+                      key: _handlesKey,
+                      painter: _SelectionHandlesPainter(
+                        ends: _selectionEnds,
+                        color: colors.green,
+                        // The selection, a scroll and output are what move an end.
+                        repaint: Listenable.merge([
+                          _controller,
+                          _scrollController,
+                          session.outputTicks,
+                        ]),
                       ),
                     ),
                   ),
@@ -1196,22 +1819,6 @@ class _TerminalPanelState extends State<TerminalPanel>
                     onCancelPreview: () => _previewCancellation?.cancel(),
                   ),
                 ),
-                // A long press selects on a phone, and nothing else offered to copy what it
-                // selected: `Copy` rides the selection, top right, until used or cleared.
-                // Under the phone's title (three rows, laid over the pane's top), not behind it.
-                Positioned(
-                  top: 60,
-                  right: 8,
-                  child: ListenableBuilder(
-                    listenable: _controller,
-                    builder: (context, _) => _controller.selection == null
-                        ? const SizedBox.shrink()
-                        : _SelectionActions(
-                            onCopy: () => unawaited(_copySelection()),
-                            onClear: _controller.clearSelection,
-                          ),
-                  ),
-                ),
               ],
             ),
           ),
@@ -1219,6 +1826,163 @@ class _TerminalPanelState extends State<TerminalPanel>
       ),
     );
   }
+}
+
+/// The two ends of a selection: where it starts, and where it stops.
+enum _SelectionEnd { begin, end }
+
+/// A pan that claims its pointer on touch-down — see the handles in [_TerminalPanelState.build].
+///
+/// Accepted while the arena is still open, which makes it the arena's eager winner: no drag
+/// recognizer above it (the page's swipe between agents) can take the pointer from it afterwards.
+class _EagerPanGestureRecognizer extends PanGestureRecognizer {
+  _EagerPanGestureRecognizer()
+    : super(supportedDevices: {PointerDeviceKind.touch});
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    super.addAllowedPointer(event);
+    resolvePointer(event.pointer, GestureDisposition.accepted);
+  }
+}
+
+/// A selection's handles, drawn: a 2pt bar the height of a row at each end, with a knob above the
+/// first and below the last, as iOS draws its own.
+///
+/// Hit only on a knob or its bar, generously ([_reach]) — a row is ~16pt and a thumb is not.
+/// Everywhere else the touch belongs to xterm underneath.
+class _SelectionHandlesPainter extends CustomPainter {
+  _SelectionHandlesPainter({
+    required this.ends,
+    required this.color,
+    required Listenable repaint,
+  }) : super(repaint: repaint);
+
+  final ({Offset begin, Offset end, double row})? Function() ends;
+  final Color color;
+
+  static const _knob = 6.0;
+  static const _reach = 24.0;
+
+  /// The knob centres, and the bars the knobs hang from.
+  static ({Offset knob, Rect bar}) _begin(
+    ({Offset begin, Offset end, double row}) ends,
+  ) => (
+    knob: ends.begin - const Offset(0, _knob),
+    bar: Rect.fromLTWH(ends.begin.dx - 1, ends.begin.dy, 2, ends.row),
+  );
+
+  static ({Offset knob, Rect bar}) _end(
+    ({Offset begin, Offset end, double row}) ends,
+  ) => (
+    knob: ends.end + Offset(0, ends.row + _knob),
+    bar: Rect.fromLTWH(ends.end.dx - 1, ends.end.dy, 2, ends.row),
+  );
+
+  /// The handle under [position], if any. The end one first: on a one-row selection the two knobs
+  /// are a row apart, and the end is the one somebody most often moves.
+  static _SelectionEnd? handleAt(
+    Offset position,
+    ({Offset begin, Offset end, double row}) ends,
+  ) {
+    bool near(({Offset knob, Rect bar}) handle) =>
+        (position - handle.knob).distance <= _reach ||
+        handle.bar.inflate(_reach / 2).contains(position);
+    if (near(_end(ends))) return _SelectionEnd.end;
+    if (near(_begin(ends))) return _SelectionEnd.begin;
+    return null;
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final at = ends();
+    if (at == null) return;
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+    final paint = Paint()..color = color;
+    for (final handle in [_begin(at), _end(at)]) {
+      canvas.drawRect(handle.bar, paint);
+      canvas.drawCircle(handle.knob, _knob, paint);
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool? hitTest(Offset position) {
+    final at = ends();
+    return at != null && handleAt(position, at) != null;
+  }
+
+  /// Always: a rebuild is also a layout that can have moved the ends — the keyboard raised, the
+  /// font changed — without the selection, the scroll or the output saying so.
+  @override
+  bool shouldRepaint(_SelectionHandlesPainter old) => true;
+}
+
+/// [TerminalPanel.lineBands], drawn: a faint wash across each band's rows, brighter while pressed.
+///
+/// ⚠️ **Over the text, not under it.** xterm owns its render box's whole background (see
+/// `RenderTerminal._paint`), so there is no under; the wash is light enough to leave the text as it
+/// is, the way xterm's own selection sits over the glyphs it marks.
+///
+/// Each band is also a button to a screen reader, named by [TerminalLineBand.label]: the rows are
+/// only paint to VoiceOver, and the answers must still be there to press.
+class _LineBandPainter extends CustomPainter {
+  _LineBandPainter({
+    required this.bands,
+    required this.rectOf,
+    required this.pressed,
+    required this.color,
+    required this.pressedColor,
+    required this.onTap,
+    required Listenable repaint,
+  }) : super(repaint: repaint);
+
+  final List<TerminalLineBand> Function() bands;
+  final Rect? Function(TerminalLineBand band) rectOf;
+  final ValueListenable<String?> pressed;
+  final Color color;
+  final Color pressedColor;
+  final void Function(TerminalLineBand band) onTap;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint();
+    for (final band in bands()) {
+      final rect = rectOf(band);
+      if (rect == null || !rect.overlaps(Offset.zero & size)) continue;
+      paint.color = band.key == pressed.value ? pressedColor : color;
+      canvas.drawRect(rect, paint);
+    }
+  }
+
+  /// Never hit: the tap belongs to xterm underneath, which finds the band itself.
+  @override
+  bool? hitTest(Offset position) => false;
+
+  @override
+  SemanticsBuilderCallback get semanticsBuilder =>
+      (size) => [
+        for (final band in bands())
+          if (rectOf(band) case final rect?
+              when rect.overlaps(Offset.zero & size))
+            CustomPainterSemantics(
+              key: ValueKey<String>('line-band-${band.key}'),
+              rect: rect.intersect(Offset.zero & size),
+              properties: SemanticsProperties(
+                button: true,
+                label: band.label,
+                textDirection: TextDirection.ltr,
+                onTap: () => onTap(band),
+              ),
+            ),
+      ];
+
+  @override
+  bool shouldRepaint(_LineBandPainter old) => true;
+
+  @override
+  bool shouldRebuildSemantics(_LineBandPainter old) => true;
 }
 
 /// The "⌘-click to open" hint, and the click cursor that goes with it.
@@ -1315,54 +2079,6 @@ class _TransferOverlay extends StatelessWidget {
             ],
           );
         },
-      ),
-    );
-  }
-}
-
-/// `Copy  ×` over a selection — the phone has no right click and no ⌘C.
-class _SelectionActions extends StatelessWidget {
-  const _SelectionActions({required this.onCopy, required this.onClear});
-
-  final VoidCallback onCopy;
-  final VoidCallback onClear;
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    Widget action(String label, VoidCallback onTap, {bool bold = false}) =>
-        Semantics(
-          button: true,
-          label: label == '×' ? 'Clear selection' : label,
-          excludeSemantics: true,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: onTap,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 44, minHeight: 40),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Center(
-                  widthFactor: 1,
-                  child: Text(
-                    label,
-                    style: tty.style(
-                      size: 15,
-                      weight: bold ? FontWeight.w700 : FontWeight.w400,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-    return Material(
-      color: Color.alphaBlend(tty.text.withValues(alpha: 0.12), tty.ground),
-      elevation: 2,
-      borderRadius: BorderRadius.circular(6),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [action('Copy', onCopy, bold: true), action('×', onClear)],
       ),
     );
   }

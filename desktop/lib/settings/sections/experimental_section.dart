@@ -1,15 +1,19 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../../shared/widgets/section_scaffold.dart';
 import '../../shared/widgets/setting_row.dart';
 import '../experimental_features.dart';
+import '../../state/app_state.dart';
+import 'privacy_section.dart' show ProductUsageSetting;
 
 class ExperimentalSection extends StatefulWidget {
-  const ExperimentalSection({super.key, this.store});
+  const ExperimentalSection({super.key, this.store, this.notifier});
 
   final ExperimentalFeaturesStore? store;
+  final AppNotifier? notifier;
 
   @override
   State<ExperimentalSection> createState() => _ExperimentalSectionState();
@@ -63,7 +67,7 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
                       ),
                   ],
                 ),
-              for (final feature in features)
+              for (final feature in features) ...[
                 SettingRow(
                   title: feature.label,
                   detail: feature.description,
@@ -73,13 +77,18 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
                       alignment: Alignment.centerLeft,
                       child: Switch(
                         key: ValueKey('experimental-${feature.id}'),
-                        value: preferences.enabled(feature),
+                        value: preferences.enabled(feature) != feature.inverted,
                         onChanged:
                             preferences.loaded &&
                                 !preferences.saving &&
                                 (preferences.isAvailable(feature) ||
                                     preferences.enabled(feature))
-                            ? (on) => unawaited(preferences.set(feature, on))
+                            ? (on) => unawaited(
+                                preferences.set(
+                                  feature,
+                                  on != feature.inverted,
+                                ),
+                              )
                             : null,
                       ),
                     ),
@@ -106,6 +115,16 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
                         )
                       : null,
                 ),
+                // Product usage sharing is the account's, as the experiments are, and sits among them as one more row,
+                // after the agents' own pull request line (owner, 2026-10-17).
+                if (feature == ExperimentalFeature.agentPullRequestLine &&
+                    !kIsWeb &&
+                    widget.notifier != null)
+                  ProductUsageSetting(
+                    notifier: widget.notifier!,
+                    compact: true,
+                  ),
+              ],
             ],
           ),
         ),

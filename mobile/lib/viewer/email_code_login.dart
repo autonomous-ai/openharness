@@ -2,8 +2,8 @@ import '../auth/auth_session.dart';
 import 'direct_auth.dart';
 import 'email_code_api.dart';
 
-/// A phone's sign-in: an emailed code, typed into the app — see [EmailCodeApi] for why a phone
-/// does not go through the browser.
+/// A phone's sign-in by an emailed code, typed into the app — see [EmailCodeApi] for why this way
+/// needs no browser. The other way, "Continue with Google / Apple", is `direct_login.dart`'s.
 ///
 /// Two steps the login screen drives in turn, each throwing a `DirectAuthException` whose message
 /// is fit to show. The session lands in the same [DirectAuth] the SSO flow fills, marked as an

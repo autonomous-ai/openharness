@@ -4,7 +4,7 @@
  * one (docs/design/2026-10-03-harnessd.md, the core boundary).
  */
 import { vi } from 'vitest'
-import { CONVERSATIONS_OFF, TERMINALS_OFF, type CoreApi } from '../core/api.js'
+import { CONVERSATIONS_OFF, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, type CoreApi } from '../core/api.js'
 
 type Overrides = { [K in keyof CoreApi]?: CoreApi[K] extends object ? Partial<CoreApi[K]> : CoreApi[K] }
 
@@ -36,6 +36,8 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       create: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
       dsh: vi.fn(() => null),
       activityText: vi.fn(async () => null),
+      activity: vi.fn(async () => ({})),
+      summaries: vi.fn(async () => ({})),
       ...over.agents,
     },
     turns: {
@@ -60,7 +62,10 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       privateGridName: vi.fn(async () => null),
       machineName: vi.fn(() => null),
       backend: vi.fn(async () => ({ status: 200, body: {} })),
+      identity: vi.fn(async () => null),
       observerKey: { publicKey: vi.fn(async () => 'cHVi'), signWelcome: vi.fn(async () => 'c2ln') },
+      tabKey: TAB_KEY_OFF,
+      tabRelay: TAB_RELAY_OFF,
       connectorVault: { seal: vi.fn(async () => ({})), open: vi.fn(async () => null) },
       onNotice: vi.fn(() => () => {}),
       signedIn: vi.fn(() => true),

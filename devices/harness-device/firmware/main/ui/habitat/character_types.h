@@ -30,14 +30,15 @@ typedef struct {
      * which does not exist anywhere in the cable vocabulary. `engine` is on the wire and stored
      * (agent_t.engine) and until now was drawn nowhere. `elapsed` is SECONDS SINCE THIS DIAL HEARD
      * ABOUT THE TURN, not since the turn began: `turn.started` carries no timestamp, so the device
-     * stamps its own clock. A turn that predates the attach reads from zero. 0 = do not draw it.
+     * stamps its own clock. A turn that predates the attach reads from zero. 0 = unknown, do not draw it (formatted by
+     * fmt_elapsed, main/elapsed.h: "0:34", "1h 5m", ...).
      *
      * `activity` is what the daemon scraped off the engine's spinner footer — a gerund like
      * "Coalescing", never a tool call. The creature skins fold it into `recipient` on a rotation,
      * because they have one text seat; a skin with two reads it here instead.
      */
     const char *tab, *engine, *activity;
-    uint16_t elapsed;
+    uint32_t elapsed;
     ht_character_mood_t mood;
     ht_character_pose_t pose;
     bool focus, carrying, footer_action, straight_title, unread, primary_title, roomy_reading, single_label;
@@ -58,6 +59,9 @@ typedef struct {
     // working scene shows, the pet's alert bubble rings from then and stays, the count in it, until they are read.
     uint32_t notice_ms;
     uint16_t notices;
+    // Focus only: the working face plays the pet's second working scene (ht_pet_t.working_alt, Claude's builder) when
+    // it has one. Drawn by ht_focus_pick_working as the scene starts showing, and kept while it shows.
+    bool working_alt;
     uint16_t ink, foreground, dim;
 } ht_character_face_t;
 

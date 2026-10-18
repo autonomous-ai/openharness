@@ -2,7 +2,12 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Feed from './Feed';
 import Detail from './Detail';
+import CreatorPage from './CreatorPage';
+import ReportsPage from '../reports/page';
+import NotificationsPage from '../notifications/page';
+import { Header } from './Header';
 import { CommunityError, emptySocial } from '@/lib/community/client';
+import { starterHarnesses } from '@/lib/community/starters';
 import type { OpenHarness } from '@/lib/community/types';
 
 const request = vi.hoisted(() => vi.fn());
@@ -121,6 +126,24 @@ describe('community navigation', () => {
     await screen.findByTitle('Orbit output');
     expect(screen.queryByRole('link', { name: 'Edit' })).not.toBeInTheDocument();
   });
+  it('reads a page opened at its slug, then names the publication by its id and shows its own address', async () => {
+    const id = '0f8fad5b-d9cb-469f-a165-70867728950e', slug = 'an-older-title-0f8fad5b';
+    window.history.replaceState(null, '', `/hub/${slug}?comments=1`);
+    try {
+      request.mockResolvedValueOnce({ harness: { ...sample, id, example: false }, social: { ...emptySocial, signedIn: true } });
+      render(<Detail id={slug} initial={null} />);
+      await screen.findByTitle('Orbit output');
+      expect(request).toHaveBeenCalledWith(`harnesses/${slug}?files=viewer`);
+      // The address moves in an effect after the page draws.
+      await waitFor(() => expect(window.location.pathname + window.location.search).toBe('/hub/orbit-0f8fad5b?comments=1'));
+      request.mockResolvedValueOnce({ liked: true, likes: 1 });
+      fireEvent.click(screen.getByRole('button', { name: 'Like harness' }));
+      await waitFor(() => expect(request).toHaveBeenLastCalledWith(`harnesses/${id}/like`, expect.anything()));
+    } finally {
+      // The next test reads the address: leave none behind, passed or failed.
+      window.history.replaceState(null, '', '/');
+    }
+  });
   it('says so when a drawn page cannot load its likes and actions, and retries', async () => {
     const id = '0f8fad5b-d9cb-469f-a165-70867728950e';
     request.mockRejectedValueOnce(new CommunityError('Service unavailable', 503));
@@ -203,7 +226,7 @@ describe('community navigation', () => {
     await screen.findByRole('link', { name: 'Open Published' });
     // Only what the server ranked, where it ranked it: no starter is appended after the publications.
     expect(screen.getAllByRole('link', { name: /^Open / }).map(link => link.getAttribute('href')))
-      .toEqual(['/hub/starter-blue-hour', '/hub/post', '/hub/starter-orbit']);
+      .toEqual(['/hub/starter-blue-hour', '/hub/published-post', '/hub/starter-orbit']);
     window.history.replaceState(null, '', '/');
   });
   it('holds a feed like until the server answers, and shows the forks a card has', async () => {
@@ -217,6 +240,21 @@ describe('community navigation', () => {
     await act(async () => answer({ liked: true, likes: 2 }));
     expect(screen.getByRole('button', { name: 'Unlike Orbit' })).toHaveTextContent('2');
     expect(screen.getByRole('button', { name: 'Unlike Orbit' })).toBeEnabled();
+  });
+  it('reads earlier comments a page at a time, and says when a page fails', async () => {
+    const latest = { id: 'c2', body: 'Latest', authorName: 'Cy', mine: false, createdAt: '2026-10-07' };
+    const earlier = { id: 'c1', body: 'Earlier', authorName: 'Bob', mine: false, createdAt: '2026-10-06' };
+    request.mockResolvedValueOnce({ harness: null, social: { ...emptySocial, comments: [latest], commentCount: 2 } });
+    render(<Detail id={sample.id} initial={sample} initialComments />);
+    await screen.findByText('Showing the latest 1 of 2 comments.');
+    request.mockRejectedValueOnce(new Error('offline'));
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier' }));
+    await screen.findByText('Earlier comments could not be loaded.');
+    request.mockResolvedValueOnce({ comments: [earlier], more: false });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('Earlier');
+    expect(request).toHaveBeenLastCalledWith('harnesses/starter-orbit/comments?before=c2');
+    expect(screen.queryByText(/Showing the latest/)).not.toBeInTheDocument();
   });
   it('counts every comment, threads replies, and lists the forks', async () => {
     const parent = { id: 'c1', body: 'First', authorName: 'Bob', mine: false, createdAt: '2026-10-06' };
@@ -249,13 +287,166 @@ describe('community navigation', () => {
     expect(screen.getByText('Make an orbit.')).toBeInTheDocument();
     fetcher.mockRestore();
   });
-  it('copies the harness link', async () => {
+  it('shares from a menu: the link copied, or a network’s own share page', async () => {
     request.mockResolvedValue({ harness: null, social: emptySocial });
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     render(<Detail id={sample.id} initial={sample} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Copy link to this harness' }));
+    const share = screen.getByRole('button', { name: 'Share' });
+    fireEvent.click(share);
+    expect(share).toHaveAttribute('aria-expanded', 'true');
+    const link = encodeURIComponent(`${window.location.origin}/hub/starter-orbit`);
+    expect(screen.getByRole('menuitem', { name: 'Share on X' })).toHaveAttribute('href', `https://x.com/intent/tweet?text=Orbit&url=${link}`);
+    expect(screen.getByRole('menuitem', { name: 'Share on Facebook' })).toHaveAttribute('href', `https://www.facebook.com/sharer/sharer.php?u=${link}`);
+    expect(screen.getByRole('menuitem', { name: 'Share on LinkedIn' })).toHaveAttribute('target', '_blank');
+    // No share sheet in this browser: nothing offers one.
+    expect(screen.queryByRole('menuitem', { name: 'More options…' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy link' }));
     await screen.findByText('Link copied');
     expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/hub/starter-orbit`);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+  it('draws the page the server read at once, then reads it again with the reader’s sign-in', async () => {
+    let answer: (page: unknown) => void = () => {};
+    request.mockReturnValueOnce(new Promise(resolve => { answer = resolve; }));
+    const page = { harnesses: [{ ...sample, id: 'first', title: 'Server card' }], nextCursor: null, following: [], stats: { first: { likes: 4, comments: 1, liked: false } } };
+    render(<Feed initialPage={page} />);
+    expect(screen.getByRole('link', { name: 'Open Server card' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Like Server card' })).toHaveTextContent('4');
+    await act(async () => { answer({ ...page, stats: { first: { likes: 4, comments: 1, liked: true } }, signedIn: true }); });
+    expect(screen.getByRole('button', { name: 'Unlike Server card' })).toBeInTheDocument();
+  });
+  it.each([
+    [{ forkedFrom: '8f0c2a1e-5b6d-4c3a-9e7f-1a2b3c4d5e6f', origin: { title: 'The original', authorName: 'Alice' } }, 'Forked from The original by Alice', true],
+    [{ forkedFrom: 'starter-orbit' }, `Forked from ${starterHarnesses.find(item => item.id === 'starter-orbit')!.title} by Harness`, true],
+    [{ forkedFrom: '8f0c2a1e-5b6d-4c3a-9e7f-1a2b3c4d5e6f', origin: null }, 'Forked from a harness that is no longer published', false],
+  ])('names where a fork came from: %o', async (fork, words, linked) => {
+    request.mockResolvedValue({ harness: null, social: emptySocial });
+    render(<Detail id="11111111-2222-4333-8444-555555555555" initial={{ ...sample, id: '11111111-2222-4333-8444-555555555555', example: false, ...fork }} />);
+    expect(screen.getByText(words).closest('a') !== null).toBe(linked);
+  });
+  it('reads an edited publication again when a refresh says its author changed it', async () => {
+    const id = '11111111-2222-4333-8444-555555555555', drawn = { ...sample, id, example: false, updatedAt: null };
+    request.mockResolvedValueOnce({ social: { ...emptySocial, updatedAt: null } });
+    render(<Detail id={id} initial={drawn} />);
+    await act(async () => {});
+    expect(request).toHaveBeenLastCalledWith(`harnesses/${id}/social`);
+    request.mockResolvedValueOnce({ social: { ...emptySocial, updatedAt: '2026-10-15T08:00:00.000Z' } })
+      .mockResolvedValueOnce({ harness: { ...drawn, title: 'Edited', updatedAt: '2026-10-15T08:00:00.000Z' }, social: emptySocial });
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.now() + 60_000);
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    vi.useRealTimers();
+    expect(await screen.findByRole('heading', { name: 'Edited' })).toBeInTheDocument();
+    expect(request).toHaveBeenLastCalledWith(`harnesses/${id}?files=viewer`);
+  });
+  it('shows a creator’s page: who they are, their harnesses, and following them', async () => {
+    const creator = { id: 'alice', name: 'Alice', followers: 1, following: false, mine: false, signedIn: true };
+    request.mockImplementation(async (path: string, options?: { method?: string }) => {
+      if (options?.method === 'PUT') return { following: true };
+      if (path.startsWith('creators/')) return { creator };
+      return { harnesses: [{ ...sample, id: 'mine-1', title: 'Her harness', authorId: 'alice', authorName: 'Alice', example: false }], nextCursor: null, following: [], stats: {}, signedIn: true };
+    });
+    render(<CreatorPage id="alice" initial={creator} initialView={{ query: '', category: '', sort: 'newest' }} />);
+    expect(screen.getByRole('heading', { name: 'Alice' })).toBeInTheDocument();
+    await screen.findByRole('link', { name: 'Open Her harness' });
+    expect(request).toHaveBeenCalledWith('harnesses?author=alice');
+    expect(screen.getAllByRole('link', { name: 'Alice' })[0]).toHaveAttribute('href', '/hub/creators/alice');
+    fireEvent.click(screen.getByRole('button', { name: 'Follow' }));
+    await screen.findByRole('button', { name: 'Following' });
+    expect(screen.getByText('2 followers')).toBeInTheDocument();
+    expect(request).toHaveBeenCalledWith('creators/alice/follow', { method: 'PUT', body: { following: true } });
+  });
+  it('says a creator is unavailable when the Hub has no such creator', async () => {
+    request.mockRejectedValue(new CommunityError('This creator is unavailable.', 404));
+    render(<CreatorPage id="nobody" initial={null} initialView={{ query: '', category: '', sort: 'newest' }} />);
+    expect(await screen.findByRole('heading', { name: 'This creator is unavailable.' })).toBeInTheDocument();
+  });
+  it('reports a harness with one reason, and leaves the reporter a page that says so', async () => {
+    const id = '11111111-2222-4333-8444-555555555555';
+    request.mockResolvedValueOnce({ social: { ...emptySocial, signedIn: true } });
+    render(<Detail id={id} initial={{ ...sample, id, example: false }} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Report harness' }));
+    const report = screen.getByRole('button', { name: 'Report' });
+    expect(report).toBeDisabled();
+    fireEvent.click(screen.getByLabelText('Spam'));
+    request.mockResolvedValueOnce({ reported: true });
+    fireEvent.click(report);
+    expect(await screen.findByRole('heading', { name: 'Thanks for reporting.' })).toBeInTheDocument();
+    expect(request).toHaveBeenLastCalledWith('reports', { method: 'POST', body: { targetType: 'harness', targetId: id, reason: 'spam' } });
+  });
+  it('offers no report on a starter or your own harness', async () => {
+    request.mockResolvedValue({ harness: null, social: { ...emptySocial, signedIn: true } });
+    render(<Detail id={sample.id} initial={sample} />);
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: 'Report harness' })).not.toBeInTheDocument();
+  });
+  it('takes a reported comment off the reporter’s page at once', async () => {
+    const comment = { id: 'c1', body: 'Buy now', authorName: 'Spammer', mine: false, createdAt: '2026-10-06' };
+    request.mockResolvedValueOnce({ harness: null, social: { ...emptySocial, signedIn: true, comments: [comment], commentCount: 1 } });
+    render(<Detail id={sample.id} initial={sample} initialComments />);
+    await screen.findByText('Buy now');
+    fireEvent.click(screen.getByRole('button', { name: 'Report comment by Spammer' }));
+    fireEvent.click(screen.getByLabelText('Harassment or hate'));
+    request.mockResolvedValueOnce({ reported: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Report' }));
+    await waitFor(() => expect(screen.queryByText('Buy now')).not.toBeInTheDocument());
+    expect(request).toHaveBeenLastCalledWith('reports', { method: 'POST', body: { targetType: 'comment', targetId: 'c1', reason: 'harassment' } });
+  });
+  it('shows reviewers what was reported, and nobody else', async () => {
+    request.mockRejectedValueOnce(new CommunityError('Admin only', 403));
+    const { unmount } = render(<ReportsPage />);
+    expect(await screen.findByText('Only the Hub’s reviewers can see reports.')).toBeInTheDocument();
+    unmount();
+    const item = { targetType: 'harness', targetId: 'h1', harnessId: 'h1', reports: 3, lastReportedAt: '2026-10-15', reasons: { spam: 2, other: 1 }, state: 'hidden', text: 'Spam page', authorName: 'Mallory' };
+    request.mockResolvedValueOnce({ reports: [item] });
+    render(<ReportsPage />);
+    expect(await screen.findByText('Spam page — Mallory')).toBeInTheDocument();
+    expect(screen.getByText('Spam 2 · Something else 1')).toBeInTheDocument();
+    request.mockResolvedValueOnce({ reviewed: true }).mockResolvedValueOnce({ reports: [{ ...item, state: 'restored' }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    expect(await screen.findByText(/Restored/)).toBeInTheDocument();
+    expect(request).toHaveBeenCalledWith('reports/review', { method: 'POST', body: { targetType: 'harness', targetId: 'h1', decision: 'restore' } });
+  });
+  it('rings the bell with the unread count only for someone signed in', async () => {
+    const { unmount } = render(<Header />);
+    await act(async () => {});
+    expect(screen.queryByRole('link', { name: /Notifications/ })).not.toBeInTheDocument();
+    unmount();
+    localStorage.setItem('harness.web.v1.auth_access_token', 'token');
+    request.mockResolvedValueOnce({ unread: 3 });
+    render(<Header />);
+    expect(await screen.findByRole('link', { name: 'Notifications, 3 unread' })).toHaveAttribute('href', '/hub/notifications');
+    expect(request).toHaveBeenCalledWith('notifications/unread');
+    localStorage.clear();
+  });
+  it('lists notifications where they lead, and marks them read', async () => {
+    const at = '2026-10-15T08:00:00.000Z';
+    request.mockResolvedValueOnce({ unread: 2, notifications: [
+      { id: 'n1', kind: 'fork', harnessId: 'h1', harnessTitle: 'Orbit', actorName: 'Bob', targetId: 'f1', createdAt: at, read: false },
+      { id: 'n2', kind: 'reply', harnessId: 'h1', harnessTitle: 'Orbit', actorName: 'Cy', targetId: 'c1', createdAt: at, read: false },
+      { id: 'n3', kind: 'comment', harnessId: 'h2', harnessTitle: 'Lamp', actorName: 'Di', targetId: 'c2', createdAt: at, read: true },
+    ] }).mockResolvedValueOnce({ read: 2 });
+    render(<NotificationsPage />);
+    expect(await screen.findByRole('link', { name: /Bob forked Orbit/ })).toHaveAttribute('href', '/hub/f1');
+    expect(screen.getByRole('link', { name: /Cy replied to your comment on Orbit/ })).toHaveAttribute('href', '/hub/orbit-h1?comments=1');
+    expect(screen.getByRole('link', { name: /Di commented on Lamp/ })).toHaveAttribute('href', '/hub/lamp-h2?comments=1');
+    await waitFor(() => expect(request).toHaveBeenCalledWith('notifications/read', { method: 'POST' }));
+  });
+  it('offers the device’s own share sheet in the menu where there is one, and closes on a click outside', async () => {
+    request.mockResolvedValue({ harness: null, social: emptySocial });
+    const share = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'share', { value: share, configurable: true });
+    render(<Detail id={sample.id} initial={sample} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'More options…' }));
+    await waitFor(() => expect(share).toHaveBeenCalledWith({ title: 'Orbit', url: `${window.location.origin}/hub/starter-orbit` }));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    Object.defineProperty(navigator, 'share', { value: undefined, configurable: true });
   });
 });

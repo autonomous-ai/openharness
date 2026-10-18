@@ -32,6 +32,19 @@ class Onboarding(unittest.TestCase):
             execute.assert_called_once_with('/usr/bin/hn-os', ['hn-os', 'try'])
             self.assertTrue((Path(temp) / '.local/state/harness-os/onboarded').exists())
 
+    def test_a_computer_set_up_from_a_phone_asks_for_opencode_alone(self):
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / 'set-up-from-phone'
+            marker.touch()
+            with patch.object(onboarding, 'FROM_PHONE', marker), \
+                 patch.object(onboarding.Path, 'home', return_value=Path(temp)), \
+                 patch.object(onboarding.subprocess, 'run', return_value=result()) as command, \
+                 patch.object(onboarding.os, 'execv') as execute, \
+                 patch.dict(os.environ, {'TMUX_PANE': '%4'}):
+                onboarding.welcome()
+            self.assertEqual(command.call_args_list[0].args[0], ['hn', 'os-action', 'ready', '%4', 'bare'])
+            execute.assert_called_once_with('/usr/bin/hn-os', ['hn-os', 'try'])
+
     def test_usb_never_opens_networking_or_an_agent(self):
         with patch.object(onboarding.Path, 'is_file', return_value=True), \
              patch.object(onboarding.subprocess, 'run') as command, \
@@ -39,6 +52,33 @@ class Onboarding(unittest.TestCase):
             onboarding.welcome()
             command.assert_not_called()
             execute.assert_called_once_with('/usr/lib/harness-os/open-install', ['open-install'])
+
+    def test_the_welcome_asks_again_until_hn_knows_its_pane(self):
+        # hn can refuse at first ("That pane is not the welcome on this computer") while it does not
+        # know the pane by its tmux id yet; one refusal used to cost the two starter terminals.
+        with tempfile.TemporaryDirectory() as temp, patch.object(onboarding.Path, 'is_file', return_value=False), \
+             patch.object(onboarding.Path, 'home', return_value=Path(temp)), \
+             patch.object(onboarding.subprocess, 'run', side_effect=[result(1), result(1), result()]) as command, \
+             patch.object(onboarding.time, 'sleep'), \
+             patch.object(onboarding.os, 'execv') as execute, \
+             patch.dict(os.environ, {'TMUX_PANE': '%4'}):
+            onboarding.welcome()
+            self.assertEqual(command.call_count, 3)
+            self.assertTrue((Path(temp) / '.local/state/harness-os/onboarded').exists())
+            execute.assert_called_once_with('/usr/bin/hn-os', ['hn-os', 'try'])
+
+    def test_a_welcome_hn_never_knows_gives_up_after_a_while(self):
+        clock = iter(range(0, 1000, 3))
+        with tempfile.TemporaryDirectory() as temp, patch.object(onboarding.Path, 'is_file', return_value=False), \
+             patch.object(onboarding.Path, 'home', return_value=Path(temp)), \
+             patch.object(onboarding.subprocess, 'run', return_value=result(1)) as command, \
+             patch.object(onboarding.time, 'monotonic', side_effect=lambda: next(clock)), \
+             patch.object(onboarding.time, 'sleep'), \
+             patch.object(onboarding.os, 'execv') as execute:
+            onboarding.welcome()
+            self.assertLess(command.call_count, 10)
+            self.assertFalse((Path(temp) / '.local/state/harness-os/onboarded').exists())
+            execute.assert_called_once()
 
     def test_failed_layout_request_does_not_mark_first_use_complete(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(onboarding.Path, 'is_file', return_value=False), \

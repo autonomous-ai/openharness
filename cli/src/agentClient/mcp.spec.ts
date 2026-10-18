@@ -17,7 +17,7 @@ const call = (name: string, args: Record<string, unknown> = {}, id = 1) => ({ js
 describe('harness mcp', () => {
   it('answers initialize in the client\'s protocol version when it knows it, with what to use Harness for', async () => {
     const state: { client?: string } = {}
-    const known = await answer({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', clientInfo: { name: 'cursor-vscode' } } }, deps(), state)
+    const known = await answer({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', clientInfo: { name: 'cursor-vscode' } } }, deps({ run: runner({ code: 1, out: '' }).run }), state)
     expect(known).toMatchObject({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'harness' }, instructions: INSTRUCTIONS } })
     expect(state.client).toBe('cursor-vscode')
     const newer = await answer({ jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '2099-01-01' } }, deps())
@@ -25,10 +25,34 @@ describe('harness mcp', () => {
     expect(await answer({ jsonrpc: '2.0', id: 3, method: 'ping' }, deps())).toEqual({ jsonrpc: '2.0', id: 3, result: {} })
   })
 
+  it('begins its instructions with who the agent is right now, from harness whoami', async () => {
+    const r = runner({ out: 'You: Codex, outside Harness, on studio. Nothing can message you here.\nCan start harnesses: yes.\n' })
+    const got = await answer({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', clientInfo: { name: 'codex-mcp-client' } } }, deps({ run: r.run }))
+    expect(r.calls.map((c) => c.argv)).toEqual([['whoami']])
+    expect(r.calls[0].env.AI_AGENT).toBe('codex')
+    expect((got!.result as { instructions: string }).instructions)
+      .toBe(`Right now:\nYou: Codex, outside Harness, on studio. Nothing can message you here.\nCan start harnesses: yes.\n\n${INSTRUCTIONS}`)
+  })
+
+  it('connects with the plain instructions when whoami fails or is slow', async () => {
+    const failed = await answer({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, deps({ run: runner({ code: 1, out: '' }).run }))
+    expect((failed!.result as { instructions: string }).instructions).toBe(INSTRUCTIONS)
+    const slow = await answer({ jsonrpc: '2.0', id: 2, method: 'initialize', params: {} }, deps({ run: () => new Promise(() => {}), whoamiMs: 5 }))
+    expect((slow!.result as { instructions: string }).instructions).toBe(INSTRUCTIONS)
+  })
+
+  it('offers harness_whoami as a read-only tool that runs harness whoami', async () => {
+    const r = runner()
+    await answer(call('harness_whoami'), deps({ run: r.run }))
+    expect(r.calls[0].argv).toEqual(['whoami'])
+    expect(TOOLS.find((t) => t.name === 'harness_whoami')?.annotations).toEqual({ readOnlyHint: true })
+    expect(INSTRUCTIONS).toContain('harness_whoami')
+  })
+
   it('lists send only to a harness in its own pane: an agent outside Harness has nothing to be answered at', async () => {
     const names = async (inPane: boolean) => ((await answer({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, deps({ inPane })))!.result as { tools: Array<{ name: string; argv?: unknown }> }).tools
     const outside = await names(false)
-    expect(outside.map((t) => t.name)).toEqual(['harness_list', 'harness_start', 'harness_wait', 'harness_read', 'harness_close'])
+    expect(outside.map((t) => t.name)).toEqual(['harness_whoami', 'harness_list', 'harness_start', 'harness_wait', 'harness_read', 'harness_close'])
     expect(outside.every((t) => t.argv === undefined)).toBe(true)
     expect((await names(true)).map((t) => t.name)).toContain('harness_send')
     expect(await answer(call('harness_send', { to: 'x', text: 'y' }), deps())).toMatchObject({ error: { code: -32602 } })
@@ -51,7 +75,7 @@ describe('harness mcp', () => {
     const codexAsks = (a: Record<string, unknown> = {}) => a.destructiveHint === true || (a.readOnlyHint !== true && (a.destructiveHint !== false || a.openWorldHint !== false))
     const listed = ((await answer({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, deps({ inPane: true })))!.result as { tools: Array<{ name: string; annotations?: Record<string, unknown> }> }).tools
     expect(Object.fromEntries(listed.map((tool) => [tool.name, codexAsks(tool.annotations)]))).toEqual({
-      harness_list: false, harness_start: false, harness_wait: false, harness_read: false, harness_send: false, harness_close: false,
+      harness_whoami: false, harness_list: false, harness_start: false, harness_wait: false, harness_read: false, harness_send: false, harness_close: false,
     })
   })
 
@@ -80,7 +104,7 @@ describe('harness mcp', () => {
     expect(r.calls.map((c) => c.argv)).toEqual([
       ['ps'], ['ps', '--all'],
       ['new', 'claude', '/work/here/app', '--name', 'reviewer', '--task', 'review it\nall of it'],
-      ['new', 'codex', '@mini', '/abs', '--name', 'gpu', '--task', 'train'],
+      ['new', 'codex', '--machine', 'mini', '/abs', '--name', 'gpu', '--task', 'train'],
       ['new', 'claude', '~/p', '--name', 'n', '--task', 'x'],
       ['wait', 'a,b', '--timeout', '45s'], ['wait', 'a', '--any', '--timeout', '600s'], ['wait', 'a', '--timeout', '2s'],
       ['show', 'a'], ['show', 'a', '--chars', '99'],
@@ -104,7 +128,7 @@ describe('harness mcp', () => {
     await answer(call('harness_start', { task: 'go', name: 'both', folder: 'app', project: 'p' }), d)
     expect(r.calls.map((c) => c.argv)).toEqual([
       ['new', 'claude', '--new', 'opinion', '--name', 'opinion', '--task', 'a second opinion'],
-      ['new', 'codex', '@mini', '--new', '--name', 'quick', '--task', 'go'],
+      ['new', 'codex', '--machine', 'mini', '--new', '--name', 'quick', '--task', 'go'],
       ['new', 'claude', '/work/here/app', '--new', 'p', '--name', 'both', '--task', 'go'],
     ])
     // As `harness new` reads them: a new project, one named by the clock, and a refusal to guess between the two.
@@ -146,7 +170,10 @@ describe('harness mcp', () => {
     expect(result('harness_close', { code: 1, out: '', err: 'You did not start x, so you may not close it.\n' }))
       .toEqual({ content: [{ type: 'text', text: 'You did not start x, so you may not close it.' }], isError: true })
     expect(result('harness_read', { code: 2, out: '', err: '' })).toEqual({ content: [{ type: 'text', text: 'harness exited 2' }], isError: true })
-    expect(result('harness_wait', { code: 3, out: 'a: needs-input\n', err: '' })).toEqual({ content: [{ type: 'text', text: 'a: needs-input' }] })
+    expect(result('harness_wait', { code: 3, out: 'a: needs the person\n', err: '' })).toEqual({ content: [{ type: 'text', text: 'a: needs the person' }] })
+    // A refusal is an answer: the agent should not retry it as it would a failure.
+    expect(result('harness_close', { code: 5, out: '', err: 'You did not start x, so you may not close it. Only the person can.\n' }))
+      .toEqual({ content: [{ type: 'text', text: 'You did not start x, so you may not close it. Only the person can.' }] })
     expect(result('harness_wait', { code: 4, out: 'a: stopped\n', err: '' }).isError).toBeUndefined()
     expect(result('harness_wait', { code: 124, out: 'a: working\n', err: '' })).toEqual({ content: [{ type: 'text', text: 'a: working\nStill working. Call harness_wait again to keep waiting.' }] })
     expect(result('harness_wait', { code: 124, out: '', err: '' }).content[0].text).toBe('Still working. Call harness_wait again to keep waiting.')

@@ -2,11 +2,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, showCommand, spawnRefusal, SPAWN_LIMITS, waitCommand, type ClientDeps } from './commands.js'
+import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, waitCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { agentSettingsPath } from '../lib/agentSettings.js'
-import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSettings.js'
+import { setAgentSettingsForTest, signedOutForTest, TEST_ACCOUNT } from '../testing/agentSettings.js'
 import type { Frame } from './model.js'
 
 const NOW = Date.parse('2026-10-11T12:00:00Z')
@@ -96,33 +96,77 @@ describe('harness ps', () => {
     started(h.ledger, 'lead', 'kid')
     expect(await psCommand([], h.deps)).toBe(EXIT.ok)
     const text = h.out.join('\n')
-    expect(text).toMatch(/^You are "lead" \(lead\)\.\nNAME +AGENT +STATE +STARTED BY +ACTIVE +FOLDER/)
+    expect(text).toMatch(/^You: Claude Code "lead" \(lead\), inside Harness, on studio\.\nCan start harnesses: yes\.\nYours: 1 open of 4 · 1 of 20 starts in the last 10 minutes\nNAME +AGENT +STATE +STARTED BY +ACTIVE +FOLDER/)
     expect(text).toMatch(/kid +Codex +working +you +1m +\/work\/kid \(main\)\n  kid recap/)
     expect(text).toMatch(/lead +Claude Code +idle +person \(you\)/)
     expect(text).not.toContain('sh ')
     expect(d.closed).toBe(true)
   })
 
-  it('tells an agent how many of its own are open and idle, and to close them once answered', async () => {
+  it('ends an agent\'s ps with Next: read its idle one, wait for its busy ones, or start one', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('lead', { engine: 'claude' }), frame('a'), frame('b', { activity: { state: 'working' } }), frame('c', { status: 'stopped' }), frame('theirs')]
     const h = harness(d)
     for (const kid of ['a', 'b', 'c']) started(h.ledger, 'lead', kid)
     expect(await psCommand([], h.deps)).toBe(EXIT.ok)
-    expect(h.out.join('\n').split('\n').at(-1)).toBe('You have 2 harnesses of your own open, 1 idle. Close each once you have its answer: harness close <name>.')
-    // One, and none idle.
+    expect(h.out.join('\n').split('\n').slice(-2)).toEqual([
+      'Next: harness show a  (read its answer, then close it: harness close a)',
+      '  or: harness wait b  (until it stops working)',
+    ])
+    // Through MCP, as its tools.
     d.frames = [frame('lead', { engine: 'claude' }), frame('b', { activity: { state: 'working' } })]
     const one = harness(d, { env: { HARNESS_VIA_MCP: '1' } })
     expect(await psCommand([], one.deps)).toBe(EXIT.ok)
-    expect(one.out.join('\n').split('\n').at(-1)).toBe('You have 1 harness of your own open. Close each once you have its answer: harness_close (name: "<name>").')
-    // None of its own, and the person: nothing to say.
+    expect(one.out.join('\n').split('\n').at(-1)).toBe('Next: harness_wait (names: "b")  (until it stops working)')
+    // None of its own, and it may start one.
     d.frames = [frame('lead', { engine: 'claude' }), frame('theirs')]
     const none = harness(d)
     expect(await psCommand([], none.deps)).toBe(EXIT.ok)
-    expect(none.out.join('\n')).not.toMatch(/of your own open/)
+    expect(none.out.join('\n').split('\n').at(-1)).toBe('Next: harness new <agent> --name <name> <project> -- <task>  (to hand work to another agent; do quick work yourself)')
+    // It may not start one: the block above says why, and nothing comes next.
+    setAgentSettingsForTest(dir, { agentsStartAgents: false })
+    const off = harness(d)
+    expect(await psCommand([], off.deps)).toBe(EXIT.ok)
+    expect(off.out.join('\n')).not.toMatch(/^Next:/m)
+    // The person: no Next.
     const person = harness(d, { pane: undefined })
     expect(await psCommand([], person.deps)).toBe(EXIT.ok)
-    expect(person.out.join('\n')).not.toMatch(/of your own open/)
+    expect(person.out.join('\n')).not.toMatch(/^Next:/m)
+    // Programs read it as a field.
+    setAgentSettingsForTest(dir, { agentsStartAgents: true })
+    const json = harness(d)
+    expect(await psCommand(['--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0]).next).toEqual([{ run: 'harness new <agent> --name <name> <project> -- <task>', when: 'to hand work to another agent; do quick work yourself' }])
+  })
+
+  it('shows an agent at most 15 rows, its own first, and says how to see the rest; a person sees all', async () => {
+    const d = new FakeDaemon()
+    // Its own two are the oldest: still shown, and first.
+    d.frames = [frame('lead', { engine: 'claude' }), ...Array.from({ length: 18 }, (_, i) => frame(`h${i}`)),
+      frame('old1', { updatedAt: '2026-10-01T00:00:00Z' }), frame('old2', { updatedAt: '2026-10-01T00:00:00Z' })]
+    const h = harness(d)
+    started(h.ledger, 'lead', 'old1')
+    started(h.ledger, 'lead', 'old2')
+    expect(await psCommand([], h.deps)).toBe(EXIT.ok)
+    const lines = h.out.join('\n').split('\n')
+    const rows = lines.filter((l) => /^(h\d+|old\d|lead) /.test(l))
+    expect(rows).toHaveLength(15)
+    expect(rows.slice(0, 2).map((l) => l.split(' ')[0])).toEqual(['old1', 'old2'])
+    // What is left out, and that the command for it lists the stopped ones too.
+    expect(lines).toContain('and 6 more, none of them yours: harness ps --all (lists every one, and those stopped this week)')
+    // Programs get every row.
+    const json = harness(d)
+    expect(await psCommand(['--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0]).harnesses).toHaveLength(21)
+    // --all: all of them.
+    const all = harness(d)
+    expect(await psCommand(['--all'], all.deps)).toBe(EXIT.ok)
+    expect(all.out.join('\n')).not.toContain('more: harness ps --all')
+    // The person: every row, as before.
+    const person = harness(d, { pane: undefined })
+    expect(await psCommand([], person.deps)).toBe(EXIT.ok)
+    expect(person.out.join('\n')).not.toContain('more: harness ps --all')
+    expect(person.out.join('\n').match(/^(h\d+|old\d|lead) /gm)).toHaveLength(21)
   })
 
   it('tells an agent outside Harness that it is one', async () => {
@@ -131,8 +175,21 @@ describe('harness ps', () => {
     const h = harness(d, { pane: undefined, env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'S1' } })
     h.ledger.append({ at: NOW, depth: 1, by: { machineId: 'm', agentId: 'claude-code:S1', name: 'Claude Code', engine: 'claude' }, child: { machineId: 'm', agentId: 'kid', name: 'kid' } })
     expect(await psCommand([], h.deps)).toBe(EXIT.ok)
-    expect(h.out[0].split('\n')[0]).toBe('You are Claude Code, outside Harness.')
+    expect(h.out[0].split('\n')[0]).toBe('You: Claude Code, outside Harness, on studio. Nothing can message you here.')
     expect(h.out[0]).toMatch(/\nkid +Codex +\w+ +you /)
+  })
+
+  it('gives the context in its JSON, and leaves a person\'s ps as it was', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('theirs')]
+    const h = harness(d)
+    expect(await psCommand(['--json'], h.deps)).toBe(EXIT.ok)
+    const listed = JSON.parse(h.out.join('\n'))
+    expect(listed.context.caller).toMatchObject({ kind: 'agent', name: 'lead', machine: 'studio' })
+    expect(listed.you).toBe('lead')
+    const person = harness(d, { pane: undefined })
+    expect(await psCommand([], person.deps)).toBe(EXIT.ok)
+    expect(person.out.join('\n')).toMatch(/^NAME +AGENT/)
   })
 
   it('prints JSON for programs, and asks for stopped ones with --all', async () => {
@@ -211,13 +268,13 @@ describe('harness show', () => {
     started(h.ledger, 'lead', 'reviewer')
     expect(await showCommand(['rev'], h.deps)).toBe(EXIT.ok)
     expect(h.out).toEqual([
-      'reviewer · Codex · studio · idle · started by you',
+      'reviewer on studio: idle · Codex · started by you',
       'folder: /work/reviewer (main)',
       'asked: review 3f2a',
       'answer (after 1 tool calls):',
       'Two bugs.',
       // Idle and the caller's: a harness left open after its answer is read sits there for nobody.
-      'Close it once you have what you need: harness close reviewer',
+      'Next: harness close reviewer  (once you have what you need)',
     ])
     expect(d.requests.filter((r) => r.type === 'session_get').map((r) => r.payload)).toEqual([
       { sessionId: 's-reviewer', limit: 80 }, { sessionId: 's-reviewer', limit: 80, before: '1' },
@@ -234,18 +291,19 @@ describe('harness show', () => {
     started(h.ledger, 'lead', 'busy')
     expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
     // An unnamed harness is called by its session title, a sentence `close` would not take: the start of its id.
-    expect(h.out.at(-1)).toBe('Close it once you have what you need: harness close kid')
+    expect(h.out.at(-1)).toBe('Next: harness close kid  (once you have what you need)')
     expect(await showCommand(['busy'], h.deps)).toBe(EXIT.ok)
-    expect(h.out.at(-1)).not.toMatch(/Close it/)
+    expect(h.out.at(-1)).not.toMatch(/harness close/)
     expect(await showCommand(['theirs'], h.deps)).toBe(EXIT.ok)
-    expect(h.out.at(-1)).not.toMatch(/Close it/)
+    expect(h.out.at(-1)).not.toMatch(/harness close/)
     const mcp = harness(d, { env: { HARNESS_VIA_MCP: '1' } })
     expect(await showCommand(['kid'], mcp.deps)).toBe(EXIT.ok)
-    expect(mcp.out.at(-1)).toBe('Close it once you have what you need: harness_close (name: "kid")')
-    // Programs read the state themselves.
+    expect(mcp.out.at(-1)).toBe('Next: harness_close (name: "kid")  (once you have what you need)')
+    // Programs read the next step as a field, not a line.
     const json = harness(d)
     expect(await showCommand(['kid', '--json'], json.deps)).toBe(EXIT.ok)
-    expect(json.out.join('\n')).not.toMatch(/Close it/)
+    expect(json.out.join('\n')).not.toMatch(/Next:/)
+    expect(JSON.parse(json.out.join('\n')).next).toEqual([{ run: 'harness close kid', when: 'once you have what you need' }])
   })
 
   it('clips a long answer and says how to read the rest; says when it waits for the person', async () => {
@@ -255,13 +313,53 @@ describe('harness show', () => {
     d.pages.set('s-long', [{ events: [ev('user_message', { content: 'go' }), ev('text_delta', { content: 'x'.repeat(50) })], hasMore: false }])
     const h = harness(d)
     expect(await showCommand(['long', '--chars', '10'], h.deps)).toBe(EXIT.ok)
-    expect(h.out[0]).toBe('long · Codex · studio · needs-input · started by person')
+    expect(h.out[0]).toBe('long on studio: needs the person · Codex · started by person')
     expect(h.out).toContain('xxxxxxxxx…')
     expect(h.out).toContain('… 40 more characters: harness show long --chars 50')
-    expect(h.out.at(-1)).toMatch(/waiting for the person/)
+    expect(h.out.at(-1)).toMatch(/^Next: tell the person/)
     const json = harness(d)
     expect(await showCommand(['long', '--json', '--chars=5'], json.deps)).toBe(EXIT.ok)
     expect(JSON.parse(json.out.join('\n'))).toMatchObject({ name: 'long', state: 'needs-input', answer: 'xxxx…', truncated: true, ask: 'go' })
+  })
+
+  it('starts with the result and ends with Next: close for its own idle harness', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid')]
+    d.pages.set('s-kid', [{ events: [ev('user_message', { content: 'review it' }), ev('text_delta', { content: 'One bug.' })], hasMore: false }])
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    const lines = h.out.join('\n').split('\n')
+    expect(lines[0]).toBe('kid on studio: idle · Codex · started by you')
+    expect(lines.at(-1)).toBe('Next: harness close kid  (once you have what you need)')
+  })
+
+  it('names wait for a working harness, and never close for one the caller did not start', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('busy', { activity: { state: 'working' } }), frame('theirs')]
+    d.screens.set('busy', ['working'])
+    const h = harness(d)
+    started(h.ledger, 'lead', 'busy')
+    expect(await showCommand(['busy'], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n').split('\n').at(-1)).toBe('Next: harness wait busy  (until it stops working)')
+    const theirs = harness(d)
+    expect(await showCommand(['theirs'], theirs.deps)).toBe(EXIT.ok)
+    expect(theirs.out.join('\n')).not.toMatch(/harness close/)
+  })
+
+  it('says to tell the person when only they can answer, and gives next in JSON', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('asker')]
+    d.screens.set('asker', ['needs_input'])
+    const h = harness(d)
+    started(h.ledger, 'lead', 'asker')
+    expect(await showCommand(['asker'], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n').split('\n').at(-1)).toBe('Next: tell the person; only they answer it (a question or a permission).')
+    const json = harness(d)
+    expect(await showCommand(['asker', '--json'], json.deps)).toBe(EXIT.ok)
+    const parsed = JSON.parse(json.out[0])
+    expect(parsed.state).toBe('needs-input')
+    expect(parsed.next).toEqual([{ tell: 'tell the person; only they answer it (a question or a permission).' }])
   })
 
   it('says when there is no turn yet, or no transcript to read', async () => {
@@ -273,12 +371,12 @@ describe('harness show', () => {
     expect(await showCommand(['broken'], h.deps)).toBe(EXIT.ok)
     expect(await showCommand(['stopped'], h.deps)).toBe(EXIT.ok)
     expect(h.out.filter((l) => l === 'No turn yet.')).toHaveLength(3)
-    expect(h.out).toContain('stopped · Codex · studio · stopped · started by person')
+    expect(h.out).toContain('stopped on studio: stopped · Codex · started by person')
     // The screen could not be read: the listed state stands.
     d.extra.agent_close = () => { throw new Error('gone') }
     const again = harness(d, { pane: undefined })
     expect(await showCommand(['fresh'], again.deps)).toBe(EXIT.ok)
-    expect(again.out[0]).toContain('· idle ·')
+    expect(again.out[0]).toContain(': idle ·')
   })
 
   it('stops reading back after four pages', async () => {
@@ -305,7 +403,11 @@ describe('harness show', () => {
     expect(h.err.at(-1)).toBe('"review" could be review-a (review-a, idle), review-b (review-b, idle). Use more of the name, or the id.')
     expect(await showCommand(['solo'], h.deps)).toBe(EXIT.failed)
     expect(await showCommand(['nobody'], h.deps)).toBe(EXIT.failed)
-    expect(h.err.at(-1)).toBe('No harness named "nobody" on this machine. `harness ps` lists them.')
+    expect(h.err.at(-1)).toBe('No harness named "nobody" on this machine. `harness ps` lists them. One on another of your machines: add --machine <name> (`harness ps --machine <name>` lists those).')
+    // An MCP client has no `--machine` to give.
+    const mcp = harness(d, { pane: undefined, env: { HARNESS_VIA_MCP: '1' } })
+    expect(await showCommand(['nobody'], mcp.deps)).toBe(EXIT.failed)
+    expect(mcp.err.at(-1)).toBe('No harness named "nobody" on this machine. `harness_list` lists them.')
   })
 
   it('prefers a live harness over a stopped one of the same name', async () => {
@@ -374,7 +476,7 @@ describe('harness wait', () => {
     answered(d, 'done')
     const h = harness(d)
     expect(await waitCommand(['done', '--json'], h.deps)).toBe(EXIT.ok)
-    expect(JSON.parse(h.out.join('\n'))).toEqual({ harnesses: [{ name: 'done', id: 'done', state: 'idle' }] })
+    expect(JSON.parse(h.out.join('\n'))).toEqual({ harnesses: [{ name: 'done', id: 'done', state: 'idle', next: [{ run: 'harness show done', when: 'to read its answer' }] }] })
     expect(inspects(d)).toBe(2)
   })
 
@@ -425,7 +527,7 @@ describe('harness wait', () => {
     d.screens.set('busy', ['working'])
     const h = harness(d)
     expect(await waitCommand(['asks'], h.deps)).toBe(EXIT.needsInput)
-    expect(h.out[0]).toMatch(/asks: needs-input · it waits for the person/)
+    expect(h.out[0]).toMatch(/asks: needs the person · it waits for the person/)
     const t = harness(d)
     expect(await waitCommand(['busy', '--timeout', '10s'], t.deps)).toBe(EXIT.timeout)
     expect(t.out[0]).toBe('busy: timeout · still working; wait again or read it: harness show busy')
@@ -444,6 +546,23 @@ describe('harness wait', () => {
     expect(g.out[0]).toBe('x: gone · it is gone')
   })
 
+  it('tells where to look for a harness that is gone, and gives each one\'s next in JSON', async () => {
+    const s = new FakeDaemon()
+    s.frames = [frame('x')]
+    s.screens.set('x', ['working'])
+    let m = 0
+    s.extra.agents_list = () => ({ agents: m++ < 2 ? s.frames : [] })
+    const g = harness(s)
+    expect(await waitCommand(['x'], g.deps)).toBe(EXIT.stopped)
+    expect(g.out.join('\n')).toBe('x: gone · it is gone\nNext: harness ps --all  (to see whether it was closed)')
+    const d = new FakeDaemon()
+    d.frames = [frame('done')]
+    answered(d, 'done')
+    const json = harness(d)
+    expect(await waitCommand(['done', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out.join('\n')).harnesses[0].next).toEqual([{ run: 'harness show done', when: 'to read its answer' }])
+  })
+
   // A Codex lead closed its harness, then waited on it as it had queued: "Failed (exit 4) … stopped · it was stopped".
   it('says a harness the caller closed was closed by it, and is no failure; another\'s close still is', async () => {
     const d = new FakeDaemon()
@@ -455,7 +574,7 @@ describe('harness wait', () => {
     expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.ok)
     expect(h.out).toEqual(['kid: closed (you closed it)'])
     expect(await waitCommand(['kid', '--json'], h.deps)).toBe(EXIT.ok)
-    expect(JSON.parse(h.out[1])).toEqual({ harnesses: [{ name: 'kid', id: 'kid', state: 'closed' }] })
+    expect(JSON.parse(h.out[1])).toEqual({ harnesses: [{ name: 'kid', id: 'kid', state: 'closed', next: [] }] })
     // Gone from the list after it closed it: still its close.
     h.ledger.append({ at: NOW, by: { machineId: 'm', agentId: 'lead' }, closed: { machineId: 'm', agentId: 'gone' } })
     let n = 0
@@ -556,6 +675,81 @@ describe('harness wait', () => {
   })
 })
 
+describe('Next names a harness as its verbs take it', () => {
+  it('quotes a two-word name once, as a shell command or a tool call', async () => {
+    expect(step({}, 'wait', '"code review"')).toBe('harness wait "code review"')
+    expect(step({ HARNESS_VIA_MCP: '1' }, 'wait', '"code review"')).toBe('harness_wait (names: "code review")')
+    expect(step({ HARNESS_VIA_MCP: '1' }, 'show', '"code review"')).toBe('harness_read (name: "code review")')
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const viaMcp = (await agentOrigin(harness(d, { env: { HARNESS_VIA_MCP: '1' } }).deps))!
+    expect(viaMcp.answer({ id: 'k1', name: 'code review' }, { local: true, machine: null }).next[0])
+      .toEqual({ run: 'harness_wait (names: "code review")', when: 'until it has answered; then read it: harness_read (name: "code review")' })
+  })
+
+  it('gives wait\'s next by a name the verbs take: quoted, or the id\'s start for a sentence', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('abcdef123456', { name: 'so we have built harness web,' }), frame('cr123456', { name: 'code review' })]
+    d.pages.set('s-abcdef123456', [{ events: [ev('user_message', { content: 'x' }), ev('text_delta', { content: 'Done.' }), ev('done')], hasMore: false }])
+    d.pages.set('s-cr123456', [{ events: [ev('user_message', { content: 'x' }), ev('text_delta', { content: 'Done.' }), ev('done')], hasMore: false }])
+    const h = harness(d, { pane: undefined })
+    expect(await waitCommand(['abcdef12', '--json'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out[0]).harnesses[0].next).toEqual([{ run: 'harness show abcdef12', when: 'to read its answer' }])
+    const two = harness(d, { pane: undefined })
+    expect(await waitCommand(['cr123456', '--json'], two.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(two.out[0]).harnesses[0].next).toEqual([{ run: 'harness show "code review"', when: 'to read its answer' }])
+  })
+})
+
+describe('refusals and the person', () => {
+  it('closing a harness the caller did not start exits 5, with its code in JSON beside the old fields', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('theirs')]
+    const h = harness(d)
+    expect(EXIT.refused).toBe(5)
+    expect(await closeCommand(['theirs'], h.deps)).toBe(EXIT.refused)
+    const json = harness(d)
+    expect(await closeCommand(['theirs', '--json'], json.deps)).toBe(EXIT.refused)
+    expect(JSON.parse(json.out[0])).toEqual({ error: 'NOT_YOURS', detail: 'You did not start theirs, so you may not close it. Only the person can.', code: 'NOT_YOURS', next: [] })
+  })
+
+  it('refuses a start over the open limit with its reason, the switch off and an orphan with theirs', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), ...['a', 'b', 'c', 'd'].map((id) => frame(id))]
+    const h = harness(d)
+    for (const kid of ['a', 'b', 'c', 'd']) started(h.ledger, 'lead', kid)
+    const full = await (await agentOrigin(h.deps))!.check().catch((e) => e)
+    expect(full).toBeInstanceOf(AgentClientError)
+    expect([full.code, full.reason]).toEqual(['SPAWN_LIMIT', 'OPEN_LIMIT'])
+    expect(refusalNext({}, full)).toEqual([{ run: 'harness close <name>', when: 'one you are done with, to free a place' }])
+    setAgentSettingsForTest(dir, { agentsStartAgents: false })
+    const off = await (await agentOrigin(harness(d).deps))!.check().catch((e) => e)
+    expect([off.code, off.reason]).toEqual(['TURNED_OFF', 'SWITCH_OFF'])
+    expect(refusalNext({}, off)).toEqual([])
+    const orphan = await (await agentOrigin(harness(new FakeDaemon(), { pane: '%gone', where: () => ({ ...where, harnessPane: true }) }).deps))!.check().catch((e) => e)
+    expect([orphan.code, orphan.reason]).toEqual(['NOT_YOURS', 'ORPHAN'])
+  })
+
+  it('says needs the person in text and keeps needs-input in JSON, with needsPerson', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('asker')]
+    d.screens.set('asker', ['needs_input'])
+    const h = harness(d)
+    started(h.ledger, 'lead', 'asker')
+    expect(await waitCommand(['asker'], h.deps)).toBe(EXIT.needsInput)
+    expect(h.out[0]).toMatch(/^asker: needs the person · /)
+    const json = harness(d)
+    expect(await waitCommand(['asker', '--json'], json.deps)).toBe(EXIT.needsInput)
+    expect(JSON.parse(json.out[0]).harnesses[0]).toMatchObject({ state: 'needs-input', needsPerson: true })
+    const shown = harness(d)
+    expect(await showCommand(['asker'], shown.deps)).toBe(EXIT.ok)
+    expect(shown.out[0]).toBe('asker on studio: needs the person · Codex · started by you')
+    const shownJson = harness(d)
+    expect(await showCommand(['asker', '--json'], shownJson.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(shownJson.out[0])).toMatchObject({ state: 'needs-input', needsPerson: true })
+  })
+})
+
 describe('harness close', () => {
   it('closes a harness the agent started, once it is idle', async () => {
     const d = new FakeDaemon()
@@ -563,33 +757,50 @@ describe('harness close', () => {
     const h = harness(d)
     started(h.ledger, 'lead', 'kid')
     expect(await closeCommand(['kid'], h.deps)).toBe(EXIT.ok)
-    expect(h.out).toEqual(['Closed kid. Its conversation is kept.'])
+    expect(h.out).toEqual(['kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 0 open of 4.'])
     expect(d.requests.at(-1)).toMatchObject({ type: 'agent_close', payload: { agentId: 'kid', sessionId: 's-kid', mode: 'idle' } })
     const now = harness(d)
     expect(await closeCommand(['kid', '--now', '--json'], now.deps)).toBe(EXIT.ok)
-    expect(JSON.parse(now.out[0])).toEqual({ name: 'kid', id: 'kid', closed: true })
+    expect(JSON.parse(now.out[0])).toEqual({ name: 'kid', id: 'kid', closed: true, effect: 'Its conversation is kept; the person can resume it.', next: [], open: 0 })
     expect(d.requests.at(-1)?.payload.mode).toBe('now')
+  })
+
+  it('says the result and the effect, and how many of its own are still open', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid'), frame('other')]
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    started(h.ledger, 'lead', 'other')
+    expect(await closeCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n')).toBe('kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 1 open of 4.')
+    const json = harness(d)
+    expect(await closeCommand(['other', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0])).toEqual({ name: 'other', id: 'other', closed: true, effect: 'Its conversation is kept; the person can resume it.', next: [], open: 1 })
+    // The person: the result alone.
+    const person = harness(d, { pane: undefined })
+    expect(await closeCommand(['kid'], person.deps)).toBe(EXIT.ok)
+    expect(person.out).toEqual(['kid on studio: closed. Its conversation is kept; the person can resume it.'])
   })
 
   it('refuses an agent a harness it did not start, and its own; the person closes anything', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('lead'), frame('theirs')]
     const h = harness(d)
-    expect(await closeCommand(['theirs'], h.deps)).toBe(EXIT.failed)
+    expect(await closeCommand(['theirs'], h.deps)).toBe(EXIT.refused)
     expect(h.err[0]).toBe('You did not start theirs, so you may not close it. Only the person can.')
-    expect(await closeCommand(['lead'], h.deps)).toBe(EXIT.failed)
+    expect(await closeCommand(['lead'], h.deps)).toBe(EXIT.refused)
     expect(h.err[1]).toBe('That is your own harness. The person closes it.')
     const person = harness(d, { pane: undefined })
     expect(await closeCommand(['theirs'], person.deps)).toBe(EXIT.ok)
     // An agent the daemon lists offline for a moment is still that agent: never the person.
     d.frames = [frame('lead', { status: 'offline' }), frame('theirs')]
     const stopped = harness(d)
-    expect(await closeCommand(['theirs'], stopped.deps)).toBe(EXIT.failed)
+    expect(await closeCommand(['theirs'], stopped.deps)).toBe(EXIT.refused)
     expect(stopped.err[0]).toMatch(/^You did not start theirs/)
     // A pane Harness made whose harness it has forgotten: what is left of an agent, never the person.
     d.frames = [frame('theirs')]
     const left = harness(d, { pane: '%gone', where: () => ({ ...where, harnessPane: true }) })
-    expect(await closeCommand(['theirs'], left.deps)).toBe(EXIT.failed)
+    expect(await closeCommand(['theirs'], left.deps)).toBe(EXIT.refused)
     expect(left.err[0]).toBe('This pane\'s harness is no longer running, so nothing here may close or start harnesses. Only the person can.')
     // A person's terminal in Harness, or a pane of their own tmux, is the person.
     d.frames = [frame('theirs'), frame('sh', { engine: 'terminal', tmuxPane: '%sh' })]
@@ -602,15 +813,15 @@ describe('harness close', () => {
     d.frames = [frame('mine'), frame('theirs'), frame('sh', { engine: 'terminal', tmuxPane: '%sh' })]
     const h = harness(d, { pane: undefined, env: { CODEX_THREAD_ID: 'T1' } })
     h.ledger.append({ at: NOW, depth: 1, by: { machineId: 'm', agentId: 'codex:T1', name: 'Codex', engine: 'codex' }, child: { machineId: 'm', agentId: 'mine', name: 'mine' } })
-    expect(await closeCommand(['theirs'], h.deps)).toBe(EXIT.failed)
+    expect(await closeCommand(['theirs'], h.deps)).toBe(EXIT.refused)
     expect(h.err[0]).toBe('You did not start theirs, so you may not close it. Only the person can.')
     expect(await closeCommand(['mine'], h.deps)).toBe(EXIT.ok)
     // Another session of the same agent did not start it.
     const other = harness(d, { pane: undefined, env: { CODEX_THREAD_ID: 'T2' } })
-    expect(await closeCommand(['mine'], other.deps)).toBe(EXIT.failed)
+    expect(await closeCommand(['mine'], other.deps)).toBe(EXIT.refused)
     // From a person's terminal in Harness: still the agent its shell names.
     const inTile = harness(d, { pane: '%sh', env: { AI_AGENT: 'cursor_1-2_agent' }, where: () => ({ ...where, harnessPane: true }) })
-    expect(await closeCommand(['theirs'], inTile.deps)).toBe(EXIT.failed)
+    expect(await closeCommand(['theirs'], inTile.deps)).toBe(EXIT.refused)
   })
 
   it('says what to do when it is working or changed, and passes on any other refusal', async () => {
@@ -645,9 +856,9 @@ describe('harness close', () => {
     const h = harness(d)
     started(h.ledger, 'lead', 'kid')
     expect(await closeCommand(['kid', '--now'], h.deps)).toBe(EXIT.ok)
-    expect(h.out).toEqual(['Closed kid. It was still starting, so no conversation was kept.'])
+    expect(h.out).toEqual(['kid on studio: closed. It was still starting, so no conversation was kept.\nNext: nothing; you have 0 open of 4.'])
     expect(await closeCommand(['kid', '--now', '--json'], h.deps)).toBe(EXIT.ok)
-    expect(JSON.parse(h.out[1])).toEqual({ name: 'kid', id: 'kid', closed: true, conversationKept: false })
+    expect(JSON.parse(h.out[1])).toEqual({ name: 'kid', id: 'kid', closed: true, conversationKept: false, effect: 'It was still starting, so no conversation was kept.', next: [], open: 0 })
     expect(await closeCommand(['kid', '--now'], h.deps)).toBe(EXIT.failed)
     expect(h.err).toEqual(['kid was not closed: Harness cannot tell which conversation it is in right now, and closing it would lose that conversation. Try again in a moment.'])
   })
@@ -666,7 +877,7 @@ describe('harness close', () => {
     expect(readFileSync(ledgerPath(dir), 'utf8').trim().split('\n')).toHaveLength(2)
     const unwritable = harness(d, { ledger: (data) => Object.assign(new Ledger(ledgerPath(data)), { append: () => { throw new Error('read-only') } }) })
     expect(await closeCommand(['kid'], unwritable.deps)).toBe(EXIT.ok)
-    expect(unwritable.out).toEqual(['Closed kid. Its conversation is kept.'])
+    expect(unwritable.out).toEqual(['kid on studio: closed. Its conversation is kept; the person can resume it.\nNext: nothing; you have 0 open of 4.'])
   })
 
   it('closes one harness at a time, by name', async () => {
@@ -735,7 +946,7 @@ describe('harness new, run by an agent', () => {
     await expect(origin.check()).rejects.toThrow(/no longer running/)
     expect(origin.prompt('x', 'm')).toBe('x')
     expect(await origin.created('m', {})).toBeNull()
-    expect(origin.next({})).toBe('')
+    expect(origin.answer({}, { local: true, machine: null })).toEqual({ effect: '', next: [] })
   })
 
   it('heads the task with who sent it, records what it started, and says how to follow it, never to message it', async () => {
@@ -763,10 +974,24 @@ describe('harness new, run by an agent', () => {
     expect(h.ledger.all()).toEqual([{ at: NOW, depth: 1, by: { machineId: 'm', agentId: 'lead', name: 'lead', engine: 'claude' }, child: { machineId: 'm', agentId: 'kid', name: 'reviewer' } }])
     await origin.created('m', { id: 'kid2', name: 7 })
     expect(h.ledger.all()[1].child.name).toBe('')
-    expect(origin.next({ id: 'kid', name: 'reviewer' })).toBe('Read it: harness show reviewer · wait for it: harness wait reviewer')
+    const here = { local: true, machine: null }
+    expect(origin.answer({ id: 'kid', name: 'reviewer' }, here)).toEqual({
+      effect: 'The person sees it in Harness, beside you.',
+      next: [{ run: 'harness wait reviewer', when: 'until it has answered; then read it: harness show reviewer' }],
+    })
     // A name that is a sentence, or Harness's own stand-in: the id's start instead.
-    expect(origin.next({ id: 'abcdef123456', name: 'Claude harness 10-11 8:38' })).toContain('harness show abcdef12 ·')
-    expect(origin.next({ id: 'abcdef123456', name: 'code review' })).toContain('harness show "code review" ·')
+    const runOf = (agent: Record<string, unknown>, at: { local: boolean; machine: string | null } = here) => { const [step] = origin.answer(agent, at).next; return 'run' in step ? step.run : '' }
+    expect(runOf({ id: 'abcdef123456', name: 'Claude harness 10-11 8:38' })).toBe('harness wait abcdef12')
+    expect(runOf({ id: 'abcdef123456', name: 'code review' })).toBe('harness wait "code review"')
+    // On another machine: named with it, and the person sees it there, not beside the caller.
+    expect(origin.answer({ id: 'kid', name: 'reviewer' }, { local: false, machine: 'Mac mini' })).toEqual({
+      effect: 'The person sees it in Harness.',
+      next: [{ run: 'harness wait --machine "Mac mini" reviewer', when: 'until it has answered; then read it: harness show --machine "Mac mini" reviewer' }],
+    })
+    // Under MCP the tools take no machine: harness_wait finds the caller's own by its record.
+    const viaMcp = (await agentOrigin(harness(d, { env: { HARNESS_VIA_MCP: '1' } }).deps))!
+    const [mcpStep] = viaMcp.answer({ id: 'kid', name: 'reviewer' }, { local: false, machine: 'mini' }).next
+    expect(mcpStep).toEqual({ run: 'harness_wait (names: "reviewer")', when: 'until it has answered; then read it: harness_read (name: "reviewer")' })
     expect(addressOf({ machineId: 'm', agentId: 'abcdef123456', name: 'so we have built harness web,', engine: 'claude' })).toBe('abcdef12')
     expect(addressOf({ machineId: 'm', agentId: 'abcdef123456', name: 'x'.repeat(41), engine: 'claude' })).toBe('abcdef12')
   })
@@ -781,8 +1006,11 @@ describe('harness new, run by an agent', () => {
     expect(origin.prompt('review it', 'm')).toBe('[from Claude Code outside Harness · studio, the agent that started you. It reads your answer itself.]\n\nreview it')
     expect(await origin.created('m', { id: 'kid', name: 'reviewer' })).toBeNull()
     expect(h.ledger.all()).toEqual([{ at: NOW, depth: 1, by: { machineId: 'm', agentId: 'claude-code:S1', name: 'Claude Code', engine: 'claude' }, child: { machineId: 'm', agentId: 'kid', name: 'reviewer' } }])
-    // Nothing can message it: it has no pane.
-    expect(origin.next({ id: 'kid', name: 'reviewer' })).toBe('Read it: harness show reviewer · wait for it: harness wait reviewer')
+    // Nothing can message it: it has no pane. It has no place beside it either.
+    expect(origin.answer({ id: 'kid', name: 'reviewer' }, { local: true, machine: null })).toEqual({
+      effect: 'The person sees it in Harness.',
+      next: [{ run: 'harness wait reviewer', when: 'until it has answered; then read it: harness show reviewer' }],
+    })
     // In a person's terminal in Harness, it is still that agent.
     expect(await agentOrigin(harness(d, { pane: '%9', env: claude, where: () => ({ ...where, harnessPane: true }) }).deps)).not.toBeNull()
     // The daemon did not answer: refused, never the person.
@@ -962,7 +1190,8 @@ describe('a harness asked for that has not started (its engine still installing)
     asked(h.ledger, 'slow', 'c3')
     h.out.length = 0
     expect(await waitCommand(['slow', '--timeout', '5s', '--json'], h.deps)).toBe(EXIT.timeout)
-    expect(JSON.parse(h.out[0])).toEqual({ harnesses: [{ name: 'slow', id: 'c3', state: 'installing', detail: 'Installing Codex. The harness starts once it is installed.' }] })
+    expect(JSON.parse(h.out[0])).toEqual({ harnesses: [{ name: 'slow', id: 'c3', state: 'installing', detail: 'Installing Codex. The harness starts once it is installed.',
+      next: [{ run: 'harness wait slow', when: 'to keep waiting' }] }] })
     h.out.length = 0
     expect(await waitCommand(['slow', '--timeout', '2s'], h.deps)).toBe(EXIT.timeout)
     expect(h.out).toEqual(['slow: installing · slow has not started yet: Harness is installing Codex. It starts by itself; wait for it with harness wait slow.'])
@@ -1144,5 +1373,289 @@ describe('an agent asking again for a harness it already has', () => {
     await origin.created('m', { id: 'k5', name: 'cx' }, 'c5')
     expect(h.ledger.pendingOf({ machineId: 'm', agentId: 'lead' }, NOW)).toEqual([])
     expect(h.ledger.parentOf({ machineId: 'm', agentId: 'k5' })?.child).toEqual({ machineId: 'm', agentId: 'k5', name: 'cx', creationId: 'c5' })
+  })
+})
+
+describe('a harness on another machine, named with --machine', () => {
+  // The lamp (lamp-4ace, 2026-10-14 21:36): a program outside Harness ran `harness new claude @office lamp-first-task`,
+  // then could not read the answer with `show` or `wait`. It is the person here: no pane, no agent in its shell.
+  const machines = async () => [
+    { machineId: 'm', label: 'studio', status: 'online', current: true },
+    { machineId: 'office-id', label: 'office', status: 'online', current: false },
+    { machineId: 'mini-id', label: 'Mac mini', status: 'online', current: false },
+  ]
+  const answered = [{ events: [ev('user_message', { content: 'What is 2+2?' }), ev('text_delta', { content: 'Four.' })], hasMore: false }]
+  const lamp = () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('office-id')
+    office.frames = [frame('lamp-first-task', { engine: 'claude' })]
+    office.pages.set('s-lamp-first-task', answered)
+    return { d, office, h: harness(d, { pane: undefined, machines, others: { 'office-id': office } }) }
+  }
+
+  it('shows it through that machine, which a name alone does not reach', async () => {
+    const { d, office, h } = lamp()
+    expect(await showCommand(['lamp-first-task'], h.deps)).toBe(EXIT.failed)
+    expect(h.err[0]).toMatch(/^No harness named "lamp-first-task" on this machine\. .*add --machine <name>/)
+    expect(await showCommand(['--machine', 'office', 'lamp-first-task', '--json'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ name: 'lamp-first-task', machine: 'office', state: 'idle', startedBy: 'person', ask: 'What is 2+2?', answer: 'Four.' })
+    expect(office.requests.map((r) => r.type)).toEqual(['agents_list', 'agent_close', 'session_get'])
+    expect(office.closed).toBe(true)
+    expect(d.closed).toBe(true)
+    // The option after the name or before it, `--machine=`, a name's start, and a machine by its id or the start of its
+    // name.
+    h.out.length = 0
+    expect(await showCommand(['lamp', '--machine=office-id'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[0]).toBe('lamp-first-task on office: idle · Claude Code · started by person')
+    expect(h.out).toContain('Four.')
+    // More of the answer is asked for on that machine too, as it was named.
+    h.out.length = 0
+    expect(await showCommand(['--machine', 'off', 'lamp-first-task', '--chars', '2'], h.deps)).toBe(EXIT.ok)
+    expect(h.out.at(-1)).toBe('… 3 more characters: harness show --machine off lamp-first-task --chars 5')
+  })
+
+  it('refuses the old @machine with what to type, before asking any machine', async () => {
+    const { d, office, h } = lamp()
+    expect(await showCommand(['@office', 'lamp-first-task'], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('Name the machine with --machine office.')
+    expect(await waitCommand(['lamp-first-task', '@Mac mini'], h.deps)).toBe(EXIT.usage)
+    expect(h.err).toContain('Name the machine with --machine "Mac mini".')
+    expect(await psCommand(['@'], h.deps)).toBe(EXIT.usage)
+    expect(h.err).toContain('Name the machine with --machine <name>.')
+    expect(d.requests).toEqual([])
+    expect(office.requests).toEqual([])
+  })
+
+  it('reads this machine as without --machine, and says what it cannot find there or which machine it does not know', async () => {
+    const { d, office, h } = lamp()
+    d.frames = [frame('here')]
+    expect(await showCommand(['--machine', 'studio', 'here', '--json'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ name: 'here', machine: 'studio' })
+    expect(office.requests).toEqual([])
+    expect(await showCommand(['--machine', 'office', 'nobody'], h.deps)).toBe(EXIT.failed)
+    expect(h.err.at(-1)).toBe('No harness named "nobody" on office. `harness ps --machine office` lists them.')
+    expect(await showCommand(['--machine', 'nowhere', 'x', '--json'], h.deps)).toBe(EXIT.failed)
+    expect(JSON.parse(h.out.at(-1)!)).toEqual({ error: 'UNKNOWN_MACHINE', detail: 'No machine called “nowhere”. Yours: studio, office, Mac mini.' })
+    // A machine that is not linked here says so.
+    expect(await showCommand(['--machine', 'mini', 'x'], h.deps)).toBe(EXIT.failed)
+    expect(h.err.at(-1)).toBe('not linked')
+    expect(await showCommand(['x', '--machine'], h.deps)).toBe(EXIT.usage)
+    expect(await showCommand(['--machine', '--json', 'x'], h.deps)).toBe(EXIT.usage)
+    expect(await showCommand(['--machine=', 'x'], h.deps)).toBe(EXIT.usage)
+    expect(h.err.filter((l) => l === '--machine needs a value.')).toHaveLength(3)
+    expect(await showCommand(['--machine', 'office', '--machine', 'mini', 'x'], h.deps)).toBe(EXIT.usage)
+    expect(h.err).toContain('Name one machine.')
+    // Without the account's machines to resolve it against, it is refused rather than guessed.
+    const bare = harness(d, { pane: undefined })
+    expect(await showCommand(['--machine', 'office', 'x'], bare.deps)).toBe(EXIT.failed)
+    expect(bare.err).toEqual(['Harness could not list your machines here.'])
+  })
+
+  it('waits on it through that machine, every name there, and names the next step with its machine', async () => {
+    const { office, h } = lamp()
+    office.frames.push(frame('second'))
+    office.screens.set('lamp-first-task', ['working', 'idle'])
+    office.pages.set('s-second', answered)
+    expect(await waitCommand(['--machine', 'office', 'lamp-first-task,second'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['lamp-first-task: idle · read it: harness show --machine office lamp-first-task', 'second: idle · read it: harness show --machine office second'])
+    expect(office.closed).toBe(true)
+    // A machine with a space in its name is quoted.
+    const mini = new FakeDaemon('mini-id')
+    mini.frames = [frame('gpu')]
+    mini.pages.set('s-gpu', answered)
+    const spaced = harness(new FakeDaemon(), { pane: undefined, machines, others: { 'mini-id': mini } })
+    expect(await waitCommand(['--machine', 'Mac mini', 'gpu'], spaced.deps)).toBe(EXIT.ok)
+    expect(spaced.out).toEqual(['gpu: idle · read it: harness show --machine "Mac mini" gpu'])
+  })
+
+  // Review of #1333: each name opened its own connection there, and a second name for the same harness was dropped
+  // with its connection still open, holding the process after it printed.
+  it('closes every connection it opens there, a name given twice or by its start included', async () => {
+    const { office, h } = lamp()
+    const opened: Array<{ closed: boolean }> = []
+    const open: ClientDeps['open'] = async (w, machineId) => {
+      if (machineId !== 'office-id') return h.deps.open!(w, machineId)
+      const line = { machineId: 'office-id', closed: false, request: (type: string, payload?: Record<string, unknown>) => office.request(type, payload), close() { this.closed = true } }
+      opened.push(line)
+      return line as unknown as Daemon
+    }
+    expect(await waitCommand(['--machine', 'office', 'lamp-first-task,lamp,lamp-first-task'], { ...h.deps, open })).toBe(EXIT.ok)
+    expect(h.out).toEqual(['lamp-first-task: idle · read it: harness show --machine office lamp-first-task'])
+    expect(opened.length).toBeGreaterThan(1)
+    expect(opened.filter((line) => !line.closed)).toEqual([])
+  })
+
+  it('lists that machine\'s harnesses, asking it what each is about', async () => {
+    const { d, office, h } = lamp()
+    d.frames = [frame('local-one')]
+    expect(await psCommand(['--machine', 'office'], h.deps)).toBe(EXIT.ok)
+    const text = h.out.join('\n')
+    expect(text).toMatch(/^NAME +AGENT/)
+    expect(text).toMatch(/lamp-first-task +Claude Code +idle +person /)
+    expect(text).toContain('lamp-first-task recap')
+    expect(text).not.toContain('local-one')
+    expect(office.requests.filter((r) => r.type === 'agent_recent').map((r) => r.payload.agentId)).toEqual(['lamp-first-task'])
+    expect(d.requests.filter((r) => r.type === 'agent_recent')).toEqual([])
+    expect(office.closed).toBe(true)
+    h.out.length = 0
+    expect(await psCommand(['--machine', 'office', '--json'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ you: null, machine: 'office', harnesses: [{ name: 'lamp-first-task', machine: 'office' }] })
+    office.frames = []
+    h.out.length = 0
+    expect(await psCommand(['--machine', 'office'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['No harnesses on office.'])
+    expect(await psCommand(['--machine', 'office', 'x'], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('harness ps takes no names. To read one: harness show --machine office x')
+  })
+
+  it('closes one there as here: the person anything, an agent only what it started', async () => {
+    const { d, office, h } = lamp()
+    expect(await closeCommand(['--machine', 'office', 'lamp-first-task'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['lamp-first-task on office: closed. Its conversation is kept; the person can resume it.'])
+    expect(office.requests.at(-1)).toMatchObject({ type: 'agent_close', payload: { agentId: 'lamp-first-task', mode: 'idle' } })
+    // One still working is waited for on its machine.
+    office.extra.agent_close = (p) => (p.mode === 'inspect' ? { activity: 'working' } : { error: 'SESSION_NOT_IDLE', activity: 'working' })
+    expect(await closeCommand(['--machine', 'office', 'lamp-first-task'], h.deps)).toBe(EXIT.failed)
+    expect(h.err.at(-1)).toBe('lamp-first-task is working. Wait for it (harness wait --machine office lamp-first-task), or close it anyway with --now.')
+    delete office.extra.agent_close
+    // An agent in a pane here: `--machine office` gives it no more than it has here.
+    d.frames = [frame('lead', { engine: 'claude' })]
+    office.frames.push(frame('kid'))
+    const agent = harness(d, { machines, others: { 'office-id': office } })
+    expect(await closeCommand(['--machine', 'office', 'lamp-first-task'], agent.deps)).toBe(EXIT.refused)
+    expect(agent.err[0]).toBe('You did not start lamp-first-task, so you may not close it. Only the person can.')
+    started(agent.ledger, 'lead', 'kid', 'office-id')
+    expect(await closeCommand(['--machine', 'office', 'kid'], agent.deps)).toBe(EXIT.ok)
+    expect(office.requests.at(-1)).toMatchObject({ type: 'agent_close', payload: { agentId: 'kid' } })
+  })
+
+  it('follows an agent\'s harness that has not started on that machine, and only that machine\'s', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('office-id')
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const launching = () => ({ state: 'pending', held: { service: 'launch', detail: 'Waiting for launch preparation.' } })
+    office.extra.agent_create_status = launching
+    d.extra.agent_create_status = launching
+    const h = harness(d, { machines, others: { 'office-id': office } })
+    const asked = (name: string, creationId: string, machineId: string) => h.ledger.append({
+      at: NOW, depth: 1, by: { machineId: 'm', agentId: 'lead', name: 'lead', engine: 'claude' }, creation: { machineId, creationId, name, engine: 'codex' },
+    })
+    asked('far', 'c1', 'office-id'); asked('near', 'c2', 'm')
+    expect(await psCommand(['--machine', 'office'], h.deps)).toBe(EXIT.ok)
+    const text = h.out.join('\n')
+    expect(text).toMatch(/\nfar +Codex +starting +you /)
+    expect(text).toContain('far has not started yet: it is starting (Waiting for launch preparation). It starts by itself; wait for it with harness wait --machine office far.')
+    expect(text).not.toContain('near')
+    expect(await showCommand(['--machine', 'office', 'far'], h.deps)).toBe(EXIT.failed)
+    expect(h.err.at(-1)).toBe('far has not started yet: it is starting (Waiting for launch preparation). It starts by itself; wait for it with harness wait --machine office far.')
+    // `near` is starting on this machine, not office.
+    expect(await showCommand(['--machine', 'office', 'near'], h.deps)).toBe(EXIT.failed)
+    expect(h.err.at(-1)).toBe('No harness named "near" on office. `harness ps --machine office` lists them.')
+  })
+})
+
+describe('spawnCheck and spawnCount', () => {
+  const lead = { machineId: 'm', agentId: 'lead', name: 'lead', engine: 'claude' }
+
+  it('counts what the limits count, and names the limit that refuses', () => {
+    const ledger = new Ledger(ledgerPath(dir))
+    for (const kid of ['a', 'b', 'c', 'd']) started(ledger, 'lead', kid)
+    const live = new Set(['m/a', 'm/b', 'm/c', 'm/d'])
+    expect(spawnCount(lead, live, ledger, NOW)).toEqual({ open: 4, starts: 4, depth: 0, oldestStartAt: NOW })
+    expect(spawnCheck(lead, live, ledger, 'm', NOW)).toEqual({ reason: 'OPEN_LIMIT', message: spawnRefusal(lead, live, ledger, 'm', NOW) })
+    expect(spawnCheck(lead, new Set(['m/a']), ledger, 'm', NOW)).toBeNull()
+    expect(spawnCheck({ ...lead, startedByAgent: true }, new Set(), ledger, 'm', NOW)).toEqual({ reason: 'DEPTH', message: DEPTH_REFUSAL })
+  })
+
+  it('names the start rate, and the oldest start in the window', () => {
+    const ledger = new Ledger(ledgerPath(dir))
+    for (let i = 0; i < SPAWN_LIMITS.perWindow; i++) started(ledger, 'lead', `k${i}`, 'm', NOW - 60_000 + i)
+    expect(spawnCheck(lead, new Set(), ledger, 'm', NOW)?.reason).toBe('START_RATE')
+    expect(spawnCount(lead, new Set(), ledger, NOW)).toMatchObject({ open: 0, starts: SPAWN_LIMITS.perWindow, oldestStartAt: NOW - 60_000 })
+  })
+})
+
+describe('harness whoami', () => {
+  /** The account's machines as this computer's daemon keeps them (`<data>/machines.json`, device/machineList.ts). */
+  const cacheMachines = (owner = TEST_ACCOUNT.machineId) => writeFileSync(join(dir, 'machines.json'), JSON.stringify({
+    machines: [
+      { machineId: 'm', name: 'studio', state: 'ready', local: true },
+      { machineId: 'o', name: 'office', state: 'ready', local: false },
+      { machineId: 'b', name: 'box', state: 'offline', local: false },
+    ],
+    bodyOwner: owner, fetchedAt: NOW,
+  }))
+  /** The account's machines from the backend: the block must never ask for them. */
+  const network = () => { const asked = { n: 0 }; return { asked, machines: () => { asked.n++; return new Promise<never>(() => {}) } } }
+
+  it('tells an agent in a pane who and where it is, that it may start, and its counts', async () => {
+    cacheMachines()
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid')]
+    const net = network()
+    const h = harness(d, { machines: net.machines })
+    started(h.ledger, 'lead', 'kid')
+    expect(await whoamiCommand([], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n')).toBe([
+      'You: Claude Code "lead" (lead), inside Harness, on studio.',
+      'Can start harnesses: yes.',
+      'Yours: 1 open of 4 · 1 of 20 starts in the last 10 minutes · other machines: office (running), box (offline)',
+    ].join('\n'))
+    expect(d.closed).toBe(true)
+    // The list the daemon keeps, never the backend: a request left open held the process for 10 to 35 s (review).
+    expect(net.asked.n).toBe(0)
+  })
+
+  it('lists no machines from a list another account\'s daemon kept', async () => {
+    cacheMachines('another-account')
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const h = harness(d)
+    expect(await whoamiCommand([], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n')).not.toContain('other machines')
+  })
+
+  it('says the switch is off, and gives the context as JSON', async () => {
+    setAgentSettingsForTest(dir, { agentsStartAgents: false })
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const h = harness(d)
+    expect(await whoamiCommand(['--json'], h.deps)).toBe(EXIT.ok)
+    const { context } = JSON.parse(h.out.join('\n'))
+    expect(context.canStart).toEqual({ ok: false, reason: 'SWITCH_OFF', message: 'The person has not turned on "Agents can start other agents".', fix: 'harness settings agents-start-agents on', fixBy: 'person' })
+    expect(context.machines).toEqual([])
+  })
+
+  it('signed out: says to sign in first, and lists no machines', async () => {
+    cacheMachines()
+    signedOutForTest()
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' })]
+    const h = harness(d)
+    expect(await whoamiCommand([], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n').split('\n')[1]).toMatch(/^Can start harnesses: no\. This computer is signed out of Harness/)
+    expect(h.out.join('\n')).not.toContain('other machines')
+  })
+
+  it('ps asks the network nothing for the block, an agent\'s or a person\'s', async () => {
+    cacheMachines()
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' })]
+    for (const over of [{}, { pane: undefined }]) {
+      const net = network()
+      const h = harness(d, { machines: net.machines, ...over })
+      expect(await psCommand([], h.deps)).toBe(EXIT.ok)
+      expect(net.asked.n).toBe(0)
+    }
+  })
+
+  it('says why when Harness cannot be reached, as ps does', async () => {
+    const h = harness(new FakeDaemon(), { open: async () => { throw new AgentClientError('DAEMON_UNREACHABLE', 'Harness is not running here.') } })
+    expect(await whoamiCommand([], h.deps)).toBe(EXIT.failed)
+    expect(h.err).toEqual(['Harness is not running here.'])
+  })
+
+  it('takes no names and no --machine', async () => {
+    const h = harness(new FakeDaemon())
+    expect(await whoamiCommand(['x'], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('harness whoami takes no names and no --machine: it is about you, here.')
   })
 })

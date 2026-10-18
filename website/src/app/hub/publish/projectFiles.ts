@@ -1,5 +1,6 @@
 import { validateDraft, type HubDraft } from '@/lib/community/drafts';
 import { communityLimits } from '@/lib/community/contract';
+import { textBytes } from '@/lib/community/files';
 import { outsideResources } from '@/lib/community/outputCheck';
 import type { SourceFile } from '@/lib/community/types';
 
@@ -51,7 +52,7 @@ export async function readProjectFolder(selected: Iterable<File>, preferredViewe
     if (size + sentSize(file, encoded) > communityLimits.projectBytes) throw new Error(`Keep the project under 6 MB as sent. ${sentNote}`);
     const content = encoded ? base64(new Uint8Array(await file.arrayBuffer())) : await file.text();
     if (content.length > communityLimits.fileChars) throw new Error(`${path} is over 3 MB as sent. ${sentNote}`);
-    size += new TextEncoder().encode(content).length;
+    size += textBytes(content);
     if (size > communityLimits.projectBytes) throw new Error(`Keep the project under 6 MB as sent. ${sentNote}`);
     files.push({ path, content, ...(encoded ? { encoding: 'base64' as const } : {}) });
   }

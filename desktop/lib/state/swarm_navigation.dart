@@ -601,6 +601,8 @@ class SwarmSearchCatalog {
           title: machine.machine.displayName,
           detail: [
             'Machine',
+            if (machine.machine.machineShare case final share?)
+              'Shared by ${share.owner}',
             _countLabel(members.length, 'harness'),
             if (machine.needsLink)
               'Link required'

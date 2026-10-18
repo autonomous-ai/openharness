@@ -1,8 +1,72 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/widgets/product_feedback.dart';
+import 'package:harness/measurement/product_measurement.dart';
+import 'package:harness/measurement/task_feedback.dart';
 
 void main() {
+  testWidgets(
+    'task outcome dialog emits fixed outcomes and exposure without task context',
+    (tester) async {
+      final answers = <String>[], reports = <Map<String, dynamic>>[];
+      final measurement = ProductMeasurement(
+        surface: 'desktop',
+        automatic: false,
+        context: ProductUsageContext(
+          release: '1.2.77',
+          platform: 'macos',
+          production: true,
+        ),
+        sendSetup: (_) async => {},
+      );
+      addTearDown(measurement.dispose);
+      measurement.account(
+        'PRIVATE_ACCOUNT',
+        choice: () async => {'enabled': true, 'revision': 0},
+        send: (report) async {
+          reports.add(report);
+          return {'accepted': true};
+        },
+      );
+      await measurement.flush();
+      await tester.pumpWidget(
+        const MaterialApp(home: Scaffold(body: Text('Fixture'))),
+      );
+      final shown = showTaskFeedback(
+        tester.element(find.text('Fixture')),
+        choice: () async => {'enabled': true, 'revision': 0},
+        send: (answer, _) async => answers.add(answer),
+        measurement: measurement,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Completed'));
+      await tester.pumpAndSettle();
+      await measurement.flush();
+      expect(answers, ['completed']);
+      final counters = reports
+          .expand((r) => (r['counters'] as Map).entries)
+          .toList();
+      expect(
+        counters.any(
+          (e) =>
+              e.key == 'health_desktop_feedback_outcome_shown' && e.value == 1,
+        ),
+        true,
+      );
+      expect(
+        counters.any(
+          (e) =>
+              e.key == 'health_desktop_feedback_outcome_answered' &&
+              e.value == 1,
+        ),
+        true,
+      );
+      expect(reports.toString(), isNot(contains('PRIVATE')));
+      Navigator.of(tester.element(find.text('Completed'))).pop();
+      await tester.pumpAndSettle();
+      await shown;
+    },
+  );
   testWidgets(
     'counts exposure, successful answer, and dismissal without task context',
     (tester) async {

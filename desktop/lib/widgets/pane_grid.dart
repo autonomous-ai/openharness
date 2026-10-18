@@ -42,6 +42,7 @@ import 'harness_activity_mark.dart';
 import 'web_pane_panel.dart';
 import 'pane_resize_handle.dart';
 import 'pane_split_edges.dart';
+import '../agent_messages/pane_shared_chips.dart';
 import 'box_chrome.dart' show kWorkspaceInset, terminalPaneBorder, PaneOpacity;
 import 'desktop_chrome.dart';
 
@@ -1662,7 +1663,36 @@ class _PaneContent extends StatelessWidget {
           notifier.zoomedPaneId == null &&
           terminalPaneCount >= 3;
       final TerminalNotice? notice;
-      if (machine == null) {
+      final sharedWaiting = machine == null && wantedAgentId != null
+          ? notifier.sharedWaitingName(pane.machineId, wantedAgentId)
+          : null;
+      final sharingEnded = machine == null
+          ? notifier.sharingEnded(pane.machineId)
+          : null;
+      if (sharedWaiting != null) {
+        // Another account's harness, restored before this window knows its
+        // machine: who it waits for, never "isn't available" (seam 3).
+        notice = terminalNotice(
+          label: 'Waiting',
+          icon: AppIcons.hourglass,
+          detail: '$sharedWaiting · waiting',
+        );
+      } else if (sharingEnded != null) {
+        // Its owner stopped sharing the machine: say who, and the one thing left to do here.
+        final tab = notifier.swarms
+            .where((swarm) => swarm.panes.contains(pane))
+            .firstOrNull;
+        notice = terminalNotice(
+          label: 'No longer shared',
+          icon: AppIcons.unlink,
+          detail:
+              '${sharingEnded.owner} stopped sharing ${sharingEnded.name} with you. The harness stays on their machine; what is shown here is read only.',
+          actionLabel: 'Close',
+          onAction: () =>
+              notifier.closePane(pane.id, swarmId: tab?.id).ignore(),
+          banner: true,
+        );
+      } else if (machine == null) {
         notice = terminalNotice(
           label: 'Unavailable',
           icon: AppIcons.cloudOff,
@@ -1767,7 +1797,11 @@ class _PaneContent extends StatelessWidget {
       } else {
         notice = null;
       }
-      return LayoutBuilder(
+      // Joining a shared tab: dimmed until the tab's owner's computer answers.
+      final joining = wantedAgentId != null &&
+          sharedPaneChipState(notifier, pane.machineId, wantedAgentId).joining !=
+              null;
+      final panel = LayoutBuilder(
         builder: (context, constraints) => TerminalPanel(
           notifier: notifier,
           session: session,
@@ -1839,8 +1873,27 @@ class _PaneContent extends StatelessWidget {
                 ),
         ),
       );
+      return joining ? Opacity(opacity: .55, child: panel) : panel;
     }
 
+    // Another account's harness, restored before the inventory (or the grant)
+    // reaches this window: it waits for its owner, never "isn't available" or
+    // a takeover offer (seam 3).
+    if (machine == null && wantedAgentId != null) {
+      if (notifier.sharedWaitingName(pane.machineId, wantedAgentId)
+          case final owner?) {
+        return _PaneStatus(
+          activity: activityMark,
+          title: kUntitledPane,
+          icon: AppIcons.hourglass,
+          message: '$owner · waiting',
+          onClose: single && !swarmMode ? null : close,
+          busy: true,
+          // Another account's name: one line, cut short, never markup.
+          singleLine: true,
+        );
+      }
+    }
     // A never-attached view has no output to preserve: keep its setup guidance.
     if (machine == null) {
       // Waiting ends once the inventory has answered, even when it has no row
@@ -2457,12 +2510,17 @@ class _PaneStatus extends StatelessWidget {
     this.actionLabel,
     this.onAction,
     this.footer,
+    this.singleLine = false,
   });
 
   final String title;
   final Widget? activity;
   final IconData icon;
   final String message;
+
+  /// The message on one line, ellipsized: it carries a string another
+  /// account chose, which may be as long as it likes.
+  final bool singleLine;
   final VoidCallback? onClose;
   final bool busy;
 
@@ -2504,13 +2562,26 @@ class _PaneStatus extends StatelessWidget {
                   ),
                   const SizedBox(height: 10),
                   Flexible(
-                    child: SingleChildScrollView(
-                      child: Text(
-                        message,
-                        textAlign: TextAlign.center,
-                        style: grid.AppType.body(color: AppColors.mutedStrong),
-                      ),
-                    ),
+                    child: singleLine
+                        ? Text(
+                            message,
+                            textAlign: TextAlign.center,
+                            maxLines: 1,
+                            softWrap: false,
+                            overflow: TextOverflow.ellipsis,
+                            style: grid.AppType.body(
+                              color: AppColors.mutedStrong,
+                            ),
+                          )
+                        : SingleChildScrollView(
+                            child: Text(
+                              message,
+                              textAlign: TextAlign.center,
+                              style: grid.AppType.body(
+                                color: AppColors.mutedStrong,
+                              ),
+                            ),
+                          ),
                   ),
                   if (actionLabel != null && onAction != null) ...[
                     const SizedBox(height: 4),

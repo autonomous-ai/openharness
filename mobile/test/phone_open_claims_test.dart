@@ -6,6 +6,14 @@ import 'package:harness_mobile/state/app_state.dart';
 
 import 'agent_pager_fixture.dart';
 
+/// A [PagerConn] already through its handshake. A `terminal_open` waits for the machine's
+/// handshake before it goes (`AppNotifier._sendTerminalFrame`), and a fake socket never has one:
+/// left to wait, the open would still be held when the test looks.
+class _HandshakenConn extends PagerConn {
+  @override
+  Future<void> waitUntilReady({required Duration timeout}) async {}
+}
+
 /// Arriving on an agent TAKES its terminal.
 ///
 /// ⚠️ **Why this has a test of its own.** The phone asked politely for a while, and what that
@@ -41,7 +49,7 @@ void main() {
   }
 
   testWidgets('opening an agent claims its terminal', (tester) async {
-    final conn = PagerConn();
+    final conn = _HandshakenConn();
     final app = pagerApp(conn);
     addTearDown(app.dispose);
 
@@ -61,7 +69,7 @@ void main() {
   });
 
   testWidgets('a tile opened ahead of the thumb asks politely', (tester) async {
-    final conn = PagerConn();
+    final conn = _HandshakenConn();
     final app = pagerApp(conn);
     addTearDown(app.dispose);
     // A guess is only made where the daemon honours the key at all — see [warmAgentPane].

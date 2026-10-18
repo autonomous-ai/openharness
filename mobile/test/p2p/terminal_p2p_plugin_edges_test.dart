@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -96,6 +97,8 @@ class _Links extends FakeLinkFactory {
   host.plugin = plugin;
   plugin.onConnectedAck({'machineId': 'machine-1', 'p2p': enabledPolicy});
   plugin.onSessionReady();
+  // The connection's first terminal is what starts the channel (`prepareOpen`).
+  unawaited(plugin.prepareOpen('first-terminal'));
   return (plugin: plugin, host: host, links: links);
 }
 
@@ -129,6 +132,7 @@ void main() {
         for (final plugin in [a, b]) {
           plugin.onConnectedAck({'p2p': enabledPolicy});
           plugin.onSessionReady();
+          unawaited(plugin.prepareOpen('first-terminal'));
         }
         // Both fail to negotiate; both wait out a retry.
         links.created[0].failNegotiation('peer_failed');
@@ -255,6 +259,7 @@ void main() {
         host.plugin = plugin;
         plugin.onConnectedAck({'p2p': enabledPolicy});
         plugin.onSessionReady();
+        unawaited(plugin.prepareOpen('first-terminal'));
         final link = links.last;
         link.open();
         flush(async);

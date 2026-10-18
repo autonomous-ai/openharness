@@ -1,5 +1,5 @@
 Baseline 2026-10-11, before the lightweight pass
-Build: idf.py -B build -DPROJECT_VER=0.0.99-pod -DPOD_PANEL_TURN=180 build; python -m esp_idf_size build/harness_pro.map
+Build: idf.py -B build -DPROJECT_VER=0.0.99-pod build; python -m esp_idf_size build/harness_pro.map
 
 Total image size: 3093612 bytes (.bin may be padded larger)
 Used Flash size: 2997844 bytes (.text 575584, .rodata 2421744)
@@ -27,11 +27,11 @@ Host raster, -O2, us per full frame: recap:be ~1050 -> ~330, agent:fw 375 -> 220
 Device: raster_max_us 19,753 / frame_max_us 21,273 in the first minute after boot (was ~43,000 / ~44,500 with a pet).
 
 Console v3 Task 4 (render performance), host raster us per full 720 x 720 frame in 24-row strips, -O2, best of 18 runs
-BEFORE (pre-change; also test/cs_perf_baseline.txt, which test/test_cs_perf.sh holds the code to at 0.85 x):
+BEFORE (pre-change; then test/cs_perf_baseline.txt, now test/ph_perf_baseline.txt, which test/test_ph_perf.sh holds the code to at 0.85 x):
   tabs 207, recent 196, tabp:3 (a Tab) 127, agent:fw (working) 231, agent:cli (asking) 301, recap:desk 397,
   agent:fw:banner (toast over Agent) 330, talk:fw 315, talk:fw:send 336, inbox 162
 AFTER (same machine, same method; ground as the scene background, corner_cover edge-ring-only square roots, one-run border+fill
 (ht_pro_rect_aa_stroke), Talk wave bars square):
   tabs 160, recent 154, tabp:3 92, agent:fw 171, agent:cli 207, recap:desk 285, agent:fw:banner 230, talk:fw 259, talk:fw:send 277, inbox 126
 Animation steps: equaliser, spinner and working mark 66 ms (was 33), Talk wave 100 ms (was 66), toast stays 33 ms.
-Image: harness_pro.bin 0x2e3b30 bytes (63% of the app partition free), -DPROJECT_VER=0.0.99-pod -DPOD_PANEL_TURN=180.
+Image: harness_pro.bin 0x2e3b30 bytes (63% of the app partition free), -DPROJECT_VER=0.0.99-pod.

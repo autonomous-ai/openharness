@@ -5,7 +5,7 @@ import { logger } from '../utils/logger.js'
 import { revokeHarnessSessionById } from './harnessSession.js'
 import {
   applyDevLogEntries, DevLogError, emptyDevLogState, parseDevLogEntry,
-  type DevLogEntry, type DevLogHead, type DevLogState,
+  type DevLogEntry, type DevLogHead, type DevLogMember, type DevLogState,
 } from './deviceLogCore.js'
 import { checkDevAck } from './deviceAckCore.js'
 
@@ -100,6 +100,22 @@ async function currentState(userId: string): Promise<{ state: DevLogState; sessi
   const state = replay(emptyDevLogState(userId), sessions, rows)
   if (rows.length || snap) await saveSnapshot(userId, state, sessions, snap ?? undefined)
   return { state, sessions }
+}
+
+/**
+ * The machine keys the account's log leaves active, by machine: what a machine shared with this account
+ * trusts it under (lib/machineAccess.ts), and the key another account's daemon pins to reach a machine
+ * shared with it. The newest key wins when one machine has two.
+ */
+export async function activeMachineKeys(userId: string): Promise<DevLogMember[]> {
+  const { state } = await currentState(userId)
+  const byMachine = new Map<string, DevLogMember>()
+  for (const member of Object.values(state.active)) {
+    if (member.kind !== 'machine' || !member.machineId) continue
+    const held = byMachine.get(member.machineId)
+    if (!held || held.seq < member.seq) byMachine.set(member.machineId, member)
+  }
+  return [...byMachine.values()]
 }
 
 /**

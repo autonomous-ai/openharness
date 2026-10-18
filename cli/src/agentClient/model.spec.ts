@@ -3,7 +3,22 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Ledger, ledgerPath } from './ledger.js'
-import { asSaid, callerOf, clip, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Frame } from './model.js'
+import { asSaid, callerOf, clip, forAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Frame, type Row } from './model.js'
+
+describe('forAgent', () => {
+  const row = (name: string, over: Partial<Row> = {}): Row => ({ name, id: name, agent: 'Codex', machine: 'm', state: 'idle', folder: null, branch: null,
+    startedBy: 'person', yours: false, self: false, lastActive: null, ...over })
+  it('puts its own first, then the working and the ones needing the person, then the rest, and counts the rest past 15', () => {
+    const rows = [...Array.from({ length: 30 }, (_, i) => row(`idle${i}`)), row('busy', { state: 'working' }), row('mine1', { yours: true }), row('mine2', { yours: true })]
+    const { shown, more } = forAgent(rows)
+    expect(shown.map((r) => r.name).slice(0, 3)).toEqual(['mine1', 'mine2', 'busy'])
+    expect(shown).toHaveLength(15)
+    expect(more).toBe(18)
+  })
+  it('shows every row when there are 15 or fewer', () => {
+    expect(forAgent([row('a'), row('b')])).toEqual({ shown: [row('a'), row('b')], more: 0 })
+  })
+})
 
 const dirs: string[] = []
 const ledger = (): Ledger => {

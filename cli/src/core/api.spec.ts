@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TERMINALS_OFF, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
+import { CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
@@ -13,6 +13,27 @@ describe('the core API services stand on', () => {
     expect(await LANE_OFF.seal('m', { type: 'message', payload: { text: 'hello' } })).toEqual({ lost: true })
     expect(await LANE_OFF.open('m', { type: 'message' })).toEqual({ lost: true })
     expect(LANE_OFF.drop('m')).toBeUndefined()
+  })
+
+  it('gives a service with no tab key of the core\'s no signature or session, and never its frame back in the clear', async () => {
+    const link = { sharedTabId: 't', machineId: 'm', peerPub: 'p' }
+    await expect(TAB_KEY_OFF.publicKey()).rejects.toThrow(/no E2EE identity/)
+    await expect(TAB_KEY_OFF.signRoster('t', 1, '{}')).rejects.toThrow(/no E2EE identity/)
+    await expect(TAB_KEY_OFF.signKeyChange('t', 'p')).rejects.toThrow(/no E2EE identity/)
+    await expect(TAB_KEY_OFF.hello(link)).rejects.toThrow(/no E2EE identity/)
+    expect(await TAB_KEY_OFF.welcome(link, {})).toBe(false)
+    expect(await TAB_KEY_OFF.accept(link, {})).toEqual({ refused: true })
+    expect(await TAB_KEY_OFF.seal(link, { type: 'message' })).toEqual({ lost: true })
+    expect(await TAB_KEY_OFF.open(link, { type: 'message' })).toEqual({ lost: true })
+    expect(TAB_KEY_OFF.drop(link)).toBeUndefined()
+    expect(ACCOUNT_BACKEND_OFF.tabKey).toBe(TAB_KEY_OFF)
+  })
+
+  it('gives a service with no tab relay of the core\'s nothing opened and nothing sent', async () => {
+    await expect(TAB_RELAY_OFF.open('t')).resolves.toBeUndefined()
+    expect(await TAB_RELAY_OFF.send('t', 'm', {})).toBe(false)
+    expect(TAB_RELAY_OFF.close('t')).toBeUndefined()
+    expect(ACCOUNT_BACKEND_OFF.tabRelay).toBe(TAB_RELAY_OFF)
   })
 
   it('gives a service with no delivery of the core\'s nothing to write, take back or hear', async () => {
@@ -63,6 +84,8 @@ describe('the core API services stand on', () => {
       windows: vi.fn(),
       daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1', autonomousEnv: 'prod' },
       observerKey: OBSERVER_KEY_OFF,
+      tabKey: TAB_KEY_OFF,
+      tabRelay: TAB_RELAY_OFF,
       connectorVault: CONNECTOR_VAULT_OFF,
       observer: vi.fn(() => true),
       turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []), deliver: vi.fn(), cancelDelivery: vi.fn(() => true), onDelivery: vi.fn(() => () => {}) },
@@ -130,6 +153,8 @@ describe('the core API services stand on', () => {
     expect(core.account.backend).toBe(deps.backend)
     expect(core.account.onNotice).toBe(deps.onNotice)
     expect(core.account.observerKey).toBe(deps.observerKey)
+    expect(core.account.tabKey).toBe(deps.tabKey)
+    expect(core.account.tabRelay).toBe(deps.tabRelay)
     expect(core.clients.observer).toBe(deps.observer)
     // What a device or another machine asks of an agent here: the core's own handlers, as they are.
     expect(core.agents.runtimeProfile).toBe(deps.runtimeProfile)
@@ -145,6 +170,14 @@ describe('the core API services stand on', () => {
     // What the devices ask of the core: this computer, the sign-in, a pane's footer, the windows.
     expect(core.machine).toBe(deps.machine)
     expect(core.agents.activityText).toBe(deps.activityText)
+    // Agent Messages asks whether harnesses work; a core that was not given the reader reports none.
+    await expect(core.agents.activity(['a1'])).resolves.toEqual({})
+    const activity = vi.fn(async () => ({ a1: 'working' as const }))
+    await expect(createCoreApi({ ...deps, activity }).agents.activity(['a1'])).resolves.toEqual({ a1: 'working' })
+    // The same for the one-line summaries (ruling T2): none from a core that was not given the reader.
+    await expect(core.agents.summaries(['a1'])).resolves.toEqual({})
+    const summaries = vi.fn(async () => ({ a1: 'Fix the login' }))
+    await expect(createCoreApi({ ...deps, summaries }).agents.summaries(['a1'])).resolves.toEqual({ a1: 'Fix the login' })
     expect(core.account.signedIn).toBe(deps.signedIn)
     expect(core.account.environment).toBe(deps.environment)
     expect(core.account.machines).toBe(deps.machines)
@@ -325,9 +358,32 @@ describe('the core API services stand on', () => {
     expect(DAEMON_UNKNOWN.machineId()).toBe('')
   })
 
-  it('gives a service that reads no backend an unavailable answer, and no notice to hear', async () => {
+  it('gives a service that reads no backend an unavailable answer, no account and no notice to hear', async () => {
     expect(await ACCOUNT_BACKEND_OFF.backend('GET', '/api/agent-messages')).toEqual({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } })
+    expect(await ACCOUNT_BACKEND_OFF.identity()).toBeNull()
     expect(ACCOUNT_BACKEND_OFF.onNotice(() => {})()).toBeUndefined()
+  })
+
+  it('reads the account signed in here through the core\'s sign-in, once it is known, and again until it is', async () => {
+    const me = (user: unknown, status = 200) => ({ status, body: { success: status === 200, data: { user } } })
+    const backend = vi.fn<CoreApiDeps['backend']>()
+      .mockRejectedValueOnce(new Error('down'))
+      .mockResolvedValueOnce({ status: 502, body: { error: 'BACKEND_UNREACHABLE' } })
+      .mockResolvedValueOnce(me({ id: 'u-alice' }))
+      .mockResolvedValueOnce(me({ id: '', email: 'alice@x.io' }))
+      .mockResolvedValueOnce(me({ id: 'u-alice', email: '' }))
+      .mockResolvedValueOnce({ status: 200, body: { success: true } })
+      .mockResolvedValueOnce(me({ id: 'u-alice', email: 'alice@x.io', name: 'Alice' }))
+    const identity = accountIdentity(backend)
+    for (let i = 0; i < 6; i++) expect(await identity()).toBeNull()
+    expect(await identity()).toEqual({ accountId: 'u-alice', email: 'alice@x.io' })
+    // Known now: a sign-in to another account starts a new core, so it is never read again.
+    expect(await identity()).toEqual({ accountId: 'u-alice', email: 'alice@x.io' })
+    expect(backend).toHaveBeenCalledTimes(7)
+    expect(backend).toHaveBeenCalledWith('GET', '/api/auth/me')
+    // The core's own: createCoreApi reads it through the backend it is handed.
+    const core = createCoreApi({ ...coreDeps(), backend: vi.fn(async () => me({ id: 'u-bob', email: 'bob@y.io' })) })
+    expect(await core.account.identity()).toEqual({ accountId: 'u-bob', email: 'bob@y.io' })
   })
 
   it('watches no terminal and signs nothing for a service without the core\'s terminals or key', async () => {

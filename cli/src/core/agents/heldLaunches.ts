@@ -19,6 +19,12 @@ import { windowsHeldPaneArgv } from '../../lib/windows/engineStart.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import type { RestoreSummary } from '../../lib/restoreAgents.js'
 
+/** How long a hold waits before the next timer pass: 2 s, doubling with each pass that launched nothing, at most
+ *  30 s. An engine that becomes available is still picked up within half a minute without anyone asking. */
+export function heldRetryMs(quietPasses: number): number {
+  return Math.min(2_000 * 2 ** quietPasses, 30_000)
+}
+
 /** The service a row is held for, or null. */
 export function heldFor(row: Pick<RegisteredSession, 'launch'> | undefined): string | null {
   return row?.launch?.state === 'held' ? row.launch.service : null
@@ -42,18 +48,25 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
   // Closing revokes preparations already waiting on hooks or a service, too.
   const current = () => !closed
   let retryTimer: ReturnType<typeof setTimeout> | undefined
+  // Timer passes in a row that launched nothing. A hold nothing else wakes (native: an engine's search path that
+  // cannot be confirmed) was retried every 2 s for good: measured 2026-10-15, one held Codex had been tried 27,491
+  // times in a day, each pass running about four login shells (`zsh -lic`, the launch environment) from the core,
+  // whose synchronous spawns held the event loop the terminals' keystrokes wait on.
+  let quietPasses = 0
   const active = new Map<string, Promise<RestoreSummary>>()
   let nextAgent = 0
   const empty = (): RestoreSummary => ({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] })
   const retryContention = (summary: RestoreSummary): void => {
+    if (summary.restored.length) quietPasses = 0
     if (closed || retryTimer || (!summary.retry && !summary.held.length)) return
     retryTimer = setTimeout(() => {
       retryTimer = undefined
+      if (!summary.retry) quietPasses++
       void restoreHeld(undefined, false).catch(error => {
         log(`[restore] core contention retry failed: ${String(error)}`)
         retryContention({ ...empty(), retry: true })
       })
-    }, summary.retry ? 500 : 2_000)
+    }, summary.retry ? 500 : heldRetryMs(quietPasses))
     retryTimer.unref?.()
   }
   // One flight per agent, four across the core. A stalled native home or service
@@ -83,6 +96,8 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
   const restoreHeld = async (service?: string, joinRunning = true): Promise<RestoreSummary | null> => {
     await ready
     if (closed) return null
+    // Asked from outside the timer (a service connected, the core became ready): something changed, so wait less.
+    if (joinRunning) quietPasses = 0
     const held = registry.list().filter(row => {
       const holder = heldFor(row)
       return holder !== null && (service === undefined || holder === service) && (joinRunning || !active.has(row.agentId))
@@ -116,6 +131,7 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
       const before = registry.byAgent(agentId)
       if (!before || closed) return { ok: false, error: 'AGENT_NOT_FOUND' }
       if (!heldFor(before)) return { ok: true, session: before, resumed: !!before.sessionId }
+      quietPasses = 0
       const summary = await restoreOne(agentId)
       retryContention(summary)
       const now = registry.byAgent(agentId)

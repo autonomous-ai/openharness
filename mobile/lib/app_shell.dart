@@ -1,3 +1,4 @@
+import 'measurement/launch_measurement.dart';
 import 'measurement/setup_usage_choice.dart';
 
 import 'package:flutter/material.dart';
@@ -11,9 +12,11 @@ import 'viewer/viewer_services.dart';
 import 'ws/terminal_transport_plugin.dart';
 import 'shared/theme/app_theme.dart' as grid;
 import 'shared/theme/appearance_prefs_store.dart';
+import 'core/machine_cache.dart';
 import 'core/startup.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
+import 'logging/launch_frames.dart';
 import 'logging/startup_trace.dart';
 
 /// A screen the app puts up for one of its states — signed in, signed out, starting.
@@ -50,13 +53,28 @@ Future<void> startHarness({
   // is an offset into THIS launch. Touched before any awaited work so the origin
   // is the entrypoint rather than whatever step happens to mark itself first.
   StartupTrace.mark('startHarness');
+  // The same origin for the launch the account's `app_start` counts.
+  LaunchMeasurement.launched();
   // ⚠️ **No keymap.** The desktop loads its keyboard configuration here, a file
   // and its watchers, beside the appearance. Nothing on the phone reads a keymap
   // — no key is ever matched against one — so the file a touchscreen could not
   // have edited is not read either.
-  await StartupTrace.time('settings.load', loadPersistedSettings);
+  // Beside the preferences, the machine the launch reopens — so the app can dial it before the
+  // first frame rather than after it (`MachineCache.preloadLaunchHint`). Here and not in
+  // [loadPersistedSettings], which tests call: this reads the real cache directory.
+  await Future.wait([
+    StartupTrace.time('settings.load', loadPersistedSettings),
+    StartupTrace.time('launchHint.read', MachineCache.preloadLaunchHint),
+  ]);
+  // ⚠️ **The app's state is made here, before the first frame, not by the first build that reads
+  // it (owner, 2026-10-01).** Its bootstrap starts the reads the launch's dial waits on
+  // (`AppNotifier.bootstrap`); made by `RootShell`'s build, they began only after MaterialApp's
+  // own first build (~170ms on a debug launch) and then queued behind the first frame too.
+  final container = ProviderContainer();
+  StartupTrace.timeSync('app.create', () => container.read(appStateProvider));
   runApp(
-    ProviderScope(
+    UncontrolledProviderScope(
+      container: container,
       child: HarnessApp(
         authenticatedScreen: authenticatedScreen,
         signedOutScreen: signedOutScreen,
@@ -72,6 +90,8 @@ Future<void> startHarness({
   WidgetsBinding.instance.addPostFrameCallback(
     (_) => StartupTrace.mark('firstFrame'),
   );
+  // And the twenty seconds after it, frame by frame — whether the launch stuttered.
+  LaunchFrames.watch();
 }
 
 class HarnessApp extends StatelessWidget {
@@ -242,7 +262,15 @@ class RootShell extends ConsumerWidget {
     final app = ref.watch(appStateProvider);
     return ListenableBuilder(
       listenable: app,
-      builder: (context, _) {
+      // ⚠️ **Made here and handed through, never made in the builder.** The notifier ticks for
+      // everything on the account — an agent synced, a turn starting on another machine — and
+      // the signed-in screen rebuilt from the top on each one: the shell, its navigator, every
+      // route on it, down to the terminal being typed into. Everything in that screen that draws
+      // from the notifier listens to it for itself, so the tick has nothing to bring it. Made
+      // here, it is the same widget on every tick and Flutter stops at it; it is made again
+      // only when this shell is (a theme or text-size change), which still rebuilds it whole.
+      child: _SignedInScreen(app: app, screen: authenticatedScreen),
+      builder: (context, signedIn) {
         final screen = switch (app.status) {
           // `bootstrapping` covers two unrelated moments: the app starting
           // cold, and a sign-in the user just began. The second keeps the
@@ -254,7 +282,7 @@ class RootShell extends ConsumerWidget {
           AppStatus.bootstrapping =>
             app.signingIn ? signedOutScreen(app) : bootScreen(app),
           AppStatus.unauthenticated => signedOutScreen(app),
-          AppStatus.authenticated => authenticatedScreen(app),
+          AppStatus.authenticated => signedIn!,
         };
         if (app.productMeasurement.surface == 'web' ||
             app.status == AppStatus.authenticated ||
@@ -263,14 +291,32 @@ class RootShell extends ConsumerWidget {
         }
         return Column(
           children: [
-            Expanded(child: screen),
-            SafeArea(
-              top: false,
-              child: SetupUsageChoice(measurement: app.productMeasurement),
+            // The choice under it keeps the home indicator's inset; the screen's own SafeArea
+            // would keep it a second time, an empty band between its foot and the choice.
+            Expanded(
+              child: MediaQuery.removePadding(
+                context: context,
+                removeBottom: true,
+                child: screen,
+              ),
             ),
+            // Keeps the home indicator's inset itself, its ground painted under it.
+            SetupUsageChoice(measurement: app.productMeasurement),
           ],
         );
       },
     );
   }
+}
+
+/// [screen] for [app] as a widget of its own, so [RootShell] can make it once and hand it through
+/// its [ListenableBuilder] — and so the screen itself is only built when it is shown.
+class _SignedInScreen extends StatelessWidget {
+  const _SignedInScreen({required this.app, required this.screen});
+
+  final AppNotifier app;
+  final AuthenticatedScreenBuilder screen;
+
+  @override
+  Widget build(BuildContext context) => screen(app);
 }

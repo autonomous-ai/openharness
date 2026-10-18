@@ -110,8 +110,10 @@ class _App extends AppNotifier {
   }
 
   @override
-  Future<GridModels> gridModels(String machineId) async =>
-      const GridModels(gridName: 'Review', models: []);
+  Future<GridModels> gridModels(
+    String machineId, {
+    bool userAction = false,
+  }) async => const GridModels(gridName: 'Review', models: []);
 
   @override
   Future<Map<String, dynamic>> localModels(

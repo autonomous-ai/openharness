@@ -204,8 +204,12 @@ class FirstArrival {
       if (machine == null) return stop('this computer never answered');
       if (!current()) return stop('the person took over');
       final machineId = machine.machine.machineId;
-      final sessions = await recentSessions(app, machineId, budget: indexWait);
-      await app.probeEngines(machineId);
+      // The conversation index and installed engines are independent. A new
+      // computer may still be indexing: do not put its engine probe behind it.
+      final (sessions, _) = await (
+        recentSessions(app, machineId, budget: indexWait),
+        app.probeEngines(machineId),
+      ).wait;
       final installed = {
         for (final engine in const ['claude', 'codex', 'opencode'])
           if (machine.engines[engine]?.installed == true) engine,

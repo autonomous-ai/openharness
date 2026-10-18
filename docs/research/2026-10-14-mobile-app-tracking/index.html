@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harness Phone Tracking</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --surface: #ffffff; --text: #1d1c1a; --muted: #6b6862; --line: #e2dfd8;
+    --accent: #2f5bea; --warn-bg: #fff4e0; --warn: #8a5a00; --ok: #1f7a3d; --ok-bg: #e6f4ea; --tag-bg: #eef1fd;
+    --no: #a3261b; --no-bg: #fbe9e7; --code-bg: #f1efea;
+    /* The phone app's own palette (mobile/lib/phone/tty.dart, dark): the phones stay dark in both themes. */
+    --pg: #181818; --pt: #f2f2ee; --praised: #2a2a2a; --pgreen: #0dbc79; --pyellow: #e5e510; --pred: #f14c4c; --pfaint: #8e8e88; --pink: #061a11;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141413; --surface: #1d1c1b; --text: #ecebe7; --muted: #a29f97; --line: #2f2d2a;
+      --accent: #8aa6ff; --warn-bg: #2d2412; --warn: #f0c063; --ok: #6fd18f; --ok-bg: #16281c; --tag-bg: #232a40;
+      --no: #ff8a7a; --no-bg: #2e1714; --code-bg: #262523;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141413; --surface: #1d1c1b; --text: #ecebe7; --muted: #a29f97; --line: #2f2d2a;
+    --accent: #8aa6ff; --warn-bg: #2d2412; --warn: #f0c063; --ok: #6fd18f; --ok-bg: #16281c; --tag-bg: #232a40;
+    --no: #ff8a7a; --no-bg: #2e1714; --code-bg: #262523;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 var(--sans); }
+  main { max-width: 1120px; margin: 0 auto; padding: 32px 16px 80px; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  h2 { font-size: 20px; margin: 48px 0 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .lede, .sub { color: var(--muted); margin: 0 0 16px; }
+  main code { font: 13px/1.4 var(--mono); background: var(--code-bg); border-radius: 4px; padding: 1px 5px; overflow-wrap: anywhere; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 20px 0 8px; }
+  .fact { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .fact b { display: block; font-size: 22px; }
+  .fact span { color: var(--muted); font-size: 14px; }
+  figure, .card { margin: 22px 0 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  figcaption, .card-body { padding: 12px 16px 14px; min-width: 0; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+  .num { font-weight: 700; color: var(--accent); }
+  .ttl2 { font-weight: 600; }
+  .tag { font-size: 12px; background: var(--tag-bg); color: var(--accent); border-radius: 999px; padding: 1px 8px; }
+  .tag.ok { background: var(--ok-bg); color: var(--ok); }
+  .tag.new { background: var(--warn-bg); color: var(--warn); }
+  figcaption p, .card-body p { margin: 6px 0 0; }
+  .note { margin-top: 8px; background: var(--warn-bg); color: var(--warn); border-radius: 8px; padding: 6px 10px; font-size: 14px; }
+  .q { margin-top: 8px; color: var(--muted); font-size: 14px; }
+  .scroll { overflow-x: auto; margin-top: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-top: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; border-top: 0; }
+  td:first-child { white-space: nowrap; font-weight: 600; }
+  td.no { color: var(--no); }
+  td.yes { color: var(--ok); }
+  ul.plain { margin: 8px 0 0; padding-left: 20px; }
+  ul.plain li { margin: 2px 0; }
+  /* Screens at the left of a step, its counters at the right. */
+  .phone-pair { display: grid; grid-template-columns: auto 1fr; }
+  .shots { display: flex; gap: 12px; padding: 16px; border-right: 1px solid var(--line); background: var(--code-bg); }
+  .shots .ph, .shots img { width: 200px; flex: none; }
+  .shots img { display: block; height: auto; border-radius: 24px; border: 4px solid #2a2a28; cursor: zoom-in; }
+  dialog { border: 0; padding: 0; max-width: 96vw; background: transparent; }
+  dialog img { max-width: 96vw; max-height: 94vh; display: block; border-radius: 8px; }
+  dialog::backdrop { background: rgba(0,0,0,.8); }
+  @media (max-width: 760px) {
+    .phone-pair { grid-template-columns: 1fr; }
+    .shots { border-right: 0; border-bottom: 1px solid var(--line); justify-content: center; }
+    .shots .ph, .shots img { width: calc(50% - 6px); max-width: 200px; }
+  }
+
+  /* Copied from docs/research/2026-10-14-mobile-onboarding so the screens match that page. */
+  /* A phone drawn at 390 x 844 pt and scaled with its container: 1cqw = 3.9pt. */
+  .ph { container-type: inline-size; position: relative; width: 100%; aspect-ratio: 390 / 844; border-radius: 30px; overflow: hidden;
+    background: var(--pg); border: 5px solid #2a2a28; box-shadow: 0 14px 30px rgba(0,0,0,.5); color: var(--pt); font-family: var(--mono); }
+  .ph .sb { position: absolute; top: 0; left: 0; right: 0; height: 12cqw; display: flex; align-items: center; justify-content: space-between;
+    padding: 1.6cqw 8cqw 0; font: 600 3.9cqw var(--sans); z-index: 6; }
+  .ph .sb .bat { width: 6.4cqw; height: 3cqw; border: .45cqw solid currentColor; border-radius: .9cqw; opacity: .9; position: relative; }
+  .ph .sb .bat::after { content: ""; position: absolute; inset: .4cqw 1.4cqw .4cqw .4cqw; background: currentColor; border-radius: .3cqw; }
+  .ph .island { position: absolute; top: 2.6cqw; left: 50%; width: 30cqw; height: 8.6cqw; transform: translateX(-50%); background: #000; border-radius: 5cqw; z-index: 7; }
+  .ph .home { position: absolute; bottom: 2.2cqw; left: 50%; width: 34cqw; height: 1.3cqw; border-radius: 1cqw; background: #e8e8e2; transform: translateX(-50%); opacity: .85; z-index: 7; }
+  .ph svg.i { width: 1em; height: 1em; display: inline-block; flex: none; }
+  /* The 44pt row under the status bar: back at the left, Settings at the right. */
+  .ph .bk, .ph .gear { position: absolute; top: 12cqw; height: 11.3cqw; width: 11.3cqw; display: grid; place-items: center; font-size: 6.2cqw; color: var(--pt); z-index: 4; }
+  .ph .bk { left: 1.6cqw; } .ph .gear { right: 1.6cqw; font-size: 5.6cqw; color: #cfcfc8; }
+
+  /* Onboarding's one frame (onboarding_frame.dart): words on top, the picture in the middle, actions at the foot. */
+  .ph .words { position: absolute; left: 9cqw; right: 9cqw; top: 27.4cqw; }
+  .ph .hl { margin: 0; font: 600 5.64cqw/1.32 var(--mono); letter-spacing: -.03em; color: var(--pt); }
+  .ph svg.pic { position: absolute; height: auto; }
+  .ph svg.pic.w { left: 15.3cqw; top: 67.7cqw; width: 69.5cqw; }
+  .ph svg.pic.g { left: 10cqw; top: 103cqw; width: 80cqw; }
+  .ph .st { position: absolute; left: 9cqw; right: 9cqw; text-align: center; font: 500 3.33cqw/1.45 var(--mono); color: #dadad4; }
+  .ph .st.w { top: 135.4cqw; } .ph .st.g { top: 180.6cqw; }
+  .ph .st .cur { display: inline-block; width: 1.6cqw; height: 3.33cqw; background: var(--pgreen); vertical-align: -.45cqw; margin-left: .5cqw; animation: blink 1s steps(1) infinite; }
+  .ph .st.err { color: var(--pred); }
+  .ph .st .ic { color: var(--pyellow); font-size: 3.6cqw; vertical-align: -.6cqw; margin-right: 1.5cqw; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .ph .st .cur, .ph .caret { animation: none; } }
+  .ph .foot { position: absolute; left: 9cqw; right: 9cqw; bottom: 10.8cqw; }
+  .ph .foot > * + .btn { margin-top: 2.56cqw; }
+  .ph .quiet { height: 11.3cqw; display: grid; place-items: center; font: 500 3.33cqw var(--mono); color: var(--pfaint); }
+  .ph .quiet b { color: var(--pt); font-weight: 600; }
+  .ph .btn { height: 13.33cqw; display: flex; align-items: center; justify-content: center; gap: 2.56cqw; white-space: nowrap; }
+  .ph .btn.pri { border-radius: 1.54cqw; background: var(--pgreen); color: var(--pink); font: 600 4.36cqw var(--mono); }
+  .ph .btn.pri svg.i { font-size: 5.13cqw; }
+  .ph .btn.goog, .ph .btn.appl { border-radius: 2.56cqw; font: 600 3.85cqw var(--mono); }
+  .ph .btn.goog { background: #fff; color: #1f1f1f; }
+  .ph .btn.appl { background: #000; color: #fff; border: 1px solid rgba(255,255,255,.24); }
+  .ph .btn svg.mk { width: 4.6cqw; height: 4.6cqw; }
+  .ph .btn.off { opacity: .5; }
+  .ph .spin { width: 4.6cqw; height: 4.6cqw; border-radius: 50%; border: .55cqw solid rgba(31,31,31,.25); border-top-color: #1f1f1f; animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ② The address that sends the link, and the steps on the computer. */
+  .ph .addr { margin-top: 5.9cqw; height: 13.33cqw; border-radius: 3.6cqw; background: var(--pgreen); color: var(--pink); display: flex; align-items: center;
+    justify-content: space-between; padding: 0 4.6cqw; font: 600 4.36cqw var(--mono); }
+  .ph .addr svg.i { font-size: 5.13cqw; }
+  .ph .steps { margin-top: 6.15cqw; }
+  .ph .stp { display: grid; grid-template-columns: 6.15cqw 1fr; column-gap: 3.6cqw; position: relative; }
+  .ph .stp:not(:last-child) { padding-bottom: 5.13cqw; }
+  .ph .stp:not(:last-child)::before { content: ""; position: absolute; left: 3.07cqw; top: 7.2cqw; bottom: 1cqw; width: 1px; background: rgba(140,140,134,.6); }
+  .ph .stp .rg { width: 6.15cqw; height: 6.15cqw; border-radius: 50%; border: 1px solid rgba(140,140,134,.6); display: grid; place-items: center; font: 3.33cqw var(--mono); color: var(--pfaint); }
+  .ph .stp .t { font: 600 3.85cqw/6.15cqw var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ph .stp .n { font: 3.33cqw/1.45 var(--mono); color: var(--pfaint); padding-top: .5cqw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ph .stp .n b { color: var(--pt); font-weight: 500; }
+
+  /* The camera page (scan_to_connect.dart). */
+  .ph .cam { position: absolute; left: 0; right: 0; top: 23.3cqw; height: 92cqw; overflow: hidden; background: radial-gradient(60cqw 55cqw at 50% 45%, #3b3a35, #121210 75%); }
+  .ph .cam .lap { position: absolute; left: 14%; top: 17%; width: 72%; height: 54%; background: #0d0d0c; border: 1.2cqw solid #2b2b28; border-radius: 1.6cqw;
+    transform: perspective(60cqw) rotateX(9deg); display: grid; place-items: center; }
+  .ph .cam .lap .dlg { background: #1c1c1a; border-radius: 1cqw; padding: 1.8cqw; display: grid; justify-items: center; gap: 1cqw; width: 46%; }
+  .ph .cam .lap .dlg span { font: 600 1.8cqw var(--sans); color: #ddd; }
+  .ph .cam .lap svg { width: 100%; height: auto; display: block; border-radius: .4cqw; }
+  .ph .cam .c { position: absolute; width: 11cqw; height: 11cqw; border: 1.1cqw solid #fff; opacity: .92; }
+  .ph .cam .c.tl { left: 25%; top: 18%; border-right: 0; border-bottom: 0; border-radius: 2.4cqw 0 0 0; }
+  .ph .cam .c.tr { right: 25%; top: 18%; border-left: 0; border-bottom: 0; border-radius: 0 2.4cqw 0 0; }
+  .ph .cam .c.bl { left: 25%; bottom: 18%; border-right: 0; border-top: 0; border-radius: 0 0 0 2.4cqw; }
+  .ph .cam .c.br { right: 25%; bottom: 18%; border-left: 0; border-top: 0; border-radius: 0 0 2.4cqw 0; }
+  .ph .under { position: absolute; left: 4.1cqw; right: 4.1cqw; top: 121cqw; }
+  .ph .under .h { font: 3.33cqw var(--mono); color: var(--pfaint); margin-bottom: 3.1cqw; }
+  .ph .under .h.big { font: 600 4.36cqw var(--mono); color: var(--pt); }
+  .ph .under .steps { margin-top: 0; }
+  .ph .tb { font: 500 3.85cqw var(--mono); color: var(--pt); text-align: center; }
+  .ph .tb.faint { color: var(--pfaint); }
+
+  /* Email sign-in (email_sign_in.dart). */
+  .ph .form { position: absolute; left: 9cqw; right: 9cqw; top: 26.4cqw; }
+  .ph .form .l { font: 3.85cqw/1.4 var(--mono); color: var(--pfaint); margin-top: 3.1cqw; }
+  .ph .field { margin-top: 6cqw; height: 13.33cqw; border-radius: 2.56cqw; background: var(--praised); display: flex; align-items: center; padding: 0 4cqw; font: 4.1cqw var(--mono); color: #85857f; }
+  .ph .digits { margin-top: 6cqw; display: grid; grid-template-columns: repeat(4, 1fr); gap: 3cqw; }
+  .ph .digits span { height: 16cqw; border-radius: 2.56cqw; background: var(--praised); display: grid; place-items: center; font: 600 6.6cqw var(--mono); }
+  .ph .digits span.on { box-shadow: inset 0 0 0 .5cqw var(--pgreen); }
+  .ph .form .btn { margin-top: 5cqw; }
+  .ph .row2 { display: flex; justify-content: space-between; margin-top: 3cqw; font: 500 3.33cqw var(--mono); }
+  .ph .row2 .dim { color: var(--pfaint); }
+  .ph .caret { display: inline-block; width: .5cqw; height: 4.6cqw; background: var(--pgreen); vertical-align: -.9cqw; animation: blink 1s steps(1) infinite; }
+
+  /* The session (terminal_page.dart): a three-line title, the terminal, the mic alone at the foot. */
+  .ph .ttl { position: absolute; left: 4.1cqw; right: 4.1cqw; top: 13.4cqw; z-index: 2; }
+  .ph .ttl b { display: block; font: 600 4.36cqw/1.3 var(--mono); }
+  .ph .ttl span { display: block; font: 3.33cqw/1.45 var(--mono); color: var(--pfaint); }
+  .ph .out { position: absolute; left: 4.1cqw; right: 4.1cqw; top: 33cqw; font: 3.33cqw/1.5 var(--mono); white-space: pre; color: #cfcfc8; overflow: hidden; }
+  .ph .out .u { color: var(--pt); } .ph .out .ok { color: var(--pgreen); } .ph .out .dim { color: #6e6e68; } .ph .out .bl { color: #6d8cff; } .ph .out .cc { color: #e8927c; }
+  .ph .out .box { display: block; border-left: .6cqw solid #6d8cff; background: #222220; padding: 2.4cqw 3cqw; margin: 3cqw 0 1.4cqw; white-space: pre-wrap; }
+  .ph .out .logo { font-size: 2.15cqw; line-height: 1.05; color: #d4d4cc; display: block; width: max-content; margin: 4cqw auto 0; }
+  .ph .out .cur { display: inline-block; width: 1.8cqw; height: 3.6cqw; background: #e5e5e0; vertical-align: -.6cqw; }
+  .ph .sline { position: absolute; left: 4cqw; right: 4cqw; bottom: 30cqw; text-align: center; font: 3.33cqw/1.45 var(--mono); color: var(--pt); background: var(--pg); padding: 2cqw 0 1.5cqw; z-index: 2; }
+  .ph .mic { position: absolute; left: 50%; bottom: 12cqw; width: 15.4cqw; height: 15.4cqw; transform: translateX(-50%); border-radius: 50%; background: #262626;
+    border: .4cqw solid #44443f; display: grid; place-items: center; z-index: 2; box-shadow: 0 1.5cqw 4cqw rgba(0,0,0,.6); font-size: 6.6cqw; color: var(--pt); }
+
+  /* iOS's own alerts, drawn over the app. */
+  .ph .veil { position: absolute; inset: 0; background: rgba(0,0,0,.5); z-index: 8; }
+  .ph .alert { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); width: 69%; background: rgba(48,48,50,.98); border-radius: 3.6cqw; z-index: 9;
+    font-family: var(--sans); text-align: center; overflow: hidden; color: #fff; }
+  .ph .alert .t { font-weight: 600; font-size: 3.9cqw; padding: 4.6cqw 4.2cqw 1.2cqw; line-height: 1.3; }
+  .ph .alert .m { font-size: 3.1cqw; color: #e2e2e2; padding: 0 4.6cqw 4.2cqw; line-height: 1.35; }
+  .ph .alert .b { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid #58585a; }
+  .ph .alert .b span { padding: 3cqw 0; color: #0a84ff; font-size: 4cqw; }
+  .ph .alert .b span + span { border-left: 1px solid #58585a; font-weight: 600; }
+
+  /* Pages with a heading (pairing, unlock, settings). */
+  .ph .pg { position: absolute; left: 4.1cqw; right: 4.1cqw; top: 25cqw; }
+  .ph .disp { font: 600 7.18cqw/1.21 var(--mono); letter-spacing: -.15cqw; }
+  .ph .rowt { font: 3.85cqw/1.45 var(--mono); color: var(--pfaint); margin-top: 3.1cqw; }
+  .ph .meta { font: 3.33cqw/1.45 var(--mono); color: var(--pfaint); }
+  .ph .pwd { margin-top: 2.6cqw; height: 12.3cqw; border-radius: 2.56cqw; background: var(--praised); display: flex; align-items: center; justify-content: space-between; padding: 0 3.6cqw;
+    font: 3.85cqw var(--mono); color: #85857f; }
+  .ph .pwd b { color: var(--pt); font-weight: 500; }
+  .ph .cmd { margin-top: 1.6cqw; border-radius: 2cqw; background: var(--praised); padding: 2.6cqw 3.2cqw; display: flex; justify-content: space-between; font: 3.33cqw var(--mono); }
+  .ph .cmd b { font-weight: 500; color: var(--pgreen); }
+  .ph .ptitle { position: absolute; left: 13cqw; top: 12cqw; height: 11.3cqw; display: flex; align-items: center; font: 600 4.36cqw var(--mono); }
+  .ph .cap2 { font: 3.33cqw var(--mono); color: var(--pfaint); margin: 5.6cqw 1cqw 2cqw; }
+  .ph .grp { background: #222222; border-radius: 3.1cqw; overflow: hidden; }
+  .ph .grp .r { display: flex; align-items: center; gap: 3cqw; padding: 3.4cqw 3.6cqw; font: 3.85cqw var(--mono); border-top: 1px solid rgba(255,255,255,.06); }
+  .ph .grp .r:first-child { border-top: 0; }
+  .ph .grp .r .v { margin-left: auto; color: var(--pfaint); font-size: 3.33cqw; }
+  .ph .grp .r .ch { color: #5c5c58; margin-left: 2cqw; }
+  .ph .grp .r .v + .ch { margin-left: 2cqw; }
+  .ph .grp .r .sp { margin-left: auto; }
+  .ph .ava { width: 9.2cqw; height: 9.2cqw; border-radius: 50%; background: rgba(189,203,220,.18); border: 1px solid rgba(189,203,220,.4); color: #bdcbdc;
+    display: grid; place-items: center; font: 600 4cqw var(--sans); flex: none; }
+  .ph .grp .r .who b { display: block; font-weight: 600; }
+  .ph .grp .r .who span { display: block; font-size: 3.33cqw; color: var(--pfaint); }
+  .ph .dimall { position: absolute; inset: 0; background: rgba(0,0,0,.55); z-index: 8; }
+  .ph .sheet { position: absolute; left: 0; right: 0; bottom: 0; background: #232323; border-radius: 5cqw 5cqw 0 0; padding: 3.2cqw 4.1cqw 12cqw; z-index: 9; }
+  .ph .sheet .grab { width: 10cqw; height: 1.2cqw; border-radius: 1cqw; background: #555; margin: 0 auto 4cqw; }
+  .ph .sheet .sh { font: 3.33cqw var(--mono); color: var(--pfaint); margin: 0 1cqw 2.6cqw; }
+  .ph .sheet .act { display: flex; align-items: center; gap: 3.4cqw; padding: 3.8cqw 3.6cqw; border-radius: 3.1cqw; background: #2c2c2c; font: 500 3.85cqw var(--mono); }
+  .ph .sheet .act.red { color: var(--pred); }
+  .ph .sheet .act svg.i { font-size: 5cqw; }
+  .ph .dlgc { position: absolute; left: 6cqw; right: 6cqw; top: 50%; transform: translateY(-50%); background: #262626; border-radius: 4.4cqw; padding: 5cqw 5cqw 4.4cqw; z-index: 9;
+    border: 1px solid rgba(255,255,255,.08); box-shadow: 0 3cqw 8cqw rgba(0,0,0,.6); }
+  .ph .dlgc .hd { display: flex; gap: 3cqw; align-items: center; }
+  .ph .dlgc .tile { width: 10cqw; height: 10cqw; border-radius: 2.6cqw; background: rgba(241,76,76,.18); color: var(--pred); display: grid; place-items: center; font-size: 5cqw; flex: none; }
+  .ph .dlgc .hd b { display: block; font: 600 4.36cqw var(--mono); }
+  .ph .dlgc .hd span { display: block; font: 3.33cqw var(--mono); color: var(--pfaint); }
+  .ph .dlgc p { font: 3.6cqw/1.45 var(--mono); color: #d5d5cf; margin: 4cqw 0 5cqw; }
+  .ph .dlgc .bb { display: grid; grid-template-columns: 1fr 1fr; gap: 2.6cqw; }
+  .ph .dlgc .bb span { height: 11.3cqw; border-radius: 2.56cqw; display: grid; place-items: center; font: 600 3.85cqw var(--mono); background: #333; }
+  .ph .dlgc .bb span.red { background: var(--pred); color: #1a0505; }
+  .ph .dlgc .bb span.go { background: var(--pgreen); color: var(--pink); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="qr" viewBox="-2 -2 25 25"><rect x="-2" y="-2" width="25" height="25" fill="#fff"/><g fill="#111"><rect x="0" y="0" width="1" height="1"/><rect x="1" y="0" width="1" height="1"/><rect x="2" y="0" width="1" height="1"/><rect x="3" y="0" width="1" height="1"/><rect x="4" y="0" width="1" height="1"/><rect x="5" y="0" width="1" height="1"/><rect x="6" y="0" width="1" height="1"/><rect x="8" y="0" width="1" height="1"/><rect x="10" y="0" width="1" height="1"/><rect x="12" y="0" width="1" height="1"/><rect x="14" y="0" width="1" height="1"/><rect x="15" y="0" width="1" height="1"/><rect x="16" y="0" width="1" height="1"/><rect x="17" y="0" width="1" height="1"/><rect x="18" y="0" width="1" height="1"/><rect x="19" y="0" width="1" height="1"/><rect x="20" y="0" width="1" height="1"/><rect x="0" y="1" width="1" height="1"/><rect x="6" y="1" width="1" height="1"/><rect x="10" y="1" width="1" height="1"/><rect x="14" y="1" width="1" height="1"/><rect x="20" y="1" width="1" height="1"/><rect x="0" y="2" width="1" height="1"/><rect x="2" y="2" width="1" height="1"/><rect x="3" y="2" width="1" height="1"/><rect x="4" y="2" width="1" height="1"/><rect x="6" y="2" width="1" height="1"/><rect x="8" y="2" width="1" height="1"/><rect x="9" y="2" width="1" height="1"/><rect x="11" y="2" width="1" height="1"/><rect x="14" y="2" width="1" height="1"/><rect x="16" y="2" width="1" height="1"/><rect x="17" y="2" width="1" height="1"/><rect x="18" y="2" width="1" height="1"/><rect x="20" y="2" width="1" height="1"/><rect x="0" y="3" width="1" height="1"/><rect x="2" y="3" width="1" height="1"/><rect x="3" y="3" width="1" height="1"/><rect x="4" y="3" width="1" height="1"/><rect x="6" y="3" width="1" height="1"/><rect x="8" y="3" width="1" height="1"/><rect x="11" y="3" width="1" height="1"/><rect x="12" y="3" width="1" height="1"/><rect x="14" y="3" width="1" height="1"/><rect x="16" y="3" width="1" height="1"/><rect x="17" y="3" width="1" height="1"/><rect x="18" y="3" width="1" height="1"/><rect x="20" y="3" width="1" height="1"/><rect x="0" y="4" width="1" height="1"/><rect x="2" y="4" width="1" height="1"/><rect x="3" y="4" width="1" height="1"/><rect x="4" y="4" width="1" height="1"/><rect x="6" y="4" width="1" height="1"/><rect x="8" y="4" width="1" height="1"/><rect x="10" y="4" width="1" height="1"/><rect x="14" y="4" width="1" height="1"/><rect x="16" y="4" width="1" height="1"/><rect x="17" y="4" width="1" height="1"/><rect x="18" y="4" width="1" height="1"/><rect x="20" y="4" width="1" height="1"/><rect x="0" y="5" width="1" height="1"/><rect x="6" y="5" width="1" height="1"/><rect x="9" y="5" width="1" height="1"/><rect x="11" y="5" width="1" height="1"/><rect x="12" y="5" width="1" height="1"/><rect x="14" y="5" width="1" height="1"/><rect x="20" y="5" width="1" height="1"/><rect x="0" y="6" width="1" height="1"/><rect x="1" y="6" width="1" height="1"/><rect x="2" y="6" width="1" height="1"/><rect x="3" y="6" width="1" height="1"/><rect x="4" y="6" width="1" height="1"/><rect x="5" y="6" width="1" height="1"/><rect x="6" y="6" width="1" height="1"/><rect x="8" y="6" width="1" height="1"/><rect x="10" y="6" width="1" height="1"/><rect x="12" y="6" width="1" height="1"/><rect x="14" y="6" width="1" height="1"/><rect x="15" y="6" width="1" height="1"/><rect x="16" y="6" width="1" height="1"/><rect x="17" y="6" width="1" height="1"/><rect x="18" y="6" width="1" height="1"/><rect x="19" y="6" width="1" height="1"/><rect x="20" y="6" width="1" height="1"/><rect x="11" y="7" width="1" height="1"/><rect x="0" y="8" width="1" height="1"/><rect x="1" y="8" width="1" height="1"/><rect x="2" y="8" width="1" height="1"/><rect x="3" y="8" width="1" height="1"/><rect x="6" y="8" width="1" height="1"/><rect x="8" y="8" width="1" height="1"/><rect x="12" y="8" width="1" height="1"/><rect x="13" y="8" width="1" height="1"/><rect x="16" y="8" width="1" height="1"/><rect x="17" y="8" width="1" height="1"/><rect x="18" y="8" width="1" height="1"/><rect x="20" y="8" width="1" height="1"/><rect x="1" y="9" width="1" height="1"/><rect x="2" y="9" width="1" height="1"/><rect x="3" y="9" width="1" height="1"/><rect x="5" y="9" width="1" height="1"/><rect x="11" y="9" width="1" height="1"/><rect x="12" y="9" width="1" height="1"/><rect x="13" y="9" width="1" height="1"/><rect x="15" y="9" width="1" height="1"/><rect x="16" y="9" width="1" height="1"/><rect x="20" y="9" width="1" height="1"/><rect x="1" y="10" width="1" height="1"/><rect x="6" y="10" width="1" height="1"/><rect x="7" y="10" width="1" height="1"/><rect x="8" y="10" width="1" height="1"/><rect x="10" y="10" width="1" height="1"/><rect x="12" y="10" width="1" height="1"/><rect x="16" y="10" width="1" height="1"/><rect x="17" y="10" width="1" height="1"/><rect x="18" y="10" width="1" height="1"/><rect x="1" y="11" width="1" height="1"/><rect x="2" y="11" width="1" height="1"/><rect x="4" y="11" width="1" height="1"/><rect x="7" y="11" width="1" height="1"/><rect x="9" y="11" width="1" height="1"/><rect x="12" y="11" width="1" height="1"/><rect x="13" y="11" width="1" height="1"/><rect x="16" y="11" width="1" height="1"/><rect x="17" y="11" width="1" height="1"/><rect x="1" y="12" width="1" height="1"/><rect x="3" y="12" width="1" height="1"/><rect x="4" y="12" width="1" height="1"/><rect x="6" y="12" width="1" height="1"/><rect x="7" y="12" width="1" height="1"/><rect x="8" y="12" width="1" height="1"/><rect x="11" y="12" width="1" height="1"/><rect x="13" y="12" width="1" height="1"/><rect x="14" y="12" width="1" height="1"/><rect x="15" y="12" width="1" height="1"/><rect x="8" y="13" width="1" height="1"/><rect x="10" y="13" width="1" height="1"/><rect x="11" y="13" width="1" height="1"/><rect x="12" y="13" width="1" height="1"/><rect x="14" y="13" width="1" height="1"/><rect x="16" y="13" width="1" height="1"/><rect x="19" y="13" width="1" height="1"/><rect x="0" y="14" width="1" height="1"/><rect x="1" y="14" width="1" height="1"/><rect x="2" y="14" width="1" height="1"/><rect x="3" y="14" width="1" height="1"/><rect x="4" y="14" width="1" height="1"/><rect x="5" y="14" width="1" height="1"/><rect x="6" y="14" width="1" height="1"/><rect x="10" y="14" width="1" height="1"/><rect x="13" y="14" width="1" height="1"/><rect x="15" y="14" width="1" height="1"/><rect x="17" y="14" width="1" height="1"/><rect x="19" y="14" width="1" height="1"/><rect x="20" y="14" width="1" height="1"/><rect x="0" y="15" width="1" height="1"/><rect x="6" y="15" width="1" height="1"/><rect x="9" y="15" width="1" height="1"/><rect x="14" y="15" width="1" height="1"/><rect x="17" y="15" width="1" height="1"/><rect x="18" y="15" width="1" height="1"/><rect x="0" y="16" width="1" height="1"/><rect x="2" y="16" width="1" height="1"/><rect x="3" y="16" width="1" height="1"/><rect x="4" y="16" width="1" height="1"/><rect x="6" y="16" width="1" height="1"/><rect x="9" y="16" width="1" height="1"/><rect x="14" y="16" width="1" height="1"/><rect x="17" y="16" width="1" height="1"/><rect x="19" y="16" width="1" height="1"/><rect x="0" y="17" width="1" height="1"/><rect x="2" y="17" width="1" height="1"/><rect x="3" y="17" width="1" height="1"/><rect x="4" y="17" width="1" height="1"/><rect x="6" y="17" width="1" height="1"/><rect x="8" y="17" width="1" height="1"/><rect x="9" y="17" width="1" height="1"/><rect x="11" y="17" width="1" height="1"/><rect x="14" y="17" width="1" height="1"/><rect x="15" y="17" width="1" height="1"/><rect x="16" y="17" width="1" height="1"/><rect x="17" y="17" width="1" height="1"/><rect x="19" y="17" width="1" height="1"/><rect x="0" y="18" width="1" height="1"/><rect x="2" y="18" width="1" height="1"/><rect x="3" y="18" width="1" height="1"/><rect x="4" y="18" width="1" height="1"/><rect x="6" y="18" width="1" height="1"/><rect x="8" y="18" width="1" height="1"/><rect x="11" y="18" width="1" height="1"/><rect x="12" y="18" width="1" height="1"/><rect x="13" y="18" width="1" height="1"/><rect x="16" y="18" width="1" height="1"/><rect x="0" y="19" width="1" height="1"/><rect x="6" y="19" width="1" height="1"/><rect x="8" y="19" width="1" height="1"/><rect x="9" y="19" width="1" height="1"/><rect x="10" y="19" width="1" height="1"/><rect x="12" y="19" width="1" height="1"/><rect x="13" y="19" width="1" height="1"/><rect x="15" y="19" width="1" height="1"/><rect x="17" y="19" width="1" height="1"/><rect x="0" y="20" width="1" height="1"/><rect x="1" y="20" width="1" height="1"/><rect x="2" y="20" width="1" height="1"/><rect x="3" y="20" width="1" height="1"/><rect x="4" y="20" width="1" height="1"/><rect x="5" y="20" width="1" height="1"/><rect x="6" y="20" width="1" height="1"/><rect x="8" y="20" width="1" height="1"/><rect x="12" y="20" width="1" height="1"/><rect x="14" y="20" width="1" height="1"/><rect x="15" y="20" width="1" height="1"/><rect x="17" y="20" width="1" height="1"/><rect x="18" y="20" width="1" height="1"/><rect x="19" y="20" width="1" height="1"/></g></symbol>
+  <symbol id="i-qr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="3" width="6" height="6" rx="1"/><rect x="3" y="15" width="6" height="6" rx="1"/><path d="M15 15h3v3M21 15v.01M15 21h6M21 18v3M12 3v3M12 9v3H9M3 12h3"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M16 6l-4-4-4 4"/><path d="M12 2v13"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M19 10.5v1a7 7 0 0 1-14 0v-1M12 18.5V22"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></symbol>
+  <symbol id="i-google" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/></symbol>
+  <symbol id="i-apple" viewBox="0 0 814 1000"><path fill="currentColor" d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57-155.5-127C46.7 790.7 0 663 0 541.8c0-194.4 126.4-297.5 250.8-297.5 66.1 0 121.2 43.4 162.7 43.4 39.5 0 101.1-46 176.3-46 28.5 0 130.9 2.6 198.3 99.2zm-234-181.5c31.1-36.9 53.1-88.1 53.1-139.3 0-7.1-.6-14.3-1.9-20.1-50.6 1.9-110.8 33.7-147.1 75.8-28.5 32.4-55.1 83.6-55.1 135.5 0 7.8 1.3 15.6 1.9 18.1 3.2.6 8.4 1.3 13.6 1.3 45.4 0 102.5-30.4 135.5-71.3z"/></symbol>
+  <symbol id="pic-welcome" viewBox="0 0 320 300"><defs><filter id="blur-w" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="6"/></filter><filter id="glow-w" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M112 50 L 208 48 M60 100 L 132 232 M260 98 L 188 232" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.2" stroke-dasharray="2 5"/><path d="M240 98 Q 204 116 184 140" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"/><circle r="2.6" fill="#8dffcf" filter="url(#glow-w)"><animateMotion path="M240 98 Q 204 116 184 140" dur="1.4s" begin="0.47s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.5;1" calcMode="linear"/><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1.4s" begin="0.47s" repeatCount="indefinite"/></circle><path d="M160 232 L 160 206" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"/><circle r="2.6" fill="#8dffcf" filter="url(#glow-w)"><animateMotion path="M160 232 L 160 206" dur="1.4s" begin="0.93s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.5;1" calcMode="linear"/><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1.4s" begin="0.93s" repeatCount="indefinite"/></circle><path d="M96 98 Q 120 116 136 140" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"/><circle r="2.6" fill="#8dffcf" filter="url(#glow-w)"><animateMotion path="M96 98 Q 120 116 136 140" dur="1.4s" begin="0s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.5;1" calcMode="linear"/><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1.4s" begin="0s" repeatCount="indefinite"/></circle><ellipse cx="257" cy="98" rx="48" ry="7" fill="#0dbc79" opacity=".18" filter="url(#blur-w)"/><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="208" y="18" width="98" height="64" rx="6"/><rect x="214" y="24" width="86" height="52" rx="3" fill="#0dbc79" fill-opacity=".10" stroke-opacity=".5"/><path d="M257 82 v12 M240 96 h34"/></g><text x="219" y="42" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9">opencode</text><rect x="264.1" y="35" width="4.6" height="8" fill="#0dbc79"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1s" repeatCount="indefinite"/></rect><ellipse cx="160" cy="288" rx="56" ry="7" fill="#0dbc79" opacity=".18" filter="url(#blur-w)"/><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="108" y="232" width="104" height="23" rx="4"/><rect x="108" y="255" width="104" height="23" rx="4"/><path d="M118 285 h84"/></g><circle cx="200" cy="244" r="1.7" fill="#0dbc79"/><circle cx="200" cy="266" r="1.7" fill="#0dbc79"/><text x="122" y="247" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9">codex</text><rect x="150.75" y="240" width="4.6" height="8" fill="#0dbc79"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1s" repeatCount="indefinite"/></rect><ellipse cx="62" cy="100" rx="54" ry="8" fill="#0dbc79" opacity=".22" filter="url(#blur-w)"/><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="22" width="98" height="64" rx="6"/><rect x="20" y="28" width="86" height="52" rx="3" fill="#0dbc79" fill-opacity=".10" stroke-opacity=".5"/><path d="M4 90 h118 l-8 7 h-102 z"/></g><text x="26" y="44" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9">claude</text><rect x="60.2" y="37" width="4.6" height="8" fill="#0dbc79"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1s" repeatCount="indefinite"/></rect><text x="26" y="56" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9">codex</text><ellipse cx="160" cy="206" rx="34" ry="6" fill="#0dbc79" opacity="0.14" filter="url(#blur-w)"/><rect x="136" y="110" width="48" height="94" rx="10" fill="#0c0c0c" stroke="#EDEDED" stroke-width="1.6"/><rect x="141" y="119" width="38" height="74" rx="5" fill="#0dbc79" fill-opacity="0.05"/><rect x="154" y="113.5" width="12" height="3" rx="1.5" fill="#EDEDED" opacity=".6"/><rect x="146" y="128" width="22" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="136" width="16" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="144" width="26" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="152" width="12" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="160" width="20" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/></symbol>
+  <symbol id="pic-looking" viewBox="0 0 320 300"><defs><filter id="blur-l" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="6"/></filter><filter id="glow-l" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M112 50 L 208 48 M60 100 L 132 232 M260 98 L 188 232" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.2" stroke-dasharray="2 5"/><circle cx="160" cy="157" r="8" fill="none" stroke="#0dbc79" stroke-width="1.2"><animate attributeName="r" values="8;120" dur="2.4s" begin="0.0s" repeatCount="indefinite"/><animate attributeName="opacity" values=".55;0" dur="2.4s" begin="0.0s" repeatCount="indefinite"/></circle><circle cx="160" cy="157" r="8" fill="none" stroke="#0dbc79" stroke-width="1.2"><animate attributeName="r" values="8;120" dur="2.4s" begin="0.8s" repeatCount="indefinite"/><animate attributeName="opacity" values=".55;0" dur="2.4s" begin="0.8s" repeatCount="indefinite"/></circle><circle cx="160" cy="157" r="8" fill="none" stroke="#0dbc79" stroke-width="1.2"><animate attributeName="r" values="8;120" dur="2.4s" begin="1.6s" repeatCount="indefinite"/><animate attributeName="opacity" values=".55;0" dur="2.4s" begin="1.6s" repeatCount="indefinite"/></circle><path d="M240 98 Q 204 116 184 140" fill="none" stroke="#5a5a58" stroke-width="1.4" stroke-dasharray="1.2 4" stroke-linecap="round"/><path d="M160 232 L 160 206" fill="none" stroke="#5a5a58" stroke-width="1.4" stroke-dasharray="1.2 4" stroke-linecap="round"/><path d="M96 98 Q 120 116 136 140" fill="none" stroke="#5a5a58" stroke-width="1.4" stroke-dasharray="1.2 4" stroke-linecap="round"/><g stroke="#EDEDED" opacity=".3" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="208" y="18" width="98" height="64" rx="6"/><rect x="214" y="24" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M257 82 v12 M240 96 h34"/></g><g stroke="#EDEDED" opacity=".3" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="108" y="232" width="104" height="23" rx="4"/><rect x="108" y="255" width="104" height="23" rx="4"/><path d="M118 285 h84"/></g><g stroke="#EDEDED" opacity=".3" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><animate attributeName="opacity" values=".25;.6;.25" dur="2.4s" repeatCount="indefinite"/><rect x="14" y="22" width="98" height="64" rx="6"/><rect x="20" y="28" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M4 90 h118 l-8 7 h-102 z"/></g><ellipse cx="160" cy="206" rx="34" ry="6" fill="#0dbc79" opacity="0.14" filter="url(#blur-l)"/><rect x="136" y="110" width="48" height="94" rx="10" fill="#0c0c0c" stroke="#EDEDED" stroke-width="1.6"/><rect x="141" y="119" width="38" height="74" rx="5" fill="#0dbc79" fill-opacity="0.05"/><rect x="154" y="113.5" width="12" height="3" rx="1.5" fill="#EDEDED" opacity=".6"/><rect x="146" y="128" width="22" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="136" width="16" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="144" width="26" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="152" width="12" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="160" width="20" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/></symbol>
+  <symbol id="pic-joined-oc" viewBox="0 0 320 300"><defs><filter id="blur-f" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="6"/></filter><filter id="glow-f" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M112 50 L 208 48 M60 100 L 132 232 M260 98 L 188 232" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.2" stroke-dasharray="2 5"/><path d="M96 98 Q 120 116 136 140" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"/><circle r="2.6" fill="#8dffcf" filter="url(#glow-f)"><animateMotion path="M96 98 Q 120 116 136 140" dur="0.7s" begin="0s" repeatCount="indefinite"/></circle><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="208" y="18" width="98" height="64" rx="6"/><rect x="214" y="24" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M257 82 v12 M240 96 h34"/></g><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="108" y="232" width="104" height="23" rx="4"/><rect x="108" y="255" width="104" height="23" rx="4"/><path d="M118 285 h84"/></g><ellipse cx="62" cy="100" rx="54" ry="8" fill="#0dbc79" opacity=".22" filter="url(#blur-f)"/><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="22" width="98" height="64" rx="6"/><rect x="20" y="28" width="86" height="52" rx="3" fill="#0dbc79" fill-opacity=".10" stroke-opacity=".5"/><path d="M4 90 h118 l-8 7 h-102 z"/></g><text x="26" y="44" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9">opencode</text><rect x="71.1" y="37" width="4.6" height="8" fill="#0dbc79"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1s" repeatCount="indefinite"/></rect><ellipse cx="160" cy="206" rx="34" ry="6" fill="#0dbc79" opacity="0.28" filter="url(#blur-f)"/><rect x="136" y="110" width="48" height="94" rx="10" fill="#0c0c0c" stroke="#EDEDED" stroke-width="1.6"/><rect x="141" y="119" width="38" height="74" rx="5" fill="#0dbc79" fill-opacity="0.1"/><rect x="154" y="113.5" width="12" height="3" rx="1.5" fill="#EDEDED" opacity=".6"/><rect x="146" y="128" width="22" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="136" width="16" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="144" width="26" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="152" width="12" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="160" width="20" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/></symbol>
+  <symbol id="pic-joined-cc" viewBox="0 0 320 300"><defs><filter id="blur-fc" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="6"/></filter><filter id="glow-fc" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M112 50 L 208 48 M60 100 L 132 232 M260 98 L 188 232" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.2" stroke-dasharray="2 5"/><path d="M96 98 Q 120 116 136 140" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"/><circle r="2.6" fill="#8dffcf" filter="url(#glow-fc)"><animateMotion path="M96 98 Q 120 116 136 140" dur="0.7s" begin="0s" repeatCount="indefinite"/></circle><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="208" y="18" width="98" height="64" rx="6"/><rect x="214" y="24" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M257 82 v12 M240 96 h34"/></g><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="108" y="232" width="104" height="23" rx="4"/><rect x="108" y="255" width="104" height="23" rx="4"/><path d="M118 285 h84"/></g><ellipse cx="62" cy="100" rx="54" ry="8" fill="#0dbc79" opacity=".22" filter="url(#blur-fc)"/><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="22" width="98" height="64" rx="6"/><rect x="20" y="28" width="86" height="52" rx="3" fill="#0dbc79" fill-opacity=".10" stroke-opacity=".5"/><path d="M4 90 h118 l-8 7 h-102 z"/></g><text x="26" y="44" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9">claude</text><rect x="60.4" y="37" width="4.6" height="8" fill="#0dbc79"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1s" repeatCount="indefinite"/></rect><ellipse cx="160" cy="206" rx="34" ry="6" fill="#0dbc79" opacity="0.28" filter="url(#blur-fc)"/><rect x="136" y="110" width="48" height="94" rx="10" fill="#0c0c0c" stroke="#EDEDED" stroke-width="1.6"/><rect x="141" y="119" width="38" height="74" rx="5" fill="#0dbc79" fill-opacity="0.1"/><rect x="154" y="113.5" width="12" height="3" rx="1.5" fill="#EDEDED" opacity=".6"/><rect x="146" y="128" width="22" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="136" width="16" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="144" width="26" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="152" width="12" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="160" width="20" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/></symbol>
+  <symbol id="pic-joined-none" viewBox="0 0 320 300"><defs><filter id="blur-fn" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="6"/></filter><filter id="glow-fn" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M112 50 L 208 48 M60 100 L 132 232 M260 98 L 188 232" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.2" stroke-dasharray="2 5"/><path d="M96 98 Q 120 116 136 140" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"/><circle r="2.6" fill="#8dffcf" filter="url(#glow-fn)"><animateMotion path="M96 98 Q 120 116 136 140" dur="0.7s" begin="0s" repeatCount="indefinite"/></circle><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="208" y="18" width="98" height="64" rx="6"/><rect x="214" y="24" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M257 82 v12 M240 96 h34"/></g><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="108" y="232" width="104" height="23" rx="4"/><rect x="108" y="255" width="104" height="23" rx="4"/><path d="M118 285 h84"/></g><ellipse cx="62" cy="100" rx="54" ry="8" fill="#0dbc79" opacity=".22" filter="url(#blur-fn)"/><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="22" width="98" height="64" rx="6"/><rect x="20" y="28" width="86" height="52" rx="3" fill="#0dbc79" fill-opacity=".10" stroke-opacity=".5"/><path d="M4 90 h118 l-8 7 h-102 z"/></g><text x="26" y="44" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9"></text><rect x="27.5" y="37" width="4.6" height="8" fill="#0dbc79"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1s" repeatCount="indefinite"/></rect><ellipse cx="160" cy="206" rx="34" ry="6" fill="#0dbc79" opacity="0.28" filter="url(#blur-fn)"/><rect x="136" y="110" width="48" height="94" rx="10" fill="#0c0c0c" stroke="#EDEDED" stroke-width="1.6"/><rect x="141" y="119" width="38" height="74" rx="5" fill="#0dbc79" fill-opacity="0.1"/><rect x="154" y="113.5" width="12" height="3" rx="1.5" fill="#EDEDED" opacity=".6"/><rect x="146" y="128" width="22" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="136" width="16" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="144" width="26" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="152" width="12" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="160" width="20" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/></symbol>
+</svg>
+<main>
+  <h1>Product measurement, Harness phone onboarding</h1>
+  <p class="lede">Every count the phone app sends while someone gets started, step by step, as built on 2026-10-14 (branch <code>feat/mobile-ios-android</code>, commit <code>248e5b1fc</code>, not yet released).
+    The steps are the ones on the <a href="../2026-10-14-mobile-onboarding/index.html">mobile onboarding page</a>. Screens 1–3 are renders of the current code
+    (<code>test/render/phone_screens_render_test.dart</code>); 4 and 5 are drawn on that page. Click a screen to enlarge it.
+    The counts come from <code>mobile/lib/measurement/</code>: the shared <code>ProductMeasurement</code> and the new <code>OnboardingMeasurement</code>.
+    The names they may use are fixed in <code>backend/src/types/productUsage.ts</code>.</p>
+  <div class="facts">
+    <div class="fact"><b>ui_phone_*</b><span>the prefix of every count from a signed-in phone (<code>setup_phone_*</code> before sign-in)</span></div>
+    <div class="fact"><b>8</b><span>new onboarding flows: 4 sign-in buttons and 4 steps after sign-in</span></div>
+    <div class="fact"><b>0</b><span>identifiers: no email, account id, device id, computer name, message or timestamp</span></div>
+    <div class="fact"><b>1</b><span>switch that stops it: Settings ▸ Privacy ▸ Share product usage data (or <code>harness privacy off</code>)</span></div>
+  </div>
+
+  <h2>How a count is sent</h2>
+  <p class="sub">The same mechanism the desktop and terminal already use since #1301, with no event stream.</p>
+  <div class="card"><div class="card-body">
+    <div class="row"><span class="num">0</span><span class="ttl2">A step starts, ends once, and becomes three numbers for the day</span><span class="tag ok">unit-tested</span></div>
+    <p>Each step calls <code>begin(flow)</code> when it starts, which counts <code>…_started</code>. It ends once with one outcome
+      (<code>ok</code> · <code>failed</code> · <code>cancelled</code> · <code>unknown</code>) and one duration bucket
+      (<code>under_1s</code> · <code>1s_to_10s</code> · <code>10s_to_1m</code> · <code>over_1m</code>). The phone adds these to that UTC day's totals in memory.
+      A batch of at most 32 counters goes to <code>POST /api/product-usage/report</code> about once a minute. A phone that waited 2 minutes for its computer sends:</p>
+    <div class="scroll"><table>
+      <tr><th>Field</th><th>Value</th></tr>
+      <tr><td>schemaVersion · day</td><td><code>1</code> · <code>"2026-10-14"</code> (UTC day only, no time)</td></tr>
+      <tr><td>id</td><td><code>"3f0c…-4…"</code>, a random receipt so a retry is not counted twice; new for each report</td></tr>
+      <tr><td>revision</td><td><code>0</code>, the version of the account's Share switch, so an "off" saved meanwhile wins</td></tr>
+      <tr><td>counters</td><td><code>{"ui_phone_computer_wait_started":1, "ui_phone_computer_wait_ok":1, "ui_phone_computer_wait_over_1m":1}</code></td></tr>
+    </table></div>
+    <p>The backend accepts only names on its list (any other name rejects the whole report) and adds them into daily totals. Who sent a report is used to check their
+      switch, and is not stored with the totals. Signed out there is no account, so the phone goes by its own <b>Share setup and sign-in counts</b> line,
+      on by default as on Desktop and kept across launches; turning it off also turns the account's sharing off at the next sign-in. Its reports go without
+      credentials or cookies to <code>POST /api/product-usage/setup</code>, with <code>"sharing": "default"</code> instead of a revision. That is the only way sign-in is counted, because a sign-in happens before there is an account. A Google sign-in that worked:</p>
+    <div class="scroll"><table>
+      <tr><th>Field</th><th>Value</th></tr>
+      <tr><td>counters</td><td><code>{"setup_phone_sign_in_started":1, "setup_phone_sign_in_ok":1, "setup_phone_sign_in_1s_to_10s":1, "setup_phone_sign_in_google_started":1, "setup_phone_sign_in_google_ok":1, "setup_phone_sign_in_google_1s_to_10s":1}</code></td></tr>
+    </table></div>
+    <div class="note">A step that starts in the second after sign-in, before the account's switch has loaded, waits in <code>OnboardingMeasurement</code>. It is counted from its real start
+      once the switch reads on, and never counted if the switch reads off or the step ends first.</div>
+  </div></div>
+
+  <h2>What changed from Autonomous Analytics</h2>
+  <p class="sub">The old phone stream (<code>mobile/lib/analytics/</code>, removed in <code>ac0c8393d</code> on 2026-09-29) and what replaces it.</p>
+  <div class="card"><div class="card-body">
+    <div class="scroll"><table>
+      <tr><th></th><th>Autonomous Analytics (removed)</th><th>Now</th></tr>
+      <tr><td>Destination</td><td>The AA Cloud Run endpoint <code>/api/v1/event_tracking</code>, under Grid's write key</td><td>The Harness backend, <code>/api/product-usage/report</code></td></tr>
+      <tr><td>Unit</td><td>One event per action, with a timestamp</td><td>Daily totals per counter, capped at 1000 a day</td></tr>
+      <tr><td>Who</td><td class="no"><code>user_email</code>, <code>user_id</code>, a stable device id, a session id on every event</td><td class="yes">Nothing. A random receipt per report, for retries only</td></tr>
+      <tr><td>Device</td><td class="no">App version and build, OS and version, arch, locale</td><td class="yes"><code>phone</code> (the surface) only</td></tr>
+      <tr><td>Timing</td><td class="no">Exact seconds (<code>seconds_since_login</code>, <code>open_seconds</code>)</td><td class="yes">Four buckets</td></tr>
+      <tr><td>Apps apart</td><td class="no">The phone stamped <code>harness-desktop-v2</code>, the desktop's category, so phone and desktop events could not be told apart</td><td class="yes"><code>phone</code> · <code>desktop</code> · <code>web</code> in every counter name</td></tr>
+      <tr><td>Opt-out</td><td>A build variable (<code>HARNESS_ANALYTICS_DISABLED</code>)</td><td>The account's Share switch on every app; off by default before sign-in</td></tr>
+    </table></div>
+    <div class="scroll"><table>
+      <tr><th>Old AA event</th><th>Now</th></tr>
+      <tr><td>signed_in · sign_in_failed {reason}</td><td><code>sign_in</code> and <code>sign_in_&lt;button&gt;</code> ok · failed · cancelled (section 1)</td></tr>
+      <tr><td>app_first_message {from, seconds_since_login}</td><td><code>first_message</code>: from the session opening to the first send, bucketed (section 4)</td></tr>
+      <tr><td>app_opened {signed_in}</td><td>Not an event: people active per app per day come from the backend's daily marks (#1314)</td></tr>
+      <tr><td>new_agent_opened · agent_created</td><td>Not on the phone. The computer's daemon counts <code>create</code> requests and their outcomes, without the engine</td></tr>
+      <tr><td>app_closed · screen_view · signed_out</td><td>Not collected. Sign-out only ends a running step as <code>cancelled</code></td></tr>
+    </table></div>
+  </div></div>
+
+  <h2>The funnel</h2>
+  <p class="sub">One flow per step. Within a day, <code>started</code> minus the four outcomes is the people who stopped there: the app closed or crashed mid-step.</p>
+  <div class="card"><div class="card-body">
+    <div class="scroll"><table>
+      <tr><th>Step</th><th>Flow</th><th>Starts</th><th>ok</th><th>failed</th><th>cancelled</th></tr>
+      <tr><td>1 · Sign in</td><td><code>sign_in</code> + <code>sign_in_scan|google|apple|email</code></td><td>Google or Apple pressed, an email code entered, a QR code read</td><td>Signed in</td><td>The service refused, or the page could not open</td><td>Google/Apple page closed, or another attempt replaced it</td></tr>
+      <tr><td>2 · Your computer</td><td><code>computer_wait</code></td><td>"On your computer, go to" shows</td><td>A computer joins the account</td><td>—</td><td>Signed out ("Not you? Sign out"), see the note</td></tr>
+      <tr><td>3 · Ready</td><td><code>session_open</code></td><td>"… is ready." starts</td><td>A session opens (its own, or one picked meanwhile)</td><td>No session after 90 s</td><td>Signed out, see the note</td></tr>
+      <tr><td>4 · Session</td><td><code>first_message</code></td><td>That session opens</td><td>First line sent from it (mic, composer or Return)</td><td>—</td><td>Left the session first</td></tr>
+      <tr><td>5 · Notifications</td><td><code>notify_permission</code></td><td>The system prompt shows</td><td>Allow</td><td>—</td><td>Don't Allow (<code>unknown</code> when the OS gives no answer)</td></tr>
+    </table></div>
+    <div class="note">Each flow runs at most once per sign-in and app launch. These are counts of attempts, not of people: the daily totals have no identity to deduplicate them.
+      A chosen sign-out first sends what the phone has queued (up to 2 s), so a step ended by "Not you? Sign out" arrives as <code>cancelled</code> with its <code>not_you</code> mark.</div>
+  </div></div>
+
+  <h2>1. Welcome and sign-in</h2>
+  <figure class="phone-pair"><div class="shots"><img src="img/01-welcome.jpg" alt="Welcome: Continue with Google, Continue with Apple, then Continue with email and QR code in one quiet line"><img src="img/02-email.jpg" alt="Your email, Send code"></div>
+    <figcaption><div class="row"><span class="num">1</span><span class="ttl2">Google, Apple, and a quiet line for email and QR</span><span class="tag">phone_welcome.dart</span><span class="tag new">new</span></div>
+      <div class="scroll"><table>
+        <tr><th>Counter</th><th>When</th></tr>
+        <tr><td>sign_in_google_*</td><td>"Continue with Google" (<code>signInWithProvider</code>)</td></tr>
+        <tr><td>sign_in_apple_*</td><td>"Continue with Apple"</td></tr>
+        <tr><td>sign_in_email_*</td><td>"Continue with email", then the 4-digit code (<code>signInWithCode</code>). Sending the code is not counted</td></tr>
+        <tr><td>sign_in_scan_*</td><td>"QR code", then a computer's Add Phone code read by the camera (<code>signInWithScan</code>)</td></tr>
+        <tr><td>sign_in_*</td><td>The total of all four, as before</td></tr>
+        <tr><td>sign_in_retried</td><td>A sign-in that went through after a failed or cancelled try in the same app run</td></tr>
+        <tr><td>sign_in_switched</td><td>A sign-in that went through on another button than the first one tried</td></tr>
+      </table></div>
+      <p>Google and Apple were not counted at all before this change, so <code>sign_in</code> totals rise when it ships. A scan that fails and falls back to the emailed code counts as a failed scan; the code typed after it is its own email attempt.</p>
+      <div class="note">Every outcome, failures and cancels included, exists only for phones whose <b>Share setup and sign-in counts</b> line is on (<code>setup_phone_*</code>), the one quiet line with ⓘ at the foot of every signed-out screen; it is on by default and remembered across launches.
+        A sign-in that <b>went through</b> is counted again under the account's own sharing (<code>ui_phone_sign_in_*_ok</code>, the large population), with <code>retried</code> and <code>switched</code> saying how hard it was. People who never get in stay invisible: take installs and first opens from App Store Connect and Play Console as the denominator.</div></figcaption></figure>
+  <figure class="phone-pair"><div class="shots"><img src="img/03-code.jpg" alt="Check your email: the 4-digit code"></div>
+    <figcaption><div class="row"><span class="num">1b</span><span class="ttl2">What a failure carries</span></div>
+      <p>Only <code>failed</code>. The red reason under the picture ("Could not open the sign-in page…"), the email typed and the code never leave the phone. The old AA <code>reason</code> code is not sent either.</p></figcaption></figure>
+
+  <h2>2. Your computer</h2>
+  <figure class="phone-pair"><div class="shots"><img src="img/04-your-computer.jpg" alt="On your computer, go to autonomous.ai/go; Looking for your computer"></div>
+    <figcaption><div class="row"><span class="num">2</span><span class="ttl2">"Looking for your computer"</span><span class="tag">agent_home.dart</span><span class="tag new">new</span></div>
+      <div class="scroll"><table>
+        <tr><th>Counter</th><th>When</th></tr>
+        <tr><td>computer_wait_started</td><td>The page shows, after a sign-in in this run or on a fresh phone, for an account with no computers</td></tr>
+        <tr><td>computer_wait_ok</td><td>The first computer appears on the account (the 5 s poll)</td></tr>
+        <tr><td>computer_wait_cancelled</td><td>Signed out from here; <code>computer_wait_not_you</code> when it was "Not you? Sign out"</td></tr>
+        <tr><td>computer_wait_link_shared</td><td>The address sent to the computer from the share sheet</td></tr>
+        <tr><td>computer_wait_&lt;bucket&gt;</td><td>How long it took to install Harness and sign in on the computer. Past a minute it also splits into <code>1m_to_5m</code>, <code>5m_to_15m</code>, <code>15m_to_1h</code>, <code>over_1h</code></td></tr>
+      </table></div>
+      <p>Accounts that already had a computer skip this step, so it has no <code>started</code> for them.</p></figcaption></figure>
+
+  <h2>3. The computer joins</h2>
+  <figure class="phone-pair"><div class="shots"><img src="img/05-ready.jpg" alt="MacBook Pro is ready."></div>
+    <figcaption><div class="row"><span class="num">3</span><span class="ttl2">"MacBook Pro is ready." and its first session</span><span class="tag">agent_home.dart</span><span class="tag new">new</span></div>
+      <div class="scroll"><table>
+        <tr><th>Counter</th><th>When</th></tr>
+        <tr><td>session_open_started</td><td>The join moment starts (a new computer, or the first ready one on the account)</td></tr>
+        <tr><td>session_open_ok</td><td>The hand-over: the computer's session opens, or one picked meanwhile in Find or from a notice</td></tr>
+        <tr><td>session_open_failed</td><td>"Waiting for its first session" passes 90 s</td></tr>
+        <tr><td>session_open_cancelled</td><td>Signed out meanwhile</td></tr>
+        <tr><td>session_open_blocked_password · blocked_offline</td><td>The joining computer wanted its password, or was offline by the account's word too</td></tr>
+      </table></div>
+      <p>A computer that wants a password or is offline leaves the step running, marked once: its time then includes unlocking it.</p></figcaption></figure>
+
+  <h2>4. The session</h2>
+  <figure class="phone-pair"><div class="shots"><div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="ttl"><b>first-project</b><span>MacBook Pro:first-project</span></div>
+        <div class="out"><span class="logo">                                 ▄
+█▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+█  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀</span><span class="box"><span class="u">make a small web page that shows today's date</span><span class="cur" style="margin-left:.6cqw"></span>
+<span class="bl">Build</span> <span class="dim">·</span> Muse Spark 1.3 Free</span><span class="dim"> ctrl+p commands</span></div>
+        <div class="sline">Send it, or say anything.</div>
+        <div class="mic"><svg class="i"><use href="#i-mic"/></svg></div>
+        <div class="home"></div></div></div>
+    <figcaption><div class="row"><span class="num">4</span><span class="ttl2">"Send it, or say anything."</span><span class="tag">terminal_page.dart</span><span class="tag new">new</span></div>
+      <div class="scroll"><table>
+        <tr><th>Counter</th><th>When</th></tr>
+        <tr><td>first_message_started</td><td>The hand-over opens the session with its one line by the mic</td></tr>
+        <tr><td>first_message_ok</td><td>The first line sent from that page: a take from the mic, the composer, or a Return</td></tr>
+        <tr><td>first_message_cancelled</td><td>Left the page before sending</td></tr>
+      </table></div>
+      <p>The old AA <code>app_first_message</code> timed from sign-in. This times from the session opening, so steps 2 and 3 are not counted twice. Sign-in to first message is the sum of the steps.</p>
+      <div class="note">The message itself, the agent, the computer and the starter task are never part of it.</div></figcaption></figure>
+
+  <h2>5. Notifications</h2>
+  <figure class="phone-pair"><div class="shots"><div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="ttl"><b>rate-limits</b><span>MacBook Pro:api-server</span><span>⑂ rate-limits</span></div>
+        <div class="out" style="top:38cqw"><span class="ok">⏺</span> All 214 tests pass. Want me
+  to write the migration?
+
+<span class="u">&gt; yes, and run it on staging</span>
+
+<span class="ok">⏺</span> <span class="u">Write(migrations/0043.sql)</span></div>
+        <div class="mic"><svg class="i"><use href="#i-mic"/></svg></div>
+        <div class="veil"></div>
+        <div class="alert"><div class="t">“Harness” Would Like to Send You Notifications</div><div class="m">Notifications may include alerts, sounds, and icon badges. These can be configured in Settings.</div><div class="b"><span>Don’t Allow</span><span>Allow</span></div></div>
+        <div class="home"></div></div></div>
+    <figcaption><div class="row"><span class="num">5</span><span class="ttl2">The system prompt, 1.2 s after the first send</span><span class="tag">notifications_ask.dart</span><span class="tag new">new</span></div>
+      <div class="scroll"><table>
+        <tr><th>Counter</th><th>When</th></tr>
+        <tr><td>notify_permission_started</td><td>The prompt is asked for (once per install)</td></tr>
+        <tr><td>notify_permission_ok</td><td>Allow</td></tr>
+        <tr><td>notify_permission_cancelled</td><td>Don't Allow</td></tr>
+        <tr><td>notify_permission_unknown</td><td>The OS gave no answer, or the request failed</td></tr>
+      </table></div>
+      <p>To read the answer, <code>SystemNotices.requestPermission()</code> now returns the plugin's <code>bool?</code> instead of nothing. Settings ▸ Notifications and Focus's tips call it as before.</p>
+      <div class="note">Android 12 and older show no prompt, so there the step can end <code>ok</code> with nothing on screen. Every count splits by iOS and Android (see Reading the numbers).</div></figcaption></figure>
+
+  <h2>Already counted, unchanged</h2>
+  <p class="sub">The phone flows from #1301/#1303 that the onboarding passes through.</p>
+  <div class="card"><div class="card-body">
+    <ul class="plain">
+      <li><b>computer_link</b>: pairing with a computer by the Add Phone code or a password.</li>
+      <li><b>remote_connect</b>: a computer's connection reaching connected.</li>
+      <li><b>People per day</b> and D1/D2/D3/D7 returns: the backend's 10-day pseudonymous marks (#1314), not sent by the app as counts. Nothing is collected until <code>PRODUCT_USAGE_SUBJECT_KEY</code> is set.</li>
+    </ul>
+  </div></div>
+
+  <h2>Added on 2026-10-16</h2>
+  <p class="sub">The flows the desktop already counted, the phone's two side pages, and who sent a request.</p>
+  <div class="card"><div class="card-body">
+    <ul class="plain">
+      <li><b>app_start</b>: a launch that came back signed in, to its first computer answering. <code>unknown</code> when the app left the screen first; a launch that signs in is the onboarding's and is not counted.</li>
+      <li><b>connect_user</b> / <b>connect_auto</b>: "Try again" on a computer apart from the app's own dials (launch, a dropped socket coming back), beside the unchanged <code>remote_connect</code>. A Try again fails at 12 s, as Desktop Connect does.</li>
+      <li><b>resume_recovery</b>: a stopped harness resumed from the phone, to its first live turn; <code>failed</code> when the computer refused it.</li>
+      <li><b>ui_phone_screen_find_swipe|button</b>, <b>ui_phone_screen_computers_swipe|button</b>: Find and Computers opened, by a swipe on the terminal or by a button (Computers in Settings, its link on a long wait at home). Find's key and screen-reader actions are not counted.</li>
+      <li><b>request_phone_*</b>: the computer's daemon counts the phone's requests (create, resume, close, search…) as the phone's, not as any app's. The phone says so inside the encrypted request (<code>usageSurface</code>); older phones still count as <code>app</code>.</li>
+      <li><b>Signed out, on by default</b>, as on Desktop: see sign-in above.</li>
+    </ul>
+  </div></div>
+
+  <h2>Reading the numbers</h2>
+  <div class="card"><div class="card-body">
+    <p><code>cd backend &amp;&amp; npm run usage:daily -- 14</code> (read-only <code>DATABASE_URL</code>) prints JSON; its <code>review.flows</code> lists every flow per channel and surface with its starts,
+      the four outcomes, <code>unmatchedStarts</code> and the duration buckets. The new flows appear there with no change, because the review reads the same vocabulary. Days are UTC; today is partial.</p>
+    <ul class="plain">
+      <li>Conversion between steps compares totals, not people: <code>session_open_started</code> ÷ <code>computer_wait_ok</code> is close to "joined, then went on", but nothing links the two counts.</li>
+      <li>Sign-in failure rates describe the phones that left the line on (the default); those that turned it off are missing. Successes, <code>retried</code> and <code>switched</code> cover every sharing account.</li>
+      <li><code>resumed</code> marks a step started in an app run that did not sign in (the app reopened mid-step). Subtract it from starts for fresh starts.</li>
+      <li>Every phone report carries its release and iOS/Android, so <code>usage:daily</code>'s <code>health.breakdowns</code> splits each <code>ui_phone_*</code> count by release and by platform: compare the release before and after a UI change. A margin appears above 20 collector days. Debug builds report as <code>development</code> and are not kept, but TestFlight builds are release builds and do count.</li>
+      <li>The web build of the same app counts under <code>ui_web_*</code>. Signed out, web sends nothing.</li>
+    </ul>
+  </div></div>
+
+  <h2>Never sent</h2>
+  <p class="sub">What the phone knows during onboarding and keeps to itself.</p>
+  <div class="card"><div class="card-body">
+    <ul class="plain">
+      <li>The email typed or shown ("Use ada@example.com"), the Google or Apple account, the account id.</li>
+      <li>The computer's name ("MacBook Pro"), its id, the session or agent, the starter task and every message.</li>
+      <li>Error text, the QR's contents, the one-time codes.</li>
+      <li>Any device or install id, OS version, locale, time of day. (The app's release and iOS or Android are sent, as margins.)</li>
+      <li>Taps, scrolling, or anything from the offline sample. Of the screens, only that Find or Computers opened, and by swipe or button.</li>
+    </ul>
+  </div></div>
+
+  <h2>Before it ships</h2>
+  <div class="card"><div class="card-body">
+    <ul class="plain">
+      <li><b>Backend first.</b> An older backend rejects a whole report that carries a name it does not know (400). The phone then retries that same report each minute until its day is more than a day old, and the other phone counts in it are lost with it. Deploy the backend vocabulary before the phone build.</li>
+      <li>The CLI copy of the vocabulary (<code>cli/src/lib/productUsageContract.ts</code>) is identical, and a backend test enforces that. Since #1323 the desktop's <code>product_measurement.dart</code> evolves on its own (health counters); it only has to name every flow the phone's copy does, which another backend test checks. Desktop sends none of the new flows.</li>
+      <li>The phone's Privacy ▸ See what's shared now lists the sign-in buttons and the four setup steps. Desktop's copy of that text does not mention them yet.</li>
+      <li>The signed-out choice is now drawn differently on each app (the phone's is one line with ⓘ), so the backend test compares its wording on both apps instead of the whole file.</li>
+    </ul>
+    <p class="q">Decided 2026-10-16: signed-out counts are on by default on the phone too, as on Desktop.</p>
+  </div></div>
+</main>
+<dialog id="zoom"><img alt=""></dialog>
+<script>
+  const zoom = document.getElementById('zoom');
+  document.querySelectorAll('.shots img').forEach((img) => img.addEventListener('click', () => {
+    zoom.querySelector('img').src = img.src; zoom.showModal();
+  }));
+  zoom.addEventListener('click', () => zoom.close());
+</script>
+</body>
+</html>

@@ -34,6 +34,17 @@ abstract interface class RelayCodec {
   Uint8List? decodeBinary(Uint8List wireFrame);
 }
 
+/// A [RelayCodec] that can open a large frame off the UI isolate — what [WsConn] asks of one when
+/// there is one, and [RelayCodec.decodeFrame] otherwise. A separate interface so a codec that has
+/// nothing to gain from it (a test's) need not say so.
+abstract interface class OffThreadRelayDecoder {
+  /// [RelayCodec.decodeFrame], with a large payload opened on a background isolate — same answer,
+  /// same null for a frame to drop.
+  Future<Map<String, dynamic>?> decodeFrameOffThread(
+    Map<String, dynamic> frame,
+  );
+}
+
 /// A fresh session for each connection to [machineId]; null when this device has no link to it —
 /// the machine could only answer `e2e_denied`, so there is nothing worth dialing.
 typedef RelayCodecFactory = Future<RelayCodec?> Function(String machineId);

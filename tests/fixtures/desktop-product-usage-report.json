@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "revision": 0,
+  "id": "27b07da5-033b-412e-b91f-7316b254f991",
+  "day": "2026-10-14",
+  "context": {
+    "surface": "desktop",
+    "release": "1.2.75",
+    "platform": "macos",
+    "channel": "production"
+  },
+  "counters": {
+    "ui_desktop_computer_link_failed": 1,
+    "ui_desktop_app_start_under_1s": 1,
+    "health_desktop_collector_days": 1,
+    "health_desktop_funnel_workspace_ready": 1,
+    "health_desktop_first_response_under_1m": 1,
+    "health_desktop_frame_under_16ms": 1000,
+    "health_desktop_feedback_outcome_shown": 1,
+    "health_desktop_report_failed": 1,
+    "health_desktop_report_failure_write_conflict": 1
+  }
+}

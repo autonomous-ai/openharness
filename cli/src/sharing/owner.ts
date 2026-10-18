@@ -7,8 +7,15 @@ import { TerminalStreamManager } from '../lib/terminalStreamManager.js'
 import { HarnessGrantStore, inviteSchema, type HarnessGrant } from './grants.js'
 import { ownerHandshake, signedOwnerHandshake, type ObserverCipher, type OwnerKey } from './crypto.js'
 import { HarnessCollaborationStore, linkVisibility, type CommentAuthor } from './collaboration.js'
+import { rosterGrants } from './rosterGrants.js'
+import type { Roster } from '../messages/roster.js'
 
 type Payload = Record<string, unknown>
+const DAY = 86400_000, HOUR = 3600_000
+/** What a derivation or a publish that nobody waits on may fail with: it is tried again at the next nudge or tick. */
+const ignore = (): void => {}
+/** A derived grant's rolling expiry, and how close to it the next derivation publishes it again. */
+export const DERIVED_DAYS = 30, RENEW_DAYS = 7
 interface Observer { grant: HarnessGrant; cipher: ObserverCipher; linkId?: string; author: CommentAuthor | null }
 /** What reads an observer's terminal: the owner's own read-only stream manager, or the core's (`streams`). */
 export type ObserverStreams = Pick<TerminalStreamManager, 'handleFrame' | 'closeConnection' | 'stop'>
@@ -30,6 +37,9 @@ export interface ShareOwnerDeps {
   send: (connId: string, type: string, payload: Payload) => boolean
   publish: (method: 'PUT' | 'DELETE', path: string, body?: unknown) => Promise<{ status: number; body: unknown }>
   watchViewer?: (agentId: string, send: (payload: Payload) => void) => (() => void)
+  /** The shared tabs' rosters this computer verified against their pins, and the account signed in here, which the
+   *  observers each tab wants are derived from (`harness_share_rosters`); null when either cannot be read. */
+  rosters?: () => Promise<{ accountId: string; rosters: Roster[]; consent: ReadonlySet<string> } | null>
   now?: () => number
 }
 
@@ -42,6 +52,10 @@ export class HarnessShareOwner {
   private readonly now: () => number
   private syncing: Promise<void> | null = null
   private mutation: Promise<unknown> = Promise.resolve()
+  /** Derivations run one after another, apart from the owner's own controls: each reads the rosters afresh, so a later
+   *  one never applies what an earlier read saw over what a later read saw. */
+  private deriving: Promise<unknown> = Promise.resolve()
+  private derivesQueued = 0
   constructor(private readonly deps: ShareOwnerDeps) {
     this.now = deps.now ?? (() => Date.now())
     this.streams = deps.streams?.({ sendTarget: (id, type, payload) => this.send(id, { type, payload }) }) ?? new TerminalStreamManager({ readOnly: true, terminals: deps.terminals!,
@@ -58,9 +72,14 @@ export class HarnessShareOwner {
       for (const [id, observer] of this.observers) {
         if (!this.authorized(observer)) this.close(id, 'Sharing ended or invitation expired')
       }
-      if (++ticks % 30 === 0) void this.sync()
+      // Derived again every 30 s: the renewals fall due, and a roster change whose nudge never came is caught here. A
+      // refused grant is tried again at most hourly from here: up to 256 of them every 30 s would hammer the backend.
+      // One already waiting to run makes another pointless; it publishes what waits as it ends.
+      if (++ticks % 30 === 0 && this.derivesQueued === 0) void this.derive(this.now() - HOUR).catch(ignore)
     }, 1000)
     this.timer.unref()
+    // Once as it starts: a member removed while Share was off loses the view now, and a refused grant is tried again.
+    void this.derive(this.now()).catch(ignore)
   }
   private authorized(observer: Observer): boolean {
     if (observer.linkId) {
@@ -108,7 +127,7 @@ export class HarnessShareOwner {
         owner: payload.owner === true,
       } : null
       const grant: HarnessGrant | null = link && (link.visibility === 'public' || author?.owner || this.invited(link.agentId, email))
-        ? { ...link, recipientEmail: email, createdAt: '', expiresAt: '', revoked: false, publicationError: null }
+        ? { ...link, recipientEmail: email, createdAt: '', expiresAt: '', revoked: false, publicationError: null, tab: null, failedAt: null }
         : payload.linkId ? null : this.deps.grants.active(String(payload.shareId), email, this.deps.machineId())
       if (!grant || !this.deps.resolveAgent(grant.agentId) || this.observers.size >= 100) {
         this.deps.send(connId, 'observer_closed', { reason: 'Sharing ended or invitation expired' }); return
@@ -155,6 +174,9 @@ export class HarnessShareOwner {
 
   /** Owner controls are serialized so a delayed publish cannot undo a subsequent removal. */
   manage(type: string, payload: Payload): Promise<Payload> {
+    // Not behind the controls' queue: a removal from the tab must not wait for an invitation's publish to finish.
+    // Every refused grant is tried again on a roster change.
+    if (type === 'harness_share_rosters') return this.derive(this.now())
     const work = this.mutation.then(() => this.manageOne(type, payload))
     this.mutation = work.catch(() => {})
     return work
@@ -217,6 +239,44 @@ export class HarnessShareOwner {
       expired: Date.parse(grant.expiresAt) <= this.now(), pending: grant.pending, error: grant.publicationError,
       watching: [...this.observers.values()].filter(o => o.grant.agentId === agentId && o.grant.recipientEmail === grant.recipientEmail).length,
     })) }
+  }
+  /**
+   * The observers the shared tabs want for this machine's harnesses, as ordinary grants tagged by tab: invited,
+   * renewed, and revoked once a member leaves the roster, whose observer is closed at once (`recheck`). Asked by Agent
+   * Messages as a roster changes (core/messagesLink.ts `observers`), as Share starts, and every 30 s here.
+   */
+  private derive(retryFailedBefore: number): Promise<Payload> {
+    this.derivesQueued++
+    const run = this.deriving.then(() => this.deriveRosters(retryFailedBefore)).finally(() => { this.derivesQueued-- })
+    this.deriving = run.catch(() => {})
+    return run
+  }
+  private async deriveRosters(retryFailedBefore: number): Promise<Payload> {
+    try { return await this.deriveLocally(retryFailedBefore) } finally {
+      // Published after, never waited on: what changed here, a revocation above all, is already in force locally.
+      void (async () => { await this.syncing; await this.sync() })().catch(ignore)
+    }
+  }
+  private async deriveLocally(retryFailedBefore: number): Promise<Payload> {
+    // A roster file that cannot be read, or an account that cannot be said, revokes nothing: a passing read error
+    // would otherwise take every member's view away and give it back a moment later.
+    const source = await this.deps.rosters?.().catch(() => null)
+    if (!source) return { invited: 0, revoked: 0 }
+    const machineId = this.deps.machineId()
+    const wanted = rosterGrants(source.rosters, { machineId, accountId: source.accountId }, source.consent)
+    // Asked only when there is something to grant: in Share's own process each ask goes to the gateway.
+    const key = wanted.length ? await this.ownerPublicKey().catch(() => null) : ''
+    // Without this machine's key (its gateway is down) nothing new can be published, but a member who left must still
+    // lose their view: the derived grants still wanted are kept exactly as they are, and every other one is revoked.
+    const held = this.deps.grants.all().filter(g => g.machineId === machineId && g.tab !== null && !g.revoked)
+    const want = key !== null ? wanted.map(w => ({ ...w, ownerPublicKey: key }))
+      : held.filter(g => wanted.some(w => w.agentId === g.agentId && w.email.trim().toLowerCase() === g.recipientEmail))
+        .map(g => ({ agentId: g.agentId, email: g.recipientEmail, tab: g.tab!, name: g.name, engine: g.engine, ownerPublicKey: g.ownerPublicKey }))
+    const { invited, revoked } = this.deps.grants.derive(machineId, want,
+      new Date(this.now() + DERIVED_DAYS * DAY).toISOString(), key !== null ? RENEW_DAYS * DAY : -Infinity,
+      key !== null ? retryFailedBefore : -Infinity)
+    this.recheck()
+    return { invited: invited.length, revoked: revoked.length }
   }
   private async ownerPublicKey(): Promise<string> {
     return b64e(this.deps.key ? await this.deps.key.publicKey() : this.deps.identity!.pub)

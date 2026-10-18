@@ -354,6 +354,15 @@ abstract final class AppPalette {
   static Color get warn =>
       AppTheme.pick(const Color(0xFF9A4708), const Color(0xFFFFB020));
 
+  /// A quiet allowance limit, distinct from an app error — the desktop's own, so
+  /// one subscription reads the same colour on both (20% or less left).
+  static Color get usageLow =>
+      AppTheme.pick(const Color(0xFF87632A), const Color(0xFFC4A46C));
+
+  /// Remaining subscription capacity is nearly exhausted (5% or less).
+  static Color get usageCritical =>
+      AppTheme.pick(const Color(0xFFB3261E), const Color(0xFFFF7068));
+
   // grey dot — a state mark, so ≥3:1 in light (3.14 on Paper's search ground).
   static Color get offline =>
       AppTheme.pick(const Color(0xFF7F7E78), const Color(0xFF6E6E6E));

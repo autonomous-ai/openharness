@@ -13,7 +13,7 @@ import { LAUNCH_LOCATION_VARIABLES } from './nativeLocations.js'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { NativeFiles } from './nativeFiles.js'
 import { inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
-import { NativePaths, verifyNativePathFacts, type NativePathFact } from './nativePaths.js'
+import { NativePaths, verifyNativePathFacts, withoutDevice, type NativePathFact } from './nativePaths.js'
 
 const LIMIT = 262_144
 // This is installation history, not launch history: ordinary launches never add
@@ -92,6 +92,7 @@ const [file,expected,testDeadline]=process.argv.slice(1),directory=path.dirname(
 const hash=s=>crypto.createHash('sha256').update(s).digest('hex');
 const id=s=>String(s.dev)+':'+String(s.ino)+':'+String(s.mode)+':'+String(s.uid);
 const ver=s=>id(s)+':'+String(s.size)+':'+String(s.mtimeNs)+':'+String(s.ctimeNs);
+const nodev=s=>s&&s.slice(s.indexOf(':')+1);
 function read(file){const fd=fs.openSync(file,C.O_RDONLY|C.O_NOFOLLOW|C.O_NONBLOCK);try{
  const s=fs.fstatSync(fd,{bigint:true});if(!s.isFile()||s.size>262144n||s.uid!==BigInt(process.getuid())||(s.mode&0o022n))throw Error('Unsafe installation record');
  const bytes=Buffer.alloc(Number(s.size));let offset=0;for(let calls=0;offset<bytes.length;calls++){
@@ -102,14 +103,14 @@ function read(file){const fd=fs.openSync(file,C.O_RDONLY|C.O_NOFOLLOW|C.O_NONBLO
 const directoryFd=fs.openSync(directory,C.O_RDONLY|C.O_DIRECTORY|C.O_NOFOLLOW),directoryId=id(fs.fstatSync(directoryFd,{bigint:true}));
 const text=read(file);if(hash(text)!==expected)throw Error('Changed installation claim');
 const claim=JSON.parse(text),authorityText=read(claim.authority),authority=JSON.parse(authorityText),dispatchText=read(claim.witness),dispatch=JSON.parse(dispatchText);
-if(authority.directory!==directoryId||read(file+'.dispatch')!==dispatchText||dispatch.kind!=='run'||dispatch.token!==claim.token||dispatch.claim!==expected)throw Error('Unconfirmed installer dispatch');
+if(nodev(authority.directory)!==nodev(directoryId)||read(file+'.dispatch')!==dispatchText||dispatch.kind!=='run'||dispatch.token!==claim.token||dispatch.claim!==expected)throw Error('Unconfirmed installer dispatch');
 try{fs.lstatSync(file+'.result');throw Error('Installer already settled')}catch(e){if(e.code!=='ENOENT')throw e}
 function current(){
  if(id(fs.lstatSync(directory,{bigint:true}))!==directoryId||read(file)!==text||read(claim.authority)!==authorityText||read(claim.witness)!==dispatchText||read(file+'.dispatch')!==dispatchText)throw Error('Changed installation authority');
  for(const p of claim.previous)if(hash(read(p.file))!==p.digest)throw Error('Changed installation predecessor');
  for(const r of claim.routes){let s;try{s=fs.lstatSync(r.path,{bigint:true})}catch(e){if(e.code!=='ENOENT')throw e;s=null}
-  if((s?id(s):null)!==r.identity)throw Error('Changed installation target');
-  if(r.alias&&(!s||ver(s)!==r.alias.version||fs.readlinkSync(r.path)!==r.alias.target))throw Error('Changed installation alias');}
+  if(nodev(s?id(s):null)!==nodev(r.identity))throw Error('Changed installation target');
+  if(r.alias&&(!s||nodev(ver(s))!==nodev(r.alias.version)||fs.readlinkSync(r.path)!==r.alias.target))throw Error('Changed installation alias');}
 }
 function publish(value){
  current();const temporary=file+'.'+claim.token+'.result-tmp',result=file+'.result';
@@ -203,7 +204,7 @@ export function createNativeInstallations({ directory, node = managedNodePath, d
         authority = readRecord(authorityFile)
       }
       const genesis = JSON.parse(authority.text) as Authority
-      if (genesis.version !== 1 || genesis.directory !== directoryId) return hold('The engine installation history was replaced; its previous owner is still unconfirmed.')
+      if (genesis.version !== 1 || withoutDevice(genesis.directory) !== withoutDevice(directoryId)) return hold('The engine installation history was replaced; its previous owner is still unconfirmed.')
       const stamp = directoryStamp(directory)
       // NativeFiles retains iterator acquisition and ancestor evidence, including ABA route swaps.
       const entries = new NativeFiles().entries(directory), names = entries.filter(name => /^\d{8}\.json$/.test(name)).sort()

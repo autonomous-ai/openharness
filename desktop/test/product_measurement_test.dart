@@ -4,6 +4,20 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness/measurement/product_measurement.dart';
+import 'package:harness/core/local_key_value_store.dart';
+
+import 'support/memory_key_value_store.dart';
+
+class _DelayedSetupStore extends MemoryKeyValueStore {
+  final loaded = Completer<String?>();
+  @override
+  Future<String?> read(String key) => loaded.future;
+}
+
+class _UnreadableSetupStore extends MemoryKeyValueStore {
+  @override
+  Future<String?> read(String key) async => throw StateError('PRIVATE_CANARY');
+}
 
 void main() {
   late ProductMeasurement usage;
@@ -42,27 +56,180 @@ void main() {
   }
 
   test(
-    'signed-out sharing defaults off and opt-in never replays earlier actions',
+    'Desktop setup sharing defaults on without claiming explicit consent',
     () async {
-      usage.begin(ProductFlow.signIn)(ProductOutcome.failed);
-      await usage.flush();
-      expect(setup, isEmpty);
-      await usage.setSignedOutSharing(true);
       final finish = usage.begin(ProductFlow.signIn);
       finish(ProductOutcome.ok);
       finish(ProductOutcome.failed);
       await usage.flush();
       expect(setup.single.keys.toSet(), {
         'schemaVersion',
-        'consent',
+        'sharing',
         'id',
         'day',
         'counters',
       });
+      expect(setup.single['sharing'], 'default');
       expect(setup.single['counters'], {
         'setup_desktop_sign_in_started': 1,
         'setup_desktop_sign_in_ok': 1,
         'setup_desktop_sign_in_under_1s': 1,
+      });
+    },
+  );
+  ProductMeasurement withStore(LocalKeyValueStore storage) =>
+      ProductMeasurement(
+        surface: 'desktop',
+        automatic: false,
+        now: () => now,
+        setupStorage: storage,
+        sendSetup: (r) async {
+          setup.add(jsonDecode(jsonEncode(r)));
+          return {'accepted': true};
+        },
+      );
+
+  test(
+    'a fresh persisted preference defaults on, and opt-out survives relaunch',
+    () async {
+      final store = MemoryKeyValueStore();
+      final first = withStore(store);
+      expect(first.choiceLoaded, isFalse);
+      first.begin(ProductFlow.signIn)(ProductOutcome.failed);
+      await first.setupChoiceReady;
+      expect(first.signedOutSharing, isTrue);
+      final pending = first.begin(ProductFlow.signIn);
+      await first.setSignedOutSharing(false);
+      pending(ProductOutcome.ok);
+      await first.flush();
+      first.dispose();
+      expect(setup, isEmpty);
+      expect(store.values, {
+        ProductMeasurement.setupPreferenceKey:
+            ProductMeasurement.pendingSetupOptOut,
+      });
+      final next = withStore(store);
+      await next.setupChoiceReady;
+      next.begin(ProductFlow.signIn)(ProductOutcome.ok);
+      await next.flush();
+      expect(setup, isEmpty);
+      await next.setSignedOutSharing(true);
+      next.begin(ProductFlow.signIn)(ProductOutcome.ok);
+      await next.flush();
+      next.dispose();
+      expect(
+        (setup.single['counters'] as Map)['setup_desktop_sign_in_started'],
+        1,
+      );
+    },
+  );
+
+  test('account opt-out persists through sign-out and relaunch', () async {
+    final store = MemoryKeyValueStore();
+    final first = withStore(store);
+    await first.setupChoiceReady;
+    first.account(
+      'PRIVATE_ACCOUNT',
+      choice: () async => {'enabled': false, 'revision': 1},
+      send: (_) async => {},
+    );
+    await first.flush();
+    await first.setupChoiceSaved;
+    first.account(null);
+    expect(first.signedOutSharing, isFalse);
+    first.dispose();
+    final next = withStore(store);
+    await next.setupChoiceReady;
+    expect(next.signedOutSharing, isFalse);
+    next.begin(ProductFlow.signIn)(ProductOutcome.ok);
+    await next.flush();
+    next.dispose();
+    expect(setup, isEmpty);
+    expect(store.values, {ProductMeasurement.setupPreferenceKey: 'false'});
+  });
+
+  test('a late local read cannot override an explicit opt-out', () async {
+    final store = _DelayedSetupStore();
+    final local = withStore(store);
+    await local.setSignedOutSharing(false);
+    store.loaded.complete('true');
+    await local.setupChoiceReady;
+    expect(local.signedOutSharing, isFalse);
+    local.dispose();
+  });
+
+  test('default-on account lookup waits for the persisted opt-out', () async {
+    final store = _DelayedSetupStore();
+    final local = withStore(store);
+    var reads = 0;
+    local.account(
+      'PRIVATE_ACCOUNT',
+      choice: () async {
+        reads++;
+        return {'enabled': true, 'revision': 0};
+      },
+      send: (_) async => throw StateError('No account report expected'),
+    );
+    final flushing = local.flush();
+    expect(reads, 0);
+    local.savedChoice({'enabled': true, 'revision': 0});
+    expect(local.sharing, isFalse);
+    store.loaded.complete(ProductMeasurement.pendingSetupOptOut);
+    await flushing;
+    expect(local.accountOptOutPending, isTrue);
+    expect(local.sharing, isFalse);
+    expect(local.signedOutSharing, isFalse);
+    local.dispose();
+    expect(setup, isEmpty);
+  });
+
+  test(
+    'local opt-out clears account observations before any re-enable',
+    () async {
+      await account();
+      final finish = usage.begin(ProductFlow.remoteConnect);
+      await usage.setSignedOutSharing(false);
+      finish(ProductOutcome.ok);
+      await usage.setSignedOutSharing(true);
+      await usage.flush();
+      expect(reports, isEmpty);
+    },
+  );
+
+  test(
+    'unreadable and malformed local preferences do not enable sharing',
+    () async {
+      for (final store in [
+        _UnreadableSetupStore(),
+        MemoryKeyValueStore()
+          ..values[ProductMeasurement.setupPreferenceKey] = 'broken',
+      ]) {
+        final local = withStore(store);
+        await local.setupChoiceReady;
+        local.begin(ProductFlow.signIn)(ProductOutcome.ok);
+        await local.flush();
+        expect(local.signedOutSharing, isFalse);
+        local.dispose();
+      }
+      expect(setup, isEmpty);
+    },
+  );
+
+  test(
+    'rapid preference changes persist in order without storing history',
+    () async {
+      final store = MemoryKeyValueStore();
+      final local = withStore(store);
+      await local.setupChoiceReady;
+      await Future.wait([
+        local.setSignedOutSharing(false),
+        local.setSignedOutSharing(true),
+        local.setSignedOutSharing(false),
+      ]);
+      local.dispose();
+      expect(store.values, {
+        ProductMeasurement.setupPreferenceKey:
+            ProductMeasurement.pendingSetupOptOut,
       });
     },
   );
@@ -88,6 +255,28 @@ void main() {
         (reports.single['counters'] as Map).keys,
         everyElement(startsWith('ui_desktop_computer_link_')),
       );
+    },
+  );
+  test(
+    'setup opt-out discards retries and re-enabling does not replay them',
+    () async {
+      var attempts = 0;
+      final local = ProductMeasurement(
+        surface: 'desktop',
+        automatic: false,
+        sendSetup: (_) async {
+          attempts++;
+          throw StateError('PRIVATE_CANARY');
+        },
+      );
+      local.begin(ProductFlow.signIn)(ProductOutcome.failed);
+      await local.flush();
+      expect(attempts, 1);
+      await local.setSignedOutSharing(false);
+      await local.setSignedOutSharing(true);
+      await local.flush();
+      local.dispose();
+      expect(attempts, 1);
     },
   );
   test(
@@ -138,7 +327,7 @@ void main() {
     },
   );
   test(
-    'unknown settings fail closed and account off also clears guest consent',
+    'unknown settings fail closed and account off also clears setup sharing',
     () async {
       await usage.setSignedOutSharing(true);
       usage.begin(ProductFlow.signIn)(ProductOutcome.ok);
@@ -150,6 +339,25 @@ void main() {
       expect(usage.sharing, isFalse);
     },
   );
+  test('phone setup retains its existing off-by-default choice', () async {
+    final phone = ProductMeasurement(
+      surface: 'phone',
+      automatic: false,
+      sendSetup: (r) async {
+        setup.add(r);
+        return {'accepted': true};
+      },
+    );
+    phone.begin(ProductFlow.signIn)(ProductOutcome.ok);
+    await phone.flush();
+    expect(setup, isEmpty);
+    await phone.setSignedOutSharing(true);
+    phone.begin(ProductFlow.signIn)(ProductOutcome.ok);
+    await phone.flush();
+    phone.dispose();
+    expect(setup.single['consent'], isTrue);
+    expect(setup.single.containsKey('sharing'), isFalse);
+  });
   test(
     'expired RAM queues are discarded and unmatched setup remains unknown',
     () async {
@@ -168,6 +376,55 @@ void main() {
       expect(setup.length, 1);
     },
   );
+  test('a missing tool keeps its setup step open and is marked once', () async {
+    usage.setupFacts({ProductFlow.setupHarness: 'pending'});
+    usage.setupFacts({ProductFlow.setupHarness: 'missing'});
+    usage.setupFacts({ProductFlow.setupHarness: 'missing'});
+    usage.setupFacts({ProductFlow.setupHarness: 'running'});
+    usage.setupFacts({ProductFlow.setupHarness: 'ready'});
+    await usage.flush();
+    expect(setup.single['counters'], {
+      'setup_desktop_setup_harness_started': 1,
+      'setup_desktop_setup_harness_missing': 1,
+      'setup_desktop_setup_harness_ok': 1,
+      'setup_desktop_setup_harness_under_1s': 1,
+    });
+  });
+  test('a signed-in setup step counts no missing mark', () async {
+    await account();
+    usage.setupFacts({ProductFlow.setupTmux: 'missing'});
+    usage.setupFacts({ProductFlow.setupTmux: 'ready'});
+    await usage.flush();
+    expect(reports.last['counters'], {
+      'ui_desktop_setup_tmux_started': 1,
+      'ui_desktop_setup_tmux_ok': 1,
+      'ui_desktop_setup_tmux_under_1s': 1,
+    });
+    expect(setup, isEmpty);
+  });
+  test('agent downloads are anonymous setup counts by engine name', () async {
+    usage.setupDownload('codex');
+    usage.setupDownload('codex', ok: true, took: const Duration(seconds: 95));
+    usage.setupDownload('claude');
+    usage.setupDownload('claude', ok: false, took: const Duration(minutes: 7));
+    usage.setupDownload('/Users/PRIVATE/.local/bin/x', ok: true);
+    await account();
+    usage.setupDownload('opencode');
+    await usage.flush();
+    final counters = {
+      for (final report in setup) ...(report['counters'] as Map),
+    };
+    expect(counters, {
+      'setup_desktop_agent_download_codex_started': 1,
+      'setup_desktop_agent_download_codex_ok': 1,
+      'setup_desktop_agent_download_codex_1m_to_5m': 1,
+      'setup_desktop_agent_download_claude_started': 1,
+      'setup_desktop_agent_download_claude_failed': 1,
+      'setup_desktop_agent_download_claude_over_5m': 1,
+      'setup_desktop_agent_download_opencode_started': 1,
+    });
+    expect(jsonEncode(setup), isNot(contains('PRIVATE')));
+  });
   test(
     'flow observations are bounded and unknown operations never upload content',
     () async {

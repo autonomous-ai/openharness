@@ -109,6 +109,60 @@ void main() {
     expect(snapshot.isStale, isTrue);
   });
 
+  test('a machine shared whole joins the list once added, and waits under Add machine before', () async {
+    final listed = api.machines();
+    await _until(() => requests.machines.length == 1);
+    Map<String, dynamic> shared(String id, String via, bool added) => {
+      'machineId': id,
+      'name': id,
+      'authMode': 'remote',
+      'status': 'running',
+      'share': {
+        'ownerName': 'Dee',
+        'ownerEmail': 'dee@acme.io',
+        'via': via,
+        'added': added,
+      },
+    };
+    requests.machines.single.response
+      ..statusCode = 200
+      ..headers.contentType = ContentType.json
+      ..write(
+        jsonEncode({
+          'success': true,
+          'data': {
+            'machines': [
+              {'machineId': 'own', 'name': 'own', 'authMode': 'remote'},
+            ],
+            'sharedMachines': [
+              shared('named', 'email', true),
+              shared('team-added', 'domain', true),
+              shared('team-waiting', 'domain', false),
+              // Listed as the account's own too: the account's own row wins.
+              shared('own', 'email', true),
+            ],
+          },
+        }),
+      );
+    await requests.machines.single.response.close();
+    await _until(() => requests.shares.length == 1);
+    await _reply(requests.shares.single, 'unused', fails: true);
+    final inventory = await listed as MachineInventory;
+    expect(inventory.map((m) => m.machineId), ['own', 'named', 'team-added']);
+    expect(inventory.first.isSharedMachine, isFalse);
+    final named = inventory[1];
+    expect(named.isSharedMachine, isTrue);
+    expect(named.isShared, isFalse);
+    expect(named.machineShare!.owner, 'Dee');
+    expect(named.machineShare!.viaDomain, isFalse);
+    expect(inventory[2].machineShare!.viaDomain, isTrue);
+    expect(inventory.toAdd.map((m) => m.machineId), ['team-waiting']);
+    expect(
+      named.copyWith(name: 'Renamed').machineShare?.ownerEmail,
+      'dee@acme.io',
+    );
+  });
+
   test('account reset stops an old request before it fetches sharing for the new account', () async {
     final old = api.machines();
     final rejected = expectLater(old, throwsStateError);

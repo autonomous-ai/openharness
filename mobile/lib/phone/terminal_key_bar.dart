@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:xterm/xterm.dart';
 
+import 'package:harness_mobile/clipboard/native_clipboard.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/terminal/key_hints.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
@@ -29,27 +32,35 @@ import 'tty.dart';
 /// phone keyboard cannot produce, or buries, and a pane is driven by:
 ///
 /// ```
-/// esc tab clear ← ↑ ↓ → /  │  🖼 ⌄
+/// esc ^C tab clear paste ⇧ ctrl ← ↑ ↓ → ↵  │  img ▾
 /// ```
 ///
 /// Every key stays in the same place every time; this strip is used while
 /// looking at the TERMINAL, not at the strip.
 ///
-/// ⚠️ **One exception: `/` becomes `⏎` while an agent is asking something.**
+/// `↵` is a new line in an engine's prompt, without sending the turn: the
+/// keyboard's own `return` submits, and nothing else a phone has can break a
+/// line. See [TerminalKeyBar.enginePrompt].
+///
+/// ⚠️ **One exception: `↵` becomes `⏎` while an agent is asking something.**
 /// A question dialog is driven by the arrows and Enter, and Enter is the one
 /// the strip did not have — the keyboard's own `return` sends it, but nothing
 /// on screen says so, and on a dialog that reads "enter to submit answer" a
-/// strip of every other key it names reads as "Enter is missing". `/` is the
-/// slot to give up: a dialog has no prompt to start a command in.
+/// strip of every other key it names reads as "Enter is missing". `↵` is the
+/// slot to give up: a dialog has no prompt to add a line to.
 ///
 /// ⚠️ **The other exception: the pane's own keys — [hints] — join the row, and
 /// only then does it scroll.** They are what Codex offers on this screen and
-/// nowhere else (`ctrl+] skip`, `⌥+↓ main prompt`), so they follow the arrows
-/// on the SAME row, which scrolls sideways while they are there and brings
-/// them into view as they arrive. Never a line of their own: a second row
-/// cost the terminal a line of output, and a strip of buttons floating over
-/// the pane covered the very hints it was read off. The fixed keys keep their
-/// size either way — only how far along the row is scrolled changes.
+/// nowhere else (`shift+← to answer`, `ctrl+] skip`, `⌥+↓ main prompt`), so
+/// they LEAD the same row and push the fixed keys along it, and the row
+/// scrolls sideways while they are there. At the head, not the tail: past a
+/// row the fixed keys already fill, a queued question's `shift+← answer` sat
+/// off the edge with nothing on screen to say it was there. Claude Code's
+/// `shift+tab to cycle` is the one that follows the arrows instead — see
+/// [KeyHint.trails]. Never a line of their own: a second row cost the terminal
+/// a line of output, and a strip of buttons floating over the pane covered the
+/// very hints it was read off. The fixed keys keep their size either way —
+/// only where along the row they sit changes.
 class TerminalKeyBar extends StatefulWidget {
   const TerminalKeyBar({
     super.key,
@@ -57,9 +68,12 @@ class TerminalKeyBar extends StatefulWidget {
     required this.enabled,
     required this.onDismissKeyboard,
     this.onPromptEdited,
+    this.onClearPrompt,
+    this.onPaste,
     this.onPickImage,
     this.onTakePhoto,
     this.questionOpen = false,
+    this.enginePrompt = false,
     this.hints = const [],
     this.ctrlArmed,
     this.onArmCtrl,
@@ -73,20 +87,37 @@ class TerminalKeyBar extends StatefulWidget {
   final bool? ctrlArmed;
   final ValueChanged<bool>? onArmCtrl;
 
-  /// An agent's question dialog is on the pane: `/` gives its slot to `⏎` —
+  /// An agent's question dialog is on the pane: `↵` gives its slot to `⏎` —
   /// see the class docblock.
   final bool questionOpen;
+
+  /// The pane runs an engine, whose prompt takes `↵`: what a hardware ⌥⏎
+  /// sends — ESC, then the Return bytes — which Claude Code, Codex and every
+  /// other Ink/readline prompt read as "add a line, do not send this turn yet"
+  /// (`MetaEnterInputHandler`). Sent through the pane's own input handler,
+  /// so the two cannot differ. Not on a plain shell, the `terminal` engine,
+  /// where ESC + Return is no newline: false leaves the key out.
+  final bool enginePrompt;
 
   /// The keys the pane's chrome offers and a phone cannot press — see
   /// [parseKeyHints]. Each is drawn as the key and Codex's own word for what
   /// it does, as the pane printed them, in the terminal's face — so it reads
-  /// as the hint it was read off. Empty leaves the row as it always was.
+  /// as the hint it was read off. Drawn before the row's own keys, but for the
+  /// [KeyHint.trails] ones, after them. Empty leaves the row as it always was.
   final List<KeyHint> hints;
 
   /// Called after `tab` or `/` changed the prompt without the software
   /// keyboard knowing — so its buffer can be emptied before it edits words the
   /// prompt no longer holds.
   final VoidCallback? onPromptEdited;
+
+  /// `clear`: empties the prompt being typed into. Null leaves the key out.
+  final VoidCallback? onClearPrompt;
+
+  /// `paste`: the phone's clipboard into the prompt, its image as well as its
+  /// text. Null leaves the key out; so does a clipboard with nothing on it —
+  /// the one key on the strip that comes and goes.
+  final VoidCallback? onPaste;
 
   /// False while the stream is not accepting input — the strip stays visible
   /// (it moves with the keyboard, and a row that vanished would take the
@@ -106,9 +137,75 @@ class TerminalKeyBar extends StatefulWidget {
   State<TerminalKeyBar> createState() => _TerminalKeyBarState();
 }
 
-class _TerminalKeyBarState extends State<TerminalKeyBar> {
+class _TerminalKeyBarState extends State<TerminalKeyBar>
+    with WidgetsBindingObserver {
   bool get _canSendImage =>
       widget.onPickImage != null || widget.onTakePhoto != null;
+
+  /// Whether the phone's clipboard holds anything `paste` would send: text,
+  /// or an image where this pane takes one. The key is drawn only then — a
+  /// `paste` that answers "nothing on the clipboard" is a key that did
+  /// nothing.
+  bool _clipboardFull = false;
+  bool _clipboardChecking = false;
+
+  /// Asks again every [_clipboardEvery] while the strip is up. Neither phone
+  /// says when its clipboard changes, and it does change under the strip: a
+  /// reply copied off the pane, text copied in another app over this one.
+  Timer? _clipboardPoll;
+  static const _clipboardEvery = Duration(seconds: 1);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _watchClipboard();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Back from another app — where the copy usually happened.
+    if (state == AppLifecycleState.resumed) unawaited(_checkClipboard());
+  }
+
+  /// Starts asking about the clipboard while there is a `paste` to show, and
+  /// stops when there is not.
+  void _watchClipboard() {
+    if (widget.onPaste == null) {
+      _clipboardPoll?.cancel();
+      _clipboardPoll = null;
+      return;
+    }
+    _clipboardPoll ??= Timer.periodic(
+      _clipboardEvery,
+      (_) => unawaited(_checkClipboard()),
+    );
+    unawaited(_checkClipboard());
+  }
+
+  /// ⚠️ **Asked, never read.** [Clipboard.hasStrings] and
+  /// [NativeClipboard.hasImage] answer without iOS's "Allow Paste" prompt or
+  /// Android's "pasted from your clipboard" toast; reading the clipboard every
+  /// second would bring up one or the other each time.
+  Future<void> _checkClipboard() async {
+    if (_clipboardChecking || widget.onPaste == null) return;
+    // Only while the app is in front: Android hands an app in the background
+    // no clipboard at all, and the key would go away for nothing.
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle != null && lifecycle != AppLifecycleState.resumed) return;
+    _clipboardChecking = true;
+    try {
+      var full = await Clipboard.hasStrings();
+      if (!full && _canSendImage) full = await NativeClipboard.hasImage();
+      if (mounted && full != _clipboardFull) {
+        setState(() => _clipboardFull = full);
+      }
+    } on PlatformException {
+      // No answer: the key stays as it was rather than flickering.
+    } finally {
+      _clipboardChecking = false;
+    }
+  }
 
   void _send(void Function() action) {
     if (!widget.enabled) return;
@@ -217,7 +314,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
     AppTheme.watch(context);
     // What drives an engine and a phone keyboard lacks: leave a mode, walk
     // history, move through a menu.
-    final keys = <Widget>[
+    final keys = <_Slot>[
       _key(label: 'esc', onTap: () => _sendKey(TerminalKey.escape)),
       // The other key a terminal person reaches for without looking: stop, now.
       _key(
@@ -230,6 +327,33 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
       ),
       // Completes a path or a command, and moves through Claude Code's menus.
       _key(label: 'tab', onTap: () => _sendKey(TerminalKey.tab, edits: true)),
+      // Empties what is typed: Ctrl+K, then Ctrl+U — not Ctrl+C, which on an
+      // empty Claude Code prompt is the first half of quitting. See
+      // `TerminalSession.clearPrompt`.
+      if (widget.onClearPrompt case final clear?)
+        _key(
+          label: 'clear',
+          semanticLabel: 'Clear prompt',
+          wide: true,
+          onTap: () {
+            _disarm();
+            clear();
+          },
+        ),
+      // The phone's clipboard, text or image — iOS's keyboard has no paste
+      // key. Beside `clear`: the two edit what is typed as a whole. Only while
+      // the clipboard holds something to paste — see [_clipboardFull].
+      if (widget.onPaste case final paste? when _clipboardFull)
+        _key(
+          label: 'paste',
+          semanticLabel: 'Paste',
+          wide: true,
+          onTap: () {
+            _disarm();
+            paste();
+            widget.onPromptEdited?.call();
+          },
+        ),
       // ⚠️ **The two modifiers stand together, before the keys they modify.**
       // Apart — one here, one at the far end of the row — they read as two
       // unrelated keys that happen to light up, and the pair a thumb reaches
@@ -274,6 +398,25 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
           // Sent as the key, not as text: the keyboard's buffer holds nothing
           // a dialog cares about, and Return is `\r` to every TUI here.
           onTap: () => _sendKey(TerminalKey.enter),
+        )
+      // The same slot at a prompt: a new line, not a submit — see
+      // [TerminalKeyBar.enginePrompt]. In the slot `⏎` takes rather than one
+      // of its own, so the row is never more keys than a question already
+      // makes it.
+      else if (widget.enginePrompt)
+        _key(
+          label: '↵',
+          semanticLabel: 'Newline',
+          onTap: () {
+            // ⌥⏎ is the whole chord: an armed `ctrl` would make it ⌃⌥⏎, which
+            // the prompt does not read as a line, so like `^C` this puts the
+            // modifiers down rather than adding them.
+            _disarm();
+            widget.terminal.keyInput(TerminalKey.enter, alt: true);
+            // The keyboard's buffer still holds the line just broken — as
+            // after a hardware Return, which empties it too.
+            widget.onPromptEdited?.call();
+          },
         ),
     ];
     // ⚠️ **Neither of these sends a byte anywhere**, and that is why they sit
@@ -282,7 +425,7 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
     // OS picker, the other drops the keyboard. Sharing a row taught the eye they
     // were the same kind of thing, and an image button that looks like `esc`
     // reads as something that will be typed at the agent.
-    final apart = <Widget>[
+    final apart = <_Slot>[
       if (_canSendImage)
         _key(
           label: 'img',
@@ -294,6 +437,9 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
       _key(
         label: '▾',
         semanticLabel: 'Hide keyboard',
+        // ⚠️ `▾` is a SMALL triangle: at the row's size it read as a speck in
+        // the corner, on the key reached for most after typing.
+        scale: 1.6,
         alwaysEnabled: true,
         onTap: widget.onDismissKeyboard,
       ),
@@ -315,7 +461,8 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
           // at a large scale the keys stop fitting the row.
           child: MediaQuery.withNoTextScaling(
             // Every key the same width, the two apart ones included — they are
-            // separated by the rule, not by being a different size.
+            // separated by the rule, not by being a different size. Only the
+            // two five-letter words are wider: see [_wideParts].
             child: widget.hints.isEmpty
                 ? Row(children: [..._row(keys), ..._rule(), ..._row(apart)])
                 : LayoutBuilder(
@@ -328,13 +475,25 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
     );
   }
 
-  /// A run of keys for the strip's one [Row], each `Expanded` with the same
-  /// flex — so every key on the strip, on either side of the rule, gets the
-  /// same width, and the row fills the phone rather than ending in a gap.
-  List<Widget> _row(List<Widget> keys) => [
+  /// How many parts of the row a key takes: [_keyParts] for most,
+  /// [_wideParts] for `clear` and `paste`.
+  ///
+  /// ⚠️ **A word as long as `clear` in a cell sized for `esc` is shrunk to half
+  /// the size of the rest of the row.** The label scales down to fit rather
+  /// than clip, so the two words came out a size nobody could read. Five parts
+  /// to three gives them the room of the letters they have, and the row
+  /// reads at one size.
+  static const _keyParts = 3;
+  static const _wideParts = 5;
+
+  /// A run of keys for the strip's one [Row], each `Expanded` with its
+  /// [_Slot.parts] as the flex — so every key on the strip, on either side of
+  /// the rule, gets the same width but the wide two, and the row fills the
+  /// phone rather than ending in a gap.
+  List<Widget> _row(List<_Slot> keys) => [
     for (var index = 0; index < keys.length; index++) ...[
       if (index > 0) const SizedBox(width: 4),
-      Expanded(child: keys[index]),
+      Expanded(flex: keys[index].parts, child: keys[index].key),
     ],
   ];
 
@@ -356,24 +515,28 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
   /// How wide [_rule] is — `8 + 1 + 8`, or the single gap in its place.
   double get _ruleWidth => _canSendImage ? 17 : 4;
 
-  /// The row while the pane offers its own keys: the fixed keys, then
-  /// [TerminalKeyBar.hints], scrolling sideways together; the two apart keys
-  /// stay pinned past the rule.
+  /// The row while the pane offers its own keys: [TerminalKeyBar.hints] at its
+  /// head, the fixed keys, then the [KeyHint.trails] ones, scrolling sideways
+  /// together; the two apart keys stay pinned past the rule.
   ///
-  /// ⚠️ **Every fixed key keeps exactly the width [_row] gives it.** The cell
+  /// ⚠️ **Every fixed key keeps exactly the width [_row] gives it.** The part
   /// is worked out the way the `Expanded` row divides [width] — the same keys,
-  /// gaps and rule — so the keys do not shrink or move when a hint arrives:
-  /// they fill the visible part of the row as they always do, and the hints
-  /// start where it ends. [_revealHints] then scrolls them into view.
-  Widget _rowWithHints(List<Widget> keys, List<Widget> apart, double width) {
+  /// gaps and rule — so the keys do not shrink when a hint arrives: the hints
+  /// at the head push them along, and the ones at the tail start where the
+  /// visible part of the row ends. [_revealHints] scrolls to whichever arrived.
+  Widget _rowWithHints(List<_Slot> keys, List<_Slot> apart, double width) {
     const gap = 4.0;
     final gaps =
         gap * (keys.length - 1) + _ruleWidth + gap * (apart.length - 1);
-    final cell = (width - gaps) / (keys.length + apart.length);
-    if (!cell.isFinite || cell <= 0) {
+    final parts = [
+      ...keys,
+      ...apart,
+    ].fold<int>(0, (sum, key) => sum + key.parts);
+    final part = (width - gaps) / parts;
+    if (!part.isFinite || part <= 0) {
       return Row(children: [..._row(keys), ..._rule(), ..._row(apart)]);
     }
-    final hints = widget.hints;
+    final (:lead, :trail) = _split(widget.hints);
     return Row(
       children: [
         Expanded(
@@ -382,71 +545,121 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                ..._cells(keys, cell),
-                // The pane's keys are not the strip's: a hairline says so,
-                // the way the rule sets the phone's own two apart.
-                const SizedBox(width: 6),
-                Container(width: 1, height: 22, color: AppGlass.hair),
-                const SizedBox(width: 6),
-                for (var i = 0; i < hints.length; i++) ...[
-                  if (i > 0) const SizedBox(width: gap),
-                  _hint(hints[i]),
-                ],
+                if (lead.isNotEmpty) ...[..._hintRun(lead), ..._hintRule()],
+                ..._cells(keys, part),
+                if (trail.isNotEmpty) ...[..._hintRule(), ..._hintRun(trail)],
               ],
             ),
           ),
         ),
         ..._rule(),
-        ..._cells(apart, cell),
+        ..._cells(apart, part),
       ],
     );
   }
 
-  /// A run of keys at a fixed [width] each — [_row]'s layout, in a row that
-  /// scrolls and so cannot divide itself with `Expanded`.
-  List<Widget> _cells(List<Widget> keys, double width) => [
+  /// [hints] by where the row draws them: before its own keys, and after —
+  /// see [KeyHint.trails]. Each side keeps the order the pane printed them in.
+  static ({List<KeyHint> lead, List<KeyHint> trail}) _split(
+    List<KeyHint> hints,
+  ) => (
+    lead: [
+      for (final hint in hints)
+        if (!hint.trails) hint,
+    ],
+    trail: [
+      for (final hint in hints)
+        if (hint.trails) hint,
+    ],
+  );
+
+  /// A run of the pane's keys, each as wide as its words.
+  List<Widget> _hintRun(List<KeyHint> hints) => [
+    for (var i = 0; i < hints.length; i++) ...[
+      if (i > 0) const SizedBox(width: 4),
+      _hint(hints[i]),
+    ],
+  ];
+
+  /// The pane's keys are not the strip's: a hairline between them says so,
+  /// the way [_rule] sets the phone's own two apart.
+  List<Widget> _hintRule() => [
+    const SizedBox(width: 6),
+    Container(width: 1, height: 22, color: AppGlass.hair),
+    const SizedBox(width: 6),
+  ];
+
+  /// A run of keys at a fixed width each, [part] times its [_Slot.parts] —
+  /// [_row]'s layout, in a row that scrolls and so cannot divide itself with
+  /// `Expanded`.
+  List<Widget> _cells(List<_Slot> keys, double part) => [
     for (var index = 0; index < keys.length; index++) ...[
       if (index > 0) const SizedBox(width: 4),
-      SizedBox(width: width, child: keys[index]),
+      SizedBox(width: part * keys[index].parts, child: keys[index].key),
     ],
   ];
 
   /// Keeps the fixed keys and the hints on one row.
   final ScrollController _scroll = ScrollController();
 
-  // ⚠️ **Not scrolled to the hints as the strip opens.** It was, and Claude Code
-  // offers `shift+tab to cycle` on every prompt, so every open slid esc and tab
-  // off the left edge — while the pane's own line said "esc to interrupt". The
-  // strip opens on its own keys; hints that ARRIVE while it is open (a question's
-  // keys, say) are scrolled to, and the rest are a sideways swipe away.
+  // ⚠️ **Not scrolled as the strip opens.** It was — to the end, where every
+  // hint then sat — and Claude Code offers `shift+tab to cycle` on every prompt,
+  // so every open slid esc and tab off the left edge while the pane's own line
+  // said "esc to interrupt". It opens at its head, which is where a question's
+  // keys are drawn ([KeyHint.trails]); `cycle` is a sideways swipe away. Hints
+  // that ARRIVE while it is open are scrolled to, wherever they are drawn.
 
   @override
   void didUpdateWidget(TerminalKeyBar oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.hints.isNotEmpty && !listEquals(widget.hints, oldWidget.hints)) {
-      _revealHints();
+      final now = _split(widget.hints), before = _split(oldWidget.hints);
+      if (now.lead.isNotEmpty && !listEquals(now.lead, before.lead)) {
+        _revealHints(atHead: true);
+      } else if (now.lead.isEmpty &&
+          now.trail.isNotEmpty &&
+          !listEquals(now.trail, before.trail)) {
+        // ⚠️ Never away from a question's keys: with one at the head, a
+        // `cycle` arriving at the tail stays a swipe away.
+        _revealHints(atHead: false);
+      }
+    }
+    // `paste` came or went, or an image stopped (or started) counting.
+    final couldSendImage =
+        oldWidget.onPickImage != null || oldWidget.onTakePhoto != null;
+    if ((widget.onPaste == null) != (oldWidget.onPaste == null) ||
+        _canSendImage != couldSendImage) {
+      _watchClipboard();
     }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _clipboardPoll?.cancel();
     _scroll.dispose();
     super.dispose();
   }
 
-  /// Scrolls the row to its end, where the hints are, once they are laid out.
+  /// Scrolls the row to the hints that just arrived, once they are laid out:
+  /// back to its head for the ones that lead it, on to its end for the ones
+  /// that trail it.
   ///
   /// ⚠️ **Brought into view, not left past the edge.** The fixed keys fill the
-  /// visible row by design, so hints that simply joined it would start just
-  /// out of sight and read as no hints at all. Only a new set of hints moves
-  /// the row; the same ones redrawn leave it wherever it was swiped to.
-  void _revealHints() {
+  /// visible row by design, so hints at its end would start just out of sight
+  /// and read as no hints at all — and a row already swiped along would leave
+  /// a new one at its head out of sight the same way. Only a new set of hints
+  /// moves the row; the same ones redrawn leave it wherever it was swiped to.
+  void _revealHints({required bool atHead}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
-      final end = _scroll.position.maxScrollExtent;
-      if (_scroll.offset == end) return;
+      final position = _scroll.position;
+      final target = atHead
+          ? position.minScrollExtent
+          : position.maxScrollExtent;
+      if (position.pixels == target) return;
       _scroll.animateTo(
-        end,
+        target,
         duration: const Duration(milliseconds: 250),
         curve: Curves.easeOut,
       );
@@ -464,31 +677,41 @@ class _TerminalKeyBarState extends State<TerminalKeyBar> {
     ),
   );
 
-  Widget _key({
+  _Slot _key({
     String? label,
     IconData? icon,
     String? semanticLabel,
     bool alwaysEnabled = false,
     bool armed = false,
+    bool wide = false,
+    double scale = 1,
     required VoidCallback onTap,
   }) {
     assert((label == null) != (icon == null), 'a key carries one of the two');
     final live = widget.enabled || alwaysEnabled;
-    return Semantics(
-      button: true,
-      label: semanticLabel ?? label,
-      // Named so a test can reach the icon keys, which carry no text.
-      key: ValueKey('terminal-key-${semanticLabel ?? label}'),
-      child: _KeyCap(
-        label: label,
-        icon: icon,
-        live: live,
-        armed: armed,
-        onTap: alwaysEnabled ? onTap : () => _send(onTap),
+    return (
+      key: Semantics(
+        button: true,
+        label: semanticLabel ?? label,
+        // Named so a test can reach the icon keys, which carry no text.
+        key: ValueKey('terminal-key-${semanticLabel ?? label}'),
+        child: _KeyCap(
+          label: label,
+          icon: icon,
+          scale: scale,
+          live: live,
+          armed: armed,
+          onTap: alwaysEnabled ? onTap : () => _send(onTap),
+        ),
       ),
+      parts: wide ? _wideParts : _keyParts,
     );
   }
 }
+
+/// One key of the strip, and how many parts of the row it takes — see
+/// [_TerminalKeyBarState._wideParts].
+typedef _Slot = ({Widget key, int parts});
 
 /// One key of the bar, lit while a thumb is on it.
 ///
@@ -506,6 +729,7 @@ class _KeyCap extends StatefulWidget {
     this.label,
     this.icon,
     this.hint,
+    this.scale = 1,
     required this.live,
     required this.armed,
     required this.onTap,
@@ -519,6 +743,10 @@ class _KeyCap extends StatefulWidget {
 
   final String? label;
   final IconData? icon;
+
+  /// The [label]'s size against the terminal's — for a glyph drawn small by
+  /// its font. Still shrinks to fit the key, like every label.
+  final double scale;
 
   /// One of the pane's own keys — see [TerminalKeyBar.hints]. As wide as its
   /// words, rather than one of the row's equal cells.
@@ -588,7 +816,10 @@ class _KeyCapState extends State<_KeyCap> {
                   child: Text(
                     widget.label ?? '',
                     maxLines: 1,
-                    style: tty.style(color: foreground),
+                    style: tty.style(
+                      color: foreground,
+                      size: tty.fontSize * widget.scale,
+                    ),
                   ),
                 ),
               ),

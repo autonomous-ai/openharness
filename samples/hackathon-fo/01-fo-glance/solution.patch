@@ -1,0 +1,447 @@
+diff --git a/devices/harness-device/firmware/main/CMakeLists.txt b/devices/harness-device/firmware/main/CMakeLists.txt
+index 044187a11..1825dabf5 100644
+--- a/devices/harness-device/firmware/main/CMakeLists.txt
++++ b/devices/harness-device/firmware/main/CMakeLists.txt
+@@ -123,6 +123,11 @@ if(DEVICE_HABITAT_ORANGE)
+     target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_HABITAT_ORANGE=1)
+ endif()
+ 
++# The Fo colours (theme.h): -DDEVICE_HABITAT_FO=1.
++if(DEVICE_HABITAT_FO)
++    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_HABITAT_FO=1)
++endif()
++
+ # Focus and nothing else until the companion skins are finished (owner, 2026-09-30); the host tests
+ # build without it and keep covering every skin. -DDEVICE_ALL_SKINS=1 lifts it for a build.
+ if(NOT DEVICE_ALL_SKINS)
+diff --git a/devices/harness-device/firmware/main/ui/habitat/focus.c b/devices/harness-device/firmware/main/ui/habitat/focus.c
+index 9cd5f93b8..9da15e8df 100644
+--- a/devices/harness-device/firmware/main/ui/habitat/focus.c
++++ b/devices/harness-device/firmware/main/ui/habitat/focus.c
+@@ -2,6 +2,7 @@
+ #include "pets.h"
+ #include "focus_faces.h"
+ #include "theme.h"
++#include "glance.h"
+ #include "../../pet_store.h"
+ #include "../../elapsed.h"
+ #include <math.h>
+@@ -60,7 +61,8 @@ enum { MARK_SIZE = 56, TITLE_BOTTOM = HT_ARC_Y + HT_ARC_CELL_HEIGHT, COL_X = 41,
+ #define FOCUS_CARD_RIM 0x3d3f47u
+ #define FOCUS_FG      0xeaeaf0u
+ #define FOCUS_EMPTY   0x585863u
+-#define FOCUS_VOICE   0x00ff2fu
++#define FOCUS_VOICE   HT_THEME_VOICE     // the listening meter and its word
++#define FOCUS_WORKING HT_THEME_WORKING   // the working line
+ #define FOCUS_REST    0x9a9aa6u   // the relaxing face's lower-arc line: the working line's arc and font, quiet grey
+ 
+ /*
+@@ -534,6 +536,9 @@ uint32_t ht_focus_pet_next_ms(const ht_character_face_t *f, const char *recap)
+         const ht_pet_scene_t *ss = sending_scene(f);
+         return ss ? scene_next_ms(ss, 0, f->clock_ms) : 0;
+     }
++    // The glance face has no pet: nothing on it moves, so it asks for no redraws.
++    ht_glance_t glance;
++    if (recap && ht_glance_parse(recap, &glance)) return 0;
+     uint32_t alert_step;
+     bool held;
+     const ht_pet_scene_t *alert = alert_scene(f, recap, &alert_step, &held);
+@@ -837,12 +842,76 @@ static void recap_cut(char *out, size_t cap, const char *recap, const ht_font_t
+     if (clipped) strcat(out, "\xe2\x80\xa6");
+ }
+ 
++/*
++ * THE GLANCE FACE — a recap that is a glance line (glance.h: "GLANCE applied=5 replies=2 interviews=1 goal=10")
++ * is drawn as numbers instead of the recap card: the name on the top arc as always, up to three numbers in
++ * Inter 44 with their keys under them in Inter 20, a ring around the edge filled progress / goal in the accent
++ * (ht_glance_progress: `applied`, else the first number), and "5 / 10 applied" on the lower arc.
++ *
++ * THE SAME ELEVEN RUNS as the home face, in their slots (see the rule at the top of this file): name, the ring's
++ * track (the mark's slot), its fill (the card's), the three numbers and an empty one (recap x4), the three keys
++ * (status, resting line x2), the lower arc. A missing number, key or fill is an empty run in its slot, so a new
++ * glance line with other numbers is a change of text, not a reshape.
++ */
++enum { GLANCE_RING_R = 227, GLANCE_RING_W = 8, GLANCE_NUM_Y = 187, GLANCE_KEY_Y = 248 };
++#define GLANCE_TRACK 0x26262cu   // the ring's unfilled band: a step above the black
++static void glance_face(ht_scene_t *s, const ht_character_face_t *f, const ht_glance_t *g)
++{
++    const ht_font_t *big = &ht_lv_inter_44.base, *mid = &ht_lv_inter_30.base, *small = &ht_lv_inter_20.base;
++    ht_arc_title_face(s, ht_rgb(FOCUS_FG), f->recipient && *f->recipient ? f->recipient : "\xe2\x80\xa6",
++                      &ht_arc_inter_prop);
++
++    // The ring: the whole circle in the track's grey, then the fill clockwise from twelve o'clock.
++    int c16 = HT_WIDTH / 2 * 16, r16 = GLANCE_RING_R * 16, w16 = GLANCE_RING_W * 16;
++    unsigned done = ht_glance_progress(g);
++    ht_ring_arc(s, c16, c16, r16, g->has_goal ? w16 : 0, 90, 180, ht_rgb(GLANCE_TRACK));
++    int half = g->has_goal && g->goal ? (int)((done >= g->goal ? 180u : 180u * done / g->goal)) : 0;
++    ht_ring_arc(s, c16, c16, r16, half ? w16 : 0, 90 - half, half, ht_rgb(HT_THEME_ACCENT));
++
++    // The numbers, side by side in equal columns; a number too wide for Inter 44 in its column steps down to 30.
++    unsigned n = g->count < HT_GLANCE_SHOWN ? g->count : HT_GLANCE_SHOWN;
++    int col_w = n == 1 ? 200 : n == 2 ? 150 : 120, left = (HT_WIDTH - (int)n * col_w) / 2;
++    for (unsigned i = 0; i < RECAP_LINES; i++) {
++        if (i >= n) { no_text(s, big); continue; }
++        char num[8];
++        snprintf(num, sizeof num, "%u", (unsigned)g->shown[i].value);
++        const ht_font_t *nf = ht_measure(big, num) <= col_w ? big : mid;
++        ht_lv_label_t l;
++        ht_lv_label(&l, nf, num, col_w, 1, true);
++        label_runs(s, &l, 1, left + (int)i * col_w, GLANCE_NUM_Y + (nf == big ? 0 : (big->height - mid->height) / 2), 0,
++                   nf, ht_rgb(FOCUS_FG), s->background);
++    }
++    // Their keys, as written, in the resting grey; a long one ends in "...".
++    for (unsigned i = 0; i < 3; i++) {
++        if (i >= n) { no_text(s, small); continue; }
++        ht_lv_label_t l;
++        ht_lv_label(&l, small, g->shown[i].key, col_w - 8, 1, true);
++        label_runs(s, &l, 1, left + (int)i * col_w + 4, GLANCE_KEY_Y, 0, small, ht_rgb(FOCUS_REST), s->background);
++    }
++
++    // "5 / 10 applied" on the lower curve — left out (an empty slot) without a goal, or when the bell pill or a footer
++    // control has the lower edge, as the relaxing line is.
++    int before = s->count;
++    if (g->has_goal && !f->notices && !f->footer_action) {
++        const char *what = g->shown[0].key;   // the key the ring counts (ht_glance_progress)
++        for (unsigned i = 0; i < g->count; i++)
++            if (!strcmp(g->shown[i].key, "applied")) what = "applied";
++        char line[48];
++        snprintf(line, sizeof line, "%u / %u %s", done, (unsigned)g->goal, what);
++        ht_arc_status_face(s, ht_rgb(FOCUS_REST), line, &ht_arc_inter_lower);
++    }
++    if (s->count == before) no_text(s, small);
++}
++
+ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, uint16_t ink,
+                    const char *recap)
+ {
+     (void)ink;
+     if (f->voice) { resting.showing = false; voice_face(s, f, frame); return; }
+     bool has_recap = recap && *recap;
++    // A glance line takes the recap card's place (glance_face above); anything else is drawn as before.
++    ht_glance_t glance;
++    if (has_recap && ht_glance_parse(recap, &glance)) { resting.showing = false; glance_face(s, f, &glance); return; }
+     bool working = !has_recap && f->activity && *f->activity;
+     bool retry = !has_recap && !working && f->status && *f->status;
+ 
+@@ -1013,10 +1082,10 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
+         status_fitted(line, sizeof line, f, lf, NULL, COL_W);
+         ht_lv_label_t l;
+         ht_lv_label(&l, lf, line, COL_W, 1, false);
+-        label_runs(s, &l, 1, COL_X, SCENE_LINE_Y, 0, lf, ht_rgb(FOCUS_VOICE), s->background);
++        label_runs(s, &l, 1, COL_X, SCENE_LINE_Y, 0, lf, ht_rgb(FOCUS_WORKING), s->background);
+     } else if (status[0] && !scene)
+         label_runs(s, &body, 1, COL_X, body_y, 0, sf,
+-                   ht_rgb(retry ? FOCUS_FG : FOCUS_VOICE), s->background);
++                   ht_rgb(retry ? FOCUS_FG : working ? FOCUS_WORKING : FOCUS_VOICE), s->background);
+     else no_text(s, sf);
+ 
+     // Nothing yet: said in the resting grey. With nothing standing above it (no pet, no mark: design 2026-10-06
+@@ -1035,7 +1104,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
+     if (scene && !taken) {
+         char arc[HT_TEXT_BYTES];
+         status_fitted(arc, sizeof arc, f, NULL, &ht_arc_inter_lower, HT_ARC_SPAN);
+-        ht_arc_status_face(s, ht_rgb(FOCUS_VOICE), arc, &ht_arc_inter_lower);
++        ht_arc_status_face(s, ht_rgb(FOCUS_WORKING), arc, &ht_arc_inter_lower);
+     } else if (relax && !f->notices && !f->footer_action)
+         // The relaxing face's one line, in the working line's arc and font, quiet grey. Left out (an empty slot) when
+         // the bell pill (y 400, notices > 0; this face has no bubble to tell them) or a footer control (y 389..439)
+diff --git a/devices/harness-device/firmware/main/ui/habitat/glance.h b/devices/harness-device/firmware/main/ui/habitat/glance.h
+new file mode 100644
+index 000000000..a5187142c
+--- /dev/null
++++ b/devices/harness-device/firmware/main/ui/habitat/glance.h
+@@ -0,0 +1,93 @@
++#pragma once
++
++#include <stdbool.h>
++#include <stdint.h>
++#include <string.h>
++
++/*
++ * THE GLANCE LINE — an agent's recap that is a few numbers instead of a sentence.
++ *
++ *     GLANCE applied=5 replies=2 interviews=1 goal=10
++ *
++ * Case-sensitive, at the very start of the recap. After "GLANCE" come up to four `key=value` pairs
++ * separated by spaces: a key is 1..12 letters a-z, a value an unsigned integer 0..9999. The pairs end at
++ * the end of the line ('\n'), the end of the text, or the first word with no '=' in it — the daemon's
++ * recap (cli/src/lib/deviceRecap.ts) runs the reply's opening sentences together, and recap_preview()
++ * in ui_habitat.c turns line breaks into spaces, so the prose after the line is still on it.
++ *
++ * `goal` is not shown as a number: it is the ring's 100 %. Every other key is shown as-is, the first
++ * three of them. Anything malformed (a fifth pair, a bad key, a value past 9999, no pair to show)
++ * is not a glance, and the face draws the ordinary recap card.
++ *
++ * Header-only and free of the renderer, so the host test (test/test_glance.c) can include it alone.
++ */
++enum { HT_GLANCE_PAIRS = 4, HT_GLANCE_SHOWN = 3, HT_GLANCE_KEY = 12, HT_GLANCE_MAX = 9999 };
++
++typedef struct {
++    char key[HT_GLANCE_KEY + 1];
++    uint16_t value;
++} ht_glance_pair_t;
++
++typedef struct {
++    ht_glance_pair_t shown[HT_GLANCE_PAIRS];   // in order, without `goal`
++    uint8_t count;                              // pairs in `shown` (1..4; the face draws the first three)
++    bool has_goal;
++    uint16_t goal;
++} ht_glance_t;
++
++// One `key=value` word at `p`, `len` bytes. False when it is not one.
++static inline bool ht_glance_pair(const char *p, size_t len, ht_glance_pair_t *out)
++{
++    const char *eq = (const char *)memchr(p, '=', len);
++    if (!eq) return false;
++    size_t klen = (size_t)(eq - p), vlen = len - klen - 1;
++    if (klen < 1 || klen > HT_GLANCE_KEY || vlen < 1 || vlen > 4) return false;
++    for (size_t i = 0; i < klen; i++)
++        if (p[i] < 'a' || p[i] > 'z') return false;
++    unsigned v = 0;
++    for (size_t i = 0; i < vlen; i++) {
++        if (eq[1 + i] < '0' || eq[1 + i] > '9') return false;
++        v = v * 10 + (unsigned)(eq[1 + i] - '0');
++    }
++    if (v > HT_GLANCE_MAX) return false;
++    memcpy(out->key, p, klen);
++    out->key[klen] = 0;
++    out->value = (uint16_t)v;
++    return true;
++}
++
++// True, with `g` filled, when `text` is a glance line; false (and `g` cleared) otherwise.
++static inline bool ht_glance_parse(const char *text, ht_glance_t *g)
++{
++    memset(g, 0, sizeof *g);
++    if (!text || strncmp(text, "GLANCE", 6) || (text[6] != ' ' && text[6] != '\t')) return false;
++    const char *p = text + 6;
++    unsigned pairs = 0;
++    for (;;) {
++        while (*p == ' ' || *p == '\t' || *p == '\r') p++;
++        if (!*p || *p == '\n') break;
++        size_t len = 0;
++        while (p[len] && p[len] != ' ' && p[len] != '\t' && p[len] != '\r' && p[len] != '\n') len++;
++        if (!memchr(p, '=', len)) break;   // prose after the line: the pairs are over
++        ht_glance_pair_t pair;
++        if (++pairs > HT_GLANCE_PAIRS || !ht_glance_pair(p, len, &pair)) goto bad;
++        if (!strcmp(pair.key, "goal")) {
++            if (g->has_goal) goto bad;
++            g->has_goal = true;
++            g->goal = pair.value;
++        } else g->shown[g->count++] = pair;
++        p += len;
++    }
++    if (g->count) return true;
++bad:
++    memset(g, 0, sizeof *g);
++    return false;
++}
++
++// What the ring counts toward the goal: `applied` when the line has it, else its first number.
++static inline uint16_t ht_glance_progress(const ht_glance_t *g)
++{
++    for (unsigned i = 0; i < g->count; i++)
++        if (!strcmp(g->shown[i].key, "applied")) return g->shown[i].value;
++    return g->count ? g->shown[0].value : 0;
++}
+diff --git a/devices/harness-device/firmware/main/ui/habitat/theme.h b/devices/harness-device/firmware/main/ui/habitat/theme.h
+index 33df179cb..8e139f087 100644
+--- a/devices/harness-device/firmware/main/ui/habitat/theme.h
++++ b/devices/harness-device/firmware/main/ui/habitat/theme.h
+@@ -7,11 +7,17 @@
+ #define HT_THEME_CANVAS    0x181818u
+ // The Focus skin's canvas. Its design (mockup/newdesign.html, every screen) is on black, not on the
+ // terminal's charcoal — Focus is the pre-habitat layout and brings its ground with it.
++#ifdef DEVICE_HABITAT_FO
++#define HT_THEME_FOCUS_CANVAS 0x081018u   // Fo: a deep night blue instead of black
++#else
+ #define HT_THEME_FOCUS_CANVAS 0x000000u
++#endif
+ #define HT_THEME_TEXT      0xefe7deu
+ #define HT_THEME_SECONDARY 0xada6adu
+ #ifdef DEVICE_HABITAT_ORANGE
+ #define HT_THEME_ACCENT    0xff6d00u
++#elif defined(DEVICE_HABITAT_FO)
++#define HT_THEME_ACCENT    0xffb000u   // Fo amber (the glance ring's fill)
+ #else
+ #define HT_THEME_ACCENT    0xc6aaefu
+ #endif
+@@ -27,7 +33,18 @@
+ // It is a pure channel — brighter and harder than HT_THEME_DONE, which is the terminal's "finished"
+ // green and is what a status line uses. The old firmware kept the two apart for the same reason: the
+ // meter is the one thing on the glass that is supposed to shout, and a status line is not.
++#ifdef DEVICE_HABITAT_FO
++#define HT_THEME_VOICE     0x00e0ffu   // Fo: a cyan meter and microphone
++#else
+ #define HT_THEME_VOICE     0x00ff2fu
++#endif
++// The Focus face's working line ("Coalescing… 0:34", on the lower arc or under the scene). The same green as the
++// voice by default; a theme can tell the two apart.
++#ifdef DEVICE_HABITAT_FO
++#define HT_THEME_WORKING   0xffc040u   // Fo: warm amber while it works
++#else
++#define HT_THEME_WORKING   0x00ff2fu
++#endif
+ #define HT_THEME_DONE      0x0dbc79u
+ #define HT_THEME_QUESTION  0xe5e510u
+ #define HT_THEME_FAILED    0xcd3131u
+diff --git a/devices/harness-device/firmware/test/run.sh b/devices/harness-device/firmware/test/run.sh
+index 28003c37e..5da526063 100644
+--- a/devices/harness-device/firmware/test/run.sh
++++ b/devices/harness-device/firmware/test/run.sh
+@@ -39,6 +39,16 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${PET_SANITIZERS:-address,u
+    "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
+ "$out/test_character_asan" "$here/vectors/pet_min.hpet" --custom-only
+ python3 "$here/test_character_preferences.py"
++# The glance line (glance.h) and the Focus face that draws it.
++cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
++   -I "$here/../main" -o "$out/test_glance" "$here/test_glance.c" "$here/../main/pet_store.c" "$here/../main/elapsed.c" \
++   "$here/../main/ui/habitat/character.c" "$here/../main/ui/habitat/illustrated.c" "$here/../main/ui/habitat/character_motion.c" \
++   "$here/../main/ui/habitat/character_layout.c" "$here/../main/ui/habitat/tux.c" \
++   "$here/../main/ui/habitat/focus.c" "$here/../main/ui/habitat/lvgl_fonts.c" "$here/../main/ui/habitat/lvgl_icons.c" "$here/../main/ui/habitat/focus_marks.c" "$here/../main/ui/habitat/focus_faces.c" "$here/../main/ui/habitat/pets.c" \
++   "$here/../main/ui/habitat/octopus.c" "$here/../main/ui/habitat/octopus_font.c" \
++   "$here/../main/ui/habitat/ascii_clip.c" \
++   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
++"$out/test_glance"
+ 
+ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
+    -I "$here/../main" -o "$out/test_elapsed" "$here/test_elapsed.c" "$here/../main/elapsed.c"
+diff --git a/devices/harness-device/firmware/test/test_glance.c b/devices/harness-device/firmware/test/test_glance.c
+new file mode 100644
+index 000000000..83882d375
+--- /dev/null
++++ b/devices/harness-device/firmware/test/test_glance.c
+@@ -0,0 +1,100 @@
++// The glance line (main/ui/habitat/glance.h) and the Focus face that draws it (focus.c, glance_face).
++#include "ui/habitat/glance.h"
++#include "ui/habitat/focus.h"
++#include "ui/habitat/theme.h"
++#include <assert.h>
++#include <stdio.h>
++#include <string.h>
++
++static void parser(void)
++{
++    ht_glance_t g;
++    // The line from the spec: three numbers shown, the goal kept apart.
++    assert(ht_glance_parse("GLANCE applied=5 replies=2 interviews=1 goal=10", &g));
++    assert(g.count == 3 && g.has_goal && g.goal == 10);
++    assert(!strcmp(g.shown[0].key, "applied") && g.shown[0].value == 5);
++    assert(!strcmp(g.shown[1].key, "replies") && g.shown[1].value == 2);
++    assert(!strcmp(g.shown[2].key, "interviews") && g.shown[2].value == 1);
++    assert(ht_glance_progress(&g) == 5);
++    // Its first line only; and the daemon's recap, which runs the prose after it onto the same line.
++    assert(ht_glance_parse("GLANCE applied=5 goal=10\nToday I sent five applications.", &g) && g.count == 1);
++    assert(ht_glance_parse("GLANCE applied=5 replies=2 goal=10 Today I sent five. Two replied.", &g) && g.count == 2);
++    // Unknown keys are shown as-is; without `applied` the ring counts the first number.
++    assert(ht_glance_parse("GLANCE pages=40 bugs=3 goal=80", &g) && ht_glance_progress(&g) == 40);
++    assert(!strcmp(g.shown[1].key, "bugs") && g.shown[1].value == 3);
++    // No goal: no ring, the numbers still stand. The edges of a value and a key.
++    assert(ht_glance_parse("GLANCE applied=0", &g) && !g.has_goal && g.count == 1 && g.shown[0].value == 0);
++    assert(ht_glance_parse("GLANCE abcdefghijkl=9999", &g) && g.shown[0].value == 9999);
++    // A fourth number is kept (the face shows three).
++    assert(ht_glance_parse("GLANCE a=1 b=2 c=3 d=4", &g) && g.count == 4 && !g.has_goal);
++    // Malformed: the ordinary recap card.
++    assert(!ht_glance_parse("GLANCE a=1 b=2 c=3 d=4 goal=5", &g) && !g.count);   // > 4 pairs
++    assert(!ht_glance_parse("GLANCE Applied=5", &g));                          // capital in the key
++    assert(!ht_glance_parse("GLANCE applied_today=5", &g));                    // not [a-z]
++    assert(!ht_glance_parse("GLANCE abcdefghijklm=1", &g));                    // 13 letters
++    assert(!ht_glance_parse("GLANCE =5", &g));                                 // empty key
++    assert(!ht_glance_parse("GLANCE applied=10000", &g));                      // > 9999
++    assert(!ht_glance_parse("GLANCE applied=99999999999", &g));                // far past it
++    assert(!ht_glance_parse("GLANCE applied=-1", &g));                         // not unsigned
++    assert(!ht_glance_parse("GLANCE applied=5x", &g));
++    assert(!ht_glance_parse("GLANCE applied=", &g));
++    assert(!ht_glance_parse("GLANCE goal=10 goal=12 applied=1", &g));          // two goals
++    assert(!ht_glance_parse("GLANCE goal=10", &g));                            // nothing to show
++    assert(!ht_glance_parse("GLANCE", &g) && !ht_glance_parse("GLANCE ", &g));
++    assert(!ht_glance_parse("glance applied=5", &g));                          // case-sensitive
++    assert(!ht_glance_parse("GLANCEapplied=5", &g));
++    assert(!ht_glance_parse("Shipped it. GLANCE applied=5", &g));             // not at the start
++    assert(!ht_glance_parse("Applied to five jobs today.", &g));
++    assert(!ht_glance_parse("", &g) && !ht_glance_parse(NULL, &g));
++}
++
++static ht_character_face_t face(void)
++{
++    ht_character_face_t f;
++    memset(&f, 0, sizeof f);
++    f.recipient = "Fo job hunt";
++    f.engine = "fo";
++    f.clock_ms = 1200;
++    return f;
++}
++
++static void face_runs(void)
++{
++    static ht_scene_t s;
++    ht_character_face_t f = face();
++    // The glance face: the home face's eleven runs, the ring in the mark's and card's slots.
++    ht_scene_clear(&s, ht_rgb(HT_THEME_FOCUS_CANVAS));
++    ht_focus_face(&s, &f, 0, 0, "GLANCE applied=5 replies=2 interviews=1 goal=10");
++    assert(s.count == 11);
++    assert(s.runs[1].ring.set && s.runs[1].ring.w16 && s.runs[2].ring.set && s.runs[2].ring.w16);
++    assert(s.runs[2].ring.colour == ht_rgb(HT_THEME_ACCENT));
++    assert(!strcmp(s.runs[3].text, "5") && !strcmp(s.runs[4].text, "2") && !strcmp(s.runs[5].text, "1") && !s.runs[6].text[0]);
++    assert(!strcmp(s.runs[7].text, "applied") && !strcmp(s.runs[8].text, "replies") && !strcmp(s.runs[9].text, "interviews"));
++    assert(!strcmp(s.runs[10].text, "5 / 10 applied"));
++    assert(ht_focus_pet_next_ms(&f, "GLANCE applied=5 goal=10") == 0);
++    // Another glance line, fewer numbers and no goal: the same runs, the empty ones empty.
++    ht_scene_clear(&s, ht_rgb(HT_THEME_FOCUS_CANVAS));
++    ht_focus_face(&s, &f, 0, 0, "GLANCE applied=12");
++    assert(s.count == 11 && s.runs[1].ring.set && !s.runs[1].ring.w16 && !s.runs[2].ring.w16);
++    assert(!strcmp(s.runs[3].text, "12") && !s.runs[4].text[0] && !s.runs[8].text[0] && !s.runs[10].text[0]);
++    // Past the goal the ring is full; at zero it is empty.
++    ht_scene_clear(&s, ht_rgb(HT_THEME_FOCUS_CANVAS));
++    ht_focus_face(&s, &f, 0, 0, "GLANCE applied=12 goal=10");
++    assert(s.runs[2].ring.w16 && s.runs[2].ring.cosh == -16384);
++    ht_scene_clear(&s, ht_rgb(HT_THEME_FOCUS_CANVAS));
++    ht_focus_face(&s, &f, 0, 0, "GLANCE applied=0 goal=10");
++    assert(s.runs[1].ring.w16 && !s.runs[2].ring.w16);
++    // A malformed line is an ordinary recap: the card (a box) in its slot, the text on it.
++    ht_scene_clear(&s, ht_rgb(HT_THEME_FOCUS_CANVAS));
++    ht_focus_face(&s, &f, 0, 0, "GLANCE applied=10000 goal=10");
++    assert(s.count == 11 && !s.runs[1].ring.set && s.runs[2].box.h && !s.runs[2].ring.set);
++    assert(strstr(s.runs[3].text, "GLANCE"));
++}
++
++int main(void)
++{
++    parser();
++    face_runs();
++    puts("glance: PASS (parser, fallback, face runs)");
++    return 0;
++}
+diff --git a/devices/harness-device/firmware/test/test_touch_ui.py b/devices/harness-device/firmware/test/test_touch_ui.py
+index 71ab1a04f..a921d73d7 100644
+--- a/devices/harness-device/firmware/test/test_touch_ui.py
++++ b/devices/harness-device/firmware/test/test_touch_ui.py
+@@ -2158,7 +2158,7 @@ int main(int argc, char **argv) {
+             assert(from && ALERT_AT(0) && BLUE_BOX() < 0 && COUNT("1") < 0 && scene.count == runs);
+             for (int i = 0; i < scene.count; i++) {
+                 assert(scene.runs[i].font != &ht_lv_montserrat_14.base || !scene.runs[i].text[0]);   // no bell pill
+-                if (scene.runs[i].arc == 2 && scene.runs[i].text[0]) assert(scene.runs[i].fg == ht_rgb(0x00ff2f));
++                if (scene.runs[i].arc == 2 && scene.runs[i].text[0]) assert(scene.runs[i].fg == ht_rgb(HT_THEME_WORKING));
+             }
+             // its next step, or the working scene's next frame if that comes first
+             assert(s.pet_next_ms > from && s.pet_next_ms <= from + S);
+@@ -2759,6 +2759,11 @@ int main(int argc, char **argv) {
+             ui_project_emit("a", "sess", "summary", "Shipped the retry queue and moved the parser tests to the new fixtures. All 44 checks pass.",
+                             "Shipped the retry queue and moved the parser tests to the new fixtures. All 44 checks pass.");
+             fake_ms = 1200; scene_take(); DESIGN("recap");
++            // The glance face (focus.c glance_face): a recap that is a glance line, as the daemon sends one.
++            DESIGN_HOME();
++            ui_project_emit("a", "sess", "summary", "GLANCE applied=5 replies=2 interviews=1 goal=10 Sent five applications today.",
++                            "GLANCE applied=5 replies=2 interviews=1 goal=10 Sent five applications today.");
++            fake_ms = 1200; scene_take(); DESIGN("glance");
+             DESIGN_HOME(); s.agents[0].busy = true; strcpy(s.agents[0].tool, "Coalescing");
+             fake_ms = 1200; scene_take(); s.agents[0].busy_ms = 1; fake_ms = 34000 + 1200; scene_take(); DESIGN("working");
+             {
+@@ -2798,6 +2803,7 @@ int main(int argc, char **argv) {
+ '''
+ extra_sources = []
+ extra_includes = ['-DDEVICE_HABITAT_ORANGE=1'] if os.environ.get('HABITAT_TEST_ORANGE') else []
++if os.environ.get('HABITAT_TEST_FO'): extra_includes.append('-DDEVICE_HABITAT_FO=1')   # the Fo colours (theme.h)
+ if os.environ.get('HABITAT_BRIDGE_TRACE'):
+     from bridge_flow_replay import instrument
+     code = instrument(code, os.environ['HABITAT_BRIDGE_TRACE'], native.parent.parent)

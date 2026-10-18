@@ -1,5 +1,6 @@
 // Task 3: Pod's cell sprite, ring arc and gradient runs.
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -228,27 +229,6 @@ static void draw_test_grad(void)
 }
 
 
-// Classic's grey gradient: every pixel neutral (r = b, g = 2r + 1), so no pink band; dithered, so it has more than a few flat steps.
-static void draw_test_grad_gray(void)
-{
-    ht_scene_t s; ht_scene_clear(&s, 0);
-    pod_grad_gray(&s, 0, 0, 20, 60, ht_rgb(0xf8f9f7), ht_rgb(0xe9eae5));
-    CHECK(s.count == 1);
-    draw(&s);
-    int sum_top = 0, sum_bot = 0;
-    for (int y = 0; y < 60; y++)
-        for (int x = 0; x < 20; x++) {
-            uint16_t v = px(x, y);
-            CHECK(((v >> 11) & 31) == (v & 31) && ((v >> 5) & 63) == 2 * (v & 31) + 1);
-            if (y < 10) sum_top += v & 31;
-            if (y >= 50) sum_bot += v & 31;
-        }
-    CHECK(sum_top > sum_bot && px(20, 0) == 0);   // darker toward the bottom; nothing outside the rect
-    int mixed = 0;
-    for (int y = 0; y < 60; y++) { uint16_t a = px(0, y), b = px(1, y); if (a != b) mixed++; }
-    CHECK(mixed > 0);   // a row between two levels alternates them
-}
-
 static void draw_test_grad_aa_corner(void)
 {
     const uint16_t ground = 0x2104, ink = ht_rgb(0x2f6df0);
@@ -280,6 +260,58 @@ static void draw_test_grad_aa_rows(void)
     int rr = (top >> 11) + (bot >> 11), gg = ((top >> 5) & 63) + ((bot >> 5) & 63), bb = (top & 31) + (bot & 31);
     CHECK(abs((m >> 11) - rr / 2) <= 1 && abs(((m >> 5) & 63) - gg / 2) <= 1 && abs((m & 31) - bb / 2) <= 1);
     CHECK(big[0] == 0 && big[10] == top);
+}
+
+// pod_grad_aa_dither: a slow gradient (a few levels over 300 rows) alternates its two nearest levels instead of banding. Each 4 x 4 block
+// averages to the exact channel value within one sixteenth of a level; no pixel is more than one level from it; mid-level rows are mixed.
+static void draw_test_grad_aa_dither(void)
+{
+    enum { GW = 16, GH = 300 };
+    const uint16_t top = ht_rgb(0x3a2c24), bot = ht_rgb(0x4a3a30);
+    static uint16_t plain[GW * GH], dith[GW * GH];
+    ht_scene_t s; ht_scene_clear(&s, 0);
+    pod_grad_aa(&s, 0, 0, GW, GH, 0, top, bot);
+    memset(plain, 0, sizeof plain);
+    ht_rect_t c = {0, 0, GW, GH};
+    ht_pro_raster(&s.runs[0], c, plain);
+    ht_scene_clear(&s, 0);
+    pod_grad_aa_dither(&s, 0, 0, GW, GH, 0, top, bot);
+    CHECK(s.count == 1);
+    memset(dith, 0, sizeof dith);
+    ht_pro_raster(&s.runs[0], c, dith);
+    int mixed_rows = 0, plain_mixed = 0;
+    for (int y = 0; y < GH; y++) {
+        const int last = GH - 1;
+        unsigned lo = 0xffff, hi = 0;
+        for (int x = 0; x < GW; x++) {
+            unsigned v = dith[y * GW + x] >> 11;
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+            if (plain[y * GW + x] != plain[y * GW]) plain_mixed++;
+        }
+        if (hi != lo) mixed_rows++;
+        CHECK(hi - lo <= 1);   // never more than one level apart within a row
+        double exact = ((top >> 11) * (double)(last - y) + (bot >> 11) * (double)y) / last;
+        for (int x = 0; x < GW; x++) {
+            double v = dith[y * GW + x] >> 11;
+            CHECK(v >= exact - 1.0 && v <= exact + 1.0);
+        }
+    }
+    CHECK(plain_mixed == 0);   // pod_grad_aa is untouched: one value per row, whole bands
+    CHECK(mixed_rows > GH / 2);   // the dither pattern is present on most rows
+    // 4 x 4 block means track the exact value within a sixteenth (+ a little rounding) for each channel.
+    for (int y = 0; y + 4 <= GH; y += 4) {
+        unsigned sr = 0, sg = 0, sb = 0;
+        for (int dy = 0; dy < 4; dy++) for (int dx = 0; dx < 4; dx++) {
+            uint16_t v = dith[(y + dy) * GW + dx];
+            sr += v >> 11; sg += (v >> 5) & 63; sb += v & 31;
+        }
+        double mid = y + 1.5, last = GH - 1;
+        double er = ((top >> 11) * (last - mid) + (bot >> 11) * mid) / last;
+        double eg = (((top >> 5) & 63) * (last - mid) + ((bot >> 5) & 63) * mid) / last;
+        double eb = ((top & 31) * (last - mid) + (bot & 31) * mid) / last;
+        CHECK(fabs(sr / 16.0 - er) < 0.35 && fabs(sg / 16.0 - eg) < 0.35 && fabs(sb / 16.0 - eb) < 0.35);
+    }
 }
 
 static void draw_test_tri(void)
@@ -471,10 +503,8 @@ static void draw_test_rect_aa_stroke(void)
 // ---- Face-aware text: a code point is kept only if the face draws it (the face's extras table) ----
 #define FACES(X) \
     X(ht_pro_24) X(ht_pro_32) X(ht_pro_42) X(ht_pro_56) \
-    X(cs_sb_48) X(cs_sb_34) X(cs_sb_26) X(cs_sb_22) X(cs_rg_24) X(cs_rg_20) X(cs_rg_17) X(cs_mono_26) X(cs_mono_18) \
-    X(cs_mono_15) X(cs_md_28) X(cs_sb_32) X(cs_rg_36) X(cs_rg_27) X(cs_rg_22) X(cs_mono_24) X(cs_mono_22) \
-    X(ci_rg_20) X(ci_rg_22) X(ci_rg_23) X(ci_rg_24) X(ci_rg_25) X(ci_rg_26) X(ci_rg_28) X(ci_rg_30) X(ci_rg_32) \
-    X(ci_rg_33) X(ci_rg_41) X(ci_rg_43) X(ci_rg_48) X(ci_bd_20) X(ci_bd_23) X(ci_bd_24) X(ci_bd_26) X(ci_bd_30) X(ci_bd_45)
+    X(ph_sb_48) X(ph_sb_34) X(ph_sb_26) X(ph_sb_22) X(ph_rg_24) X(ph_mono_26) X(ph_mono_18) \
+    X(ph_sb_32) X(ph_rg_36) X(ph_mono_22)
 typedef struct { const char *name; const ht_pro_font_t *face; } named_face_t;
 #define ENTRY(f) {#f, &f},
 static const named_face_t all_faces[] = { FACES(ENTRY) };
@@ -495,11 +525,9 @@ static const char *draw_text(const ht_pro_font_t *face, const char *text, int *i
     if (ink) *ink = n;
     return s.runs[0].text;
 }
-static bool starts_with(const char *s, const char *prefix) { return !strncmp(s, prefix, strlen(prefix)); }
-static bool cut_face(const char *name)   // faces cut to a fixed string (gen_fonts CONSOLE_CUT / CLASSIC_CUT): their extras may be blank
+static bool cut_face(const char *name)   // faces cut to a fixed string (gen_fonts CONSOLE_CUT): their extras may be blank
 {
-    return !strcmp(name, "cs_sb_48") || !strcmp(name, "cs_mono_24") || !strcmp(name, "ci_rg_43") ||
-           !strcmp(name, "ci_rg_48") || !strcmp(name, "ci_bd_45");
+    return !strcmp(name, "ph_sb_48");
 }
 static const named_face_t *find_face(const char *name)
 {
@@ -510,14 +538,8 @@ static const named_face_t *find_face(const char *name)
 static void draw_test_marks_follow_the_face(void)
 {
     const char *input = "a \xe2\x86\x90 b \xe2\x86\x91 c \xe2\x96\xb2";   // a <- b ^ c up-triangle
-    // Classic: none of the arrows is in the face, so each becomes its ASCII fallback, never a '?'.
-    const char *ci = draw_text(find_face("ci_rg_24")->face, input, NULL);
-    CHECK(!strchr(ci, '?'));
-    for (const char *p = ci; *p; p++) CHECK(!((unsigned char)*p & 0x80));
-    CHECK(starts_with(ci, "a ") && strstr(ci, " b ") && strstr(ci, " c "));
-    CHECK(strlen(ci) > strlen("a  b  c "));
-    // Console: the marks are native and kept as they are.
-    const char *cs = draw_text(find_face("cs_rg_24")->face, input, NULL);
+    // Pets: the marks are native and kept as they are.
+    const char *cs = draw_text(find_face("ph_rg_24")->face, input, NULL);
     CHECK(!strcmp(cs, input));
     // The old faces carry no marks either: a fallback, never '?'.
     const char *old = draw_text(find_face("ht_pro_24")->face, input, NULL);
@@ -526,9 +548,8 @@ static void draw_test_marks_follow_the_face(void)
     // The five marks that always passed through the no-face path still do.
     char out[64];
     CHECK(ht_display_text_ex(out, sizeof out, "\xe2\x86\x92", NULL) && !strcmp(out, "\xe2\x86\x92"));
-    // Console's right arrow stays native; Classic's becomes ASCII and does not draw the em dash.
-    CHECK(!strcmp(draw_text(find_face("cs_rg_24")->face, "\xe2\x86\x92", NULL), "\xe2\x86\x92"));
-    CHECK(strcmp(draw_text(find_face("ci_rg_24")->face, "\xe2\x86\x92", NULL), "\xe2\x86\x92") != 0);
+    // Pets's right arrow stays native.
+    CHECK(!strcmp(draw_text(find_face("ph_rg_24")->face, "\xe2\x86\x92", NULL), "\xe2\x86\x92"));
 }
 
 static void draw_test_extras_round_trip(void)
@@ -547,48 +568,277 @@ static void draw_test_extras_round_trip(void)
             int ink;
             const char *shown = draw_text(f, text, &ink);
             CHECK(!strcmp(shown, text));   // kept native
-            // A face cut to a fixed string draws only that string's marks (U+2026 on cs_sb_48 / ci_bd_45).
-            if (cut_face(nf->name) && !(cp == 0x2026 && (!strcmp(nf->name, "cs_sb_48") || !strcmp(nf->name, "ci_bd_45")))) continue;
+            // A face cut to a fixed string draws only that string's marks (U+2026 on ph_sb_48).
+            if (cut_face(nf->name) && !(cp == 0x2026 && !strcmp(nf->name, "ph_sb_48"))) continue;
             if (!ink) fprintf(stderr, "%s U+%04X has no ink\n", nf->name, (unsigned)cp);
             CHECK(ink > 0);
         }
     }
-    // Classic: U+2014 draws the dash itself and U+2192 neither draws it nor falls back onto it.
-    for (unsigned i = 0; i < N_FACES; i++) {
-        const named_face_t *nf = &all_faces[i];
-        if (strncmp(nf->name, "ci_", 3) || cut_face(nf->name)) continue;
-        static uint16_t dash[TW * TH], arrow[TW * TH];
-        int ink;
-        CHECK(!strcmp(draw_text(nf->face, "\xe2\x80\x94", &ink), "\xe2\x80\x94") && ink > 0);
-        memcpy(dash, tbuf, sizeof tbuf);
-        const char *a = draw_text(nf->face, "\xe2\x86\x92", NULL);
-        CHECK(strcmp(a, "\xe2\x86\x92") != 0 && !strchr(a, '?'));
-        memcpy(arrow, tbuf, sizeof tbuf);
-        CHECK(memcmp(dash, arrow, sizeof dash) != 0);
-        draw_text(nf->face, "-", NULL);
-        CHECK(memcmp(dash, tbuf, sizeof dash) != 0);   // the dash is the em dash glyph, not the hyphen
+}
+
+// zoom 16 is an exact 2x nearest-neighbour scale of the zoom-8 picture; 9..15 clamp to 8.
+static void draw_test_cell_zoom_2x(void)
+{
+    static const uint16_t pal[] = {0, 0xe0ff, 0x1f00};
+    static const uint8_t cells[] = {1,0,2,  2,1,1};
+    ht_cell_frame_t f = {3, 2, 1, pal, cells, NULL};
+    ht_scene_t a, b; ht_scene_clear(&a, 0); ht_scene_clear(&b, 0);
+    CHECK(pod_cell(&a, 5, 6, &f, 8));
+    CHECK(pod_cell(&b, 5, 6, &f, 16));
+    CHECK(b.runs[0].x == 5 && b.runs[0].y == 6);
+    CHECK(b.runs[0].w == 2 * a.runs[0].w && b.runs[0].pro_height == 2 * a.runs[0].pro_height);
+    uint16_t one[W * H];
+    draw_over(&a, 0x1234); memcpy(one, buf, sizeof buf);
+    draw_over(&b, 0x1234);
+    for (int j = 0; j < 2; j++)
+        for (int k = 0; k < 3; k++)
+            for (int dy = 0; dy < 2; dy++)
+                for (int dx = 0; dx < 2; dx++)
+                    CHECK(px(5 + 2 * k + dx, 6 + 2 * j + dy) == one[(6 + j) * W + 5 + k]);
+    CHECK(px(4, 6) == 0x1234 && px(11, 6) == 0x1234 && px(5, 10) == 0x1234);   // nothing outside the 6 x 4 box
+}
+// A coarse grid (cell 2: each cell 2 glass pixels at zoom 8) at zoom 16 is the zoom-8 picture, every pixel doubled: the cells are
+// 4 px wide, the edge softening decides per cell exactly as at 1x.
+static void draw_test_cell_zoom_2x_coarse(void)
+{
+    static const uint16_t pal[] = {0, 0xe0ff, 0x1f00};
+    static const uint8_t cells[] = {1,0,2,  2,1,1,  1,1,2};
+    ht_cell_frame_t f = {3, 3, 2, pal, cells, NULL};
+    ht_scene_t a, b; ht_scene_clear(&a, 0); ht_scene_clear(&b, 0);
+    CHECK(pod_cell(&a, 3, 2, &f, 8));
+    CHECK(pod_cell(&b, 3, 2, &f, 16));
+    CHECK(a.runs[0].w == 6 && a.runs[0].pro_height == 6 && b.runs[0].w == 12 && b.runs[0].pro_height == 12);
+    uint16_t one[W * H];
+    draw_over(&a, 0x1234); memcpy(one, buf, sizeof buf);
+    draw_over(&b, 0x1234);
+    int inked = 0;
+    for (int j = 0; j < 6; j++)
+        for (int k = 0; k < 6; k++) {
+            uint16_t want = one[(2 + j) * W + 3 + k];
+            inked += want != 0x1234;
+            for (int dy = 0; dy < 2; dy++)
+                for (int dx = 0; dx < 2; dx++)
+                    CHECK(px(3 + 2 * k + dx, 2 + 2 * j + dy) == want);
+        }
+    CHECK(inked > 20);
+    CHECK(px(2, 2) == 0x1234 && px(15, 2) == 0x1234 && px(3, 14) == 0x1234);   // nothing outside the 12 x 12 box
+}
+static void draw_test_cell_zoom_clamp(void)
+{
+    static const uint16_t pal[] = {0, 0xe0ff};
+    static const uint8_t cells[] = {1,1,1,  1,1,1};
+    ht_cell_frame_t f = {3, 2, 1, pal, cells, NULL};
+    for (unsigned z = 9; z <= 15; z++) {
+        ht_scene_t a, b; ht_scene_clear(&a, 0); ht_scene_clear(&b, 0);
+        CHECK(pod_cell(&a, 5, 6, &f, 8));
+        CHECK(pod_cell(&b, 5, 6, &f, z));
+        CHECK(a.runs[0].w == b.runs[0].w && a.runs[0].pro_height == b.runs[0].pro_height);
+        CHECK(a.runs[0].radius == b.runs[0].radius);
     }
 }
 
-static void draw_test_update_version_on_ci_bd_45(void)
+// ---- the fast paths against the plain per-pixel forms they replaced ------------------------------------------------------------
+static uint32_t lcg_state = 12345;
+static unsigned rnd(unsigned n) { lcg_state = lcg_state * 1664525u + 1013904223u; return (lcg_state >> 8) % n; }
+
+typedef struct { int16_t cx16, cy16; uint16_t r16, w16; int16_t ux, uy, cosh; } ref_arc_params_t;   // pod_draw.c's arc_params_t
+static uint16_t ref_mix565(uint16_t fg, uint16_t bg, unsigned a, unsigned levels)
 {
-    const ht_pro_font_t *f = find_face("ci_bd_45")->face;
-    const char *version = "0.2.0-beta+v";
-    for (const char *c = version; *c; c++) {
-        char one[2] = {*c, 0};
-        int ink;
-        CHECK(!strcmp(draw_text(f, one, &ink), one));
-        if (*c != ' ') { if (!ink) fprintf(stderr, "ci_bd_45 '%c' has no ink\n", *c); CHECK(ink > 0); }
+    unsigned half = levels / 2;
+    unsigned rr = ((fg >> 11) * a + (bg >> 11) * (levels - a) + half) / levels;
+    unsigned gg = (((fg >> 5) & 63) * a + ((bg >> 5) & 63) * (levels - a) + half) / levels;
+    unsigned bb = ((fg & 31) * a + (bg & 31) * (levels - a) + half) / levels;
+    return (uint16_t)((rr << 11) | (gg << 5) | bb);
+}
+// The arc as it was before the band was cut per row: every pixel of the box takes the square root.
+static void ref_arc_raster(const ht_run_t *r, ht_rect_t c, uint16_t *out)
+{
+    ref_arc_params_t p;
+    memcpy(&p, r->text, sizeof p);
+    int x1 = c.x > r->x ? c.x : r->x, x2 = c.x + c.w < r->x + r->w ? c.x + c.w : r->x + r->w;
+    int y1 = c.y > r->y ? c.y : r->y, y2 = c.y + c.h < r->y + r->pro_height ? c.y + c.h : r->y + r->pro_height;
+    int half = p.w16 / 2, rad = p.r16;
+    for (int y = y1; y < y2; y++) {
+        uint16_t *row = out + (y - c.y) * c.w - c.x;
+        int vy = p.cy16 - (y * 16 + 8);
+        for (int x = x1; x < x2; x++) {
+            int vx = x * 16 + 8 - p.cx16;
+            int d = (int)ref_isqrt((uint32_t)(vx * vx + vy * vy));
+            int cov = half - (d > rad ? d - rad : rad - d) + 8;
+            if (cov <= 0) continue;
+            int64_t dot = (int64_t)vx * p.ux + (int64_t)vy * p.uy;
+            int64_t lhs = dot * dot, rhs = (int64_t)(vx * vx + vy * vy) * p.cosh * p.cosh;
+            bool in = p.cosh >= 0 ? dot >= 0 && lhs + (lhs >> 12) >= rhs : dot >= 0 || lhs <= rhs + (rhs >> 12);
+            if (!in) continue;
+            row[x] = cov >= 16 ? r->fg : ref_mix565(r->fg, row[x], (unsigned)cov, 16);
+        }
     }
-    CHECK(!strcmp(draw_text(f, version, NULL), version));
-    int printable = 0;
-    for (int c = 0x21; c < 0x7f; c++) {
-        char one[2] = {(char)c, 0};
-        int ink;
-        draw_text(f, one, &ink);
-        printable += ink > 0;
+}
+// A ring arc cut into a span per row (and a hole in the middle) draws exactly the pixels of the full box: random arcs, including ones whose centre is
+// a pixel centre (distance 0) and thick ones that reach it, clipped whole and to a window.
+static void draw_test_arc_rows_equal_box(void)
+{
+    static uint16_t a[W * H], b[W * H];
+    int drawn = 0;
+    for (int n = 0; n < 600; n++) {
+        ht_scene_t s; ht_scene_clear(&s, 0);
+        int cx16 = n % 3 == 0 ? (int)(8 + 16 * rnd(W)) : (int)rnd(W * 16 + 400) - 200, cy16 = n % 3 == 0 ? (int)(8 + 16 * rnd(H)) : (int)rnd(H * 16 + 400) - 200;
+        int r16 = n % 5 == 0 ? (int)rnd(120) : (int)rnd(900), w16 = 1 + (int)rnd(n % 4 == 0 ? 700 : 160);
+        if (!pod_arc(&s, cx16, cy16, r16, w16, (int)rnd(360), (int)rnd(181), (uint16_t)(0x1000 + rnd(0xE000)))) continue;
+        for (int pass = 0; pass < 2; pass++) {
+            const ht_rect_t c = pass ? (ht_rect_t){5, 7, 40, 33} : clip;
+            for (int i = 0; i < c.w * c.h; i++) a[i] = b[i] = (uint16_t)(0x0841 * (unsigned)(i & 7));
+            ht_pro_raster(&s.runs[0], c, a);
+            ref_arc_raster(&s.runs[0], c, b);
+            CHECK(!memcmp(a, b, (size_t)c.w * c.h * sizeof a[0]));
+        }
+        drawn += s.runs[0].w > 0;
     }
-    CHECK(printable == 0x7f - 0x21);
+    CHECK(drawn > 400);
+}
+
+// The 2x cell path against its per-pixel definition: output pixel (x, y) is source cell ((x - x0) >> 1, (y - y0) >> 1), softened toward what is under it on an
+// edge. Windows that start on an odd or an even output row, and ones that cut the frame on either side.
+static unsigned ref_soften_k(uint16_t c)
+{
+    unsigned r = c >> 11, g = (c >> 5) & 63, b = c & 31;
+    unsigned lum = (r * 8u * 77u + g * 4u * 150u + b * 8u * 29u) >> 8;
+    return lum >= 112 ? 0 : (112 - lum) * 154 / 112;
+}
+static uint16_t ref_soften(uint16_t c, uint16_t dest)
+{
+    unsigned k = ref_soften_k(c);
+    if (!k) return c;
+    unsigned r = c >> 11, g = (c >> 5) & 63, b = c & 31, dr = dest >> 11, dg = (dest >> 5) & 63, db = dest & 31;
+    r = (r * (256 - k) + dr * k) / 256; g = (g * (256 - k) + dg * k) / 256; b = (b * (256 - k) + db * k) / 256;
+    return (uint16_t)(r << 11 | g << 5 | b);
+}
+static void ref_cell_2x(const ht_cell_frame_t *f, int x0, int y0, ht_rect_t c, uint16_t *out)
+{
+    for (int y = c.y; y < c.y + c.h; y++)
+        for (int x = c.x; x < c.x + c.w; x++) {
+            int cx = (x - x0) >> 1, cy = (y - y0) >> 1;
+            if (x < x0 || y < y0 || cx >= f->cols || cy >= f->rows) continue;
+            unsigned i = f->cells[cy * f->cols + cx];
+            if (!i) continue;
+            uint16_t v = __builtin_bswap16(f->palette[i]);
+            bool edge = cx == 0 || cy == 0 || cx + 1 >= f->cols || cy + 1 >= f->rows || !f->cells[cy * f->cols + cx - 1] ||
+                        !f->cells[cy * f->cols + cx + 1] || !f->cells[(cy - 1) * f->cols + cx] || !f->cells[(cy + 1) * f->cols + cx];
+            out[(y - c.y) * c.w + x - c.x] = edge ? ref_soften(v, out[(y - c.y) * c.w + x - c.x]) : v;
+        }
+}
+static void draw_test_cell_2x_matches_definition(void)
+{
+    static uint16_t pal[16];
+    static uint8_t cells[20 * 20];
+    static uint16_t a[W * H], b[W * H];
+    for (int n = 0; n < 200; n++) {
+        for (int k = 1; k < 16; k++) pal[k] = (uint16_t)rnd(0x10000);   // dark ones (they soften) and light ones
+        int cols = 3 + (int)rnd(14), rows = 3 + (int)rnd(14);
+        for (int i = 0; i < cols * rows; i++) cells[i] = rnd(4) ? (uint8_t)(1 + rnd(15)) : 0;
+        ht_cell_frame_t f = {(uint8_t)cols, (uint8_t)rows, 1, pal, cells, NULL};
+        int x0 = (int)rnd(30) - 8, y0 = (int)rnd(30) - 8;
+        ht_scene_t s; ht_scene_clear(&s, 0);
+        CHECK(pod_cell(&s, x0, y0, &f, 16));
+        for (int pass = 0; pass < 3; pass++) {
+            const ht_rect_t c = pass == 0 ? clip : pass == 1 ? (ht_rect_t){(int16_t)rnd(10), (int16_t)(1 + 2 * rnd(8)), 30, 25} : (ht_rect_t){3, (int16_t)(2 * rnd(8)), 41, 20};
+            for (int i = 0; i < c.w * c.h; i++) a[i] = b[i] = 0x5555;
+            ht_pro_raster(&s.runs[0], c, a);
+            ref_cell_2x(&f, x0, y0, c, b);
+            CHECK(!memcmp(a, b, (size_t)c.w * c.h * sizeof a[0]));
+        }
+    }
+}
+
+// Baked cells (pod_cell_flat): over the one colour it is told, a frame zoomed below 1x is the very picture pod_cell resamples, whole or in windows;
+// it is worked out once per (frame, zoom, ground) and kept; another ground, zoom or frame is another entry.
+static void draw_test_cell_flat_equals_resample(void)
+{
+    static uint16_t pal[16];
+    static uint8_t cells[30 * 30];
+    static uint16_t a[W * H], b[W * H];
+    pod_cell_bake_reset();
+    unsigned expect_bakes = 0;
+    for (int n = 0; n < 60; n++) {
+        for (int k = 1; k < 16; k++) pal[k] = (uint16_t)rnd(0x10000);
+        int cols = 4 + (int)rnd(26), rows = 4 + (int)rnd(26);
+        for (int i = 0; i < cols * rows; i++) cells[i] = rnd(3) ? (uint8_t)(1 + rnd(15)) : 0;
+        ht_cell_frame_t f = {(uint8_t)cols, (uint8_t)rows, 1, pal, cells, NULL};
+        unsigned z = 2 + rnd(6);   // 2..7: below 1x
+        uint16_t ground = (uint16_t)rnd(0x10000);
+        int x0 = (int)rnd(20), y0 = (int)rnd(20);   // on the clip, so the first raster bakes
+        ht_scene_t flat, plain; ht_scene_clear(&flat, 0); ht_scene_clear(&plain, 0);
+        CHECK(pod_cell_flat(&flat, x0, y0, &f, z, ground) && pod_cell(&plain, x0, y0, &f, z));
+        CHECK(flat.runs[0].w == plain.runs[0].w && flat.runs[0].pro_height == plain.runs[0].pro_height);
+        for (int pass = 0; pass < 3; pass++) {
+            const ht_rect_t c = pass == 0 ? clip : pass == 1 ? (ht_rect_t){(int16_t)rnd(10), (int16_t)rnd(10), 33, 21} : (ht_rect_t){0, (int16_t)rnd(30), 64, 7};
+            for (int i = 0; i < c.w * c.h; i++) a[i] = b[i] = ground;
+            ht_pro_raster(&flat.runs[0], c, a);
+            ht_pro_raster(&plain.runs[0], c, b);
+            CHECK(!memcmp(a, b, (size_t)c.w * c.h * sizeof a[0]));
+        }
+        expect_bakes++;
+        CHECK(pod_cell_bakes() == expect_bakes);   // three rasters, one bake
+    }
+    // The entry is found again, not baked again; a different ground or zoom is a new entry; a frame at 1x or more is not baked at all.
+    const unsigned px = pod_cell_bake_px();
+    CHECK(px > 0);
+    ht_cell_frame_t g = {6, 6, 1, pal, cells, NULL};
+    ht_scene_t s; ht_scene_clear(&s, 0);
+    CHECK(pod_cell_flat(&s, 0, 0, &g, 5, 0x1234) && pod_cell_flat(&s, 0, 0, &g, 5, 0x1234) && pod_cell_flat(&s, 0, 0, &g, 5, 0x4321) && pod_cell_flat(&s, 0, 0, &g, 4, 0x1234));
+    for (int i = 0; i < s.count; i++) { for (int j = 0; j < W * H; j++) a[j] = 0; ht_pro_raster(&s.runs[i], clip, a); }
+    CHECK(pod_cell_bakes() == expect_bakes + 3);
+    CHECK(pod_cell_flat(&s, 0, 0, &g, 8, 0x1234) && s.runs[s.count - 1].text[0] == 0);
+    for (int j = 0; j < W * H; j++) a[j] = 0;
+    ht_pro_raster(&s.runs[s.count - 1], clip, a);
+    CHECK(pod_cell_bakes() == expect_bakes + 3);
+    // A full table is not an error: the frame is resampled each time as before, the picture the same. (64 entries; the 65th and later are not kept.)
+    pod_cell_bake_reset();
+    for (int n = 0; n < 70; n++) {
+        const uint16_t ground = (uint16_t)(0x0100 + n);
+        ht_scene_t flat, plain; ht_scene_clear(&flat, 0); ht_scene_clear(&plain, 0);
+        CHECK(pod_cell_flat(&flat, 4, 4, &g, 5, ground) && pod_cell(&plain, 4, 4, &g, 5));
+        for (int j = 0; j < W * H; j++) a[j] = b[j] = ground;
+        ht_pro_raster(&flat.runs[0], clip, a);
+        ht_pro_raster(&plain.runs[0], clip, b);
+        CHECK(!memcmp(a, b, sizeof a));
+    }
+    CHECK(pod_cell_bakes() == 64);
+    pod_cell_bake_reset();
+    CHECK(pod_cell_bakes() == 0 && pod_cell_bake_px() == 0);
+}
+
+// The anti-aliased gradient's corner rows work the coverage out only within the radius at each end and fill between; clear rows are one colour.
+// Against the per-pixel form, whole and clipped, with radii from 0 to a pill.
+static void draw_test_grad_aa_spans_equal_pixels(void)
+{
+    static uint16_t a[W * H], b[W * H];
+    for (int n = 0; n < 300; n++) {
+        int w = 4 + (int)rnd(56), h = 2 + (int)rnd(40), rad = n % 7 == 0 ? 0 : (int)rnd((unsigned)(w < h ? w : h) / 2 + 1);
+        int x0 = (int)rnd(10) - 3, y0 = (int)rnd(12) - 3;
+        uint16_t top = (uint16_t)rnd(0x10000), bot = (uint16_t)rnd(0x10000);
+        ht_scene_t s; ht_scene_clear(&s, 0);
+        pod_grad_aa(&s, x0, y0, w, h, rad, top, bot);
+        const ht_run_t *r = &s.runs[0];
+        for (int pass = 0; pass < 3; pass++) {
+            const ht_rect_t c = pass == 0 ? clip : pass == 1 ? (ht_rect_t){(int16_t)rnd(20), (int16_t)rnd(12), (int16_t)(1 + rnd(40)), (int16_t)(1 + rnd(30))} : (ht_rect_t){0, 0, 64, 3};
+            for (int i = 0; i < c.w * c.h; i++) a[i] = b[i] = (uint16_t)(0x2104 * (unsigned)(i % 5));
+            ht_pro_raster(r, c, a);
+            const int last = r->pro_height > 1 ? r->pro_height - 1 : 1;
+            for (int y = c.y > r->y ? c.y : r->y; y < (c.y + c.h < r->y + r->pro_height ? c.y + c.h : r->y + r->pro_height); y++) {
+                int row = y - r->y, cy = row < r->radius ? row : row >= r->pro_height - r->radius ? r->pro_height - 1 - row : -1;
+                uint16_t ink = ref_mix565(bot, top, (unsigned)row, (unsigned)last);
+                for (int x = c.x > r->x ? c.x : r->x; x < (c.x + c.w < r->x + r->w ? c.x + c.w : r->x + r->w); x++) {
+                    int dx = x - r->x, cx = dx < r->radius ? dx : dx >= r->w - r->radius ? r->w - 1 - dx : -1;
+                    unsigned cov = cx < 0 || cy < 0 ? 16 : ht_pro_corner_cover(r->radius, cx, cy);
+                    uint16_t *d = &b[(y - c.y) * c.w + x - c.x];
+                    if (!cov) continue;
+                    *d = cov >= 16 ? ink : ht_pro_over(ink, *d, cov * 255 / 16);
+                }
+            }
+            CHECK(!memcmp(a, b, (size_t)c.w * c.h * sizeof a[0]));
+        }
+    }
 }
 
 int main(void)
@@ -600,17 +850,23 @@ int main(void)
     draw_test_edge_softening();
     draw_test_no_white_halo();
     draw_test_zoom();
+    draw_test_cell_zoom_2x();
+    draw_test_cell_zoom_2x_coarse();
+    draw_test_cell_zoom_clamp();
     draw_test_arc();
+    draw_test_arc_rows_equal_box();
+    draw_test_cell_2x_matches_definition();
+    draw_test_cell_flat_equals_resample();
+    draw_test_grad_aa_spans_equal_pixels();
     draw_test_damage();
     draw_test_grad();
-    draw_test_grad_gray();
     draw_test_grad_aa_corner();
     draw_test_grad_aa_rows();
+    draw_test_grad_aa_dither();
     draw_test_tri();
     draw_test_tri_seam();
     draw_test_marks_follow_the_face();
     draw_test_extras_round_trip();
-    draw_test_update_version_on_ci_bd_45();
     printf("Pod draw: PASS (%d checks)\n", checks);
     return 0;
 }

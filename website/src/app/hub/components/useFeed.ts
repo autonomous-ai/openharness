@@ -1,25 +1,25 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { communityRequest, CommunityError } from '@/lib/community/client';
-import { feedPath, type FeedQuery } from '@/lib/community/feed';
+import { feedPath, type FeedPage, type FeedQuery, type Stats } from '@/lib/community/feed';
+import { onSessionChange } from '@/lib/community/session';
+import { putLike } from '@/lib/community/social';
 import type { HarnessSummary } from '@/lib/community/types';
 
-/** `forks` comes from a backend that counts them; an older one leaves it out. */
-export type Stats = { likes: number; comments: number; liked: boolean; forks?: number };
-/** `order` comes with a popular feed from a backend that ranks the starters too; an older one leaves it out. */
-type FeedResult = { harnesses: HarnessSummary[]; order?: string[]; nextCursor: string | null; following: string[]; stats?: Record<string, Stats>; signedIn?: boolean };
 
 /**
  * One feed's pages, their likes, comments and forks, and the reader's likes. Pages load as `more`
  * scrolls into view; a newer load supersedes an older one, and a sign-in, a sign-out or a new view
  * (matched by the server across every publication) reloads. `settled` turns true once the first
  * page has answered, so what is drawn under the pages waits for them instead of jumping.
+ * `initial` is that page as the server read it for a visitor: drawn at once, then read again here
+ * with the reader's sign-in, which is only in this browser.
  */
-export function useFeed({ following, mine, forkedFrom, query, category, sort }: FeedQuery) {
-  const [posts, setPosts] = useState<HarnessSummary[]>([]), [follows, setFollows] = useState<string[]>([]);
-  const [stats, setStats] = useState<Record<string, Stats>>({}), [signedIn, setSignedIn] = useState(false);
-  const [cursor, setCursor] = useState<string | null>(null), [settled, setSettled] = useState(false);
-  const [order, setOrder] = useState<string[] | null>(null);
+export function useFeed({ following, mine, forkedFrom, author, query, category, sort }: FeedQuery, initial?: FeedPage | null) {
+  const [posts, setPosts] = useState<HarnessSummary[]>(initial?.harnesses ?? []), [follows, setFollows] = useState<string[]>(initial?.following ?? []);
+  const [stats, setStats] = useState<Record<string, Stats>>(initial?.stats ?? {}), [signedIn, setSignedIn] = useState(false);
+  const [cursor, setCursor] = useState<string | null>(initial?.nextCursor ?? null), [settled, setSettled] = useState(!!initial);
+  const [order, setOrder] = useState<string[] | null>(initial?.order ?? null);
   const [error, setError] = useState(''), [likeError, setLikeError] = useState(''), [signedOut, setSignedOut] = useState(false), [busy, setBusy] = useState(false);
   const [liking, setLiking] = useState<ReadonlySet<string>>(new Set());
   const generation = useRef(0), loading = useRef(false), pendingLikes = useRef(new Set<string>()), more = useRef<HTMLDivElement>(null);
@@ -28,7 +28,7 @@ export function useFeed({ following, mine, forkedFrom, query, category, sort }: 
     const requestId = ++generation.current;
     loading.current = true; setBusy(true); setError(''); setSignedOut(false);
     try {
-      const result = await communityRequest<FeedResult>(feedPath({ following, mine, forkedFrom, query, category, sort }, after));
+      const result = await communityRequest<FeedPage>(feedPath({ following, mine, forkedFrom, author, query, category, sort }, after));
       if (requestId !== generation.current) return;
       setPosts(previous => after ? [...previous, ...result.harnesses.filter(item => !previous.some(p => p.id === item.id))] : result.harnesses);
       setStats(previous => after ? { ...previous, ...result.stats } : result.stats || {});
@@ -39,11 +39,11 @@ export function useFeed({ following, mine, forkedFrom, query, category, sort }: 
       if (e instanceof CommunityError && e.status === 401) setSignedOut(true);
       else setError('Community posts are temporarily unavailable. You can still explore and fork the starter projects.');
     } finally { if (requestId === generation.current) { loading.current = false; setBusy(false); setSettled(true); } }
-  }, [following, mine, forkedFrom, query, category, sort]);
+  }, [following, mine, forkedFrom, author, query, category, sort]);
   useEffect(() => {
-    void load(); const reload = () => { void load(); };
-    window.addEventListener('storage', reload); window.addEventListener('harness-session', reload);
-    return () => { generation.current++; window.removeEventListener('storage', reload); window.removeEventListener('harness-session', reload); };
+    void load();
+    const stop = onSessionChange(() => { void load(); });
+    return () => { generation.current++; stop(); };
   }, [load]);
   useEffect(() => {
     if (!cursor || busy || error || !more.current || !('IntersectionObserver' in window)) return;
@@ -60,7 +60,7 @@ export function useFeed({ following, mine, forkedFrom, query, category, sort }: 
     if (pendingLikes.current.has(id)) return;
     pending(id, true); setLikeError('');
     try {
-      const result = await communityRequest<{ liked: boolean; likes: number }>(`harnesses/${id}/like`, { method: 'PUT', body: { liked: !stats[id]?.liked } });
+      const result = await putLike(id, !stats[id]?.liked);
       setStats(previous => ({ ...previous, [id]: { ...previous[id], comments: previous[id]?.comments || 0, ...result } }));
     } catch (e) {
       if (e instanceof CommunityError && e.status === 401) setSignedOut(true);

@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/phone/agent_home.dart';
+import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/agent_swipe.dart';
+import 'package:harness_mobile/phone/welcome/onboarding_copy.dart';
 import 'package:harness_mobile/phone/welcome/pick_up_page.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -93,24 +95,41 @@ void main() {
       await tester.pump(const Duration(seconds: 11));
     });
 
-    testWidgets(
-      'or, with nothing remembered at all, the sessions to pick from',
-      (tester) async {
-        await pumpHome(
-          tester,
-          tabs: [
-            deskTab('t1', 'Empty', ['gone']),
-            deskTab('t2', 'Docker', ['c', 'd']),
-          ],
-        );
+    testWidgets('or, with nothing remembered at all, the computer\'s moment, then the session used on it '
+        'last — not a tab', (tester) async {
+      final app = await pumpHome(
+        tester,
+        tabs: [
+          deskTab('t1', 'Empty', ['gone']),
+          deskTab('t2', 'Docker', ['c', 'd']),
+        ],
+      );
+      // The desktop opened `a` last: its pane took focus there (`lastOpenedAt`).
+      app.stateOf('m')!.agents = [
+        for (final id in pagerAgentIds)
+          Agent(
+            id: id,
+            name: id,
+            engine: 'claude',
+            project: const AgentProject(name: 'work', cwd: '/work'),
+            terminalAvailable: true,
+            lastOpenedAt: id == 'a' ? DateTime(2026, 10, 12, 9) : null,
+          ),
+      ];
+      app.notifyListeners();
+      await tester.pump();
 
-        // A new phone opens on "Pick up where you left off", not on a session guessed for it.
-        expect(find.byType(PickUpPage), findsOneWidget);
-        expect(find.byType(AgentSwipeHost), findsNothing);
-        // Its list reaches the machines as Find does (`reachAllMachines`): let the timers run out.
-        await tester.pumpWidget(const SizedBox());
-        await tester.pump(const Duration(seconds: 30));
-      },
-    );
+      // A new phone signed in to an account that had the computer: "Test host is ready.", not
+      // "Pick up where you left off", and not a tab's first agent.
+      expect(find.text(OnboardingCopy.ready('Test host')), findsOneWidget);
+      expect(find.byType(PickUpPage), findsNothing);
+      await tester.pump(const Duration(milliseconds: 2300));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(pager(tester).agentId, 'a');
+      expect(app.firstSessionLine?.text, OnboardingCopy.micTalk);
+      // The record and the machines' reach run on timers: let them run out.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 30));
+    });
   });
 }

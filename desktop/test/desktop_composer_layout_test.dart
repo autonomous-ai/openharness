@@ -69,11 +69,17 @@ class _ReviewApp extends AppNotifier {
   Future<void> probeEngines(String machineId, {bool force = false}) async {}
 
   @override
-  Future<void> probeDsh(String machineId, {bool force = false}) async {}
+  Future<void> probeDsh(
+    String machineId, {
+    bool force = false,
+    bool userAction = false,
+  }) async {}
 
   @override
-  Future<GridModels> refreshGridModels(String machineId) async =>
-      const GridModels.unreachable();
+  Future<GridModels> refreshGridModels(
+    String machineId, {
+    bool userAction = false,
+  }) async => const GridModels.unreachable();
 
   @override
   Future<Map<String, dynamic>> readGitProject(

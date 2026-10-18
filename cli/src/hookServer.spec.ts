@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { request, type Server } from 'node:http'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startHookServer, type HookServerHandlers, chooseHookAgent, hookFiredAt, knownTranscriptFor } from './hookServer.js'
@@ -433,6 +433,23 @@ describe('account Experimental settings proxy', () => {
     const failed = await post(body)
     expect(failed.status).toBe(502)
     expect(await failed.text()).not.toContain('PRIVATE_CANARY')
+  })
+  it('forwards the current Desktop health report intact while rejecting private context', async () => {
+    const body = JSON.parse(readFileSync(new URL('../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8'))
+    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { accepted: true } } }))
+    const { base } = await start({ onProductUsageReport: send })
+    const headers = { 'content-type': 'application/json', 'x-adapter-local': '1' }
+    const post = (value: unknown, h = headers) => fetch(`${base}/api/product-usage/report`, { method: 'POST', headers: h, body: JSON.stringify(value) })
+    expect((await post(body, { ...headers, origin: 'https://untrusted.example' } as typeof headers)).status).toBe(403)
+    for (const bad of [{ ...body, context: { ...body.context, path: 'PRIVATE_CANARY' } },
+      { ...body, context: { ...body.context, release: 'PRIVATE_CANARY' } },
+      { ...body, counters: { health_cli_report_failure_auth: 1 } }]) {
+      const refused = await post(bad)
+      expect(refused.status).toBe(400); expect(await refused.text()).not.toContain('PRIVATE_CANARY')
+    }
+    expect(send).not.toHaveBeenCalled()
+    expect((await post(body)).status).toBe(200)
+    expect(send).toHaveBeenCalledExactlyOnceWith(body)
   })
   it('serves the Privacy switch and rejects cross-origin, extra-field and malformed writes', async () => {
     const write = vi.fn(async () => ({ status: 200, body: { success: true, data: { enabled: false, revision: 1 } } }))

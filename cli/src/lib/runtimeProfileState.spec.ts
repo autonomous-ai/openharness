@@ -383,6 +383,39 @@ describe('runtime profiles without the pilot implementations', () => {
     expect(manager.getState(agent.sessionId)).toEqual(before)
   })
 
+  // Pi 1.0 prints no `model • level` in its footer: the right edge clips the model's name and a footer
+  // extension can replace the line. Its session file still says both (shapes from a Pi 1.0.0 session,
+  // 2026-10-15; the values are invented).
+  it('reads Pi 1.0 model and thinking level from its session, never from the clipped footer', () => {
+    const manager = new RuntimeProfileState(() => undefined)
+    const agent = session('pi')
+    manager.hydrate(agent, [
+      '{"type":"session","version":3,"id":"s1","timestamp":"2026-10-15T03:00:00.000Z","cwd":"/tmp/pi"}',
+      '{"type":"model_change","id":"m1","parentId":null,"timestamp":"2026-10-15T03:00:01.000Z","provider":"autonomous-ai","modelId":"DeepSeek-V4-Flash-0731"}',
+      '{"type":"thinking_level_change","id":"t1","parentId":"m1","timestamp":"2026-10-15T03:00:01.000Z","thinkingLevel":"off"}',
+    ])
+    expect(parseRuntimeProfile(manager.selectedModel(agent))).toMatchObject({ engine: 'pi', model: 'DeepSeek-V4-Flash-0731', effort: 'off' })
+    expect(manager.ingestPane(agent, '↑14M ↓289k R21M CH0.0% 51.4%/256k (auto)                        DeepSeek-V4-Fla', true)).toBe(false)
+    expect(parseRuntimeProfile(manager.selectedModel(agent))?.model).toBe('DeepSeek-V4-Flash-0731')
+    // Every answer names the model that gave it.
+    expect(manager.ingest(agent, JSON.stringify({ type: 'message', message: {
+      role: 'assistant', provider: 'autonomous-ai', model: 'Qwen/Qwen3.8-27B', content: [{ type: 'text', text: 'ok' }],
+    } }), true)).toBe(true)
+    expect(parseRuntimeProfile(manager.selectedModel(agent))?.model).toBe('Qwen/Qwen3.8-27B')
+    // A person's message names none.
+    expect(manager.ingest(agent, JSON.stringify({ type: 'message', message: { role: 'user', model: 'other', content: [] } }), true)).toBe(false)
+  })
+
+  it('confirms a Pi switch from the model_change its /model writes', async () => {
+    const manager = new RuntimeProfileState(() => undefined)
+    const agent = session('pi')
+    manager.hydrate(agent, ['{"type":"model_change","provider":"autonomous-ai","modelId":"DeepSeek-V4-Flash-0731"}'])
+    manager.beginControl(agent, { id: 'target', sessionId: agent.sessionId, engine: agent.engine, model: 'Qwen/Qwen3.8-27B', effort: 'auto' })
+    const waiting = manager.waitForModel(agent.sessionId, 1000)
+    manager.ingest(agent, '{"type":"model_change","provider":"autonomous-ai","modelId":"Qwen/Qwen3.8-27B"}', true)
+    expect(await waiting).toBe(true)
+  })
+
   it.each(['amp', 'muse', 'copilot', 'terminal'] as const)('does not interpret Claude UI quoted in a %s pane', engine => {
     // Apply the same boundary in explicit inline mode. Supplying a Claude facet must not make it a
     // fallback for engines whose profile source is their own config or registration.

@@ -41,6 +41,7 @@ mod layout;
 mod desk_layout;
 mod local;
 mod machine_menu;
+mod measure;
 mod modal;
 mod buttons;
 mod dialog;
@@ -449,6 +450,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     // Its ids ($N @N %N) from this server name's counters: unique among its clients.
     ids::use_file(&app::sessions_path(None));
     let mut app = app::App::new(port, tx.clone(), size);
+    // app_start runs from the process's start, as the Desktop's launch clock does.
+    app.measure.since = started;
     app.first_session();
     // `hn <command>` from a shell comes in here.
     let socket = ipc::serve(tx.clone(), port);

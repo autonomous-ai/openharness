@@ -37,7 +37,10 @@ void main() {
   }
 
   test('a space costs no glyph', () {
-    expect(glyphsDrawnFor('a  b    '), 2);
+    // `a  b` is one run ([GlyphRun]): the blanks between ride in it, and the
+    // ones after it are not drawn.
+    expect(glyphsDrawnFor('a  b    '), 1);
+    expect(glyphsDrawnFor('    '), 0);
   });
 
   test('an underlined space still draws its underline', () {

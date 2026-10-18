@@ -17,6 +17,9 @@ import 'harness_comments.dart';
 import '../state/app_state.dart';
 import '../ws/ws_conn.dart';
 import '../community/publish.dart';
+import '../agent_messages/shared_tab_errors.dart' show sharedTabErrorText;
+import '../agent_messages/shared_tab_placement.dart' show plainSharedText;
+import '../agent_messages/shared_tabs.dart' show SharedTabsFailure;
 
 typedef ShareAction = Future<Map<String, dynamic>> Function(
   String action,
@@ -45,8 +48,19 @@ class ShareHarnessDialog extends StatefulWidget {
     required this.name,
     required this.manage,
     this.publish,
+    this.tabMode = false,
+    this.errorMachine,
   });
   final String name;
+
+  /// Inviting people to a shared tab: no link, Access or Comments, and at
+  /// most [maxTabInvites] addresses at a time. `list` answers `shares`
+  /// (`email`, `expiresAt`, and an `id` only when the invitation can be
+  /// revoked); `invite` may also answer `refused` (`email`, `error`).
+  final bool tabMode;
+
+  /// The name of the computer a refused action needed, for "… is away".
+  final String? errorMachine;
   final ShareAction manage;
 
   /// Hands the harness to the Hub, returning what the person does next there.
@@ -57,6 +71,8 @@ class ShareHarnessDialog extends StatefulWidget {
 
 enum _ShareRow { access, people, options, expiry, comments, stop, copy, retry }
 
+const maxTabInvites = 8;
+
 class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
   final _focus = FocusNode(debugLabel: 'share-form');
   final _emailFocus = FocusNode(debugLabel: 'share-emails');
@@ -66,7 +82,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
   final _sideScroll = ScrollController();
   final _rowKeys = {for (final row in _ShareRow.values) row: GlobalKey()};
   final _choiceKeys = <int, GlobalKey>{};
-  _ShareRow _row = _ShareRow.copy;
+  late _ShareRow _row = widget.tabMode ? _ShareRow.people : _ShareRow.copy;
   bool _options = false, _picking = false, _hideChoices = false;
   int _choice = 0;
 
@@ -87,9 +103,13 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
     // autofocus wins per scope — so the form asks for the keys itself.
     _focusPane();
     unawaited(_load());
-    _presence = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (!_busy) unawaited(_load(quiet: true));
-    });
+    // A shared tab's people come from the roster the app already holds; it
+    // reads again after each action, so nothing polls while the form is open.
+    if (!widget.tabMode) {
+      _presence = Timer.periodic(const Duration(seconds: 5), (_) {
+        if (!_busy) unawaited(_load(quiet: true));
+      });
+    }
   }
 
   @override
@@ -104,18 +124,26 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
     super.dispose();
   }
 
-  String _message(Object error) =>
-      error is WsRequestFailure && error.code == 'UNSUPPORTED'
+  /// The invitations that can be revoked (those with an id), in list order.
+  List<Map<String, dynamic>> get _removable => [
+    for (final s in _shares)
+      if (s['id'] is String) s,
+  ];
+
+  String _message(Object error) => error is SharedTabsFailure
+      ? sharedTabErrorText(error, machine: widget.errorMachine)
+      : error is WsRequestFailure && error.code == 'UNSUPPORTED'
       ? 'Update Harness on this machine to start sharing.'
       : error is WsRequestFailure && error.detail != null
       ? error.detail!
       : 'Could not reach this harness. Check the connection and try again.';
   void _accept(Map<String, dynamic> response) {
+    final removable = _removable;
     final recipientId =
-        _row == _ShareRow.people && _choice >= 2 && _choice - 2 < _shares.length
-        ? _shares[_choice - 2]['id']
+        _row == _ShareRow.people && _choice >= 2 && _choice - 2 < removable.length
+        ? removable[_choice - 2]['id']
         : null;
-    _collaboration = response['collaboration'] == true;
+    _collaboration = !widget.tabMode && response['collaboration'] == true;
     _link = response['link'] is Map
         ? Map<String, dynamic>.from(response['link'] as Map)
         : null;
@@ -124,7 +152,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
         Map<String, dynamic>.from(row as Map),
     ];
     if (recipientId != null) {
-      final index = _shares.indexWhere((share) => share['id'] == recipientId);
+      final index = _removable.indexWhere((share) => share['id'] == recipientId);
       _choice = index < 0 ? 0 : index + 2;
       if (_picking && index < 0) _focusPane();
     }
@@ -163,11 +191,12 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
         .map((e) => e.toLowerCase())
         .toSet()
         .toList();
+    final most = widget.tabMode ? maxTabInvites : 20;
     if (emails.isEmpty ||
-        emails.length > 20 ||
+        emails.length > most ||
         emails.any((e) => !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(e))) {
       setState(() {
-        _error = 'Enter up to 20 valid email addresses, separated by commas.';
+        _error = 'Enter up to $most valid email addresses, separated by commas.';
         _notice = null;
       });
       return;
@@ -184,9 +213,33 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
         'days': _days,
       });
       if (mounted) {
+        final refused = [
+          for (final r in response['refused'] as List? ?? const [])
+            if (r is Map)
+              '${plainSharedText('${r['email']}')}: ${sharedTabErrorText(SharedTabsFailure('${r['error']}', plainSharedText('${r['error']}')))}',
+        ];
+        final refusedEmails = [
+          for (final r in response['refused'] as List? ?? const [])
+            if (r is Map) '${r['email']}',
+        ];
         setState(() {
           _accept(response);
-          _emails.clear();
+          if (widget.tabMode) {
+            // What was refused stays in the field to fix or try again.
+            _emails.text = refusedEmails.join(', ');
+          } else {
+            _emails.clear();
+          }
+          if (widget.tabMode) {
+            final sent = emails.length - refused.length;
+            _error = refused.isEmpty ? null : refused.join('\n');
+            _notice = sent <= 0
+                ? null
+                : sent == 1
+                ? '1 person invited.'
+                : '$sent people invited.';
+            return;
+          }
           _notice = _shares.any((s) => s['error'] != null)
               ? 'Some invitations could not be shared. Check the details below.'
               : _shares.any((s) => s['pending'] == true)
@@ -217,7 +270,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
       if (mounted) {
         setState(() {
           _accept(response);
-          _notice = 'Access removed.';
+          _notice = widget.tabMode ? 'Invitation revoked.' : 'Access removed.';
         });
       }
     } catch (error) {
@@ -292,7 +345,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
       if (_collaboration) _ShareRow.comments,
       if (_linkActive) _ShareRow.stop,
     ],
-    _ShareRow.copy,
+    if (!widget.tabMode) _ShareRow.copy,
     if (_error != null) _ShareRow.retry,
   ];
 
@@ -355,7 +408,9 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
     setState(() {
       _picking = false;
       _hideChoices = true;
-      if (selectCopy) _row = _ShareRow.copy;
+      if (selectCopy) {
+        _row = widget.tabMode ? _ShareRow.options : _ShareRow.copy;
+      }
     });
     _focusPane();
   }
@@ -387,7 +442,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
       final count = switch (_row) {
         _ShareRow.access => 2,
         _ShareRow.expiry => 3,
-        _ShareRow.people => _shares.length + 2,
+        _ShareRow.people => _removable.length + 2,
         _ => 0,
       };
       if (count == 0) return;
@@ -437,8 +492,8 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
         case _ShareRow.people:
           if (_choice < 2) {
             if (_emails.text.trim().isNotEmpty) unawaited(_invite());
-          } else if (_choice - 2 < _shares.length) {
-            unawaited(_remove(_shares[_choice - 2]['id'] as String));
+          } else if (_choice - 2 < _removable.length) {
+            unawaited(_remove(_removable[_choice - 2]['id'] as String));
           }
         default:
           break;
@@ -607,7 +662,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
 
   List<String> get _messages => [
     if (_loading) 'Loading sharing…',
-    if (!_loading && !_collaboration && _error == null)
+    if (!widget.tabMode && !_loading && !_collaboration && _error == null)
       'Update Harness on this machine to share browser links and comments.',
     ?_error,
     ?_notice,
@@ -768,10 +823,15 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('Share harness', style: DesktopChrome.heading()),
+                  Text(
+                    widget.tabMode ? 'Invite people' : 'Share harness',
+                    style: DesktopChrome.heading(),
+                  ),
                   const SizedBox(height: 8),
                   Text(
-                    widget.name,
+                    widget.tabMode ? plainSharedText(widget.name) : widget.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: DesktopChrome.text(size: 14, medium: true),
                   ),
                   const SizedBox(height: DesktopChrome.groupGap),
@@ -787,8 +847,10 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
             ),
           ),
         ),
-        const SizedBox(height: DesktopChrome.groupGap),
-        _formRow(_ShareRow.copy),
+        if (!widget.tabMode) ...[
+          const SizedBox(height: DesktopChrome.groupGap),
+          _formRow(_ShareRow.copy),
+        ],
         if (widget.publish != null) ...[
           const SizedBox(height: DesktopChrome.controlGap),
           TextButton(
@@ -826,7 +888,7 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
           children: [
             Expanded(
               child: Text(
-                'Keep your machine online.',
+                widget.tabMode ? 'People you invite see a notice in Harness.' : 'Keep your machine online.',
                 style: DesktopChrome.metadata(),
               ),
             ),
@@ -1045,13 +1107,17 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
                       ),
                       const SizedBox(height: 8),
                       note(
-                        'Invited for $_days days. Copy and send them the link.',
+                        widget.tabMode
+                            ? 'Invited for $_days days.'
+                            : 'Invited for $_days days. Copy and send them the link.',
                       ),
                       const SizedBox(height: DesktopChrome.groupGap),
                       if (_shares.isEmpty) note('No invited people yet.'),
-                      for (final (index, share) in _shares.indexed) ...[
+                      for (final share in _shares) ...[
                         Text(
-                          '${share['email']}',
+                          plainSharedText('${share['email']}'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: DesktopChrome.text(size: 13, medium: true),
                         ),
                         const SizedBox(height: 4),
@@ -1065,17 +1131,19 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
                               : DesktopChrome.muted,
                         ),
                         const SizedBox(height: 8),
-                        choice(
-                          'Remove ${share['email']}',
-                          index + 2,
-                          () => unawaited(_remove(share['id'] as String)),
-                          destructive: true,
-                        ),
+                        if (share['id'] is String)
+                          choice(
+                            '${widget.tabMode ? 'Revoke' : 'Remove'} ${plainSharedText('${share['email']}')}',
+                            _removable.indexOf(share) + 2,
+                            () => unawaited(_remove(share['id'] as String)),
+                            destructive: true,
+                          ),
                         const SizedBox(height: DesktopChrome.groupGap),
                       ],
-                      note(
-                        'Viewers can comment; they cannot control your agent.',
-                      ),
+                      if (!widget.tabMode)
+                        note(
+                          'Viewers can comment; they cannot control your agent.',
+                        ),
                     ],
                     if (_row == _ShareRow.comments)
                       note('Open Comments to join the discussion.'),
@@ -1100,6 +1168,6 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
             ? 'Expired · add again to renew'
             : (share['watching'] as num? ?? 0) > 0
             ? 'Watching now · Can view'
-            : 'Can view${expires == null ? '' : ' · Until ${expires.month}/${expires.day}/${expires.year}'}');
+            : '${widget.tabMode ? 'Invited' : 'Can view'}${expires == null ? '' : ' · Until ${expires.month}/${expires.day}/${expires.year}'}');
   }
 }

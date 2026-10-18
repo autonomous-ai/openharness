@@ -204,6 +204,12 @@ String newDeskId() {
 final _deskIdShape = RegExp(r'^[0-9a-f]{32}$');
 bool isDeskId(String id) => _deskIdShape.hasMatch(id);
 
+/// A shared tab's id, as the daemon's `roster.ts` schema accepts it (24
+/// hex). It is never a desk tab's id: a member's desk tab is derived from it
+/// (`memberDeskTabId`, 1c R1), a desk id in shape.
+final _sharedTabIdShape = RegExp(r'^[0-9a-f]{24}$');
+bool isSharedTabId(String id) => _sharedTabIdShape.hasMatch(id);
+
 /// The ops that turn [before] into [after], in an order the backend applies
 /// left to right: closes first, then creates, then renames and pane changes,
 /// then order. Names are compared only where the person named the tab —

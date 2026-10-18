@@ -8,8 +8,10 @@ import type { TerminalBackendCoordinator } from '../lib/terminalBackendCoordinat
 import type { TerminalStreamSink } from '../lib/terminalTypes.js'
 import { decodeTerminalLocal, TerminalBinaryKind } from '../lib/terminalBinary.js'
 import { HarnessGrantStore } from './grants.js'
+import { HarnessCollaborationStore } from './collaboration.js'
 import { HarnessShareOwner, type ShareOwnerDeps } from './owner.js'
 import { recipientHandshake, type ObserverCipher } from './crypto.js'
+import type { Roster } from '../messages/roster.js'
 
 describe('owner authority and read-only observation', () => {
   let root: string, store: HarnessGrantStore, owner: HarnessShareOwner
@@ -19,6 +21,7 @@ describe('owner authority and read-only observation', () => {
   let publish: Mock<ShareOwnerDeps['publish']>, send: Mock<ShareOwnerDeps['send']>, watchViewer: Mock<NonNullable<ShareOwnerDeps['watchViewer']>>
   let opened: Array<{ sink: TerminalStreamSink; handle: any }>
   let machineId: string
+  let rosters: Mock<NonNullable<ShareOwnerDeps['rosters']>>
   beforeEach(() => {
     vi.useFakeTimers()
     root = mkdtempSync(join(tmpdir(), 'share-owner-test-'))
@@ -28,9 +31,10 @@ describe('owner authority and read-only observation', () => {
       active: true, projectPath: '/tmp/project', runtimes: [{ backend: 'tmux', paneId: '%1' }],
       primaryRuntimeKey: 'tmux:default:%1' } as unknown as RegisteredSession]])
     publish = vi.fn(async () => ({ status: 200, body: {} }))
+    rosters = vi.fn(async () => ({ accountId: 'bob', rosters: [] as Roster[], consent: new Set<string>() }))
     send = vi.fn((id, type, payload) => { frames.push({ id, type, payload }); return true })
     watchViewer = vi.fn((_id, callback) => { callback({ state: 'live', data: 'jpeg' }); return vi.fn() })
-    owner = new HarnessShareOwner({ machineId: () => machineId, identity, grants: store,
+    owner = new HarnessShareOwner({ machineId: () => machineId, identity, grants: store, rosters,
       resolveAgent: id => agents.get(id), send, publish, watchViewer,
       terminals: { openStream: async (_agent: RegisteredSession, _size: unknown, sink: TerminalStreamSink, readOnly: boolean) => {
         expect(readOnly).toBe(true)
@@ -240,5 +244,201 @@ describe('owner authority and read-only observation', () => {
     const sync = owner.sync()
     store.revoke(other.id, 'machine', 'agent'); finish({ status: 403, body: {} }); await sync
     expect(store.all().find(g => g.id === other.id)).toMatchObject({ revoked: true, publicationError: null, pending: true })
+  })
+
+  describe('observers derived from the shared tabs\' rosters', () => {
+    const KEY = 'A'.repeat(43) + '=', TAB = 'a'.repeat(24), DAY = 86400_000
+    /** Bob (this account) asked for his harness `agent` on this machine in Alice's tab. */
+    const ASKED = new Set([`${TAB}\nmachine\nagent`])
+    /** A tab Alice owns, with Bob (this account) and Carol as members, and Bob's harness `agent` on this machine. */
+    function tab(members = ['carol']): Roster {
+      return { sharedTabId: TAB, version: 2, name: 'Launch',
+        owner: { accountId: 'alice', email: 'alice@example.com', machineId: 'alice-mac', machinePublicKey: KEY }, leader: null,
+        members: ['bob', ...members].map(id => ({ accountId: id, email: `${id}@example.com`, name: id, acceptedAt: '2026-10-15T00:00:00.000Z' })),
+        harnesses: [{ accountId: 'bob', machineId: 'machine', machinePublicKey: KEY, agentId: 'agent', name: 'api', engine: 'codex' }],
+        invites: [] }
+    }
+    /** Derive, and let what it published settle. */
+    const derive = async () => { const result = await owner.manage('harness_share_rosters', {}); await owner.sync(); return result }
+    const holding = (roster: Roster | null, consent: ReadonlySet<string> = ASKED) => { rosters.mockResolvedValue(roster && { accountId: 'bob', rosters: [roster], consent }) }
+    const open = (grant: { id: string; recipientEmail: string }, id = 'observer:carol') =>
+      owner.receive(id, 'observer_open', { shareId: grant.id, email: grant.recipientEmail, ephemeral: b64e(newEphemeral().pub) })
+    const carolOf = () => store.all().find(g => g.recipientEmail === 'carol@example.com')!
+
+    it('derives a grant for every other account in the tab, publishes it, and lets that observer watch', async () => {
+      holding(tab())
+      expect(await derive()).toEqual({ invited: 2, revoked: 0 })
+      expect(publish.mock.calls.map(c => [c[0], (c[2] as any).recipientEmail, (c[2] as any).name])).toEqual([
+        ['PUT', 'alice@example.com', 'api'], ['PUT', 'carol@example.com', 'api']])
+      expect(store.all().every(g => g.tab === TAB && !g.pending && g.ownerPublicKey === b64e(identity.pub))).toBe(true)
+      await open(carolOf())
+      expect(frames.at(-1)).toMatchObject({ id: 'observer:carol', type: 'observer_welcome' })
+      expect(await derive()).toEqual({ invited: 0, revoked: 0 })
+    })
+
+    it('grants nothing for a member harness this machine never asked for, nor one listed again after it was taken out', async () => {
+      holding(tab(), new Set())
+      expect(await derive()).toEqual({ invited: 0, revoked: 0 })
+      expect(store.all()).toEqual([])
+      holding(tab())
+      expect(await derive()).toEqual({ invited: 2, revoked: 0 })
+      // Taken out by the member (the consent goes, messages/consentStore.ts), the owner listing it again grants nothing.
+      holding(tab(), new Set())
+      expect(await derive()).toEqual({ invited: 0, revoked: 2 })
+    })
+
+    it('closes a removed member\'s observer as soon as the roster changes, and unpublishes its grant', async () => {
+      holding(tab())
+      await derive()
+      const grant = carolOf()
+      await open(grant)
+      holding(tab([]))
+      void owner.manage('harness_share_rosters', {})
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(frames.findLast(f => f.id === 'observer:carol')).toMatchObject({ type: 'observer_closed', payload: { reason: 'Access removed' } })
+      expect(publish).toHaveBeenLastCalledWith('DELETE', `/api/harness-shares/${grant.id}`, undefined)
+      expect(store.active(grant.id, 'carol@example.com', 'machine')).toBeNull()
+      // Added back, the member gets the same grant again.
+      holding(tab())
+      expect(await derive()).toEqual({ invited: 1, revoked: 0 })
+      expect(carolOf()).toMatchObject({ id: grant.id, revoked: false })
+    })
+
+    it('closes it at once even while a slow publish holds the owner\'s controls', async () => {
+      holding(tab())
+      await derive()
+      await open(carolOf())
+      let finish!: (result: { status: number; body: {} }) => void
+      publish.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      const inviting = invite(['dave@example.com'])
+      await Promise.resolve()
+      holding(tab([]))
+      expect(await owner.manage('harness_share_rosters', {})).toEqual({ invited: 0, revoked: 1 })
+      expect(frames.findLast(f => f.id === 'observer:carol')).toMatchObject({ type: 'observer_closed', payload: { reason: 'Access removed' } })
+      finish({ status: 200, body: {} })
+      await inviting
+      await owner.sync()
+      expect(publish).toHaveBeenCalledWith('DELETE', `/api/harness-shares/${carolOf().id}`, undefined)
+    })
+
+    it('derives once as Share starts, so a member removed while it was off loses the view without a nudge', async () => {
+      holding(tab())
+      const started = new HarnessShareOwner({ machineId: () => machineId, identity, grants: store, rosters,
+        resolveAgent: id => agents.get(id), send, publish, terminals: {} as TerminalBackendCoordinator })
+      try {
+        await vi.advanceTimersByTimeAsync(0)
+        expect(store.all().filter(g => g.tab === TAB && !g.revoked)).toHaveLength(2)
+        expect(rosters).toHaveBeenCalled()
+      } finally { await started.stop() }
+    })
+
+    it('revokes nothing when the rosters or the account cannot be read', async () => {
+      holding(tab())
+      await derive()
+      await open(carolOf())
+      holding(null)
+      expect(await derive()).toEqual({ invited: 0, revoked: 0 })
+      rosters.mockRejectedValueOnce(new Error('EIO'))
+      expect(await derive()).toEqual({ invited: 0, revoked: 0 })
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(frames.findLast(f => f.id === 'observer:carol')?.type).toBe('observer_welcome')
+      expect(store.all().filter(g => !g.revoked)).toHaveLength(2)
+    })
+
+    it('hides derived grants from the Share list, refuses to remove one, and ignores them for a private link', async () => {
+      holding(tab())
+      await derive()
+      expect((await owner.manage('harness_share_list', { agentId: 'agent' })).shares).toEqual([])
+      const grant = store.all()[0]
+      expect(await owner.manage('harness_share_remove', { agentId: 'agent', id: grant.id })).toMatchObject({ error: 'INVITATION_NOT_FOUND' })
+      expect(store.active(grant.id, grant.recipientEmail, 'machine')).not.toBeNull()
+      const linked = new HarnessShareOwner({ machineId: () => machineId, identity, grants: store, rosters,
+        collaboration: new HarnessCollaborationStore(join(root, 'collaboration.json')),
+        resolveAgent: id => agents.get(id), send, publish, terminals: {} as TerminalBackendCoordinator })
+      try {
+        const { link } = await linked.manage('harness_share_link', { agentId: 'agent', visibility: 'private' }) as { link: { id: string } }
+        // Watching the tab's harness is not an invitation to its private link.
+        await linked.receive('observer:link', 'observer_open', { linkId: link.id, email: grant.recipientEmail, ephemeral: b64e(newEphemeral().pub) })
+        expect(frames.at(-1)).toMatchObject({ id: 'observer:link', type: 'observer_closed' })
+        // Turning the link off takes back the person's invitations, never the tab's.
+        await linked.manage('harness_share_link', { agentId: 'agent', visibility: 'off' })
+        expect(store.all().filter(g => !g.revoked)).toHaveLength(2)
+      } finally { await linked.stop() }
+    })
+
+    it('derives again and renews on its 30 s clock, and closes a removed member there at the latest', async () => {
+      holding(tab())
+      await derive()
+      await open(carolOf())
+      vi.setSystemTime(Date.now() + 24 * DAY)
+      publish.mockClear()
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(publish.mock.calls.map(c => c[0])).toEqual(['PUT', 'PUT'])
+      expect(Date.parse(store.all()[0].expiresAt)).toBeGreaterThan(Date.now() + 29 * DAY)
+      expect(frames.findLast(f => f.id === 'observer:carol')?.type).toBe('observer_welcome')
+      holding(tab([]))
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(frames.findLast(f => f.id === 'observer:carol')?.type).toBe('observer_closed')
+      // A derivation that fails outright still publishes what waits.
+      vi.spyOn(store, 'derive').mockImplementationOnce(() => { throw new Error('Disk full') })
+      store.invite({ machineId: 'machine', agentId: 'agent', recipientEmail: 'dave@example.com', name: 'api', engine: 'codex',
+        ownerPublicKey: carolOf().ownerPublicKey, expiresAt: new Date(Date.now() + DAY).toISOString() })
+      publish.mockClear()
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(publish).toHaveBeenCalledWith('PUT', expect.any(String), expect.objectContaining({ recipientEmail: 'dave@example.com' }))
+    })
+
+    it('runs one tick derivation at a time: a tick finding one still waiting starts no other', async () => {
+      holding(tab())
+      await derive()
+      let release!: () => void
+      rosters.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ accountId: 'bob', rosters: [tab()], consent: ASKED }) }))
+      rosters.mockClear()
+      await vi.advanceTimersByTimeAsync(30_000)
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(rosters).toHaveBeenCalledTimes(1)
+      release()
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(rosters).toHaveBeenCalledTimes(2)
+    })
+
+    it('tries a refused grant again on a roster change, and from the clock at most hourly', async () => {
+      publish.mockResolvedValue({ status: 403, body: { error: { message: 'This machine is not available to share.' } } })
+      holding(tab())
+      await derive()
+      expect(carolOf()).toMatchObject({ publicationError: 'This machine is not available to share.', failedAt: Date.now() })
+      publish.mockClear()
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(publish).not.toHaveBeenCalled()
+      // A nudge tries every refused grant again.
+      await derive()
+      expect(publish).toHaveBeenCalledTimes(2)
+      publish.mockClear()
+      publish.mockResolvedValue({ status: 200, body: {} })
+      // The clock does, once the refusal is an hour old.
+      await vi.advanceTimersByTimeAsync(3600_000)
+      expect(publish).toHaveBeenCalledTimes(2)
+      expect(carolOf()).toMatchObject({ publicationError: null, pending: false })
+    })
+
+    it('still takes access away when this machine\'s key cannot be read, and derives nothing without rosters', async () => {
+      let keyed = false
+      const key = { publicKey: vi.fn(async () => { if (!keyed) throw new Error('no gateway'); return identity.pub }), signWelcome: vi.fn() }
+      const keyless = new HarnessShareOwner({ machineId: () => machineId, key, grants: store, rosters,
+        resolveAgent: id => agents.get(id), send, publish, terminals: {} as TerminalBackendCoordinator })
+      try {
+        holding(tab())
+        expect(await keyless.manage('harness_share_rosters', {})).toEqual({ invited: 0, revoked: 0 })
+        keyed = true
+        expect(await keyless.manage('harness_share_rosters', {})).toEqual({ invited: 2, revoked: 0 })
+        keyed = false
+        holding(tab([]))
+        expect(await keyless.manage('harness_share_rosters', {})).toEqual({ invited: 0, revoked: 1 })
+        expect(store.all().find(g => g.recipientEmail === 'alice@example.com')).toMatchObject({ revoked: false })
+      } finally { await keyless.stop() }
+      const plain = new HarnessShareOwner({ machineId: () => machineId, identity, grants: store,
+        resolveAgent: id => agents.get(id), send, publish, terminals: {} as TerminalBackendCoordinator })
+      try { expect(await plain.manage('harness_share_rosters', {})).toEqual({ invited: 0, revoked: 0 }) } finally { await plain.stop() }
+    })
   })
 })

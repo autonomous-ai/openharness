@@ -11,6 +11,11 @@ it('retains exact device/inode numbers, repeated library maps and complete empty
   expect(parse('p42\0\n')).toEqual([])
   expect(parse('p42\0\nf4\0tPIPE\0n->pipe\0\n')).toEqual([{ fd: '4', kind: 'PIPE', path: '->pipe' }])
 })
+it('accepts a nameless NPOLICY descriptor but never a nameless file', () => {
+  expect(parse('p42\0\nf33\0tNPOLICY\0n\0\n')).toEqual([{ fd: '33', kind: 'NPOLICY', path: '' }])
+  expect(() => parse('p42\0\nf33\0tREG\0D0x1\0i5\0n\0\n')).toThrow('identity is held')
+  expect(() => parse('p42\0\nf4\0tPIPE\0n\0\n')).toThrow('identity is held')
+})
 it.each([
   '', 'p42\n', 'p42\0\n' + file().slice(0, -1), 'p41\0\n' + file(),
   file(), 'p42\0\np42\0\n', 'p42\0xextra\0\n',

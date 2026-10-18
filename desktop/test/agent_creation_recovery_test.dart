@@ -676,7 +676,10 @@ void main() {
   ]) {
     test('$result never turns a status check into another launch', () async {
       final connection = _Connection();
-      final app = createApp(connectionForTest: (_) => connection);
+      // One check, answered: following a harness the machine is still
+      // starting is held_creation_follow_test.dart's, and asks only status.
+      final app = createApp(connectionForTest: (_) => connection)
+        ..startingCreationWait = Duration.zero;
       addTearDown(app.dispose);
       final attempt = AgentCreationAttempt();
       await _timeOut(app, connection, attempt);

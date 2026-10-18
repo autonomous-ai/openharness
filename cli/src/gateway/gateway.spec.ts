@@ -35,7 +35,17 @@ it('passes only lifecycle scalars to product reporting and keeps relaying if rep
   gateway.broadcast({ type: 'error', agentId: 'fixture-agent', payload: { message: 'PRIVATE_CANARY' } })
   expect(observe).toHaveBeenCalledWith('error', 'fixture-agent', false, false)
   expect(JSON.stringify(observe.mock.calls)).not.toContain('PRIVATE_CANARY')
+  // An agent's launch state, from its frame: the state and a listed code, never the frame or its words.
+  const launchState = vi.fn()
+  gateway.productUsage = { observe, opened: vi.fn(), presence: vi.fn(), launchState }
+  gateway.broadcast({ type: 'agent_synced', payload: { agent: { id: 'fixture-agent', name: 'PRIVATE_CANARY',
+    launch: { state: 'failed', error: 'START_TIMEOUT', detail: 'PRIVATE_CANARY' } } } })
+  gateway.broadcast({ type: 'agent_synced', payload: { agent: { id: 'fixture-agent', launch: { state: 'PRIVATE_CANARY' } } } })
+  gateway.broadcast({ type: 'agent_synced', payload: { agent: { name: 'no id' } } })
+  gateway.broadcast({ type: 'agent_renamed', payload: { agentId: 'fixture-agent', name: 'PRIVATE_CANARY' } })
+  expect(launchState.mock.calls).toEqual([['fixture-agent', 'failed', 'start_timeout'], ['fixture-agent', 'other', undefined]])
   const fail = () => { throw new Error('Reporting unavailable') }
+  expect(() => { gateway.productUsage = { observe, opened: vi.fn(), presence: vi.fn(), launchState: fail }; gateway.broadcast({ type: 'agent_synced', payload: { agent: { id: 'a', launch: { state: 'ready' } } } }) }).not.toThrow()
   gateway.productUsage = { observe: fail, opened: fail, presence: fail, counter: fail, launch: fail }
   expect(() => gateway.usageCounter('create_requests')).not.toThrow()
   expect(() => gateway.usageLaunch({ id: 'synthetic-creation-1', phase: 'start' })).not.toThrow()

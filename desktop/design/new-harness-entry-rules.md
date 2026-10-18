@@ -175,10 +175,12 @@ Detached checkouts do not invent a branch name; full path and checkout details
 remain available through the context controls. Worktree implementation folders
 are not everyday project labels. See [workspace-status-bar.md](workspace-status-bar.md)
 for context actions and compact layout. A folder inside a linked
-worktree (the focused pane's, or one typed or browsed) shows as the same folder
-in the repository's main checkout, so Cmd-N from a worktree pane starts beside
-it rather than inside it. Worktrees Start made are never offered as recent
-projects.
+worktree that the form inherits (the focused pane's, a draft's, a recent one)
+shows as the same folder in the repository's main checkout, so Cmd-N from a
+worktree pane starts beside it rather than inside it. A worktree folder the
+person browses or types stays itself: the harness works in it on its current
+branch, and Worktree is off and unavailable ("Already a worktree"). Worktrees
+Start made are never offered as recent projects.
 
 **Branch** starts on `main` for a fresh desktop form. With Worktree on, local
 `main` or `origin/main` can supply the base. With Worktree off, it must be a local

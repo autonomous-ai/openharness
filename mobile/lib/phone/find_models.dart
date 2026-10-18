@@ -155,7 +155,8 @@ class _FindModelsState extends State<FindModels> {
       // Find's list: down from the field at the top, the same rows as every other mode.
       return ListView(
         padding: EdgeInsets.zero,
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        // A scroll keeps the keyboard, as in the harness list (`phone_search_results.dart`).
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.manual,
         children: rows,
       );
     },

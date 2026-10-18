@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' show max;
 
 import 'package:xterm/src/base/observable.dart';
@@ -19,6 +20,7 @@ import 'package:xterm/src/core/state.dart';
 import 'package:xterm/src/core/tabs.dart';
 import 'package:xterm/src/utils/ascii.dart';
 import 'package:xterm/src/utils/circular_buffer.dart';
+import 'package:xterm/src/utils/input_trace.dart';
 
 /// [Terminal] is an interface to interact with command line applications. It
 /// translates escape sequences from the application into updates to the
@@ -226,6 +228,91 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   /// [onTitleChange] when the escape sequences in [data] request it.
   void write(String data) {
     _parser.write(data);
+    // AUTONOMOUS PATCH: in the middle of a frame — see [setSynchronizedOutputMode].
+    if (_synchronizedOutput) {
+      if (_synchronizedOutputHold == null) {
+        _framesEndedBeforeHold = _framesEnded;
+        _synchronizedOutputHold = Timer(
+          synchronizedOutputLimit,
+          _synchronizedOutputLimitReached,
+        );
+      }
+      return;
+    }
+    _synchronizedOutputHold?.cancel();
+    _synchronizedOutputHold = null;
+    notifyListeners();
+  }
+
+  /* Synchronized output (DEC private mode 2026) */
+
+  /// AUTONOMOUS PATCH: the longest a frame is held for its end — see
+  /// [setSynchronizedOutputMode].
+  static const synchronizedOutputLimit = Duration(milliseconds: 150);
+
+  /// Whether the program is in the middle of drawing a frame: it set mode 2026
+  /// and has not reset it yet.
+  bool _synchronizedOutput = false;
+
+  /// Running from the first write that left a frame unfinished until a write
+  /// ends with no frame open, or [synchronizedOutputLimit] passes.
+  ///
+  /// ⚠️ **Not restarted by a frame ending.** Writes that each finish one frame
+  /// and begin the next (`… CSI ? 2026 l CSI ? 2026 h …`) never end with no
+  /// frame open, and a hold that started again with every one of them would
+  /// never show anything at all.
+  Timer? _synchronizedOutputHold;
+
+  /// Frames ended ever, and as of when the hold began — a program still drawing
+  /// (only faster than its frames arrive whole) against one that stopped.
+  int _framesEnded = 0;
+  int _framesEndedBeforeHold = 0;
+
+  /// Whether the listeners are being held back for a frame still arriving: the
+  /// buffer is part old, part new, and anything drawn from it now would show it
+  /// torn. Ends with a notification — the frame's end, or the limit.
+  bool get synchronizedOutputHeld => _synchronizedOutputHold != null;
+
+  /// AUTONOMOUS PATCH: DEC private mode 2026, synchronized output — the program
+  /// brackets each frame it draws with `CSI ? 2026 h` … `CSI ? 2026 l`, and the
+  /// listeners hear of the frame once, when it is whole.
+  ///
+  /// ⚠️ **A frame arrives in pieces.** A full-screen program's redraw — Claude
+  /// Code's, a few kilobytes — reaches the phone as several chunks, 3–12ms
+  /// apart, and a frame drawn between two of them showed the screen half old
+  /// and half new: torn, and to the scroll's animation not a scroll at all, so
+  /// it jumped instead of sliding (measured on a phone, 2026-10-05). The parser
+  /// still applies every byte as it comes, so the buffer is always current for
+  /// whoever reads it; only [notifyListeners] waits for the end of the frame.
+  ///
+  /// ⚠️ **Never held for long.** A frame that does not end within
+  /// [synchronizedOutputLimit] is shown as it stands. If no frame at all ended
+  /// in that time the program is taken to have stopped mid-frame (it crashed,
+  /// the link dropped) and the mode is turned off, so the screen goes on
+  /// updating as if it had never been set; a program that is still ending
+  /// frames — only faster than they arrive whole — keeps it.
+  @override
+  void setSynchronizedOutputMode(bool enabled) {
+    if (enabled == _synchronizedOutput) return;
+    _synchronizedOutput = enabled;
+    if (!enabled) _framesEnded++;
+  }
+
+  void _synchronizedOutputLimitReached() {
+    _synchronizedOutputHold = null;
+    if (!_synchronizedOutput) return;
+    if (_framesEnded == _framesEndedBeforeHold) {
+      _synchronizedOutput = false;
+      inputTrace(
+        () => 'sync output: no frame ended in '
+            '${synchronizedOutputLimit.inMilliseconds}ms — mode turned off',
+      );
+    } else {
+      inputTrace(
+        () => 'sync output: no whole frame in '
+            '${synchronizedOutputLimit.inMilliseconds}ms — shown as it stands',
+      );
+    }
     notifyListeners();
   }
 

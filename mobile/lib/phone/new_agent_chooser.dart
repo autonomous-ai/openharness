@@ -47,7 +47,11 @@ class ChooserItem<T> {
 /// current value, and the `+` actions ending it. A tap picks and closes.
 ///
 /// Long lists scroll in full. [autofocusSearch] always shows the search field and opens its keyboard.
-Future<T?> showNewAgentChooser<T>(
+///
+/// ⚠️ **Null is the sheet put away, so no row's value may be null** — hence `T extends Object`. The
+/// Profile chooser's Default row once was, and a pull down came back as "Default", resetting the
+/// profile it was meant to leave alone. A choice of "none" travels inside a value of its own.
+Future<T?> showNewAgentChooser<T extends Object>(
   BuildContext context, {
   required String hint,
   required List<ChooserItem<T>> items,

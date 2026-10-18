@@ -207,7 +207,7 @@ pub(super) fn list(app: &mut App, request: Request) {
     // (only New Harness read it), so its folders stayed "still loading" and only its agents'
     // scratch folders were offered.
     if kind == "folder" && !app.homes.contains_key(&machine) && app.shell_context.homes_asked.insert(machine.clone()) {
-        crate::input::load_dsh(app, machine.clone());
+        crate::input::load_dsh(app, machine.clone(), false);
     }
     let browsing = kind == "folder" && crate::shell_picker::folder_parts(query).0.is_some();
     let parent = if kind == "folder" {

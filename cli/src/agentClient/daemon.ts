@@ -15,7 +15,8 @@ import { unixSocketPath } from '../lib/localSocket.js'
 import { paneOwner } from '../messages/command.js'
 
 export class AgentClientError extends Error {
-  constructor(readonly code: string, message: string) { super(message) }
+  /** [reason]: which limit or rule refused, for a refusal (`SPAWN_LIMIT`'s `OPEN_LIMIT`, `TURNED_OFF`'s `SWITCH_OFF`). */
+  constructor(readonly code: string, message: string, readonly reason?: string) { super(message) }
 }
 
 /** Which daemon: its port and data folder, and this machine's id as the daemon knows it. */

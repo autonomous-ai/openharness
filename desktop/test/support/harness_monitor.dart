@@ -65,7 +65,11 @@ class MonitorTestApp extends ModelManagerTestApp {
   }
 
   @override
-  Future<void> probeDsh(String machineId, {bool force = false}) async {
+  Future<void> probeDsh(
+    String machineId, {
+    bool force = false,
+    bool userAction = false,
+  }) async {
     await probeReply?.future;
     if (probeError != null) throw StateError(probeError!);
     stateOf(machineId)!.dsh.replace([

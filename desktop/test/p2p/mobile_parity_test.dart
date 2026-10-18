@@ -9,14 +9,16 @@ import 'package:flutter_test/flutter_test.dart';
 /// E2EE went months without the phone's one-welcome and rekey-replay fixes.
 /// Here a drift fails until the change is carried across — or, if the two are
 /// meant to differ now, until the file leaves this list on purpose.
+///
+/// Left on purpose (2026-10-14): the P2P plugin and policy, the relay codec and
+/// the E2EE session. The phone changed them for its own launch and network:
+/// the channel starts on the first terminal with no open wait, a dropped
+/// channel is redialled within seconds, and the hello, the welcome and a large
+/// frame are worked on a background isolate. The web keeps its copies.
 const _copies = {
-  'lib/web/p2p/terminal_p2p_plugin.dart': 'lib/p2p/terminal_p2p_plugin.dart',
   'lib/web/p2p/terminal_p2p_link.dart': 'lib/p2p/terminal_p2p_link.dart',
-  'lib/web/p2p/terminal_p2p_policy.dart': 'lib/p2p/terminal_p2p_policy.dart',
   'lib/ws/terminal_transport_plugin.dart':
       'lib/ws/terminal_transport_plugin.dart',
-  'lib/ws/relay_codec.dart': 'lib/ws/relay_codec.dart',
-  'lib/e2ee/relay_session_crypto.dart': 'lib/e2ee/relay_session_crypto.dart',
 };
 
 /// The phone's package name is the only difference a copy is allowed.

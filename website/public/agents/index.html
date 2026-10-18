@@ -75,22 +75,63 @@
     work yourself, and a quick parallel search or edit inside one task with your own sub-agents (Claude Code's Agent
     tool, Codex sub-agents): they are cheaper and faster. Close each harness once you have its answer.</p>
 
+  <h2 id="when">Harness, or running <code>codex</code> yourself</h2>
+  <p>If Codex or Claude Code is installed, you can run it yourself for a one-off answer
+    (<code>codex exec "&lt;task&gt;"</code>, <code>claude -p "&lt;task&gt;"</code>). Use Harness instead when:</p>
+  <div class="table">
+  <table>
+    <thead><tr><th>The task</th><th>Why Harness</th></tr></thead>
+    <tbody>
+      <tr><td>The person should see the work, or may need to answer it</td><td>Every harness is in their Harness
+        app, where they can watch it, answer its questions or stop it. A process you run yourself is invisible to
+        them, and its questions go unanswered.</td></tr>
+      <tr><td>Several tasks at once</td><td><code>harness wait &lt;name&gt;,&lt;name&gt;</code> waits for all of
+        them, or the first with <code>--any</code>.</td></tr>
+      <tr><td>Work that takes longer than your turn</td><td>A harness keeps running after your turn ends, and its
+        answer stays there to read.</td></tr>
+      <tr><td>Another of the person's machines</td><td><code>harness new --machine &lt;machine&gt;</code>: no SSH,
+        once that machine runs Harness signed in to the person's account.</td></tr>
+      <tr><td>Cleaning up after yourself</td><td>Limits on how many you start, and Harness closes what you leave
+        behind.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
   <h2 id="install">Install</h2>
   <pre><code>curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
 harness start</code></pre>
+  <h3 id="install-steps">Install, step by step, for an agent</h3>
+  <div class="table">
+  <table>
+    <thead><tr><th>Step</th><th>Who</th><th>How</th></tr></thead>
+    <tbody>
+      <tr><td>1. Is it there already?</td><td>You</td><td><code>harness version</code>. Found: skip to step 4.</td></tr>
+      <tr><td>2. Ask before installing</td><td>The person</td><td>It installs software on their computer: ask
+        them first.</td></tr>
+      <tr><td>3. Install</td><td>You, once they agree</td><td><code>curl -fsSL
+        https://harness.autonomous.ai/cli/install.sh | bash</code>. On Linux it may need their password for
+        <code>apt-get</code>; without one, ask them to run <code>sudo apt-get install -y tmux curl</code> first. It
+        ends by saying what to run next.</td></tr>
+      <tr><td>4. Start Harness here</td><td>You</td><td><code>harness start</code>. No account is needed.</td></tr>
+      <tr><td>5. See what you may do</td><td>You</td><td><code>harness whoami</code>. It says whether you may start
+        harnesses, and if not, what to ask the person.</td></tr>
+      <tr><td>6. Sign in</td><td>The person</td><td><code>harness login</code>, in a browser. Needed for agents to
+        start harnesses, and for other machines.</td></tr>
+      <tr><td>7. Let agents start agents</td><td>The person</td><td>Settings ▸ Experimental ▸ Agents can start
+        other agents, or <code>harness settings agents-start-agents on</code> in their own terminal. It is their
+        consent: run by an agent, it is refused (exit 5).</td></tr>
+      <tr><td>8. Check</td><td>You</td><td><code>harness whoami</code> says <code>Can start harnesses: yes.</code></td></tr>
+    </tbody>
+  </table>
+  </div>
   <p>macOS and Linux. <code>harness start</code> starts Harness on this computer. No account is needed for the
     harnesses the person starts on this computer; <code>harness login</code> signs in, which the person needs for
     their other machines, the phone app, and what they let agents do. The agents you start must be installed and
     signed in to their own providers: <code>claude</code> for Claude Code, <code>codex</code> for Codex.</p>
   <p>An agent starts harnesses only once the person turns on <strong>Agents can start other agents</strong>, an
-    experiment of their Harness account (Settings ▸ Experimental, or <code>harness settings agents-start-agents
-    on</code>), off by default. Until then <code>harness new</code> refuses and says how: tell the person, and do the
-    work yourself.</p>
-  <p>On Linux the installer installs tmux and curl with <code>apt-get</code>, which asks for the person's password.
-    Without one, ask the person to run <code>sudo apt-get install -y tmux curl</code> first.</p>
-  <p>Ask the person before you install software on their computer. To check whether Harness is already there:
-    <code>harness version</code>. The agent commands below are new: if <code>harness ps</code> is an unknown command,
-    run <code>harness update</code>.</p>
+    experiment of their Harness account, off by default. Until then <code>harness new</code> refuses (exit 5) and
+    says how: tell the person, and do the work yourself. The agent commands are new: if <code>harness whoami</code>
+    is an unknown command, run <code>harness update</code>.</p>
 
   <h2 id="skill">Add the skill</h2>
   <p>The <code>harness</code> skill tells an agent when to use Harness and how. It comes as a plugin for Claude Code
@@ -120,10 +161,13 @@ curl -fsSL https://raw.githubusercontent.com/autonomous-ai/openharness/main/plug
   <table>
     <thead><tr><th>Command</th><th>What it does</th></tr></thead>
     <tbody>
+      <tr><td><code>harness whoami</code></td><td>Who you are to Harness: which agent, on which machine, inside Harness or
+        not; whether you may start harnesses now and, if not, who can change that; how many of yours are open. Run it
+        first.</td></tr>
       <tr><td><code>harness ps [--all]</code></td><td>The harnesses on this machine: name, agent, state, who started it,
         when it was last active, its folder and what it is about. <code>--all</code> adds the ones stopped in the
         last week.</td></tr>
-      <tr><td><code>harness new [agent] [@machine] [folder | project] --name NAME -- TASK</code></td><td>Start a harness and give
+      <tr><td><code>harness new [agent] [--machine NAME] [folder | project] --name NAME -- TASK</code></td><td>Start a harness and give
         it a task. <code>agent</code> is <code>claude</code> (the default), <code>codex</code>, or another agent
         installed there. The folder is the current directory when left out. For scratch or new work, give a project
         name (<code>harness new codex review -- …</code>) rather than a folder of your own: Claude Code and Codex ask
@@ -144,7 +188,10 @@ curl -fsSL https://raw.githubusercontent.com/autonomous-ai/openharness/main/plug
   </div>
   <p>Name every harness you start with <code>--name</code>: an unnamed one takes its session's title, which changes.
     Every command also takes the start of a harness's id, takes <code>--json</code> for JSON, and prints its usage
-    with <code>--help</code>. Every error says what to run next.</p>
+    with <code>--help</code>. Every command ends with <code>Next:</code>, the command to run next (in JSON,
+    <code>next</code>), and every error says what to run next. A harness waiting on a question or a permission is
+    shown as <code>needs the person</code>: tell the person. <code>harness help agents</code> prints the commands,
+    states, exit codes and rules on one screen.</p>
   <p id="no-prompts">Once Harness runs on a computer, Claude Code and Codex there run these commands and Harness's MCP
     tools without asking: Harness adds them to their permission rules (Claude Code's <code>settings.json</code>,
     Codex's <code>rules/harness.rules</code>), and Codex runs them outside its sandbox. What an agent may do with them
@@ -163,6 +210,8 @@ curl -fsSL https://raw.githubusercontent.com/autonomous-ai/openharness/main/plug
       <tr><td><code>3</code></td><td><code>wait</code>: a harness needs the person (a question or a permission). Tell
         the person; only they answer it.</td></tr>
       <tr><td><code>4</code></td><td><code>wait</code>: a harness stopped or is gone.</td></tr>
+      <tr><td><code>5</code></td><td>Refused: your limits, the person's setting, or a harness you did not start. Do not
+        retry it; tell the person, or do the work yourself.</td></tr>
       <tr><td><code>124</code></td><td><code>wait</code>: timed out while a harness was still working. Wait again, or
         read it.</td></tr>
     </tbody>
@@ -209,9 +258,10 @@ harness wait reviewer &amp;&amp; harness show reviewer</code></pre>
 
   <h2 id="machines">Run on another machine</h2>
   <pre><code>harness machines
-harness new codex @mini ~/code/app --name train -- "Run the training script and report the final loss."</code></pre>
+harness new codex --machine mini ~/code/app --name train -- "Run the training script and report the final loss."</code></pre>
   <p>Needs the person signed in to Harness on both computers (<code>harness login</code>). <code>harness ps</code>
-    lists this machine.</p>
+    lists this machine; <code>harness ps --machine mini</code>, <code>harness show --machine mini train</code> and
+    <code>harness wait --machine mini train</code> reach the other.</p>
 
   <h2 id="where">Inside a harness, or outside Harness</h2>
   <ul>
@@ -219,8 +269,9 @@ harness new codex @mini ~/code/app --name train -- "Run the training script and 
       teammates in your tab, while Agent Messages are on (Settings ▸ Experimental, off by default). A harness you started,
       or the one that started you, is no exception.</li>
     <li><strong>Outside Harness</strong> (Claude Code or Codex in a terminal app, an editor or the person's own tmux):
-      Harness tells you by your session, from what your agent sets in its shell. <code>harness ps</code> says
-      "You are Claude Code, outside Harness." and marks what this session started as <code>you</code>; the limits
+      Harness tells you by your session, from what your agent sets in its shell. <code>harness whoami</code> (and the
+      top of <code>harness ps</code>) says "You: &lt;agent&gt;, outside Harness, on &lt;machine&gt;.", and
+      <code>harness ps</code> marks what this session started as <code>you</code>; the limits
       below apply; each harness you start reads
       <code>[from Claude Code outside Harness · &lt;machine&gt;, the agent that started you. It reads your answer itself.]</code>
       above its task; and you may close only what this session started. Nothing can message you, and
@@ -236,6 +287,7 @@ harness new codex @mini ~/code/app --name train -- "Run the training script and 
   <table>
     <thead><tr><th>Tool</th><th>Arguments</th><th>Same as</th></tr></thead>
     <tbody>
+      <tr><td><code>harness_whoami</code></td><td>none</td><td><code>harness whoami</code></td></tr>
       <tr><td><code>harness_list</code></td><td><code>all?</code></td><td><code>harness ps</code></td></tr>
       <tr><td><code>harness_start</code></td><td><code>task</code>, <code>name</code>, <code>folder?</code> or
         <code>project?</code> (a new project for scratch or new work), <code>agent?</code> (<code>claude</code> or
@@ -259,13 +311,6 @@ harness new codex @mini ~/code/app --name train -- "Run the training script and 
     or in Claude Code <code>claude mcp add harness -- harness mcp</code>. An app opened from the Finder may not have
     <code>~/.local/bin</code> on its PATH; if it cannot find <code>harness</code>, give it the full path that
     <code>command -v harness</code> prints.</p>
-  <p>Through npm, for clients that start servers with <code>npx</code>: <code>@autonomous-ai/harness-mcp</code> runs
-    <code>harness mcp</code> from the installed CLI, and where Harness is not installed it offers one tool,
-    <code>harness_setup</code>, that says how to install it.
-    <a href="goose://extension?cmd=npx&amp;arg=-y&amp;arg=%40autonomous-ai%2Fharness-mcp&amp;timeout=660&amp;id=harness&amp;name=Harness&amp;description=Start%20Claude%20Code%20and%20Codex%20agents%20the%20person%20can%20watch%2C%20wait%20for%20them%20and%20read%20their%20answers.">Add to goose</a>
-    uses this form.</p>
-  <pre><code>{"mcpServers": {"harness": {"command": "npx", "args": ["-y", "@autonomous-ai/harness-mcp"]}}}
-claude mcp add harness -- npx -y @autonomous-ai/harness-mcp</code></pre>
 
   <h2 id="rules">Rules</h2>
   <ul>

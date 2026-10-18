@@ -161,48 +161,6 @@ bool config_save_muted(bool muted)
     return ok;
 }
 
-bool config_load_turn(bool fallback)
-{
-    nvs_handle_t h;
-    uint8_t turn = fallback ? 1 : 0;
-    if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
-        nvs_get_u8(h, "turn", &turn);
-        nvs_close(h);
-    }
-    return turn != 0;
-}
-
-bool config_save_turn(bool turned)
-{
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
-    bool ok = nvs_set_u8(h, "turn", turned ? 1 : 0) == ESP_OK && nvs_commit(h) == ESP_OK;
-    nvs_close(h);
-    ESP_LOGI(TAG, "save_turn %d: %s", (int)turned, ok ? "ok" : "FAILED");
-    return ok;
-}
-
-int config_load_skin(int fallback)
-{
-    nvs_handle_t h;
-    uint8_t skin = fallback == 1 ? 1 : 0;
-    if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
-        nvs_get_u8(h, "skin", &skin);
-        nvs_close(h);
-    }
-    return skin == 1 ? 1 : 0;   // an unknown stored value reads as Classic
-}
-
-bool config_save_skin(int skin)
-{
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
-    bool ok = nvs_set_u8(h, "skin", skin == 1 ? 1 : 0) == ESP_OK && nvs_commit(h) == ESP_OK;
-    nvs_close(h);
-    ESP_LOGI(TAG, "save_skin %d: %s", skin, ok ? "ok" : "FAILED");
-    return ok;
-}
-
 bool config_clear_all(void)
 {
     nvs_handle_t h;

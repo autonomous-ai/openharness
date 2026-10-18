@@ -1,3 +1,4 @@
+import '../agent_messages/shared_tab_placement.dart' show plainSharedText;
 import '../core/models.dart';
 import '../core/runtime_model_name.dart';
 import '../shared/theme/prompt_style.dart';
@@ -188,6 +189,7 @@ class WorkspacePaneContext {
     this.agent,
     this.branch,
     this.project,
+    this.shared = false,
   });
 
   final TerminalPane pane;
@@ -196,6 +198,10 @@ class WorkspacePaneContext {
   final String machineName, provider, location, detail;
   final String projectName;
   final String? branch;
+
+  /// Another account's harness, shown through a share (seam 5): its machine
+  /// is named for its owner and is not this account's to browse.
+  final bool shared;
   String? get agentId => pane.isViewer ? pane.ownerAgentId : pane.agentId;
   String? get engine => agent?.engine ?? pane.session?.engineId;
   String get modelLabel => modelLabelWithEffort(
@@ -243,9 +249,26 @@ class WorkspacePaneContext {
     final agent = _agentFor(app, pane.machineId, agentId);
     final project = agent == null ? null : machine?.projectOf(agent);
     // A cloud harness runs in its maker's cloud: that is said where a remote
-    // computer's name goes ("Devin's cloud").
+    // computer's name goes ("Devin's cloud"). Another account's harness names
+    // its owner, never a machine id (seam 5).
+    final shared =
+        pane.sharedHarness != null || machine?.machine.isShared == true;
+    // Another account's name: plain, one line (the bar ellipsizes it).
+    final ownerName = shared
+        ? [
+            pane.sharedOwnerName,
+            machine?.machine.ownerName,
+          ]
+              .whereType<String>()
+              .map(plainSharedText)
+              .where((n) => n.isNotEmpty)
+              .firstOrNull
+        : null;
     final machineName =
-        agent?.cloud?.place ?? machine?.machine.displayName ?? pane.machineId;
+        agent?.cloud?.place ??
+        ownerName ??
+        machine?.machine.displayName ??
+        pane.machineId;
     final engine = agent?.engine ?? pane.session?.engineId;
     final provider =
         agent?.gridModel ??
@@ -267,6 +290,7 @@ class WorkspacePaneContext {
       projectName: projectName,
       location: '$machineName${projectName.isEmpty ? '' : ':$projectName'}',
       branch: branch,
+      shared: shared,
       detail: [
         if (agent != null) agent.displayName,
         if (provider.isNotEmpty) provider,

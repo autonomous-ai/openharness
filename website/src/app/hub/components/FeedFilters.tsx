@@ -8,7 +8,7 @@ import styles from '../community.module.css';
 
 type Props = { category: string; sort: FeedSort; onCategory: (category: string) => void; onSort: (sort: FeedSort) => void };
 
-const sortLabels: Record<FeedSort, string> = { newest: 'Newest', popular: 'Popular' };
+const sortLabels: Record<FeedSort, string> = { newest: 'Newest', trending: 'Trending', popular: 'Popular' };
 
 /**
  * The categories, one at a time (All clears it). When they do not fit, the row scrolls by finger,

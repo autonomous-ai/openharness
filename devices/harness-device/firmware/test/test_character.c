@@ -601,7 +601,7 @@ static void focus_face(void)
         ht_character_face(&scene, &c, &f, 0xffff, "");
         only_inter(&scene);
         assert(scene.runs[7].y == 233 - ht_lv_inter_30.base.height / 2 && scene.runs[7].font == &ht_lv_inter_30.base &&
-               !strcmp(scene.runs[7].text, "Simmering\xe2\x80\xa6 34s"));   // the gerund for 30..35 s
+               !strcmp(scene.runs[7].text, "Simmering\xe2\x80\xa6 0:34"));   // the gerund for 30..35 s
         {
             int d = pet_gaps(&scene, &scene.runs[1]);
             assert(d >= -3 && d <= 3);
@@ -801,7 +801,7 @@ static void focus_face(void)
                     assert(mark->y == 233 + 4 - ws->h / 2 + ws->dy + bob);
                     assert(!scene.runs[7].text[0]);                 // the centred status is empty
                     const ht_run_t *lower = &scene.runs[10];
-                    assert(lower->arc == 2 && !strcmp(lower->text, "Working\xe2\x80\xa6 5s"));   // Inter has the real ellipsis
+                    assert(lower->arc == 2 && !strcmp(lower->text, "Working\xe2\x80\xa6 0:05"));   // Inter has the real ellipsis
                     assert(lower->fg == ht_rgb(0x00ff2f));
                     frame_at[state][step] = frame;
                 } else {
@@ -972,7 +972,7 @@ static void focus_face(void)
             assert(scene_frame(ws, scene.runs[1].sprite.cells, 1) == ws->loop[step]);
             assert(!scene.runs[7].text[0] && scene.runs[3].sprite.cells);   // the props (pan, food) in run 3
             assert(scene.runs[10].arc == 2 && scene.runs[10].fg == ht_rgb(0x00ff2f) &&
-                   !strcmp(scene.runs[10].text, "Coalescing\xe2\x80\xa6 34s") &&
+                   !strcmp(scene.runs[10].text, "Coalescing\xe2\x80\xa6 0:34") &&
                    scene.runs[10].font == &ht_lv_inter_med_26.base);
             bool fresh = true;
             for (int k = 0; k < distinct; k++) fresh &= frames_seen[k] != ws->loop[step];
@@ -1066,7 +1066,7 @@ static void focus_face(void)
         assert(scene.count == 11 && scene.runs[1].sprite.width == 56);
         assert(scene.runs[7].font == &ht_lv_inter_30.base && scene.runs[7].fg == ht_rgb(0x00ff2f) &&
                scene.runs[7].y == 233 - ht_lv_inter_30.base.height / 2 &&
-               !strcmp(scene.runs[7].text, "Coalescing\xe2\x80\xa6 34s"));
+               !strcmp(scene.runs[7].text, "Coalescing\xe2\x80\xa6 0:34"));
         assert(!scene.runs[10].text[0] && !scene.runs[10].arc);
 
         // Listening: Claude draws a scene frame, no bars; an engine without one draws its seven bars.
@@ -1216,7 +1216,7 @@ static void focus_face(void)
                         }
                         if (kind == 0) {        // status on the lower arc, nothing centred
                             assert(!cs_.runs[7].text[0] && cs_.runs[10].arc == 2 &&
-                                   !strcmp(cs_.runs[10].text, "Coalescing\xe2\x80\xa6 34s") && !cs_.runs[10].gained);
+                                   !strcmp(cs_.runs[10].text, "Coalescing\xe2\x80\xa6 0:34") && !cs_.runs[10].gained);
                             assert(!cs_.runs[4].text[0] && !cs_.runs[5].text[0] && !cs_.runs[6].text[0]);   // the other recap lines stay empty
                         }
                         if (kind == 1) {
@@ -1587,7 +1587,7 @@ static void focus_face(void)
             assert(scene.count == 11 && scene.runs[1].sprite.width == cp->working_scene->w);
             const ht_run_t *line = &scene.runs[7];
             assert(!line->arc && line->font == &ht_lv_inter_30.base && line->y == 334 &&
-                   line->fg == ht_rgb(0x00ff2f) && !strcmp(line->text, "Coalescing\xe2\x80\xa6 34s"));
+                   line->fg == ht_rgb(0x00ff2f) && !strcmp(line->text, "Coalescing\xe2\x80\xa6 0:34"));
             assert(line->x + line->w / 2 >= 232 && line->x + line->w / 2 <= 234);
             assert(!scene.runs[10].text[0] && !scene.runs[10].arc);
             for (int i = 0; i < scene.count; i++) assert(scene.runs[i].arc != 2);
@@ -1596,16 +1596,20 @@ static void focus_face(void)
         f.footer_action = false; f.activity = "Running firmware checks";
         ht_scene_clear(&scene, 0); ht_character_face(&scene, &c, &f, 0xffff, "");
         size_t n = strlen(scene.runs[10].text);
-        assert(scene.runs[10].arc == 2 && n >= 3 && !strcmp(scene.runs[10].text + n - 3, "34s") && ht_arc_measure(&ht_arc_inter_lower, scene.runs[10].text) <= HT_ARC_SPAN);
+        assert(scene.runs[10].arc == 2 && n >= 3 && !strcmp(scene.runs[10].text + n - 4, "0:34") && ht_arc_measure(&ht_arc_inter_lower, scene.runs[10].text) <= HT_ARC_SPAN);
         assert(strstr(scene.runs[10].text, "Running firmw") && !scene.runs[7].text[0]);
         f.elapsed = 65;
         ht_scene_clear(&scene, 0); ht_character_face(&scene, &c, &f, 0xffff, "");
         n = strlen(scene.runs[10].text);
-        assert(!strcmp(scene.runs[10].text + n - 6, "1m 05s") && ht_arc_measure(&ht_arc_inter_lower, scene.runs[10].text) <= HT_ARC_SPAN);
+        assert(!strcmp(scene.runs[10].text + n - 4, "1:05") && ht_arc_measure(&ht_arc_inter_lower, scene.runs[10].text) <= HT_ARC_SPAN);
+        f.elapsed = 86399;   // the widest string the format makes, "23h 59m": the verb gives way, the time stays whole
+        ht_scene_clear(&scene, 0); ht_character_face(&scene, &c, &f, 0xffff, "");
+        n = strlen(scene.runs[10].text);
+        assert(n >= 7 && !strcmp(scene.runs[10].text + n - 7, "23h 59m") && ht_arc_measure(&ht_arc_inter_lower, scene.runs[10].text) <= HT_ARC_SPAN);
         f.elapsed = 34; f.activity = "Reconciling the payment ledger migration plan"; f.footer_action = true;
         ht_scene_clear(&scene, 0); ht_character_face(&scene, &c, &f, 0xffff, "");
         n = strlen(scene.runs[7].text);
-        assert(!strcmp(scene.runs[7].text + n - 3, "34s") && scene.runs[7].w <= 384 && scene.runs[7].w > 300);
+        assert(!strcmp(scene.runs[7].text + n - 4, "0:34") && scene.runs[7].w <= 384 && scene.runs[7].w > 300);
         assert(scene.runs[7].x >= 41 && scene.runs[7].x + scene.runs[7].w <= 41 + 384);
     }
 
@@ -2189,6 +2193,88 @@ static void custom_pet(void)
     puts("Custom pet: resting, relaxing (v2), code-drawn working alert, r 230 clamp and a swap mid-scene PASS");
 }
 
+/*
+ * THE BUILDER (owner, 2026-10-16: mockup/clawd_build.py): Claude alone has a second working scene, 32 steps of 55 ms.
+ * ht_focus_pick_working draws chef or builder once as the scene starts showing for an agent and keeps it for as long
+ * as it shows — every frame of the showing draws the same scene — and both come up. The alert is the chef's, its
+ * bubble placed from the builder's origin: beside the builder's hat, inside the glass.
+ */
+static unsigned rnd_n;
+static uint32_t rnd_count(void) { return rnd_n++; }   // 0, 1, 2, ...: chef, builder, chef, ...
+static ht_character_face_t builder_face(uint32_t clock_ms, bool working, unsigned notices)
+{
+    ht_character_face_t f = {.recipient = "Payments refactor", .tab = "", .engine = "claude",
+        .activity = working ? "Coalescing" : "", .elapsed = 34, .status = "", .hint = "", .detail = "",
+        .mood = working ? HT_CHARACTER_WORKING : HT_CHARACTER_DONE, .clock_ms = clock_ms,
+        .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+    if (notices) { f.notice_ms = 1; f.notices = (uint16_t)notices; }
+    return f;
+}
+static bool draws_scene(const ht_scene_t *scene, const ht_pet_scene_t *sc)
+{
+    for (int i = 0; i < scene->count; i++)
+        if (scene->runs[i].sprite.cells && scene_frame(sc, scene->runs[i].sprite.cells, 1) >= 0) return true;
+    return false;
+}
+static void focus_builder(void)
+{
+    for (unsigned i = 0; i < ht_pet_count; i++) assert(!ht_pets[i].working_alt == !!strcmp(ht_pets[i].engine, "claude"));
+    const ht_pet_t *cp = pet_of("claude");
+    const ht_pet_scene_t *ws = cp->working_scene, *bs = cp->working_alt;
+    assert(bs && bs->steps == 32 && bs->step_ms == 55 && bs->overlay && bs->step_dy && !bs->waves && !bs->shapes);
+    bool wide = false;   // its sweat drop and hammer in one props frame: wider than a byte (terminal.h HT_CELL_COLS_MAX)
+    for (unsigned i = 0; i < bs->steps; i++) wide |= bs->overlay->frames[bs->overlay->loop[i]].cols > 255;
+    assert(wide);
+    ht_character_t c = {0};
+    ht_character_select(&c, HT_CHARACTER_FOCUS);
+    ht_focus_working_pick_t pick = {0};
+    unsigned seen[2] = {0, 0};
+    uint32_t clock = 1;
+    rnd_n = 0;
+    for (int showing = 0; showing < 4; showing++) {
+        bool alt = false;
+        for (unsigned step = 0; step < 2 * bs->steps; step++, clock += 55) {   // two loops of one showing
+            ht_character_face_t f = builder_face(clock, true, 0);
+            ht_focus_pick_working(&pick, &f, "", "agent-1", rnd_count);
+            if (!step) alt = f.working_alt;
+            assert(f.working_alt == alt);
+            ht_scene_t scene; ht_scene_clear(&scene, 0);
+            ht_character_face(&scene, &c, &f, 0xffff, "");
+            assert(scene.count == 11 && draws_scene(&scene, alt ? bs : ws) && !draws_scene(&scene, alt ? ws : bs));
+            uint32_t next = ht_focus_pet_next_ms(&f, "");
+            assert(next > clock && next % 55 == 0);
+            if (alt && step < bs->steps) ink_inside_r230(&scene);
+        }
+        seen[alt]++;
+        ht_character_face_t done = builder_face(clock, false, 0);   // the turn ends: the showing with it
+        ht_focus_pick_working(&pick, &done, "Shipped the retry queue.", "agent-1", rnd_count);
+        assert(!done.working_alt && !pick.shown);
+    }
+    assert(seen[0] == 2 && seen[1] == 2 && rnd_n == 4);   // one draw a showing, never one a frame
+    // Another agent's face is another showing; coming back to the first is one more. Codex never consults the draw.
+    ht_character_face_t f = builder_face(clock, true, 0);
+    ht_focus_pick_working(&pick, &f, "", "agent-1", rnd_count);
+    ht_focus_pick_working(&pick, &f, "", "agent-2", rnd_count);
+    ht_focus_pick_working(&pick, &f, "", "agent-2", rnd_count);
+    assert(rnd_n == 6);
+    f.engine = "codex";
+    ht_focus_pick_working(&pick, &f, "", "agent-3", rnd_count);
+    assert(!f.working_alt && rnd_n == 6);
+    // The alert over the builder: the chef's bubble, from the builder's origin (left of its hat), inside the glass.
+    ht_character_face_t chef = builder_face(5000, true, 3), build = chef;
+    build.working_alt = true;
+    ht_rect_t a = {0}, b = {0};
+    assert(ht_focus_alert_shown(&chef, "", &a) && ht_focus_alert_shown(&build, "", &b));
+    int sx = (HT_WIDTH - bs->w) / 2 + bs->dx, sy = HT_HEIGHT / 2 - bs->h / 2 + 4 + bs->dy;
+    assert(a.w && a.w == b.w && a.h == b.h && b.x + b.w <= sx + 12 && b.y < sy);
+    ht_scene_t scene; ht_scene_clear(&scene, 0);
+    ht_character_face(&scene, &c, &build, 0xffff, "");
+    assert(scene.count == 11 && draws_scene(&scene, bs));
+    ink_inside_r230(&scene);
+    printf("Builder: Claude only, one draw per showing (%u chef, %u builder), stable over %u frames, bubble beside the hat PASS\n",
+           seen[0], seen[1], 2 * bs->steps);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) { fprintf(stderr, "usage: test_character <pet_min.hpet> [--custom-only]\n"); return 2; }
@@ -2201,6 +2287,6 @@ int main(int argc, char **argv)
     assert(!strcmp(ht_character_name(HT_CHARACTER_TIM), "Tim"));
     assert(!strcmp(ht_character_name(HT_CHARACTER_TUX), "Tux"));
     clocks(); portraits(); delivery_and_caption(); recap_budget(); focus_face();
-    focus_relaxing(); footer_layout(); inbox_layout(); custom_pet();
+    focus_relaxing(); focus_builder(); footer_layout(); inbox_layout(); custom_pet();
     printf("Characters: both adapters, eight moods, five sizes, pause/mic/wrap/swap and %u exact incremental redraws PASS\n", redraws);
 }

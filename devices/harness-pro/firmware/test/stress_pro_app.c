@@ -53,7 +53,7 @@ bool pro_settings_muted(void) { return true; }
 void ram_telemetry_periodic(const char *tag) { (void)tag; }
 bool fw_was_updated(char *version, size_t cap) { (void)version; (void)cap; return false; }
 void pro_frame_init(void) {}
-uint32_t pro_frame_present(const ht_scene_t *p, const ht_scene_t *n) { (void)p; (void)n; return 0; }
+uint32_t pro_frame_present(const ht_scene_t *p, const ht_scene_t *n, uint32_t *px) { (void)p; (void)n; if (px) *px = 1; return 0; }
 void pro_display_set_brightness(uint8_t l) { (void)l; }
 void pro_display_power(bool on) { (void)on; }
 pro_touch_sample_t pro_touch_poll(int *x, int *y) { (void)x; (void)y; return PRO_TOUCH_NONE; }

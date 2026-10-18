@@ -203,6 +203,20 @@ class PublicationGuards(unittest.TestCase):
         with self.assertRaises(ValueError):
             publish.validate_receipts(manifest, receipts)
 
+    def test_image_build_requires_its_hn_runtime_validation(self):
+        manifest = {'source_commit': 'source-one'}
+        image = {'head_sha': 'source-one'}
+        publish.validate_image_build(manifest, image, [{'name': 'image', 'conclusion': 'success'},
+                                                       {'name': 'runtime', 'conclusion': 'success'}])
+        # Image runs from before the split validated hn inside the image job.
+        publish.validate_image_build(manifest, image, [{'name': 'image', 'conclusion': 'success'}])
+        for jobs, commit in [([{'name': 'image', 'conclusion': 'success'}, {'name': 'runtime', 'conclusion': 'failure'}], 'source-one'),
+                             ([{'name': 'image', 'conclusion': 'success'}, {'name': 'runtime', 'conclusion': 'skipped'}], 'source-one'),
+                             ([{'name': 'image', 'conclusion': 'failure'}, {'name': 'runtime', 'conclusion': 'success'}], 'source-one'),
+                             ([{'name': 'image', 'conclusion': 'success'}, {'name': 'runtime', 'conclusion': 'success'}], 'source-two')]:
+            with self.subTest(jobs=jobs, commit=commit), self.assertRaises(ValueError):
+                publish.validate_image_build(manifest, {'head_sha': commit}, jobs)
+
     def test_only_complete_matching_machine_evidence_can_publish(self):
         manifest = {'source_commit': 'source-one', 'iso': {'sha256': 'image-one'}}
         receipts = [dict(firmware=fw, encrypted=encrypted, status='passed', iso_sha256='image-one',

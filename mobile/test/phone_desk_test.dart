@@ -200,6 +200,60 @@ void main() {
     expect(backend.received, isEmpty);
   });
 
+  // ⚠️ The regression this is here for: Find narrowed to Docker, New Harness tapped over an agent
+  // of Desktop — and the new agent landed in Desktop, the tab of the agent on screen.
+  test(
+    'an agent made for a tab picked by hand joins that tab, and the phone is in it',
+    () async {
+      await join();
+      // The tab of the agent on screen, which the home screen records.
+      desk.note('t1');
+
+      desk.adopt((machineId: 'm', agentId: 'new'), tabId: 't2');
+
+      expect(_agentsOf(desk, 't1'), ['a', 'b']);
+      expect(_agentsOf(desk, 't2'), ['c', 'new']);
+      expect(desk.activeTabId, 't2');
+      await pumpEventQueue();
+      expect(backend.received, [
+        {'op': 'pane.add', 'tabId': 't2', 'machineId': 'm', 'agentId': 'new'},
+      ]);
+    },
+  );
+
+  test('a tab picked by hand counts with the phone in no tab too', () async {
+    await join();
+    desk.note(null);
+
+    desk.adopt((machineId: 'm', agentId: 'new'), tabId: 't2');
+    await pumpEventQueue();
+
+    expect(_agentsOf(desk, 't2'), ['c', 'new']);
+    expect(desk.activeTabId, 't2');
+    expect(backend.received.map((op) => op['tabId']), ['t2']);
+  });
+
+  test(
+    'a picked tab closed on another computer meanwhile leaves the agent in the tab the phone is in',
+    () async {
+      await join();
+      desk.note('t1');
+      backend.edit([
+        {'op': 'tab.close', 'id': 't2'},
+      ]);
+      await desk.refresh();
+
+      desk.adopt((machineId: 'm', agentId: 'new'), tabId: 't2');
+      await pumpEventQueue();
+
+      expect(_agentsOf(desk, 't1'), ['a', 'b', 'new']);
+      expect(desk.activeTabId, 't1');
+      expect(backend.received, [
+        {'op': 'pane.add', 'tabId': 't1', 'machineId': 'm', 'agentId': 'new'},
+      ]);
+    },
+  );
+
   test('an agent deleted on the phone leaves every tab that held it', () async {
     backend = _Backend(
       tabs: [

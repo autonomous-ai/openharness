@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { probeExecFile } from './offThreadExec.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { link, lstat, mkdir, open, unlink } from 'node:fs/promises'
@@ -191,7 +192,7 @@ export async function nativeProcessImages(
     const remaining = Math.floor(deadline - performance.now())
     if (!helper || remaining <= 0) return empty
     return await new Promise(resolve => {
-      execFile(helper.path, ['--paths', ...new Set(pids).values()].map(String),
+      probeExecFile(execFile)(helper.path, ['--paths', ...new Set(pids).values()].map(String),
         { timeout: remaining, maxBuffer: 4 * 1024 * 1024, env: psEnv() }, (error, stdout) => {
           const result = parseNativeProcessImages(stdout ?? '', new Set(pids))
           if (error && !result.images.size) {

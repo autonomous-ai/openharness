@@ -13,6 +13,7 @@ import 'package:harness_mobile/core/local_key_value_store.dart';
 import 'package:harness_mobile/core/machine_cache.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/core/snapshot_store.dart';
+import 'package:harness_mobile/measurement/product_measurement.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/desk_sync.dart';
@@ -150,6 +151,34 @@ class FakeApi extends ApiClient {
 
   @override
   Future<bool> postDeviceAck(DevAck ack) async => false;
+
+  /// The account's product-usage choice, and every report sent under it — what a test that counts
+  /// usage reads back. Never the network.
+  Map<String, dynamic> usageChoice = const {'enabled': true, 'revision': 0};
+  final List<Map<String, dynamic>> usageReports = [];
+
+  /// What each read or save of the choice asked: null for a read, the setting for a save.
+  final List<bool?> usageChoiceAsks = [];
+
+  @override
+  Future<Map<String, dynamic>> productUsageSettings({bool? enabled}) async {
+    usageChoiceAsks.add(enabled);
+    if (enabled != null) {
+      usageChoice = {
+        'enabled': enabled,
+        'revision': (usageChoice['revision'] as int) + 1,
+      };
+    }
+    return Map.of(usageChoice);
+  }
+
+  @override
+  Future<Map<String, dynamic>> productUsageReport(
+    Map<String, dynamic> report,
+  ) async {
+    usageReports.add(jsonDecode(jsonEncode(report)) as Map<String, dynamic>);
+    return {'accepted': true};
+  }
 
   /// Answers `/api/auth/me` in place of [profile] when set — held open, or
   /// throwing.
@@ -440,6 +469,7 @@ ViewerRig viewerApp({
   MachineCache? machineCache,
   LocalKeyValueStore? storage,
   Duration turnActivityTimeout = const Duration(seconds: 12),
+  ProductMeasurement? productMeasurement,
 }) {
   final session = AuthSession(storage: MemoryKeyValueStore());
   final viewer = FakeViewer(session);
@@ -459,6 +489,7 @@ ViewerRig viewerApp({
         machineCache ??
         (storage == null ? null : MachineCache(store: MemorySnapshotStore())),
     turnActivityTimeout: turnActivityTimeout,
+    productMeasurement: productMeasurement,
     connectionForTest: (machineId) =>
         conns.putIfAbsent(machineId, ScriptedConn.new),
   );
@@ -488,10 +519,12 @@ Future<ViewerRig> signedInWith(
   bool noTakeover = true,
   LocalKeyValueStore? storage,
   Duration turnActivityTimeout = const Duration(seconds: 12),
+  ProductMeasurement? productMeasurement,
 }) async {
   final rig = viewerApp(
     storage: storage,
     turnActivityTimeout: turnActivityTimeout,
+    productMeasurement: productMeasurement,
   );
   rig.api.onMachines = () async => [
     for (final id in agents.keys) remoteMachine(id),

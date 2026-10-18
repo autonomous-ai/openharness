@@ -148,6 +148,8 @@ describe('Agent Messages\' mailbox', () => {
     const long = paneNotice({ ...message(), text: 'x'.repeat(500) })
     expect(long).toBe(`← lead: ${'x'.repeat(NOTICE_TEXT - 1)}…`)
     expect(paneNotice({ ...message(), text: 'short' })).toBe('← lead: short')
+    // The text may be another account's: no control or format character reaches the person's pane (review of B2).
+    expect(paneNotice({ ...message(), text: '\u0007\u001b[2J\u001b]0;pwn\u0007a\tb\u202ec' })).toBe('← lead: [2J]0;pwna bc')
     expect(paneNotice({ ...message(), text: '' })).toBe('← lead: ')
   })
 

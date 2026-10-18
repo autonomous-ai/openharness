@@ -81,7 +81,7 @@ export function parseNativeProcessControl(output: string, pids: readonly number[
         || BigInt(fd.device) > 0xffffffffn || typeof fd.inode !== 'string' || !/^\d{1,20}$/.test(fd.inode)
         || BigInt(fd.inode) > 0xffffffffffffffffn) return nativeUnavailable('the native control descriptor is invalid')
       seen.add(fd.fd)
-      const kinds: Record<number, string> = { 2: 'SOCKET', 3: 'PSXSHM', 4: 'PSXSEM', 5: 'KQUEUE', 6: 'PIPE', 7: 'FSEVENT' }
+      const kinds: Record<number, string> = { 2: 'SOCKET', 3: 'PSXSHM', 4: 'PSXSEM', 5: 'KQUEUE', 6: 'PIPE', 7: 'FSEVENT', 9: 'NPOLICY' }
       const modes: Record<number, string> = { [0o100000]: 'REG', [0o040000]: 'DIR', [0o020000]: 'CHR', [0o060000]: 'BLK', [0o010000]: 'FIFO' }
       const kind = fd.type === 1 ? modes[fd.mode] : kinds[fd.type]
       if (!kind || (fd.type === 1 ? fd.inode === '0' : fd.mode !== 0 || fd.device !== '0' || fd.inode !== '0')) {

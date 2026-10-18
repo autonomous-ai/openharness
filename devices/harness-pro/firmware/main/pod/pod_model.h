@@ -41,7 +41,6 @@ typedef struct {
     char steps[POD_STEPS_MAX][POD_STEP_BYTES];   // this turn's tools and previous activity sentences, newest first (cut on a codepoint)
     uint16_t step_at_s[POD_STEPS_MAX];   // seconds into the turn each step arrived (steps[] order); 0xFFFF = unknown (no turn start seen)
     uint8_t step_count;
-    uint8_t fresh_steps;                 // the newest steps[] that came after the last question (Classic draws only these: it never showed older ones)
     int16_t step_total;                  // steps pushed this turn (not cut by the list's cap or by done), -1 when no turn.started was seen
     bool turn_started;                   // a turn.started began the current turn (step times are measured from since_ms)
     bool failed;                         // the last turn ended in turn.error; the next turn.started clears it (state stays IDLE)
@@ -66,6 +65,9 @@ typedef struct {
     // event arrives, or Idle again after POD_SENT_WAIT_MS with none.
     bool sent;
     uint32_t sent_ms;
+    // This turn plays the pet's second working scene (POD_SCENE_WORK_ALT, Claude's builder) instead of its first (the
+    // chef): drawn once as the turn starts (pod_model_random), kept until it ends, so every screen shows the same one.
+    bool work_alt;
 } pod_agent_t;
 
 typedef struct { int16_t x1, y1, x2, y2; } pod_rect_t;   // 0..1000
@@ -116,6 +118,9 @@ void pod_copy_str(char *dst, size_t cap, const char *src);
 void pod_utf8_trim(char *s);
 
 void pod_model_reset(pod_model_t *);
+// The random source a new turn draws its working scene from (pod_agent_t.work_alt): esp_random on the device (pro_app);
+// NULL, the default, always the first scene (the host tests and goldens: the chef).
+void pod_model_random(uint32_t (*rnd)(void));
 // Interface addition: call at agents.begin; agents_end then drops every agent not re-sent since.
 void pod_model_agents_begin(pod_model_t *);
 void pod_model_agent(pod_model_t *, const char *id, const char *name, const char *engine, const char *machine);
@@ -188,5 +193,7 @@ bool pod_model_unread_seen(pod_model_t *, const char *agent, const char *token);
 // Read here: the same, and an entry that had a token is queued in reads[] for notif.read.
 bool pod_model_unread_read(pod_model_t *, const char *agent);
 const pod_unread_t *pod_model_unread_find(const pod_model_t *, const char *agent);
+// How many notices Pets lists (the Notices screen and Home's Notices card): the asking agents, then the unread entries of agents that are not asking.
+int pod_notice_count(const pod_model_t *);
 // Take the queued notif.read frames (at most max); returns the count.
 int pod_model_take_reads(pod_model_t *, pod_read_out_t out[], int max);

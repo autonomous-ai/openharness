@@ -71,6 +71,7 @@ void main() {
       'email': 'a@b.co',
       'otp': '1234',
       'grant_type': 'otp',
+      'app': 'harness-mobile',
     });
     expect(tokens.token, 'access-1');
     expect(tokens.refreshToken, 'refresh-1');
@@ -163,6 +164,7 @@ void main() {
       expect(http.sent.single.body, {
         'refresh_token': 'refresh-0',
         'grant_type': 'refresh_token',
+        'app': 'harness-mobile',
       });
       expect(tokens.token, 'access-1');
     });

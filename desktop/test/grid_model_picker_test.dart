@@ -932,13 +932,14 @@ void main() {
   });
 
   group('which engines are offered a picker at all', () {
-    test('the three whose switching has been driven end to end', () {
+    test('the four whose switching has been driven end to end', () {
       // Not the daemon's `localModelEngines`, which is the wider "could a Local model be handed to
       // this engine" — seven carry a launch contract. This is which ones a person is OFFERED the
-      // switch on, and it is the three that have been watched work: Claude Code and Codex move by
-      // environment, OpenCode by a config file plus its own `/models` picker.
-      expect(kModelPickerEngines, {'claude', 'codex', 'opencode'});
-      for (final engine in ['claude', 'codex', 'opencode']) {
+      // switch on, and it is the four that have been watched work: Claude Code and Codex move by
+      // environment, OpenCode by a config file plus its own `/models` picker, Pi by its own home
+      // re-pointed at the grid.
+      expect(kModelPickerEngines, {'claude', 'codex', 'opencode', 'pi'});
+      for (final engine in ['claude', 'codex', 'opencode', 'pi']) {
         expect(modelPickerSupports(engine), isTrue, reason: engine);
       }
     });
@@ -951,7 +952,6 @@ void main() {
         'cursor',
         'hermes',
         'grok',
-        'pi',
         'kilo',
         'amp',
         'devin',

@@ -58,6 +58,11 @@ COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder /app/dist ./dist
 
 ENV NODE_ENV=production
+# Public tag/SHA only; /api/health uses these to verify the image actually serving traffic.
+ARG BUILD_TAG
+ARG BUILD_SHA
+ENV BUILD_TAG=${BUILD_TAG}
+ENV BUILD_SHA=${BUILD_SHA}
 # Role selector. Override to `job` on the worker Deployment (replicas: 1).
 ENV APP=api
 # Each pod is one node process (no pm2 cluster here), so cap V8's old space explicitly: without it V8

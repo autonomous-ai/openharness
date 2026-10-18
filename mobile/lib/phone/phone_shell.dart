@@ -1,15 +1,18 @@
 import 'dart:async';
 
-import 'new_device_banner.dart';
-
 import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
 
 import '../p2p/phone_terminal_p2p.dart';
 import 'agent_home.dart';
+import 'approve_sign_in.dart';
+import 'browser_handoff.dart';
 import 'devices_page.dart';
+import 'exit_app.dart';
+import 'new_device_banner.dart';
 import 'phone_shell_scope.dart';
+import 'welcome/connect_code.dart';
 
 /// The signed-in phone app: one page stack, rooted in [AgentHome] — the terminal the phone opens
 /// on and stays on. Machines and Settings are pages pushed onto it, from the terminal's menu and
@@ -33,6 +36,7 @@ class PhoneShell extends StatefulWidget {
 }
 
 class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
+  late final BrowserHandoff _browser;
   final _navigator = GlobalKey<NavigatorState>();
 
   /// The nested navigator's own — see the note at the `HeroControllerScope` below.
@@ -42,6 +46,15 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // A page a harness's program opened while this phone was typing there (Claude Code's `/login`).
+    _browser = BrowserHandoff(
+      widget.notifier,
+      say: (text) =>
+          ScaffoldMessenger.maybeOf(context)
+              ?.showSnackBar(SnackBar(content: Text(text))),
+    );
+    widget.notifier.onBrowserOpen = (machineId, _, url) =>
+        unawaited(_browser.open(machineId, url));
     final notices = widget.notifier.agentNotices.system;
     notices.opened.addListener(_openNoticedAgent);
     notices.openedDevice.addListener(_openNoticedDevice);
@@ -54,6 +67,13 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
         _openNoticedDevice();
       });
     }
+    // A computer's sign-in QR read before this phone was signed in: the sign-in was the way to
+    // answer it, and this shell is the first thing up after it — see [_approveHeldComputerSignIn].
+    if (widget.notifier.pendingComputerSignIn != null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _approveHeldComputerSignIn(),
+      );
+    }
     // ⚠️ Not asked here any more. Signed in with nothing on screen, "Harness would like to send you
     // notifications" is a question with no reason attached. It is asked the first time a harness
     // is on screen — see `FocusHints.onDone` in `terminal_page.dart`.
@@ -62,6 +82,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    widget.notifier.onBrowserOpen = null;
+    unawaited(_browser.dispose());
     widget.notifier.agentNotices.system.opened.removeListener(
       _openNoticedAgent,
     );
@@ -128,6 +150,27 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     setState(() => _canPop = false);
   }
 
+  /// The computer whose sign-in QR (`harness login --qr`) the welcome screen read before this phone
+  /// was signed in ([AppNotifier.pendingComputerSignIn]): the approval it asked for, now that it can
+  /// be given. Spent here whatever the answer — a code is one computer's sign-in, once.
+  ///
+  /// From this shell's context and not a page's: the home page under it is still settling (the
+  /// machines loading, "Waiting for your computer…" swapping with "Looking for your computers…") and
+  /// a page swapped out mid-answer would drop it. The dialog stands on the root navigator either way.
+  void _approveHeldComputerSignIn() {
+    final code = widget.notifier.pendingComputerSignIn;
+    if (!mounted || code == null) return;
+    widget.notifier.pendingComputerSignIn = null;
+    unawaited(
+      approveComputerSignIn(
+        context,
+        widget.notifier,
+        SignInCode(code),
+        scanAgain: 'Show it again on the computer, then scan it from Settings ▸ Sign in a computer.',
+      ),
+    );
+  }
+
   /// A tapped "agent finished" notice: that agent, as the home screen — the
   /// dial's drawer row opening its agent.
   void _openNoticedAgent() {
@@ -175,6 +218,13 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// who was looking straight at it, with a network that would have answered at once.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive) {
+      // The app switcher coming up is `inactive`, and a swipe there can end the app without it
+      // ever reaching `paused` — so the machine cache is written here as well. See
+      // [AppNotifier.handleAppInactive].
+      widget.notifier.handleAppInactive();
+      return;
+    }
     if (state == AppLifecycleState.paused) {
       // The other half of the resume below: work that only makes sense in
       // front of somebody stops here. The sockets are not touched — the OS
@@ -194,7 +244,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// below, or `canPop` would answer with whatever was true when the shell last happened to build.
   bool _canPop = false;
 
-  /// Android's back button: the stack's own pages first, then the system.
+  /// Android's back button: the stack's own pages first, then the question before leaving the app.
   ///
   /// The notification is used only as a SIGNAL that the stack moved, and the answer is then read
   /// from the navigator itself.
@@ -219,21 +269,70 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
 
   void _handleBack(bool didPop, Object? result) {
     if (didPop) return;
-    _navigator.currentState?.maybePop().then((_) {
-      if (mounted) _syncCanPop();
-    });
+    unawaited(_back());
   }
 
+  /// The stack's own pages first; what is left is leaving the app, which Android asks about.
+  ///
+  /// ⚠️ **The stack is ASKED, rather than judged by its `canPop`.** `maybePop` answers false only
+  /// when the root has nothing to close. `canPop` is false at the root even while something there
+  /// holds the press itself — Find over the terminal, whose own [PopScope] steps out of it — and
+  /// back used to leave the app from under an open Find because of it.
+  ///
+  /// ⚠️ **Only the app's own root asks.** The sample runs this same shell on a route pushed over the
+  /// welcome screen, and back at ITS root has always left the sample for that screen — so a shell
+  /// with a route under it pops that route instead. `pop`, not `maybePop`: this shell's own
+  /// [PopScope] is what refuses the pop, and asking the route again would land straight back here.
+  Future<void> _back() async {
+    final handled = await _navigator.currentState?.maybePop() ?? false;
+    if (!mounted) return;
+    _syncCanPop();
+    if (handled || !confirmsExitOnBack) return;
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isFirst) {
+      // Only while it is still on top: a sheet pushed meanwhile is what the next press closes.
+      if (route.isCurrent) Navigator.of(context).pop();
+      return;
+    }
+    await confirmExitApp(context);
+  }
+
+  /// The page stack. A fresh widget each call — what makes the [Navigator] tell every route on it
+  /// that the world may have changed (`Route.changedExternalState`), and so rebuild every page.
+  Widget _pages() => HeroControllerScope(
+    controller: _heroController,
+    child: Navigator(
+      key: _navigator,
+      // ⚠️ The controller goes in the SCOPE ONLY, never also in `observers`.
+      // `NavigatorState._updateEffectiveObservers` appends the scope's controller
+      // to `widget.observers` itself, so listing it here registers it twice and
+      // trips "A HeroController can not be shared by multiple Navigators" — which
+      // reads like a sharing bug and is really a double-subscription by one
+      // navigator.
+      onGenerateRoute: (_) => MaterialPageRoute<void>(
+        builder: (_) => AgentHome(
+          notifier: widget.notifier,
+          openMachineId: _linkedMachineId,
+          openAgent: _openAgentRequest,
+        ),
+      ),
+    ),
+  );
+
   @override
-  Widget build(BuildContext context) => PhoneShellScope(
-    onMachineLinked: _followLinkedMachine,
-    onOpenAgent: _openAgentAtHome,
-    child: ListenableBuilder(
-      listenable: widget.notifier,
-      builder: (context, _) => PopScope<Object?>(
+  Widget build(BuildContext context) {
+    // Made once per build of the shell, and handed through the [ListenableBuilder] below — see the
+    // note there.
+    final pages = _pages();
+    return PhoneShellScope(
+      onMachineLinked: _followLinkedMachine,
+      onOpenAgent: _openAgentAtHome,
+      child: PopScope<Object?>(
         // False while the stack has somewhere to go back to, so the gesture reaches [_handleBack]
-        // instead of leaving the app. True at its root: the press then belongs to the system.
-        canPop: !_canPop,
+        // instead of leaving the app. True at its root: the press then belongs to the system —
+        // except on Android, where the root asks before the app is left ([confirmExitApp]), so
+        // every press is the shell's.
+        canPop: !confirmsExitOnBack && !_canPop,
         onPopInvokedWithResult: _handleBack,
         child: NotificationListener<NavigationNotification>(
           onNotification: _onNavigation,
@@ -243,44 +342,55 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
             //
             // `MaterialApp` installs one controller for the ROOT navigator only; a nested
             // `Navigator` inherits nothing, so its routes have no observer to drive a flight.
-            body: Column(
-              children: [
-                // A device this phone had never trusted joined the account (device key log).
-                NewDeviceBanner(
-                  notifier: widget.notifier,
-                  navigator: _navigator,
-                ),
-                Expanded(
-                  // While a band shows it has taken the status-bar inset, so the pages under it must
-                  // not take it again (a blank gap the height of the notch otherwise).
-                  child: MediaQuery.removePadding(
-                    context: context,
-                    removeTop: NewDeviceBanner.showing(widget.notifier),
-                    child: HeroControllerScope(
-                      controller: _heroController,
-                      child: Navigator(
-                        key: _navigator,
-                        // ⚠️ The controller goes in the SCOPE ONLY, never also in `observers`.
-                        // `NavigatorState._updateEffectiveObservers` appends the scope's controller to
-                        // `widget.observers` itself, so listing it here registers it twice and trips
-                        // "A HeroController can not be shared by multiple Navigators" — which reads
-                        // like a sharing bug and is really a double-subscription by one navigator.
-                        onGenerateRoute: (_) => MaterialPageRoute<void>(
-                          builder: (_) => AgentHome(
-                            notifier: widget.notifier,
-                            openMachineId: _linkedMachineId,
-                            openAgent: _openAgentRequest,
-                          ),
-                        ),
+            //
+            // ⚠️ **Only the bands and the inset under them are rebuilt by the notifier, and the
+            // page stack is not — while the home screen is all there is.** This used to wrap the
+            // whole shell, so every tick of the notifier (an agent synced on any machine, a turn
+            // starting) handed the [Navigator] a new widget, which rebuilds EVERY route on it:
+            // the home screen down to the terminal being typed into, several times a second in a
+            // burst. The home screen listens to the notifier for itself ([AgentHome]), so at the
+            // root the stack is handed through untouched. A page PUSHED over it may not listen —
+            // it may read the notifier in `build` and count on being rebuilt — so while one is up
+            // the stack is rebuilt on every tick exactly as before.
+            body: ListenableBuilder(
+              listenable: widget.notifier,
+              child: pages,
+              builder: (context, pages) => Column(
+                children: [
+                  // A device this phone had never trusted joined the account (device key log).
+                  NewDeviceBanner(
+                    notifier: widget.notifier,
+                    navigator: _navigator,
+                  ),
+                  Expanded(
+                    // While a band shows it has taken the status-bar inset, so the pages under it must
+                    // not take it again (a blank gap the height of the notch otherwise).
+                    //
+                    // ⚠️ **Read under the Scaffold, through this Builder — never through the shell's
+                    // own context.** The Scaffold has resized its body for the keyboard, and hands the
+                    // body a MediaQuery with the keyboard's inset taken out so nothing below takes it
+                    // again. The shell's context sits ABOVE the Scaffold and still holds that inset:
+                    // rebuilt from it, every page in this navigator read the keyboard afresh and its
+                    // own Scaffold shrank for it a second time. The terminal page lost twice the
+                    // keyboard's height, its key bar left floating halfway up the screen over an
+                    // empty band. See `TerminalPage.didChangeMetrics`, which relies on the inset
+                    // being gone here.
+                    child: Builder(
+                      builder: (context) => MediaQuery.removePadding(
+                        context: context,
+                        removeTop: NewDeviceBanner.showing(widget.notifier),
+                        child: (_navigator.currentState?.canPop() ?? false)
+                            ? _pages()
+                            : pages!,
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

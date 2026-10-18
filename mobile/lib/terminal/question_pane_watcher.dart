@@ -181,7 +181,13 @@ class QuestionPaneWatcher extends ChangeNotifier {
     // The same dialog redrawn — a caret moving between rows rewrites the whole
     // block. Keeping the one already held is what stops a publish on every
     // arrow key.
-    if (_view?.fingerprint == found.fingerprint) {
+    //
+    // ⚠️ **Unless what a tap can do changed with it.** An MCP form's caret
+    // moving from a field onto its buttons is the same dialog — same
+    // fingerprint, so nothing upstream takes it for a new question — but its
+    // answers have just become tappable, and the page has to hear that.
+    if (_view?.fingerprint == found.fingerprint &&
+        _view?.tappable == found.tappable) {
       return (view: _view, again: false);
     }
     return (view: found, again: false);

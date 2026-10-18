@@ -8,25 +8,41 @@ automatically proven improvement. Changes still need review, tests and a deliber
 
 | Question | Signal | Interpretation |
 | --- | --- | --- |
-| Does first measured use lead to work? | First-launch installation cohorts; work and first text response within 24 hours | Same participating installation, not signup conversion, same-task success or unique people. Existing users enter when updated; mature only after the full follow-up day ends. |
-| Where does a launch stall or fail? | Pending install/model/native waits; observed launch created/failed/cancelled/unconfirmed; fixed failure categories and duration buckets | Polls are not attempts. Missing outcomes, daemon restarts and the 15-minute observation bound reduce coverage. Inspect unknowns alongside failures. |
-| Which actions break? | Create, resume, restart, model-change, history, fork, close, delete, search, history paging, Store list/install/update/remove, model list/download/start/stop and browser-open requests, fixed outcomes/errors and latency buckets | Request acceptance is not task success. Pending/unknown requests are separate from completed replies. |
+| Does first measured use lead to work? | First-launch installation cohorts; work and first text response within 24 hours; the first launch's engine (`first_launch_engine_opencode`, `_claude`, `_codex`, `_other`) and, for Claude Code and Codex, whether that engine had a credential here (`first_launch_<engine>_signed_in`, `_signed_out`, `_unknown`) | Same participating installation, not signup conversion, same-task success or unique people. Existing users enter when updated; mature only after the full follow-up day ends. The credential is one presence check per installation, in the gateway (`cli/src/lib/engineAccount.ts`: a file stat'ed or parsed for a token, a Keychain item looked up without its secret); it reads the gateway's own environment and starts no login shell, so a key only a shell profile exports reads as signed out on a daemon launchd or systemd started. `unknown` is a Codex that keeps its tokens in the OS keyring, or a check that failed. An answer lost to a stop or a choice change leaves the engine count without one. |
+| Where does a launch stall or fail? | Pending install/model/native waits; observed launch created/failed/cancelled/unconfirmed; fixed failure categories and duration buckets; an `other` failure's code (`launch_failed_code_<code>`); a created launch whose engine then did not start (`launch_late_failed`, by code in `launch_late_failed_code_<code>`) | Polls are not attempts. Missing outcomes, daemon restarts and the 15-minute observation bound reduce coverage. Inspect unknowns alongside failures. Codes are the daemon's own fixed names, lower-cased (`LAUNCH_ERROR_CODES`); `unlisted` is a code not in the list and `none` a failure that named none, so the codes add up to `launch_failed_other`. A late failure (the new-pane watcher's ENGINE_DID_NOT_START, ENGINE_NOT_INSTALLED or START_TIMEOUT, set after the reply said created) is one of the `launch_created`, never a `launch_failed`; the gateway reads it from the agent's own announcement for 15 minutes after the launch was created, and earlier CLI releases counted these only as created (compare releases separately). |
+| Which actions break? | Create, resume, restart, model-change, history, fork, close, delete, search, history paging, Store list/install/update/remove, model list/download/start/stop and browser-open requests, fixed outcomes/errors and latency buckets; the code of an `other` create or resume refusal (`create_error_code_<code>`, `resume_error_code_<code>`) | Request acceptance is not task success. Pending/unknown requests are separate from completed replies. Requests are also counted by source: `app`, `tool`, `automatic` (fixed polls, whichever app makes them), `unknown` and `phone` — the phone marks the requests the daemon measures (`usageSurface: 'phone'`, inside the E2EE payload); older phones still count as `app`. Each code family adds up to its `create_error_other` or `resume_error_other`. |
 | Does work get a response promptly? | First text response buckets; over-one-minute waits; error events; matched ends without text; interruptions | Includes automation. Tool-only turns, interruptions and missing lifecycle events can explain missing text. No message is inspected. |
 | Do installations return to work? | D1/D7/D28 working-day cohorts, consecutive complete-week and calendar-month returns, return after a seven-day gap | Any working day can be a cohort; not new-signup retention. Local date flags produce unlinked totals. Opt-outs, reinstallations, resets and missing uploads affect results. |
-| Was the task useful? | Optional Completed / Partly completed / Not completed plus five fixed reason choices, reachable from Rate task outcome and Privacy | Voluntary and self-selected; not representative success or satisfaction. There is no free-text input. |
+| Was the task useful? | Optional Completed / Partly completed / Not completed plus five fixed reason choices from clients that offer feedback; current Desktop Settings no longer exposes feedback controls | Voluntary and self-selected; not representative success or satisfaction. There is no free-text input. |
 | Is there usage at all? | Active and working computer counts; app opens; older-client relay totals | Background windows can count as active. An open is a surface going from no attached window to one, not each connection (the desktop holds one per machine and redials). Relay events are not distinct people; the populations must not be added together. |
 
-| Which features get tried and used again? | First measured installations and daily first/repeat feature reach | Locally deduplicated installation-days, not unique accounts. Reads the apps make on their own (history, history paging, Store list, model list; `PRODUCT_USAGE_AUTOMATIC_ACTIONS`) count reliability only and have no reach. |
-| Where do app flows break? | Setup, Harness/tmux/clipboard steps, sign-in, workspace/remote connections, computer linking, viewer-pane opening and manual update checking/staging | Fixed started/ok/failed/cancelled/unknown counts and coarse duration buckets. Opening a viewer pane is not rendering its content; staging an update is not a successful relaunch. |
+| Which features get tried and used again? | First measured installations and daily first/repeat feature reach | Locally deduplicated installation-days, not unique accounts. Reads the apps make on their own (history, history paging, Store list, model list; `PRODUCT_USAGE_AUTOMATIC_ACTIONS`) count reliability only. The Store and model lists get reach only from the request an app marks `userAction` when a person opens them (`<action>_user_*`, `PRODUCT_USAGE_USER_OPENED_ACTIONS`); history has none. |
+| Where do app flows break? | Setup, Harness/tmux/clipboard steps, sign-in, workspace/remote connections, computer linking, viewer-pane opening and manual update checking/staging; a setup step whose tool was missing at a check (`setup_desktop_setup_<step>_missing`); the agents a new computer downloads beside setup (`setup_desktop_agent_download_<opencode\|codex\|claude>_started`, `_ok`, `_failed`, with under 1 min, 1–5 min and over 5 min) | Fixed started/ok/failed/cancelled/unknown counts and coarse duration buckets. Opening a viewer pane is not rendering its content; staging an update is not a successful relaunch. A setup step stays open from the first check until its tool is in place, so a tool that was missing and then installed is one ok step and one `_missing` mark; only a setup that ends failed fails its step. Earlier Desktop releases counted every check that found a tool missing as a failed step (on 2026-10-16 the Harness step read 72 failed of 221 while 0 setups failed): compare releases separately. `_missing` is any tool a check found absent or out of date (a Harness CLI older than this Desktop needs, on a computer already in use, counts too), not only new computers. A step left waiting (the review, a Linux Terminal handoff, manual mode, someone who walks away) now ends `unknown` at the 15-minute observation bound instead of `failed`, so expect `setup_*_unknown` to rise, mostly on Linux. `_missing` and the download counts are anonymous setup counts only. A download whose prerequisite (curl, Harness's Node) never arrived counts as started and failed; `ok` means the agent's program is in place, judged per engine. |
+| Where does the phone's onboarding stall? | After sign-in: waiting for the first computer, opening its session, the first message, the notification prompt. A sign-in that went through, by button, counted again under the account's sharing. Waits past a minute split into 1–5 min, 5–15 min, 15 min–1 h and over 1 h for the computer and the first message. Once per step per sign-in: `resumed` (reopened in a run that did not sign in), "Not you? Sign out", the address sent from the share sheet, a joining computer that wants its password or is offline | Stage totals per day, not a linked funnel. Subtract `resumed` from starts for fresh starts; an unmatched start is a closed app or a step still waiting. A resumed step's duration starts at the reopening. Signed-in sign-in counts are successes only; failures and cancels before an account remain the signed-out counts', but a success is marked `retried` (a failed or cancelled try came first in that app run) or `switched` (another button was tried first). Phone reports carry release and iOS/Android, so every phone count also splits by those two margins (above 20 collector days); debug builds are not kept. A chosen sign-out sends what is queued first (up to 2 s), so "Not you? Sign out" reaches the totals. |
+| How fast does the phone get back to work? | A launch that came back signed in, to its first computer answering (`app_start`); a dial the person asked for ("Try again", `connect_user`) apart from the app's own (`connect_auto`), beside the unchanged `remote_connect`; a stopped harness resumed from the phone, to its first live turn (`resume_recovery`) | A launch that signs in is the onboarding's and is not counted; one that leaves the screen before a computer answers is `unknown`, one whose computers never answer stays started. An asked-for dial fails at 12 s, as Desktop Connect does. A phone dial is `failed` only when the phone knows why (locked or offline), `unknown` otherwise; the reasons (`connect_error_*`) are Desktop health counters. |
+| Are the phone's side pages used? | Find and Computers opens, by a sideways swipe on the terminal or by a button (Computers' row in Settings, its link on a long wait at home) | Which page and which way, nothing more. Find's key and screen-reader actions are not counted; a swipe that lets Find go back opened nothing. |
 | Is measurement losing coverage? | Updated collector installation-days, pruned queues, full observation maps, unmatched app starts | Loss signals warrant caution. No signal does not prove complete collection. |
 | How many people use Harness, and do they come back? | People active / working / new per day and per app, and D1/D2/D3/D7 returns (backend rollup of 10-day pseudonymous marks) | Sharing accounts only, staff excluded; an app open across midnight counts on both days, so prefer working returns. Not available before `PRODUCT_USAGE_SUBJECT_KEY` is set. |
 
-Native signed-out sessions can explicitly enable **Share setup and sign-in counts**. It starts off
-on every app launch, sends no credentials/cookies, and never replays earlier actions. Setup state
-already visible when opted in can start an observation; duration then begins at that observation,
-not necessarily at installation start. An account's off choice disables it once known. Web pre-sign-in
-collection stays disabled because that transport cannot guarantee omitted cookies. These optional,
-untrusted, self-selected counts are a separate population from signed-in app/daemon reports. They
+Desktop setup and sign-in counts are enabled by default, with no onboarding checkbox. Desktop has
+one “Share product usage data” switch in Experimental, with no separate Privacy page or feedback
+controls. The browser keeps its existing Privacy page. Users can
+turn them off in **Settings → Experimental → Share product usage data**, including before sign-in through
+the app menu. Local booleans remember the preference and a pending opt-out across launches; reporting waits for
+that preference to load and stays off if it cannot be read. The confirmed account preference takes
+over after sign-in and is remembered for the next signed-out launch. An explicit Settings opt-out
+before sign-in is applied to the account before Desktop sharing can resume; failures keep it pending
+and reporting off. An account's default-on response cannot erase that pending choice. Turning sharing off discards
+queued counts and open observations. It does not retract a request already sent.
+The phone's **Share setup and sign-in counts** line, under its signed-out screens, is on by default too
+and follows the same rules: unticking it is kept on the phone as a pending opt-out, applied to the
+account at the next sign-in before phone sharing resumes; an unreadable choice is off; the confirmed
+account preference is remembered for the next signed-out launch. With nowhere to keep the opt-out
+(tests, the sample) it starts off. Neither native setup transport sends credentials/cookies or replays earlier actions.
+Setup state already visible when sharing becomes enabled can start an observation; duration then
+begins at that observation, not necessarily at installation start. Web pre-sign-in collection stays
+disabled because that transport cannot guarantee omitted cookies. These untrusted setup counts are
+a separate population from signed-in app/daemon reports; older clients and opt-outs affect coverage. They
 show observed friction at each step, **not** unique signup conversion or a linked user funnel.
 Reproduce those paths with test accounts and synthetic inputs. No screen recordings,
 click trails, stable analytics identifiers, locations, content or arbitrary properties are added.
@@ -61,17 +77,26 @@ Weekly bins cover completed weeks from installations that report again, so non-r
 
 Native Desktop observes main-frame/first-frame viewer loading, updater apply acknowledgements and
 the next observed version, explicit versus automatic connections, and resume-to-observed-work.
+Known-unlinked native Desktop retry probes do not start additional automatic connection
+observations: the initial refusal remains one outcome, and an explicit Connect is measured
+separately. Older releases counted every probe in the health totals. A drop across this
+measurement change is not evidence that fewer people encountered linking trouble; these
+counters do not count affected people. Retry suppression adds no identifiers or stored history.
 The startup bucket measures launch to the first consented observation of a connected workspace,
 including preference/sign-in delay. One in 60 rendered frames supplies a coarse duration bucket;
-it cannot reliably detect an idle freeze. Error hooks pass only framework/async categories.
-Desktop RSS and gateway RSS/CPU sample once per minute; they describe those processes, not the
-whole machine or agents. Sampling adds no core timer, process enumeration, or subprocess.
+it cannot reliably detect an idle freeze. Frames of a hidden, minimised or occluded window, and the
+first frame after it is shown again, are not sampled (the OS throttles them), nor is each launch's
+first frame, which `app_start` already times; earlier releases sampled both. Error hooks pass only framework/async categories.
+Desktop RSS samples once per minute and gateway RSS/CPU once per report tick (45 to 75 seconds, a
+minute on average); they describe those processes, not the whole machine or agents. Sampling adds
+no core timer, process enumeration, or subprocess.
 
-Desktop's only new disk state is the last consented run's version, clean-exit/update flags, choice
+Desktop keeps its setup-sharing preference and pending opt-out booleans, plus the last sharing-enabled run's version, clean-exit/update flags, choice
 revision and a local-only account-scope hash. One serialized asynchronous write plus one latest
 pending value bounds disk work. It is cleared on sign-out/off and never enters a report. An unclean
 run can mean a force quit or power loss, and only becomes observable if the app returns. Update
-flags are best effort; analytics never delays exit. Gateway work-day flags expire after 35 days;
+flags are best effort; the existing expected-version flag starts during download so its disk write
+does not begin only at exit, and failed downloads clear it. Analytics never delays exit. Gateway work-day flags expire after 35 days;
 a local yes/no marker prevents an old installation from being counted as newly activated again.
 All new fields are allowlisted; no URLs, raw error strings, stack traces, device specifications,
 task/session IDs or content are accepted. Feedback is voluntary and shown/answered/dismissed
@@ -85,10 +110,42 @@ Unmeasured RPCs return a shared no-op immediately. The `HARNESSD_SERVICES=none` 
 runs services inline; it does not provide process isolation.
 
 The gateway coalesces asynchronous disk writes, caps its local queue at 256 KiB / 35 UTC days,
-and bounds in-memory turn/launch observations at 1,000 each. Reports contain at most 64 counters
-and stay below 8 KiB. One sync runs at a time, with five-second network deadlines and a one-minute
-report interval. Unknown or failed preference checks stop collection. Slow or failed reporting can
+and bounds in-memory turn/launch observations at 1,000 each (and the created launches' agents it
+watches for a late failure, for 15 minutes each). Reports contain at most 64 counters and stay below
+8 KiB. One sync runs at a time, with five-second network deadlines. The gateway reads the sharing
+choice as it starts, so collection starts with it, and sends its first report a random 10 to 60
+seconds later; each later tick comes a random 45 to 75 seconds after the last. Every daemon of a
+release updated at the same second, and a report at start then one each minute made the fleet report
+together: backend write conflicts and `USAGE_BUSY` refusals (41 and 48 on 2026-10-16). A report the
+backend refuses as busy or failing (429, 5xx, a timeout) waits for a full-jitter backoff whose ceiling
+doubles from two minutes to half an hour with each such refusal in a row, and never less than the
+answer's Retry-After (held to the same half hour); any other answer resets it. Ticks still read the
+choice meanwhile. Unknown or failed preference checks stop collection. Slow or failed reporting can
 lose counts and cannot become a product dependency. A failed disk write also disables collection.
+
+Stopping the gateway writes the collector's final, clean state synchronously before it returns
+(a temporary file and a rename, at most the 256 KiB queue), and its process stops the gateway before
+it closes the core's link and exits. A write still on its way cannot put an older state over it.
+Earlier releases wrote the clean exit asynchronously and their process exited first, so `harness
+stop`, updates, sign-in and sign-out restarts, service installs and OS logouts all counted as
+`health_cli_unclean_restart` (69, then 170 on 2026-10-16, production counters). Compare that counter
+by release across this change; now it counts a process that ended without stopping (a crash, a kill,
+power loss, a stop that outlasted its five-second grace).
+
+`health_cli_report_rejected` counts unsuccessful delivery attempts, including retries; it is not
+a count of lost reports. A report that names a counter this backend does not know yet (a client a
+release ahead of it) is kept without that name, never stored or echoed, and counted once as
+`health_<cli|desktop|phone>_report_unknown_metric`; before, the whole report was refused and retried.
+A report with no known counter left is still refused. New `health_cli_report_failure_*` counters split those attempts into fixed
+invalid, too-large, authentication, rate-limit, timeout, unreachable, write-conflict, transaction,
+server and other categories. A transaction failure does not by itself prove a timeout. No raw error
+message, database detail, URL or unknown error code is collected. These diagnostics share the same
+privacy choice and bounded queue, so a delivery outage can delay its own diagnostic counters.
+Desktop now splits failed delivery attempts into the same fixed categories. A permanently invalid
+or oversized packet is discarded so it cannot block newer reports; transient errors retry the
+same receipt. Delayed errors after a choice or account change are discarded.
+The local app proxy accepts only bounded UI counts, or Desktop health/UI counts with the exact
+public release, OS and channel context. It does not accept daemon counters or arbitrary context.
 
 Desktop and phone collectors keep only fixed counters in RAM, at most 64 in-flight observations,
 with at most 32 counters per report, one pending report per channel and one flush at a time.
@@ -99,13 +156,53 @@ for all three phases. Counts expire after
 yesterday; app exit loses RAM counts. Update-stage outcomes may be lost during immediate exit;
 never delay an update to flush analytics. There is no persistent app identifier or local event log.
 
-The signed-out endpoint permits only setup counters and explicit consent, rejects auth/cookie
+hn reports as the `tui` surface: fixed `ui_tui_*` flow and `health_tui_*` milestone counters only,
+sent as one-way `product_observe` frames to this computer's daemon, which accepts them only from hn
+over the owner's socket, never relays them, and adds them to its own queue under the account's
+choice; those arriving before its first choice read wait in RAM (64 at most) until it is known.
+hn records only while signed in: nothing observed before sign-in is kept or sent, and a sign-in,
+sign-out or account change discards what is waiting, so its own sign-in is not observed. Flows are
+workspace and remote connections, computer linking, viewer opening (in a browser, or its link shown
+over SSH), app start, workspace ready and resume recovery, each started when it begins as on the
+Desktop; milestones are workspace ready, first work and first response, once per app session, with
+the Desktop's definitions. Milestones are not reset when the sharing choice changes within a session.
+At most 64 observations wait in hn's RAM (a full queue drops the rest and says so once per session,
+`health_tui_observation_overflow`); nothing is written to disk. Its counters travel in reports of
+their own. A backend that predates `tui` refuses only those, and the daemon then drops hn's counts
+until the next UTC day or its own restart, without counting a failed delivery.
+
+The signed-out endpoint permits only setup counters. Older native clients send `consent: true`;
+default-on Desktop and phone send `sharing: "default"`, accepted only when every counter is one
+surface's (Desktop or phone) and never recorded as an explicit opt-in. The two request forms are mutually exclusive. The endpoint rejects auth/cookie
 headers, limits bodies to 4 KiB and values to 1,000, and admits at most 120 writes/minute and four
 concurrent writes per server process. No IP-based analytics or new rate-limit identity is stored.
 Exhaustion drops measurement rather than affecting sign-in. Public counts remain susceptible to
 fabrication; they are directional diagnostics, not trusted account acquisition metrics.
 
 Both ingestion paths atomically add only UTC-day/metric totals plus an unlinked random retry receipt.
+Fast database write conflicts retry that complete transaction up to three times with short jitter,
+rechecking the sharing choice each time. No retry starts after the first second; existing transaction
+deadlines still apply to each attempt. Slow or exhausted conflicts return to the client's normal
+immutable-report retry. Receipts prevent both immediate and later retries from counting twice.
+Reports update their counters and separate margins in one Mongo update command inside
+that transaction. A partial write aborts the receipt and all counts; no per-report body is stored.
+This shortens shared-row contention without adding a daemon timer or delaying product actions.
+Each backend process admits one aggregate report transaction at a time, with at most 32 waiting
+reports and a two-second queue deadline. Overflow returns a retryable busy response. Permission
+is checked inside the transaction after admission, including every conflict retry. Other server
+processes can still contend; this does not promise zero delivery failures.
+The public `/api/health` response includes validated release tag/SHA coordinates so a successful
+image build can be distinguished from the version actually serving requests.
+
+Resume diagnostics add fixed conditions by request source: runtime unavailable, saved state missing,
+project missing, harness missing, credentials missing, busy, changed, unconfirmed, preparation failed,
+launch failed, invalid and other. These come only from known error codes, never error text or paths.
+An engine of a resumed harness that did not start (ENGINE_DID_NOT_START, ENGINE_NOT_INSTALLED,
+START_TIMEOUT) is a launch failure, a resume while the harness is being deleted is busy, and a request
+that named no harness is invalid; earlier releases counted these as `other`.
+From CLI 0.4.3, an unconfirmed runtime counts as unknown and a concurrently changed harness as
+cancelled (legacy aggregate: unknown), rather than failed. Compare releases separately across this
+definition change; a lower failure rate alone is not proof the product improved.
 Receipts expire within 36 days and totals within 396 days through the existing Mongo TTL indexes.
 No account deduplication markers or stable hashes enter these totals. People-based daily counts and
 D1/D2/D3/D7 returns come from one mark per sharing person per day under an HMAC pseudonym (no time,
@@ -148,14 +245,18 @@ Decision: keep | revise | revert | inconclusive
 Next review date:
 ```
 
-The `review` output proposes investigations, not code changes or automatic deployments. Feedback
+The `review` output proposes investigations, not code changes or automatic deployments. Its unknown
+launch refusals and its engines that did not start after a create each name their five most frequent
+codes; a large `unlisted` share means a code is missing from `LAUNCH_ERROR_CODES`. Feedback
 is one source of evidence; a missing response does not identify why a person stopped using Harness.
 
 ## Rollout and privacy controls
 
 Deploy backend schema and the singleton worker first, including unique indexes and TTL indexes.
 Use synthetic data to verify duplicate receipts, transaction rollback/retry, off/on revision fencing
-and expiry. Then release CLI, desktop and phone together. Check that the switch saves and that reports
+and expiry. Then release CLI, desktop and phone together. An older backend refuses a whole report
+carrying a counter it does not know (a phone page opening, a `request_phone_*` count, a phone
+`sharing: "default"` setup report, a launch code or a first launch's engine), so the backend always goes first. Check that the switch saves and that reports
 stop when it is off. Old clients stop contributing individual daily histories when the backend changes;
 the historical reporting command will no longer be a current-usage source.
 
@@ -169,7 +270,7 @@ Suggested visible release note:
 
 > Harness now shares limited product usage counts by default to help us find broken or slow flows.
 > These counts do not include your prompts, responses, code, files or project details. Turn sharing
-> off for your account in Settings → Privacy → Share product usage data, or use `harness privacy off`.
+> off for your account in Settings → Experimental → Share product usage data, or use `harness privacy off`.
 > Existing opt-outs stay off. Optional feedback sends only the answer you choose.
 > With sharing on, Harness also keeps which days you used it and through which app, under an
 > coded ID instead of your account, for 10 days, then only as combined totals.

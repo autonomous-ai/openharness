@@ -19,6 +19,7 @@ class SettingRow extends StatelessWidget {
     this.controlSemanticLabel,
     this.footer,
     this.alignTop = false,
+    this.inlineControl = false,
     this.badge,
   });
 
@@ -37,6 +38,10 @@ class SettingRow extends StatelessWidget {
 
   /// Align taller controls with the title; compact controls stay centered.
   final bool alignTop;
+
+  /// Keep a small control beside its label even at large text sizes. The label
+  /// can wrap; the switch does not need the wide editor's stacked layout.
+  final bool inlineControl;
 
   /// A small tag after the title, such as `New`. Null draws the title alone.
   final String? badge;
@@ -100,8 +105,9 @@ class SettingRow extends StatelessWidget {
         children: [
           LayoutBuilder(
             builder: (context, constraints) =>
-                constraints.maxWidth <
-                    MediaQuery.textScalerOf(context).scale(_stackBelow)
+                !inlineControl &&
+                    constraints.maxWidth <
+                        MediaQuery.textScalerOf(context).scale(_stackBelow)
                 ? Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [

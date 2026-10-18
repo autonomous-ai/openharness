@@ -1,13 +1,17 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import 'package:harness_mobile/core/app_settings.dart';
 import 'package:harness_mobile/core/app_version.dart';
 import 'package:harness_mobile/demo/sample_mode.dart'
     show SampleMode, SampleSession, openSampleMode;
 import 'package:harness_mobile/core/device_name.dart';
+import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/measurement/product_measurement.dart';
 import 'package:harness_mobile/shared/widgets/app_dialog.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/appearance_prefs_store.dart';
@@ -16,8 +20,11 @@ import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 
+import 'add_device/add_device_page.dart';
 import 'approve_sign_in.dart';
+import 'connectors_page.dart';
 import 'devices_page.dart';
+import 'machine_profile_picker.dart';
 import 'machines_tab.dart';
 import 'phone_navigation.dart' show phoneRoute;
 import 'phone_name_store.dart';
@@ -166,27 +173,71 @@ class _Body extends StatelessWidget {
           if (_sample(context) == null)
             SettingsRow(title: 'Privacy', onTap: () => Navigator.of(context).push(
               phoneRoute((_) => PrivacyPage(request: ({bool? enabled}) async {
-                final value = await notifier.api.productUsageSettings(enabled: enabled);
-                notifier.productMeasurement.savedChoice(value);
+                final value = await notifier.productUsageSettings(enabled: enabled);
+                // Set here by the person: it also settles an opt-out made before sign-in.
+                notifier.productMeasurement.savedChoice(value, explicit: enabled != null);
+                await notifier.productMeasurement.setupChoiceSaved;
                 return value;
               }, feedback: notifier.api.productUsageFeedback)),
             )),
           // The computers this phone reaches — here rather than a menu of their own: linking one is
           // a once-a-while errand, and Find already reaches every agent on them.
+          // Each computer's sheet there holds what the account can do to it — try it again, rename
+          // it, take it off the account (`machine_actions.dart`).
           SettingsRow(
             title: 'Computers',
+            onTap: () {
+              notifier.productMeasurement.screenOpened(
+                PhoneScreen.computers,
+                ScreenOpening.button,
+              );
+              Navigator.of(context).push(
+                phoneRoute(
+                  (_) => MachinesTab(
+                    notifier: notifier,
+                    large: false,
+                    fromSettings: true,
+                  ),
+                ),
+              );
+            },
+          ),
+          // Which computer's tabs this phone shows — the desktop's Profiles. Beside Computers: it
+          // is a choice among them, and changes nothing on any of them. Only once there IS a choice
+          // — two computers or more — or one is already made, so it can be undone.
+          if (notifier.machines.length > 1 || notifier.machineProfileId != null)
+            SettingsRow(
+              key: const Key('settings-profile'),
+              title: 'Profile',
+              value: machineProfileLabel(notifier),
+              onTap: () =>
+                  unawaited(showMachineProfilePicker(context, notifier)),
+            ),
+          // The services those computers' agents use (Linear, GitHub…), signed in to from here.
+          SettingsRow(
+            key: const Key('settings-connectors'),
+            title: 'Connectors',
             onTap: () => Navigator.of(context).push(
-              phoneRoute((_) => MachinesTab(notifier: notifier, large: false)),
+              phoneRoute((_) => ConnectorsPage(notifier: notifier)),
             ),
           ),
           // Every device signed in to the account — each trusted by the others because of that, so
           // this is where one that is not yours is seen and taken out.
-          // A computer showing its sign-in QR (`harness login`, or the desktop app's "Scan with your
+          // A computer showing its sign-in QR (`harness login --qr`, or the web app's "Scan with your
           // phone"): this phone approves it with its own account.
           SettingsRow(
             key: const Key('settings-sign-in-computer'),
             title: 'Sign in a computer',
             onTap: () => unawaited(signInAComputer(context, notifier)),
+          ),
+          // A Harness with no screen (a box, a mini PC): onto the person's Wi-Fi and signed in to
+          // this account through its setup hotspot.
+          SettingsRow(
+            key: const Key('settings-add-device'),
+            title: 'Set up a device',
+            onTap: () => Navigator.of(context).push(
+              phoneRoute((_) => AddDevicePage(notifier: notifier)),
+            ),
           ),
           SettingsRow(
             title: 'Your devices',
@@ -195,6 +246,9 @@ class _Body extends StatelessWidget {
               phoneRoute((_) => DevicesPage(notifier: notifier)),
             ),
           ),
+          // Under Your devices: a new device on the account is one of the two things a notice says.
+          // Not in the sample, whose notices go nowhere.
+          if (_sample(context) == null) _NotificationsRow(notifier: notifier),
           // The name those computers show when this phone takes a harness over — which makes it a
           // fact about the account's computers, not about how the terminal looks.
           _PhoneNameRow(notifier: notifier),
@@ -277,9 +331,142 @@ class _Body extends StatelessWidget {
           icon: LucideIcons.logOut300,
           label: 'Sign out',
           destructive: true,
-          onTap: () => unawaited(notifier.logout()),
+          onTap: () => unawaited(confirmSignOut(context, notifier)),
         ),
       ],
+    );
+  }
+}
+
+/// Sign out, asked first — from the account sheet here, and from "Not you? Sign out" on the page a
+/// phone waits for its first computer on (`welcome/your_computer.dart`).
+///
+/// Asked first, because a sign-out is more than leaving this screen: the phone's key leaves the
+/// account's devices ([AppNotifier.logout]), and signing in again makes a new one — which every
+/// other device then announces as a new device. One stray tap in the sheet used to be all of it.
+///
+/// ⚠️ **"Signing out…" from the confirm on.** The sign-out takes up to 5 seconds before the welcome
+/// screen comes up ([AppNotifier.logout]), and the page it was asked from used to stand there
+/// unchanged meanwhile, its Sign out still there to press again. A page that cannot be left now
+/// says what is happening; the signed-in screen, and it with it, goes when the sign-out lands.
+Future<void> confirmSignOut(BuildContext context, AppNotifier notifier) async {
+  if (notifier.signingOut) return;
+  final confirmed = await confirmPhoneAction(
+    context,
+    // The sheet row's own icon — see [confirmPhoneAction].
+    icon: LucideIcons.logOut300,
+    title: 'Sign out?',
+    detail: notifier.currentUser?.email,
+    // "Your harnesses keep running" is news only to somebody who has harnesses: the account with
+    // no computer is the wrong-account case "Not you? Sign out" is for.
+    message: notifier.machines.isEmpty
+        ? 'When you sign in again, your other devices will see this phone as a '
+              'new device.'
+        : 'Your harnesses keep running on your computers. When you sign in again, '
+              'your other devices will see this phone as a new device.',
+    confirmLabel: 'Sign out',
+  );
+  if (!confirmed) return;
+  // The sign-out itself never waits on the page: one asked for is carried out.
+  Route<void>? shown;
+  if (context.mounted) {
+    final route = phoneRoute(
+      (_) => const _SigningOut(),
+      swipeToGoBack: false,
+    );
+    unawaited(Navigator.of(context).push(route));
+    shown = route;
+  }
+  try {
+    await notifier.logout();
+  } finally {
+    // Gone with the signed-in screen when the sign-out lands; still here only if it was cut short.
+    if (shown != null && shown.isActive) shown.navigator?.removeRoute(shown);
+  }
+}
+
+/// The page a Sign out by hand stands on until the welcome screen comes up — see [confirmSignOut].
+/// No way back from it: there is nothing left to go back to.
+class _SigningOut extends StatelessWidget {
+  const _SigningOut();
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: AppPalette.windowBg,
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox.square(
+                dimension: 22,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppPalette.accent,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'Signing out…',
+                key: const ValueKey('signing-out'),
+                style: TextStyle(color: AppPalette.textSecondary, fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Settings over the current page — the page Find and a terminal's menu push.
+void openPhoneSettings(BuildContext context, AppNotifier notifier) => unawaited(
+  Navigator.of(context)
+      .push(phoneRoute((_) => SettingsPage(notifier: notifier, large: false))),
+);
+
+/// Settings, at the top right of the screens a phone stands on before it can reach any harness:
+/// waiting for its first computer, unlocking the only one, the computers list while none is ready,
+/// pairing by a scanned code.
+///
+/// ⚠️ **The only way to Settings from those screens, and so to Sign out.** Find and a terminal's
+/// menu are where Settings otherwise opens, and both need a harness: a phone signed in to the wrong
+/// account — one with no computer on it — had no way out short of deleting the app.
+class PhoneSettingsButton extends StatelessWidget {
+  const PhoneSettingsButton({super.key, required this.notifier});
+
+  final AppNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Semantics(
+      button: true,
+      label: 'Settings',
+      excludeSemantics: true,
+      child: GestureDetector(
+        key: const ValueKey('phone-settings'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          HapticFeedback.selectionClick();
+          openPhoneSettings(context, notifier);
+        },
+        // The back chevron's box, mirrored: the same touch target, the glyph on the right gutter.
+        child: SizedBox(
+          width: 52,
+          height: 44,
+          child: Padding(
+            padding: const EdgeInsets.only(right: Tty.origin - 2),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Icon(LucideIcons.settings300, size: 21, color: tty.faint),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -350,6 +537,94 @@ class _VoiceLanguageRow extends StatelessWidget {
       );
     },
   );
+}
+
+/// Whether this phone may notify — a harness finishing while the app is away, a new device on the
+/// account ([noticesWhen]) — and the way to turn it on.
+///
+/// ⚠️ **The way back.** The OS asks once by itself, as the first terminal's tips go
+/// (`terminal_page.dart`). A "Don't Allow" there had no way back from inside the app, and the device
+/// notices went with it — the one warning that a key nobody recognises joined the account.
+///
+/// Off, a tap asks the OS: the prompt where it still has one to show, and where it does not (iOS
+/// asks once; Android stops after a refusal or two) the answer is still no, so the way to the
+/// phone's own switch is offered. On, a tap goes straight to that switch. Read again on the way back
+/// from Settings. No value at all where the answer cannot be read (a stand-in notice centre).
+class _NotificationsRow extends StatefulWidget {
+  const _NotificationsRow({required this.notifier});
+
+  final AppNotifier notifier;
+
+  @override
+  State<_NotificationsRow> createState() => _NotificationsRowState();
+}
+
+class _NotificationsRowState extends State<_NotificationsRow>
+    with WidgetsBindingObserver {
+  bool? _on;
+
+  SystemNotices get _notices => widget.notifier.agentNotices.system;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_read());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Back from the phone's Settings, where the switch is — or from anywhere else it could change.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(_read());
+  }
+
+  Future<void> _read() async {
+    final on = await noticesEnabled(_notices);
+    if (mounted && on != _on) setState(() => _on = on);
+  }
+
+  Future<void> _tap() async {
+    if (_on == true) {
+      await openAppSettings();
+      return;
+    }
+    await _notices.requestPermission();
+    await _read();
+    if (!mounted || _on != false) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: const Text(
+          'Notifications are off for Harness. Turn them on in the phone’s Settings.',
+        ),
+        action: SnackBarAction(
+          label: 'Open Settings',
+          onPressed: () => unawaited(openAppSettings()),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return SettingsRow(
+      key: const ValueKey('settings-notifications'),
+      title: 'Notifications',
+      detail: 'When $noticesWhen.',
+      value: switch (_on) {
+        true => 'On',
+        false => 'Off',
+        null => null,
+      },
+      onTap: () => unawaited(_tap()),
+    );
+  }
 }
 
 /// What this phone is called on another screen's "took control" banner —

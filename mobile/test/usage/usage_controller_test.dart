@@ -53,7 +53,7 @@ void main() {
       .where((a) => a.provider == provider)
       .firstOrNull
       ?.reading
-      .railWindow
+      .tightest
       ?.usedPercent;
 
   test('nobody asked yet: not loading, and no answer', () {

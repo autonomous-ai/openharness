@@ -7,6 +7,7 @@ import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/agent_index.dart';
 import 'package:harness_mobile/phone/agents_list_page.dart';
+import 'package:harness_mobile/phone/find_row.dart';
 import 'package:harness_mobile/phone/phone_destination.dart';
 import 'package:harness_mobile/phone/phone_search_catalog.dart';
 import 'package:harness_mobile/phone/phone_search_controller.dart';
@@ -192,7 +193,7 @@ class _SearchConn extends WsConn {
 }
 
 /// A machine answering `agent_recent` with what was asked of each agent, and
-/// nothing else.
+/// `session_search` from the same words — its own index — and nothing else.
 class _RecentConn extends WsConn {
   _RecentConn(this.asks)
     : super(
@@ -221,6 +222,26 @@ class _RecentConn extends WsConn {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
   }) async {
+    // What Find searches what was said with, since it reads no previews of its
+    // own (`PhoneSearchController.contentHitFor`).
+    if (type == 'session_search') {
+      final query = (payload['query'] as String).toLowerCase();
+      return {
+        'hits': [
+          for (final MapEntry(key: agentId, value: said) in asks.entries)
+            for (final ask in said)
+              if (ask.toLowerCase().contains(query))
+                {
+                  'agentId': agentId,
+                  'sessionId': 'session-$agentId',
+                  'field': 'ask',
+                  'snippet': ask,
+                  'together': true,
+                  'score': 1,
+                },
+        ],
+      };
+    }
     // ⚠️ A real [WsConn] completes an error reply as an error (`ws_conn.dart`),
     // never as a map. Returning one here let `agents_list` read `agents: null`
     // as "this machine has no agents" and wipe the list the test had set up.
@@ -373,11 +394,20 @@ List<PhoneDestination> _rank(
 );
 
 /// Find as the terminal puts it up — the phone's one search — all the way open.
-Widget _findOver(AppNotifier app, {VoidCallback? onClose}) => MaterialApp(
+///
+/// ⚠️ [AlwaysStoppedAnimation] stands at 1 but says it is still on its way
+/// (`forward`), so the reach for the fleet that waits for the slide to finish
+/// (`PhoneSearchResults._reachOnceOpen`) never starts. Pass
+/// [kAlwaysCompleteAnimation] for a test that needs it.
+Widget _findOver(
+  AppNotifier app, {
+  VoidCallback? onClose,
+  Animation<double> animation = const AlwaysStoppedAnimation(1),
+}) => MaterialApp(
   home: Scaffold(
     body: TerminalSearchOverlay(
       notifier: app,
-      animation: const AlwaysStoppedAnimation(1),
+      animation: animation,
       onClose: onClose ?? () {},
     ),
   ),
@@ -385,6 +415,21 @@ Widget _findOver(AppNotifier app, {VoidCallback? onClose}) => MaterialApp(
 
 /// A Find row's name, or any other line Find draws as rich text.
 Finder _row(String text) => find.text(text, findRichText: true);
+
+/// A Find row's state word, at the end of its first line: alone, or ahead of
+/// the row's age (`paused · 1m`).
+Finder _state(String word) =>
+    find.textContaining(RegExp('^${RegExp.escape(word)}( · |\$)'));
+
+/// The state word of the Find row named [title]: null for a harness with
+/// nothing to say — idle, whose first line ends in its age alone.
+String? _stateOf(WidgetTester tester, String title) => tester
+    .widget<FindRow>(
+      find.byWidgetPredicate(
+        (widget) => widget is FindRow && widget.title == title,
+      ),
+    )
+    .state;
 
 void main() {
   group('Agent.fromJson', () {
@@ -561,6 +606,14 @@ void main() {
           },
         },
       });
+      await _settle();
+      // Marked, not read: nothing reads previews in the background any more
+      // (owner, 2026-10-01). The next screen that asks reads it again, though
+      // well inside freshFor.
+      expect(conn.asked, ['live']);
+      app.sessionPreviews.warm([
+        app.previewKey('box', app.machineStates['box']!.agents.single),
+      ]);
       await _settle();
       expect(conn.asked, ['live', 'live']);
       expect(_agentIds(_rank(app, 'deploy')), ['live']);
@@ -770,7 +823,10 @@ void main() {
 
     await tester.enterText(find.byType(TextField), '@');
     await tester.pump();
-    expect(_row('Machine · 2 harnesses'), findsOneWidget);
+    // The machine's state is the word at the row's right edge; the line under
+    // its name says what it holds.
+    expect(_row('2 harnesses'), findsOneWidget);
+    expect(_state('ready'), findsOneWidget);
   });
 
   testWidgets('> runs a command by name', (tester) async {
@@ -916,11 +972,12 @@ void main() {
       await tester.pump();
 
       // Taps wait for the resume, but the live agent still HAS its terminal — `exited` over it
-      // would be a claim about the agent that the in-flight resume had nothing to do with.
+      // would be a claim about the agent that the in-flight resume had nothing to do with. Idle,
+      // it has no word at all (owner, 2026-09-30).
       expect(conn.resumed, ['saved']);
-      expect(find.text('resuming'), findsOneWidget);
-      expect(find.text('exited'), findsNothing);
-      expect(find.text('idle'), findsOneWidget);
+      expect(_state('resuming'), findsOneWidget);
+      expect(_state('exited'), findsNothing);
+      expect(_stateOf(tester, 'work · live'), isNull);
       // The list's own notify debounce, so no timer outlives the test.
       await tester.pump(const Duration(milliseconds: 100));
     });
@@ -939,8 +996,8 @@ void main() {
       await tester.pump();
 
       // `paused` would promise a resume the machine can only refuse.
-      expect(find.text('stopped'), findsOneWidget);
-      expect(find.text('paused'), findsNothing);
+      expect(_state('stopped'), findsOneWidget);
+      expect(_state('paused'), findsNothing);
       final blank = _agentRows(app)
           .firstWhere((row) => row.entry!.agent.id == 'blank');
       expect(blank.entry!.isOpenable, isFalse);
@@ -967,8 +1024,8 @@ void main() {
 
       // The desktop's `canPauseAndResume`: a current daemon resumes every engine, some as a new
       // conversation, so the row is paused work a tap brings back.
-      expect(find.text('paused'), findsOneWidget);
-      expect(find.text('stopped'), findsNothing);
+      expect(_state('paused'), findsOneWidget);
+      expect(_state('stopped'), findsNothing);
       expect(_agentRows(app).single.entry!.isOpenable, isTrue);
       await tester.pump(const Duration(milliseconds: 100));
     });
@@ -986,8 +1043,8 @@ void main() {
 
       // `paused` says a tap will bring it back; `exited` would say a tap does
       // nothing. The two must not be confused for each other.
-      expect(find.text('paused'), findsOneWidget);
-      expect(find.text('exited'), findsNothing);
+      expect(_state('paused'), findsOneWidget);
+      expect(_state('exited'), findsNothing);
     });
   });
 
@@ -1203,7 +1260,10 @@ void main() {
     final app = _app([box, lab], connFor: (machineId) => conns[machineId]!);
     addTearDown(app.dispose);
 
-    await tester.pumpWidget(_findOver(app));
+    // All the way up: the reach waits for Find's slide to finish.
+    await tester.pumpWidget(
+      _findOver(app, animation: kAlwaysCompleteAnimation),
+    );
     await tester.pump(const Duration(milliseconds: 100));
 
     // Opening the search asked BOTH — the whole point. Before this it asked
@@ -1422,7 +1482,7 @@ void main() {
   );
 
   testWidgets(
-    'opening search warms content, and what was asked finds a harness',
+    'opening search reads no previews, and what was asked still finds a harness',
     (tester) async {
       final conn = _RecentConn({
         '3188': ['which llama.cpp build is running?'],
@@ -1437,13 +1497,22 @@ void main() {
       await tester.pumpWidget(_findOver(app));
       // The store publishes on an 80 ms beat, as on the desktop.
       await tester.pump(const Duration(milliseconds: 100));
-      expect(conn.asked, ['3188', '2312']);
+      // ⚠️ No `agent_recent` reads from Find, on opening or per row (owner,
+      // 2026-10-01): they queued on the relay ahead of the terminal being
+      // attached.
+      expect(conn.asked, isEmpty);
 
-      // What was asked of 3188 is what finds it: neither name says `llama`.
+      // What was asked of 3188 is what finds it — through its machine's own
+      // index (`session_search`): neither name says `llama`.
       await tester.enterText(find.byType(TextField), 'llama');
+      await tester.pump(const Duration(milliseconds: 300));
       await tester.pump();
       expect(_row('work · 3188'), findsOneWidget);
       expect(_row('work · 2312'), findsNothing);
+      expect(conn.asked, isEmpty);
+      // Typing asks the machines: let their timers run out.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 30));
     },
   );
 

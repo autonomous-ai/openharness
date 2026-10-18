@@ -1,8 +1,4 @@
-// The Pro's glass: a 720 x 720 RGB565 panel and its GT911 touch, upright to the caller.
-//
-// A unit whose panel is mounted upside down runs with the runtime turn on (pro_turn.h: the app's setting, whose default
-// is -DPOD_PANEL_TURN=180). The picture is turned where strips are written and the contact where it is read, so callers
-// always see an upright PRO_DISPLAY_PX x PRO_DISPLAY_PX glass.
+// The Pro's glass: a 720 x 720 RGB565 panel and its GT911 touch, in the panel's own orientation (no turn).
 #pragma once
 
 #include <stdbool.h>
@@ -15,7 +11,7 @@
 // touch controller is logged and retried by pro_touch_read().
 void pro_display_init(void);
 
-// One contact, in upright glass coordinates. False when nothing touches the glass or the controller is
+// One contact, in glass coordinates. False when nothing touches the glass or the controller is
 // absent or returned something untrustworthy (out of range, or more than one finger).
 bool pro_touch_read(int *x, int *y);
 
@@ -23,7 +19,7 @@ bool pro_touch_read(int *x, int *y);
 // BAD: fingers the caller must not act on (more than one, or a point off the glass): cancel the contact and
 // ignore it until every finger is up. ERROR: the read itself failed (a stale or lost sample, not a lift).
 typedef enum { PRO_TOUCH_NONE, PRO_TOUCH_ONE, PRO_TOUCH_BAD, PRO_TOUCH_ERROR } pro_touch_sample_t;
-// Upright glass coordinates in *x, *y on ONE. This is where the screen turn is applied to the contact (once).
+// Glass coordinates in *x, *y on ONE.
 pro_touch_sample_t pro_touch_poll(int *x, int *y);
 
 // Backlight level 0..255, floored at 20 so the glass never goes dark by a setting. Off keeps the picture and
@@ -37,11 +33,9 @@ void pro_display_power(bool on);
 #define PRO_STRIP_PX (PRO_DISPLAY_PX * PRO_STRIP_LINES)
 uint16_t *pro_panel_strip(int which);   // 0 or 1
 
-// Push the w*h pixels in strip buffer `buf` (a pro_panel_strip() buffer, rows packed at width w) to the upright
-// rectangle (x, y). Applies the panel turn exactly once: pro_panel_prepare() reverses the buffer in place (call it
-// right after rasterising, before waiting), and the submit maps the rectangle. Asynchronous: the buffer belongs to the
+// Push the w*h pixels in strip buffer `buf` (a pro_panel_strip() buffer, rows packed at width w) to the
+// rectangle (x, y). Asynchronous: the buffer belongs to the
 // DMA until pro_panel_wait() returns. Waiting for the previous submit before the next one is the caller's job.
-void pro_panel_prepare(uint16_t *buf, int w, int h);
 void pro_panel_submit(int x, int y, int w, int h, const uint16_t *buf);
 // Block until the last submit has landed in the panel's framebuffer (250 ms; a timeout aborts to the reboot path).
 void pro_panel_wait(void);

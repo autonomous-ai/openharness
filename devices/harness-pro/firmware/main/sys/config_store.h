@@ -24,14 +24,6 @@ void    config_save_brightness(uint8_t level);
 bool config_load_muted(void);
 bool config_save_muted(bool muted);
 
-// The screen turned 180 degrees. `fallback` is the answer when nothing was saved (the build's default).
-bool config_load_turn(bool fallback);
-bool config_save_turn(bool turned);
-
-// The interface: 0 Classic (the default), 1 Console.
-int config_load_skin(int fallback);
-bool config_save_skin(int skin);
-
 // The voice language the device captures in. The daemon PROPOSES one from the computer's locale on every
 // `welcome`; once the user has picked here, this wins — the person holding the device may well speak
 // something other than the laptop is set to.

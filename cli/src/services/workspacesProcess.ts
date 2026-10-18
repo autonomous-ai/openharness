@@ -68,6 +68,8 @@ export function workspacesCoreApi(
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
       ...AGENT_ACTIONS_OFF,
       activityText: UNASKED.activityText,
+      activity: UNASKED.activity,
+      summaries: UNASKED.summaries,
     },
     // The workspaces drive no agent: these are never asked of them.
     turns: { send: () => {}, stop: () => {}, recent: async () => [], asks: async () => [], ...DELIVERIES_OFF },

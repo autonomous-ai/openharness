@@ -4,12 +4,17 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:xterm/utils.dart' show traceText;
 import 'package:xterm/xterm.dart';
 
 import '../core/crash_log.dart';
+import '../logging/typing_trace.dart';
 import 'control_chord.dart';
+import 'keyframe_write.dart';
+import 'screen_snapshot.dart';
 import 'terminal_binary.dart';
 import 'terminal_input.dart';
+import 'terminal_prompt_zone.dart';
 import 'terminal_viewport.dart';
 import 'utf8_chunks.dart';
 
@@ -127,7 +132,7 @@ class _ActiveUpload {
 /// One controller stream for one remote Harness agent.
 ///
 /// Sequence corruption is recovered with bounded resync retries and one clean
-/// reopen. Transport loss still freezes input until the user opens a session.
+/// reopen, and so is a stream that goes quiet without a word ([_sendHeartbeat]).
 class TerminalSession extends ChangeNotifier {
   static const protocolVersion = 3;
   static const minCols = 40;
@@ -139,6 +144,11 @@ class TerminalSession extends ChangeNotifier {
   final String agentId;
   String agentName;
   final String? engineId;
+
+  /// What the view's scroll mirror knows of this agent's rows — kept by the app
+  /// for the agent, not the session, so it outlives every keyframe and every
+  /// reopen of it. See [RemoteScrollMemory]. Null keeps it in the view only.
+  final RemoteScrollMemory? scrollMemory;
   final TerminalFrameSender send;
   final TerminalBinarySender sendBinary;
 
@@ -157,6 +167,25 @@ class TerminalSession extends ChangeNotifier {
   /// spending it on a no-op.
   final Future<bool> Function()? onOpenStalled;
 
+  /// When the transport last heard from this session's MACHINE — a frame it sealed, not the
+  /// relay's own (`WsConn.lastHeardFromMachineAt`). Null hook: the open watchdog keeps its old,
+  /// impatient rule (see [_openPatience]), and a quiet stream is always resynced
+  /// ([_sendHeartbeat]) rather than its transport redialled.
+  final DateTime? Function()? lastHeardFromMachine;
+
+  /// Takes this machine's whole transport down and dials it again, because a stream on it went
+  /// quiet and the socket heard nothing from the machine in that time either — see
+  /// [_sendHeartbeat]. Returns whether it did; false (the socket is mid-dial already, or cannot
+  /// redial) leaves the stream to its own resync.
+  ///
+  /// ⚠️ **The whole socket, not this stream.** A socket left half-open (Wi-Fi giving way to 4G)
+  /// carries every terminal of the machine, and every one of them is as dead as this one. Asking
+  /// the daemon for a resync over it would wait out three unanswered tries and an open's patience —
+  /// about twenty more seconds — before anything redialled. The caller marks the machine's
+  /// sessions lost before the redial (`AppNotifier._redialStaleTransport`), which is what puts
+  /// them back, screens kept, once the new socket is up.
+  final bool Function()? onTransportSilent;
+
   /// This client's own introduction, sent with every `terminal_open`; null
   /// for a viewer that never takes control and so is never anyone's taker.
   final TerminalClientDescriptor? client;
@@ -170,8 +199,11 @@ class TerminalSession extends ChangeNotifier {
     required this.sendBinary,
     this.client,
     this.onOpenStalled,
+    this.lastHeardFromMachine,
+    this.onTransportSilent,
     this.resyncTimeout = const Duration(seconds: 4),
     this.takeover = true,
+    this.scrollMemory,
   }) {
     terminal = _newTerminal();
   }
@@ -250,6 +282,35 @@ class TerminalSession extends ChangeNotifier {
   String? _openRequestId;
   int? _expectedSeq;
 
+  /// For the typing trace (`typing_trace.dart`, off unless built in): when input last went out, on
+  /// the trace clock, for an echo's latency; and the status last traced.
+  int _lastInputSentMs = -1 << 30;
+  TerminalSessionStatus? _tracedStatus;
+
+  /// For the typing trace: input sends queued and not finished, and when the last one finished.
+  int _sendsInFlight = 0;
+  int _sendsIdleSinceMs = 0;
+
+  @override
+  void notifyListeners() {
+    if (kTypingTrace && status != _tracedStatus) {
+      typingEvent(
+        'session ${agentId.length > 8 ? agentId.substring(0, 8) : agentId}'
+        ' ${_tracedStatus?.name ?? '-'} → ${status.name}'
+        '${errorCode == null ? '' : ' ($errorCode)'}',
+      );
+      _tracedStatus = status;
+    }
+    super.notifyListeners();
+  }
+
+  /// Frames dropped in a row as already drawn — see [_alreadyDrawn].
+  int _staleInARow = 0;
+
+  /// Past this many already-drawn frames in a row the numbering itself is in doubt, and a resync
+  /// settles it rather than dropping frames for ever.
+  static const _maxStaleInARow = 64;
+
   /// Whether this session has drawn anything yet.
   ///
   /// False from the moment the session opens until the machine's first
@@ -272,6 +333,34 @@ class TerminalSession extends ChangeNotifier {
   /// Something to show: this attach's first frame, or a kept screen standing in for it.
   bool get hasScreen => hasRenderedFrame || _showingKeptScreen;
 
+  /// Whether a new stream of this session is on its way over a screen this session itself drew —
+  /// a reopen once its socket was dialled again, a recovery — rather than an empty terminal
+  /// waiting for its first keyframe.
+  ///
+  /// ⚠️ **Why the page needs to know.** An open forgets the stream's sequence ([hasRenderedFrame]
+  /// goes false) but keeps the terminal and what is on it (`preserveTerminal`, which every reopen
+  /// asks for). Read as "no screen", the page laid its attaching skeleton over that screen: back
+  /// from a network switch, the reader saw their terminal vanish into a skeleton and come back a
+  /// moment later. The page keeps it up under a spinner instead ([TerminalPage]).
+  ///
+  /// Only a screen of this session's own streams. A kept screen seeded from another session (the
+  /// pager's, see [seedScreen]) is [hasScreen] already, and needs no word while it attaches.
+  bool get showsEarlierScreen => !hasScreen && _drewScreen;
+
+  /// Set when a keyframe of this session's lands, and cleared only when an open puts a blank
+  /// terminal in its place — see [showsEarlierScreen].
+  bool _drewScreen = false;
+
+  /// The stream was lost with its socket ([transportLost]) and waits for the socket to come back
+  /// — the one `error` the app repairs by itself, by reopening once the machine's socket is up.
+  /// Other errors stay until somebody acts on them.
+  bool get lostWithTransport =>
+      status == TerminalSessionStatus.error &&
+      errorCode == transportLostCode;
+
+  /// The [errorCode] [transportLost] leaves.
+  static const transportLostCode = 'TERMINAL_DISCONNECTED';
+
   /// Shows [kept] — the screen this agent had when the phone last left it — until the live stream's
   /// first keyframe lands and replaces it.
   ///
@@ -290,6 +379,27 @@ class TerminalSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// [snapshot] — a screen this run kept of this agent ([ScreenSnapshot]) — drawn into a terminal
+  /// built like this session's own, and shown as [seedScreen] shows one.
+  ///
+  /// Never over something better: a screen already on show (a live frame, or the exact terminal
+  /// kept from a moment ago) stays.
+  void seedSnapshot(ScreenSnapshot snapshot) {
+    if (hasScreen || _disposed) return;
+    final kept = _newTerminal(bindCallbacks: false)
+      ..resize(_clampCols(snapshot.cols), _clampRows(snapshot.rows))
+      ..write(snapshot.ansi);
+    seedScreen(kept);
+  }
+
+  /// This session's screen as a [ScreenSnapshot] to keep, or null with nothing live to keep — a
+  /// screen still standing in from a kept one is not news, and keeping it again would only
+  /// refresh its date.
+  ScreenSnapshot? snapshotForKeeping() {
+    if (_disposed || !hasRenderedFrame) return null;
+    return ScreenSnapshot.capture(terminal);
+  }
+
   int _lastRenderedSeq = -1;
   int _framesSinceAck = 0;
   int _renderedSinceAckBytes = 0;
@@ -301,14 +411,70 @@ class TerminalSession extends ChangeNotifier {
   /// or frames accepted since would be re-sent under numbers already used.
   int? _lastRealignedTo;
   int _resizeSeq = 0;
+
+  /// The size the last `terminal_resize` asked for, and when — until a keyframe of that size
+  /// answers it. See [_answerOnItsWay].
+  ({int cols, int rows, DateTime at})? _resizeAsked;
+
+  /// Asks for the size again if the keyframe [_answerOnItsWay] waited for never came.
+  Timer? _resizeAnswerTimer;
+
+  /// How long a resize's own keyframe may take before a keyframe of another size is believed.
+  static const _resizeAnswerWait = Duration(milliseconds: 1500);
   bool _resyncRequested = false;
   int _resyncAttempts = 0;
   int _autoReopenAttempts = 0;
   bool _openStallRecovered = false;
+
+  /// Heartbeats in a row that heard nothing on this stream — see [_sendHeartbeat].
+  int _quietBeats = 0;
+
+  /// When this stream was last heard from: its `terminal_ready`, then each frame of it. Set beside
+  /// every reset of [_quietBeats], and compared against [lastHeardFromMachine] — never with a
+  /// clock's duration — to tell a dead socket from a dead stream ([_transportSilentToo]).
+  DateTime? _lastHeardOnStream;
+
+  /// The heartbeats a live stream cannot go without a frame: at least 15s of silence, the
+  /// desktop's limit. Four, not three, because the count is of beats that heard nothing, and the
+  /// last frame may have landed just before the first of them.
+  static const _quietBeatsBeforeResync = 4;
+
+  /// When the open now in flight first left — kept through its resends, so its patience
+  /// ([_openPatience]) counts from the first ask rather than starting over at each one.
+  DateTime? _openSentAt;
+
+  /// How long an unanswered open waits while its machine is SILENT before [_handleOpenTimeout]
+  /// redials — and while the machine is answering other things, the longer [_openSlowPatience].
+  static const _openSilentPatience = Duration(seconds: 10);
+  static const _openSlowPatience = Duration(seconds: 20);
+
+  /// When this session last reopened itself after an open of this same device took its stream —
+  /// see [_takenBySelf]. Spaced by [_ownTakeoverCooldown].
+  DateTime? _ownTakeoverReopenedAt;
+  static const _ownTakeoverCooldown = Duration(seconds: 30);
+
   bool _disposed = false;
   int _generation = 0;
   bool _remoteCursorVisible = true;
   bool _cursorBlinkPhaseVisible = true;
+
+  /// Whether the cursor is hidden until the program draws again, because where the screen has it
+  /// is not where the program put it.
+  ///
+  /// ⚠️ **A pane made shorter loses the rows under its cursor.** tmux shrinks a pane by deleting
+  /// rows from the bottom up to the cursor before it pushes any into the history (`screen_resize_y`),
+  /// and it never asks whether they were empty. A shell's are; Claude Code's classic screen parks
+  /// the cursor on its prompt with four rows of its own under it (a border, two status lines, a
+  /// blank). The keyboard coming up shrinks the pane and those rows go. When Claude Code's redraw
+  /// for the resize follows the keyframe, it puts the cursor back on the prompt within milliseconds
+  /// — but when it did not (seen 2026-10-06), the cursor stayed at the bottom row, under the status
+  /// lines and against the key bar, until the first key typed made Claude Code draw again. So the
+  /// cursor is not shown until the program's next output, whichever of the two that is.
+  bool _cursorAwaitsProgram = false;
+
+  /// The pane height whose shrinking cut rows drawn under the cursor ([_noteCutUnderCursor]), spent
+  /// on the keyframe that answers it.
+  int? _cutUnderCursorFrom;
   List<int> _utf8Tail = const [];
   final List<int> _inputBytes = [];
   Timer? _heartbeat;
@@ -316,6 +482,11 @@ class TerminalSession extends ChangeNotifier {
   Timer? _inputTimer;
   Timer? _resizeTimer;
   DateTime? _lastInputFlushAt;
+
+  /// When typing into this terminal last went out to the machine — null before it ever has. What
+  /// the app's agent-list check reads to stay out of the way of somebody typing
+  /// (`AppNotifier._typingOn`).
+  DateTime? get lastInputAt => _lastInputFlushAt;
   DateTime? _lastResizeFlushAt;
   Timer? _resyncTimer;
   Timer? _scrollTimer;
@@ -423,17 +594,22 @@ class TerminalSession extends ChangeNotifier {
     errorMessage = null;
     takenOverBy = null;
     _expectedSeq = null;
+    _staleInARow = 0;
     _lastRenderedSeq = -1;
     _framesSinceAck = 0;
     _renderedSinceAckBytes = 0;
     _inputSeq = 0;
     _lastRealignedTo = null;
     _resizeSeq = 0;
+    _resizeAsked = null;
     _utf8Tail = const [];
     _remoteCursorVisible = true;
     _cursorBlinkPhaseVisible = true;
+    _cursorAwaitsProgram = false;
+    _cutUnderCursorFrom = null;
     _resyncRequested = false;
     _resyncAttempts = 0;
+    _openSentAt = null;
     if (resetRecovery) {
       _autoReopenAttempts = 0;
       _openStallRecovered = false;
@@ -446,7 +622,11 @@ class TerminalSession extends ChangeNotifier {
     // blank terminal where the reader's last screen should have been, with
     // [hasScreen] telling it not to show the skeleton either.
     final keep = preserveTerminal || _showingKeptScreen;
-    if (!keep) terminal = _newTerminal()..resize(cols, rows);
+    if (!keep) {
+      terminal = _newTerminal()..resize(cols, rows);
+      // A blank terminal: whatever this session drew before is gone with the old one.
+      _drewScreen = false;
+    }
     status = TerminalSessionStatus.opening;
     _openRequestId =
         'term_${DateTime.now().microsecondsSinceEpoch}_${Random.secure().nextInt(1 << 31)}';
@@ -507,6 +687,7 @@ class TerminalSession extends ChangeNotifier {
       transportLost('Could not send terminal_open');
       return;
     }
+    _openSentAt ??= DateTime.now();
     // An immediate ready/keyframe can arrive before send() resolves. Its
     // watchdog or live stream must not be replaced by an open timeout.
     if (status != TerminalSessionStatus.opening || streamId != null) return;
@@ -523,6 +704,8 @@ class TerminalSession extends ChangeNotifier {
   /// itself succeeded — the relay session was silently stale (ciphertext for a dead E2EE session gets
   /// dropped, not rejected). Force a fresh dial and resend the SAME open request (same `requestId`, so
   /// a late reply for the original still matches) before giving up.
+  ///
+  /// Unless the machine is only SLOW — see [_openPatience], which this waits out first.
   Future<void> _handleOpenTimeout(
     Map<String, dynamic> openPayload,
     int generation,
@@ -530,6 +713,15 @@ class TerminalSession extends ChangeNotifier {
     if (!_isCurrent(generation) ||
         status != TerminalSessionStatus.opening ||
         streamId != null) {
+      return;
+    }
+    final patience = _openPatience();
+    if (patience != null) {
+      _resyncTimer?.cancel();
+      _resyncTimer = Timer(
+        patience,
+        () => unawaited(_handleOpenTimeout(openPayload, generation)),
+      );
       return;
     }
     final sent = await _recoverAndResend(openPayload, generation);
@@ -552,6 +744,37 @@ class TerminalSession extends ChangeNotifier {
           ? 'Terminal did not reopen after resync failed.'
           : 'Harness did not respond — check your connection.',
     );
+  }
+
+  /// How much longer the open in flight may go unanswered before [_handleOpenTimeout] treats its
+  /// session as stale and redials — null once it has waited long enough, or when there is no way to
+  /// tell ([lastHeardFromMachine] absent, or the open not sent yet): the old rule, no patience.
+  ///
+  /// ⚠️ **Why the watchdog waits now (owner, 2026-10-01).** It redialled four seconds after any
+  /// unanswered open, on the theory that only a session that went stale behind a live relay stays
+  /// that quiet. A launch measured on a busy machine said otherwise: the relay was slow — 5 to 7
+  /// seconds each way while it carried the launch's other traffic — and the redial made it worse
+  /// every time. It threw away every request in flight, started a fresh handshake and agent list
+  /// on top of what was queued, and resent the open, which then reached the machine TWICE (the
+  /// first copy had been on its way all along); the later copy took the terminal off the earlier
+  /// one and the screen sat taken over by its own phone. The terminal that answered in about 8
+  /// seconds was shown at 22, or not at all.
+  ///
+  /// So the redial waits for evidence: a machine that has sealed ANY frame to this connection since
+  /// the open left is alive and only behind, and gets [_openSlowPatience]; one that has said
+  /// nothing at all gets [_openSilentPatience] — still the stale session's cure, ten seconds in
+  /// rather than four. Counted from the open's first send, so a resend does not start the clock
+  /// again, and in steps no longer than [resyncTimeout].
+  Duration? _openPatience() {
+    final sentAt = _openSentAt;
+    final heard = lastHeardFromMachine;
+    if (sentAt == null || heard == null) return null;
+    final lastHeard = heard();
+    final answering = lastHeard != null && lastHeard.isAfter(sentAt);
+    final limit = answering ? _openSlowPatience : _openSilentPatience;
+    final left = limit - DateTime.now().difference(sentAt);
+    if (left <= Duration.zero) return null;
+    return left < resyncTimeout ? left : resyncTimeout;
   }
 
   /// Shared recovery for both open-failure paths (`send()` itself failing, and `terminal_ready` never
@@ -598,11 +821,27 @@ class TerminalSession extends ChangeNotifier {
     if (_disposed) return false;
     switch (type) {
       case 'terminal_ready':
-        if (status != TerminalSessionStatus.opening ||
+        // ⚠️ **A reply to the open this session gave up waiting for is still taken (owner,
+        // 2026-10-01).** [_handleOpenTimeout] ends an open nobody answered in `error`, and the reply
+        // used to be dropped when it came after all — on a slow relay it does, seconds later — so
+        // the stream the machine had just opened was left running for nobody while this session
+        // asked for another. Only for THAT open ([_openRequestId] is the last one sent) and only
+        // while nothing has replaced it: a reopen since has a new request id, and the reply to the
+        // old one is then rightly ignored.
+        final lateReply =
+            status == TerminalSessionStatus.error &&
+            errorCode == 'TERMINAL_RESYNC_TIMEOUT' &&
+            streamId == null;
+        if ((status != TerminalSessionStatus.opening && !lateReply) ||
             payload['requestId'] != _openRequestId ||
             payload['agentId'] != agentId ||
             payload['protocolVersion'] != protocolVersion) {
           return true;
+        }
+        if (lateReply) {
+          status = TerminalSessionStatus.opening;
+          errorCode = null;
+          errorMessage = null;
         }
         streamId = payload['streamId'] as String?;
         if (streamId == null || streamId!.isEmpty) {
@@ -637,6 +876,8 @@ class TerminalSession extends ChangeNotifier {
         // for the life of the process, beating twice as often and still
         // beating after [dispose].
         _heartbeat?.cancel();
+        _quietBeats = 0;
+        _lastHeardOnStream = DateTime.now();
         _heartbeat = Timer.periodic(
           const Duration(seconds: 5),
           (_) => unawaited(_sendHeartbeat()),
@@ -655,6 +896,16 @@ class TerminalSession extends ChangeNotifier {
         final accepted = payload['accepted'] == true;
         if (_activeUpload?.beginAccepted.isCompleted == false) {
           _activeUpload!.beginAccepted.complete(accepted);
+        }
+        // A stream the daemon no longer has takes no input and no upload, and nothing else says
+        // so: the picture fails, and the terminal sat on as if live. Its screen is kept and it is
+        // opened once more — the desktop's recovery — without sending the picture again. Older
+        // daemons give only the reason's words.
+        if (!accepted &&
+            (payload['code'] == 'TERMINAL_STREAM_NOT_FOUND' ||
+                payload['reason'] ==
+                    'no live terminal stream for this pane (reopen it and try again)')) {
+          await _recoverByReopen(reason: 'TERMINAL_STREAM_NOT_FOUND');
         }
         return true;
       case 'terminal_chunked_upload_progress':
@@ -712,6 +963,7 @@ class TerminalSession extends ChangeNotifier {
         linkMode = null;
         _abortActiveUpload();
         notifyListeners();
+        if (takenOver && _takenBySelf(takenOverBy)) _reopenAfterOwnTakeover();
         return true;
       case 'terminal_error':
         final errorStream = payload['streamId'];
@@ -797,6 +1049,14 @@ class TerminalSession extends ChangeNotifier {
         // TERMINAL_PASTE_FAILED already is, since it may mean the pty is in an unknown state.
         // `_fail` itself resolves any in-flight upload (see `_abortActiveUpload`), so there is
         // nothing extra to do here for TERMINAL_PASTE_IMAGE_FAILED/TERMINAL_PASTE_FILE_FAILED.
+        //
+        // The daemon no longer holds this stream (it closed it while its link to the backend was
+        // down, say) and said so because this session asked (`reportMissing`). Reopen in place now
+        // rather than waiting out the heartbeat silence and three resyncs (2026-10-16).
+        if (errorCode == 'TERMINAL_STREAM_NOT_FOUND') {
+          unawaited(_recoverByReopen(reason: 'TERMINAL_STREAM_NOT_FOUND'));
+          return true;
+        }
         _fail(errorCode, payload['message']?.toString());
         return true;
       case 'terminal_transport_error':
@@ -811,6 +1071,9 @@ class TerminalSession extends ChangeNotifier {
 
   Future<void> handleBinary(TerminalBinaryFrame frame) async {
     if (_disposed || frame.streamId != streamId) return;
+    // Heard from: whatever the frame turns out to be, the stream is alive — see [_sendHeartbeat].
+    _quietBeats = 0;
+    _lastHeardOnStream = DateTime.now();
     final generation = _generation;
     _renderTail = _renderTail
         .then((_) async {
@@ -821,51 +1084,19 @@ class TerminalSession extends ChangeNotifier {
             return;
           }
           if (frame.kind == TerminalBinaryKind.keyframe) {
-            final nextCols = frame.cols;
-            final nextRows = frame.rows;
-            if (nextCols == null || nextRows == null) {
-              await _requestResync('TERMINAL_KEYFRAME_INVALID');
-              return;
+            if (kTypingTrace) {
+              typingEvent(
+                'out KEYFRAME ${agentId.length > 8 ? agentId.substring(0, 8) : agentId}'
+                ' seq=${frame.seq} ${frame.cols}×${frame.rows}'
+                ' ${bytes.length}B (status=${status.name}) — replaces the terminal',
+              );
             }
-            // Publish a complete screen atomically. A damaged snapshot must
-            // leave the retained screen available while resync recovers.
-            final decoded = decodeUtf8Chunk(_prepareKeyframeBytes(bytes));
-            final replacement = _newTerminal(bindCallbacks: false)
-              ..resize(_clampCols(nextCols), _clampRows(nextRows))
-              ..write(decoded.text);
-            _bindTerminal(replacement);
-            terminal = replacement;
-            _showingKeptScreen = false;
-            cols = _clampCols(nextCols);
-            rows = _clampRows(nextRows);
-            _utf8Tail = decoded.tail;
-            _remoteCursorVisible = terminal.cursorVisibleMode;
-            _cursorBlinkPhaseVisible = true;
-            _expectedSeq = frame.seq + 1;
-            _lastRenderedSeq = frame.seq;
-            _resyncRequested = false;
-            _resyncAttempts = 0;
-            _autoReopenAttempts = 0;
-            errorCode = null;
-            errorMessage = null;
-            takenOverBy = null;
-            _resyncTimer?.cancel();
-            _resyncTimer = null;
-            status = TerminalSessionStatus.controlling;
-            _markForAck(bytes.length);
-            notifyListeners();
-            final measured = _measuredViewport;
-            if (measured != null) {
-              _pendingCols = measured.cols;
-              _pendingRows = measured.rows;
-            }
-            if (_pendingCols != null && _pendingRows != null) {
-              unawaited(_flushResize());
-            }
+            await _applyKeyframe(frame, bytes, generation);
             return;
           }
           if (frame.kind == TerminalBinaryKind.sync) {
             if (status == TerminalSessionStatus.resyncing) return;
+            if (_alreadyDrawn(frame)) return;
             if (_expectedSeq == null || frame.seq != _expectedSeq) {
               await _requestResync('TERMINAL_SEQUENCE_GAP');
               return;
@@ -877,11 +1108,37 @@ class TerminalSession extends ChangeNotifier {
           }
           if (frame.kind != TerminalBinaryKind.output ||
               status == TerminalSessionStatus.resyncing) {
+            if (kTypingTrace && frame.kind == TerminalBinaryKind.output) {
+              typingEvent(
+                'out seq=${frame.seq} ${bytes.length}B DROPPED — resyncing',
+              );
+            }
+            return;
+          }
+          if (_alreadyDrawn(frame)) {
+            if (kTypingTrace) {
+              typingEvent(
+                'out seq=${frame.seq} ${bytes.length}B DROPPED — already drawn'
+                ' (expected $_expectedSeq)',
+              );
+            }
             return;
           }
           if (_expectedSeq == null || frame.seq != _expectedSeq) {
+            if (kTypingTrace) {
+              typingEvent(
+                'out seq=${frame.seq} GAP (expected $_expectedSeq) → resync',
+              );
+            }
             await _requestResync('TERMINAL_SEQUENCE_GAP');
             return;
+          }
+          if (kTypingTrace) {
+            final since = typingNowMs() - _lastInputSentMs;
+            typingNote(
+              'out seq=${frame.seq} ${bytes.length}B'
+              '${since < 5000 ? ' +${since}ms after the last send' : ''}',
+            );
           }
           if (!_writeBytes(bytes)) {
             await _requestResync('TERMINAL_OUTPUT_DECODE_FAILED');
@@ -922,6 +1179,26 @@ class TerminalSession extends ChangeNotifier {
   Future<void> onRendererFailure() =>
       _requestResync('TERMINAL_RENDERER_FAILED');
 
+  /// Whether [frame] is numbered below the next one expected — already part of the screen, since
+  /// the keyframe that moved [_expectedSeq] past it was drawn after it was sent.
+  ///
+  /// ⚠️ **Not a gap, and not worth a redraw.** It is what the relay delivers late once a stream has
+  /// moved onto the data channel: output the machine put on the relay before it flipped, landing
+  /// after the channel's keyframe (`TerminalP2pPlugin._lateOnRelay`). Read as a sequence gap, each
+  /// one cost a resync — a fresh keyframe and the whole screen drawn again, right as the stream had
+  /// just been moved for speed.
+  ///
+  /// Bounded ([_maxStaleInARow]): a run of them longer than any migration leaves is taken for
+  /// numbering gone wrong, and falls through to the gap check's resync.
+  bool _alreadyDrawn(TerminalBinaryFrame frame) {
+    final expected = _expectedSeq;
+    if (expected == null || frame.seq >= expected) {
+      _staleInARow = 0;
+      return false;
+    }
+    return ++_staleInARow <= _maxStaleInARow;
+  }
+
   Uint8List? _decodeBinaryBytes(TerminalBinaryFrame frame) {
     try {
       return frame.compressed
@@ -951,17 +1228,30 @@ class TerminalSession extends ChangeNotifier {
     if (identical(_viewport, viewport)) _viewport = null;
   }
 
-  /// Empties the prompt being typed into: Ctrl+E to its end, then Ctrl+U to
-  /// delete back to its start — what a shell and Claude Code's prompt both
-  /// read as "clear the line" — and the keyboard's own buffer with it (see
-  /// [TerminalViewport.clearInputBuffer]).
+  /// Empties the prompt being typed into, all of it: Ctrl+K until nothing is
+  /// after the cursor, then Ctrl+U until nothing is before it — what a shell
+  /// and both agents' prompts read as "kill the line" — and the keyboard's own
+  /// buffer with it (see [TerminalViewport.clearInputBuffer]).
+  ///
+  /// ⚠️ **One kill is one ROW, not the prompt.** Claude Code's Ctrl+U deletes
+  /// back to the start of the row as WRAPPED, and at a row's start only the
+  /// newline before it; Ctrl+K likewise forwards. A phone's pane is about
+  /// forty columns wide, so two pastes already wrap, and a single Ctrl+E,
+  /// Ctrl+U left all but the last row behind. So each is sent twice per row
+  /// the prompt can take on screen ([promptRowsBound]): a kill past the
+  /// prompt's ends does nothing.
   ///
   /// ⚠️ Not Ctrl+C: to Claude Code an empty prompt's Ctrl+C is the first half
   /// of quitting.
   void clearPrompt() {
     if (!acceptsInput) return;
-    terminal.keyInput(TerminalKey.keyE, ctrl: true);
-    terminal.keyInput(TerminalKey.keyU, ctrl: true);
+    final kills = 2 * promptRowsBound(terminal.buffer);
+    for (var i = 0; i < kills; i++) {
+      terminal.keyInput(TerminalKey.keyK, ctrl: true);
+    }
+    for (var i = 0; i < kills; i++) {
+      terminal.keyInput(TerminalKey.keyU, ctrl: true);
+    }
     resetInputBuffer();
   }
 
@@ -990,13 +1280,44 @@ class TerminalSession extends ChangeNotifier {
     terminal.setCursorVisibleMode(_remoteCursorVisible);
     terminal.write(text);
     _remoteCursorVisible = terminal.cursorVisibleMode;
+    if (_cursorAwaitsProgram) {
+      _cursorAwaitsProgram = false;
+      if (kTypingTrace) typingEvent('cursor: shown — the program drew again');
+    }
     _applyCursorVisibility();
   }
 
   void _applyCursorVisibility() {
     terminal.setCursorVisibleMode(
-      _remoteCursorVisible && _cursorBlinkPhaseVisible,
+      _remoteCursorVisible && _cursorBlinkPhaseVisible && !_cursorAwaitsProgram,
     );
+  }
+
+  /// Notes whether making the pane [nextRows] high cuts rows drawn under the cursor, for the
+  /// keyframe that answers it ([_cutUnderCursorFrom]). Read only while the emulator still has the
+  /// pane's height — the emulator's own shrink deletes the same rows tmux will. Only ever set here,
+  /// never cleared: a later step of the same shrink reads an emulator that has lost them already.
+  void _noteCutUnderCursor(int nextRows) {
+    if (nextRows < rows &&
+        terminal.viewHeight == rows &&
+        !_showingKeptScreen &&
+        !terminal.isUsingAltBuffer &&
+        _drawnUnderCursor()) {
+      _cutUnderCursorFrom = rows;
+    }
+  }
+
+  /// Whether a row under the cursor has anything drawn on it — what tmux deletes first when the
+  /// pane is made shorter. See [_cursorAwaitsProgram].
+  bool _drawnUnderCursor() {
+    final buffer = terminal.buffer;
+    final top = buffer.scrollBack;
+    for (var y = buffer.cursorY + 1; y < terminal.viewHeight; y++) {
+      final index = top + y;
+      if (index < 0 || index >= buffer.lines.length) break;
+      if (buffer.lines[index].getText().trim().isNotEmpty) return true;
+    }
+    return false;
   }
 
   bool _writeBytes(List<int> bytes) {
@@ -1004,8 +1325,162 @@ class TerminalSession extends ChangeNotifier {
     // directly; only a split UTF-8 scalar needs a joined buffer.
     final combined = _utf8Tail.isEmpty ? bytes : <int>[..._utf8Tail, ...bytes];
     final decoded = decodeUtf8Chunk(combined);
+    if (kTypingTrace && decoded.text.contains('\x1b[?2026')) {
+      // Whether the program brackets its frames for synchronized output — see
+      // `Terminal.setSynchronizedOutputMode`. A mark split across two packets
+      // goes uncounted; this is a trace.
+      for (final mark in _synchronizedOutputMark.allMatches(decoded.text)) {
+        typingCount(mark.group(1) == 'h' ? 'sync.begin' : 'sync.end');
+      }
+    }
     if (decoded.text.isNotEmpty) _writeTerminalText(decoded.text);
     _utf8Tail = decoded.tail;
+    return true;
+  }
+
+  static final _synchronizedOutputMark = RegExp(r'\x1b\[\?2026([hl])');
+
+  /// A keyframe: the stream's whole screen and its history, which replaces the emulator outright.
+  /// Published whole and at once — see [writeKeyframeInSlices] for how a large one is parsed.
+  Future<void> _applyKeyframe(
+    TerminalBinaryFrame frame,
+    Uint8List bytes,
+    int generation,
+  ) async {
+    final nextCols = frame.cols;
+    final nextRows = frame.rows;
+    if (nextCols == null || nextRows == null) {
+      await _requestResync('TERMINAL_KEYFRAME_INVALID');
+      return;
+    }
+    // Publish a complete screen atomically. A damaged snapshot must
+    // leave the retained screen available while resync recovers.
+    final decoded = decodeUtf8Chunk(_prepareKeyframeBytes(bytes));
+    final replacement = _newTerminal(bindCallbacks: false)
+      ..resize(_clampCols(nextCols), _clampRows(nextRows));
+    if (decoded.text.length <= keyframeSliceChars) {
+      replacement.write(decoded.text);
+    } else if (!await writeKeyframeInSlices(
+      replacement,
+      decoded.text,
+      stillWanted: () => _isCurrent(generation) && frame.streamId == streamId,
+    )) {
+      // Closed, reopened or taken over while it parsed: whoever moved
+      // the stream on owns what is shown now, and this screen is dropped.
+      return;
+    }
+    final cutFrom = _cutUnderCursorFrom;
+    if (cutFrom != null && _clampRows(nextRows) < cutFrom) {
+      // The answer to the shrink that cut rows under the cursor. A keyframe at the old size, sent
+      // before the resize landed, leaves it for the one that is.
+      _cutUnderCursorFrom = null;
+      if (!replacement.isUsingAltBuffer && !_cursorAwaitsProgram) {
+        _cursorAwaitsProgram = true;
+        if (kTypingTrace) {
+          typingEvent(
+            'cursor: hidden — the pane shrank from $cutFrom rows through rows'
+            ' drawn under it, so it waits for the program to draw again',
+          );
+        }
+      }
+    }
+    _bindTerminal(replacement);
+    terminal = replacement;
+    _showingKeptScreen = false;
+    _drewScreen = true;
+    cols = _clampCols(nextCols);
+    rows = _clampRows(nextRows);
+    _utf8Tail = decoded.tail;
+    _remoteCursorVisible = terminal.cursorVisibleMode;
+    _cursorBlinkPhaseVisible = true;
+    // A keyframe is the program's screen, not a redraw by it: a cursor held stays held through it.
+    _applyCursorVisibility();
+    _expectedSeq = frame.seq + 1;
+    _staleInARow = 0;
+    _lastRenderedSeq = frame.seq;
+    _resyncRequested = false;
+    _resyncAttempts = 0;
+    _autoReopenAttempts = 0;
+    errorCode = null;
+    errorMessage = null;
+    takenOverBy = null;
+    _resyncTimer?.cancel();
+    _resyncTimer = null;
+    status = TerminalSessionStatus.controlling;
+    _markForAck(bytes.length);
+    notifyListeners();
+    final measured = _measuredViewport;
+    if (measured != null) {
+      _pendingCols = measured.cols;
+      _pendingRows = measured.rows;
+    }
+    // Asked first, and always: a keyframe that answers the resize out is what clears it.
+    if (_answerOnItsWay()) return;
+    if (_pendingCols != null && _pendingRows != null) {
+      unawaited(_flushResize());
+    }
+  }
+
+  /// Whether the keyframe just drawn predates the resize still out — the size it asked for is still
+  /// the one wanted, and that resize's own keyframe is on its way ([_resizeStillComing]).
+  ///
+  /// ⚠️ **Not asked again, which is what this used to do.** The machine answers a resize with a
+  /// keyframe, but one it had already put on the wire at the OLD size lands first. Read as the
+  /// size having slipped, it sent the same resize again — and got a third keyframe for it. Every
+  /// keyboard raised was measured at three keyframes and two resizes (2026-10-05): three times the
+  /// emulator replaced and the screen parsed and drawn whole, the keyboard's buffer emptied each
+  /// time, right as somebody starts typing.
+  bool _answerOnItsWay() {
+    final asked = _resizeAsked;
+    if (asked == null) return false;
+    if (asked.cols == cols && asked.rows == rows) {
+      // This keyframe IS the answer.
+      _resizeAsked = null;
+      _resizeAnswerTimer?.cancel();
+      _resizeAnswerTimer = null;
+      return false;
+    }
+    final pendingCols = _pendingCols, pendingRows = _pendingRows;
+    if (pendingCols == null ||
+        pendingRows == null ||
+        !_resizeStillComing(pendingCols, pendingRows)) {
+      return false;
+    }
+    if (kTypingTrace) {
+      typingEvent(
+        'resize: keyframe ${cols}x$rows predates the ${asked.cols}x${asked.rows}'
+        ' still coming — not asked again',
+      );
+    }
+    _pendingCols = null;
+    _pendingRows = null;
+    return true;
+  }
+
+  /// Whether a resize to [nextCols]×[nextRows] is out already and its keyframe not overdue — and so
+  /// not to be asked for again ([_answerOnItsWay]; and in [_flushResize], for the emulator laid out
+  /// at a stale keyframe's size resizing itself back). Held for [_resizeAnswerWait] at most: an
+  /// answer that never comes is asked for again then.
+  bool _resizeStillComing(int nextCols, int nextRows) {
+    final asked = _resizeAsked;
+    if (asked == null || asked.cols != nextCols || asked.rows != nextRows) {
+      return false;
+    }
+    final waited = DateTime.now().difference(asked.at);
+    if (waited >= _resizeAnswerWait) return false;
+    if (_resizeAnswerTimer == null) {
+      final generation = _generation;
+      _resizeAnswerTimer = Timer(_resizeAnswerWait - waited, () {
+        _resizeAnswerTimer = null;
+        if (!_isCurrent(generation) || _resizeAsked == null) return;
+        _resizeAsked = null;
+        final measured = _measuredViewport;
+        if (measured == null) return;
+        _pendingCols = measured.cols;
+        _pendingRows = measured.rows;
+        unawaited(_flushResize());
+      });
+    }
     return true;
   }
 
@@ -1095,15 +1570,23 @@ class TerminalSession extends ChangeNotifier {
   /// blind. Set and cleared by the page; null the rest of the time.
   Future<bool> Function(String text)? voiceDeliver;
 
+  /// Called each time this pane sends a line on the person's behalf: a Return typed or pressed —
+  /// it crosses [_onTerminalOutput] — or a composed message that went ([sendComposerText]). Set by
+  /// the page showing the pane, which asks for notifications after the phone's first send
+  /// (`phone/terminal_page.dart`); null the rest of the time.
+  VoidCallback? onLineSent;
+
   Future<bool> sendComposerText(String text) async {
     if (!acceptsInput) return false;
     final content = text.trimRight();
     if (content.trim().isEmpty) return false;
-    return send('message', {
+    final sent = await send('message', {
       'content': content,
       'agentId': agentId,
       'mode': 'auto',
     });
+    if (sent) onLineSent?.call();
+    return sent;
   }
 
   /// A clipboard paste made directly into this pane, delivered as one atomic unit instead of going
@@ -1296,7 +1779,16 @@ class TerminalSession extends ChangeNotifier {
   }
 
   void _onTerminalOutput(String data) {
+    if (kTypingTrace && data.isNotEmpty) {
+      typingTrace(
+        acceptsInput
+            ? 'pty in "${traceText(data)}"'
+            : 'pty in DROPPED — not taking input (status=${status.name}'
+                  ' stream=${streamId != null} watching=$watching) "${traceText(data)}"',
+      );
+    }
     if (!acceptsInput || data.isEmpty) return;
+    if (data.contains('\r')) onLineSent?.call();
     data = _spendArmedControl(data);
     final bytes = utf8.encode(data);
     final isBoundary =
@@ -1338,6 +1830,12 @@ class TerminalSession extends ChangeNotifier {
     _inputTimer?.cancel();
     _inputTimer = null;
     if (!acceptsInput || _inputBytes.isEmpty) {
+      if (kTypingTrace && _inputBytes.isNotEmpty) {
+        typingTrace(
+          'pty flush DROPPED ${_inputBytes.length}B — not taking input'
+          ' (status=${status.name})',
+        );
+      }
       _inputBytes.clear();
       return;
     }
@@ -1345,13 +1843,35 @@ class TerminalSession extends ChangeNotifier {
     _inputBytes.clear();
     _lastInputFlushAt = DateTime.now();
     final currentStreamId = streamId;
-    if (currentStreamId == null) return;
+    if (currentStreamId == null) {
+      if (kTypingTrace) {
+        typingTrace('pty flush DROPPED ${bytes.length}B — no stream');
+      }
+      return;
+    }
     final generation = _generation;
+    final flushedAt = kTypingTrace ? typingNowMs() : 0;
+    final queuedBehind = _sendsInFlight;
+    final idleFor = typingNowMs() - _sendsIdleSinceMs;
+    if (kTypingTrace) _sendsInFlight++;
     final queued = _inputSendTail.then((_) async {
       if (!_isCurrent(generation) ||
           !acceptsInput ||
           streamId != currentStreamId) {
+        if (kTypingTrace) {
+          typingTrace(
+            'pty send DROPPED ${bytes.length}B — the stream moved on while it'
+            ' queued (status=${status.name})',
+          );
+        }
         return;
+      }
+      if (kTypingTrace && typingNowMs() - flushedAt >= 3) {
+        typingTrace(
+          'pty send waited ${typingNowMs() - flushedAt}ms — $queuedBehind send(s)'
+          ' were in flight when it was queued'
+          '${queuedBehind == 0 ? ', the line idle for ${idleFor}ms' : ''}',
+        );
       }
       // Numbered HERE, on the tail, not when the flush was asked for. A frame
       // the guard above drops — the session went `resyncing` while an earlier
@@ -1381,7 +1901,15 @@ class TerminalSession extends ChangeNotifier {
           bytes: Uint8List.fromList(bytes.sublist(offset, end)),
           compressed: false,
         );
+        final sendStarted = kTypingTrace ? typingNowMs() : 0;
         final sent = await sendBinary(frame);
+        if (kTypingTrace) {
+          _lastInputSentMs = typingNowMs();
+          typingTrace(
+            'pty sent seq=${frame.seq} ${frame.bytes.length}B ok=$sent'
+            ' in ${typingNowMs() - sendStarted}ms via=${linkMode ?? '?'}',
+          );
+        }
         if (!_isCurrent(generation)) return;
         if (!sent) {
           transportLost('Terminal input was not sent');
@@ -1389,9 +1917,17 @@ class TerminalSession extends ChangeNotifier {
         }
       }
     });
-    _inputSendTail = queued.catchError((_) {
-      if (_isCurrent(generation)) transportLost('Terminal input was not sent');
-    });
+    _inputSendTail = queued
+        .catchError((_) {
+          if (_isCurrent(generation)) {
+            transportLost('Terminal input was not sent');
+          }
+        })
+        .whenComplete(() {
+          if (!kTypingTrace) return;
+          _sendsInFlight--;
+          _sendsIdleSinceMs = typingNowMs();
+        });
     await _inputSendTail;
   }
 
@@ -1419,6 +1955,8 @@ class TerminalSession extends ChangeNotifier {
   static const _resizeCoalesceWindow = Duration(milliseconds: 50);
 
   void resize(int width, int height) {
+    // [Terminal.resize] asks here before it shrinks itself, so this still reads the pane's height.
+    _noteCutUnderCursor(_clampRows(height));
     _pendingCols = _clampCols(width);
     _pendingRows = _clampRows(height);
     final last = _lastResizeFlushAt;
@@ -1447,11 +1985,21 @@ class TerminalSession extends ChangeNotifier {
     final nextRows = _pendingRows!;
     _pendingCols = null;
     _pendingRows = null;
+    final cutFrom = _cutUnderCursorFrom;
+    if (cutFrom != null && nextRows >= cutFrom) {
+      // The shrink was taken back before it was asked for — the keyboard went down again.
+      _cutUnderCursorFrom = null;
+    }
     if (nextCols == cols && nextRows == rows) return;
+    if (_resizeStillComing(nextCols, nextRows)) return;
+    // A keyframe's own resize to the measured size comes straight here, not through [resize].
+    _noteCutUnderCursor(nextRows);
     cols = nextCols;
     rows = nextRows;
     _lastResizeFlushAt = DateTime.now();
+    _resizeAsked = (cols: cols, rows: rows, at: _lastResizeFlushAt!);
     final generation = _generation;
+    if (kTypingTrace) typingEvent('resize → $cols×$rows');
     final sent = await send('terminal_resize', {
       'streamId': streamId,
       'resizeSeq': _resizeSeq++,
@@ -1532,16 +2080,72 @@ class TerminalSession extends ChangeNotifier {
     }
   }
 
+  /// Keeps the lease, and notices a stream that went quiet without a word.
+  ///
+  /// ⚠️ **A send that succeeds proves only that the socket takes bytes, not that THIS stream is
+  /// still there.** The daemon sends a sync frame every five seconds even while the terminal is idle
+  /// (`SYNC_INTERVAL_MS`, `cli/src/lib/terminalStreamManager.ts`), so a stream that hears nothing for
+  /// [_quietBeatsBeforeResync] beats is gone: a socket left half-open by Wi-Fi giving way to 4G
+  /// while the app was away, a stale relay session, a stream the daemon dropped and never said.
+  /// Until this, such a terminal looked live and took no input until the account's two-minute agent
+  /// poll gave up on the machine — about four minutes. It resyncs, then reopens, as the desktop does
+  /// (#432).
+  ///
+  /// Counted in beats, not by the clock, on purpose: an app the OS suspended runs no timers, so
+  /// the gap it was away is no beat at all, and coming back is not taken for a silence.
+  ///
+  /// Which repair, once the stream has gone quiet that long:
+  /// - **The socket heard nothing from the machine either** ([_transportSilentToo]): the socket is
+  ///   what died, and every stream on it with it. It is redialled at once ([onTransportSilent]),
+  ///   skipping the resync tries and the open's patience that only a live socket could answer.
+  /// - **The socket still hears the machine** (another agent's output, its sync frames, a reply):
+  ///   only this stream is gone, and the daemon can repair it — the resync, then a reopen.
   Future<void> _sendHeartbeat() async {
     if (!acceptsInput) return;
     final generation = _generation;
-    final sent = await send('terminal_alive', {'streamId': streamId});
+    final sent = await send('terminal_alive', {
+      'streamId': streamId,
+      // Ask the daemon to say so if it no longer holds this stream (CLI `reportMissing`).
+      'reportMissing': true,
+    });
     if (!sent && _isCurrent(generation)) {
       transportLost('Terminal heartbeat was not sent');
+      return;
     }
+    if (!_isCurrent(generation) || !acceptsInput) return;
+    if (++_quietBeats < _quietBeatsBeforeResync) return;
+    _quietBeats = 0;
+    if (_transportSilentToo() && (onTransportSilent?.call() ?? false)) return;
+    // Read again: a redial the hook declined may still have taken this session down meanwhile —
+    // another stream of the machine got there first — and a resync now would overwrite its
+    // "Connection lost" with a timeout for a stream that is already being put back.
+    if (!_isCurrent(generation) || !acceptsInput) return;
+    await _requestResync('TERMINAL_STREAM_TIMEOUT');
+  }
+
+  /// Whether the machine's socket has heard nothing from the machine since this stream was last
+  /// heard from — so the silence is the socket's, not this stream's alone.
+  ///
+  /// Both times are moments, compared with each other, never a duration on a clock: an app the OS
+  /// suspended keeps both where they were, and the comparison stays true across the gap. A socket
+  /// carries every frame its machine seals — this stream's sync frames among them, every five
+  /// seconds — so on a live socket the machine is heard from after this stream's last frame as
+  /// soon as anything else of it arrives. False when there is no hook to ask, or the socket has
+  /// never heard the machine at all: the resync stays the repair, as it was before this check.
+  bool _transportSilentToo() {
+    final heard = lastHeardFromMachine?.call();
+    final streamHeard = _lastHeardOnStream;
+    if (heard == null || streamHeard == null) return false;
+    return !heard.isAfter(streamHeard);
   }
 
   Future<void> _requestResync(String reason) async {
+    if (kTypingTrace) {
+      typingEvent(
+        'RESYNC asked: $reason (status=${status.name}'
+        ' pending input ${_inputBytes.length}B dropped)',
+      );
+    }
     if (streamId == null) {
       _fail(reason, null);
       return;
@@ -1584,6 +2188,7 @@ class TerminalSession extends ChangeNotifier {
       'streamId': currentStream,
       'attempt': _resyncAttempts,
       'reason': errorCode,
+      'reportMissing': true,
     });
     if (!_isCurrent(generation) ||
         streamId != currentStream ||
@@ -1668,10 +2273,45 @@ class TerminalSession extends ChangeNotifier {
     streamId = null;
     linkMode = null;
     status = TerminalSessionStatus.error;
-    errorCode = 'TERMINAL_DISCONNECTED';
+    errorCode = transportLostCode;
     errorMessage = message;
     _abortActiveUpload();
     notifyListeners();
+  }
+
+  /// Whether [by] — who took this stream — is this very device: the introduction it sends with
+  /// every open ([client]), by kind and name, and by machine where both name one.
+  bool _takenBySelf(TerminalClientDescriptor? by) {
+    final me = client;
+    if (me == null || by == null) return false;
+    if (by.kind != me.kind || by.name != me.name) return false;
+    final mine = me.machineId;
+    final theirs = by.machineId;
+    return mine == null || theirs == null || mine == theirs;
+  }
+
+  /// Taken over by an open of this same device: open again, politely, once.
+  ///
+  /// ⚠️ **A takeover is a person's to answer — except one this phone did to itself (owner,
+  /// 2026-10-01).** [takenOver] is a dead end on purpose (see `_paneNeedsAttach`): reopening it
+  /// automatically would have two apps trading one terminal back and forth. But an open of THIS
+  /// device can reach the machine after the one now showing — a copy of a resent open, delivered
+  /// late from a connection the phone had already dropped. It takes the terminal, its own
+  /// connection is gone a moment later, and the screen sat on "iPhone 16 Pro connected to this
+  /// terminal", taken by itself, with nobody holding the terminal at all. Measured at launch on a
+  /// slow relay, where it left the first screen on its skeleton until it was tapped.
+  ///
+  /// Polite ([takeover] false), so it never takes the terminal from anybody: free, it opens as
+  /// usual; held, it watches, with the band offering it back. And at most once per
+  /// [_ownTakeoverCooldown], because two phones can share a name, and against a daemon that
+  /// ignores the polite flag the two would otherwise take the terminal from each other for ever.
+  void _reopenAfterOwnTakeover() {
+    final now = DateTime.now();
+    final last = _ownTakeoverReopenedAt;
+    if (last != null && now.difference(last) < _ownTakeoverCooldown) return;
+    _ownTakeoverReopenedAt = now;
+    takeover = false;
+    unawaited(reopen());
   }
 
   /// A polite open was refused — see [takeover]. The same dead end as a stream that was taken
@@ -1735,6 +2375,8 @@ class TerminalSession extends ChangeNotifier {
     _inputTimer = null;
     _resizeTimer?.cancel();
     _resizeTimer = null;
+    _resizeAnswerTimer?.cancel();
+    _resizeAnswerTimer = null;
     _resyncTimer?.cancel();
     _resyncTimer = null;
     _scrollTimer?.cancel();

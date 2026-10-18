@@ -36,6 +36,21 @@ describe('community API boundary', () => {
     expect(options.headers.get('content-type')).toBe('application/gzip');
     expect(Buffer.from(options.body).equals(gzipped)).toBe(true);
   });
+  it('forwards every route the Hub calls: notifications, reports, a creator and the rest', async () => {
+    vi.stubEnv('COMMUNITY_API_URL', 'http://127.0.0.1:54882');
+    const fetcher = vi.fn().mockImplementation(async () => Response.json({ success: true, data: {} })); vi.stubGlobal('fetch', fetcher);
+    const id = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    const paths = ['harnesses', `harnesses/${id}`, 'harnesses/pac-man-neon-maze-chase-0f8fad5b', `harnesses/${id}/like`, `harnesses/${id}/social`, `harnesses/${id}/comments`, `harnesses/${id}/comments/${id}`,
+      'creators/alice', 'creators/alice/follow', 'notifications', 'notifications/unread', 'notifications/read', 'reports', 'reports/review', 'translate'];
+    for (const path of paths) {
+      const response = await GET(new Request(`https://harness.example/api/community/${path}`), { params: Promise.resolve({ path: path.split('/') }) });
+      expect(response.status, path).toBe(200);
+    }
+    expect(fetcher).toHaveBeenCalledTimes(paths.length);
+    for (const path of ['notifications/all', 'reports/x', 'creators/alice/followers']) {
+      expect((await GET(new Request(`https://harness.example/api/community/${path}`), { params: Promise.resolve({ path: path.split('/') }) })).status, path).toBe(404);
+    }
+  });
   it('rejects arbitrary proxy destinations and oversized publications before forwarding', async () => {
     const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
     expect((await GET(new Request('https://harness.example/api/community/auth'), { params: Promise.resolve({ path: ['..', 'auth'] }) })).status).toBe(404);

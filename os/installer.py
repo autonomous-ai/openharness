@@ -517,7 +517,8 @@ def install_image(config, source, target, progress, resources):
         networks = Path('/etc/NetworkManager/system-connections')
         if networks.exists():
             shutil.copytree(networks, target / 'etc/NetworkManager/system-connections', dirs_exist_ok=True)
-        chroot(target, 'systemctl', 'enable', 'NetworkManager', 'systemd-resolved', 'systemd-timesyncd')
+        chroot(target, 'systemctl', 'enable', 'NetworkManager', 'systemd-resolved', 'systemd-timesyncd',
+               'harness-setup.service')
         chroot(target, 'systemctl', 'disable', 'sshd.service')
         report('Preparing startup and recovery…')
         chroot(target, '/usr/lib/harness-os/init-keyring')

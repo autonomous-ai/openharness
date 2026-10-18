@@ -111,6 +111,18 @@ void main() {
     },
   );
 
+  testWidgets('opening the sheet asks for the models as a person\'s own', (
+    tester,
+  ) async {
+    final connection = conn();
+    await open(tester, app(connection));
+
+    // The one read the model list's reach counts (`model_list_user_*`).
+    expect(sent(connection, 'grid_models_list'), [
+      {'userAction': true},
+    ]);
+  });
+
   testWidgets('the agent is on its own login until a model is picked', (
     tester,
   ) async {

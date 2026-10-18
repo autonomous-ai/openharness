@@ -44,9 +44,13 @@ class TtyPrimaryButton extends StatefulWidget {
     required this.onPressed,
     this.busy = false,
     this.busyLabel,
+    this.icon,
   });
 
   final String label;
+
+  /// Drawn before [label], in its ink — Connect computer's QR.
+  final IconData? icon;
 
   /// Null draws it disabled.
   final VoidCallback? onPressed;
@@ -104,11 +108,32 @@ class _TtyPrimaryButtonState extends State<TtyPrimaryButton> {
             borderRadius: BorderRadius.circular(6),
           ),
           alignment: Alignment.center,
-          child: TtyText(
-            widget.busy ? (widget.busyLabel ?? widget.label) : widget.label,
-            color: ink,
-            weight: FontWeight.w600,
-            size: TtySize.title,
+          // One line, as a [TtyText] — but ending in "…" where it does not fit, not cut at the
+          // edge: a busy label names the computer ("Pairing with Tonys-MacBook-Pro.local…"), and
+          // a hostname that long lost its end, and the ellipsis that says it is still working.
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.icon case final icon?) ...[
+                Icon(icon, size: 20, color: ink),
+                const SizedBox(width: 10),
+              ],
+              Flexible(
+                child: Text(
+                  widget.busy
+                      ? (widget.busyLabel ?? widget.label)
+                      : widget.label,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                  style: tty.style(
+                    color: ink,
+                    weight: FontWeight.w600,
+                    size: TtySize.title,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -124,12 +149,16 @@ class TtyTextButton extends StatelessWidget {
     required this.onPressed,
     this.color,
     this.weight = FontWeight.w500,
+    this.size = TtySize.row,
   });
 
   final String label;
   final VoidCallback? onPressed;
   final Color? color;
   final FontWeight weight;
+
+  /// The onboarding's quiet line is the meta size ("Continue with email").
+  final double size;
 
   @override
   Widget build(BuildContext context) {
@@ -156,7 +185,7 @@ class TtyTextButton extends StatelessWidget {
                 label,
                 color: onPressed == null ? tty.dim : (color ?? tty.text),
                 weight: weight,
-                size: TtySize.row,
+                size: size,
               ),
             ),
           ),
@@ -339,9 +368,13 @@ class TtyField extends StatefulWidget {
     this.autofocus = false,
     this.keyboardType,
     this.autofillHints,
+    this.obscure = false,
   });
 
   final TextInputType? keyboardType;
+
+  /// A password: one line, its characters hidden.
+  final bool obscure;
   final Iterable<String>? autofillHints;
 
   final TextEditingController controller;
@@ -411,8 +444,11 @@ class _TtyFieldState extends State<TtyField> {
         textInputAction: widget.action,
         // The keyboard's own composing, left on: Vietnamese Telex on iOS rides on
         // autocorrection. See `ComposingKeyboard`.
-        autocorrect: ComposingKeyboard.autocorrect,
-        enableSuggestions: ComposingKeyboard.enableSuggestions,
+        autocorrect: !widget.obscure && ComposingKeyboard.autocorrect,
+        enableSuggestions:
+            !widget.obscure && ComposingKeyboard.enableSuggestions,
+        // A password: dots, the platform showing the character just typed for a moment.
+        obscureText: widget.obscure,
         smartDashesType: SmartDashesType.disabled,
         smartQuotesType: SmartQuotesType.disabled,
         textCapitalization: multi

@@ -398,6 +398,10 @@ void main() {
     expect(row('relay'), findsNothing);
     expect(older.requests, isEmpty);
     expect(relay.requests, isEmpty);
+    // Opened by a person: the first ask is marked as theirs, for the Store's reach.
+    expect(local.requests.firstWhere((r) => r.$1 == 'dsh_list').$2, {
+      'userAction': true,
+    });
 
     await tester.tap(find.byKey(const ValueKey('store-primary-action')));
     await tester.pumpAndSettle();
@@ -424,6 +428,11 @@ void main() {
       'dsh_remove',
       'dsh_list',
     ]);
+    // The asks after an install or a removal are the app's own.
+    expect(
+      local.requests.where((r) => r.$1 == 'dsh_list').skip(1).map((r) => r.$2),
+      everyElement(isEmpty),
+    );
 
     expect(older.requests, isEmpty);
     expect(relay.requests, isEmpty);

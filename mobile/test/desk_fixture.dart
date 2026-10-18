@@ -41,7 +41,8 @@ class DeskApi extends ApiClient {
 }
 
 /// A tab of `m`'s agents, named — by hand unless [custom] is false, when the
-/// name is the desk's placeholder and the tab is called after its first agent.
+/// name is the desk's placeholder and the tab takes what most of its agents
+/// share (`deskTabNames`).
 DeskTab deskTab(
   String id,
   String name,

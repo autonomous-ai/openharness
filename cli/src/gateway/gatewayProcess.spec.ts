@@ -10,10 +10,13 @@ import { GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import type { CoreConnection, ServiceProcessOptions } from '../services/process.js'
+import { b64e, newIdentity } from '../lib/e2ee/core.js'
 import { runGatewayService } from './gatewayProcess.js'
 import type { GatewayHost, StartedGateway } from './start.js'
+import { TabSessions } from './tabKey.js'
 
 const STREAM = '00000000-0000-4000-8000-000000000002'
+const alice = newIdentity(), bob = newIdentity()
 const clear: TerminalBinaryClear = { kind: TerminalBinaryKind.input, streamId: STREAM, seq: 3, compressed: false, bytes: new Uint8Array([108, 115]) }
 
 function stubGateway() {
@@ -48,6 +51,12 @@ function stubGateway() {
       seal: vi.fn(async (plaintext: string) => { if (!plaintext) throw new Error('nothing to seal'); return { sealed: plaintext } }),
       open: vi.fn(async (envelope: unknown) => ((envelope as { sealed?: string })?.sealed ? { plaintext: (envelope as { sealed: string }).sealed, complete: true } : null)),
     },
+    tabKey: new TabSessions(() => alice, () => 'alice-mac'),
+    tabRelay: { open: vi.fn(async () => {}), send: vi.fn(async (_tab: string, to: string) => to === 'alice-mac'), close: vi.fn() },
+    sharedTrust: vi.fn(async (desired: { pins?: unknown[]; keys?: unknown[] }) => {
+      if (desired.pins?.length === 0 && desired.keys?.length === 0) throw new Error('stores unwritable')
+      return { pins: desired.pins?.length ?? -1, keys: desired.keys?.length ?? -1 }
+    }),
   } satisfies GatewayOps
   const sessions: Array<{ send: ReturnType<typeof vi.fn>; sendBinary: ReturnType<typeof vi.fn>; detach: ReturnType<typeof vi.fn> }> = []
   const windowRelay = {
@@ -68,15 +77,16 @@ function wire() {
   let options!: ServiceProcessOptions
   const gateways: Array<ReturnType<typeof stubGateway>> = []
   const hosts: GatewayHost[] = []
-  runGatewayService({
+  const linkStop = vi.fn()
+  const service = runGatewayService({
     dataDir: '/data', socketPath: '/data/daemon.sock', machineId: 'computer-1', token: 'token',
-    run: (given) => { options = given; return { stop: vi.fn() } },
+    run: (given) => { options = given; return { stop: linkStop } },
     start: (host) => { hosts.push(host); const stub = stubGateway(); gateways.push(stub); return stub as unknown as StartedGateway },
   })
   const heard = {
     frame: vi.fn(), binary: vi.fn(), client: vi.fn(), disconnected: vi.fn(), observer: vi.fn(), toLocal: vi.fn(), status: vi.fn(),
     linkDown: vi.fn(), commanders: vi.fn(), commanderJoined: vi.fn(), meta: vi.fn(), notice: vi.fn(), revoked: vi.fn(), busy: vi.fn(),
-    device: vi.fn(), deviceRevoked: vi.fn(), toWindows: vi.fn(),
+    device: vi.fn(), deviceRevoked: vi.fn(), toWindows: vi.fn(), tabFrame: vi.fn(),
   }
   const tokens = { accessToken: vi.fn(async () => 'token-a') }
   const backend = vi.fn(async () => ({ status: 200, body: { data: { acct: 'a' } } }))
@@ -98,7 +108,7 @@ function wire() {
   }
   const connect = () => { options.onConnected!(core); link.connected() }
   const disconnect = () => { options.onDisconnected!(); link.disconnected() }
-  return { link, heard, gateways, hosts, connect, disconnect, tokens, backend, options: () => options }
+  return { link, heard, gateways, hosts, connect, disconnect, tokens, backend, options: () => options, service, linkStop }
 }
 
 describe('the gateway\'s process, spoken to by the core', () => {
@@ -138,6 +148,30 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(w.gateways).toHaveLength(2)
     expect(w.gateways[1].port.serveThisComputerOnly).toHaveBeenCalled()
     expect(w.gateways[1].port.holdRequests).not.toHaveBeenCalled()
+  })
+
+  it('stops the gateway, and its usage collector with it, before its link closes as the process goes', async () => {
+    // The process's stop used to close the link and nothing else: the gateway's stop waited for the link's close
+    // event, which the process's exit came before, so its collector never wrote a clean exit
+    // (health_cli_unclean_restart, 69 to 170 on 2026-10-16, production counters).
+    const w = wire()
+    w.connect()
+    const [gateway] = w.gateways
+    let finished = false
+    gateway.stop.mockImplementation(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); finished = true })
+    const stopping = w.service.stop()
+    expect(gateway.stop).toHaveBeenCalledOnce()
+    expect(w.linkStop).toHaveBeenCalledOnce()
+    expect(gateway.stop.mock.invocationCallOrder[0]).toBeLessThan(w.linkStop.mock.invocationCallOrder[0])
+    await stopping
+    expect(finished).toBe(true)
+    // The link's close that follows finds nothing left to stop.
+    w.disconnect()
+    expect(gateway.stop).toHaveBeenCalledOnce()
+    // Never started: the process still goes.
+    const idle = wire()
+    await idle.service.stop()
+    expect(idle.linkStop).toHaveBeenCalledOnce()
   })
 
   it('starts once it knows the core took its link, though the core says start a frame before', () => {
@@ -225,6 +259,7 @@ describe('the gateway\'s process, spoken to by the core', () => {
     events.device('dial-1', { type: 'autonomous_device_request' }, { type: 'hello' })
     events.deviceRevoked('P')
     events.toWindows({ type: 'device_keys_changed', payload: {} })
+    events.tabFrame({ sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', closed: { code: 4403, reason: 'Not in this shared tab' } })
     const { heard } = w
     expect(heard.frame).toHaveBeenCalledWith('phone-1', { type: 'message' }, 'p2p', 'web')
     expect(heard.binary).toHaveBeenCalledWith('phone-1', clear)
@@ -243,6 +278,7 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(heard.device).toHaveBeenCalledWith('dial-1', { type: 'autonomous_device_request' }, { type: 'hello' })
     expect(heard.deviceRevoked).toHaveBeenCalledWith('P')
     expect(heard.toWindows).toHaveBeenCalledWith({ type: 'device_keys_changed', payload: {} })
+    expect(heard.tabFrame).toHaveBeenCalledWith({ sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', closed: { code: 4403, reason: 'Not in this shared tab' } })
   })
 
   it('answers the core\'s commands about the keys from the gateway it runs, and 503 with none running', async () => {
@@ -306,6 +342,52 @@ describe('the gateway\'s process, spoken to by the core', () => {
     await expect(key.publicKey()).rejects.toThrow('odd')
   })
 
+  it('dispatches gateway_tab_key to TabSessions, and holds no key while it is not running', async () => {
+    const TAB = 'a1b2c3d4e5f6a1b2c3d4e5f6'
+    const toBob = { sharedTabId: TAB, machineId: 'bob-mini', peerPub: b64e(bob.pub) }
+    const toAlice = { sharedTabId: TAB, machineId: 'alice-mac', peerPub: b64e(alice.pub) }
+    const peer = new TabSessions(() => bob, () => 'bob-mini')
+    const w = wire()
+    const key = w.link.ops.tabKey
+    await expect(key.publicKey()).rejects.toThrow(/not running/)
+    expect(await key.seal(toBob, { type: 'ping' })).toEqual({ lost: true })
+    w.connect()
+    expect(await key.publicKey()).toBe(b64e(alice.pub))
+    await expect(key.signRoster('tab-1', 1, '{}')).rejects.toThrow('not a roster')
+    const answer = await peer.accept(toAlice, await key.hello(toBob))
+    expect(await key.welcome(toBob, (answer as { welcome: Record<string, unknown> }).welcome)).toBe(true)
+    const sealed = await key.seal(toBob, { type: 'ping' }) as { frame: Record<string, unknown> }
+    expect(await peer.open(toAlice, sealed.frame)).toEqual({ frame: { type: 'ping' } })
+    expect(await key.open(toBob, (await peer.seal(toAlice, { type: 'pong' }) as { frame: Record<string, unknown> }).frame)).toEqual({ frame: { type: 'pong' } })
+    key.drop(toBob)
+    await Promise.resolve()
+    expect(await key.seal(toBob, { type: 'ping' })).toEqual({ lost: true })
+    for (const method of ['clear', 'constructor', 'nothing']) {
+      expect(await w.options().requests[GATEWAY_CALLS.tabKey]({ method, args: [] }, { local: true, owner: true })).toEqual({ error: 'UNKNOWN_METHOD' })
+    }
+  })
+
+  it('dispatches gateway_tab_relay to the gateway\'s relay, and sends nothing while it is not running', async () => {
+    const TAB = 'a1b2c3d4e5f6a1b2c3d4e5f6'
+    const w = wire()
+    const relay = w.link.ops.tabRelay
+    await relay.open(TAB)
+    expect(await relay.send(TAB, 'alice-mac', {})).toBe(false)
+    w.connect()
+    const ops = w.gateways[0].ops.tabRelay
+    await relay.open(TAB)
+    expect(ops.open).toHaveBeenCalledWith(TAB)
+    expect(await relay.send(TAB, 'alice-mac', { sealed: 1 })).toBe(true)
+    expect(await relay.send(TAB, 'carol-pc', { sealed: 1 })).toBe(false)
+    expect(ops.send).toHaveBeenCalledWith(TAB, 'alice-mac', { sealed: 1 })
+    relay.close(TAB)
+    await Promise.resolve()
+    expect(ops.close).toHaveBeenCalledWith(TAB)
+    for (const method of ['closeAll', 'constructor', 'nothing']) {
+      expect(await w.options().requests[GATEWAY_CALLS.tabRelay]({ method, args: [TAB] }, { local: true, owner: true })).toEqual({ error: 'UNKNOWN_METHOD' })
+    }
+  })
+
   it('seals and opens the account\'s connections with the identity it holds, and none while it is not running', async () => {
     const w = wire()
     const vault = w.link.ops.connectorVault
@@ -317,6 +399,21 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(await vault.open({ other: 1 })).toBeNull()
     await expect(vault.seal('')).rejects.toThrow('nothing to seal')
     expect(await w.options().requests[GATEWAY_CALLS.connectorVault]({ op: 'nothing' }, { local: true, owner: true })).toEqual({ error: 'UNKNOWN_OP' })
+  })
+
+  it('makes the trust stores hold what sharing asks, only the parts it sent, valid peers only', async () => {
+    const w = wire()
+    const trust = w.link.ops.sharedTrust
+    await expect(trust({ pins: [] })).rejects.toThrow(/not started|not running/)
+    w.connect()
+    const peer = { machineId: 'a'.repeat(32), pub: Buffer.alloc(32, 1).toString('base64'), label: 'Studio' }
+    expect(await trust({ pins: [peer, { machineId: '../x', pub: 'bad', label: '' }] })).toEqual({ pins: 1, keys: -1 })
+    expect(w.gateways[0].ops.sharedTrust).toHaveBeenLastCalledWith({ pins: [peer] })
+    expect(await trust({ keys: [peer] })).toEqual({ pins: -1, keys: 1 })
+    expect(w.gateways[0].ops.sharedTrust).toHaveBeenLastCalledWith({ keys: [peer] })
+    await expect(trust({ pins: [], keys: [] })).rejects.toThrow('stores unwritable')
+    w.gateways[0].ops.sharedTrust.mockRejectedValueOnce('odd')
+    await expect(trust({})).rejects.toThrow('odd')
   })
 
   it('opens a window\'s session on another machine, carries it both ways, and fails it as the pool did', async () => {

@@ -15,10 +15,8 @@ import 'package:harness_mobile/core/local_key_value_store.dart';
 import 'package:harness_mobile/phone/welcome/focus_hints.dart';
 import 'package:harness_mobile/phone/link_page.dart';
 import 'package:harness_mobile/phone/machines_tab.dart';
-import 'package:harness_mobile/phone/welcome/connect_computer.dart';
 import 'package:harness_mobile/phone/welcome/phone_welcome.dart';
-import 'package:harness_mobile/phone/welcome/set_up_computer.dart';
-import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/phone/welcome/your_computer.dart';
 import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/phone/terminal_page.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
@@ -358,37 +356,26 @@ void main() {
     voice: voice,
   );
 
+  PhoneWelcome welcome() => PhoneWelcome(
+    notifier: notifier,
+    sendCode: (_) async {},
+    signIn: (_, _) async {},
+  );
+
   testWidgets('welcome', skip: skip, (tester) async {
-    final key = await pumpScreen(
-      tester,
-      PhoneWelcome(notifier: notifier, onTrySample: (_) async => null),
-    );
+    final key = await pumpScreen(tester, welcome());
     await shoot(tester, key, '0-welcome');
   });
 
-  PhoneWelcome welcome() => PhoneWelcome(
-    notifier: notifier,
-    onTrySample: (_) async => null,
-    sendCode: (_) async {},
-    signIn: (_, _) async {},
-    scanCamera: const SizedBox(),
-    loadDownloads: () async => const {},
-  );
-
-  testWidgets('welcome, scan', skip: skip, (tester) async {
-    final key = await pumpScreen(tester, welcome());
-    await tester.tap(find.text('Yes — scan to connect'));
+  /// The welcome's quiet line: the emailed code.
+  Future<void> toEmail(WidgetTester tester) async {
+    await tester.tap(find.byKey(const ValueKey('welcome-continue-email')));
     await tester.pump(const Duration(milliseconds: 300));
-    // [shoot] takes the screen down after it: one capture per test.
-    await shoot(tester, key, '0a-welcome-scan');
-  });
+  }
 
   testWidgets('welcome, email', skip: skip, (tester) async {
     final key = await pumpScreen(tester, welcome());
-    await tester.tap(find.text('Yes — scan to connect'));
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.text('Use email instead'));
-    await tester.pump(const Duration(milliseconds: 300));
+    await toEmail(tester);
     await tester.enterText(
       find.byKey(const Key('welcome-email')).last,
       'ada@example.com',
@@ -398,20 +385,8 @@ void main() {
   });
 
   testWidgets('welcome, code', skip: skip, (tester) async {
-    final key = await pumpScreen(
-      tester,
-      PhoneWelcome(
-        notifier: notifier,
-        onTrySample: (_) async => null,
-        sendCode: (_) async {},
-        signIn: (_, _) async {},
-        scanCamera: const SizedBox(),
-      ),
-    );
-    await tester.tap(find.text('Yes — scan to connect'));
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.text('Use email instead', findRichText: true));
-    await tester.pump(const Duration(milliseconds: 300));
+    final key = await pumpScreen(tester, welcome());
+    await toEmail(tester);
     await tester.enterText(find.byType(TextField), 'ada@example.com');
     await tester.tap(find.text('Send code'));
     await tester.pump(const Duration(milliseconds: 300));
@@ -420,36 +395,26 @@ void main() {
     await shoot(tester, key, '0c-welcome-code');
   });
 
-  testWidgets('set up your computer', skip: skip, (tester) async {
-    final key = await pumpScreen(
-      tester,
-      ConnectComputerPage(
-        notifier: notifier,
-        onTrySample: (_) async => null,
-        loadDownloads: () async => const {},
-      ),
-    );
-    await shoot(tester, key, '0d-connect-computer');
+  testWidgets('on your computer, go to', skip: skip, (tester) async {
+    final key = await pumpScreen(tester, YourComputerPage(notifier: notifier));
+    await shoot(tester, key, '0d-your-computer');
   });
 
-  testWidgets('set up, download menu', skip: skip, (tester) async {
-    final key = await pumpScreen(
-      tester,
-      Builder(
-        builder: (context) => Scaffold(
-          backgroundColor: Tty.of(context).ground,
-          body: SafeArea(
-            child: SetUpComputerPage(
-              onScan: () {},
-              onBack: () {},
-              onTrySample: () {},
-              loadDownloads: () async => const {},
-            ),
-          ),
-        ),
-      ),
+  testWidgets('your computer, ready', skip: skip, (tester) async {
+    final key = await pumpScreen(tester, YourComputerPage(notifier: notifier));
+    const studio = Machine(
+      machineId: 'studio',
+      authMode: MachineAuthMode.remote,
+      name: 'MacBook Pro',
     );
-    await shoot(tester, key, '0e-set-up');
+    notifier.machines = [...notifier.machines, studio];
+    notifier.notifyListeners();
+    // Past the laptop lighting, before the page goes back. The moment's clock starts on the frame
+    // after the one that draws it joined.
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 1200));
+    await shoot(tester, key, '0e-your-computer-ready');
   });
 
   void addOtherComputers() {
@@ -579,7 +544,10 @@ void main() {
           Positioned.fill(
             child: FocusHints(
               micBottom: 34 + 4 * 15.6,
-              store: FocusHintsSeen(storage: _MemoryStore()),
+              // Asked for again (Settings ▸ Show the tips again): never by themselves.
+              store: FocusHintsSeen(
+                storage: _MemoryStore()..write('phone_focus_hints_v1', 'again'),
+              ),
             ),
           ),
         ],

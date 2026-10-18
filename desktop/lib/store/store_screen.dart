@@ -182,8 +182,10 @@ class _StoreTabState extends State<StoreTab> {
       if (!mounted) return;
       unawaited(_store.loadRatings());
       // Refresh installs made from a local terminal while the Store was closed.
+      // Taken whether or not this computer is here yet, so the mark never lands on a later Store.
+      final opened = widget.notifier.takeStoreOpened();
       final local = widget.notifier.localMachineState;
-      if (local != null) _ask(local);
+      if (local != null) _ask(local, userAction: opened);
       widget.notifier.addListener(_onAppChanged);
       // A Store left open picks up new publications; engines do not need reprobes.
       // The daemon caches catalog HTTP requests for five minutes.
@@ -206,12 +208,14 @@ class _StoreTabState extends State<StoreTab> {
   /// harnesses installed. So a machine is asked again each time it connects.
   final _askedWhileConnected = <String>{};
 
-  void _ask(MachineState machine) {
+  void _ask(MachineState machine, {bool userAction = false}) {
     final id = machine.machine.machineId;
     if (machine.connectionStatus == ConnectionStatus.connected) {
       _askedWhileConnected.add(id);
     }
-    unawaited(widget.notifier.probeDsh(id, force: true));
+    unawaited(
+      widget.notifier.probeDsh(id, force: true, userAction: userAction),
+    );
     // The engine rows read the same probe the New Harness dialog does; a
     // machine that has never been asked would show Claude Code as absent.
     unawaited(widget.notifier.probeEngines(id, force: true));

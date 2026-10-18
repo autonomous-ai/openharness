@@ -3,8 +3,10 @@
 
     scripts/prune_pets.py <pets.c>      rewrites in place, prints the bytes removed; a second run removes 0.
 
-Pod plays only each pet's idle and asking small loops and its work, listen and send scenes (pod_pet.c). So:
-  * alert_scene and relaxing_scene become NULL; whatever only they reached (scenes, overlays, frame arrays) goes;
+Pod plays only each pet's idle and asking small loops and its work (both: working_alt too), relax, listen and send
+scenes (pod_pet.c). So:
+  * alert_scene becomes NULL; whatever only it reached (scenes, overlays, frame arrays) goes; relaxing_scene and
+    working_alt (Claude's builder) stay;
   * the small frames only the WORKING / DONE loops use go (codex), the kept frames are renumbered, and the
     WORKING / DONE rows (never read) become {0,0}.
 The file is one C statement per line. Anything else unexpected stops the run before the file is touched.
@@ -40,13 +42,14 @@ def main(path):
         elif i != pets[0] and not (l.startswith(("//", "#include ", "_Static_assert(", "const unsigned ht_pet_count = "))):
             fail(f"line {i + 1}: unexpected: {l[:80]}")
 
-    # 1. ht_pets: alert and relaxing scenes become NULL, and each pet's small frames shrink to what idle/asking play.
+    # 1. ht_pets: the alert scene becomes NULL (the relax scene stays), and each pet's small frames shrink to what idle/asking play.
     row = lines[pets[0]]
-    ent = re.findall(r'\{"(\w+)",\d+,\d+,NULL,(\w+)_loops,(\w+)_step_ms,&\w+,&\w+,&\w+,(\w+),(&\w+|NULL),(\d+),(&\w+|NULL)\}', row)
+    ent = re.findall(r'\{"(\w+)",\d+,\d+,NULL,(\w+)_loops,(\w+)_step_ms,&\w+,&\w+,&\w+,(\w+),(&\w+|NULL),(\d+),(&\w+|NULL),(&\w+|NULL)\}', row)
     if len(ent) != row.count('{"'):
         fail("ht_pets row has an unexpected shape")
-    for eng, _, _, frames, alert, steps, relax in ent:
-        if alert not in ("NULL", f"&{eng}_alert") or relax not in ("NULL", f"&{eng}_relax") or frames != eng + "_frames":
+    for eng, _, _, frames, alert, steps, relax, alt in ent:
+        if alert not in ("NULL", f"&{eng}_alert") or relax not in ("NULL", f"&{eng}_relax") or frames != eng + "_frames" \
+                or not (alt == "NULL" or alt.startswith(f"&{eng}_")):
             fail(f"{eng}: unexpected scene names")
         loops_i = stmts[eng + "_loops"]
         m = re.fullmatch(r"(static const ht_pet_step_t \w+_loops\[HT_PET_STATES\]\[HT_PET_STEPS\] = )\{(.*)\};", lines[loops_i])
@@ -70,7 +73,7 @@ def main(path):
         body = ",".join("{" + ",".join("{%d,%d}" % p for p in out[s * STEPS:(s + 1) * STEPS]) + "}" for s in range(STATES))
         lines[loops_i] = m.group(1) + "{" + body + "};"
         lines[stmts[frames]] = f"{fm.group(1)}[{len(used)}]{fm.group(3)}{{{','.join(fl[o] for o in used)}}};"
-        row = row.replace(f"{frames},{alert},", f"{frames},NULL,").replace(f",{relax}}}", ",NULL}")
+        row = row.replace(f"{frames},{alert},", f"{frames},NULL,")
     lines[pets[0]] = row
 
     # 2. Keep only what the table reaches (a definition is kept when a kept line names it).

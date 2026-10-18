@@ -50,7 +50,8 @@ How they work together comes from how they are prompted:
   Agents left without a task start when the lead's message arrives.
 
 Anyone can message anyone in the tab. A lead owns the shared parts (integration branch, devices, interfaces);
-it is not a switchboard. Harness has no roles.
+it is not a switchboard. Harness has no roles; shared tabs add one optional label, a leader
+(below, delivery plan step 6).
 
 ### The tab
 
@@ -324,6 +325,14 @@ Experimental → Swarm collaboration, the Swarm conversation views on desktop an
    the tab's 💬 and its **Agent Messages** menu item, keeps **Show Agent Messages**, and shows the switch in
    Settings ▸ Experimental. The backend's per-tab records stay, unread, for older windows.
 5. Into the edge host (2026-10-12): no process of its own, and off or signed out it runs nothing (How it works).
+6. Shared tabs across accounts (owner, 2026-10-15). Built in steps 1a and 1b on branch `feat/shared-tabs`, not released;
+   the desktop is step 1c, built and not released. A tab's owner invites people by email;
+   their harnesses join from their own computers and accounts, one of the owner's harnesses may be marked leader,
+   messages cross accounts over a blind relay against a roster the owner's computer signs, and tasks go through
+   GitHub issues and pull requests. No new switch, verb or service. Design:
+   [docs/superpowers/specs/2026-10-15-agent-messages-across-accounts-design.md](../superpowers/specs/2026-10-15-agent-messages-across-accounts-design.md).
+7. A leader, tasks and Tab Activity in every tab (owner, 2026-10-16). Built on branch `feat/tab-activity`, not released.
+   Design: [docs/superpowers/specs/2026-10-16-shared-tab-activity-sidebar-design.md](../superpowers/specs/2026-10-16-shared-tab-activity-sidebar-design.md).
 
 ## Verification
 

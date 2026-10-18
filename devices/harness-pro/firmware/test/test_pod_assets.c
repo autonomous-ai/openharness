@@ -17,7 +17,7 @@ int main(void) {
         assert(p);
         assert(p->working_scene && p->listening_scene && p->sending_scene && p->cells);
     }
-    assert(pod_mark("muse") && pod_logo_find("muse", 28) && pod_logo_find("muse", 28)->size == 28);
+    assert(pod_mark("muse") && pod_logo_find("muse", 44) && pod_logo_find("muse", 44)->size == 44);
     assert(pod_mark("cursor") && pod_mark("cursor")->light);
     assert(pod_mark("claude") && !pod_mark("claude")->light);
     assert(pod_mark("nope") == NULL);
@@ -29,12 +29,12 @@ int main(void) {
         for (unsigned k = 0; k < sizeof light / sizeof *light; k++) want |= !strcmp(pod_marks[i].engine, light[k]);
         assert(pod_marks[i].light == want);
     }
-    // Every size Pod draws a mark at exists for all 14 engines, with both arrays: the chip (28) and the one cover
+    // Every size Pod draws a mark at exists for all 14 engines, with both arrays: the notice logo (44) and the one cover
     // size (72) for the cover sides the views use (Recap 132, Agent 270 and 230 asking, Talking 260).
     static const int cover_sides[] = {132, 270, 230, 260};
     for (unsigned i = 0; i < pod_mark_count; i++) {
         const char *e = pod_marks[i].engine;
-        assert(pod_logo_find(e, POD_LOGO_CHIP) && pod_logo_find(e, POD_LOGO_CHIP)->px && pod_logo_find(e, POD_LOGO_CHIP)->a);
+        assert(pod_logo_find(e, 44) && pod_logo_find(e, 44)->px && pod_logo_find(e, 44)->a);
         for (unsigned k = 0; k < sizeof cover_sides / sizeof *cover_sides; k++) {
             int sz = pod_logo_cover_size(cover_sides[k]);
             const pod_logo_t *l = pod_logo_find(e, sz);
@@ -47,8 +47,8 @@ int main(void) {
         // any cover side gets a generated size: nothing is ever scaled at runtime
         if (!pod_pet_for(e)) for (int side = 40; side <= 720; side++) assert(pod_logo_find(e, pod_logo_cover_size(side)));
     }
-    assert(pod_logo_find("cursor", 99) == NULL && pod_logo_find("nope", 28) == NULL && pod_logo_find(NULL, 28) == NULL);
-    assert(pod_logo_cover_size(132) == 72 && pod_logo_cover_size(270) == 72 && pod_logo_cover_size(230) == 72 && pod_logo_cover_size(260) == 72 && POD_LOGO_NSIZES == 4);
+    assert(pod_logo_find("cursor", 99) == NULL && pod_logo_find("nope", 44) == NULL && pod_logo_find(NULL, 44) == NULL);
+    assert(pod_logo_cover_size(132) == 72 && pod_logo_cover_size(270) == 72 && pod_logo_cover_size(230) == 72 && pod_logo_cover_size(260) == 72 && POD_LOGO_NSIZES == 2);
     for (unsigned i = 0; i < pod_mark_count; i++) assert(strlen(pod_marks[i].engine) < 12);   // fits pod_agent_t.engine[12]
     puts("pod assets ok");
     return 0;

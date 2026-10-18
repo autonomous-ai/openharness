@@ -23,14 +23,24 @@ class KeyHint {
 
   final KeyChord chord;
 
-  /// The key as the chrome printed it — `ctrl+]`, `⌥+↓`, `shift + ←` — for the
-  /// button to repeat word for word, so it reads as the hint beside it rather
-  /// than as a translation of it.
+  /// The key as the chrome printed it — `ctrl+]`, `⌥+↓`, `⇧←`, `shift + ←` —
+  /// for the button to repeat word for word, so it reads as the hint beside it
+  /// rather than as a translation of it.
   final String keyText;
 
   /// What the hint says the key does, as the CLI worded it — `cycle`,
   /// `main prompt`.
   final String action;
+
+  /// Whether the key strip draws this one AFTER its own keys rather than
+  /// before them — see `TerminalKeyBar.hints`.
+  ///
+  /// ⚠️ **Only Claude Code's `shift+tab to cycle`.** It is on every prompt, so
+  /// at the head of the strip it would push the arrows off the edge for good;
+  /// at the end it is a swipe away and the strip opens as it always did. Every
+  /// other hint is a key a screen is asking for right now — a queued question's
+  /// `shift+← to answer` — and leads the strip.
+  bool get trails => _trailing.hasMatch(action);
 
   @override
   bool operator ==(Object other) =>
@@ -70,10 +80,18 @@ const int _maxHints = 4;
 /// A key as the chrome writes one: modifiers joined to a key by `+`, or a bare
 /// function key. Modifiers are required for everything else — a plain `esc`
 /// or `tab` is a key the phone already has.
+///
+/// ⚠️ **Both spellings, old and new.** Codex 0.156.1 writes a modifier joined
+/// by `+` (`shift+←`, `⌥+↓`); 0.161.0 writes the macOS glyph straight onto
+/// the key (`⇧← to answer`), and its glyph keys too (`⇥`, `⏎`). A pattern that
+/// knew only the first read the queued question's key as no key at all: the
+/// queue was seen, and the strip offered nothing to open it with. The bare
+/// glyph and the glyph keys are added alongside, never in place of, the `+`
+/// form — either CLI may be on the far side.
 final RegExp _chord = RegExp(
   r'(?<![\w+])'
-  r'((?:(?:shift|ctrl|control|alt|option|opt|meta|[⇧⌃⌥])\s*\+\s*)+'
-  r"(?:tab|enter|return|esc|escape|space|backspace|delete|del|up|down|left|right|home|end|pageup|pagedown|pgup|pgdn|f(?:1[0-2]|[1-9])|[←→↑↓]|[a-z0-9]|[\]\[\\/.,;'`=\-])"
+  r'((?:(?:shift|ctrl|control|alt|option|opt|meta|[⇧⌃⌥])\s*\+\s*|[⇧⌃⌥])+'
+  r"(?:tab|enter|return|esc|escape|space|backspace|delete|del|up|down|left|right|home|end|pageup|pagedown|pgup|pgdn|f(?:1[0-2]|[1-9])|[←→↑↓]|[⇥⏎↵⌫]|[a-z0-9]|[\]\[\\/.,;'`=\-])"
   r'|f(?:1[0-2]|[1-9]))'
   r'(?![\w])',
   caseSensitive: false,
@@ -120,6 +138,10 @@ final RegExp _offered = RegExp(
   r'^(answer|skip|main prompt|next question|prev(ious)? question|edit last queued|copy|view transcript|cycle)\b',
   caseSensitive: false,
 );
+
+/// The [_offered] hints drawn after the key strip's own keys — see
+/// [KeyHint.trails].
+final RegExp _trailing = RegExp(r'^cycle\b', caseSensitive: false);
 
 /// Whether a phone can already press [chord] — the software keyboard or the
 /// key strip has it — so a hint for it would only repeat a key on screen.

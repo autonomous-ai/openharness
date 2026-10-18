@@ -119,7 +119,7 @@ describe('Harness for agents, end to end', () => {
     // It sees itself.
     const ps = await run('ps')
     expect(ps.code, ps.err).toBe(0)
-    expect(ps.out).toMatch(/^You are "lead" \(/)
+    expect(ps.out).toMatch(/^You: Claude Code "lead" \(/)
     expect(ps.out).toMatch(/\nlead +Claude Code +\w+ +person \(you\)/)
 
     // A terminal is the person's: no verb here lists one, so the agent could never read or close it. Refused, none made.
@@ -131,8 +131,8 @@ describe('Harness for agents, end to end', () => {
     // It starts a harness with a task, which reads who sent it, in a project Harness makes for it.
     const started = await run('new', 'claude', 'kid', '--name', 'kid', '--', 'hello kid')
     expect(started.code, started.err).toBe(0)
-    expect(started.out).toContain(`Created kid on this computer in ${join(d.env.HOME!, 'harnesses', 'kid')}.`)
-    expect(started.out).toContain('Read it: harness show kid · wait for it: harness wait kid')
+    expect(started.out).toContain(`kid on this computer: starting. Claude Code, in ${join(d.env.HOME!, 'harnesses', 'kid')}.`)
+    expect(started.out).toContain('Next: harness wait kid  (until it has answered; then read it: harness show kid)')
     expect(started.out).not.toContain('harness send')
     // Started lines: a create the machine answers pending first also writes a pending one (agentClient/ledger.ts).
     const ledger = readFileSync(join(d.dataDir, 'agent-client', 'started.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((row) => row.child)
@@ -144,8 +144,7 @@ describe('Harness for agents, end to end', () => {
     expect(waited.out.trim()).toBe('kid: idle · read it: harness show kid')
     const shown = await run('show', 'kid')
     expect(shown.code, shown.err).toBe(0)
-    expect(shown.out).toContain('kid · Claude Code · ')
-    expect(shown.out).toContain('· idle · started by you')
+    expect(shown.out).toMatch(/^kid on .+: idle · Claude Code · started by you\n/)
     expect(shown.out).toContain('asked: [from lead · Claude Code · ')
     expect(shown.out).toContain('the harness that started you. It reads your answer itself.]')
     expect(shown.out).not.toContain('harness send')
@@ -175,15 +174,16 @@ describe('Harness for agents, end to end', () => {
 
     // It closes what it started, and only that; the harness it started may not close it.
     const own = await run('close', 'lead')
-    expect(own.code).toBe(1)
+    // Refused, not failed: exit 5.
+    expect(own.code).toBe(5)
     expect(own.err).toContain('That is your own harness.')
     const fromKid = await harness(d, String(kid.tmuxPane), ['close', 'lead'])
-    expect(fromKid.code, fromKid.out).toBe(1)
+    expect(fromKid.code, fromKid.out).toBe(5)
     expect(fromKid.err).toContain('You did not start lead')
     await run('wait', 'kid', '--timeout', '2m')
     const closed = await run('close', 'kid')
     expect(closed.code, closed.err).toBe(0)
-    expect(closed.out.trim()).toBe('Closed kid. Its conversation is kept.')
+    expect(closed.out.trim()).toMatch(/^kid on .+: closed\. Its conversation is kept; the person can resume it\.\nNext: nothing; you have 0 open of 4\.$/)
     const after = await run('ps', '--all', '--json')
     expect(JSON.parse(after.out).harnesses).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'kid', state: 'stopped', startedBy: 'you' })]))
 
@@ -234,7 +234,7 @@ describe('Harness for agents, end to end', () => {
 
     // One level down: the harness lead started may not start one itself, and nothing is started.
     const deeper = await harness(d, String(kid.tmuxPane), ['new', 'claude', 'deeper', '--name', 'deeper', '--', 'hello deeper'])
-    expect(deeper.code, deeper.out).toBe(1)
+    expect(deeper.code, deeper.out).toBe(5)
     expect(deeper.err.trim()).toBe('A harness another agent started may not start harnesses itself. Do the work yourself, or say in your answer what else is needed.')
     expect((await list(true)).some((a) => a.name === 'deeper')).toBe(false)
 
@@ -242,9 +242,9 @@ describe('Harness for agents, end to end', () => {
     const waited = await harness(d, String(first.tmuxPane), ['wait', 'kid', '--timeout', '2m'])
     expect(waited.code, waited.out + waited.err).toBe(0)
     const shown = await harness(d, String(first.tmuxPane), ['show', 'kid'])
-    expect(shown.out.trim().split('\n').at(-1)).toBe('Close it once you have what you need: harness close kid')
+    expect(shown.out.trim().split('\n').at(-1)).toBe('Next: harness close kid  (once you have what you need)')
     const ps = await harness(d, String(first.tmuxPane), ['ps'])
-    expect(ps.out.trim().split('\n').at(-1)).toBe('You have 1 harness of your own open, 1 idle. Close each once you have its answer: harness close <name>.')
+    expect(ps.out.trim().split('\n').at(-1)).toBe('Next: harness show kid  (read its answer, then close it: harness close kid)')
 
     // A second lead with two: the person types into one of them, from a window.
     const second = await lead('lead2')
@@ -317,11 +317,13 @@ describe('Harness for agents, end to end', () => {
 
     const ps = await run('ps')
     expect(ps.code, ps.err).toBe(0)
-    expect(ps.out.split('\n')[0]).toBe('You are Claude Code, outside Harness.')
+    expect(ps.out.split('\n')[0]).toMatch(/^You: Claude Code, outside Harness, on .+\. Nothing can message you here\.$/)
     const started = await run('new', 'claude', 'helper', '--name', 'helper', '--', 'check it')
     expect(started.code, started.out + started.err).toBe(0)
     // Nothing can message an agent with no pane: no `send` in what to do next.
-    expect(started.out).toContain('Read it: harness show helper · wait for it: harness wait helper')
+    expect(started.out).toContain('Next: harness wait helper  (until it has answered; then read it: harness show helper)')
+    // No pane to open it beside.
+    expect(started.out).toContain('The person sees it in Harness.\n')
     expect(started.out).not.toContain('harness send')
     // Started lines: a create the machine answers pending first also writes a pending one (agentClient/ledger.ts).
     const ledger = readFileSync(join(d.dataDir, 'agent-client', 'started.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((row) => row.child)
@@ -338,11 +340,11 @@ describe('Harness for agents, end to end', () => {
     expect(shown.out).toContain('check it')
 
     const person = await run('close', 'theirs')
-    expect(person.code).toBe(1)
+    expect(person.code).toBe(5)
     expect(person.err).toContain('You did not start theirs')
     // Another session of the same agent did not start it either.
     const other = await harness(d, '', ['close', 'helper'], { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'another-session' })
-    expect(other.code).toBe(1)
+    expect(other.code).toBe(5)
     const closed = await run('close', 'helper')
     expect(closed.code, closed.err).toBe(0)
     client.close()
@@ -353,8 +355,8 @@ describe('Harness for agents, end to end', () => {
   // because for its first seconds every read of the Codex process was refused. The fake Codex holds such a descriptor
   // for as long, and its first hook is as late: until then nothing could bind its conversation, as there.
   it.each([
-    ['binds its conversation a few seconds in', 6_000, 'Closed pong. Its conversation is kept.'],
-    ['never binds while the close waits', 120_000, 'Closed pong. It was still starting, so no conversation was kept.'],
+    ['binds its conversation a few seconds in', 6_000, /^pong on .+: closed\. Its conversation is kept; the person can resume it\.\nNext: nothing; you have 0 open of 4\.$/],
+    ['never binds while the close waits', 120_000, /^pong on .+: closed\. It was still starting, so no conversation was kept\.\nNext: nothing; you have 0 open of 4\.$/],
   ] as const)('an agent closes a Codex it started a second ago, which %s', async (_, unboundMs, said) => {
     const module = pathToFileURL(join(CLI_ROOT, 'e2e', 'harness', 'fakeEngine.mjs')).href
     const { d } = await signedIn({ agents_start_agents: true }, { before: (d) => {
@@ -375,7 +377,7 @@ describe('Harness for agents, end to end', () => {
     const closed = await run('close', 'pong', '--now')
     expect(closed.err).not.toMatch(/descriptor|identity is held/)
     expect(closed.code, closed.out + closed.err).toBe(0)
-    expect(closed.out.trim()).toBe(said)
+    expect(closed.out.trim()).toMatch(said)
     const stopped = await until('pong stopped', async () => { const r = await row(); return !r || r.status === 'stopped' ? r ?? {} : null }, 30_000, 250)
     if (unboundMs < 10_000) expect(stopped.sessionId).toBeTruthy()
     expect(await enginesIn(d, String(live.tmuxPane))).toBe('')
@@ -400,7 +402,7 @@ describe('Harness for agents, end to end', () => {
     expect(hello.result.instructions).toContain('Never give work to, or close, a harness you did not start')
     server.notify('notifications/initialized')
     const tools = (await server.request('tools/list')).result.tools.map((t: { name: string }) => t.name)
-    expect(tools).toEqual(['harness_list', 'harness_start', 'harness_wait', 'harness_read', 'harness_close'])
+    expect(tools).toEqual(['harness_whoami', 'harness_list', 'harness_start', 'harness_wait', 'harness_read', 'harness_close'])
 
     // An empty folder of its own: refused, with the project it can ask for instead.
     const scratch = join(d.root, 'tmp', 'mcp-scratch')
@@ -411,9 +413,9 @@ describe('Harness for agents, end to end', () => {
       + 'which needs no approval). Nothing was started.' })
     const started = await server.call('harness_start', { task: 'hello from mcp', project: 'mcp-kid', name: 'mcpkid' })
     expect(started.isError, started.text).toBe(false)
-    expect(started.text).toContain(`Created mcpkid on this computer in ${join(d.env.HOME!, 'harnesses', 'mcp-kid')}.`)
+    expect(started.text).toContain(`mcpkid on this computer: starting. Claude Code, in ${join(d.env.HOME!, 'harnesses', 'mcp-kid')}.`)
     // Its next steps are named as the tools: an MCP client may have no shell to run `harness show` in.
-    expect(started.text).toContain('Read it: harness_read (name: "mcpkid") · wait for it: harness_wait (names: "mcpkid")')
+    expect(started.text).toContain('Next: harness_wait (names: "mcpkid")  (until it has answered; then read it: harness_read (name: "mcpkid"))')
     // Started lines: a create the machine answers pending first also writes a pending one (agentClient/ledger.ts).
     const ledger = readFileSync(join(d.dataDir, 'agent-client', 'started.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line)).filter((row) => row.child)
     expect(ledger).toEqual([expect.objectContaining({ by: expect.objectContaining({ agentId: expect.stringMatching(/^agent:cursor:mcp-\d+$/), name: 'Cursor' }) })])
@@ -423,12 +425,14 @@ describe('Harness for agents, end to end', () => {
     expect(read.text).toContain('asked: [from Cursor outside Harness · ')
     expect(read.text).toContain('hello from mcp')
     const listed = await server.call('harness_list', {})
-    expect(listed.text.split('\n')[0]).toBe('You are Cursor, outside Harness.')
+    expect(listed.text.split('\n')[0]).toMatch(/^You: Cursor, outside Harness, on .+\. Nothing can message you here\.$/)
     expect(listed.text).toMatch(/\nmcpkid +Claude Code +\w+ +you /)
     const refused = await server.call('harness_close', { name: 'theirs' })
-    expect(refused).toEqual({ text: 'You did not start theirs, so you may not close it. Only the person can.', isError: true })
+    // A refusal is an answer, not an error to retry.
+    expect(refused).toEqual({ text: 'You did not start theirs, so you may not close it. Only the person can.', isError: false })
     const closed = await server.call('harness_close', { name: 'mcpkid' })
-    expect(closed).toEqual({ text: 'Closed mcpkid. Its conversation is kept.', isError: false })
+    expect(closed.isError).toBe(false)
+    expect(closed.text).toMatch(/^mcpkid on .+: closed\. Its conversation is kept; the person can resume it\.\nNext: nothing; you have 0 open of 4\.$/)
     server.close()
     client.close()
   })
@@ -446,7 +450,7 @@ describe('Harness for agents, end to end', () => {
     await d.start()
     await until('Harness to allow its commands in Claude Code and Codex', () => existsSync(rules)
       && readFileSync(settings, 'utf8').includes('mcp__plugin_harness_harness__harness_send'), 30_000)
-    const tools = { ps: 'harness_list', show: 'harness_read', wait: 'harness_wait', new: 'harness_start', close: 'harness_close', send: 'harness_send' }
+    const tools = { whoami: 'harness_whoami', ps: 'harness_list', show: 'harness_read', wait: 'harness_wait', new: 'harness_start', close: 'harness_close', send: 'harness_send' }
     const verbs = Object.keys(tools) as Array<keyof typeof tools>, launcher = join(d.env.HOME!, '.local', 'bin', 'harness')
     // The person's deny of `harness close` is theirs: no allow for it in either spelling (Claude Code does not count the
     // launcher's path as the same command). Its MCP tool is another tool, and is allowed by name. `harness --help`,
@@ -495,7 +499,7 @@ describe('Harness for agents, end to end', () => {
     // The project it names instead: Harness makes it, answers the question for it, and the work is done with nobody asked.
     const started = await run('new', 'claude', 'opinion', '--name', 'opinion', '--', 'a second opinion on the shell script')
     expect(started.code, started.out + started.err).toBe(0)
-    expect(started.out).toContain(`Created opinion on this computer in ${join(d.env.HOME!, 'harnesses', 'opinion')}.`)
+    expect(started.out).toContain(`opinion on this computer: starting. Claude Code, in ${join(d.env.HOME!, 'harnesses', 'opinion')}.`)
     expect(started.out).not.toContain('trust')
     const waited = await run('wait', 'opinion', '--timeout', '2m')
     expect(waited.out.trim(), waited.err).toBe('opinion: idle · read it: harness show opinion')
@@ -511,7 +515,7 @@ describe('Harness for agents, end to end', () => {
       + '(harness wait exits 3). For new work, a project name avoids this: harness new codex checker --name checker -- …')
     const held = await run('wait', 'checker', '--timeout', '2m')
     expect(held.code, held.out + held.err).toBe(3)
-    expect(held.out.trim()).toMatch(/^checker: needs-input · /)
+    expect(held.out.trim()).toMatch(/^checker: needs the person · /)
     expect((await run('close', 'opinion')).code).toBe(0)
   })
 
@@ -522,7 +526,7 @@ describe('Harness for agents, end to end', () => {
     // Claude Code in a terminal app, refused with where the person turns it on.
     const asAgent = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'held-session' }
     const refused = await harness(d, '', ['new', 'claude', 'held', '--name', 'held', '--', 'hello'], asAgent)
-    expect(refused.code, refused.out).toBe(1)
+    expect(refused.code, refused.out).toBe(5)
     expect(refused.err.trim()).toBe('Agents may not start harnesses: the person turns on "Agents can start other agents" in Harness Settings ▸ Experimental, or runs `harness settings agents-start-agents on`. Until then, do the work yourself.')
     expect(JSON.parse((await harness(d, '', ['ps', '--json'])).out).harnesses).toEqual([])
     // The person, at a terminal: written through this computer's daemon to the account, and kept here at once.
@@ -545,7 +549,7 @@ describe('Harness for agents, end to end', () => {
     relay.setExperiment('agents_start_agents', false)
     await kept(d, (settings) => settings.agentsStartAgents === false)
     const again = await harness(d, '', ['new', 'claude', 'again', '--name', 'again', '--', 'hello'], asAgent)
-    expect(again.code, again.out).toBe(1)
+    expect(again.code, again.out).toBe(5)
     expect(again.err).toContain('Settings ▸ Experimental')
   })
 

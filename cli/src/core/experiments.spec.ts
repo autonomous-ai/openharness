@@ -113,7 +113,7 @@ describe('the account\'s agent experiments, kept for this computer', () => {
   })
   afterEach(() => { vi.useRealTimers(); rmSync(dataDir, { recursive: true, force: true }) })
 
-  const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false }
+  const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false }
   /** The account's answer, as backend routes/experimentalSettings.ts gives it. */
   const account = (features: Record<string, boolean>, accountId = 'acct') =>
     ({ status: 200, body: { success: true, data: { accountId, revision: 1, features: { share_button: false, ...features }, available: {} } } })
@@ -284,6 +284,16 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     expect(await t.sync.settingsRead()).toEqual({ status: 200, body: { ...OFF, agentsStartAgents: true, signedIn: true } })
     session = null
     expect(await t.sync.settingsRead()).toEqual({ status: 200, body: { ...OFF, signedIn: false } })
+  })
+
+  it('writes the summary switch, stored inverted, through to the account like the others', async () => {
+    const t = setup()
+    const patches: unknown[] = []
+    answer(account({}))
+    answers.push(async (method, body) => { patches.push(body); return account({ agent_messages_hide_summary: true }) })
+    expect(await t.sync.settingsWrite({ agentMessagesHideSummary: true }))
+      .toEqual({ status: 200, body: { ...OFF, agentMessagesHideSummary: true, signedIn: true } })
+    expect(patches).toEqual([{ accountId: 'acct', feature: 'agent_messages_hide_summary', enabled: true }])
   })
 
   it('writes `harness settings` and an older window\'s Settings ▸ Agents through to the account', async () => {

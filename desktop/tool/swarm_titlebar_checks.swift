@@ -631,13 +631,13 @@ private extension SwarmTabButton {
   func checkCenteredLabel() throws {
     let paragraph = label.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
     let resting = titleRect(revealed: false)
-    let group = statusSpace == 0 ? resting
-      : NSRect(x: resting.minX, y: 0, width: resting.width + statusSpace, height: bounds.height)
+    let group = trailingSpace == 0 ? resting
+      : NSRect(x: resting.minX, y: 0, width: resting.width + trailingSpace, height: bounds.height)
     try checkTitlebar(paragraph?.alignment == .center && abs(group.midX - bounds.midX) < 0.01,
       "The resting title and adjacent status form a centered group")
     let revealed = titleRect(revealed: true)
     try checkTitlebar(revealed.minX <= resting.minX && revealed.minX >= 14 &&
-      revealed.maxX + statusSpace <= closeButton.frame.minX + 0.01,
+      revealed.maxX + trailingSpace <= closeButton.frame.minX + 0.01,
       "Revealed, the title moves only left, and only as far as × needs")
     try checkTitlebar(selectButton.frame == bounds, "Selection and drag retain the whole tab target beneath its accessory")
     try checkTitlebar(subviews.count == 2 && closeButton.frame.maxX == bounds.maxX - 8,
@@ -661,13 +661,17 @@ private extension SwarmTabButton {
     let hover = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
       timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
     let rows = menu?.items ?? []
-    try checkTitlebar(rows.map(\.title) == ["Rename Tab…", "", "Show Agent Messages", "", "Close Tab"],
-      "The tab menu: Rename Tab…, Show Agent Messages, Close Tab; no Agent Messages on/off row")
-    try checkTitlebar(rows[1...2].allSatisfy(\.isHidden), "A tab without a log (the Store) lists no Show Agent Messages")
+    // Shared tabs' rows (1c) sit around Show Agent Messages; checkSharedTab covers them. Unshared and without
+    // Invite People… they are all hidden.
+    try checkTitlebar(rows.map(\.title) == ["Rename Tab…", "", "Invite People…", "Show Agent Messages",
+      "Stop Sharing Tab", "Move Here", "Leave Tab", "", "Close Tab"],
+      "The tab menu: Rename Tab…, the sharing rows around Show Agent Messages, Close Tab; no Agent Messages on/off row")
+    try checkTitlebar(rows[1...6].allSatisfy(\.isHidden), "A tab without a log (the Store) lists no Show Agent Messages")
     try checkTitlebar(subviews.count == 2, "A tab holds only its selection target and ×")
 
     canShowAgentMessages = true
-    try checkTitlebar(rows[1...2].allSatisfy { !$0.isHidden }, "A tab with a log lists Show Agent Messages")
+    try checkTitlebar(!rows[1].isHidden && !rows[3].isHidden && [2, 4, 5, 6].allSatisfy { rows[$0].isHidden },
+      "A tab with a log lists Show Agent Messages")
     try checkTitlebar(closeButton.isHidden && accessibilityChildren()?.count == 1,
       "At rest a tab shows only its name and status")
     let title = titleRect
@@ -681,7 +685,7 @@ private extension SwarmTabButton {
     try checkTitlebar(selectButton.accessibilityHelp() == "Needs your input",
       "The status slot keeps the tab's own status")
     activity = nil
-    let show = rows[2]
+    let show = rows[3]
     try checkTitlebar(validateMenuItem(show) && show.state == .off, "Show Agent Messages is a plain row, never checked")
     _ = (show.target as AnyObject).perform(show.action, with: show)
     try checkTitlebar(events.count == 1 && events[0] == ("showAgentMessages", swarmId),
@@ -692,8 +696,110 @@ private extension SwarmTabButton {
     actionsEnabled = true
     canShowAgentMessages = false
     _ = (show.target as AnyObject).perform(show.action, with: show)
-    try checkTitlebar(rows[2].isHidden && events.count == 1, "Without a log the row is gone and asks nothing")
+    try checkTitlebar(rows[3].isHidden && rows[1].isHidden && events.count == 1,
+      "Without a log the row is gone and asks nothing")
   }
+
+  /// A tab shared with other accounts (1c): a two-person mark and the
+  /// harness count after the name, counted in the title group; its menu by
+  /// role. The selection button keeps "Select <name>" as its label (UI tests
+  /// find tabs by it) and says it is shared in its help.
+  func checkSharedTab() throws {
+    frame = NSRect(x: 0, y: 0, width: 240, height: 40)
+    contentCenterY = 20
+    name = "app"
+    displayLabel = "app"
+    activity = nil
+    canShowAgentMessages = true
+    layoutSubtreeIfNeeded()
+    var events: [(String, String?)] = []
+    emit = { method, args in events.append((method, (args as? [String: Any])?["id"] as? String)) }
+    defer { emit = nil }
+    let rows = menu?.items ?? []
+    func visible() -> [String] { rows.filter { !$0.isHidden && !$0.isSeparatorItem }.map(\.title) }
+    func row(_ title: String) -> NSMenuItem { rows.first { $0.title == title }! }
+
+    // Unshared, where shares can be read (or Agent Messages is off): Invite only.
+    let unsharedMinimum = minimumWidth
+    let unsharedHelp = selectButton.accessibilityHelp()
+    try checkTitlebar(visible() == ["Rename Tab…", "Show Agent Messages", "Close Tab"],
+      "Without canInvitePeople an unshared tab offers nothing of sharing")
+    canInvitePeople = true
+    try checkTitlebar(visible() == ["Rename Tab…", "Invite People…", "Show Agent Messages", "Close Tab"],
+      "An unshared tab offers Invite People… before Show Agent Messages")
+    try checkTitlebar(sharedMarkWidth == 0 && minimumWidth == unsharedMinimum,
+      "An unshared tab draws no mark")
+
+    applyShared(["count": 7, "role": "owner", "canMoveHere": true])
+    layoutSubtreeIfNeeded()
+    try checkTitlebar(sharedMarkWidth > 0 && sharedMarkWidth == sharedLabelLayout!.size.width + Self.sharedImageWidth + Self.sharedImageGap,
+      "The mark is the cached person.2.fill image and count label")
+    try checkTitlebar(abs(minimumWidth - unsharedMinimum - (sharedMarkWidth + Self.gap)) < 0.01,
+      "The tab's width grew by the cached mark's width")
+    try checkTitlebar(sharedLabelLayout?.text.string == "7", "The mark's label is the harness count")
+    try checkTitlebar(visible() == ["Rename Tab…", "Invite People…", "Show Agent Messages", "Stop Sharing Tab",
+      "Move Here", "Close Tab"], "The owner's menu: Invite People…, Stop Sharing Tab and Move Here, in that order")
+    try checkTitlebar(accessibilityLabel() == "app", "The tab group's label stays its name")
+    try checkTitlebar(selectButton.accessibilityLabel() == "Select app", "The selection button keeps Select <name>")
+    try checkTitlebar(selectButton.accessibilityHelp() == "Shared tab, 7 harnesses",
+      "The selection button's help says it is shared, and how many harnesses")
+    try checkTitlebar(sharedRect.minX >= titleRect.maxX + Self.gap - 0.01 && sharedRect.maxX <= bounds.maxX,
+      "The mark sits after the name, inside the tab")
+    // The name gives way to the mark; the count is never cut.
+    name = String(repeating: "x", count: 300)
+    displayLabel = name
+    layoutSubtreeIfNeeded()
+    let hover = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+      timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+    mouseEntered(with: hover)
+    layoutSubtreeIfNeeded()
+    try checkTitlebar(titleRect.width < naturalTitleWidth && sharedRect.width == sharedMarkWidth &&
+      sharedRect.maxX <= closeButton.frame.minX + 0.01,
+      "A long name is cut before the mark, which stays whole and clear of ×")
+    mouseExited(with: hover)
+    name = "app"
+    displayLabel = "app"
+    _ = rendered()
+
+    for title in ["Invite People…", "Stop Sharing Tab", "Move Here"] {
+      let item = row(title)
+      try checkTitlebar(validateMenuItem(item), "\(title) is enabled")
+      _ = (item.target as AnyObject).perform(item.action, with: item)
+    }
+    try checkTitlebar(events.map(\.0) == ["invitePeople", "stopSharingTab", "moveTabHere"] &&
+      events.allSatisfy { $0.1 == swarmId }, "Each row asks for its action on this tab")
+
+    applyShared(["count": 7, "role": "owner", "canMoveHere": false])
+    try checkTitlebar(visible() == ["Rename Tab…", "Invite People…", "Show Agent Messages", "Stop Sharing Tab",
+      "Close Tab"], "Shared from this computer: no Move Here")
+
+    applyShared(["count": 1, "role": "member", "canMoveHere": false])
+    try checkTitlebar(visible() == ["Rename Tab…", "Show Agent Messages", "Leave Tab", "Close Tab"],
+      "A member's menu: Show Agent Messages and Leave Tab, no Invite")
+    try checkTitlebar(selectButton.accessibilityHelp() == "Shared tab, 1 harness", "One harness is singular")
+    events.removeAll()
+    let invite = row("Invite People…")
+    _ = (invite.target as AnyObject).perform(invite.action, with: invite)
+    let leave = row("Leave Tab")
+    _ = (leave.target as AnyObject).perform(leave.action, with: leave)
+    try checkTitlebar(events.map(\.0) == ["leaveTab"], "A hidden row asks nothing; Leave Tab asks to leave")
+    actionsEnabled = false
+    _ = (leave.target as AnyObject).perform(leave.action, with: leave)
+    try checkTitlebar(!validateMenuItem(leave) && events.count == 1, "A modal disables Leave Tab")
+    actionsEnabled = true
+
+    // Unshared again: everything back as it was.
+    applyShared(nil)
+    canInvitePeople = false
+    layoutSubtreeIfNeeded()
+    try checkTitlebar(sharedMarkWidth == 0 && minimumWidth == unsharedMinimum &&
+      selectButton.accessibilityHelp() == unsharedHelp && selectButton.accessibilityLabel() == "Select app",
+      "Unshared, the tab has no mark and its accessibility is as before")
+    try checkTitlebar(visible() == ["Rename Tab…", "Show Agent Messages", "Close Tab"],
+      "Unshared, without Invite, the menu is as before")
+  }
+
+  private func rendered() -> Data { renderedPixels() }
 
   /// At the 128pt minimum, a tab draws its whole name beside a status at
   /// rest, and still 16pt of it when hovered.
@@ -1261,6 +1367,44 @@ private extension SwarmTabStrip {
       "Workspace teardown hides the daemon")
   }
 
+  /// Tab Activity's button, just after New Tab: shown only where the active tab can show the sidebar, its
+  /// tooltip and label saying Show or Hide as the sidebar stands, and a click toggles it in Flutter.
+  func checkTabActivityButton() throws {
+    var state: [String: Any] = ["enabled": true, "tabs": [["id": "work", "name": "Desktop"]], "activeId": "work"]
+    var calls: [String] = []
+    emit = { method, _ in calls.append(method) }
+    setFrameSize(NSSize(width: 900, height: 40))
+    update(state)
+    layout()
+    try checkTitlebar(tabActivityButton.isHidden && !tabActivityButton.isEnabled &&
+      accessibilityChildren()?.contains(where: { $0 as? NSView === tabActivityButton }) == false,
+      "No Tab Activity button where the tab cannot show it")
+    let budgetWithout = scroll.frame.width
+    for (open, title) in [(false, "Show Tab Activity"), (true, "Hide Tab Activity")] {
+      state["canShowTabActivity"] = true
+      state["tabActivityOpen"] = open
+      state["tabActivityTooltip"] = "\(title) · ⇧⌘Y"
+      update(state)
+      layout()
+      try checkTitlebar(!tabActivityButton.isHidden && tabActivityButton.isEnabled &&
+        tabActivityButton.image != nil &&
+        tabActivityButton.frame.minX == newButton.frame.maxX && tabActivityButton.frame.width > 0 &&
+        tabActivityButton.frame.maxX < searchButton.frame.minX &&
+        tabActivityButton.accessibilityLabel() == title &&
+        tabActivityButton.toolTip == "\(title) · ⇧⌘Y" &&
+        tabActivityButton.accessibilityHelp() == tabActivityButton.toolTip &&
+        accessibilityChildren()?.contains(where: { $0 as? NSView === tabActivityButton }) == true,
+        "Tab Activity sits after New Tab and says \(title)")
+    }
+    try checkTitlebar(scroll.frame.width <= budgetWithout, "The button takes its room from the tabs, not over them")
+    tabActivityButton.performClick(nil)
+    try checkTitlebar(calls == ["toggleTabActivity"], "Tab Activity's button toggles the sidebar in Flutter")
+    state["enabled"] = false
+    update(state)
+    tabActivityButton.performClick(nil)
+    try checkTitlebar(!tabActivityButton.isEnabled && calls.count == 1, "A modal disables Tab Activity's button")
+  }
+
   func checkTopActions() throws {
     var state: [String: Any] = ["enabled": true,
       "searchTooltip": "Open Harness · ⌘P", "addPhoneTooltip": "Add Phone", "storeTooltip": "Explore Harness Store · ⌘S",
@@ -1518,7 +1662,20 @@ private extension SwarmTabStrip {
       "No tab gains a control for Agent Messages")
     try checkTitlebar(!visibleAnimatedTabs.contains { $0 === tabs[0] },
       "A tab with an Agent Messages log animates nothing; only a working tab's spinner moves")
+    // Shared tabs (1c): each row's `shared` and `canInvitePeople` reach its tab; a row without them clears them.
+    var sharedRows = rows
+    sharedRows[0]["canInvitePeople"] = true
+    sharedRows[1]["shared"] = ["count": 7, "role": "owner", "canMoveHere": true]
+    sharedRows[2]["shared"] = ["count": 2, "role": "member", "canMoveHere": false]
+    sharedRows[3]["shared"] = ["count": 3, "role": "visitor"]
+    update(["enabled": true, "activeId": "work", "tabs": sharedRows])
+    try checkTitlebar(tabs.map(\.sharedCount) == [nil, 7, 2, nil] &&
+      tabs.map(\.sharedRole) == [nil, "owner", "member", nil] && tabs.map(\.canMoveHere) == [false, true, false, false] &&
+      tabs.map(\.canInvitePeople) == [true, false, false, false],
+      "Each row's shared mark and role reach its tab; an unknown role is no share")
     update(["enabled": true, "activeId": "work", "tabs": rows])
+    try checkTitlebar(tabs.allSatisfy { $0.sharedCount == nil && $0.sharedRole == nil && !$0.canInvitePeople },
+      "A row without them unshares its tab")
     try checkTitlebar(tabs.map(\.displayLabel) == ["New Tab", "Desktop", "1: Release planning", "Notes"],
       "Clean labels preserve numeric-looking custom names and omit generated prefixes")
     try checkTitlebar(tabs.map(\.shortcutHint) == ["⌘1", "⌘2", "⌃⌥⌘R", nil],
@@ -2400,10 +2557,12 @@ private extension SwarmTitlebar {
       "New Terminal stays off the File menu; its chord lives in the keymap")
     let historyMenu = main.item(withTitle: "History")!.submenu!
     try checkTitlebar(agent.items.contains { $0.title == "Clone Harness" && $0.representedObject as? String == "cloneAgent" }, "Clone Harness preserves its action")
-    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["newAgent", "sessions", "addAgent", "cloneAgent", "restartAgent", "shareAgent", "separator", "new", "renameActive", "closeActive", "showAgentMessages", "separator", "splitRight", "splitDown", "zoomPane", "movePaneToTab", "closePane"], "File groups harness, tab and pane actions, harnesses first")
+    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["newAgent", "sessions", "addAgent", "cloneAgent", "restartAgent", "shareAgent", "removeFromTab", "toggleLeader", "separator", "new", "renameActive", "closeActive", "invitePeople", "showAgentMessages", "stopSharingTab", "moveTabHere", "leaveTab", "separator", "splitRight", "splitDown", "zoomPane", "movePaneToTab", "closePane"], "File groups harness, tab and pane actions, harnesses first")
     for (action, title, menu) in [
       ("restartAgent", "Restart Harness", agent),
       ("shareAgent", "Share Harness", agent),
+      ("removeFromTab", "Remove from Tab", agent),
+      ("toggleLeader", "Make Leader", agent),
       ("toggleViewer", "Toggle Viewer", main.item(withTitle: "View")!.submenu!),
       ("toggleComposer", "Toggle Message Composer", main.item(withTitle: "View")!.submenu!),
     ] {
@@ -2419,6 +2578,42 @@ private extension SwarmTitlebar {
       actionsEnabled = false
       try checkTitlebar(!validateMenuItem(item), "\(title) respects modal state")
     }
+    // Remove from Tab is hidden unless Dart offers it for the focused pane.
+    let removeRow = agent.items.first { $0.representedObject as? String == "removeFromTab" }!
+    for offered in [true, false] {
+      _ = try messenger.receive("update", arguments: ["enabled": true, "tabs": [], "paneActions": ["removeFromTab": offered]])
+      try checkTitlebar(removeRow.isHidden == !offered, "File shows Remove from Tab only where the focused harness can leave its tab")
+    }
+    // Make Leader / Remove Leader: one row whose title follows what Dart offers the focused pane, hidden when neither.
+    let leaderRow = agent.items.first { $0.representedObject as? String == "toggleLeader" }!
+    for (offered, action, title) in [(true, "make", "Make Leader"), (true, "remove", "Remove Leader"), (false, "make", "Make Leader"), (true, "none", "Make Leader")] {
+      var update: [String: Any] = ["enabled": true, "tabs": [], "paneActions": ["toggleLeader": offered]]
+      if action != "none" { update["leaderAction"] = action }
+      _ = try messenger.receive("update", arguments: update)
+      try checkTitlebar(leaderRow.title == title, "File says \(title) for a \(action) offer")
+      try checkTitlebar(leaderRow.isHidden == !(offered && action != "none"), "File shows Make Leader / Remove Leader only where Dart offers one")
+    }
+    // File's sharing rows (1c) for the active tab: shown and enabled only as Dart offers them.
+    let shareRows = ["invitePeople": "Invite People", "stopSharingTab": "Stop Sharing Tab", "moveTabHere": "Move Here",
+                     "leaveTab": "Leave Tab"]
+    for (offered, enabled) in [(["invitePeople"], true), (["invitePeople", "stopSharingTab", "moveTabHere"], true),
+                               (["leaveTab"], true), ([], true), (["invitePeople"], false)] {
+      _ = try messenger.receive("update", arguments: ["enabled": enabled, "tabs": [],
+        "tabShareActions": Dictionary(uniqueKeysWithValues: offered.map { ($0, true) })])
+      for (action, title) in shareRows {
+        let item = agent.items.first { $0.representedObject as? String == action }!
+        try checkTitlebar(item.title == title && item.isHidden == !offered.contains(action),
+          "File shows \(title) only where the active tab offers it")
+        try checkTitlebar(validateMenuItem(item) == (enabled && offered.contains(action)),
+          "\(title) is enabled only where offered, and never under a modal")
+        if validateMenuItem(item) {
+          menuAction(item)
+          try checkTitlebar(messenger.calls.last?.method == action && messenger.calls.last?.arguments == nil,
+            "\(title) asks Flutter for the active tab")
+        }
+      }
+    }
+    _ = try messenger.receive("update", arguments: ["tabs": [], "enabled": false])
     try checkTitlebar(agent.items.first?.title == "New Harness" && agent.items.first?.keyEquivalent == "n" && agent.items.first?.keyEquivalentModifierMask == [.command],
       "New Harness leads File on Command-N")
     for (action, title, key) in [("splitRight", "Split Right", "r"), ("splitDown", "Split Down", "d")] {
@@ -2463,6 +2658,24 @@ private extension SwarmTitlebar {
     actionsEnabled = false
     try checkTitlebar(!validateMenuItem(showMessagesRow), "Show Agent Messages respects modal state")
     actionsEnabled = true
+    // View's Show Tab Activity / Hide Tab Activity for the active tab: shown and enabled where the tab has Agent
+    // Messages, titled by whether its sidebar is open.
+    let tabActivityRow = main.item(withTitle: "View")!.submenu!.items.first { $0.representedObject as? String == "toggleTabActivity" }!
+    try checkTitlebar(tabActivityRow.image != nil, "Tab Activity has a native icon")
+    for (log, open) in [(true, false), (true, true), (false, false), (false, true)] {
+      _ = try messenger.receive("update", arguments: ["enabled": true, "tabs": [], "canShowAgentMessages": true, "canShowTabActivity": log, "tabActivityOpen": open])
+      try checkTitlebar(tabActivityRow.isHidden == !log, "View shows Tab Activity only where Dart's toggle would act")
+      try checkTitlebar(tabActivityRow.title == (open ? "Hide Tab Activity" : "Show Tab Activity"),
+        "View says Show or Hide Tab Activity as the sidebar stands")
+      try checkTitlebar(validateMenuItem(tabActivityRow) == log, "Tab Activity is enabled only where Dart's toggle would act, not with Agent Messages alone")
+    }
+    _ = try messenger.receive("update", arguments: ["enabled": true, "tabs": [], "canShowTabActivity": true])
+    menuAction(tabActivityRow)
+    try checkTitlebar(messenger.calls.last?.method == "toggleTabActivity", "Tab Activity dispatches to Flutter for the active tab")
+    _ = try messenger.receive("update", arguments: ["enabled": false, "tabs": [], "canShowTabActivity": true])
+    try checkTitlebar(!validateMenuItem(tabActivityRow), "Tab Activity respects modal state")
+    actionsEnabled = true
+    canShowAgentMessages = true
     let closeTabShortcut = agent.items.first { $0.representedObject as? String == "closeActive" }!
     let closePaneShortcut = agent.items.first { $0.representedObject as? String == "closePane" }!
     try checkTitlebar(closeTabShortcut.keyEquivalent == "w" && closeTabShortcut.keyEquivalentModifierMask == [.command], "Close Tab defaults to Command-W")
@@ -2795,11 +3008,13 @@ do {
   try strip.checkHarnessMonitor()
   try strip.checkInventoryFooter()
   try strip.checkTopActions()
+  try SwarmTabStrip(frame: NSRect(x: 0, y: 0, width: 900, height: 40)).checkTabActivityButton()
   try checkIconTooltipTracking()
   try strip.checkActivityMarks()
   try SwarmTabButton(id: "label-measurements").checkLabelMeasurementChanges()
   try SwarmTabButton(id: "hover-close").checkHoverClose()
   try SwarmTabButton(id: "agent-messages").checkAgentMessages()
+  try SwarmTabButton(id: "shared-tab").checkSharedTab()
   try SwarmTabButton(id: "minimum-width").checkMinimumWidth()
   try SwarmTabButton(id: "selection-surface").checkSelectionSurface()
   try strip.checkTabPresentationAndCapture()

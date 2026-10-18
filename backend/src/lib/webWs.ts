@@ -5,7 +5,7 @@
  *
  *  - PER-USER (current): the subprotocol is the user's SSO access token → ONE socket per user.
  *    The socket starts UNATTACHED; the client scopes it with `machine_select {machineId}` (ownership-checked
- *    against `agentBinding.userId`), which detaches the previous hub client and attaches a fresh one
+ *    against `agentBinding.userId`, or shared with this account: lib/machineAccess.ts), which detaches the previous hub client and attaches a fresh one
  *    (new connId — keeps the (agent, connId) invariant that E2EE and reply-targeting rely on). While
  *    attached, frames flow exactly like the legacy mode (sendDown / up:{machineId} fan-out). The socket
  *    also live-watches ALL the user's agents and pushes `machines_status` frames (node_status transitions
@@ -24,7 +24,8 @@ import { extractKey } from '../utils/crypto.js'
 import { machineIdFromKey } from '../utils/crypto.js'
 import { prisma, machineAlive } from './prisma.js'
 import { touchDeviceKey } from './deviceKeyLog.js'
-import { getAgentPresence, getAgentPresenceMany, subscribeStatus, getDevicePresence, subscribeDeviceStatus, subscribeDeviceMachineListChanged, subscribeDeviceE2eePair } from './bus.js'
+import { getAgentPresence, getAgentPresenceMany, subscribeStatus, getDevicePresence, subscribeDeviceStatus, subscribeDeviceMachineListChanged, subscribeDeviceE2eePair, subscribeMachineShareChanged } from './bus.js'
+import { sharedMachineAccess } from './machineAccess.js'
 import { relayWebDocumentPushes } from './webAccountPushes.js'
 import { DAEMONS } from '../config/env.js'
 import { attachHubClient, trackSocketLiveness, type HubClient } from './hub.js'
@@ -321,7 +322,12 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     const gen = ++selectGen
     const binding = await prisma.machine.findUnique({ where: { machineId: machineId } })
     if (closed || gen !== selectGen) return // superseded by a newer select
-    if (!binding || binding.deletedAt || binding.userId !== user.sub) {
+    // Another account's machine is selected only while it is shared with this one (lib/machineAccess.ts),
+    // with the same rights as the owner's own; its daemon decides again whether to trust this account.
+    const shared = binding && !binding.deletedAt && binding.userId !== user.sub
+      ? await sharedMachineAccess(user, binding).catch(() => null) : null
+    if (closed || gen !== selectGen) return
+    if (!binding || binding.deletedAt || (binding.userId !== user.sub && !shared)) {
       logger.warn('machine_select rejected', { userId: user.sub, machineId })
       send({ type: 'machine_select_error', payload: { machineId: machineId, error: 'NOT_YOUR_MACHINE' } })
       return
@@ -356,8 +362,37 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     client = attachHubClient(ws, machineId, 'web')
     currentAgentId = machineId
     currentBinding = binding
-    logger.info('web user selected agent', { userId: user.sub, machineId, connId: client.connId })
+    watchShare(shared ? machineId : null)
+    logger.info('web user selected agent', { userId: user.sub, machineId, connId: client.connId, ...(shared ? { shared } : {}) })
     ack(machineId)
+  }
+
+  // A machine shared with this account stays selected while its sharing still lets it: the owner taking
+  // the address off, turning the domain off or stopping, or this account removing it from its list, ends
+  // the session at once on whichever instance holds it (bus `machine-share:<id>`).
+  let shareUnsub: (() => void) | null = null
+  let shareGen = 0
+  const watchShare = (machineId: string | null): void => {
+    const gen = ++shareGen
+    shareUnsub?.()
+    shareUnsub = null
+    if (!machineId) return
+    const recheck = async (): Promise<void> => {
+      const binding = await prisma.machine.findUnique({ where: { machineId } })
+      const still = binding && !binding.deletedAt ? await sharedMachineAccess(user, binding) : null
+      if (still || closed || gen !== shareGen || currentAgentId !== machineId) return
+      logger.info('shared machine session ended: sharing changed', { userId: user.sub, machineId })
+      selectGen++
+      client?.detach()
+      client = null
+      currentAgentId = null
+      currentBinding = null
+      send({ type: 'machine_select_error', payload: { machineId, error: 'NOT_YOUR_MACHINE' } })
+      ws.close(4403, 'Sharing ended')
+    }
+    void subscribeMachineShareChanged(machineId, () => { void recheck().catch(() => { /* the next change asks again */ }) })
+      .then((unsub) => { if (gen === shareGen && !closed) shareUnsub = unsub; else unsub() })
+      .catch((err) => logger.warn('web-ws machine share watch failed', { userId: user.sub, machineId, error: String(err) }))
   }
 
   // Presence, remembered briefly. Every non-terminal frame used to cost one Redis GET on the hot path;
@@ -440,6 +475,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     }
     if (type === 'machine_deselect') {
       selectGen++ // cancel any in-flight bindAgent
+      watchShare(null)
       client?.detach()
       client = null
       currentAgentId = null
@@ -532,6 +568,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     client?.detach()
     client = null
     currentBinding = null
+    watchShare(null)
     for (const [, unsub] of statusSubs) unsub()
     statusSubs.clear()
     if (watchAgentsTimer) { clearTimeout(watchAgentsTimer); watchAgentsTimer = null }

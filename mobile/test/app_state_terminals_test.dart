@@ -25,6 +25,11 @@ void main() {
     ].join('\n');
   }
 
+  /// How long an open the machine has said nothing to waits before its
+  /// watchdog gives up on the socket — `TerminalSession._openSilentPatience`,
+  /// private there. Real time: the watchdog reads the wall clock.
+  const silentPatience = Duration(seconds: 10);
+
   /// The pager warming [agentId] on `m`, its parked page measuring itself.
   Future<void> warm(ViewerRig rig, String agentId) async {
     final warming = rig.app.warmAgentPane('m', agentId);
@@ -502,10 +507,15 @@ void main() {
       session.reportViewport(80, 24);
       await opening;
 
-      // No terminal_ready: past the session's watchdog, the socket is suspect.
+      // No terminal_ready, and not a word from the machine: past the session's
+      // watchdog the open is still waited on — a slow relay is not a dead one…
       await Future<void>.delayed(
         session.resyncTimeout + const Duration(milliseconds: 100),
       );
+      expect(rig.conn('m').redials, 0);
+
+      // …until the machine has been silent for as long as an open waits.
+      await Future<void>.delayed(silentPatience - session.resyncTimeout);
 
       expect(rig.conn('m').redials, 1);
       expect(opensFor(rig, 'a'), hasLength(2), reason: 'the same open, again');
@@ -527,8 +537,10 @@ void main() {
       session.reportViewport(80, 24);
       await opening;
 
+      // Given up on once a silent machine would be — but the dial in progress
+      // is left to finish.
       await Future<void>.delayed(
-        session.resyncTimeout + const Duration(milliseconds: 100),
+        silentPatience + const Duration(milliseconds: 100),
       );
 
       expect(rig.conn('m').redials, 0);

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { localSocketPath } from '../lib/localSocket.js'
 import { NOT_RUNNING, SANDBOXED } from '../lib/unreachable.js'
-import { messagesRpc } from './rpc.js'
+import { messagesRpc, RefusedError } from './rpc.js'
 
 type Behave = (ws: WebSocket, frame: { type: string; payload: Record<string, unknown> }) => void
 
@@ -61,6 +61,8 @@ describe('one Agent Messages request through the daemon', () => {
       else ws.send(JSON.stringify({ type: 'agent_messages_result', payload: { requestId: frame.payload.requestId, error: 'MESSAGES_OFF', detail: 'off here' } }))
     }
     await expect(messagesRpc(target(), { action: 'send' })).rejects.toMatchObject({ code: 'MESSAGES_OFF', message: 'off here' })
+    // The machine answered: a refusal, told apart from one that could not be asked.
+    await expect(messagesRpc(target(), { action: 'send' })).rejects.toBeInstanceOf(RefusedError)
     behave = (ws, frame) => {
       if (frame.type === 'machine_select') ws.send(JSON.stringify({ type: 'connected', payload: {} }))
       else ws.send(JSON.stringify({ type: 'agent_messages_result', payload: { requestId: frame.payload.requestId, error: 'BARE' } }))
@@ -71,6 +73,7 @@ describe('one Agent Messages request through the daemon', () => {
   it('says when the machine is unavailable, unpaired, or the answer is not one', async () => {
     behave = (ws) => ws.send(JSON.stringify({ type: 'machine_select_error', payload: { error: 'NOT_PAIRED' } }))
     await expect(messagesRpc(target(), {})).rejects.toMatchObject({ code: 'NOT_PAIRED' })
+    await expect(messagesRpc(target(), {}).catch((error: unknown) => error instanceof RefusedError)).resolves.toBe(false)
     behave = (ws) => ws.send(JSON.stringify({ type: 'machine_select_error', payload: {} }))
     await expect(messagesRpc(target(), {})).rejects.toMatchObject({ code: 'MACHINE_UNAVAILABLE' })
     behave = (ws) => ws.close(4404)

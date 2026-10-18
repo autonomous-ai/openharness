@@ -5,4 +5,6 @@ export const MUSE_IDENTITY: RunIdentity = {
   bytes: [64 * 1024, 4 * 1024 * 1024],
   cwd: ['payload', 'record', 'workspace_root'],
   run: [{ field: ['payload', 'kind'], value: 'run' }, { field: ['payload', 'event', 'kind'], value: 'started' }],
+  // Muse Code 1.4 opens a transcript with a retained permission transaction; the workspace record follows it.
+  preamble: ['retained_frame'],
 }

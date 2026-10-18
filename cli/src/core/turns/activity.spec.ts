@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { activityRuntimeKey } from '../../lib/runtimeActivity.js'
 import type { ActivityFrame } from '../../lib/turnActivity.js'
-import { createTurnActivity, type TurnActivityDeps } from './activity.js'
+import { activityOf, createTurnActivity, type TurnActivityDeps } from './activity.js'
 
 const live = { agentId: 'a1', sessionId: 's1', engine: 'claude', active: true } as RegisteredSession
 const idle = { agentId: 'a2', sessionId: 's2', engine: 'claude', active: false } as RegisteredSession
@@ -52,6 +52,14 @@ describe('turn activity', () => {
     expect(deps.terminals.capture).toHaveBeenCalledWith(live, { mode: 'visible', ansi: true })
     vi.mocked(deps.terminals.capture).mockResolvedValueOnce({ state: 'failed', reason: 'no pane' })
     expect(await runtime.capture(live)).toBeNull()
+  })
+
+  it('reports the working state of the live agents asked about, and leaves out those that are not live', () => {
+    const frames: Record<string, ActivityFrame | null> = { a1: { state: 'working' } as ActivityFrame, a3: null }
+    const byAgent = (id: string) => [live, shell].find((s) => s.agentId === id)
+    expect(activityOf(['a1', 'a3', 'gone'], byAgent, (s) => frames[s.agentId] ?? null)).toEqual({ a1: 'working', a3: 'unknown' })
+    expect(activityOf(['a3'], byAgent, () => null)).toEqual({ a3: 'unknown' })
+    expect(activityOf([], byAgent, () => null)).toEqual({})
   })
 
   it('shows the app an agent\'s activity, and none for a plain terminal', () => {

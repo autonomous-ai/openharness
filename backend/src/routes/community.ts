@@ -4,6 +4,10 @@ import { prisma } from '../lib/prisma.js'
 import { parseAutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import { communityStarterAuthor, communityStarters } from '../lib/communityAccess.js'
 import { feedPage, feedSorts, feedStats } from '../lib/communityFeed.js'
+import { saveLike } from '../lib/communityLikes.js'
+import { resolvePublicationId } from '../lib/communitySlug.js'
+import { notify } from '../lib/communityNotifications.js'
+import { hiddenFrom, isHiddenFrom } from '../lib/communityReports.js'
 import { communityCategories, communityEngines, communityHarnessIds, communityHarnessMarkers, communityLimits, communityPathPattern, communityReservedName } from '../lib/communityContract.js'
 import { validateBody, validateParams, validateQuery } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
@@ -106,26 +110,58 @@ async function authorName(userId: string): Promise<string> {
 
 type Publication = NonNullable<Awaited<ReturnType<typeof publication>>>
 
+/** Comments a read sends at once: the latest with a harness's social state, and each earlier page. */
+export const commentPageSize = 100
+
+type CommentRow = { id: string; body: string; authorName: string; createdAt: Date; parentId: string | null; parentAuthorName: string | null; userId: string }
+
+/** One comment as a reader sees it: whether its harness's creator wrote it, and whether this reader may delete it. */
+export function commentView(row: CommentRow, authorId: string, userId?: string) {
+  return { id: row.id, body: row.body, authorName: row.authorName, createdAt: row.createdAt, parentId: row.parentId, parentAuthorName: row.parentAuthorName, creator: row.userId === authorId, mine: row.userId === userId || authorId === userId }
+}
+
 async function socialState(post: Publication, autonomousEnv: string, userId: string | undefined) {
   const harnessId = post.id
+  // Comments reports have hidden from this reader are neither shown nor counted.
+  const hidden = await hiddenFrom(autonomousEnv, 'comment', userId, harnessId)
+  const visible = hidden.length ? { id: { notIn: hidden } } : {}
   const [likes, liked, comments, follow, commentCount, forks] = await Promise.all([
     prisma.communityLike.count({ where: { autonomousEnv, harnessId } }),
     userId ? prisma.communityLike.findUnique({ where: { autonomousEnv_harnessId_userId: { autonomousEnv, harnessId, userId } } }) : null,
-    prisma.communityComment.findMany({ where: { autonomousEnv, harnessId }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100 }),
+    prisma.communityComment.findMany({ where: { autonomousEnv, harnessId, ...visible }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: commentPageSize }),
     userId ? prisma.communityFollow.findUnique({ where: { autonomousEnv_authorId_userId: { autonomousEnv, authorId: post.authorId, userId } } }) : null,
-    // The comments above are the latest 100; these say how many there are in all, and how many public forks.
-    prisma.communityComment.count({ where: { autonomousEnv, harnessId } }),
+    // The comments above are the latest page (routes/communityComments.ts reads earlier ones); these say how many there are in all, and how many public forks.
+    prisma.communityComment.count({ where: { autonomousEnv, harnessId, ...visible } }),
     prisma.communityHarness.count({ where: { autonomousEnv, deletedAt: null, forkedFrom: harnessId } }),
   ])
   return {
     likes, liked: !!liked, following: !!follow, signedIn: !!userId, mine: post.authorId === userId, commentCount, forks,
-    comments: comments.reverse().map(row => ({ id: row.id, body: row.body, authorName: row.authorName, createdAt: row.createdAt, parentId: row.parentId, parentAuthorName: row.parentAuthorName, creator: row.userId === post.authorId, mine: row.userId === userId || post.authorId === userId })),
+    // When its author last edited it: a page drawn before then reads the publication again.
+    updatedAt: 'updatedAt' in post ? post.updatedAt : null,
+    comments: comments.reverse().map(row => commentView(row, post.authorId, userId)),
   }
 }
 
-async function publication(id: string, autonomousEnv: string) {
+export async function publication(id: string, autonomousEnv: string) {
   if (communityStarters.has(id)) return { id, authorId: communityStarterAuthor, authorName: 'Harness', credits: [] }
   return prisma.communityHarness.findFirst({ where: { id, autonomousEnv, deletedAt: null } })
+}
+
+/** A publication as this reader may see it: none once reports hide it from them, except from its author. */
+export async function visiblePublication(id: string, autonomousEnv: string, userId?: string) {
+  const post = await publication(id, autonomousEnv)
+  if (!post || post.authorId === userId || communityStarters.has(id)) return post
+  return await isHiddenFrom(autonomousEnv, 'harness', id, userId) ? null : post
+}
+
+/**
+ * The publication a fork was made from, named on its page: `origin` is null once that one is no
+ * longer published. A starter's name is the website's, so a fork of one carries none.
+ */
+async function origin(forkedFrom: string | null, autonomousEnv: string) {
+  if (!forkedFrom || communityStarters.has(forkedFrom)) return {}
+  const source = await prisma.communityHarness.findFirst({ where: { id: forkedFrom, autonomousEnv, deletedAt: null }, select: { title: true, authorName: true } })
+  return { origin: source }
 }
 
 export async function communityRoutes(app: FastifyInstance): Promise<void> {
@@ -137,23 +173,28 @@ export async function communityRoutes(app: FastifyInstance): Promise<void> {
     cursor: z.string().uuid().or(z.enum([...communityStarters] as [string, ...string[]])).optional(),
     following: z.enum(['true', 'false']).optional(), mine: z.enum(['true', 'false']).optional(),
     q: z.string().trim().min(1).max(searchMaxChars).optional(), category: z.enum(communityCategories).optional(),
-    sort: z.enum(feedSorts).optional(), forkedFrom: identifier.optional(),
-  }).strict().refine(query => query.sort === 'popular' || !communityStarters.has(query.cursor ?? ''), 'Only a popular feed pages past a starter.')
+    sort: z.enum(feedSorts).optional(), forkedFrom: identifier.optional(), author: identifier.optional(),
+  }).strict().refine(query => query.sort === 'popular' || query.sort === 'trending' || !communityStarters.has(query.cursor ?? ''), 'Only a popular or trending feed pages past a starter.')
+    .refine(query => !query.author || (query.mine !== 'true' && query.following !== 'true'), 'A creator’s feed is neither yours nor Following.')
   app.get<{ Querystring: z.infer<typeof feedQuery> }>('/api/community/harnesses', { preHandler: validateQuery(feedQuery) }, async (req, reply) => {
     const autonomousEnv = environment(req)
     if ((req.query.following === 'true' || req.query.mine === 'true') && !req.user) return sendError(reply, 'Sign in to see your harnesses and creators you follow.', 'UNAUTHORIZED', 401)
-    const follows = req.user ? await prisma.communityFollow.findMany({ where: { autonomousEnv, userId: req.user.sub }, select: { authorId: true } }) : []
-    const { following, mine, q, category, forkedFrom, sort = 'newest', cursor } = req.query
+    const { following, mine, q, category, forkedFrom, author, sort = 'newest', cursor } = req.query
+    const [follows, hidden] = await Promise.all([
+      req.user ? prisma.communityFollow.findMany({ where: { autonomousEnv, userId: req.user.sub }, select: { authorId: true } }) : [],
+      // Your own list shows your own work, hidden or not.
+      mine === 'true' ? [] : hiddenFrom(autonomousEnv, 'harness', req.user?.sub),
+    ])
     const where = {
-      autonomousEnv, deletedAt: null, ...searchWhere(q),
+      autonomousEnv, deletedAt: null, ...searchWhere(q), ...(hidden.length ? { id: { notIn: hidden } } : {}),
       ...(following === 'true' ? { authorId: { in: follows.map(row => row.authorId) } } : {}), ...(mine === 'true' ? { authorId: req.user!.sub } : {}),
-      ...(category ? { category } : {}), ...(forkedFrom ? { forkedFrom } : {}),
+      ...(category ? { category } : {}), ...(forkedFrom ? { forkedFrom } : {}), ...(author ? { authorId: author } : {}),
     }
     // Starters are the website's: it matches their search and category, so a popular page ranks all of
-    // them there is a place for — none among your own or a harness's forks, and in Following only
-    // when the reader follows Harness.
+    // them there is a place for — none among your own or a harness's forks, in Following only when
+    // the reader follows Harness, and on a creator's page only on Harness's.
     const followed = new Set(follows.map(row => row.authorId))
-    const starters = mine === 'true' || forkedFrom || (following === 'true' && !followed.has(communityStarterAuthor)) ? [] : [...communityStarters]
+    const starters = mine === 'true' || forkedFrom || (following === 'true' && !followed.has(communityStarterAuthor)) || (author && author !== communityStarterAuthor) ? [] : [...communityStarters]
     const { page, order, nextCursor } = await feedPage(where, autonomousEnv, sort, starters, cursor)
     const ids = [...page.map(row => row.id), ...communityStarters]
     const [stats, covered] = await Promise.all([
@@ -165,23 +206,26 @@ export async function communityRoutes(app: FastifyInstance): Promise<void> {
     sendSuccess(reply, { harnesses: page.map(row => withCoverPath({ ...row, cover: withCover.has(row.id) ? 'set' : null })), ...(order ? { order } : {}), stats, signedIn: !!req.user, nextCursor, following: [...followed] })
   })
 
-  // `files=viewer` sends only the output page: a harness page draws nothing else.
+  // `files=viewer` sends only the output page: a harness page draws nothing else. The website's
+  // address for it (its slug) finds it too; every other route takes the id this one answers with.
   const harnessQuery = z.object({ files: z.enum(['viewer']).optional() })
   app.get<{ Params: z.infer<typeof params>; Querystring: z.infer<typeof harnessQuery> }>('/api/community/harnesses/:id', { preHandler: [validateParams(params), validateQuery(harnessQuery)] }, async (req, reply) => {
-    const autonomousEnv = environment(req), harnessId = req.params.id
-    const post = await publication(harnessId, autonomousEnv)
+    const autonomousEnv = environment(req), harnessId = await resolvePublicationId(req.params.id, autonomousEnv)
+    const post = await visiblePublication(harnessId, autonomousEnv, req.user?.sub)
     if (!post) return sendError(reply, 'This harness is unavailable.', 'NOT_FOUND', 404)
+    const stored = 'title' in post ? post : null
+    const [source, social] = await Promise.all([origin(stored?.forkedFrom ?? null, autonomousEnv), socialState(post, autonomousEnv, req.user?.sub)])
     sendSuccess(reply, {
       // A starter's files are the website's own; only a publication is stored here.
-      harness: 'title' in post ? withCoverPath(req.query.files === 'viewer' ? withViewerOnly(post) : post) : null,
-      social: await socialState(post, autonomousEnv, req.user?.sub),
+      harness: stored ? { ...withCoverPath(req.query.files === 'viewer' ? withViewerOnly(stored) : stored), ...source } : null,
+      social,
     })
   })
 
-  // What a reader's page refreshes: the publication itself changes only when its author edits it.
+  // What a reader's page refreshes: the publication itself changes only when its author edits it, which `updatedAt` says.
   app.get<{ Params: z.infer<typeof params> }>('/api/community/harnesses/:id/social', { preHandler: validateParams(params) }, async (req, reply) => {
     const autonomousEnv = environment(req)
-    const post = await publication(req.params.id, autonomousEnv)
+    const post = await visiblePublication(req.params.id, autonomousEnv, req.user?.sub)
     if (!post) return sendError(reply, 'This harness is unavailable.', 'NOT_FOUND', 404)
     sendSuccess(reply, { social: await socialState(post, autonomousEnv, req.user?.sub) })
   })
@@ -214,6 +258,10 @@ export async function communityRoutes(app: FastifyInstance): Promise<void> {
       if (!clientId || (error as { code?: string }).code !== 'P2002') throw error
       post = await prisma.communityHarness.findFirst({ where: { id: clientId, autonomousEnv, authorId: userId, deletedAt: null } })
       if (!post) return sendError(reply, 'This publication request is no longer available. Start a new draft.', 'CONFLICT', 409)
+      return sendSuccess(reply, { id: post.id }, 201)
+    }
+    if (original && 'title' in original) {
+      await notify(autonomousEnv, userId, [{ userId: original.authorId, kind: 'fork', harnessId: original.id, harnessTitle: original.title, actorName: data.authorName, targetId: post.id }])
     }
     sendSuccess(reply, { id: post.id }, 201)
   })
@@ -227,17 +275,14 @@ export async function communityRoutes(app: FastifyInstance): Promise<void> {
   const likeBody = z.object({ liked: z.boolean() }).strict()
   app.put<{ Params: z.infer<typeof params>; Body: z.infer<typeof likeBody> }>('/api/community/harnesses/:id/like', { preHandler: [validateParams(params), validateBody(likeBody)] }, async (req, reply) => {
     const autonomousEnv = environment(req), harnessId = req.params.id, userId = req.user!.sub
-    if (!await publication(harnessId, autonomousEnv)) return sendError(reply, 'Harness not found.', 'NOT_FOUND', 404)
-    const key = { autonomousEnv, harnessId, userId }
-    if (req.body.liked) await prisma.communityLike.upsert({ where: { autonomousEnv_harnessId_userId: key }, create: key, update: {} })
-    else await prisma.communityLike.deleteMany({ where: key })
-    sendSuccess(reply, { liked: req.body.liked, likes: await prisma.communityLike.count({ where: { autonomousEnv, harnessId } }) })
+    if (!await visiblePublication(harnessId, autonomousEnv, userId)) return sendError(reply, 'Harness not found.', 'NOT_FOUND', 404)
+    sendSuccess(reply, { liked: req.body.liked, likes: await saveLike({ autonomousEnv, harnessId, userId }, req.body.liked) })
   })
 
   const commentBody = z.object({ body: z.string().trim().min(1).max(2000), clientId: z.string().uuid(), parentId: z.string().uuid().optional() }).strict()
   app.post<{ Params: z.infer<typeof params>; Body: z.infer<typeof commentBody> }>('/api/community/harnesses/:id/comments', { preHandler: [validateParams(params), validateBody(commentBody)] }, async (req, reply) => {
     const autonomousEnv = environment(req), harnessId = req.params.id, userId = req.user!.sub, clientId = req.body.clientId
-    const post = await publication(harnessId, autonomousEnv)
+    const post = await visiblePublication(harnessId, autonomousEnv, userId)
     if (!post) return sendError(reply, 'Harness not found.', 'NOT_FOUND', 404)
     const parent = req.body.parentId ? await prisma.communityComment.findFirst({ where: { id: req.body.parentId, harnessId, autonomousEnv } }) : null
     if (req.body.parentId && !parent) return sendError(reply, 'That comment is no longer available.', 'NOT_FOUND', 404)
@@ -246,7 +291,12 @@ export async function communityRoutes(app: FastifyInstance): Promise<void> {
     if (!existing && await prisma.communityComment.count({ where: { autonomousEnv, userId, createdAt: { gt: new Date(Date.now() - 60_000) } } }) >= 10)
       return sendError(reply, 'Please wait before adding another comment.', 'RATE_LIMITED', 429)
     const row = existing ?? await prisma.communityComment.upsert({ where: { autonomousEnv_harnessId_userId_clientId: key }, create: { ...key, body: req.body.body, authorName: await authorName(userId), parentId: parent?.id, parentAuthorName: parent?.authorName }, update: {} })
-    sendSuccess(reply, { comment: { id: row.id, body: row.body, authorName: row.authorName, createdAt: row.createdAt, parentId: row.parentId, parentAuthorName: row.parentAuthorName, creator: row.userId === post.authorId, mine: true } })
+    // A retried post was told about the first time. A reply's comment writer hears of it as a reply, even when they made the harness.
+    if (!existing && 'title' in post) {
+      const where = { harnessId, harnessTitle: post.title, actorName: row.authorName, targetId: row.id }
+      await notify(autonomousEnv, userId, [...(parent ? [{ ...where, userId: parent.userId, kind: 'reply' as const }] : []), { ...where, userId: post.authorId, kind: 'comment' }])
+    }
+    sendSuccess(reply, { comment: commentView(row, post.authorId, userId) })
   })
 
   const commentParams = params.extend({ commentId: z.string().uuid() })

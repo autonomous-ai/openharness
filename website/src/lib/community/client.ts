@@ -1,15 +1,17 @@
 import type { OpenHarness, SocialState } from './types';
 import { gzipJson, gzipType } from './gzip';
-import { refreshHubSession } from './session';
+import { accessTokenKey, refreshHubSession } from './session';
 
 /** Read the existing Harness web session; the community does not mint a second identity. */
 export function sessionHeaders(): Record<string, string> {
   try {
-    const token = localStorage.getItem('harness.web.v1.auth_access_token');
+    const token = localStorage.getItem(accessTokenKey);
     const env = localStorage.getItem('harness.web.v1.auth_autonomous_env');
     return { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'x-autonomous-env': env === 'stag' ? 'stag' : 'prod' };
   } catch { return {}; }
 }
+
+const unavailable = 'The community is temporarily unavailable. Try again.';
 
 export class CommunityError extends Error {
   constructor(message: string, public status: number) { super(message); }
@@ -33,8 +35,9 @@ export async function communityRequest<T>(path: string, options: { method?: stri
     delete headers.Authorization;
     response = await fetch(`/api/community/${path}`, { ...request, headers });
   }
-  const body = await response.json();
-  if (!response.ok || !body.success) throw new CommunityError(body.error?.message || 'The community is temporarily unavailable. Try again.', response.status);
+  // A proxy's error page is HTML: the reader gets the plain sentence, never a JSON parser's.
+  const body: { success?: boolean; data?: T; error?: { message?: string } } | null = await response.json().catch(() => null);
+  if (!response.ok || !body?.success) throw new CommunityError(body?.error?.message || unavailable, response.status);
   return body.data as T;
 }
 

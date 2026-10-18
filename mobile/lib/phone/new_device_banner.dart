@@ -6,6 +6,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/viewer/device_log_sync.dart';
 
+import 'device_detail_page.dart' show kItsMine;
 import 'device_history_page.dart';
 import 'devices_page.dart';
 import 'phone_navigation.dart' show phoneRoute;
@@ -152,12 +153,12 @@ class NewDeviceBanner extends StatelessWidget {
             ),
             TextButton(
               // A key a fork suspended stays suspended however often the banner is dismissed (the next
-              // read of the log would bring it back), so "Mine" opens its page, which says why and
-              // is where the person can vouch for it.
+              // read of the log would bring it back), so "It’s mine" opens its page, which says why
+              // and is where the person can vouch for it.
               onPressed: () => notifier.newDeviceSuspended(m.pub)
                   ? unawaited(_open(m.pub))
                   : notifier.dismissNewDevice(m.pub),
-              child: const Text('Mine'),
+              child: const Text(kItsMine),
             ),
             TextButton(
               // One new device goes straight to its key code; several go to the list, where each is a row.

@@ -50,4 +50,21 @@ export function createTurnActivity({ readScreen, terminals, bySession, sessionTu
   return { runtimeActivity, turnActivity, activityFrame }
 }
 
+/**
+ * The working state of each listed agent, as the windows are told it (`activityFrame`): for Agent Messages, which
+ * tells a shared tab's other accounts. An agent that is not live is left out.
+ */
+export function activityOf(
+  agentIds: string[],
+  byAgent: (agentId: string) => RegisteredSession | undefined,
+  activityFrame: (session: RegisteredSession) => ActivityFrame | null,
+): Record<string, ActivityState> {
+  const states: Record<string, ActivityState> = {}
+  for (const agentId of agentIds) {
+    const session = byAgent(agentId)
+    if (session) states[agentId] = activityFrame(session)?.state ?? 'unknown'
+  }
+  return states
+}
+
 export type TurnActivityReaders = ReturnType<typeof createTurnActivity>

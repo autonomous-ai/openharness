@@ -162,7 +162,10 @@ class ReviewApp extends ModelManagerTestApp {
   }
 
   @override
-  Future<GridModels> gridModels(String machineId) async => GridModels(
+  Future<GridModels> gridModels(
+    String machineId, {
+    bool userAction = false,
+  }) async => GridModels(
     gridName: 'home',
     models: [
       for (final raw in localInventory['models'] as List)

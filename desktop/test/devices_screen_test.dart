@@ -404,18 +404,14 @@ void main() {
     dial.dispose();
   });
 
-  testWidgets('Interface shows only for a Pro and sends the chosen skin', (
+  testWidgets('A Pro that still reports a uiSkin shows no Interface choice', (
     tester,
   ) async {
     final dial = DialState();
-    final sent = <Map<String, Object?>>[];
     final controller = DevicesController(
       dial: dial,
       accountId: 'a',
-      sendSettings: (_, patch) async {
-        sent.add(patch);
-        return true;
-      },
+      sendSettings: (_, patch) async => true,
     );
     await controller.load();
     final pro = DialStatus.fromJson({
@@ -429,98 +425,18 @@ void main() {
         'brightness': 70, 'character': 2, 'face': 720, 'round': false,
         'muted': false, 'quiet': false, 'straightTitle': true,
         'focusFace': true, 'scrollReversed': false, 'voiceLang': 'en',
-        'uiSkin': 'classic',
+        'uiSkin': 'classic', // an older firmware: Pets is the only interface now
       },
     });
-    expect(pro.settings!.uiSkin, 'classic');
-    final oldPro = DialStatus.fromJson({
-      'attached': true,
-      'id': 'p2',
-      'mac': 'aa:bb:cc:p2',
-      'fw': '0.1.0',
-      'hw': 'harness-pro',
-      'board': 'pro',
-      'settings': {
-        'brightness': 70, 'character': 2, 'face': 720, 'round': false,
-        'muted': false, 'quiet': false, 'straightTitle': true,
-        'focusFace': true, 'scrollReversed': false, 'voiceLang': 'en',
-      },
-    });
-    report(dial, [pro, deviceStatus('round'), oldPro]);
+    report(dial, [pro]);
     await pump(tester, controller);
-    Future<void> select(int i) async {
-      await tester.tap(
-        find.byKey(ValueKey('device-card-${controller.devices[i].key}')),
-      );
-      await tester.pumpAndSettle();
-    }
-
-    await select(2);
-    expect(find.text('Interface'), findsNothing); // firmware without uiSkin
-    await select(0);
-    expect(find.text('Interface'), findsOneWidget);
-    await tester.ensureVisible(find.text('Console'));
-    await tester.tap(find.text('Console'));
-    await tester.pump();
-    expect(sent.last, {'uiSkin': 'console'});
-
-    await select(1);
-    expect(find.text('Interface'), findsNothing);
-    await tester.pumpWidget(const SizedBox());
-    controller.dispose();
-    dial.dispose();
-  });
-
-  testWidgets('Rotate screen 180° shows only for a Pro reporting screenTurned', (
-    tester,
-  ) async {
-    final dial = DialState();
-    final sent = <Map<String, Object?>>[];
-    final controller = DevicesController(
-      dial: dial,
-      accountId: 'a',
-      sendSettings: (_, patch) async {
-        sent.add(patch);
-        return true;
-      },
+    await tester.tap(
+      find.byKey(ValueKey('device-card-${controller.devices[0].key}')),
     );
-    await controller.load();
-    DialStatus pro(String id, {bool? turned}) => DialStatus.fromJson({
-      'attached': true,
-      'id': id,
-      'mac': 'aa:bb:cc:$id',
-      'fw': '0.1.1',
-      'hw': 'harness-pro',
-      'board': 'pro',
-      'settings': {
-        'brightness': 70, 'character': 2, 'face': 720, 'round': false,
-        'muted': false, 'quiet': false, 'straightTitle': true,
-        'focusFace': true, 'scrollReversed': false, 'voiceLang': 'en',
-        'screenTurned': ?turned,
-      },
-    });
-    report(dial, [pro('p1', turned: false), pro('p2'), deviceStatus('round')]);
-    await pump(tester, controller);
-    Future<void> select(int i) async {
-      await tester.tap(
-        find.byKey(ValueKey('device-card-${controller.devices[i].key}')),
-      );
-      await tester.pumpAndSettle();
-    }
-
-    await select(0);
-    final key = controller.devices[0].key;
-    final row = find.byKey(ValueKey('devices-screen-turn-$key'));
-    expect(find.text('Rotate screen 180°'), findsOneWidget);
-    await tester.ensureVisible(row);
-    await tester.tap(row);
-    await tester.pump();
-    expect(sent.last, {'screenTurned': true});
-
-    await select(1);
-    expect(find.text('Rotate screen 180°'), findsNothing);
-    await select(2);
-    expect(find.text('Rotate screen 180°'), findsNothing);
+    await tester.pumpAndSettle();
+    expect(find.text('Brightness'), findsWidgets); // the settings did open
+    expect(find.text('Interface'), findsNothing);
+    expect(find.byType(SegmentedButton<String>), findsNothing);
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
     dial.dispose();

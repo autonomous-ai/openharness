@@ -83,6 +83,8 @@ pub struct Pane {
     /// The far pane's size — what the grid is.
     pub cols: u16,
     pub rows: u16,
+    /// Whether [cols]/[rows] came from the far pane (a keyframe), not from this side's guess.
+    pub far_sized: bool,
     /// What we last asked the far pane to be.
     pub want: (u16, u16),
     pub input_seq: u64,
@@ -470,6 +472,7 @@ impl Pane {
             input_off: false,
             opening: false,
             takeover_pending: false,
+            far_sized: false,
             read_only: false,
             last_alive: Instant::now(),
             dirty: true,
@@ -532,6 +535,7 @@ impl Pane {
     pub fn keyframe(&mut self, cols: u16, rows: u16, bytes: &[u8]) {
         self.cols = cols.max(1);
         self.rows = rows.max(1);
+        self.far_sized = true;
         self.term = Term::new(config(), &Size(self.cols, self.rows), self.listener.clone());
         self.parser = Processor::new();
         self.in_screen_title = false;

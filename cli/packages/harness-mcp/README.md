@@ -8,6 +8,7 @@ harnesses, wait for them, read their answers and close them:
 
 | Tool | What it does |
 |---|---|
+| `harness_whoami` | who you are to Harness, and whether you may start harnesses now: call it first |
 | `harness_list` | the harnesses here: state, who started each, what each is about |
 | `harness_start` | start an agent on a task in a folder or a new project, by name |
 | `harness_wait` | wait until harnesses stop working |

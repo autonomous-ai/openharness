@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -97,7 +98,9 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   late SettingsSection _section =
-      widget.initialSection ?? kDefaultSettingsSection;
+      !kIsWeb && widget.initialSection == SettingsSection.privacy
+      ? SettingsSection.experimental
+      : widget.initialSection ?? kDefaultSettingsSection;
 
   /// Narrow screens only: a section is open over the list. Opening Settings on
   /// a named section starts there; otherwise the list comes first.

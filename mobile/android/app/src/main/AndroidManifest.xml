@@ -9,6 +9,10 @@
     <!-- Lets libwebrtc notice a wifi↔cellular change and restart ICE rather than
          wait out the disconnect grace. Not a runtime permission. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Joining a new device's setup hotspot (Settings ▸ Add a device): a WifiNetworkSpecifier
+         request, which Android confirms with its own sheet. Neither is a runtime permission. -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Taking a picture to send to an agent. Picking an EXISTING picture needs
          no permission at all: image_picker goes through ACTION_GET_CONTENT / the
          photo picker, which hands back one item the user chose rather than
@@ -47,6 +51,26 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <!-- "Back to Harness" on the last page of "Continue with Google / Apple": brings the app
+             back over the Custom Tab the sign-in ran in, and takes the tab down with it (see
+             SignInReturnActivity.kt). It carries nothing and does nothing else, so being
+             reachable by any link that names its scheme costs nothing. Its own empty affinity,
+             no history and no Recents entry: it is a hop, never a screen. The scheme is
+             `signInReturnUrl` in lib/viewer/sign_in_browser.dart. -->
+        <activity
+            android:name=".SignInReturnActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="ai.autonomous.harness.signin" />
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

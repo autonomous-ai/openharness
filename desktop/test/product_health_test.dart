@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ui' show AppLifecycleState, FrameTiming;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/measurement/product_measurement.dart';
@@ -77,23 +78,38 @@ void main() {
     connections.dispose();
   });
 
-  test('consented funnel is once per local episode, with coarse waits and no identity', () async {
-    usage.milestone(ProductHealthMeasure.funnelFirstWork);
-    expect(totals(), isEmpty);
-    usage.account(null);
-    await usage.setSignedOutSharing(true);
-    usage.milestone(ProductHealthMeasure.funnelSetupSeen);
-    now = now.add(const Duration(minutes: 2));
-    usage.milestone(ProductHealthMeasure.funnelFirstWork);
-    usage.milestone(ProductHealthMeasure.funnelFirstWork);
-    now = now.add(const Duration(minutes: 4));
-    usage.milestone(ProductHealthMeasure.funnelFirstResponse);
-    await usage.flush();
-    expect(totals()['setup_desktop_funnel_first_work'], 1);
-    expect(totals()['setup_desktop_first_work_1m_to_5m'], 1);
-    expect(totals()['setup_desktop_first_response_over_5m'], 1);
-    expect(jsonEncode(setup), isNot(contains('PRIVATE')));
-  });
+  test(
+    'setup funnel is once per local episode, with coarse waits and no identity',
+    () async {
+      usage.milestone(ProductHealthMeasure.funnelFirstWork);
+      expect(totals(), isEmpty);
+      usage.account(null);
+      await usage.setSignedOutSharing(true);
+      usage.milestone(ProductHealthMeasure.funnelSetupSeen);
+      now = now.add(const Duration(minutes: 2));
+      usage.milestone(ProductHealthMeasure.funnelFirstWork);
+      usage.milestone(ProductHealthMeasure.funnelFirstWork);
+      now = now.add(const Duration(minutes: 4));
+      usage.milestone(ProductHealthMeasure.funnelFirstResponse);
+      await usage.flush();
+      expect(totals()['setup_desktop_funnel_first_work'], 1);
+      expect(totals()['setup_desktop_first_work_1m_to_5m'], 1);
+      expect(totals()['setup_desktop_first_response_over_5m'], 1);
+      expect(jsonEncode(setup), isNot(contains('PRIVATE')));
+    },
+  );
+
+  test(
+    'signed-in milestones remain in account-controlled health totals',
+    () async {
+      await usage.flush();
+      usage.milestone(ProductHealthMeasure.funnelWorkspaceReady);
+      usage.milestone(ProductHealthMeasure.funnelFirstWork);
+      await usage.flush();
+      expect(setup, isEmpty);
+      expect(totals()['health_desktop_funnel_first_work'], 1);
+    },
+  );
 
   test('manual connect and automatic retries remain separate; missing outcomes expire as unknown', () async {
     await usage.flush();
@@ -120,6 +136,61 @@ void main() {
     expect(totals()['ui_desktop_resume_recovery_unknown'], 1);
     expect(jsonEncode(reports), isNot(contains('PRIVATE')));
     expect(reports.first['context'], usage.context!.toJson());
+  });
+
+  test('known unlinked probes preserve the first outcome without counting each retry', () async {
+    await usage.flush();
+    final connections = ProductConnections(usage);
+    addTearDown(connections.dispose);
+    connections.status('PRIVATE_MACHINE', connecting: true, connected: false);
+    connections.refused(
+      'PRIVATE_MACHINE',
+      ProductHealthMeasure.connectErrorUnlinked,
+    );
+    connections.status(
+      'PRIVATE_MACHINE',
+      connecting: true,
+      connected: false,
+      suppressStart: true,
+    );
+    connections.status('PRIVATE_MACHINE', connecting: false, connected: false);
+    for (var retry = 0; retry < 10; retry++) {
+      connections.status(
+        'PRIVATE_MACHINE',
+        connecting: true,
+        connected: false,
+        suppressStart: true,
+      );
+      connections.refused(
+        'PRIVATE_MACHINE',
+        ProductHealthMeasure.connectErrorUnlinked,
+      );
+      connections.status(
+        'PRIVATE_MACHINE',
+        connecting: false,
+        connected: false,
+        failure: ProductHealthMeasure.connectErrorUnlinked,
+      );
+    }
+    final manual = connections.manual('PRIVATE_MACHINE');
+    connections.status(
+      'PRIVATE_MACHINE',
+      connecting: true,
+      connected: false,
+      suppressStart: true,
+    );
+    connections.status('PRIVATE_MACHINE', connecting: false, connected: true);
+    manual(ProductOutcome.ok);
+    // A later ordinary connection remains measurable.
+    connections.status('PRIVATE_MACHINE', connecting: true, connected: false);
+    connections.status('PRIVATE_MACHINE', connecting: false, connected: true);
+    await usage.flush();
+    expect(totals()['ui_desktop_connect_auto_started'], 2);
+    expect(totals()['ui_desktop_connect_auto_failed'], 1);
+    expect(totals()['health_desktop_connect_error_unlinked'], 1);
+    expect(totals()['ui_desktop_connect_auto_ok'], 1);
+    expect(totals()['ui_desktop_connect_user_ok'], 1);
+    expect(jsonEncode(reports), isNot(contains('PRIVATE')));
   });
 
   test('opt-out and account changes fence delayed callbacks, counters, and retries', () async {
@@ -170,6 +241,50 @@ void main() {
       runtime.dispose();
       await tester.pump();
       expect(saved, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'frames sample every 60th visible frame, never the first or a hidden one',
+    (tester) async {
+      var lifecycle = AppLifecycleState.resumed;
+      final runtime = ProductRuntimeHealth(
+        usage,
+        readState: () async => {},
+        writeState: (_) async {},
+        readVersion: () async => '1.2.73',
+        lifecycle: () => lifecycle,
+      );
+      runtime.account('PRIVATE_ACCOUNT');
+      await usage.flush();
+      await tester.pump();
+      FrameTiming frame(int ms) => FrameTiming(
+        vsyncStart: 0,
+        buildStart: 0,
+        buildFinish: 0,
+        rasterStart: 0,
+        rasterFinish: ms * 1000,
+        rasterFinishWallTime: ms * 1000,
+      );
+      // A launch's first frame is its heavy workspace restore: not a sample
+      // (frames 1–59 are not sampled; the 60th is).
+      runtime.framesForTest([frame(900), for (var i = 1; i < 59; i++) frame(5)]);
+      // Minimised, then shown: the first frame back is the catch-up, and would
+      // otherwise be the 60th, the sampled one.
+      runtime.lifecycleChanged(AppLifecycleState.hidden);
+      runtime.lifecycleChanged(AppLifecycleState.inactive);
+      runtime.framesForTest([frame(700), frame(5)]);
+      // A batch reported while hidden is the OS's throttling: none of it counts.
+      lifecycle = AppLifecycleState.hidden;
+      runtime.framesForTest([for (var i = 0; i < 120; i++) frame(400)]);
+      // Visible but without focus (inactive) still counts: a person sees it.
+      lifecycle = AppLifecycleState.inactive;
+      runtime.framesForTest([frame(700), for (var i = 0; i < 60; i++) frame(5)]);
+      await usage.flush();
+      expect(totals()['health_desktop_frame_under_16ms'], 2);
+      expect(totals()['health_desktop_frame_over_250ms'], isNull);
+      runtime.dispose();
+      await tester.pump();
     },
   );
 

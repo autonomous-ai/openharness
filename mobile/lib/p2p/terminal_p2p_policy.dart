@@ -79,7 +79,8 @@ class TerminalP2pPolicy {
   /// `stun:`/`stuns:` urls, in the backend's order.
   final List<String> stunUrls;
 
-  /// How long a `terminal_open` waits for the data channel before riding the relay.
+  /// How long a `terminal_open` waits for the data channel before riding the relay — in the CLI.
+  /// ⚠️ The phone parses and logs it but does not wait: see `TerminalP2pPlugin.prepareOpen`.
   final int openWaitMs;
   final TerminalP2pTurn? turn;
 

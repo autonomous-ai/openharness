@@ -35,8 +35,10 @@ export interface LocalDelivery {
   at: number
 }
 
-/** A message this machine sent, waiting to be handed to another machine. */
-export interface Outgoing { messageId: string; machineId: string; nextTryAt: number; tries: number; reason?: string }
+/** A message this machine sent, waiting to be handed to another machine. `sharedTabId`: the shared tab it goes through,
+ *  to another account's machine; none for a machine of this account, over its paired relay. Kept with it, so a message
+ *  for another account's harness is never handed to this account's relay later (service.ts `route`). */
+export interface Outgoing { messageId: string; machineId: string; nextTryAt: number; tries: number; reason?: string; sharedTabId?: string }
 
 export interface Entry { message: Message; statuses: DeliveryStatus[] }
 
@@ -85,7 +87,7 @@ export class MessageStore {
     return {
       history,
       local,
-      outbox: Array.isArray(raw.outbox) ? raw.outbox.filter((o) => o && typeof o.messageId === 'string') : [],
+      outbox: Array.isArray(raw.outbox) ? raw.outbox.filter((o) => o && typeof o.messageId === 'string' && (o.sharedTabId === undefined || typeof o.sharedTabId === 'string')) : [],
       noted: raw.noted && typeof raw.noted === 'object' ? raw.noted : {},
       notes,
     }

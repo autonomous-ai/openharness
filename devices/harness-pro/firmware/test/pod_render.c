@@ -1,15 +1,16 @@
-// Dev tool (not run by run.sh): renders one Pod screen of a fixed demo model to a 720 x 720 PPM.
-// Usage: pod_render <screen> <out.ppm> [now_ms]      pod_render.py builds it and converts the PPMs to PNG.
-//   screens: tabs[:<rows scrolled>[+<more tabs>][@<px offset: mid-drag>] | :mock] (the album grid; mock = the mockup's six covers, one empty), default[:tab|:talk] (default marks), recent, chrome[:talk] (the bar and the Talk transport alone: Classic's, where chrome:talk is the disabled button; or the Console's bar and hints), tab:<n>, agent:<id>, recap:<id>, talk:<id>   (ids: fw ota be cli web desk docs vault
-//   site cur notes2 kilo). ota:<pct>|ota:restart (the update screen), notice:updated|notice:failed (the Tabs screen with that pill). inbox[:ask] (Classic: entries only, or the asking agent's row first), banner:done|failed[@<ms after shown>] (Classic banner over Tabs; --now is ignored), tab:empty, tabs:9 (nine tabs: two pages), talk:listen|send, tabs:linkdown (Connection lost); and ":bell" (unread entries: the bell in the status bar) or ":banner" (the notification banner too) on any
-//   other screen, e.g. tabs:bell, tab:1:bell, agent:fw:banner, recap:desk:banner. The demo is the HTML mockup's (the Pod mockup): the same agents, tabs and times.
+// Dev tool (not run by run.sh): renders one Pets screen of a fixed demo model to a 720 x 720 PPM.
+// Usage: pod_render [--spec out.json] <screen> <out.ppm> [now_ms]      pod_render.py builds it and converts the PPMs to PNG.
+//   screens: tabs[:<tab>[+<more tabs>] | :mock | :9 | :seven | :single | :long | :notices | :linkdown | :banner] (Home),
+//   agent:<id>, recap:<id>, talk:<id> (ids: fw ota be cli web desk docs vault site cur notes2 kilo; suffixes :long :offline :unread :viet ...),
+//   talk:listen|send, inbox[:viet|:quiet|:failed], ota:<pct>|ota:restart (the update screen), notice:updated|notice:failed (the Home screen with that pill),
+//   <room>:toast[@<ms after it showed>] (the notice toast), and ":bell" / ":banner" on a screen (unread entries; banner adds the toast). The demo is the
+//   HTML mockup's: the same agents, tabs and times. `--skin pets` is accepted and ignored (Pets is the only interface).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-#include "pod/classic/ci.h"
-#include "pod/console/cs.h"
+#include "pod/home/ph.h"
 #include "pod/pod_view.h"
 #include "pro_canvas.h"
 
@@ -83,7 +84,7 @@ static void demo(void)
     pod_nav_init(&N);
 }
 
-// Console fixtures (--skin console only, so the Classic screens keep their model): the agent's verb, steps and stats the Console
+// Fixtures: the agent's verb, steps and stats the Pets
 // screens read. screen's tokens pick edge cases: long (long names, a long question, long steps), offline, extreme (999 passes, 12 failures, 1:23:45, huge tokens), testfail (desk's turn
 // stats fail), scroll (desk's recap is long and scrolled), and inbox (reading-list's last turn failed).
 static void set_steps(const char *id, int n, const char *const text[], const uint16_t at[])
@@ -131,30 +132,6 @@ static void console_fixture(const char *screen)
     }
 }
 
-// Classic fixtures through the public model feeds only, so the same tool renders them from the tree before the Console skin existed:
-// steps6 (fw gets eight distinct activity sentences: Classic shows the last three) and qresume (cli works, asks, the question
-// closes, then one more sentence: Classic shows nothing from before the question).
-static void classic_fixture(const char *screen)
-{
-    if (strstr(screen, "steps6"))
-        for (int i = 0; i < 8; i++) {
-            char t[40];
-            snprintf(t, sizeof t, "Reading file number %d of the tree", i);
-            pod_model_turn(&M, "fw", "activity", t, 140 + i, T0 + 1000u + (uint32_t)i * 1000u);
-        }
-    if (strstr(screen, "qresume")) {
-        pod_model_turn(&M, "cli", "started", NULL, 0, T0 + 1000u);
-        for (int i = 0; i < 4; i++) {
-            char t[40];
-            snprintf(t, sizeof t, "Checking migration step %d", i);
-            pod_model_turn(&M, "cli", "activity", t, 5 + i, T0 + 2000u + (uint32_t)i * 1000u);
-        }
-        pod_model_question(&M, "cli", "Run the migration now?");
-        pod_model_question_close(&M, "cli");
-        pod_model_turn(&M, "cli", "activity", "Running the migration", 12, T0 + 9000u);
-    }
-}
-
 // The mockup's Option B: Recent, then five tabs with the second selected (the mockup's last, empty one is not shown).
 static void mock_tabs(void)
 {
@@ -190,6 +167,28 @@ static void more_tabs(int extra)
         sw[i].panes = sw[i].agents = TAB_N[k];
     }
     pod_model_swarms(&M, sw, ids, n, total, "s5", NULL, 0);
+}
+
+// Pets Home fixtures: tabs:seven (a middle tab of seven agents: four icons and "+3") and tabs:single (a middle tab of one agent), each between
+// two other tabs so the neighbours peek in.
+static void cover_tabs(bool seven)
+{
+    static const char *const seven_ids[] = {"fw", "ota", "be", "cli", "web", "desk", "docs"}, *const one_id[] = {"kilo"};
+    static const char *const *ids[3];
+    static const char *const names[] = {"Firmware", "Harness repo", "Notes"};
+    static uint8_t n[3];
+    cable_swarm_t sw[3];
+    memset(sw, 0, sizeof sw);
+    ids[0] = T_FW; n[0] = 2;
+    ids[1] = seven ? seven_ids : one_id; n[1] = seven ? 7 : 1;
+    ids[2] = T_NOTES; n[2] = 3;
+    for (int i = 0; i < 3; i++) {
+        snprintf(sw[i].id, SWARM_ID_MAX, "c%d", i);
+        snprintf(sw[i].name, CABLE_NAME_MAX, "%s", seven || i != 1 ? names[i] : "Solo");
+        sw[i].panes = sw[i].agents = n[i];
+    }
+    pod_model_swarms(&M, sw, ids, n, 3, "c1", NULL, 0);
+    pod_nav_act(&N, &M, POD_A_SCROLL, 1, T0);
 }
 
 static bool open_agent(const char *id)
@@ -270,7 +269,7 @@ static void write_spec(const char *path, const char *screen)
         }
         fputc('}', f);
     }
-    static const char *const act[] = {"NONE", "BACK", "BANNER", "OPEN_TAB", "OPEN_AGENT", "PREV", "NEXT", "TALK", "RECAP", "PANES", "TABS", "INBOX", "OPEN_NOTIF", "ATTENTION", "FOLLOW", "SCROLL"};
+    static const char *const act[] = {"NONE", "BACK", "BANNER", "OPEN_TAB", "OPEN_AGENT", "PREV", "NEXT", "TALK", "RECAP", "PANES", "TABS", "INBOX", "OPEN_NOTIF", "FOLLOW", "SCROLL", "ENTER_TAB"};
     fprintf(f, "],\"hits\":[");
     for (int i = 0; i < F.hit_count; i++) {
         const pod_hit_t *h = &F.hits[i];
@@ -283,102 +282,62 @@ static void write_spec(const char *path, const char *screen)
     fclose(f);
 }
 
+// What the glue adds after pod_render, once the entry is still unread: the toast over a room (not Home or Notices) of another agent.
+static void overlay(bool banner, bool toast, uint32_t now)
+{
+    const pod_unread_t *bn = pod_model_unread_find(&M, "be");   // "be" is the entry the toast shows
+    if (!bn) return;
+    const pod_frame_t *top = N.depth ? &N.stack[N.depth - 1] : NULL;
+    if ((banner || toast) && top && (top->view == POD_V_AGENT || top->view == POD_V_RECAP) && strcmp(top->agent, "be")) ph_toast(&F, &M, bn, T0, now);
+}
+
 int main(int argc, char **argv)
 {
     const char *spec = NULL;
     for (int i = 1; i + 1 < argc; i++)
         if (!strcmp(argv[i], "--spec")) { spec = argv[i + 1]; memmove(argv + i, argv + i + 2, (size_t)(argc - i - 2) * sizeof *argv); argc -= 2; break; }
-    pod_skin_t skin = POD_SKIN_CLASSIC;   // --skin console|classic
-    for (int i = 1; i + 1 < argc; i++)
-        if (!strcmp(argv[i], "--skin")) { skin = !strcmp(argv[i + 1], "console") ? POD_SKIN_CONSOLE : POD_SKIN_CLASSIC; memmove(argv + i, argv + i + 2, (size_t)(argc - i - 2) * sizeof *argv); argc -= 2; break; }
+    for (int i = 1; i + 1 < argc; i++)   // --skin <name>: accepted and ignored (Pets is the only interface)
+        if (!strcmp(argv[i], "--skin")) { memmove(argv + i, argv + i + 2, (size_t)(argc - i - 2) * sizeof *argv); argc -= 2; break; }
     bool notice = false, notice_bad = false;
     const char *notice_text = "Didn't catch that";
     int ota_pct = -1;   // ota:<pct> | ota:restart (the update screen, the mockup's 0.1.2 -> 0.1.3); restart is -2
-    if (argc < 3) { fprintf(stderr, "usage: pod_render [--spec out.json] [--skin console|classic] <screen> <out.ppm> [now_ms]\n"); return 2; }
+    if (argc < 3) { fprintf(stderr, "usage: pod_render [--spec out.json] <screen> <out.ppm> [now_ms]\n"); return 2; }
     const char *screen = argv[1];
-    if (!strcmp(screen, "talk:listen")) screen = "talk:fw";          // Classic Talk, listening / sending (talk:<id>[:send] for any agent)
+    if (!strcmp(screen, "talk:listen")) screen = "talk:fw";          // Talk, listening / sending (talk:<id>[:send] for any agent)
     else if (!strcmp(screen, "talk:send")) screen = "talk:fw:send";
     bool timing = !strncmp(screen, "time:", 5);   // time:<screen>: rasterise the screen 50 times, print the mean us per full frame
     if (timing) screen += 5;
     uint32_t now = argc > 3 ? (uint32_t)strtoul(argv[3], NULL, 10) : T0;
-    const bool ban_screen = !strncmp(screen, "banner:", 7);   // banner:done|failed[@ms]: the banner ms after it showed (shown at T0), over Tabs
-    if (ban_screen && strchr(screen, '@')) now = T0 + (uint32_t)atoi(strchr(screen, '@') + 1);
+    const bool toast = strstr(screen, "toast") != NULL;   // <agent|recap>:<id>:toast[@<ms after it showed>], the notice toast over that room (shown at T0)
+    if (toast && strchr(screen, '@')) now = T0 + (uint32_t)atoi(strchr(screen, '@') + 1);
     demo();
-    classic_fixture(screen);
-    N.skin = skin;
-    bool banner = strstr(screen, "banner") != NULL, bell = banner || strstr(screen, "bell") != NULL, inbox = !strncmp(screen, "inbox", 5);
-    if (skin == POD_SKIN_CONSOLE && (!strncmp(screen, "agent:", 6) || !strncmp(screen, "recap:", 6) || !strncmp(screen, "talk:", 5) || !strncmp(screen, "inbox", 5)))
-        console_fixture(screen);   // only the screens that read it: the older Console goldens keep their model
+    bool banner = strstr(screen, "banner") != NULL, bell = banner || toast || strstr(screen, "bell") != NULL || !strcmp(screen, "tabs:notices"), inbox = !strncmp(screen, "inbox", 5);
+    if ((!strncmp(screen, "agent:", 6) || !strncmp(screen, "recap:", 6) || !strncmp(screen, "talk:", 5) || !strncmp(screen, "inbox", 5)))
+        console_fixture(screen);   // only the screens that read it: the older Pets goldens keep their model
     if ((bell || inbox) && !strstr(screen, "quiet")) {   // unread entries, oldest first (the newest ends on top); "be" is the one the banner shows
         pod_model_unread_add(&M, "cur", "api-client", "Bumped the SDK and regenerated the client. Nothing else changed.", 41, T0 - 3600000u);
         pod_model_unread_add(&M, "vault", "obsidian-vault", "Added two more poems to Poems and Themes.md", 12, T0 - 720000u);
         pod_model_unread_add(&M, "ota", "dial-ota", "Built and flashed the dial with the new face. The OTA channel is untouched.", 301, T0 - 180000u);
         pod_model_unread_add(&M, "be", "backend", "Fixed the cable resync. Tests pass on the host and the device, and the frame time is back under 45 ms.", 134, T0 - 2000u);
     }
-    if (ban_screen && !strncmp(screen + 7, "failed", 6)) ((pod_unread_t *)pod_model_unread_find(&M, "be"))->kind = POD_UNREAD_FAILED;
-    if (inbox && skin == POD_SKIN_CLASSIC && !strstr(screen, ":ask")) pod_model_question_close(&M, "cli");   // inbox: entries only; inbox:ask: the asking agent's amber row first
+    if (inbox && strstr(screen, "viet")) {   // Vietnamese texts on the rows
+        snprintf(((pod_unread_t *)pod_model_unread_find(&M, "be"))->text, POD_UNREAD_TEXT, "Đã sửa lỗi đồng bộ cáp. Mọi bài kiểm thử đều xanh trên máy chủ và thiết bị.");
+        snprintf(((pod_unread_t *)pod_model_unread_find(&M, "ota"))->text, POD_UNREAD_TEXT, "Đã nạp mặt mới cho núm xoay, kênh cập nhật không đổi và mọi thứ vẫn chạy ổn định như trước đó.");
+    }
     if (inbox) pod_nav_act(&N, &M, POD_A_INBOX, 0, T0);
-    else if (ban_screen) {   // the Tabs screen under the banner
+    else if (!strcmp(screen, "tabs:notices")) {   // Home on the Notices card (the entries are added above; the asking agent counts too)
+        pod_nav_act(&N, &M, POD_A_SCROLL, -1, T0);
     } else if (!strcmp(screen, "tabs:9")) more_tabs(3);   // nine tabs: more than one page
-    else if (!strncmp(screen, "tabs", 4)) {   // tabs, or tabs:<n>: the Cover Flow with cover n (0 = Recent) chosen
+    else if (!strcmp(screen, "tabs:seven") || !strcmp(screen, "tabs:single")) cover_tabs(!strcmp(screen, "tabs:seven"));
+    else if (!strcmp(screen, "tabs:none")) { static const char *const *no_ids[1]; static const uint8_t no_n[1]; pod_model_swarms(&M, NULL, no_ids, no_n, 0, "", NULL, 0); pod_model_question_close(&M, "cli"); }   // the first screen: no tabs
+    else if (!strcmp(screen, "tabs:long")) snprintf(M.tabs[0].name, CABLE_NAME_MAX, "%.*s", CABLE_NAME_MAX - 1, "marketing-site-redesign-with-a-long-name");   // Home: a name as long as the model keeps one
+    else if (!strncmp(screen, "tabs", 4)) {   // tabs, or tabs:<n>: Home on tab n
         if (screen[4] == ':' && !strcmp(screen + 5, "mock")) mock_tabs();
         else if (screen[4] == ':') {
             const char *plus = strchr(screen, '+');   // tabs:<rows>+<n>: n more tabs
             if (plus) more_tabs(atoi(plus + 1));
-            pod_nav_act(&N, &M, POD_A_SCROLL, atoi(screen + 5), T0);   // rows (2 a page)
+            pod_nav_act(&N, &M, POD_A_SCROLL, atoi(screen + 5), T0);   // the tab
         }
-        const char *at = strchr(screen, '@');   // tabs:<rows>@<px>: mid-drag, the grid at this offset from the top of page 0
-        if (at) { F.tabs_moving = true; F.tabs_off = atoi(at + 1); }
-    } else if (!strncmp(screen, "default", 7) && !inbox) {   // default marks: a tab with no panes (not shown), one of unknown agents, one with a stranger
-        pod_model_agents_begin(&M);
-        pod_model_agent(&M, "zz", "stranger", "zzz", "MacBook Pro");
-        pod_model_agent(&M, "fw", "firmware-pro", "claude", "MacBook Pro");
-        pod_model_agents_end(&M);
-        static const char *const A[] = {"zz", "nobody"}, *const B[] = {"fw", "zz", "nobody"};
-        static const char *const *L[] = {NULL, A, B};
-        static const uint8_t NN[] = {0, 2, 3};
-        cable_swarm_t sw[3];
-        memset(sw, 0, sizeof sw);
-        snprintf(sw[0].id, SWARM_ID_MAX, "e0"); snprintf(sw[0].name, CABLE_NAME_MAX, "Empty");
-        snprintf(sw[1].id, SWARM_ID_MAX, "e1"); snprintf(sw[1].name, CABLE_NAME_MAX, "Strangers"); sw[1].panes = sw[1].agents = 2;
-        snprintf(sw[2].id, SWARM_ID_MAX, "e2"); snprintf(sw[2].name, CABLE_NAME_MAX, "Mixed"); sw[2].panes = sw[2].agents = 3;
-        pod_model_swarms(&M, sw, L, NN, 3, "e0", NULL, 0);
-        if (strstr(screen, "tab")) pod_nav_act(&N, &M, POD_A_OPEN_TAB, 1, T0);   // Mixed (Empty is not listed)
-        if (strstr(screen, "talk")) { pod_nav_act(&N, &M, POD_A_OPEN_TAB, 0, T0); pod_nav_act(&N, &M, POD_A_OPEN_AGENT, 0, T0); }
-    } else if (!strcmp(screen, "recent")) {
-        pod_nav_act(&N, &M, POD_A_OPEN_TAB, POD_TAB_RECENT, T0);
-    } else if (!strncmp(screen, "tabp:", 5)) {   // tabp:<n>: one tab of n panes with its real rects (Console Tab): 3 = the mockup's, 1 = full, 8 = a 3 x 3 grid with two spare
-        static const char *const P3[] = {"cli", "web", "docs"}, *const P1[] = {"be"}, *const P8[] = {"fw", "ota", "be", "cli", "web", "desk", "docs", "vault"};
-        int n = atoi(screen + 5);
-        const char *const *ids = n == 3 ? P3 : n == 1 ? P1 : P8;
-        cable_swarm_t sw[1];
-        cable_tile_t tl[8];
-        memset(sw, 0, sizeof sw);
-        memset(tl, 0, sizeof tl);
-        snprintf(sw[0].id, SWARM_ID_MAX, "p");
-        snprintf(sw[0].name, CABLE_NAME_MAX, "Backend");
-        sw[0].panes = sw[0].agents = (uint8_t)n;
-        for (int k = 0; k < n; k++) {
-            int c = n == 3 ? (k == 0 ? 0 : 1) : n == 1 ? 0 : k % 3, cols = n == 3 ? 2 : n == 1 ? 1 : 3;
-            int r = n == 3 ? (k == 0 ? 0 : k - 1) : n == 1 ? 0 : k / 3, rows = n == 3 ? (k == 0 ? 1 : 2) : n == 1 ? 1 : 3;
-            tl[k].x1 = (int16_t)(c * 1000 / cols); tl[k].x2 = (int16_t)((c + 1) * 1000 / cols);
-            tl[k].y1 = (int16_t)(r * 1000 / rows); tl[k].y2 = (int16_t)((r + 1) * 1000 / rows);
-            snprintf(tl[k].agent_id, sizeof tl[k].agent_id, "%s", ids[k]);
-        }
-        uint8_t cnt[1] = {(uint8_t)n};
-        pod_model_swarms(&M, sw, &ids, cnt, 1, "p", tl, n);
-        pod_nav_act(&N, &M, POD_A_OPEN_TAB, 0, T0);
-    } else if (!strcmp(screen, "tab:empty")) {   // a tab with no rows to list: an older daemon's, members unknown
-        static const uint8_t none[1] = {0};
-        cable_swarm_t sw[1];
-        memset(sw, 0, sizeof sw);
-        snprintf(sw[0].id, SWARM_ID_MAX, "n0");
-        snprintf(sw[0].name, CABLE_NAME_MAX, "New Swarm");
-        sw[0].agents = 1;
-        pod_model_swarms(&M, sw, NULL, none, 1, "n0", NULL, 0);
-        pod_nav_act(&N, &M, POD_A_OPEN_TAB, 0, T0);
-    } else if (!strncmp(screen, "tab:", 4)) {
-        pod_nav_act(&N, &M, POD_A_OPEN_TAB, atoi(screen + 4), T0);
     } else if (!strncmp(screen, "agent:", 6) || !strncmp(screen, "recap:", 6) || !strncmp(screen, "talk:", 5)) {
         char idbuf[32];
         snprintf(idbuf, sizeof idbuf, "%s", strchr(screen, ':') + 1);
@@ -390,6 +349,15 @@ int main(int argc, char **argv)
         if (screen[0] == 'r' && N.stack[N.depth - 1].view != POD_V_RECAP) pod_nav_act(&N, &M, POD_A_RECAP, 0, T0);
         if (screen[0] == 't') pod_nav_act(&N, &M, POD_A_TALK, 0, T0);
         if (screen[0] == 't' && suffix && !strcmp(suffix, "send")) pod_nav_act(&N, &M, POD_A_TALK, 0, T0 + 1000);
+        if (suffix && !strncmp(suffix, "unread", 6)) {   // the Pets room: an unread FINISHED entry (unread) or FAILED one (unreadfail), added after the open that would read it
+            const pod_agent_t *ua = pod_model_find(&M, id);
+            pod_model_unread_add(&M, id, ua ? ua->name : id, ua && ua->recap_lines ? ua->recap : "Fixed the checkout test. Nothing else changed.", 41, T0 - 2000u);
+            if (!strcmp(suffix, "unreadfail")) ((pod_unread_t *)pod_model_unread_find(&M, id))->kind = POD_UNREAD_FAILED;
+        }
+        if (suffix && !strcmp(suffix, "long")) pod_model_recap(&M, id, "I went through the whole checkout flow and fixed the failing test first, then tidied the fixtures, renamed two helpers, rewrote the retry loop so it backs off properly, added a regression test for the double charge, updated the docs and the changelog, and re-ran the full suite twice to be sure nothing else moved. Everything is green now and the branch is ready for review whenever you are.", false);
+        if (suffix && !strcmp(suffix, "short")) pod_model_recap(&M, id, "All green.", false);
+        if (suffix && !strcmp(suffix, "medium")) pod_model_recap(&M, id, "Fixed the checkout test and tidied the fixtures. I also renamed two helpers.", false);
+        if (suffix && !strcmp(suffix, "viet")) pod_model_recap(&M, id, "Tôi đã sửa lỗi thanh toán ở bước cuối, chỉnh lại vòng lặp thử lại và thêm kiểm thử cho trường hợp trụ hai lần. Tệp chính nằm ở /Users/duynguyen/go/src/github.com/autonomous-ai/autonomous-harness/devices/harness-pro/firmware/main/pod/home/ph_recap.c. Mọi thứ đều xanh, nhánh này sẵn sàng để xem lại khi bạn rảnh. Cứ gọi tôi nếu cần thêm gì nữa.", false);
         if (suffix && !strcmp(suffix, "scroll")) N.stack[N.depth - 1].scroll = 3;
         if (suffix && !strcmp(suffix, "notice")) notice = true;
         if (suffix && (!strcmp(suffix, "updated") || !strcmp(suffix, "failed"))) {   // agent:<id>:updated|failed, the OTA pills
@@ -397,7 +365,6 @@ int main(int argc, char **argv)
             notice_bad = !strcmp(suffix, "failed");
             notice_text = notice_bad ? "Update failed \xc2\xb7 trying again later" : "Updated to 0.1.3";
         }
-    } else if (!strncmp(screen, "chrome", 6)) {
     } else if (!strncmp(screen, "ota:", 4)) {
         ota_pct = !strcmp(screen + 4, "restart") ? -2 : atoi(screen + 4);
     } else if (!strncmp(screen, "notice:", 7)) {   // the Tabs screen with the glue's pill: notice:updated | notice:failed
@@ -408,53 +375,26 @@ int main(int argc, char **argv)
         fprintf(stderr, "unknown screen: %s\n", screen);
         return 2;
     }
-    ht_scene_clear(&S, ht_rgb(skin == POD_SKIN_CONSOLE ? 0xffffffu : 0xf6f6f0u));   // Classic ground (CI_GROUND)
+    ht_scene_clear(&S, ht_rgb(0xffffffu));
     F.scene = &S;
     if (strstr(screen, "linkdown")) pod_model_link(&M, false);   // e.g. tabs:linkdown
     F.banner = banner;
     F.mic_level = strstr(screen, "quiet") ? 0 : 3;
     if (ota_pct != -1) {
-        if (skin == POD_SKIN_CONSOLE) cs_view_ota(&F, "0.1.1", "0.1.2", ota_pct < 0 ? 100 : ota_pct, ota_pct == -2);
-        else pod_view_ota(&F, "0.1.2", "0.1.3", ota_pct < 0 ? 100 : ota_pct, ota_pct == -2);
-    } else if (skin == POD_SKIN_CONSOLE && !strncmp(screen, "chrome", 6)) {   // the Console chrome: bar, marks, hint strip (chrome:talk: the input bar)
-        pod_agent_t a;
-        memset(&a, 0, sizeof a);
-        static const char *const st[] = {"npm test \xc2\xb7 44 passed", "The hero now uses the new gradient; pricing is next.", "Read src/pricing.tsx", "Read src/hero.tsx"};
-        static const uint16_t at[] = {41, 72, 130, 151};
-        for (int i = 0; i < 4; i++) { snprintf(a.steps[i], sizeof a.steps[i], "%s", st[i]); a.step_at_s[i] = at[i]; }
-        a.step_count = 4;
-        ht_pro_rect(&S, 0, 0, POD_W, POD_W, 0, ht_rgb(CS_GROUND));
-        const char *const crumbs[] = {"Desktop", "landing"};
-        bool talk = strstr(screen, "talk") != NULL;
-        cs_bar(&F, crumbs, 2, 6, 1, talk ? 0 : 3, talk ? "make the hero gradient subtler" : NULL, now);
-        cs_dot(&S, 36, 110, 'g', now); cs_dot(&S, 66, 110, 'q', now); cs_dot(&S, 96, 110, 'd', now);
-        cs_dot(&S, 126, 110, 'r', now); cs_dot(&S, 156, 110, 'i', now);
-        cs_badge(&S, 400, 96, "claude"); cs_badge(&S, 440, 96, "codex"); cs_badge(&S, 480, 96, "muse");
-        cs_badge(&S, 520, 96, "cursor"); cs_badge(&S, 560, 96, "kilo");
-        cs_working_mark(&S, 28, 140, now);
-        cs_logo(&S, 100, 130, 36, "claude"); cs_logo(&S, 150, 130, 44, "codex");
-    } else if (!strncmp(screen, "chrome", 6)) {   // Classic's bar (back label, title, bell) and the Talk transport alone: chrome or chrome:talk
-        ci_bar(&F, "Firmware", "Tabs", 3, true);
-        ci_talk(&F, strstr(screen, "talk") == NULL);
+        ph_view_ota(&F, "0.1.1", "0.1.2", ota_pct < 0 ? 100 : ota_pct, ota_pct == -2);
     } else {
         pod_render(&F, &N, &M, now);
     }
-    if (banner) {   // the glue draws it after pod_render, and only while the entry is unread (pod_glue.c)
-        const pod_unread_t *ban = pod_model_unread_find(&M, "be");
-        if (ban && skin == POD_SKIN_CONSOLE) cs_toast(&F, &M, ban, now);
-        else if (ban) pod_banner(&F, &M, ban, T0, now);   // shown at T0: --now T0+3000 is the half-way frame
-    }
+    overlay(banner, toast, now);   // the glue draws it after pod_render, and only while the entry is unread (pod_glue.c)
     if (notice) {   // the glue's pill (pod_glue.c pod_ui_render), repeated here: this tool does not link the glue
         const char *text = notice_text;
-        const bool classic = skin != POD_SKIN_CONSOLE;
-        const ht_pro_font_t *font = classic ? &ci_rg_24 : &ht_pro_24;
+        const ht_pro_font_t *font = &ht_pro_24;
         int w = ht_pro_width(font, text);
-        if (w > (classic ? 580 : 600)) w = classic ? 580 : 600;
-        int pw = w + (classic ? 24 : 40), ny = (classic ? POD_CLASSIC_TRANSPORT_Y : POD_TRANSPORT_Y) - 8 - 40;
-        const uint16_t bg = ht_rgb(notice_bad ? 0xb3261e : classic ? 0x25372f : 0x111111);
-        if (classic) ht_pro_rect_aa(&S, (POD_W - pw) / 2, ny, pw, 40, 7, bg);
-        else ht_pro_rect(&S, (POD_W - pw) / 2, ny, pw, 40, 20, bg);
-        ht_pro_text(&S, (POD_W - w) / 2, ny + (classic ? (40 - font->height) / 2 : 7), w, font, ht_rgb(0xffffff), text);
+        if (w > 600) w = 600;
+        int pw = w + 40, ny = POD_TRANSPORT_Y - 8 - 40;
+        const uint16_t bg = ht_rgb(notice_bad ? 0xb3261e : 0x111111);
+        ht_pro_rect(&S, (POD_W - pw) / 2, ny, pw, 40, 20, bg);
+        ht_pro_text(&S, (POD_W - w) / 2, ny + 7, w, font, ht_rgb(0xffffff), text);
     }
     if (spec) write_spec(spec, screen);
     static uint16_t px[720 * 720];
@@ -465,13 +405,9 @@ int main(int argc, char **argv)
         double build = 0, raster = 0;
         for (int i = 0; i < REPS; i++) {
             clock_gettime(CLOCK_MONOTONIC, &a);
-            ht_scene_clear(&S, ht_rgb(skin == POD_SKIN_CONSOLE ? 0xffffffu : 0xf6f6f0u));   // Classic ground (CI_GROUND)
+            ht_scene_clear(&S, ht_rgb(0xffffffu));
             pod_render(&F, &N, &M, now);
-            if (banner) {   // the glue draws the toast after pod_render (and only while the entry is unread): time it too
-                const pod_unread_t *bn = pod_model_unread_find(&M, "be");
-                if (bn && skin == POD_SKIN_CONSOLE) cs_toast(&F, &M, bn, now);
-                else if (bn) pod_banner(&F, &M, bn, T0, now);
-            }
+            overlay(banner, toast, now);   // the glue draws it after pod_render: time it too
             clock_gettime(CLOCK_MONOTONIC, &b);
             build += (double)(b.tv_sec - a.tv_sec) * 1e6 + (double)(b.tv_nsec - a.tv_nsec) / 1e3;
             clock_gettime(CLOCK_MONOTONIC, &a);
@@ -479,7 +415,7 @@ int main(int argc, char **argv)
             clock_gettime(CLOCK_MONOTONIC, &b);
             raster += (double)(b.tv_sec - a.tv_sec) * 1e6 + (double)(b.tv_nsec - a.tv_nsec) / 1e3;
         }
-        // The device rasterises in 24-row strips (pro_frame.c): the number the Console perf check (test_cs_perf.sh) compares.
+        // The device rasterises in 24-row strips (pro_frame.c): the number the Pets perf check (test_ph_perf.sh) compares.
         double strips = 1e30;
         for (int rep = 0; rep < REPS; rep++) {
             clock_gettime(CLOCK_MONOTONIC, &a);

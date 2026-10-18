@@ -6,6 +6,7 @@ import 'package:harness_mobile/widgets/engine_identity.dart';
 
 import 'usage_accounts.dart';
 import 'usage_controller.dart';
+import 'usage_pressure.dart';
 import 'usage_window.dart';
 
 /// Subscription readings for the model sheet's own first row. Opening the
@@ -149,10 +150,7 @@ class ModelsMenuController extends ChangeNotifier {
     return '';
   }
 
-  static String _remaining(UsageWindow window) {
-    final left = (100 - window.usedPercent).clamp(0, 100);
-    // Never round a positive remainder to zero (or a partial balance to 100).
-    if (left > 0 && left < 1) return '<1%';
-    return '${left.floor()}%';
-  }
+  // The Usage page's figure too, so the sheet and the page cannot disagree.
+  static String _remaining(UsageWindow window) =>
+      usageRemainingLabel(window.usedPercent);
 }

@@ -341,10 +341,16 @@ Map<String, dynamic> linkMode(String streamId, String mode) => {
 ///
 /// Under [async], the plugin's clock is the fake one — `DateTime.now()` is not
 /// faked on its own, and the retry budget and migration sweep read the clock.
+///
+/// The session coming up starts no channel: the connection's first terminal
+/// does (`prepareOpen`). Unless [firstTerminal] is false, that first open has
+/// been asked for — no frame sent, only the ask — so the channel is
+/// negotiating, as the app has it by the time anything else happens.
 ({TerminalP2pPlugin plugin, FakeHost host, FakeLinkFactory links}) bootPlugin({
   Map<String, dynamic>? policy = enabledPolicy,
   int peerVersion = 1,
   FakeAsync? async,
+  bool firstTerminal = true,
 }) {
   final host = FakeHost(codec: FakeCodec(terminalP2pVersion: peerVersion));
   final links = FakeLinkFactory();
@@ -358,5 +364,6 @@ Map<String, dynamic> linkMode(String streamId, String mode) => {
   host.plugin = plugin;
   plugin.onConnectedAck({'machineId': 'machine-1234567890', 'p2p': policy});
   plugin.onSessionReady();
+  if (firstTerminal) unawaited(plugin.prepareOpen('first-terminal'));
   return (plugin: plugin, host: host, links: links);
 }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/usage/usage_summary.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
 
 import 'viewer_app_fixture.dart';
@@ -231,6 +232,21 @@ void main() {
       expect(rig.signIn.logouts, 1);
     });
 
+    test('the Settings row\'s usage figure goes with the account', () async {
+      // Kept, the next account to sign in read this one's figure on its row.
+      addTearDown(() => lastUsageSummary.value = null);
+      final rig = viewerApp();
+      addTearDown(rig.app.dispose);
+      rig.api.onMachines = () async => [remoteMachine('m')];
+      await rig.app.bootstrap();
+      await settle();
+      lastUsageSummary.value = '15% remaining';
+
+      await rig.app.logout();
+
+      expect(lastUsageSummary.value, isNull);
+    });
+
     test('a machine list that lands after sign-out is thrown away', () async {
       final rig = viewerApp();
       addTearDown(rig.app.dispose);
@@ -302,6 +318,23 @@ void main() {
         expect(rig.app.lastError, 'Your sign-in expired. Sign in again.');
         expect(rig.app.currentUser, isNull);
         expect(redraws, 1, reason: 'several sockets can race to say so');
+      },
+    );
+
+    test(
+      'a session revoked under a running app takes its usage figure',
+      () async {
+        addTearDown(() => lastUsageSummary.value = null);
+        final rig = viewerApp();
+        addTearDown(rig.app.dispose);
+        rig.api.onMachines = () async => [remoteMachine('m')];
+        await rig.app.bootstrap();
+        await settle();
+        lastUsageSummary.value = '15% remaining';
+
+        rig.app.authFailureForTest('Your sign-in expired. Sign in again.');
+
+        expect(lastUsageSummary.value, isNull);
       },
     );
   });

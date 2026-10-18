@@ -1,31 +1,49 @@
 'use client';
 import { useRef, useState } from 'react';
 import { commentTotal, threadComments } from '@/lib/community/comments';
+import type { ReportReason } from '@/lib/community/reports';
 import type { HarnessComment, SocialState } from '@/lib/community/types';
 import { SignIn } from './Header';
+import { ReportForm } from './ReportForm';
 import styles from '../community.module.css';
 
 type Props = {
-  social: SocialState; ready: boolean; busy: boolean; onRetry: () => void;
+  social: SocialState; ready: boolean; busy: boolean; onRetry: () => void; onEarlier: () => Promise<boolean>;
   onRemove: (comment: HarnessComment) => void; onPost: (body: string, clientId: string, parentId?: string) => Promise<boolean>;
+  onReport: (comment: HarnessComment, reason: ReportReason) => Promise<boolean>;
 };
 
 const day = (createdAt: string) => new Date(createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
-function Comment({ comment, busy, canReply, onReply, onRemove }: { comment: HarnessComment; busy: boolean; canReply: boolean; onReply: () => void; onRemove: () => void }) {
+type CommentProps = { comment: HarnessComment; busy: boolean; canReply: boolean; onReply: () => void; onRemove: () => void; onReport: (reason: ReportReason) => Promise<boolean> };
+
+function Comment({ comment, busy, canReply, onReply, onRemove, onReport }: CommentProps) {
+  const [reporting, setReporting] = useState(false);
   return <article className={`${styles.comment} ${comment.parentId ? styles.reply : ''}`}>
     <div className={styles.commentBy}>
       <span>{comment.authorName}</span>{comment.creator && <em className={styles.creator}>Creator</em>}<small>{day(comment.createdAt)}</small>
       {comment.mine && <button disabled={busy} aria-label={`Delete comment by ${comment.authorName}`} onClick={onRemove}>Delete</button>}
+      {!comment.mine && canReply && <button disabled={busy} aria-label={`Report comment by ${comment.authorName}`} onClick={() => setReporting(true)}>Report</button>}
     </div>
     {comment.parentId && <small className={styles.replyContext}>Replying to {comment.parentAuthorName}</small>}
     <p>{comment.body}</p>
     {canReply && <button className={styles.replyButton} onClick={onReply}>Reply</button>}
+    {reporting && <ReportForm what="comment" onReport={onReport} onCancel={() => setReporting(false)} />}
   </article>;
 }
 
+/** How many of the comments are shown, and a way further back: a page at a time, said when one fails. */
+function EarlierComments({ shown, total, onEarlier }: { shown: number; total: number; onEarlier: () => Promise<boolean> }) {
+  const [state, setState] = useState<'idle' | 'loading' | 'failed'>('idle');
+  const load = async () => { setState('loading'); setState(await onEarlier() ? 'idle' : 'failed'); };
+  return <p className={styles.notice}>
+    {state === 'failed' ? 'Earlier comments could not be loaded.' : `Showing the latest ${shown} of ${total} comments.`}
+    <button type="button" disabled={state === 'loading'} onClick={() => void load()}>{state === 'loading' ? 'Loading…' : state === 'failed' ? 'Retry' : 'Show earlier'}</button>
+  </p>;
+}
+
 /** The conversation under a harness: the comments, each reply under its thread, and a form to add one or reply to one. */
-export function Comments({ social, ready, busy, onRetry, onRemove, onPost }: Props) {
+export function Comments({ social, ready, busy, onRetry, onEarlier, onRemove, onReport, onPost }: Props) {
   const [draft, setDraft] = useState(''), [replyTo, setReplyTo] = useState<HarnessComment | null>(null);
   // Kept across a failed post, so a retry of the same text is recognised as the same comment.
   const requestId = useRef<string | null>(null);
@@ -39,8 +57,8 @@ export function Comments({ social, ready, busy, onRetry, onRemove, onPost }: Pro
   return <>
     {!ready && <p className={styles.notice}>Comments are unavailable right now. <button onClick={onRetry}>Retry</button></p>}
     {ready && !social.comments.length && <p className={styles.notice}>What would you make from here?</p>}
-    {ready && commentTotal(social) > social.comments.length && <p className={styles.notice}>Showing the latest {social.comments.length} of {commentTotal(social)} comments.</p>}
-    {threadComments(social.comments).map(comment => <Comment key={comment.id} comment={comment} busy={busy} canReply={social.signedIn} onReply={() => reply(comment)} onRemove={() => onRemove(comment)} />)}
+    {ready && commentTotal(social) > social.comments.length && <EarlierComments shown={social.comments.length} total={commentTotal(social)} onEarlier={onEarlier} />}
+    {threadComments(social.comments).map(comment => <Comment key={comment.id} comment={comment} busy={busy} canReply={social.signedIn} onReply={() => reply(comment)} onRemove={() => onRemove(comment)} onReport={reason => onReport(comment, reason)} />)}
     {social.signedIn ? <form className={styles.commentForm} onSubmit={event => { event.preventDefault(); void submit(); }}>
       <label htmlFor="comment">{replyTo ? `Reply to ${replyTo.authorName}` : 'Join the conversation'}</label>
       {replyTo && <button type="button" className={styles.replyButton} onClick={() => reply(null)}>Cancel reply</button>}

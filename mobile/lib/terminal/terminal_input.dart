@@ -35,7 +35,37 @@ class MetaEnterInputHandler implements TerminalInputHandler {
   }
 }
 
-/// The handler every pane's [Terminal] is built with — xterm's default behaviour, plus ⌥⏎.
+/// Keeps ⇧⏎ as CSI-u (`CSI 13;2u`) instead of losing Shift in the default keytab — the desktop's
+/// `ShiftEnterInputHandler`, so a hardware keyboard on a phone sends what it sends on the laptop.
+///
+/// The keytab answers ⇧⏎ with `\EOM`, the keypad's Enter, which no engine's prompt reads as a
+/// newline. As CSI-u a prompt can tell the newline it binds to ⇧⏎ from the plain Return that
+/// submits. One that does not read CSI-u is no worse off than with `\EOM`, and ⌥⏎
+/// ([MetaEnterInputHandler]) is the newline every Ink/readline prompt reads — which is why the key
+/// bar's own newline sends that one.
+///
+/// Fixed bytes rather than asked of [_inner], as on the desktop: CSI-u has one spelling, LNM
+/// (`lineFeedMode`) included.
+class ShiftEnterInputHandler implements TerminalInputHandler {
+  const ShiftEnterInputHandler(this._inner);
+
+  final TerminalInputHandler _inner;
+
+  @override
+  String? call(TerminalKeyboardEvent event) {
+    final isEnter =
+        event.key == TerminalKey.enter || event.key == TerminalKey.numpadEnter;
+    // ⌥⇧⏎ is [MetaEnterInputHandler]'s, ⌃⇧⏎ the keytab's: only Shift alone is this.
+    if (isEnter && event.shift && !event.alt && !event.ctrl) {
+      return '\x1b[13;2u';
+    }
+    return _inner(event);
+  }
+}
+
+/// The handler every pane's [Terminal] is built with — xterm's default behaviour, plus ⌥⏎ and ⇧⏎,
+/// in the desktop's order: ⌥ is translated first, so ⌥⇧⏎ asks the keytab for a plain Return and
+/// stays a Meta-prefixed Return rather than a prefixed CSI-u.
 const TerminalInputHandler harnessInputHandler = MetaEnterInputHandler(
-  defaultInputHandler,
+  ShiftEnterInputHandler(defaultInputHandler),
 );

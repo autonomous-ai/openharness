@@ -25,6 +25,9 @@ export interface MachinePeer {
   pub: string // base64 Ed25519 pubkey of the peer machine's own identity
   label: string
   linkedAt: number
+  /** Another account's machine shared with this one (gateway/sharedTrust.ts): dialed like the account's
+   *  own, but never a member of the trust group, which never exchanges rosters with it. */
+  shared?: true
 }
 
 function readAll(): Map<string, MachinePeer> {
@@ -48,9 +51,9 @@ export class MachinePeerStore {
     return readAll().get(machineId) ?? null
   }
 
-  pin(machineId: string, pub: string, label: string, at = Date.now()): void {
+  pin(machineId: string, pub: string, label: string, at = Date.now(), shared = false): void {
     const peers = readAll()
-    peers.set(machineId, { machineId, pub, label, linkedAt: at })
+    peers.set(machineId, { machineId, pub, label, linkedAt: at, ...(shared ? { shared: true as const } : {}) })
     writeAll(peers)
   }
 

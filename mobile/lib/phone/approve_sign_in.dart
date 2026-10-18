@@ -1,10 +1,13 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart' show DioException, DioExceptionType;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/api/api_client.dart'
+    show ApiException, describeApiError;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/app_dialog.dart'
     show appDialogButtonStyle, kDialogControlRadius, showAppDialog;
@@ -14,7 +17,7 @@ import 'tty.dart';
 import 'welcome/connect_code.dart';
 import 'welcome/scan_to_connect.dart';
 
-/// Settings ▸ Sign in a computer: scan the QR a computer shows (`harness login`, or the desktop
+/// Settings ▸ Sign in a computer: scan the QR a computer shows (`harness login --qr`, or the web
 /// app's "Scan with your phone") and approve its sign-in with this phone's account.
 ///
 /// Approving hands that computer the account's terminals — signing in is what makes the account's
@@ -28,23 +31,42 @@ Future<void> signInAComputer(BuildContext context, AppNotifier notifier, {Widget
 }
 
 /// The prompt and the answer for one scanned [code].
-Future<void> approveComputerSignIn(BuildContext context, AppNotifier notifier, SignInCode code) async {
+///
+/// [scanAgain], when given, follows the reason a code could not be read: where to scan a fresh one.
+/// For a code scanned a while before it is answered — on the welcome screen, before the sign-in this
+/// phone needed first — when the camera that read it is long gone.
+Future<void> approveComputerSignIn(
+  BuildContext context,
+  AppNotifier notifier,
+  SignInCode code, {
+  String? scanAgain,
+}) async {
   final Map<String, dynamic> asking;
   try {
     asking = await notifier.api.signInLookup(code.code);
   } catch (error) {
-    if (context.mounted) await _tell(context, "Couldn't read that code", '$error');
+    if (context.mounted) {
+      final reason = _reason(error);
+      await _tell(context, "Couldn't read that code", scanAgain == null ? reason : '$reason $scanAgain');
+    }
     return;
   }
   if (!context.mounted) return;
   if (asking['status'] != 'pending') {
-    await _tell(context, 'Already answered', 'That code was already answered. Scan the new one.');
+    await _tell(
+      context,
+      'Already answered',
+      scanAgain == null
+          ? 'That code was already answered. Scan the new one.'
+          : 'That code was already answered. $scanAgain',
+    );
     return;
   }
+  final label = asking['label'] is String ? (asking['label'] as String).trim() : '';
   final answer = await showAppDialog<_Answer>(
     context: context,
     builder: (_) => _ApproveDialog(
-      label: (asking['label'] as String?)?.trim().isNotEmpty == true ? asking['label'] as String : 'A computer',
+      label: label.isEmpty ? null : label,
       computer: asking['kind'] == 'computer',
       sameNetwork: asking['sameNetwork'] == true,
       where: [
@@ -65,8 +87,41 @@ Future<void> approveComputerSignIn(BuildContext context, AppNotifier notifier, S
       await notifier.api.denySignIn(code.code);
     }
   } catch (error) {
-    if (context.mounted) await _tell(context, "Couldn't answer", '$error');
+    if (context.mounted) await _tell(context, "Couldn't answer", _reason(error));
   }
+}
+
+/// Why a request failed, as a sentence for the person.
+///
+/// ⚠️ **Never the exception's own text.** `'$error'` put "DioException [connection error]: The
+/// connection errored: Failed host lookup: …" in the snackbar for a phone that was merely offline.
+/// The backend's own message ([ApiException]) is said as it is — "That code has expired" — and a
+/// failure to reach it in [describeApiError]'s words; anything else, in plain ones.
+String _reason(Object error) {
+  if (error is ApiException) return _sentence(error.message);
+  if (error is DioException) {
+    return switch (error.type) {
+      DioExceptionType.connectionError ||
+      DioExceptionType.connectionTimeout ||
+      DioExceptionType.sendTimeout ||
+      DioExceptionType.receiveTimeout ||
+      DioExceptionType.badResponse => _sentence(describeApiError(error)),
+      DioExceptionType.badCertificate ||
+      DioExceptionType.cancel ||
+      DioExceptionType.transformTimeout ||
+      DioExceptionType.unknown =>
+        'Couldn’t reach Harness. Check your connection and try again.',
+    };
+  }
+  return 'Something went wrong. Try again.';
+}
+
+/// [describeApiError] words its reasons to follow a colon ("could not reach Harness. …"); here
+/// they start a sentence.
+String _sentence(String text) {
+  final trimmed = text.trim();
+  if (trimmed.isEmpty) return 'Something went wrong. Try again.';
+  return '${trimmed[0].toUpperCase()}${trimmed.substring(1)}';
 }
 
 /// One line of news where the person is: the answer went through, or why it did not.
@@ -90,10 +145,18 @@ class _ApproveDialog extends StatelessWidget {
     required this.where,
   });
 
-  final String label;
+  /// The name it gave itself; null when it gave none.
+  final String? label;
   final bool computer;
   final bool sameNetwork;
   final String where;
+
+  /// Its name when it gave one, else what it is: a name-shaped "A computer" made "Sign in A
+  /// computer?", and said "computer" of an app too.
+  String get _title => switch (label) {
+    final label? => 'Sign in $label?',
+    null => computer ? 'Sign in a computer?' : 'Sign in an app?',
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -129,7 +192,7 @@ class _ApproveDialog extends StatelessWidget {
                   const SizedBox(width: 14),
                   Expanded(
                     child: Text(
-                      'Sign in $label?',
+                      _title,
                       key: const Key('approve-sign-in-title'),
                       style: TextStyle(
                         color: AppPalette.textPrimary,
@@ -144,8 +207,8 @@ class _ApproveDialog extends StatelessWidget {
               const SizedBox(height: 14),
               Text(
                 computer
-                    ? 'A computer, to your account — it will run your agents and reach your machines.'
-                    : 'An app, to your account — it will reach your machines.',
+                    ? 'A computer, to your account — it will run your agents and reach your other computers.'
+                    : 'An app, to your account — it will reach your computers.',
                 style: text,
               ),
               const SizedBox(height: 10),

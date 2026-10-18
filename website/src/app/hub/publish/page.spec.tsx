@@ -35,7 +35,7 @@ describe('explicit publication', () => {
     await waitFor(() => expect(screen.queryByText(/still the original/)).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Publish harness' }));
-    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith('/hub/published-fixture'));
+    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith('/hub/my-orbit-publishe'));
     expect(published()[0][1].body).toMatchObject({ forkedFrom: 'starter-orbit', confirmed: true, license: 'MIT', files: [{ path: 'index.html', content: '<h1>My new orbit</h1>' }], conversation: project.conversation });
     expect(published()[0][1].body).not.toHaveProperty('originalOutput');
     expect(published()[0][1].body).not.toHaveProperty('english');
@@ -107,7 +107,7 @@ describe('explicit publication', () => {
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'TANK 1987 II' } });
     fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith(`/hub/${tankId}`));
+    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith('/hub/tank-1987-ii-11111111'));
     expect(saved(tankId)![1].body).toMatchObject({ title: 'TANK 1987 II', viewerPath: 'tank/index.html', files: tank.files, confirmed: true, license: 'MIT' });
     // The cover stays as it is: its address is not an image to send back.
     expect(saved(tankId)![1].body).not.toHaveProperty('cover');
@@ -144,7 +144,7 @@ describe('explicit publication', () => {
     fireEvent.change(await screen.findByLabelText('Publish as'), { target: { value: tankId } });
     fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith(`/hub/${tankId}`));
+    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith('/hub/my-orbit-11111111'));
     // Where a publication came from is not an edit's to change.
     expect(saved(tankId)![1].body).not.toHaveProperty('forkedFrom');
     expect(published()).toHaveLength(0);

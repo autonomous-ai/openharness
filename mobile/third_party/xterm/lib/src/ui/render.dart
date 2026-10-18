@@ -1,4 +1,4 @@
-import 'dart:math' show max;
+import 'dart:math' show max, min;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
@@ -11,10 +11,15 @@ import 'package:xterm/src/terminal.dart';
 import 'package:xterm/src/ui/controller.dart';
 import 'package:xterm/src/ui/cursor_type.dart';
 import 'package:xterm/src/ui/painter.dart';
+import 'package:xterm/src/ui/remote_scroll_animator.dart';
+import 'package:xterm/src/ui/remote_scroll_mirror.dart';
+import 'package:xterm/src/ui/scroll_handler.dart';
 import 'package:xterm/src/ui/selection_mode.dart';
 import 'package:xterm/src/ui/terminal_size.dart';
 import 'package:xterm/src/ui/terminal_text_style.dart';
 import 'package:xterm/src/ui/terminal_theme.dart';
+import 'package:xterm/src/utils/input_trace.dart';
+import 'package:xterm/src/utils/unicode_v11.dart';
 
 typedef EditableRectCallback = void Function(Rect rect, Rect caretRect);
 
@@ -36,7 +41,21 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     EditableRectCallback? onEditableRect,
     String? composingText,
     int composingBacktrackCells = 0,
+    double devicePixelRatio = 1.0,
+    bool animateRemoteScroll = false,
+    void Function(int rows)? onRemoteScrollShift,
+    bool mirrorRemoteScroll = false,
+    bool mirrorPageKeys = false,
+    RemoteScrollLink? remoteScrollLink,
+    RemoteScrollMemory? remoteScrollMemory,
   })  : _terminal = terminal,
+        _mirrorRemoteScroll = mirrorRemoteScroll,
+        _mirrorPageKeys = mirrorPageKeys,
+        _remoteScrollMemory = remoteScrollMemory,
+        _remoteScrollLink = remoteScrollLink,
+        _devicePixelRatio = devicePixelRatio,
+        _animateRemoteScroll = animateRemoteScroll,
+        _onRemoteScrollShift = onRemoteScrollShift,
         _controller = controller,
         _offset = offset,
         _padding = padding,
@@ -63,6 +82,12 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     }
     _terminal = terminal;
     _reportedViewportSize = null;
+    _predictedText = '';
+    _predictedCells = 0;
+    // The recorded lines are the old emulator's: none of them is drawn again.
+    _painter.clearLinePictures();
+    _remoteScroll?.reset();
+    _mirror?.reset();
     if (attached && _renderingEnabled) _terminal.addListener(_onTerminalChange);
     _resizeTerminalIfNeeded();
     markNeedsLayout();
@@ -112,6 +137,8 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   set renderingEnabled(bool value) {
     if (value == _renderingEnabled) return;
     _renderingEnabled = value;
+    _remoteScroll?.reset();
+    _mirror?.reset();
     if (attached) {
       if (value) {
         _terminal.addListener(_onTerminalChange);
@@ -127,18 +154,24 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   set textStyle(TerminalStyle value) {
     if (value == _painter.textStyle) return;
     _painter.textStyle = value;
+    _remoteScroll?.reset();
+    _mirror?.reset();
     markNeedsLayout();
   }
 
   set textScaler(TextScaler value) {
     if (value == _painter.textScaler) return;
     _painter.textScaler = value;
+    _remoteScroll?.reset();
+    _mirror?.reset();
     markNeedsLayout();
   }
 
   set theme(TerminalTheme value) {
     if (value == _painter.theme) return;
     _painter.theme = value;
+    _remoteScroll?.reset();
+    _mirror?.reset();
     markNeedsPaint();
   }
 
@@ -184,6 +217,234 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     if (value == _composingBacktrackCells) return;
     _composingBacktrackCells = value;
     markNeedsPaint();
+  }
+
+  /// AUTONOMOUS PATCH: what is typed and not yet echoed, drawn faint at the
+  /// cursor — `TerminalView.predictsEcho`. Set by the view directly rather than
+  /// through a rebuild: it changes with every key and every echo.
+  String _predictedText = '';
+  int _predictedCells = 0;
+  set predictedText(String value) {
+    if (value == _predictedText) return;
+    _predictedText = value;
+    var cells = 0;
+    for (final rune in value.runes) {
+      final width = unicodeV11.wcwidth(rune);
+      if (width > 0) cells += width;
+    }
+    _predictedCells = cells;
+    markNeedsPaint();
+  }
+
+  /// AUTONOMOUS PATCH: the screen's pixels per logical pixel — the grid each
+  /// line's top is placed on, see [_snapLineTop].
+  double _devicePixelRatio;
+  set devicePixelRatio(double value) {
+    if (value == _devicePixelRatio) return;
+    _devicePixelRatio = value;
+    markNeedsPaint();
+  }
+
+  /// AUTONOMOUS PATCH: whether a full-screen program's scroll slides into place
+  /// rather than jumping — `TerminalView.altBufferScrollAnimated`.
+  bool _animateRemoteScroll;
+  set animateRemoteScroll(bool value) {
+    if (value == _animateRemoteScroll) return;
+    _animateRemoteScroll = value;
+    if (!value) {
+      _remoteScroll?.dispose();
+      _remoteScroll = null;
+      markNeedsPaint();
+    }
+  }
+
+  void Function(int rows)? _onRemoteScrollShift;
+  set onRemoteScrollShift(void Function(int rows)? value) {
+    _onRemoteScrollShift = value;
+    _remoteScroll?.onShift = value;
+  }
+
+  /// Made the first time a wheel event goes out with [_animateRemoteScroll] on.
+  RemoteScrollAnimator? _remoteScroll;
+
+  /// AUTONOMOUS PATCH: [lines] wheel lines just went to the program, negative
+  /// for up. Its next redraw may be that scroll's answer, and then slides into
+  /// place instead of jumping — see [RemoteScrollAnimator].
+  void expectRemoteScroll(int lines) {
+    if (_mirrorRemoteScroll ||
+        !_animateRemoteScroll ||
+        !_renderingEnabled ||
+        !attached ||
+        !_isWholeAltScreen) {
+      return;
+    }
+    final animator = _remoteScroll ??= RemoteScrollAnimator(
+      onFrame: _paintSlideFrame,
+      takePicture: _painter.takeLinePicture,
+      onShift: _onRemoteScrollShift,
+    );
+    animator.expect(
+      lines,
+      _terminal.buffer.lines,
+      _terminal.viewHeight,
+      _painter.cellSize.height,
+    );
+  }
+
+  /// AUTONOMOUS PATCH: whether a full-screen program's scroll is moved by the
+  /// finger here and filled in by the program — `TerminalView.altBufferScrollMirror`,
+  /// see [RemoteScrollMirror]. In its place, [expectRemoteScroll]'s slide.
+  bool _mirrorRemoteScroll;
+  set mirrorRemoteScroll(bool value) {
+    if (value == _mirrorRemoteScroll) return;
+    _mirrorRemoteScroll = value;
+    _mirror?.dispose();
+    _mirror = null;
+    markNeedsPaint();
+  }
+
+  /// Where the mirror asks the program to scroll — the scroll handler's pacing.
+  RemoteScrollLink? _remoteScrollLink;
+  set remoteScrollLink(RemoteScrollLink? value) => _remoteScrollLink = value;
+
+  /// AUTONOMOUS PATCH: whether the mirror may scroll the program a page at a
+  /// time with its Page Up and Page Down keys — `TerminalView.altBufferScrollPageKeys`.
+  bool _mirrorPageKeys;
+  set mirrorPageKeys(bool value) => _mirrorPageKeys = value;
+
+  /// AUTONOMOUS PATCH: what the mirror knew of this program's rows, kept by the
+  /// embedder across emulators and views — `TerminalView.altBufferScrollMemory`.
+  RemoteScrollMemory? _remoteScrollMemory;
+  set remoteScrollMemory(RemoteScrollMemory? value) {
+    if (identical(value, _remoteScrollMemory)) return;
+    _remoteScrollMemory = value;
+    _mirror?.memory = value;
+  }
+
+  RemoteScrollMirror? _mirror;
+
+  /// The screen for the mirror to fetch ahead from, when it can be read whole.
+  RemoteScreen? _mirrorScreen() {
+    if (!_canMirror || _terminal.synchronizedOutputHeld) return null;
+    return (
+      lines: _terminal.buffer.lines,
+      rowCount: _terminal.viewHeight,
+      lineHeight: _painter.cellSize.height,
+    );
+  }
+
+  RemoteScrollMirror get _mirrorNow => _mirror ??= _newMirror();
+
+  RemoteScrollMirror _newMirror() => RemoteScrollMirror(
+        onFrame: markNeedsPaint,
+        requestLines: (lines) => _remoteScrollLink?.send(lines),
+        requestsIdle: () => _remoteScrollLink?.idle ?? true,
+        cancelRequests: () => _remoteScrollLink?.cancel() ?? 0,
+        pageKeysEnabled: () => _mirrorPageKeys,
+        requestPage: (direction) =>
+            _mirrorPageKeys &&
+            (_remoteScrollLink?.sendPage(direction) ?? false),
+        readScreen: _mirrorScreen,
+      )..memory = _remoteScrollMemory;
+
+  bool get _canMirror =>
+      _mirrorRemoteScroll &&
+      _renderingEnabled &&
+      attached &&
+      hasSize &&
+      _painter.cellSize.height > 0 &&
+      _isWholeAltScreen;
+
+  /// AUTONOMOUS PATCH: a scroll began on the alternate screen, the scrollable at
+  /// [pixels].
+  void mirrorScrollStart(double pixels) {
+    if (!_canMirror) return;
+    _mirrorNow.begin(
+      pixels,
+      _terminal.buffer.lines,
+      _terminal.viewHeight,
+      _painter.cellSize.height,
+      screenWhole: !_terminal.synchronizedOutputHeld,
+    );
+  }
+
+  /// AUTONOMOUS PATCH: the scrollable is at [pixels]. False when it cannot be
+  /// mirrored now — then the scroll goes out as plain wheel events.
+  bool mirrorScrollTo(double pixels) {
+    if (!_canMirror) {
+      _mirror?.reset();
+      return false;
+    }
+    _mirrorNow.scrollTo(
+      pixels,
+      _terminal.buffer.lines,
+      _terminal.viewHeight,
+      _painter.cellSize.height,
+      screenWhole: !_terminal.synchronizedOutputHeld,
+    );
+    return true;
+  }
+
+  /// AUTONOMOUS PATCH: the scroll is over — the finger up, any fling run out.
+  void mirrorScrollEnd() => _mirror?.end();
+
+  /// AUTONOMOUS PATCH: a frame of the slide — drawn, unless a redraw is still
+  /// arriving.
+  ///
+  /// ⚠️ **Not while the terminal holds a frame** ([Terminal.synchronizedOutputHeld]):
+  /// its buffer is part old, part new, and the slide repaints every frame, so it
+  /// drew exactly the torn screen the hold keeps from the listeners. The frame's
+  /// end lays the terminal out and paints it anyway; the slide only loses the
+  /// frames in between, a few milliseconds of them.
+  void _paintSlideFrame() {
+    if (_terminal.synchronizedOutputHeld) return;
+    markNeedsPaint();
+  }
+
+  /// On the alternate screen, with no history: buffer line `i` is screen row
+  /// `i`, which is what a slide's rows are counted in.
+  bool get _isWholeAltScreen =>
+      _terminal.isUsingAltBuffer &&
+      _terminal.buffer.lines.length == _terminal.viewHeight;
+
+  /// The screen was laid out again: a slide starts, carries on or ends here.
+  void _updateRemoteScroll() {
+    // A program whose scrolling rows are remembered gets its mirror before the
+    // first scroll: it fetches ahead from the start.
+    if (_mirror == null &&
+        _mirrorRemoteScroll &&
+        _mirrorPageKeys &&
+        _remoteScrollMemory?.knowsScrollingRows == true &&
+        _canMirror) {
+      _mirrorNow;
+    }
+    final mirror = _mirror;
+    if (mirror != null) {
+      if (!_isWholeAltScreen) {
+        mirror.reset();
+      } else if (!_terminal.synchronizedOutputHeld) {
+        // ⚠️ Never a frame still arriving: part old, part new, it was matched
+        // and written into the mirror's document as one, and rows came out of
+        // order (reported on a phone, 2026-10-06). Its end lays the screen out
+        // again, whole.
+        mirror.frame(
+          _terminal.buffer.lines,
+          _terminal.viewHeight,
+          _painter.cellSize.height,
+        );
+      }
+    }
+    final animator = _remoteScroll;
+    if (animator == null) return;
+    if (!_isWholeAltScreen) {
+      animator.reset();
+      return;
+    }
+    animator.update(
+      _terminal.buffer.lines,
+      _terminal.viewHeight,
+      _painter.cellSize.height,
+    );
   }
 
   TerminalSize? _viewportSize;
@@ -248,6 +509,8 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     _terminal.removeListener(_onTerminalChange);
     _controller.removeListener(_onControllerUpdate);
     _focusNode.removeListener(_onFocusChange);
+    _remoteScroll?.reset();
+    _mirror?.reset();
   }
 
   @override
@@ -259,6 +522,16 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   void systemFontsDidChange() {
     _painter.clearFontCache();
     super.systemFontsDidChange();
+  }
+
+  @override
+  void dispose() {
+    _remoteScroll?.dispose();
+    _remoteScroll = null;
+    _mirror?.dispose();
+    _mirror = null;
+    _painter.clearLinePictures();
+    super.dispose();
   }
 
   @override
@@ -279,6 +552,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     _updateScrollOffset();
     if (followTail) _stickToBottom = true;
     _laidOutMaxScrollExtent = _maxScrollExtent;
+    _updateRemoteScroll();
     _scheduleEditableRect();
   }
 
@@ -504,7 +778,22 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   @override
   void paint(PaintingContext context, Offset offset) {
-    _paint(context, offset);
+    if (xtermInputTrace == null) {
+      _paint(context, offset);
+    } else {
+      final recordedBefore = _painter.linesRecorded;
+      final watch = Stopwatch()..start();
+      _paint(context, offset);
+      final micros = watch.elapsedMicroseconds;
+      final redrawn = _painter.linesRecorded - recordedBefore;
+      if (redrawn > 0 || micros > 4000) {
+        inputTrace(
+          () => 'paint ${(micros / 1000).toStringAsFixed(1)}ms'
+              ' redrawn=$redrawn cursor=${_terminal.buffer.cursorX},'
+              '${_terminal.buffer.absoluteCursorY}',
+        );
+      }
+    }
     context.setWillChangeHint();
   }
 
@@ -538,24 +827,59 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final effectFirstLine = firstLine.clamp(0, lines.length - 1);
     final effectLastLine = lastLine.clamp(0, lines.length - 1);
 
+    // AUTONOMOUS PATCH: a full-screen program's scroll, its scrolling rows drawn
+    // where the finger has them ([_paintMirror]) or still sliding into place
+    // ([_paintSlide]) — the rest as ever.
+    final mirror =
+        _mirror?.isActive == true && _isWholeAltScreen ? _mirror : null;
+    final slide = mirror == null && _remoteScroll?.isSliding == true
+        ? _remoteScroll
+        : null;
+    final movingTop = mirror?.top ?? slide?.top;
+    final movingBottom = mirror?.bottom ?? slide?.bottom;
+    final movedBy = mirror?.offset ?? slide?.offset ?? 0.0;
+
     for (var i = effectFirstLine; i <= effectLastLine; i++) {
-      _painter.paintLine(
+      if (movingTop != null && i >= movingTop && i <= movingBottom!) continue;
+      _painter.paintLineCached(
         canvas,
-        offset.translate(0, (i * charHeight + _lineOffset).truncateToDouble()),
-        lines[i],
+        offset.translate(0, _snapLineTop(i * charHeight + _lineOffset)),
+        // The program's own rows as they were, while the mirror fetches ahead.
+        mirror?.heldRow(i) ?? lines[i],
       );
     }
 
-    if (_terminal.buffer.absoluteCursorY >= effectFirstLine &&
-        _terminal.buffer.absoluteCursorY <= effectLastLine) {
+    if (mirror != null) {
+      _paintMirror(canvas, offset, mirror);
+    } else if (slide != null) {
+      _paintSlide(canvas, offset, slide, effectFirstLine, effectLastLine);
+    }
+
+    final cursorY = _terminal.buffer.absoluteCursorY;
+    if (cursorY >= effectFirstLine && cursorY <= effectLastLine) {
+      // A cursor inside the moving rows moves with them.
+      final cursorAt =
+          movingTop != null && cursorY >= movingTop && cursorY <= movingBottom!
+              ? offset + cursorOffset.translate(0, movedBy)
+              : offset + cursorOffset;
+
+      final predicting = !_isComposingText && _predictedText.isNotEmpty;
       if (_isComposingText) {
-        _paintComposingText(canvas, offset + cursorOffset);
+        _paintComposingText(canvas, cursorAt);
+      } else if (predicting) {
+        _paintPredictedText(canvas, cursorAt);
       }
 
       if (_shouldShowCursor) {
         _painter.paintCursor(
           canvas,
-          offset + cursorOffset,
+          // Past what is drawn ahead of the echo, where the echo will leave it.
+          predicting
+              ? cursorAt.translate(
+                  _predictedCells * _painter.cellSize.width,
+                  0,
+                )
+              : cursorAt,
           cursorType: _cursorType,
           hasFocus: _focusNode.hasFocus,
         );
@@ -581,6 +905,92 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     }
 
     canvas.restore();
+  }
+
+  /// AUTONOMOUS PATCH: the scrolling rows as the finger has them — each document
+  /// row of [RemoteScrollMirror] at its place relative to [RemoteScrollMirror.display],
+  /// clipped to the rows that scroll so the program's fixed rows stay put. A row
+  /// never seen is left as background.
+  void _paintMirror(Canvas canvas, Offset offset, RemoteScrollMirror mirror) {
+    final lineHeight = _painter.cellSize.height;
+    final top = offset.dy + _snapLineTop(mirror.top * lineHeight + _lineOffset);
+    final bottom = offset.dy +
+        _snapLineTop((mirror.bottom + 1) * lineHeight + _lineOffset);
+    canvas.save();
+    canvas.clipRect(
+      Rect.fromLTRB(offset.dx, top, offset.dx + size.width, bottom),
+    );
+    final display = mirror.display;
+    final first = (display + mirror.top).floor();
+    final last = (display + mirror.bottom).ceil();
+    for (var row = first; row <= last; row++) {
+      final line = mirror.rowAt(row);
+      if (line == null) continue;
+      _painter.paintLineCached(
+        canvas,
+        offset.translate(
+          0,
+          _snapLineTop((row - display) * lineHeight + _lineOffset),
+        ),
+        line,
+      );
+    }
+    canvas.restore();
+  }
+
+  /// AUTONOMOUS PATCH: the rows of a scroll still sliding into place — each
+  /// drawn [RemoteScrollAnimator.offset] from where it belongs, with the rows
+  /// that left the screen sliding out after them, all clipped to the rows the
+  /// scroll moved so the program's fixed rows above and below stay put.
+  void _paintSlide(
+    Canvas canvas,
+    Offset offset,
+    RemoteScrollAnimator slide,
+    int firstLine,
+    int lastLine,
+  ) {
+    final lines = _terminal.buffer.lines;
+    final lineHeight = _painter.cellSize.height;
+    final shift = slide.offset;
+    final top = offset.dy + _snapLineTop(slide.top * lineHeight + _lineOffset);
+    final bottom =
+        offset.dy + _snapLineTop((slide.bottom + 1) * lineHeight + _lineOffset);
+
+    canvas.save();
+    canvas.clipRect(
+      Rect.fromLTRB(offset.dx, top, offset.dx + size.width, bottom),
+    );
+    final from = max(slide.top, firstLine);
+    final to = min(slide.bottom, lastLine);
+    for (var i = from; i <= to; i++) {
+      _painter.paintLineCached(
+        canvas,
+        offset.translate(0, _snapLineTop(i * lineHeight + _lineOffset + shift)),
+        lines[i],
+      );
+    }
+    for (final ghost in slide.ghosts) {
+      canvas.save();
+      canvas.translate(
+        offset.dx,
+        offset.dy + _snapLineTop(ghost.key * lineHeight + _lineOffset + shift),
+      );
+      canvas.drawPicture(ghost.value);
+      canvas.restore();
+    }
+    canvas.restore();
+  }
+
+  /// AUTONOMOUS PATCH: a line's top, on the screen's own pixel grid.
+  ///
+  /// It was truncated to whole LOGICAL pixels, which on a 3× phone is three
+  /// device pixels: a slow scroll moved the text in visible three-pixel steps,
+  /// holding still for frames in between, while the finger moved smoothly. On
+  /// the device grid it moves a pixel at a time and stays as crisp.
+  double _snapLineTop(double y) {
+    final ratio = _devicePixelRatio;
+    if (ratio <= 0) return y.truncateToDouble();
+    return (y * ratio).roundToDouble() / ratio;
   }
 
   /// Paints the text that is currently being composed in IME to [canvas] at
@@ -634,6 +1044,30 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         maxWidth: (size.width - composingOffset.dx).clamp(0.0, size.width));
 
     textPainter.paint(canvas, composingOffset);
+    textPainter.dispose();
+  }
+
+  /// AUTONOMOUS PATCH: [_predictedText] at [offset], the cursor — in the
+  /// cursor's colour, faint, over the cells it will be echoed into.
+  void _paintPredictedText(Canvas canvas, Offset offset) {
+    final color = _painter.resolveForegroundColor(_terminal.cursor.foreground);
+    final style = _painter.textStyle.toTextStyle(
+      color: color.withAlpha((color.a * 255 * 0.55).round()),
+      backgroundColor: _painter.theme.background,
+      underline: false,
+    );
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: _predictedText,
+        style: style.copyWith(
+          decoration: TextDecoration.none,
+          decorationColor: const Color(0x00000000),
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      textScaler: _painter.textScaler,
+    )..layout(maxWidth: (size.width - offset.dx).clamp(0.0, size.width));
+    textPainter.paint(canvas, offset);
     textPainter.dispose();
   }
 

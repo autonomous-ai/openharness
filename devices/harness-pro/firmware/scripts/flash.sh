@@ -20,7 +20,7 @@ PORT=${FLASH_PORT:-/dev/cu.usbmodem21101}   # another unit: FLASH_PORT=/dev/cu.u
 ESPTOOL="$HOME/.harness/flasher/esptool-v5.3.1-macos-amd64/esptool-macos-amd64/esptool"
 FLAG="$HOME/.harness/flasher/flashing"
 WANT_CHIP="ESP32-P4 (revision v3.2)"
-WANT_MACS="e8:f6:0a:e7:63:7d e8:f6:0a:e7:64:61"   # the known units; a new one is added here after its chip-id is read
+WANT_MACS="e8:f6:0a:e7:63:7d e8:f6:0a:e7:64:61 e8:f6:0a:e7:64:86"   # the known units; a new one is added here after its chip-id is read
 
 cd "$(dirname "$0")/.." || exit 1
 APP=$(ls "$BUILD_DIR"/harness_pro.bin 2>/dev/null | head -n 1)

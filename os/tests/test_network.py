@@ -35,6 +35,12 @@ class Screen:
 
 
 class Network(unittest.TestCase):
+    def setUp(self):
+        # No setup hotspot unless a test says so (SetupHotspot below): its own nmcli call stays out of
+        # the counted ones.
+        hotspot = patch.object(network, 'setup_hotspot_up', return_value=False)
+        hotspot.start()
+        self.addCleanup(hotspot.stop)
     def test_privileged_form_uses_a_fixed_executable_not_the_callers_path(self):
         with patch.object(network.subprocess, 'run', return_value=result()) as run:
             network.nmcli('general')
@@ -150,6 +156,24 @@ class Network(unittest.TestCase):
         self.enterContext(patch.object(network, 'wired_devices', return_value=[['eth0', 'ethernet', 'disconnected']]))
         self.enterContext(patch.object(network, 'nmcli', return_value=result()))
         return screen, network.NetworkPage(screen, first_use=first_use)
+
+    def test_a_page_opened_offline_closes_once_the_network_is_back(self):
+        # hn brought it forward during an outage (a phone's setup hotspot): the network came back
+        # some other way, and the page gives its tab back.
+        screen, page = self.page([], first_use=False)
+        clock = iter(range(0, 1000, 3))
+        with patch.object(network, 'connected', side_effect=[False, False, True]), \
+             patch.object(network.time, 'monotonic', side_effect=lambda: next(clock)), \
+             patch.object(screen, 'get_wch', side_effect=curses.error):
+            self.assertEqual(page.run(), 0)
+
+    def test_a_page_opened_online_stays_to_change_networks(self):
+        screen, page = self.page(['\x1b'], first_use=False)
+        clock = iter(range(0, 1000, 3))
+        with patch.object(network, 'connected', return_value=True) as online, \
+             patch.object(network.time, 'monotonic', side_effect=lambda: next(clock)):
+            self.assertEqual(page.run(), 1)
+        self.assertEqual(online.call_count, 1)
 
     def test_first_page_keeps_wifi_above_wired_and_advances_only_after_connection(self):
         screen, page = self.page(['\x1b', '\x03', 'r', '\n'])
@@ -270,3 +294,50 @@ class Network(unittest.TestCase):
     def test_wide_and_control_characters_fit_the_terminal(self):
         self.assertEqual(network.fit('網路123', 5), '網路1')
         self.assertEqual(network.fit('a\x1b\tb', 6), 'a  b  ')
+
+
+class SetupHotspot(unittest.TestCase):
+    """While setup.py hosts its hotspot for a phone, the page looks as it always does."""
+
+    def test_the_hotspot_is_seen_among_the_active_connections(self):
+        with patch.object(network, 'nmcli', return_value=result(output='harness-setup\nlo\n')):
+            self.assertTrue(network.setup_hotspot_up())
+        with patch.object(network, 'nmcli', return_value=result(output='Glinks 1\n')):
+            self.assertFalse(network.setup_hotspot_up())
+
+    def test_the_list_is_the_one_seen_before_the_hotspot_not_the_hotspot(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as handle:
+            handle.write('[{"ssid": "Weak", "signal": 30, "security": "WPA2", "device": "wlo1"},'
+                         ' {"ssid": "Glinks 1", "signal": 80, "security": "WPA2", "device": "wlo1"},'
+                         ' {"ssid": "Cafe", "signal": 50, "security": "", "device": "wlo1"}, {"bad": 1}]')
+        self.addCleanup(Path(handle.name).unlink)
+        with patch.object(network, 'SETUP_NETWORKS', handle.name), \
+             patch.object(network, 'setup_hotspot_up', return_value=True), \
+             patch.object(network, 'nmcli') as command:
+            rows = network.scan(rescan=True)
+        command.assert_not_called()
+        self.assertEqual([row['ssid'] for row in rows], ['Glinks 1', 'Cafe', 'Weak'])
+        self.assertEqual(rows[1]['security'], '--')
+        self.assertFalse(any(row['active'] for row in rows))
+
+    def test_no_list_is_an_empty_one(self):
+        with patch.object(network, 'SETUP_NETWORKS', '/nonexistent/setup-networks.json'):
+            self.assertEqual(network.setup_networks(), [])
+
+    def test_the_hotspot_alone_is_not_online(self):
+        with patch.object(network, 'nmcli', return_value=result(output='connected (local only)')), \
+             patch.object(network, 'setup_hotspot_up', return_value=True), \
+             patch.object(network, 'wired_devices', return_value=[]):
+            self.assertFalse(network.connected())
+        with patch.object(network, 'nmcli', return_value=result(output='connected')), \
+             patch.object(network, 'setup_hotspot_up', return_value=True), \
+             patch.object(network, 'wired_devices', return_value=[['ens5', 'ethernet', 'connected']]):
+            self.assertTrue(network.connected())
+
+    def test_choosing_a_network_on_screen_takes_the_radio_back_first(self):
+        calls = []
+        with patch.object(network, 'setup_hotspot_up', return_value=True), \
+             patch.object(network, 'nmcli', side_effect=lambda *a, secret=None, wait=8: calls.append(a) or result()):
+            self.assertTrue(network.connect(WIFI, 'password1'))
+        self.assertEqual(calls[0], ('connection', 'down', 'id', 'harness-setup'))

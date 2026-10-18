@@ -5,6 +5,7 @@ import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
+import 'package:harness_mobile/phone/welcome/onboarding_copy.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
 
@@ -28,10 +29,11 @@ class _Conn extends WsConn {
   }) async => {};
 }
 
-/// A new account's first minutes on the phone, signed in: no computer yet → how to set one up;
-/// the computer appears, locked → its unlock, right there; unlocked with nothing running → New.
+/// A new account's first minutes on the phone, signed in: no computer yet → "On your computer, go
+/// to"; the computer appears → its moment ("studio is ready."); locked → its unlock, right there;
+/// unlocked with nothing running → New.
 void main() {
-  testWidgets('no computer, then a locked one, then an empty one', (
+  testWidgets('no computer, then one joining locked, then an empty one', (
     tester,
   ) async {
     final app = AppNotifier(
@@ -66,7 +68,12 @@ void main() {
     }
 
     await settle();
-    expect(find.text('Get Harness for\nyour computer'), findsOneWidget);
+    expect(find.text(OnboardingCopy.goToHeadline), findsOneWidget);
+    expect(find.text('autonomous.ai/go'), findsOneWidget);
+    expect(
+      find.textContaining(OnboardingCopy.looking, findRichText: true),
+      findsOneWidget,
+    );
 
     // It appears — awake, and waiting for its phone password.
     const studio = Machine(
@@ -80,6 +87,13 @@ void main() {
       ..needsLink = true
       ..agentLoadStatus = AgentLoadStatus.needsLink;
     app.notifyListeners();
+    await tester.pump();
+    // The computer the phone waited for: its moment first, named as the person's own…
+    expect(find.text(OnboardingCopy.ready('studio')), findsOneWidget);
+    await tester.pump();
+    expect(app.welcomedMachines, contains('studio'));
+    // …then, as it wants its password, the unlock.
+    await tester.pump(const Duration(milliseconds: 2300));
     await settle();
     expect(find.text('Unlock studio'), findsOneWidget);
 

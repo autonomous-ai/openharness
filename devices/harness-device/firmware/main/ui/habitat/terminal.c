@@ -533,7 +533,7 @@ bool ht_icon(ht_scene_t *s, int x, int y, const ht_icon_t *icon)
 }
 bool ht_cell_sprite(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f)
 {
-    if (s->count >= HT_RUNS || !f || !f->cols || !f->rows || !f->cell) return false;
+    if (s->count >= HT_RUNS || !f || !f->cols || f->cols > HT_CELL_COLS_MAX || !f->rows || !f->cell) return false;
     ht_run_t *r = &s->runs[s->count++];
     memset(r, 0, sizeof *r);
     r->x = x; r->y = y; r->w = f->cols * f->cell; r->font = &ht_mono_16;
@@ -558,8 +558,8 @@ static const uint8_t *cell_row(const uint8_t *cells, const uint16_t *row_at, int
 }
 uint8_t ht_cell_at(const ht_cell_frame_t *f, int col, int row)
 {
-    uint8_t buf[256];
-    if (!f || col < 0 || row < 0 || col >= f->cols || row >= f->rows) return 0;
+    uint8_t buf[HT_CELL_COLS_MAX];
+    if (!f || f->cols > HT_CELL_COLS_MAX || col < 0 || row < 0 || col >= f->cols || row >= f->rows) return 0;
     return cell_row(f->cells, f->row_at, f->cols, row, buf)[col];
 }
 bool ht_cell_sprite_zoom(ht_scene_t *s, int x, int y, const ht_cell_frame_t *f, unsigned zoom)
@@ -1592,7 +1592,7 @@ static void sprite_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
         // Zoomed: in units where a frame pixel is `zoom` wide and a glass pixel 8, each glass pixel is the mean of the
         // frame pixels it overlaps, weighted by the overlap (a transparent one counts as the black ground).
         int cols=s->src_w/s->cell,z=s->zoom;
-        static uint8_t unpacked[9][256];   // the frame rows one glass row covers (8 / zoom + 1 at most)
+        static uint8_t unpacked[9][HT_CELL_COLS_MAX];   // the frame rows one glass row covers (8 / zoom + 1 at most)
         for(int y=top;y<bottom;y++){
             int v0=(y-r->y)*8,v1=v0+8;
             uint16_t *dst=out+(y-clip.y)*clip.w+left-clip.x;
@@ -1622,7 +1622,7 @@ static void sprite_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
     if(s->cells){
         // Cells: a run of `cell` px per palette index, 0 leaves the frame as it is.
         int cols=s->width/s->cell;
-        static uint8_t unpacked[256];
+        static uint8_t unpacked[HT_CELL_COLS_MAX];
         for(int y=top;y<bottom;y++){
             const uint8_t *row=cell_row(s->cells,s->row_at,cols,(y-r->y)/s->cell,unpacked);
             uint16_t *dst=out+(y-clip.y)*clip.w+left-clip.x;

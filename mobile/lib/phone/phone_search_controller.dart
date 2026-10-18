@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 
 import 'package:harness_mobile/core/phone_search_history.dart';
+import 'package:harness_mobile/logging/typing_trace.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/external_session.dart';
 import 'package:harness_mobile/state/search_when.dart';
@@ -12,6 +14,7 @@ import 'phone_destination.dart';
 import 'phone_search_catalog.dart';
 import 'phone_search_commands.dart';
 import 'phone_search_rank.dart';
+import 'phone_status.dart';
 
 /// What the box finds, said in the box.
 ///
@@ -43,6 +46,7 @@ class PhoneSearchController extends ChangeNotifier {
     this.commands,
     this.modes = true,
   }) {
+    final built = kTypingTrace ? (Stopwatch()..start()) : null;
     _catalog = _cache.read(notifier);
     _content = SessionContentSearch(
       machines: () => notifier.searchableMachineIds,
@@ -52,6 +56,12 @@ class PhoneSearchController extends ChangeNotifier {
     _filter();
     notifier.addListener(_rebuild);
     notifier.sessionPreviews.addListener(_previewChanged);
+    if (built != null) {
+      typingEvent(
+        'find search ready in ${built.elapsedMilliseconds}ms'
+        ' · ${_catalog.length} catalog rows, ${rows.length} shown',
+      );
+    }
   }
 
   final AppNotifier notifier;
@@ -71,7 +81,7 @@ class PhoneSearchController extends ChangeNotifier {
   /// typed. The modes were the desktop's command palette carried over.
   final bool modes;
 
-  final _cache = PhoneSearchCatalogCache();
+  PhoneSearchCatalogCache get _cache => PhoneSearchCatalogCache.of(notifier);
 
   /// What every machine's session index found for the query — see [contentHitFor].
   late final SessionContentSearch _content;
@@ -281,11 +291,13 @@ class PhoneSearchController extends ChangeNotifier {
   bool canSubmit(PhoneDestination row) => switch (row.kind) {
     // Stopped work counts: the tap resumes it first — see [AgentEntry.isOpenable].
     PhoneDestinationKind.agent => row.entry?.isOpenable ?? false,
-    // A locked machine opens its password form, which is the thing to do about
-    // it; a switched-off one has nothing to take a password.
-    PhoneDestinationKind.machine => _catalog.any(
-      (entry) => entry.id == row.id && entry.isMachine,
-    ),
+    // A switched-off one has nothing to take a password and no harnesses to
+    // list: the tap narrowed Find to an empty list. Dimmed instead, and sunk
+    // under the machines that answer by the end of [_filter].
+    PhoneDestinationKind.machine =>
+      row.machine != null &&
+          phoneMachineStatusOf(row.machine!) != PhoneMachineStatus.offline &&
+          _catalog.any((entry) => entry.id == row.id && entry.isMachine),
     PhoneDestinationKind.project => _catalog.any(
       (entry) => entry.id == row.id && entry.isProject,
     ),
@@ -298,16 +310,43 @@ class PhoneSearchController extends ChangeNotifier {
           notifier.searchableMachineIds.contains(row.machineId),
   };
 
+  /// The app changed while the box is open: the catalog is read again at the
+  /// start of the next frame, once.
+  ///
+  /// ⚠️ **Once a frame, not once a notify.** A machine coming back notifies a
+  /// dozen times in one go — its status, its link, its agents — and reading the
+  /// catalog after each one was 2–5ms apiece, 35ms of a single frame (measured
+  /// on a phone, 217 rows, 2026-10-05). The list could not show the steps
+  /// between anyway: it repaints once a frame.
   void _rebuild() {
+    if (_rebuildFrame != null || _disposed) return;
+    _rebuildFrame = SchedulerBinding.instance.scheduleFrameCallback((_) {
+      _rebuildFrame = null;
+      if (!_disposed) _readCatalog();
+    });
+  }
+
+  int? _rebuildFrame;
+
+  void _readCatalog() {
+    final took = kTypingTrace ? (Stopwatch()..start()) : null;
     final next = _cache.read(notifier);
     // Nothing about the fleet changed shape, so the rows cannot have either —
     // and re-ranking would hand the list a new set of objects to rebuild from
     // for no reason. What the rows SAY still updates: they read their machine
     // live, and the preview store has its own path in.
     if (identical(next, _catalog)) return;
+    final catalogMs = took?.elapsedMicroseconds;
     _catalog = next;
     _filter();
     _scheduleNotify();
+    if (took != null && took.elapsedMicroseconds >= 2000) {
+      typingEvent(
+        'listener find: catalog ${(catalogMs! / 1000).toStringAsFixed(1)}ms,'
+        ' filter ${((took.elapsedMicroseconds - catalogMs) / 1000).toStringAsFixed(1)}ms'
+        ' · ${_catalog.length} rows, query "${matchQuery.length} chars"',
+      );
+    }
   }
 
   /// Content landing can add or remove a match, but must never shuffle the rows
@@ -322,9 +361,9 @@ class PhoneSearchController extends ChangeNotifier {
   /// Announce a change the APP made, one microtask late.
   ///
   /// ⚠️ **Never synchronously, because these two arrive mid-build.**
-  /// [PhoneSearchResults] warms the preview store from its `initState`, and the
-  /// store publishes to its listeners as it goes — so the controller was told to
-  /// re-rank while the very list watching it was still being built, and
+  /// [PhoneSearchResults] once warmed the preview store from its `initState`,
+  /// and the store publishes to its listeners as it goes — so the controller was
+  /// told to re-rank while the very list watching it was still being built, and
   /// `markNeedsBuild` threw. A microtask drains after the build phase, which is
   /// the earliest moment a rebuild can legally be asked for.
   ///
@@ -527,6 +566,10 @@ class PhoneSearchController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    final rebuild = _rebuildFrame;
+    if (rebuild != null) {
+      SchedulerBinding.instance.cancelFrameCallbackWithId(rebuild);
+    }
     _content
       ..removeListener(_contentChanged)
       ..dispose();

@@ -64,7 +64,11 @@ class _Notifier extends AppNotifier {
   String? probeRefusal;
 
   @override
-  Future<void> probeDsh(String machineId, {bool force = false}) async {
+  Future<void> probeDsh(
+    String machineId, {
+    bool force = false,
+    bool userAction = false,
+  }) async {
     harnessProbes++;
     if (probeRefusal case final refusal?) {
       stateOf(machineId)!.dsh.error = refusal;

@@ -1,0 +1,21 @@
+# Pre-change (v3 Task 4) host us per Pets frame: 720x720 in 24-row strips, -O2, best of 18 runs, default font. test_ph_perf.sh needs <= 85% of these.
+# Re-baselined DOWN after the 2026-10-15 perf round (ring-arc band cut per row, a quicker exact 2x cell path, gradient spans, the small faces baked once):
+# each number below is about 1.25 x what the round measured, so the 85% limit leaves ~7% over it. Measured before -> after: tabs 176 -> 134, tabs:2 205 -> 161,
+# agent:fw 225 -> 171, agent:cli 134 -> 105, recap:desk 229 -> 127, talk:fw 372 -> 138, talk:fw:send 156 -> 86, inbox 373 -> 166 (host us; device ms ~ us x 0.089).
+# 2026-10-15 Notices card + toast: tabs:notices is Home on the Notices card (measured 141: the same dithered card, a count and three one-line rows; no pills, no icon row);
+# agent:fw:toast@2500 and recap:desk:toast@2500 are a room with the notice toast mid-bar (measured 239 and 189 against 169 and 126 without it: the toast adds ~65 us, two
+# AA rounded rects of a 640 x 118 card and a few small runs). Same rule: each baseline is about 1.25 x what was measured. Every Pets screen's full redraw stays under ~270 host us.
+# tabs 170 -> 185 (measured 134 -> 147): the demo model has an asking agent, so tab 0 now has the Notices card peeking on its left (one more dithered gradient, ~13 us).
+# 2026-10-15 Codex drawn smooth at 2x (pod_cell_smooth: corner rule + bilinear instead of doubled pixels): agent:cli, a Codex room, measured 267 (was 105).
+# 2026-10-15 Notices card as a letter (option A): a light card with two sheets behind it, their rounded corners anti-aliased per pixel; tabs:notices measured 221 (was 141). Static: paid only on a full redraw.
+tabs 185
+tabs:2 200
+tabs:notices 276
+agent:fw 215
+agent:cli 334
+recap:desk 160
+talk:fw 175
+talk:fw:send 110
+inbox 210
+agent:fw:toast@2500 300
+recap:desk:toast@2500 237

@@ -114,25 +114,64 @@ void main() {
     expect(activeDeskGroup(built, groups, null).name, 'Docker');
   });
 
-  group('a tab nobody named is called after its first agent', () {
+  group('a tab nobody named takes what most of its agents share', () {
     Future<AppNotifier> named(List<DeskTab> tabs) async {
       final built = await deskApp(conn, tabs: tabs);
       addTearDown(built.dispose);
       return built;
     }
 
-    test('its display name, as the desktop names the tab', () async {
+    /// Every fixture agent is Claude Code in `work` on `Test host`; [engines]
+    /// and [projects] make some of them something else.
+    void recast(
+      AppNotifier built, {
+      Map<String, String> engines = const {},
+      Map<String, String> projects = const {},
+    }) {
+      built.stateOf('m')!.agents = [
+        for (final agent in built.stateOf('m')!.agents)
+          Agent(
+            id: agent.id,
+            name: agent.name,
+            engine: engines[agent.id] ?? agent.engine,
+            project: AgentProject(
+              name: projects[agent.id] ?? agent.project!.name,
+              cwd: '/${projects[agent.id] ?? agent.project!.name}',
+            ),
+            terminalAvailable: agent.terminalAvailable,
+          ),
+      ];
+    }
+
+    test('agents of one type name it by that type, as the desktop does', () async {
       final built = await named([
         deskTab('t1', 'Untitled Tab', ['c', 'a'], custom: false),
       ]);
-      built.stateOf('m')!.agents = [
-        for (final agent in built.stateOf('m')!.agents)
-          agent.id == 'c'
-              ? Agent(id: 'c', name: 'harness-3', title: 'Greet user')
-              : agent,
-      ];
 
-      expect(groupsOf(built).single.name, 'Greet user');
+      // Type, project and machine each hold both agents: the stronger trait wins.
+      expect(groupsOf(built).single.name, 'code');
+    });
+
+    test('the trait most of its agents share beats a stronger one', () async {
+      final built = await named([
+        deskTab('t1', 'Untitled Tab', ['a', 'b'], custom: false),
+      ]);
+      recast(built, engines: {'a': 'terminal'});
+
+      expect(groupsOf(built).single.name, 'work');
+    });
+
+    test('a tie goes to what the other tabs do not share', () async {
+      final built = await named([
+        deskTab('t1', 'Untitled Tab', ['a', 'b'], custom: false),
+        deskTab('t2', 'Untitled Tab', ['c', 'd'], custom: false),
+      ]);
+      recast(built, projects: {'c': 'site', 'd': 'site'});
+
+      expect(
+        [for (final group in groupsOf(built)) group.name],
+        ['work', 'site'],
+      );
     });
 
     test('a name somebody chose stands', () async {
@@ -143,32 +182,33 @@ void main() {
       expect(groupsOf(built).single.name, 'Docker');
     });
 
-    test('an agent with no name of its own leaves the placeholder', () {
-      final tab = deskTab('t1', 'Untitled Tab', ['c'], custom: false);
+    test('a tab with nothing to vote is the placeholder', () async {
+      final built = await named([
+        deskTab('t1', 'Untitled Tab', [], custom: false),
+      ]);
 
-      expect(
-        deskTabName(tab, const Agent(id: 'c', name: 'harness-3')),
-        'New Swarm',
-      );
-      expect(deskTabName(tab, null), 'New Swarm');
+      expect(deskTabNames(built), {'t1': 'New Swarm'});
     });
 
-    test('legacy automatic names migrate while explicit names stay intact', () {
-      for (final legacy in [
+    test('legacy automatic names are never shown, explicit names stand', () async {
+      const legacy = [
         'New tab',
         'New Tab',
         'Untitled Tab',
         'New Harness',
         'New Agent',
-      ]) {
-        expect(
-          deskTabName(deskTab('t1', legacy, [], custom: false), null),
-          'New Swarm',
-        );
-        expect(
-          deskTabName(deskTab('t1', legacy, [], custom: true), null),
-          legacy,
-        );
+      ];
+      final built = await named([
+        for (final (i, name) in legacy.indexed) ...[
+          deskTab('auto$i', name, [], custom: false),
+          deskTab('chosen$i', name, []),
+        ],
+      ]);
+
+      final names = deskTabNames(built);
+      for (final (i, name) in legacy.indexed) {
+        expect(names['auto$i'], 'New Swarm');
+        expect(names['chosen$i'], name);
       }
     });
   });

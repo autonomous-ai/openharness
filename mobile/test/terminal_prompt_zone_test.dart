@@ -90,4 +90,69 @@ void main() {
       expect(isPromptTap(terminal.buffer, 8), isFalse);
     },
   );
+
+  group('a dialog drawn where the prompt was', () {
+    // Claude Code with an MCP server's Accept/Decline open, as captured from a live pane
+    // (openharness#1272): the prompt hidden, the cursor parked on the blank row under the footer.
+    const dialog = [
+      '  output',
+      '',
+      '────────────────────────────────────────',
+      '  MCP server “x” requests your input',
+      '',
+      '  This SQL includes destructive op…',
+      '',
+      '  ❯ Accept    Decline',
+      '',
+      '  Esc to cancel · ↑/↓ to navigate',
+      '',
+      '',
+    ];
+
+    test('counts whole, from the rule over it down', () {
+      final terminal = _screen(dialog, cursorLine: 10);
+      expect(_promptRows(terminal).first, 2);
+      // The buttons themselves, which the cursor alone left out.
+      expect(isPromptTap(terminal.buffer, 7), isTrue);
+      expect(isPromptTap(terminal.buffer, 1), isFalse);
+    });
+
+    test('keeps the cursor\'s zone where the host answers its rows itself', () {
+      final terminal = _screen(dialog, cursorLine: 10);
+      expect(isPromptTap(terminal.buffer, 7, wholeDialog: false), isFalse);
+      expect(isPromptTap(terminal.buffer, 9, wholeDialog: false), isTrue);
+    });
+
+    test('a rule with no footer under it is output, not a dialog', () {
+      final terminal = _screen([
+        for (var i = 0; i < 4; i++) 'output $i',
+        '----------------------------------------',
+        'build ok',
+        'tests ok',
+        'lint ok',
+        'deploy ok',
+        'done',
+        '',
+        '',
+      ], cursorLine: 11);
+      expect(isPromptTap(terminal.buffer, 6), isFalse);
+    });
+
+    test('the prompt box under its rule is the prompt, not a dialog', () {
+      final terminal = _screen(
+        [
+          '  answer',
+          '',
+          '────────────────────────────────────────',
+          '❯ ',
+          '────────────────────────────────────────',
+          '  ⏵⏵ auto mode on (shift+tab to cycle)',
+        ],
+        cursorLine: 3,
+        alt: true,
+      );
+      expect(_promptRows(terminal).first, 2);
+      expect(isPromptTap(terminal.buffer, 1), isFalse);
+    });
+  });
 }

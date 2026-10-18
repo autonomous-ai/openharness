@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:harness_mobile/core/local_key_value_store.dart';
 import 'package:harness_mobile/measurement/product_measurement.dart';
+
+import 'voice_fakes.dart' show MemoryKeyValueStore;
 
 void main() {
   late ProductMeasurement usage;
@@ -199,4 +203,277 @@ void main() {
       expect(setup, isEmpty);
     },
   );
+
+  group('signed-out sharing kept on this phone, as on the desktop', () {
+    late MemoryKeyValueStore store;
+    final opened = <ProductMeasurement>[];
+    setUp(() => store = MemoryKeyValueStore());
+    tearDown(() {
+      for (final usage in opened) {
+        usage.dispose();
+      }
+      opened.clear();
+    });
+
+    String? kept() => store.values[ProductMeasurement.setupPreferenceKey];
+
+    ProductMeasurement launch({LocalKeyValueStore? keeping}) {
+      final usage = ProductMeasurement(
+        surface: 'phone',
+        automatic: false,
+        now: () => now,
+        setupStorage: keeping,
+        sendSetup: (r) async {
+          setup.add(jsonDecode(jsonEncode(r)));
+          return {'accepted': true};
+        },
+      );
+      opened.add(usage);
+      return usage;
+    }
+
+    /// Signed in, the account answering [answer] to every read.
+    Future<void> signIn(
+      ProductMeasurement usage,
+      Map<String, dynamic> Function() answer,
+    ) async {
+      usage.account(
+        'PRIVATE_ACCOUNT',
+        choice: () async => answer(),
+        send: (r) async {
+          reports.add(jsonDecode(jsonEncode(r)));
+          return {'accepted': true};
+        },
+      );
+      await usage.flush();
+      await usage.setupChoiceSaved;
+    }
+
+    test('starts on, and says so rather than consent', () async {
+      final phone = launch(keeping: store);
+      expect(
+        phone.choiceLoaded,
+        isFalse,
+        reason: 'nothing counted before it is read',
+      );
+      await phone.setupChoiceReady;
+      expect(phone.signedOutSharing, isTrue);
+      phone.begin(ProductFlow.signIn)(ProductOutcome.ok);
+      await phone.flush();
+      expect(setup.single['sharing'], 'default');
+      expect(setup.single.containsKey('consent'), isFalse);
+      expect(
+        (setup.single['counters'] as Map).keys,
+        everyElement(startsWith('setup_phone_sign_in_')),
+      );
+    });
+
+    test(
+      'turned off signed out, it is kept as an opt-out to carry to the account',
+      () async {
+        final first = launch(keeping: store);
+        await first.setupChoiceReady;
+        await first.setSignedOutSharing(false);
+        expect(kept(), ProductMeasurement.pendingSetupOptOut);
+        expect(first.accountOptOutPending, isTrue);
+
+        final second = launch(keeping: store);
+        await second.setupChoiceReady;
+        expect(second.signedOutSharing, isFalse);
+        expect(second.accountOptOutPending, isTrue);
+        second.begin(ProductFlow.signIn)(ProductOutcome.ok);
+        await second.flush();
+        expect(setup, isEmpty);
+      },
+    );
+
+    test('until the account confirms it is off, nothing is counted for the account', () async {
+      final phone = launch(keeping: store);
+      await phone.setupChoiceReady;
+      await phone.setSignedOutSharing(false);
+      // An account that still reads on (the request to turn it off has not landed).
+      await signIn(phone, () => {'enabled': true, 'revision': 0});
+      expect(phone.sharing, isFalse);
+      expect(phone.accountOptOutPending, isTrue);
+      phone.begin(ProductFlow.remoteConnect)(ProductOutcome.ok);
+      await phone.flush();
+      expect(reports, isEmpty);
+
+      // The account turned off: the opt-out is settled and kept as an ordinary off.
+      phone.savedChoice({'enabled': false, 'revision': 1});
+      await phone.setupChoiceSaved;
+      expect(phone.accountOptOutPending, isFalse);
+      expect(kept(), 'false');
+    });
+
+    test(
+      'the account\'s choice is the next signed-out one, on or off',
+      () async {
+        final phone = launch(keeping: store);
+        await phone.setupChoiceReady;
+        await signIn(phone, () => {'enabled': false, 'revision': 3});
+        expect(kept(), 'false');
+        expect(phone.signedOutSharing, isFalse);
+
+        final next = launch(keeping: store);
+        await next.setupChoiceReady;
+        await signIn(next, () => {'enabled': true, 'revision': 4});
+        expect(kept(), 'true');
+        expect(next.signedOutSharing, isTrue);
+      },
+    );
+
+    test(
+      'turning sharing on in Privacy settles an opt-out still to carry',
+      () async {
+        final phone = launch(keeping: store);
+        await phone.setupChoiceReady;
+        await phone.setSignedOutSharing(false);
+        await signIn(phone, () => {'enabled': true, 'revision': 0});
+        expect(phone.sharing, isFalse);
+
+        phone.savedChoice({'enabled': true, 'revision': 5}, explicit: true);
+        await phone.setupChoiceSaved;
+        expect(phone.accountOptOutPending, isFalse);
+        expect(phone.sharing, isTrue);
+        expect(kept(), 'true');
+      },
+    );
+
+    test(
+      'an account answer before the phone\'s own choice is read waits for it',
+      () async {
+        final slow = _Slow();
+        final phone = launch(keeping: slow);
+        phone.savedChoice({'enabled': true, 'revision': 0});
+        expect(phone.choiceLoaded, isFalse);
+        slow.answer.complete(ProductMeasurement.pendingSetupOptOut);
+        await phone.setupChoiceReady;
+        expect(phone.accountOptOutPending, isTrue);
+        expect(phone.signedOutSharing, isFalse);
+      },
+    );
+
+    test('a choice that cannot be read is an opt-out still to carry', () async {
+      final phone = launch(keeping: _Unreadable());
+      await phone.setupChoiceReady;
+      expect(phone.choiceLoaded, isTrue);
+      expect(phone.signedOutSharing, isFalse);
+      expect(phone.accountOptOutPending, isTrue);
+    });
+
+    test(
+      'a box ticked or unticked before the kept choice is read stands',
+      () async {
+        final phone = launch(keeping: store);
+        await phone.setSignedOutSharing(false);
+        await phone.setupChoiceReady;
+        expect(phone.signedOutSharing, isFalse);
+      },
+    );
+
+    test(
+      'with nowhere to keep an opt-out — a test, the sample — it starts off',
+      () {
+        final phone = launch();
+        expect(phone.choiceLoaded, isTrue);
+        expect(phone.signedOutSharing, isFalse);
+        expect(phone.accountOptOutPending, isFalse);
+      },
+    );
+  });
+
+  group('the phone\'s side pages', () {
+    late ProductMeasurement phone;
+    setUp(() {
+      phone = ProductMeasurement(
+        surface: 'phone',
+        automatic: false,
+        now: () => now,
+        sendSetup: (_) async => {'accepted': true},
+      );
+    });
+    tearDown(() => phone.dispose());
+
+    test(
+      'each opening is counted by page and by way, for an account that shares',
+      () async {
+        phone.screenOpened(PhoneScreen.find, ScreenOpening.swipe);
+        phone.account(
+          'PRIVATE_ACCOUNT',
+          choice: () async => choice,
+          send: (r) async {
+            reports.add(jsonDecode(jsonEncode(r)));
+            return {'accepted': true};
+          },
+        );
+        await phone.flush();
+        phone.screenOpened(PhoneScreen.find, ScreenOpening.swipe);
+        phone.screenOpened(PhoneScreen.find, ScreenOpening.swipe);
+        phone.screenOpened(PhoneScreen.computers, ScreenOpening.button);
+        await phone.flush();
+        expect(reports.single['counters'], {
+          'ui_phone_screen_find_swipe': 2,
+          'ui_phone_screen_computers_button': 1,
+        });
+      },
+    );
+
+    test(
+      'a desktop never counts them: the backend names them for the phone alone',
+      () async {
+        await account();
+        usage.screenOpened(PhoneScreen.find, ScreenOpening.button);
+        await usage.flush();
+        expect(reports, isEmpty);
+      },
+    );
+
+    test('every page and way is in the backend vocabulary', () {
+      final vocabulary = File('../backend/src/types/productUsage.ts')
+          .readAsStringSync();
+      List<String> listed(String name) => RegExp("'(\\w+)'")
+          .allMatches(
+            RegExp('export const $name = \\[([^\\]]*)\\]')
+                .firstMatch(vocabulary)!
+                .group(1)!,
+          )
+          .map((match) => match.group(1)!)
+          .toList();
+      expect(
+        listed('PRODUCT_USAGE_PHONE_SCREENS'),
+        PhoneScreen.values.map((screen) => screen.name),
+      );
+      expect(
+        listed('PRODUCT_USAGE_SCREEN_OPENINGS'),
+        ScreenOpening.values.map((how) => how.name),
+      );
+    });
+  });
+}
+
+/// A kept choice that cannot be read: an opt-out must never come back on because of it.
+class _Unreadable implements LocalKeyValueStore {
+  @override
+  Future<String?> read(String key) async => throw StateError('locked');
+
+  @override
+  Future<void> write(String key, String value) async {}
+
+  @override
+  Future<void> delete(String key) async {}
+}
+
+/// A kept choice read only when the test says so.
+class _Slow implements LocalKeyValueStore {
+  final answer = Completer<String?>();
+
+  @override
+  Future<String?> read(String key) => answer.future;
+
+  @override
+  Future<void> write(String key, String value) async {}
+
+  @override
+  Future<void> delete(String key) async {}
 }

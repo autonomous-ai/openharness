@@ -15,11 +15,15 @@ const patterns: { kind: string; pattern: RegExp }[] = [
   { kind: 'a password or secret', pattern: /\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)\b["']?\s*[:=]\s*["'][^"'\s]{8,}["']/i },
 ];
 
-/** Where the text files and the conversation look like they hold a credential. */
-export function findSecrets(files: SourceFile[], conversation: ConversationTurn[]): SecretFinding[] {
-  const places = [
-    ...files.filter(file => !file.encoding).map(file => ({ where: file.path, text: file.content })),
-    ...conversation.map((turn, index) => ({ where: `Message ${index + 1}`, text: turn.text })),
-  ];
-  return places.flatMap(({ where, text }) => patterns.filter(({ pattern }) => pattern.test(text)).map(({ kind }) => ({ where, kind })));
-}
+type Place = { where: string; text: string };
+const scan = (places: Place[]): SecretFinding[] =>
+  places.flatMap(({ where, text }) => patterns.filter(({ pattern }) => pattern.test(text)).map(({ kind }) => ({ where, kind })));
+
+/** Which text files look like they hold a credential. Scanned apart from the conversation: a project runs
+ * to megabytes, and a keystroke in a message must not read every file again. */
+export const secretsInFiles = (files: SourceFile[]): SecretFinding[] =>
+  scan(files.filter(file => !file.encoding).map(file => ({ where: file.path, text: file.content })));
+
+/** Which messages of the conversation look like they hold a credential. */
+export const secretsInConversation = (conversation: ConversationTurn[]): SecretFinding[] =>
+  scan(conversation.map((turn, index) => ({ where: `Message ${index + 1}`, text: turn.text })));

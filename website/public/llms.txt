@@ -2,6 +2,8 @@
 
 > Harness runs coding agents (Claude Code, Codex and others) in terminal sessions called harnesses, on the person's own computers, and shows every one in its desktop, web and phone apps. An agent can start harnesses from its shell, wait for them, read their answers and close them, while the person watches.
 
+When to use Harness rather than running `codex exec` or `claude -p` yourself: the person should see the work or may need to answer it (every harness is in their Harness app; a process you run yourself is invisible to them), several tasks run at once, the work outlasts your turn, it runs on another of the person's machines (`--machine`), or you want the limits and cleanup Harness gives. For a one-off answer nobody needs to watch, running the agent yourself is fine.
+
 Install on macOS or Linux, then start it. No account is needed for the harnesses the person starts on this computer:
 
 ```
@@ -9,26 +11,38 @@ curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash
 harness start
 ```
 
-On Linux the installer installs tmux and curl with apt-get, which asks for the person's password. Without one, ask the person to run `sudo apt-get install -y tmux curl` first.
+Step by step, for an agent (who does each):
 
-An agent starts harnesses only once the person turns on "Agents can start other agents", an experiment of their Harness account (Settings ▸ Experimental, or `harness settings agents-start-agents on`), off by default. Until then `harness new` refuses and says how: tell the person, and do the work yourself.
+1. You: `harness version`. Found: go to 4.
+2. The person: ask before installing software on their computer.
+3. You, once they agree: the install line above. On Linux it may need their password for apt-get; without one, ask them to run `sudo apt-get install -y tmux curl` first. It ends by saying what to run next.
+4. You: `harness start`. No account is needed.
+5. You: `harness whoami`. It says whether you may start harnesses, and if not, what to ask the person.
+6. The person: `harness login`, in a browser.
+7. The person: turns on "Agents can start other agents", an experiment of their Harness account (Settings ▸ Experimental, or `harness settings agents-start-agents on`), off by default. It is their consent: run by an agent, `harness settings … on` is refused (exit 5). Until then `harness new` refuses (exit 5) and says how: tell the person, and do the work yourself.
+8. You: `harness whoami` says `Can start harnesses: yes.`
 
 The commands an agent uses:
 
 ```
+harness whoami                                      # who and where you are, whether you may start harnesses, your limits
 harness ps [--all]                                  # the harnesses here: state, who started each, what each is about
-harness new [agent] [@machine] [folder | project] --name NAME -- TASK
+harness new [agent] [--machine NAME] [folder | project] --name NAME -- TASK
 harness wait NAME[,NAME…] [--any] [--timeout 30m]   # exits 0 idle, 3 needs the person, 4 stopped or gone, 124 timed out
 harness show NAME [--chars N]                       # its state, the last ask and its answer
 harness send NAME "text"                            # a teammate in this tab, while Agent Messages are on
 harness close NAME [--now]                          # save its screen and stop it; the conversation is kept
 ```
 
+`ps`, `show`, `wait` and `close` take `--machine NAME` too, for a harness on another of the person's machines.
+
+Every command ends with `Next:`, the command to run next, and `--json` gives the same as `next`. Exit 5 means refused (your limits, the person's setting, or a harness you did not start): do not retry it; tell the person, or do the work yourself. A harness waiting on a question or a permission is said as `needs the person`: tell the person, only they answer it. `harness help agents` prints the commands, states, exit codes and rules on one screen.
+
 Once Harness runs on a computer, Claude Code and Codex there run these commands and Harness's MCP tools without asking: Harness adds them to their permission rules, and Codex runs them outside its sandbox. Run each `harness` command by itself or join them with `&&`; piped or joined with other commands, the rule no longer matches. Where Harness has not set an agent up, run `harness` outside its sandbox, which cannot reach Harness's local daemon.
 
-`harness mcp` serves the same as MCP tools over stdio (command `harness`, arguments `["mcp"]`): `harness_list`, `harness_start`, `harness_wait`, `harness_read`, `harness_close`, and `harness_send` inside a harness (teammates in its tab only, while Agent Messages are on: Settings ▸ Experimental, off by default). For clients that start servers with npx, `npx -y @autonomous-ai/harness-mcp` runs `harness mcp`, or, where Harness is not installed, offers one tool, `harness_setup`, that says how to install it.
+`harness mcp` serves the same as MCP tools over stdio (command `harness`, arguments `["mcp"]`): `harness_whoami`, `harness_list`, `harness_start`, `harness_wait`, `harness_read`, `harness_close`, and `harness_send` inside a harness (teammates in its tab only, while Agent Messages are on: Settings ▸ Experimental, off by default).
 
-Every harness spends the person's tokens. Start one only for work that can run in parallel with yours, needs another model's view (a review, a second opinion from Codex), takes long, or belongs in its own folder; do quick work yourself. For scratch or new work, give a project name (`harness new codex review -- …`) rather than a folder of your own: Claude Code and Codex ask the person to trust a folder Harness did not make. List first, name every harness, then wait, read it, and close it once you have its answer. An agent may have at most 4 live harnesses it started, and a harness another agent started may not start harnesses itself. Harness cleans up after agents: closing a harness closes the harnesses it started, and one another agent started is closed once it has sat idle 30 minutes after its last answer, unless the person typed into it; its conversation is kept. Give work only to harnesses you started, and close only those; starting one does not let you message it, so put everything in the task; never answer a harness's question or permission prompt, and never ask one to publish, deploy, delete or push. An agent outside Harness (Claude Code or Codex in a terminal app or editor) is recognized by its session: it gets the same limits, may close only what its session started, and cannot be messaged.
+Every harness spends the person's tokens. Start one only for work that can run in parallel with yours, needs another model's view (a review, a second opinion from Codex), takes long, or belongs in its own folder; do quick work yourself. For scratch or new work, give a project name (`harness new codex review -- …`) rather than a folder of your own: Claude Code and Codex ask the person to trust a folder Harness did not make. Run `harness whoami` first, then list; name every harness, then wait, read it, and close it once you have its answer. An agent may have at most 4 live harnesses it started, and a harness another agent started may not start harnesses itself. Harness cleans up after agents: closing a harness closes the harnesses it started, and one another agent started is closed once it has sat idle 30 minutes after its last answer, unless the person typed into it; its conversation is kept. Give work only to harnesses you started, and close only those; starting one does not let you message it, so put everything in the task; never answer a harness's question or permission prompt, and never ask one to publish, deploy, delete or push. An agent outside Harness (Claude Code or Codex in a terminal app or editor) is recognized by its session: it gets the same limits, may close only what its session started, and cannot be messaged.
 
 ## For agents
 

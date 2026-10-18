@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
@@ -47,7 +47,10 @@ it('reports only local counters from a real turn, and the account switch stops t
     return rows.agents.some((a: Record<string, unknown>) => a.id === agentId && a.sessionId) || null
   }, 45000)
   await client.request('session_search', { query: 'PRIVATE_SEARCH_CANARY' })
-  const appReport = { schemaVersion: 1, revision: 0, id: '27b07da5-033b-412e-b91f-7316b254f991', day: new Date().toISOString().slice(0, 10), counters: { ui_desktop_computer_link_failed: 1 } }
+  const missing = await client.request('agent_resume', { agentId: 'PRIVATE_MISSING_AGENT_CANARY' })
+  expect(missing.error).toBe('AGENT_NOT_FOUND')
+  // The same Desktop-format fixture must pass both the local proxy and the backend route tests.
+  const appReport = { ...JSON.parse(readFileSync(new URL('../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8')), day: new Date().toISOString().slice(0, 10) }
   const forwarded = await fetch(`http://127.0.0.1:${d.port}/api/product-usage/report`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: JSON.stringify(appReport) })
   expect(forwarded.status).toBe(200)
   expect(backend.productUsage.reports).toContainEqual(appReport)
@@ -64,6 +67,8 @@ it('reports only local counters from a real turn, and the account switch stops t
   expect(sum('health_cli_interactive_work_days')).toBe(1)
   expect(sum('health_cli_first_interactive_work')).toBe(1)
   expect(sum('request_app_message_started')).toBeGreaterThan(0)
+  expect(sum('request_app_resume_failed')).toBe(1)
+  expect(sum('request_app_resume_reason_saved_state_missing')).toBe(1)
   const wire = JSON.stringify(backend.productUsage.reports)
   for (const privateValue of ['PRIVATE_', creationId, machine.machineId, machine.computerId, machine.token, agentId, cwd, 'userMessage', 'payload']) expect(wire).not.toContain(privateValue)
   expect((await fetch(settings, { method: 'POST', headers: { 'content-type': 'application/json', 'x-adapter-local': '1' }, body: '{"enabled":false}' })).status).toBe(200)

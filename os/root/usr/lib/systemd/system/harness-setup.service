@@ -1,0 +1,16 @@
+[Unit]
+Description=Set this Harness up from a phone while it has no network
+After=NetworkManager.service
+Wants=NetworkManager.service
+ConditionPathExists=!/etc/harness-live
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/lib/harness-os/setup.py watch
+# Leave no setup hotspot behind when stopped mid-way.
+ExecStopPost=-/usr/bin/nmcli connection delete id harness-setup
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

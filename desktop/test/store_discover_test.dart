@@ -137,7 +137,11 @@ class _App extends AppNotifier {
         configStore: null,
       );
   @override
-  Future<void> probeDsh(String machineId, {bool force = false}) async {}
+  Future<void> probeDsh(
+    String machineId, {
+    bool force = false,
+    bool userAction = false,
+  }) async {}
   @override
   Future<void> probeEngines(String machineId, {bool force = false}) async {}
 

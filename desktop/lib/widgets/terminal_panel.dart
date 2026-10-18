@@ -46,6 +46,7 @@ import '../theme/app_theme.dart';
 import 'engine_identity.dart';
 import 'harness_agent_control.dart';
 import '../agent_messages/pane_message_mark.dart';
+import '../agent_messages/pane_shared_chips.dart';
 import 'harness_activity_mark.dart';
 import 'grid_model_picker.dart';
 import 'pane_header_actions.dart';
@@ -2971,6 +2972,12 @@ class _TerminalHeader extends StatelessWidget {
                                 ),
                               ),
                             ),
+                          PaneSharedChips(
+                            app: notifier,
+                            machineId: session.machineId,
+                            agentId: session.agentId,
+                            style: titleStyle,
+                          ),
                           PaneMessageMarkView(
                             controller: notifier.agentMessages,
                             machineId: session.machineId,

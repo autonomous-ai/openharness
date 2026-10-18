@@ -55,10 +55,10 @@ void main() {
       FakeTranscriber stt,
     })
   >
-  openFind(WidgetTester tester) async {
+  openFind(WidgetTester tester, {bool handshaken = false}) async {
     setPhone(tester, largePhone);
     final app = edgeApp(
-      conn: EdgeConn(const {}, machine),
+      conn: EdgeConn(const {}, machine)..handshaken = handshaken,
       agents: [
         edgeAgent('a0', name: 'on-screen'),
         edgeAgent('work', name: 'working'),
@@ -121,18 +121,23 @@ void main() {
     await tester.pump(const Duration(seconds: 30));
   }
 
+  /// A row's state word, at the end of its first line: alone, or ahead of the row's age
+  /// (`done · 5m`).
+  Finder state(String word) =>
+      find.textContaining(RegExp('^${RegExp.escape(word)}( · |\$)'));
+
   testWidgets('each row says what its harness is doing', (tester) async {
     final (:app, closes: _, opened: _, voice: _, stt: _) = await openFind(
       tester,
     );
-    expect(find.text('working'), findsWidgets);
-    expect(find.text('done'), findsOneWidget);
-    expect(find.text('paused'), findsOneWidget);
-    expect(find.text('exited'), findsOneWidget);
-    expect(
-      find.textContaining('· current', findRichText: true),
-      findsOneWidget,
-    );
+    // `working` is that harness's name too: its word is the one ahead of its age.
+    expect(find.textContaining(RegExp(r'^working · ')), findsOneWidget);
+    expect(state('done'), findsOneWidget);
+    expect(state('paused'), findsOneWidget);
+    expect(state('exited'), findsOneWidget);
+    // The harness on screen says `current` where its age would be — and, idle, no word ahead of
+    // it: idle says nothing (owner, 2026-09-30).
+    expect(find.text('current'), findsOneWidget);
     await close(tester, app);
   });
 
@@ -150,10 +155,15 @@ void main() {
     await close(tester, app);
   });
 
-  testWidgets('Find accepts a query immediately on opening', (tester) async {
+  testWidgets('Find opens with the keys down, and a tap on the field takes a '
+      'query', (tester) async {
     final (:app, closes: _, opened: _, voice: _, stt: _) = await openFind(
       tester,
     );
+    // The rows are what Find is opened to see: the keyboard comes with a tap on the field.
+    expect(tester.testTextInput.isVisible, isFalse);
+    await tester.tap(find.byType(TextField));
+    await tester.pump();
     expect(tester.testTextInput.isVisible, isTrue);
     tester.testTextInput.updateEditingValue(
       const TextEditingValue(text: 'working'),
@@ -178,7 +188,11 @@ void main() {
   testWidgets('a conversation Harness did not start: resumed as a harness', (
     tester,
   ) async {
-    final (:app, closes: _, :opened, voice: _, stt: _) = await openFind(tester);
+    // The harness it becomes is opened once its terminal is asked for, which waits for the socket.
+    final (:app, closes: _, :opened, voice: _, stt: _) = await openFind(
+      tester,
+      handshaken: true,
+    );
     await tester.tap(find.byType(TextField));
     await tester.enterText(find.byType(TextField), 'dial');
     await frames(tester, count: 6);

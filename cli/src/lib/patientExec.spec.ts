@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HELD_MS, MAX_WINDOWS, patientDeadline, patientExec } from './patientExec.js'
+import { enableOffThreadExec, resetOffThreadExec } from './offThreadExec.js'
 
 const hold = (ms: number) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }
 const run = patientExec(execFile)
@@ -109,5 +110,53 @@ describe('a deadline that counts only running time', () => {
     vi.advanceTimersByTime(11)
     vi.advanceTimersByTime(1)
     expect(expire).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the same contract, with the core\'s probes in their worker', () => {
+  afterEach(() => { resetOffThreadExec() })
+
+  it('reads an answer that arrived while this loop was held, and never runs the in-thread execFile', async () => {
+    enableOffThreadExec()
+    const inThread = vi.fn()
+    const kept = new Promise<{ error: Error | null; stdout: string }>((resolve) => {
+      patientExec(inThread)('echo', ['still here'], { timeout: 100 }, (error, stdout) => resolve({ error, stdout }))
+    })
+    setImmediate(() => hold(400))
+    expect(await kept).toEqual({ error: null, stdout: 'still here\n' })
+    expect(inThread).not.toHaveBeenCalled()
+  })
+
+  it('reports a timeout exactly as the in-thread path does', async () => {
+    enableOffThreadExec()
+    const error = await new Promise<Error | null>((resolve) => {
+      patientExec(execFile)('sleep', ['5'], { timeout: 100 }, (e) => resolve(e))
+    })
+    expect(error).toMatchObject({ killed: true, code: 'ETIMEDOUT', signal: 'SIGTERM' })
+    expect(error!.message).toBe('sleep did not answer within 100 ms')
+  })
+
+  it('never turns an answer into an empty success while the worker is busy spawning', async () => {
+    // Found in review: with Node's own timeout in the worker, a burst of probes held the worker spawning
+    // past a short probe's deadline; the timer then ran before the exit was read, and Node reported the
+    // answered child as success with nothing in it: "no panes", the failure stall.e2e.ts exists for.
+    enableOffThreadExec()
+    await new Promise((resolve) => { patientExec(execFile)('true', [], {}, resolve) })
+    for (let round = 0; round < 3; round++) {
+      const answer = new Promise<{ error: (Error & { code?: unknown }) | null; stdout: string }>((resolve) => {
+        patientExec(execFile)('sh', ['-c', 'echo answer'], { timeout: 100 }, (error, stdout) => resolve({ error, stdout }))
+      })
+      const burst = Array.from({ length: 150 }, () => new Promise((resolve) => { patientExec(execFile)('true', [], { timeout: 10_000 }, resolve) }))
+      const { error, stdout } = await answer
+      await Promise.all(burst)
+      if (error) expect(error).toMatchObject({ code: 'ETIMEDOUT' })
+      else expect(stdout).toBe('answer\n')
+    }
+  }, 30_000)
+
+  it('passes a failure through as it is', async () => {
+    enableOffThreadExec()
+    const error = await new Promise<Error | null>((resolve) => { patientExec(execFile)('false', [], { timeout: 1_000 }, (e) => resolve(e)) })
+    expect(error).toMatchObject({ code: 1 })
   })
 })

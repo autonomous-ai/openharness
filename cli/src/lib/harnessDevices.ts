@@ -98,7 +98,6 @@ export const deviceSettingsPatchSchema = z.object({
   muted: z.boolean().optional(),
   quiet: z.boolean().optional(),
   scrollReversed: z.boolean().optional(),
-  screenTurned: z.boolean().optional(),
   uiSkin: z.enum(['classic', 'console']).optional(),
   voiceLang: z.string().regex(/^[a-z]{2}(?:-[A-Z]{2})?$/).optional(),
   character: z.number().int().min(0).max(255).optional(),

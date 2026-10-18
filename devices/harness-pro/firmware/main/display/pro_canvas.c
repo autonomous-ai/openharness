@@ -236,7 +236,10 @@ static void rect_aa_raster(const ht_run_t *r, int x0, int y0, int x1, int y1, ht
         uint16_t *row = out + (y-clip.y)*clip.w - clip.x;
         int cy = dy < rad ? dy : dy >= r->pro_height-rad ? r->pro_height-1-dy : -1;   // corner row, mirrored
         if (cy < 0) { fill_span(row + x0, x1-x0, r->fg); continue; }
+        // A corner row: the coverage only varies in the two corner columns; the straight middle is one span.
+        const int ml = max_(x0, r->x + rad), mr = min_(x1, r->x + r->w - rad);
         for (int x = x0; x < x1; x++) {
+            if (x == ml && mr > ml) { fill_span(row + ml, mr - ml, r->fg); x = mr - 1; continue; }
             int dx = x - r->x, cx = dx < rad ? dx : dx >= r->w-rad ? r->w-1-dx : -1;
             unsigned cov = cx < 0 ? 16 : ht_pro_corner_cover(rad, cx, cy);
             if (cov >= 16) row[x] = r->fg;

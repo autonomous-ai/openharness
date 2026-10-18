@@ -55,7 +55,7 @@ class _RecordingSession extends TerminalSession {
 
   /// "Take control": the daemon answers by handing this window the lease.
   @override
-  Future<void> reopen({bool force = false}) async {
+  Future<void> reopen({bool force = false, bool redial = true}) async {
     calls.add('reopen:$force');
     watching = false;
     notifyListeners();

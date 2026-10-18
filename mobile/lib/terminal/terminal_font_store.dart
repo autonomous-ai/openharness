@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import '../core/apple_fonts.dart';
 
 import 'package:flutter/foundation.dart';
@@ -24,9 +26,15 @@ import 'terminal_typography.dart';
 /// `Ubuntu Sans Mono` is the 25.04-and-later family and `Ubuntu Mono` the older
 /// one, so both are listed rather than guessing the release.
 ///
+/// Android has a list of its own, the two faces it ships under the names its
+/// `fonts.xml` gives them (see `androidTerminalFontFamily`). It ships none of
+/// the Apple faces or the Linux ones, and while it was offered the Linux list
+/// every pick drew the same Droid Sans Mono.
+///
 /// Every value exists on every platform. A `state.json` written on a Mac and
 /// carried to a Linux box still loads, and the Settings dropdown keeps showing
-/// whatever is actually selected (see `_FamilyDropdown`).
+/// whatever is actually selected (see `_FamilyDropdown`). Android is the
+/// exception — see [TerminalFontStore.load].
 enum TerminalFontChoice {
   sfMono('SF Mono', macTerminalFontFamily, macTerminalFontFallback),
   menlo('Menlo', 'Menlo', ['Monaco', 'Courier New', 'monospace']),
@@ -58,7 +66,16 @@ enum TerminalFontChoice {
     'DejaVu Sans Mono',
     'Liberation Mono',
     'monospace',
-  ]);
+  ]),
+
+  droidSansMono(
+    'Droid Sans Mono',
+    androidTerminalFontFamily,
+    androidTerminalFontFallback,
+  ),
+  // A typewriter face with a smaller repertoire than Droid Sans Mono, which
+  // covers what it lacks before the system's own fallback has to.
+  cutiveMono('Cutive Mono', 'serif-monospace', [androidTerminalFontFamily]);
 
   const TerminalFontChoice(
     this.label,
@@ -78,19 +95,52 @@ enum TerminalFontChoice {
     liberationMono,
     notoSansMono,
   ];
+  static const _androidChoices = [droidSansMono, cutiveMono];
 
-  /// The faces worth offering on the host this build is running on.
+  /// The faces worth offering on [host].
   ///
   /// Windows falls in with Linux deliberately rather than with macOS: its
   /// runner is unexercised (see CLAUDE.md), and of the two lists the Linux one
   /// at least ends every fallback at the generic `monospace`, which Windows
   /// does resolve.
-  static List<TerminalFontChoice> get available =>
-      hasAppleFonts ? _macChoices : _linuxChoices;
+  static List<TerminalFontChoice> availableOn(TerminalFontHost host) =>
+      switch (host) {
+        TerminalFontHost.apple => _macChoices,
+        TerminalFontHost.android => _androidChoices,
+        TerminalFontHost.other => _linuxChoices,
+      };
 
-  /// What a fresh install opens with, and what `reset()` returns to.
-  static TerminalFontChoice get defaultForPlatform =>
-      hasAppleFonts ? sfMono : dejaVuSansMono;
+  /// What a fresh install on [host] opens with, and what `reset()` returns to.
+  static TerminalFontChoice defaultOn(TerminalFontHost host) => switch (host) {
+    TerminalFontHost.apple => sfMono,
+    TerminalFontHost.android => droidSansMono,
+    TerminalFontHost.other => dejaVuSansMono,
+  };
+
+  /// The faces worth offering on the host this build is running on.
+  static List<TerminalFontChoice> get available =>
+      availableOn(TerminalFontHost.current);
+}
+
+/// Which set of fonts the OS under the app ships — what decides the terminal's
+/// [TerminalFontChoice.availableOn] list and its default.
+///
+/// Read from `dart:io` rather than `defaultTargetPlatform`, as [hasAppleFonts]
+/// is: the question is which fonts are installed, not which platform the
+/// widgets imitate, and a test overriding the latter runs on the same fonts.
+enum TerminalFontHost {
+  /// macOS and iOS — see [hasAppleFonts].
+  apple,
+  android,
+
+  /// Linux, and Windows with it — see [TerminalFontChoice.availableOn].
+  other;
+
+  static TerminalFontHost get current => hasAppleFonts
+      ? apple
+      : Platform.isAndroid
+      ? android
+      : other;
 }
 
 /// The user's chosen terminal typography (family + size), remembered across
@@ -110,9 +160,17 @@ enum TerminalFontChoice {
 /// guard and [ValueNotifier]'s own "don't notify on a no-op set" work for
 /// free.
 class TerminalFontStore extends ValueNotifier<TerminalStyle> {
-  TerminalFontStore({LocalKeyValueStore? storage})
+  /// [host] is the OS whose fonts this store picks among — the running one
+  /// unless a test names another.
+  TerminalFontStore({LocalKeyValueStore? storage, TerminalFontHost? host})
     : _storage = storage ?? HarnessFileStore.shared,
-      super(_styleFor(TerminalFontChoice.defaultForPlatform, terminalFontSize));
+      _host = host ?? TerminalFontHost.current,
+      super(
+        _styleFor(
+          TerminalFontChoice.defaultOn(host ?? TerminalFontHost.current),
+          terminalFontSize,
+        ),
+      );
 
   static const _familyKey = 'terminal_font_family';
   static const _sizeKey = 'terminal_font_size';
@@ -125,6 +183,11 @@ class TerminalFontStore extends ValueNotifier<TerminalStyle> {
   static const _step = 1.0;
 
   final LocalKeyValueStore _storage;
+  final TerminalFontHost _host;
+
+  /// What a fresh install opens with on this store's host, and what [reset]
+  /// returns to.
+  TerminalFontChoice get defaultChoice => TerminalFontChoice.defaultOn(_host);
 
   static final _cache = <(TerminalFontChoice, double), TerminalStyle>{};
   static TerminalStyle _styleFor(TerminalFontChoice choice, double size) =>
@@ -139,7 +202,7 @@ class TerminalFontStore extends ValueNotifier<TerminalStyle> {
 
   TerminalFontChoice get family => TerminalFontChoice.values.firstWhere(
     (choice) => choice.fontFamily == value.fontFamily,
-    orElse: () => TerminalFontChoice.defaultForPlatform,
+    orElse: () => defaultChoice,
   );
 
   double get size => value.fontSize;
@@ -147,6 +210,12 @@ class TerminalFontStore extends ValueNotifier<TerminalStyle> {
   /// Read the saved choice, if there is one. Failure (or a stale/unknown
   /// family name from an older build) is silent and lands on the default —
   /// an unreadable state file is not a reason to refuse to start.
+  ///
+  /// ⚠️ **On Android a face Android does not ship lands on the default too.**
+  /// Before it had a list of its own the phone offered Android the Linux one,
+  /// so a pick saved then names a face no Android phone has — drawn as Droid
+  /// Sans Mono while Settings named DejaVu or Ubuntu. Elsewhere every value
+  /// still loads, for the reason given on [TerminalFontChoice].
   Future<void> load() async {
     try {
       final saved = await _storage.readMany([_familyKey, _sizeKey]);
@@ -154,19 +223,22 @@ class TerminalFontStore extends ValueNotifier<TerminalStyle> {
       final savedSize = saved[_sizeKey];
       final choice = TerminalFontChoice.values
           .where((c) => c.name == savedFamily)
+          .where(_loads)
           .firstOrNull;
       final size = savedSize == null ? null : double.tryParse(savedSize);
       value = _styleFor(
-        choice ?? TerminalFontChoice.defaultForPlatform,
+        choice ?? defaultChoice,
         _clamp(size ?? terminalFontSize),
       );
     } catch (_) {
-      value = _styleFor(
-        TerminalFontChoice.defaultForPlatform,
-        terminalFontSize,
-      );
+      value = _styleFor(defaultChoice, terminalFontSize);
     }
   }
+
+  /// Whether a saved [choice] is taken as it is — see [load].
+  bool _loads(TerminalFontChoice choice) =>
+      _host != TerminalFontHost.android ||
+      TerminalFontChoice.availableOn(_host).contains(choice);
 
   Future<void> setFamily(TerminalFontChoice choice) => _set(choice, size);
 
@@ -174,14 +246,11 @@ class TerminalFontStore extends ValueNotifier<TerminalStyle> {
   Future<void> decreaseSize() => _set(family, size - _step);
   Future<void> setSize(double size) => _set(family, size);
 
-  Future<void> reset() =>
-      _set(TerminalFontChoice.defaultForPlatform, terminalFontSize);
+  Future<void> reset() => _set(defaultChoice, terminalFontSize);
 
   /// Whether the current pick *is* the default — what [reset] would leave the
   /// store at, so a Reset control can say it has nothing to do.
-  bool get isDefault =>
-      family == TerminalFontChoice.defaultForPlatform &&
-      size == terminalFontSize;
+  bool get isDefault => family == defaultChoice && size == terminalFontSize;
 
   double _clamp(double size) => size.clamp(minSize, maxSize);
 

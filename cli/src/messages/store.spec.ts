@@ -22,18 +22,21 @@ describe('Agent Messages\' saved state', () => {
     store.record(message(1))
     store.state.local.push({ key: 'k', messageId: 'm0000001', agentId: 'b', pane: '%1', state: 'queued', tries: 0, nextTryAt: 0, at: 0 })
     store.state.outbox.push({ messageId: 'm0000001', machineId: 'm2', nextTryAt: 0, tries: 0 })
+    // Another account's machine, through the shared tab it was routed to: the route is kept with it.
+    store.state.outbox.push({ messageId: 'm0000001', machineId: 'bob-mini', nextTryAt: 0, tries: 0, sharedTabId: 'a'.repeat(24) })
     store.state.noted.b = 'sig'
     store.state.notes.b = { pane: '%1', key: '0note-sig', signature: 'sig' }
     store.save()
     const again = new MessageStore(join(dir, 'state'))
     expect(again.state.history.map((e) => e.message.id)).toEqual(['m0000001'])
     expect(again.state.local).toHaveLength(1)
-    expect(again.state.outbox).toHaveLength(1)
+    expect(again.state.outbox).toEqual([{ messageId: 'm0000001', machineId: 'm2', nextTryAt: 0, tries: 0 },
+      { messageId: 'm0000001', machineId: 'bob-mini', nextTryAt: 0, tries: 0, sharedTabId: 'a'.repeat(24) }])
     expect(again.state.noted).toEqual({ b: 'sig' })
     // A bare `%1`, as every state written before other backends holds it, is read as the tmux pane it was.
     expect(again.state.local[0].pane).toBe('tmux\u0000%1')
     expect(again.state.notes).toEqual({ b: { pane: 'tmux\u0000%1', key: '0note-sig', signature: 'sig' } })
-    writeFileSync(join(dir, 'state', 'state.json'), JSON.stringify({ history: [{ message: { id: 'bad' } }, { message: message(2) }], local: [null, { key: 1 }], outbox: [null], noted: 'x', notes: [] }))
+    writeFileSync(join(dir, 'state', 'state.json'), JSON.stringify({ history: [{ message: { id: 'bad' } }, { message: message(2) }], local: [null, { key: 1 }], outbox: [null, { messageId: 'm0000002', machineId: 'm2', sharedTabId: 7 }], noted: 'x', notes: [] }))
     const partial = new MessageStore(join(dir, 'state'))
     expect(partial.state).toEqual({ history: [{ message: message(2), statuses: [] }], local: [], outbox: [], noted: {}, notes: {} })
   })

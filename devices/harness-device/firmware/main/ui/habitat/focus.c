@@ -3,6 +3,7 @@
 #include "focus_faces.h"
 #include "theme.h"
 #include "../../pet_store.h"
+#include "../../elapsed.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -206,13 +207,28 @@ static const ht_pet_t *pet_for(const ht_character_face_t *f)
 /*
  * THE WORKING SCENE: a pet with one (Claude's cooking Clawd) plays it, large, in place of the small
  * pet and the centred working line, while it is working on a plain working line — not asking, not a
- * recap, not the listening meter, not held. NULL otherwise.
+ * recap, not the listening meter, not held. NULL otherwise. A pet with a second one (Claude's builder,
+ * owner 2026-10-16: mockup/clawd_build.py) plays that instead when the face says so (f->working_alt).
  */
 static const ht_pet_scene_t *working_scene(const ht_character_face_t *f, const char *recap)
 {
     const ht_pet_t *pet = pet_for(f);
     if (!pet || !pet->working_scene || pet_holds(f) || f->mood == HT_CHARACTER_LISTENING) return NULL;
-    return pet_state(f, recap) == HT_PET_WORKING ? pet->working_scene : NULL;
+    if (pet_state(f, recap) != HT_PET_WORKING) return NULL;
+    return f->working_alt && pet->working_alt ? pet->working_alt : pet->working_scene;
+}
+void ht_focus_pick_working(ht_focus_working_pick_t *p, ht_character_face_t *f, const char *recap, const char *agent,
+                           uint32_t (*rnd)(void))
+{
+    f->working_alt = false;
+    const ht_pet_t *pet = pet_for(f);
+    bool shown = working_scene(f, recap) != NULL;
+    if (shown && (!p->shown || strncmp(p->agent, agent ? agent : "", sizeof p->agent - 1))) {
+        p->alt = pet && pet->working_alt && (rnd() & 1u);
+        snprintf(p->agent, sizeof p->agent, "%s", agent ? agent : "");
+    }
+    p->shown = shown;
+    f->working_alt = shown && p->alt;
 }
 /*
  * THE RELAXING SCENE (owner, 2026-10-09: mockup/relaxing.html): the resting face of an agent with nothing to show —
@@ -740,11 +756,10 @@ static void label_runs(ht_scene_t *s, const ht_lv_label_t *l, int runs, int x, i
     }
 }
 
-// "34s", then "1m 05s" — the old firmware's fmt_elapsed.
-static void elapsed_text(char *out, size_t cap, unsigned sec)
+// The shared elapsed format (main/elapsed.c): "0:34", "1:05", "1h 5m", "2d 3h". 0 = unknown, not drawn.
+static void elapsed_text(char *out, size_t cap, uint32_t sec)
 {
-    if (sec < 60) snprintf(out, cap, "%us", sec);
-    else snprintf(out, cap, "%um %02us", sec / 60, sec % 60);
+    fmt_elapsed(out, cap, sec);
 }
 
 /*

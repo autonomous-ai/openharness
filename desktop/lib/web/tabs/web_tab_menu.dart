@@ -56,8 +56,17 @@ String webPaneTitle(AppNotifier app, TerminalPane pane) {
 String? _statusLabel(HarnessActivity? activity) =>
     activity == HarnessActivity.idle ? null : activity?.label;
 
+/// The active tab's rows about sharing it, in the desktop tab menu's order.
+const _tabSharingRows = [
+  ('shared_tab.invite', 'Invite People…'),
+  ('agent_messages.show', 'Show Agent Messages'),
+  ('shared_tab.stop', 'Stop Sharing Tab'),
+  ('shared_tab.leave', 'Leave Tab'),
+];
+
 /// The menu's rows: this tab's harnesses (a phone draws one at a time), then
-/// every tab, then rename. Harnesses and tabs both close from their row.
+/// every tab, then this tab's sharing and Agent Messages, then rename.
+/// Harnesses and tabs both close from their row.
 List<Widget> webTabMenuRows(
   AppNotifier app,
   WorkspaceCommands commands,
@@ -129,6 +138,16 @@ List<Widget> webTabMenuRows(
           status: _statusLabel(tabActivity(app, tab)),
         ),
       ),
+    // This tab's sharing with other accounts (1c) and its Agent Messages, as
+    // the desktop tab menu offers them: everything a native menu has is
+    // clickable here. Move Here is never offered in a browser (no "here").
+    for (final (command, title) in _tabSharingRows)
+      if (commands.canRun(command))
+        row(
+          'web-tab-run:$command',
+          WebRunCommand(command),
+          PaneMenuRow(selected: false, title: title),
+        ),
     // New tabs are the `+` beside the switcher, as on desktop.
     if (commands.canRun('swarm.rename'))
       row(

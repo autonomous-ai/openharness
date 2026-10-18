@@ -23,6 +23,7 @@ static const ht_pet_scene_t *scene_of(const ht_pet_t *pet, pod_scene_t which)
 {
     switch (which) {
     case POD_SCENE_WORK: return pet->working_scene;
+    case POD_SCENE_WORK_ALT: return pet->working_alt ? pet->working_alt : pet->working_scene;
     case POD_SCENE_RELAX: return pet->relaxing_scene;
     case POD_SCENE_LISTEN: return pet->listening_scene;
     case POD_SCENE_SEND: return pet->sending_scene;
@@ -47,7 +48,11 @@ unsigned pod_pet_runs(const char *engine, pod_scene_t scene)
 
 // ---- the dial's scene maths, ported ---------------------------------------------------------------------
 
-static unsigned scene_clock_step(const ht_pet_scene_t *c, uint32_t clock_ms) { return (clock_ms / c->step_ms) % c->steps; }
+// How long a step is shown. Pets redraws on a 66 ms beat (POD_PH_ANIM_MS), so a step shorter than that (Claude's 55 ms scenes, Codex's 42 to 46 ms
+// loop) sampled by the clock skips one every few beats and stutters. In beat mode (Pets: pod_pet_draw) such a step is shown for exactly one beat, so
+// every step is drawn in turn, a little slower than the art's own pace. pod_pet_draw_on keeps the clock and its 33 ms frames (tests and tools).
+static uint32_t beat_step_ms(uint32_t step_ms, bool beat) { return beat && step_ms < POD_PH_ANIM_MS ? POD_PH_ANIM_MS : step_ms; }
+static unsigned scene_clock_step(const ht_pet_scene_t *c, uint32_t clock_ms, bool beat) { return (clock_ms / beat_step_ms(c->step_ms, beat)) % c->steps; }
 
 // sin(x) for x in radians, no libm: reduce to [-pi, pi], then a Taylor series (error < 2e-4).
 static float fsin(float x)
@@ -67,7 +72,11 @@ typedef struct {
     int bx, by, side;      // the square
     int ox, oy;            // where the scene's top-left sits
     unsigned z;            // zoom in eighths
+    unsigned zmax;         // 8, or 16 when the square is the 2x one
     uint32_t ground;       // 0xRRGGBB the listening waves fade toward
+    bool flat;             // the ground under the scene's main frame is the one colour `ground` (pod_pet_draw_flat): a frame below 1x is baked
+    bool beat;             // Pets: a step shorter than the 66 ms beat lasts one beat (see beat_step_ms)
+    bool smooth;           // the pet is painted art, not pixel art: at 2x it is interpolated, not doubled (pod_cell_smooth)
 } ctx_t;
 
 static void rect_in(const ctx_t *c, int *x, int *y, int w, int h)
@@ -75,17 +84,19 @@ static void rect_in(const ctx_t *c, int *x, int *y, int w, int h)
     *x = clampi(*x, c->bx, c->bx + c->side - w);
     *y = clampi(*y, c->by, c->by + c->side - h);
 }
-static void put_frame(const ctx_t *c, int x, int y, const ht_cell_frame_t *f)
+static void put_frame(const ctx_t *c, int x, int y, const ht_cell_frame_t *f, bool main_frame)
 {
     int w = (f->cols * f->cell * (int)c->z + 7) / 8, h = (f->rows * f->cell * (int)c->z + 7) / 8;
     rect_in(c, &x, &y, w, h);
-    pod_cell(c->s, x, y, f, c->z);
+    if (main_frame && c->flat) pod_cell_flat(c->s, x, y, f, c->z, ht_rgb(c->ground));   // only the main frame: an overlay lands on the frame, not on the ground
+    else if (c->smooth) pod_cell_smooth(c->s, x, y, f, c->z);
+    else pod_cell(c->s, x, y, f, c->z);
 }
 static void put_overlay(const ctx_t *c, const ht_pet_scene_t *e, unsigned level, unsigned step)
 {
     unsigned i = level * e->steps + step;
     put_frame(c, c->ox + sc(e->overlay->at[i][0], c->z), c->oy + sc(e->overlay->at[i][1], c->z),
-              &e->overlay->frames[e->overlay->loop[i]]);
+              &e->overlay->frames[e->overlay->loop[i]], false);
 }
 static int bar_height(const ht_pet_bars_t *b, int j, unsigned level, uint32_t clock_ms)
 {
@@ -137,7 +148,7 @@ static void play_scene(ctx_t *c, const ht_pet_scene_t *e, unsigned level, unsign
             for (int k = 0; k < e->waves->count; k++) put_wave(c, e, side, k, level, clock_ms);
     if (e->overlay && e->bars) put_overlay(c, e, level, step);
     int dy = e->step_dy ? e->step_dy[at] : 0;
-    put_frame(c, c->ox, c->oy + sc(dy, c->z), &e->frames[e->loop[at]]);
+    put_frame(c, c->ox, c->oy + sc(dy, c->z), &e->frames[e->loop[at]], true);
     if (e->bars)
         for (int j = 0; j < 3; j++) put_bar(c, e, j, level, clock_ms);
     if (e->overlay && !e->bars) put_overlay(c, e, level, step);
@@ -149,16 +160,19 @@ static void play_scene(ctx_t *c, const ht_pet_scene_t *e, unsigned level, unsign
 // w x h box (the dial's dx, dy place it on a round glass: juggling balls above, waves beside), so the player
 // centres and fits this, not the box. Found by playing the scene over a few seconds, once per scene.
 typedef struct { int x0, y0, x1, y1; } extent_t;
+static unsigned s_scans;
+unsigned pod_pet_extent_scans(void) { return s_scans; }
 static extent_t scene_extent(const ht_pet_scene_t *e, unsigned level)
 {
+    s_scans++;
     // A whole scene (tens of KB): in PSRAM, not internal RAM. The render task is the only caller.
     static EXT_RAM_BSS_ATTR ht_scene_t scratch;
     extent_t u = {0x7fff, 0x7fff, -0x7fff, -0x7fff};
     for (unsigned n = 0; n < 24 + 128; n++) {
         uint32_t clock_ms = n < 24 ? n * e->step_ms : (n - 24) * 41u;
-        ctx_t c = {&scratch, -4000, -4000, 8000, 0, 0, 8, 0xffffff};
+        ctx_t c = {&scratch, -4000, -4000, 8000, 0, 0, 8, 8, 0xffffff, false, false, false};
         scratch.count = 0;
-        play_scene(&c, e, level, scene_clock_step(e, clock_ms), clock_ms);
+        play_scene(&c, e, level, scene_clock_step(e, clock_ms, false), clock_ms);
         for (int i = 0; i < scratch.count; i++) {
             const ht_run_t *r = &scratch.runs[i];
             if (r->w <= 0 || r->pro_height <= 0) continue;
@@ -169,25 +183,44 @@ static extent_t scene_extent(const ht_pet_scene_t *e, unsigned level)
     if (u.x1 < u.x0) u = (extent_t){0, 0, e->w, e->h};
     return u;
 }
+// One slot per (scene, level) the player asks for: 4 pets x 4 scenes (the listening one at its top level, the rest at 0) is 16; 32 leaves room for more pets.
+enum { EXTENT_SLOTS = 32 };
+static unsigned scene_level(const ht_pet_scene_t *e, pod_scene_t scene) { (void)e; return scene == POD_SCENE_LISTEN ? HT_PET_SCENE_LEVELS - 1 : 0; }
 static extent_t cached_extent(const ht_pet_scene_t *e, unsigned level)
 {
-    static struct { const ht_pet_scene_t *e; unsigned level; extent_t u; } cache[16];
+    static struct { const ht_pet_scene_t *e; unsigned level; extent_t u; } cache[EXTENT_SLOTS];
     static unsigned used;
     for (unsigned i = 0; i < used; i++)
         if (cache[i].e == e && cache[i].level == level) return cache[i].u;
     extent_t u = scene_extent(e, level);
-    if (used < 16) { cache[used].e = e; cache[used].level = level; cache[used].u = u; used++; }
+    if (used < EXTENT_SLOTS) { cache[used].e = e; cache[used].level = level; cache[used].u = u; used++; }
     return u;
 }
 
 // ---- the small pet --------------------------------------------------------------------------------------
 
+// Whether row r of the frame has an inked cell: one pass over the row's own bytes (a packed row is a run of skip, count, cells; the
+// plain grid's row is read in place), not a ht_cell_at per cell, which unpacks the whole row every time.
+static bool row_inked(const ht_cell_frame_t *fr, int r)
+{
+    if (!fr->row_at) {
+        const uint8_t *p = fr->cells + (size_t)r * fr->cols;
+        for (int c = 0; c < fr->cols; c++) if (p[c]) return true;
+        return false;
+    }
+    const uint8_t *p = fr->cells + fr->row_at[r];
+    for (int x = 0; x < fr->cols;) {
+        int skip = *p++, n = *p++;
+        for (int k = 0; k < n; k++) if (p[k]) return true;
+        p += n; x += skip + n;
+    }
+    return false;
+}
 static void ink_rows(const ht_cell_frame_t *fr, int *first, int *end)
 {
     *first = *end = 0;
     for (int r = 0; r < fr->rows; r++)
-        for (int col = 0; col < fr->cols; col++)
-            if (ht_cell_at(fr, col, r)) { if (*end == 0) *first = r; *end = r + 1; break; }
+        if (row_inked(fr, r)) { if (*end == 0) *first = r; *end = r + 1; }
 }
 static bool loops_differ(const ht_pet_t *pet, int a, int b)
 {
@@ -197,13 +230,15 @@ static bool loops_differ(const ht_pet_t *pet, int a, int b)
 }
 static void play_rest(ctx_t *c, const ht_pet_t *pet, ht_pet_state_t state, uint32_t clock_ms)
 {
-    unsigned step = (clock_ms / pet->step_ms[state]) % ht_pet_steps(pet);
+    unsigned step = (clock_ms / beat_step_ms(pet->step_ms[state], c->beat)) % ht_pet_steps(pet);
     const ht_pet_step_t *p = &pet->loops[state][step];
     const ht_cell_frame_t *fr = &pet->cells[p->frame];
     int fw = fr->cols * fr->cell, fh = fr->rows * fr->cell;
     // Largest zoom that leaves 12% of the square free: the cells are stored at 2x, so 8 is the stored size.
+    // At 2x (zmax 16) the zoom is 16 when it fits, else at most 8: pod_cell has no zoom between.
     int z = c->side * 88 * 8 / 100 / imax(1, imax(fw, fh));
-    z = clampi(z, 2, 8);
+    z = clampi(z, 2, (int)c->zmax);
+    if (z > 8 && z < 16) z = 8;
     int pw = (fw * z + 7) / 8, ph = (fh * z + 7) / 8;
     // Centred by the ink of the loop's first frame, as the dial does, so a pose that reaches higher does not move it.
     int r0, r1;
@@ -213,7 +248,7 @@ static void play_rest(ctx_t *c, const ht_pet_t *pet, ht_pet_state_t state, uint3
     int px = c->bx + (c->side - pw) / 2;
     int py = c->by + (c->side - ink_h) / 2 - ink_top + p->dy * z / 4;
     c->z = (unsigned)z;
-    put_frame(c, px, py, fr);
+    put_frame(c, px, py, fr, true);
 }
 
 // ---- when the drawing next changes ----------------------------------------------------------------------
@@ -229,7 +264,7 @@ static bool step_differs(const ht_pet_scene_t *e, unsigned level, unsigned a, un
                                e->shapes->count * sizeof e->shapes->at[0]);
 }
 
-uint32_t pod_pet_next_step_ms(const char *engine, pod_scene_t scene, uint32_t clock_ms, uint32_t started_ms)
+static uint32_t next_step_ms(const char *engine, pod_scene_t scene, uint32_t clock_ms, uint32_t started_ms, bool beat)
 {
     const ht_pet_t *pet = pod_pet_for(engine);
     if (!pet) return 1000;   // a still logo: only the screen's own clocks move
@@ -238,17 +273,17 @@ uint32_t pod_pet_next_step_ms(const char *engine, pod_scene_t scene, uint32_t cl
     bool hold = false;   // SEND holds its last step instead of wrapping
     ht_pet_state_t state = HT_PET_IDLE;
     if (e) {
-        if (e->bars || e->waves) return POD_PET_STEP_MS;
-        step_ms = e->step_ms;
+        if (e->bars || e->waves) return beat ? POD_PH_ANIM_MS - clock_ms % POD_PH_ANIM_MS : POD_PET_STEP_MS;   // drawn from the clock: every frame the beat allows
+        step_ms = beat_step_ms(e->step_ms, beat);
         if (scene == POD_SCENE_SEND) {
             hold = true;
             uint32_t age = (int32_t)(clock_ms - started_ms) >= 0 ? clock_ms - started_ms : 0;
             clock_ms = age;
             from = age / step_ms >= n ? n - 1u : age / step_ms;
-        } else from = scene_clock_step(e, clock_ms);
+        } else from = scene_clock_step(e, clock_ms, beat);
     } else {
         if (scene == POD_SCENE_ASK && loops_differ(pet, HT_PET_ASKING, HT_PET_IDLE)) state = HT_PET_ASKING;
-        step_ms = pet->step_ms[state];
+        step_ms = beat_step_ms(pet->step_ms[state], beat);
         from = (clock_ms / step_ms) % n;
     }
     for (k = 1; k <= n; k++) {
@@ -260,6 +295,14 @@ uint32_t pod_pet_next_step_ms(const char *engine, pod_scene_t scene, uint32_t cl
             return k * step_ms - clock_ms % step_ms;
     }
     return n * step_ms;   // every step draws the same
+}
+uint32_t pod_pet_next_step_ms(const char *engine, pod_scene_t scene, uint32_t clock_ms, uint32_t started_ms)
+{
+    return next_step_ms(engine, scene, clock_ms, started_ms, false);
+}
+uint32_t pod_pet_next_beat_ms(const char *engine, pod_scene_t scene, uint32_t clock_ms, uint32_t started_ms)
+{
+    return next_step_ms(engine, scene, clock_ms, started_ms, true);
 }
 
 // ---- the player -----------------------------------------------------------------------------------------
@@ -305,14 +348,38 @@ void pod_mark_default_big(ht_scene_t *s, int x, int y, int size, uint16_t ground
     ht_pro_text(s, x + (size - w) / 2, y + (size - f->height) / 2 - size / 16, w, f, ht_rgb(0x6f746f), ">_");
 }
 
-void pod_pet_draw(ht_scene_t *s, int x, int y, int side, const char *engine, pod_scene_t scene,
-                  uint32_t clock_ms, uint32_t started_ms)
+int pod_pet_ink_h(const char *engine, pod_scene_t scene, int side, unsigned zoom8)
 {
-    pod_pet_draw_on(s, x, y, side, engine, scene, clock_ms, started_ms, 0xffffff);
+    const ht_pet_t *pet = pod_pet_for(engine);
+    if (!pet) return 0;
+    unsigned zmax = zoom8 > 8 && zoom8 <= 16 ? zoom8 : 8u;
+    if (zmax > 8) side = side * (int)zmax / 8;
+    const ht_pet_scene_t *e = scene_of(pet, scene);
+    if (!e) {   // the small pet (play_rest): the ink of the loop's first frame at the zoom it picks
+        ht_pet_state_t state = HT_PET_IDLE;
+        if (scene == POD_SCENE_ASK && loops_differ(pet, HT_PET_ASKING, HT_PET_IDLE)) state = HT_PET_ASKING;
+        const ht_cell_frame_t *fr = &pet->cells[pet->loops[state][0].frame];
+        int fw = fr->cols * fr->cell, fh = fr->rows * fr->cell;
+        int z = side * 88 * 8 / 100 / imax(1, imax(fw, fh));
+        z = clampi(z, 2, (int)zmax);
+        if (z > 8 && z < 16) z = 8;
+        int r0, r1;
+        ink_rows(fr, &r0, &r1);
+        int h = (r1 - r0) * fr->cell * z / 8;
+        return h > 0 ? h : (fh * z + 7) / 8;
+    }
+    extent_t u = cached_extent(e, scene_level(e, scene));   // the level the draw uses
+    int uw = u.x1 - u.x0, uh = u.y1 - u.y0, room = imax(1, side - 6), big = imax(uw, uh);
+    const bool fits = zmax > 8 && big * (int)zmax / 8 <= room && (zmax == 16 || !strcmp(engine, "codex"));
+    unsigned z = fits ? zmax : big <= room ? 8u : (unsigned)imax(4, 8 * room / big);
+    return sc(uh, z);
 }
-void pod_pet_draw_on(ht_scene_t *s, int x, int y, int side, const char *engine, pod_scene_t scene,
-                     uint32_t clock_ms, uint32_t started_ms, uint32_t ground_rgb)
+enum { DRAW_BEAT = 1, DRAW_FLAT = 2 };
+static void draw(ht_scene_t *s, int x, int y, int side, const char *engine, pod_scene_t scene,
+                 uint32_t clock_ms, uint32_t started_ms, uint32_t ground_rgb, unsigned zoom8, unsigned flags)
 {
+    unsigned zmax = zoom8 > 8 && zoom8 <= 16 ? zoom8 : 8u;   // 9..15: a smooth pet's in-between zoom (pod_cell_smooth); a scene only
+    if (zmax > 8) { int grown = side * (int)zmax / 8; x -= (grown - side) / 2; y -= (grown - side) / 2; side = grown; }   // the zoomed square, same centre
     const ht_pet_t *pet = pod_pet_for(engine);
     if (!pet) {   // the logo, big, on a pale box; a light mark (Cursor's) on a dark one, else it would vanish
         const pod_mark_t *m = pod_mark(engine);
@@ -322,7 +389,8 @@ void pod_pet_draw_on(ht_scene_t *s, int x, int y, int side, const char *engine, 
         if (!pod_logo_draw(s, mx, my, size, engine)) pod_mark_default_big(s, mx, my, size, ht_rgb(0xf0f4f0));
         return;
     }
-    ctx_t c = {s, x, y, side, x, y, 8, ground_rgb};
+    // Codex's robot is a painted render cut down to 192 x 208 (owner: doubled pixel by pixel it looked jagged on the voice screen).
+    ctx_t c = {s, x, y, side, x, y, 8, zmax, ground_rgb, (flags & DRAW_FLAT) != 0, (flags & DRAW_BEAT) != 0, !strcmp(engine, "codex")};
     const ht_pet_scene_t *e = scene_of(pet, scene);
     if (!e) {
         ht_pet_state_t state = HT_PET_IDLE;
@@ -330,16 +398,35 @@ void pod_pet_draw_on(ht_scene_t *s, int x, int y, int side, const char *engine, 
         play_rest(&c, pet, state, clock_ms);
         return;
     }
-    unsigned level = scene == POD_SCENE_LISTEN ? HT_PET_SCENE_LEVELS - 1 : 0, step;
+    unsigned level = scene_level(e, scene), step;
     // Fit what the scene draws (a margin of 3 px for rounding), zooming down only when it is larger than the square.
     extent_t u = cached_extent(e, level);
     int uw = u.x1 - u.x0, uh = u.y1 - u.y0, room = imax(1, side - 6), big = imax(uw, uh);
-    c.z = big <= room ? 8u : (unsigned)imax(4, 8 * room / big);
+    if (zmax > 8 && big * (int)zmax / 8 <= room && (zmax == 16 || c.smooth)) c.z = zmax;
+    else c.z = big <= room ? 8u : (unsigned)imax(4, 8 * room / big);
     c.ox = x + (side - sc(uw, c.z)) / 2 - sc(u.x0, c.z);
     c.oy = y + (side - sc(uh, c.z)) / 2 - sc(u.y0, c.z);
     if (scene == POD_SCENE_SEND) {
         uint32_t age = (int32_t)(clock_ms - started_ms) >= 0 ? clock_ms - started_ms : 0;
-        step = age / e->step_ms >= e->steps ? e->steps - 1u : age / e->step_ms;
-    } else step = scene_clock_step(e, clock_ms);
+        const uint32_t step_ms = beat_step_ms(e->step_ms, c.beat);
+        step = age / step_ms >= e->steps ? e->steps - 1u : age / step_ms;
+    } else step = scene_clock_step(e, clock_ms, c.beat);
     play_scene(&c, e, level, step, clock_ms);
+}
+
+// Pets (the beat, white ground), Pets over a ground of one colour (the beat, and a frame below 1x baked), and the clock-stepped variant.
+void pod_pet_draw(ht_scene_t *s, int x, int y, int side, const char *engine, pod_scene_t scene,
+                  uint32_t clock_ms, uint32_t started_ms, unsigned zoom8)
+{
+    draw(s, x, y, side, engine, scene, clock_ms, started_ms, 0xffffff, zoom8, DRAW_BEAT);
+}
+void pod_pet_draw_flat(ht_scene_t *s, int x, int y, int side, const char *engine, pod_scene_t scene,
+                       uint32_t clock_ms, uint32_t started_ms, uint32_t ground_rgb, unsigned zoom8)
+{
+    draw(s, x, y, side, engine, scene, clock_ms, started_ms, ground_rgb, zoom8, DRAW_BEAT | DRAW_FLAT);
+}
+void pod_pet_draw_on(ht_scene_t *s, int x, int y, int side, const char *engine, pod_scene_t scene,
+                     uint32_t clock_ms, uint32_t started_ms, uint32_t ground_rgb, unsigned zoom8)
+{
+    draw(s, x, y, side, engine, scene, clock_ms, started_ms, ground_rgb, zoom8, 0);
 }

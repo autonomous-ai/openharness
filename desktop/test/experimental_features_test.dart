@@ -121,7 +121,7 @@ void main() {
           'Turn on to have a harness another agent started add one line to the pull requests it '
           'opens: 🤝 Started by another agent in Harness.',
       'Agents in the same tab can message each other':
-          'Turn on to let Claude Code and Codex in one tab send each other messages with harness send.',
+          'Turn on to let Claude Code and Codex in one tab send each other messages with harness send. Invite people to a tab and their harnesses join it from their own computers.',
     };
     for (final MapEntry(key: label, value: detail) in copy.entries) {
       expect(find.text(label), findsOneWidget);
@@ -140,6 +140,30 @@ void main() {
       ('agent_pull_request_line', true),
       ('agent_messages', true),
     ]);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('the summary switch is stored inverted: checked when agent_messages_hide_summary is off', (tester) async {
+    final server = AccountSettings('a');
+    final store = await open(server);
+    await tester.pumpWidget(
+      MaterialApp(home: Scaffold(body: ExperimentalSection(store: store))),
+    );
+    await tester.pumpAndSettle();
+    const title = 'Share a one-line summary of what your harnesses are doing with people in your shared tabs';
+    expect(find.text(title), findsOneWidget);
+    final toggle = find.byKey(const ValueKey('experimental-agent_messages_hide_summary'));
+    await tester.ensureVisible(toggle);
+    expect(tester.widget<Switch>(toggle).value, isTrue);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(server.writes.last.$2.id, 'agent_messages_hide_summary');
+    expect(server.writes.last.$3, isTrue);
+    expect(tester.widget<Switch>(toggle).value, isFalse);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(server.writes.last.$3, isFalse);
+    expect(tester.widget<Switch>(toggle).value, isTrue);
     await tester.pumpWidget(const SizedBox());
   });
 

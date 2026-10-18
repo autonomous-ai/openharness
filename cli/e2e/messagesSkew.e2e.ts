@@ -7,11 +7,21 @@
  * swapped under a running master, and its core killed for the master to start again from the bundle on disk.
  *
  * - This build's core under a master from before: that master's own Agent Messages process, asked for as the core
- *   starts, carries a message typed into an idle agent, once; started again on this build, it carries the next.
- * - A core from before under this build's master: the edge host carries it; no process of its own is started.
+ *   starts, carries a message typed into an idle agent, once; started again on this build, it carries the next. That
+ *   process from before never asks this core for shared tabs (`account`, `tab_key`, `tab_relay`, `observers`): no
+ *   share route is called and no tab's relay is opened while it runs (shared tabs' version skew, case 2).
+ * - A core from before under this build's master: the edge host carries it; no process of its own is started. Its
+ *   Agent Messages are this build's, under a core that answers shared tabs' queries `UNKNOWN_QUERY`: every share action
+ *   answers `DAEMON_TOO_OLD` with `CORE_TOO_OLD_TEXT`, the restart it needs, and nothing reaches a share route, while
+ *   messages within the account's own tab are carried as before (case 1).
+ *
+ * Shared tabs' cases (docs/superpowers/specs/2026-10-15-agent-messages-across-accounts-design.md, "Rollout") need a build
+ * from before them; one from before the move (2026-10-12) is one.
  *
  * Opt-in, since it needs a build from before the move (`SKEW_FROM=<that build>/cli.js`, its notify.mjs beside it), and
  * runs this checkout's from the run's bundle:
+ * The old bundle to use is the 2c2c6be52 build (what 1b and 1c validated with); a fresh 4f92ee5e9 build fails the
+ * old-master test on 1b and 1c alike.
  *     SKEW_FROM=<build>/cli.js E2E_BUNDLE=1 npx vitest run --config vitest.e2e.config.ts e2e/messagesSkew.e2e.ts
  */
 import { execFileSync } from 'node:child_process'
@@ -24,12 +34,17 @@ import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { FAKE_ACCOUNT, FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import { AGENT_SETTINGS_DEFAULTS, saveAgentSettings } from '../src/lib/agentSettings.js'
+import { CORE_TOO_OLD_TEXT } from '../src/services/messagesProcess.js'
 
 const FROM = process.env.SKEW_FROM
 const ME: FakeMachine = { machineId: 'c3'.repeat(16), computerId: 'e2e-computer-0000-0000-0000000000c3', name: 'skew', token: 'e2e-token-skew' }
 const NO_EXECVE = fileURLToPath(new URL('./harness/noExecve.cjs', import.meta.url))
 
 const count = (text: string, part: string): number => text.split(part).length - 1
+/** What the backend saw of shared tabs: their routes, and their relay's socket. */
+const sharedTabsSeen = (backend: FakeBackend, since = 0): string[] =>
+  backend.seen.slice(since).filter((line) => /\/api\/agent-messages\/(shares|invites)|\/api\/agent-messages-ws/.test(line))
+const SHARE_ACTIONS = ['shares', 'share_tab', 'share_invite', 'share_accept', 'share_stop']
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents).find((agent) => agent.id === agentId)
 
@@ -144,6 +159,9 @@ describe.skipIf(!FROM)('Agent Messages between a core and a master of different 
     const client = await LocalClient.connect(d, { machineId: ME.machineId })
     const agents: Array<Record<string, any>> = []
     await message(d, relay, client, agents, 'Which port does the daemon serve?')
+    // The process from before knows nothing of shared tabs: under this core it calls none of their routes and opens no
+    // tab's relay.
+    expect(sharedTabsSeen(relay)).toEqual([])
     // Its process started again: on the bundle on disk, this build's, still alone.
     const pid = Number([...d.log().matchAll(/\[harnessd\] service messages started \(pid (\d+)\)/g)].at(-1)![1])
     const links = count(d.log(), '[services] messages connected')
@@ -160,10 +178,18 @@ describe.skipIf(!FROM)('Agent Messages between a core and a master of different 
     const { d, dir, relay } = await start('old-core', now)
     await until('the edge host to connect it', () => count(d.log(), '[services] messages connected') >= 1 || null, 60_000, 200)
     await swapCore(d, dir, before)
+    // This build's core, before the swap, read the shares once as Agent Messages woke: what follows is the old core's.
+    const since = relay.seen.length
     const client = await LocalClient.connect(d, { machineId: ME.machineId })
     await message(d, relay, client, [], 'Which port does the daemon serve?')
     // The core from before asks for it as an experiment, at start: this master runs it in the edge host already.
     expect(count(d.log(), '[harnessd] service messages started')).toBe(0)
+    // Shared tabs need the core restarted on this build: each share action says so, and none reaches the backend.
+    for (const action of SHARE_ACTIONS) {
+      const answer = await client.request('agent_messages', { action, tabId: 'app', name: 'app', sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6' }, 40_000)
+      expect(answer, action).toMatchObject({ error: 'DAEMON_TOO_OLD', detail: CORE_TOO_OLD_TEXT })
+    }
+    expect(sharedTabsSeen(relay, since)).toEqual([])
     expect(d.coresStarted()).toBe(2)
     client.close()
   }, 600_000)

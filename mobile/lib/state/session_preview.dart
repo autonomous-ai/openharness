@@ -1,8 +1,10 @@
 /// Ported from the desktop's `lib/state/session_preview.dart`, so a phone
 /// search reaches the same session content the desktop's Open Agent picker
 /// does. Keep the two in step; the additions here are
-/// [SessionPreview.searchParts], which the phone's result rows quote from, and
-/// [SessionPreviewStore.markStale], for turns a sleeping phone never heard.
+/// [SessionPreview.searchParts], which the phone's result rows quote from,
+/// [SessionPreviewStore.markStale], for turns a sleeping phone never heard,
+/// [SessionPreview.recap], for the recap a row of Find unfolds, and
+/// [SessionPreviewStore.maxInFlight], so those recaps arrive sooner.
 library;
 
 import 'dart:async';
@@ -28,6 +30,15 @@ class SessionPreview {
   /// `notify/done_notice.dart` stays silent for it. Unlike [completedText] it
   /// never carries over from an earlier turn.
   String? turnReply;
+
+  /// The headline of the turn [savedText] came from — the `summary` event's
+  /// `recap`, one line of at most 200 characters on the wire — or null where
+  /// that turn had none.
+  ///
+  /// ⚠️ **Dropped the moment a turn this phone watched end says something.**
+  /// From then on the reply on record is that turn's, which this headline was
+  /// not written for; the next read brings the new turn's own.
+  String? recap;
   String _streamText = '';
   String? _searchText;
   bool turnOpen = false,
@@ -84,6 +95,7 @@ class SessionPreview {
     earlierRequest,
     liveText,
     responseExcerpt,
+    recap,
     ...earlierResponses,
     activity,
   }.whereType<String>().toList();
@@ -102,14 +114,16 @@ class SessionPreview {
 }
 
 /// Bounded memory shared across picker openings. Inventory warms small cached
-/// `agent_recent` replies with two requests at a time. Selection reads memory;
-/// a settled cold selection may schedule the same inexpensive background read.
+/// `agent_recent` replies with [maxInFlight] requests at a time. Selection
+/// reads memory; a settled cold selection may schedule the same inexpensive
+/// background read.
 class SessionPreviewStore extends ChangeNotifier {
   SessionPreviewStore({
     required this.fetchRecent,
     required this.canFetch,
     this.capacity = 256,
     this.freshFor = const Duration(minutes: 1),
+    this.maxInFlight = 2,
     DateTime Function()? now,
   }) : _now = now ?? DateTime.now;
 
@@ -117,6 +131,9 @@ class SessionPreviewStore extends ChangeNotifier {
   final bool Function(SessionPreviewKey) canFetch;
   final int capacity;
   final Duration freshFor;
+
+  /// How many reads are out at once, across every machine. The desktop's two.
+  final int maxInFlight;
   final DateTime Function() _now;
   final _records = <SessionPreviewKey, SessionPreview>{};
   final _queue = <SessionPreviewKey>{};
@@ -172,7 +189,7 @@ class SessionPreviewStore extends ChangeNotifier {
   }
 
   void _drain() {
-    while (!_disposed && _inFlight.length < 2 && _queue.isNotEmpty) {
+    while (!_disposed && _inFlight.length < maxInFlight && _queue.isNotEmpty) {
       final key = _queue.first;
       _queue.remove(key);
       if (!canFetch(key)) continue;
@@ -207,16 +224,24 @@ class SessionPreviewStore extends ChangeNotifier {
         final events = reply['events'];
         if (events is List) {
           final responses = <String>[];
+          String? headline;
           for (final event in events.take(3)) {
             if (event is! Map || event['kind'] != 'summary') continue;
             final text =
                 previewText(event['fullText'], limit: 6000) ??
                 previewText(event['text'], limit: 6000) ??
                 previewText(event['recap'], limit: 6000);
-            if (text != null && !responses.contains(text)) responses.add(text);
+            if (text == null || responses.contains(text)) continue;
+            // The headline of the event [savedText] is taken from, and of no
+            // other: an earlier turn's would sit over the wrong reply.
+            if (responses.isEmpty) {
+              headline = previewText(event['recap'], limit: 400);
+            }
+            responses.add(text);
           }
           if (responses.isNotEmpty) {
             entry.savedText = responses.first;
+            entry.recap = headline;
             entry.earlierResponses
               ..clear()
               ..addAll(responses.skip(1));
@@ -295,7 +320,10 @@ class SessionPreviewStore extends ChangeNotifier {
         entry.turnOpen = false;
         entry.interrupted = payload['aborted'] == true;
         entry.turnReply = entry.liveText;
-        if (entry.liveText != null) entry.completedText = entry.liveText;
+        if (entry.liveText != null) {
+          entry.completedText = entry.liveText;
+          entry.recap = null;
+        }
         entry.liveText = null;
         entry.activity = null;
     }

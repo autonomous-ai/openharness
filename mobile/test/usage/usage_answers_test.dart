@@ -160,7 +160,7 @@ void main() {
       expect(reading.status, UsageStatus.ok);
       expect(reading.account, 'acct');
       expect(reading.windows, hasLength(2));
-      expect(reading.railWindow!.usedPercent, 64);
+      expect(reading.tightest!.usedPercent, 64);
       expect(reading.windows.first.resetsAt, isNotNull);
     });
 

@@ -58,6 +58,8 @@ export function searchCoreApi(
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
       ...AGENT_ACTIONS_OFF,
       activityText: UNASKED.activityText,
+      activity: UNASKED.activity,
+      summaries: UNASKED.summaries,
     },
     // Search drives no agent: these are never asked of it.
     turns: { send: () => {}, stop: () => {}, recent: async () => [], asks: async () => [], ...DELIVERIES_OFF },

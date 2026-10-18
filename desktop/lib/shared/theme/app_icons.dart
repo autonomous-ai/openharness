@@ -125,6 +125,7 @@ abstract final class AppIcons {
   static const packageOpen = LucideIcons.packageOpen400;
   static const palette = LucideIcons.palette400;
   static const paperclip = LucideIcons.paperclip400;
+  static const panelLeft = LucideIcons.panelLeft400;
   static const panelsTopLeft = LucideIcons.panelsTopLeft400;
   static const pause = LucideIcons.pause400;
   static const pencil = LucideIcons.pencil400;
@@ -170,6 +171,7 @@ abstract final class AppIcons {
   static const unplug = LucideIcons.unplug400;
   static const usb = LucideIcons.usb400;
   static const user = LucideIcons.user400;
+  static const users = LucideIcons.users400;
   static const waypoints = LucideIcons.waypoints400;
   static const zap = LucideIcons.zap400;
 }

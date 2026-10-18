@@ -37,11 +37,8 @@ describe('owner device management', () => {
     expect(set).toHaveBeenCalledExactlyOnceWith('usb-b', { brightness: 35 })
     expect(reply).toMatchObject({ ok: true, status: { devices: [{ settings: { brightness: 80 } }, { settings: { brightness: 80 } }, {}, {}] } })
   })
-  it('passes a Pro\'s screen turn through, and refuses a turn that is not a boolean', async () => {
-    const { service, set } = fixture()
-    await harnessDevicesRequest(service, 'harness_device_settings', { id: 'usb-b', patch: { screenTurned: true } })
-    expect(set).toHaveBeenCalledExactlyOnceWith('usb-b', { screenTurned: true })
-    expect(deviceSettingsPatchSchema.safeParse({ screenTurned: 'yes' }).success).toBe(false)
+  it('validates a Pro\'s interface skin, and refuses the retired screen turn', async () => {
+    expect(deviceSettingsPatchSchema.safeParse({ screenTurned: true }).success).toBe(false)
     expect(deviceSettingsPatchSchema.safeParse({ uiSkin: 'classic' }).success).toBe(true)
     expect(deviceSettingsPatchSchema.safeParse({ uiSkin: 1 }).success).toBe(false)
     expect(deviceSettingsPatchSchema.safeParse({ uiSkin: 'x' }).success).toBe(false)

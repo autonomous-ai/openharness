@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:collection/collection.dart' show compareNatural;
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -62,17 +64,79 @@ class AgentEntry {
 /// [phoneMachineListsAgents]: an offline machine's agent list is whatever was last seen there, and
 /// drawing it beside live ones would offer rows that cannot be opened. Those machines are reachable
 /// on the Machines tab instead, which is where the thing to do about them lives.
+///
+/// ⚠️ **The same list comes back while nothing it was built from has changed (owner, 2026-10-02).**
+/// Every screen on a phone reads this in its build, several times over — the terminal on screen
+/// three times — and each of those rebuilds on every change anywhere in the app. On an account of
+/// seven to ten machines with fifty sessions each that was hundreds of entries made, and sorted by
+/// [visibleAgents], per read, per rebuild. What it is built from is checked machine by machine —
+/// the machine, its state, whether it lists, and the list object itself, which the app replaces
+/// rather than edits whenever an agent changes — so the check is as long as the machine list, not
+/// as the agents. An [AgentEntry] reads waiting and working live from its machine's state, so a
+/// kept entry is never stale on those.
+///
+/// Read-only: callers walk it or build from it, and a list shared between them must not be edited.
 List<AgentEntry> agentIndex(AppNotifier notifier) {
+  final memo = _indexMemo[notifier];
+  if (memo != null && memo.stillFor(notifier)) return memo.entries;
+  final sources = <_IndexSource>[];
   final entries = <AgentEntry>[];
   for (final machine in notifier.machines) {
     final state = notifier.stateOf(machine.machineId);
-    if (state == null) continue;
-    if (!phoneMachineListsAgents(state)) continue;
+    final lists = state != null && phoneMachineListsAgents(state);
+    sources.add(_IndexSource(machine, state, lists ? state.agents : null));
+    if (!lists) continue;
     for (final agent in state.agents) {
       entries.add(AgentEntry(machine: state, agent: agent));
     }
   }
-  return entries;
+  final built = List<AgentEntry>.unmodifiable(entries);
+  _indexMemo[notifier] = _IndexMemo(sources, built);
+  return built;
+}
+
+/// What [agentIndex] last built for a notifier, kept on the notifier itself so it goes with it.
+final _indexMemo = Expando<_IndexMemo>('agentIndex');
+
+/// One machine as [agentIndex] read it: the machine, its state, and the agent list it drew from
+/// that state — null when the machine did not list.
+class _IndexSource {
+  _IndexSource(this.machine, this.state, this.agents)
+    : agentCount = agents?.length ?? 0;
+
+  final Machine machine;
+  final MachineState? state;
+  final List<Agent>? agents;
+
+  /// The list's length when it was read — a list edited in place, which the app does not do,
+  /// would keep its identity and still be caught by the length most of the time.
+  final int agentCount;
+}
+
+class _IndexMemo {
+  _IndexMemo(this.sources, this.entries);
+
+  final List<_IndexSource> sources;
+  final List<AgentEntry> entries;
+
+  /// Whether [notifier] would build exactly [entries] again: the same machines, in the same order,
+  /// each with the same state, listing or not as before, from the same list of agents.
+  bool stillFor(AppNotifier notifier) {
+    final machines = notifier.machines;
+    if (machines.length != sources.length) return false;
+    for (var i = 0; i < sources.length; i++) {
+      final source = sources[i];
+      final machine = machines[i];
+      if (!identical(machine, source.machine)) return false;
+      final state = notifier.stateOf(machine.machineId);
+      if (!identical(state, source.state)) return false;
+      final lists = state != null && phoneMachineListsAgents(state);
+      final agents = lists ? state.agents : null;
+      if (!identical(agents, source.agents)) return false;
+      if ((agents?.length ?? 0) != source.agentCount) return false;
+    }
+    return true;
+  }
 }
 
 /// The agents waiting on an answer, across every machine.
@@ -173,10 +237,42 @@ List<T> _stableSorted<T>(Iterable<T> items, int Function(T a, T b) compare) {
 /// along it, so it has to be built in ONE place: a page computing "the next agent" from a slightly
 /// different order than the list it was opened from would skip an agent, or hand back the one just
 /// left, and nothing on screen would explain why.
-List<AgentEntry> visibleAgents(List<AgentEntry> entries) => [
-  ...waitingAgents(entries),
-  ...otherAgents(entries),
-];
+///
+/// Kept per [entries] list, and handed back again while every entry still waits, works and opens
+/// as it did — the only things the order reads. [agentIndex] returns the same list while nothing
+/// under it changed, so on a rebuild that changed nothing this is one pass over the entries
+/// instead of a sort of them. Read-only, like [agentIndex]'s.
+List<AgentEntry> visibleAgents(List<AgentEntry> entries) {
+  final flags = Uint8List(entries.length);
+  for (var i = 0; i < entries.length; i++) {
+    final entry = entries[i];
+    flags[i] =
+        (entry.isWaiting ? 1 : 0) |
+        (entry.isWorking ? 2 : 0) |
+        (entry.isOpenable ? 4 : 0);
+  }
+  final memo = _visibleMemo[entries];
+  if (memo != null && _sameFlags(memo.flags, flags)) return memo.visible;
+  final visible = List<AgentEntry>.unmodifiable([
+    ...waitingAgents(entries),
+    ...otherAgents(entries),
+  ]);
+  _visibleMemo[entries] = (flags: flags, visible: visible);
+  return visible;
+}
+
+/// What [visibleAgents] last made of an entries list, with the flags it was ordered by.
+final _visibleMemo = Expando<({Uint8List flags, List<AgentEntry> visible})>(
+  'visibleAgents',
+);
+
+bool _sameFlags(Uint8List a, Uint8List b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
 
 /// The machines the filter chips offer, in the order they are drawn.
 ///

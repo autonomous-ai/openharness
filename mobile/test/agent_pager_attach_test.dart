@@ -9,6 +9,14 @@ import 'package:harness_mobile/state/app_state.dart';
 
 import 'agent_pager_fixture.dart';
 
+/// A [PagerConn] already through its handshake. A `terminal_open` waits for the machine's
+/// handshake before it goes (`AppNotifier._sendTerminalFrame`), and a fake socket never has one:
+/// left to wait, every open below would still be held when the test looks.
+class _HandshakenConn extends PagerConn {
+  @override
+  Future<void> waitUntilReady({required Duration timeout}) async {}
+}
+
 /// The pager holds a HANDFUL of agents open — the one being read, the ones a swipe or two away, and
 /// the two just left — and hands the rest back a beat after each swipe. See `AgentSwipeHost._keepSet`.
 ///
@@ -39,7 +47,7 @@ void main() {
     WidgetTester tester, {
     bool long = false,
   }) async {
-    final conn = PagerConn();
+    final conn = _HandshakenConn();
     final app = pagerApp(conn);
     addTearDown(app.dispose);
     if (long) lengthen(app);
@@ -65,7 +73,7 @@ void main() {
   /// every page of the pager — down. As a root it can only no-op, so the regression this guards
   /// against is invisible there.
   Future<(AppNotifier, PagerConn)> pushPager(WidgetTester tester) async {
-    final conn = PagerConn();
+    final conn = _HandshakenConn();
     final app = pagerApp(conn);
     addTearDown(app.dispose);
     final list = pagerList(app);

@@ -10,9 +10,14 @@ import { registerAuthMiddleware } from './middlewares/authMiddleware.js'
 import { cursorRoutes } from './routes/cursor.js'
 import { voiceRoutes } from './routes/voice.js'
 import { harnessShareRoutes } from './routes/harnessShares.js'
+import { machineShareRoutes } from './routes/machineShares.js'
 import { harnessLinkRoutes } from './routes/harnessLinks.js'
 import { communityRoutes } from './routes/community.js'
 import { communityTranslateRoutes } from './routes/communityTranslate.js'
+import { communityCommentRoutes } from './routes/communityComments.js'
+import { communityCreatorRoutes } from './routes/communityCreators.js'
+import { communityNotificationRoutes } from './routes/communityNotifications.js'
+import { communityReportRoutes } from './routes/communityReports.js'
 import { communityEditRoutes } from './routes/communityEdit.js'
 import { deviceKeyRoutes } from './routes/deviceKeys.js'
 import { qrSignInRoutes } from './routes/qrSignIn.js'
@@ -24,6 +29,7 @@ import { zooRoutes } from './routes/zoo.js'
 import { experimentalSettingsRoutes } from './routes/experimentalSettings.js'
 import { describeDaemonsSwitch } from './lib/daemonsSwitch.js'
 import { handleObserverUpgrade } from './lib/observerWs.js'
+import { handleAgentMessagesUpgrade } from './lib/agentMessagesWs.js'
 import { deviceAuthRoutes } from './routes/deviceAuth.js'
 import { healthRoutes, authRoutes, userRoutes, machineRoutes, planRoutes, gridRoutes, deviceRoutes, mobileRoutes, appRoutes, analyticsRoutes, productUsageRoutes, agentRouteRoutes, jevRouteRoutes, storeRoutes } from './routes/index.js'
 import { startSubdomainProxy, startMeshProxy } from './lib/subdomainProxy.js'
@@ -94,6 +100,10 @@ const app = Fastify({
       const path = (req.url ?? '').split('?')[0]
       if (path === '/api/observer-ws') {
         handleObserverUpgrade(req, socket, head)
+        return
+      }
+      if (path === '/api/agent-messages-ws') {
+        handleAgentMessagesUpgrade(req, socket, head)
         return
       }
       // Inverted-transport hub endpoints (terminated here, not proxied):
@@ -178,9 +188,14 @@ async function start(): Promise<void> {
   await app.register(deviceAuthRoutes) // device-authorization grant: how the desktop app gets a machine key
   await app.register(storeRoutes)      // the Harness Store's ratings and reviews; the catalogue is the CLI's registry
   await app.register(harnessShareRoutes)
+  await app.register(machineShareRoutes)
   await app.register(harnessLinkRoutes)
   await app.register(communityRoutes)
   await app.register(communityEditRoutes)      // an author edits their publication in place
+  await app.register(communityCommentRoutes)   // a harness page reads its earlier comments
+  await app.register(communityCreatorRoutes)   // a creator's page: their name, followers and the reader's follow
+  await app.register(communityReportRoutes)    // readers report a publication or comment; reviewers restore or remove it
+  await app.register(communityNotificationRoutes) // a creator's bell: comments, replies and forks of their work
   await app.register(communityTranslateRoutes) // a Hub draft's words in English, for its author to review
   await app.register(qrSignInRoutes)       // sign a computer in by scanning its QR with a signed-in phone
   await app.register(deviceKeyRoutes)     // the account's device key log: signing in is what trusts a device

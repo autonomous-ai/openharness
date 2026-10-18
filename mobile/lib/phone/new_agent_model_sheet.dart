@@ -98,7 +98,10 @@ class _ModelChooserState extends State<_ModelChooser> {
   Future<void> _load() async {
     if (_loading) return;
     setState(() => _loading = true);
-    final catalog = await widget.notifier.gridModels(widget.machineId);
+    final catalog = await widget.notifier.gridModels(
+      widget.machineId,
+      userAction: true,
+    );
     if (!mounted) return;
     setState(() {
       _catalog = catalog;

@@ -14,6 +14,8 @@
  * - `observer_key`: this machine's public key, or its signature on a welcome to one observer of one share, by
  *   the gateway, which holds the identity (Share's owner);
  * - `observer_send`: a frame Share sealed for one of its observers, to the relay through the gateway;
+ * - `account`: the account signed in here, its id and email, as the core reads it (`core.account.identity`), for Share
+ *   alone: the observers a shared tab wants are derived for this account's harnesses;
  * - `cloud_publish`, `cloud_ask`, `cloud_unask`: the cloud agents' harnesses and their questions
  *   (`core.cloud`, core/agents/cloud.ts), for the cloud service alone.
  * The core answers them only for the experiments (core/api.ts `EXPERIMENTS`): creating an agent or
@@ -27,7 +29,7 @@ import type { AgentCreateRequest, CoreApi } from './api.js'
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -98,6 +100,11 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       else if (query === 'cloud_ask') core.cloud.ask(text(payload.agentId), text(payload.questionId), (payload.question ?? {}) as { text: string; choices: string[] })
       else core.cloud.unask(text(payload.agentId), text(payload.questionId))
       return {}
+    }
+    case 'account': {
+      if (service !== 'sharing') return { error: 'NOT_SHARING' }
+      const known = await core.account.identity()
+      return known ? { ...known } : { error: 'ACCOUNT_UNAVAILABLE' }
     }
     case 'observer_send': {
       const connId = text(payload.connId), type = text(payload.type)

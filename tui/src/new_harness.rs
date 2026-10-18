@@ -469,7 +469,7 @@ pub fn open(app: &mut App, machine: Option<String>, cwd: Option<String>) {
     };
     let machine = form.draft.machine.clone();
     store_form(app, form);
-    crate::input::load_dsh(app, machine);
+    crate::input::load_dsh(app, machine, false);
 }
 
 fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surface: Surface) -> Option<Box<Form>> {
@@ -1182,7 +1182,7 @@ fn set_machine(app: &mut App, form: &mut Form, machine: &str) {
     form.profiles = Value::Null;
     form.draft.profile = None;
     form.resource_generation.clear();
-    crate::input::load_dsh(app, machine.into());
+    crate::input::load_dsh(app, machine.into(), false);
     refresh_form(app, form);
 }
 fn set_engine(form: &mut Form, engine: &str) {

@@ -17,7 +17,9 @@ export interface DescriptorEvidence {
 export const descriptorKey = (row: NativeDescriptor) => `${row.device}:${row.inode}`
 const signature = (rows: readonly NativeDescriptor[]) => rows.map(row =>
   JSON.stringify([row.fd, row.path, row.kind, String(row.device), String(row.inode)])).sort().join('\n')
-const knownKinds = new Set(['REG', 'DIR', 'CHR', 'BLK', 'FIFO', 'PIPE', 'unix', 'IPv4', 'IPv6', 'KQUEUE', 'FSEVENT', 'PSXSEM', 'PSXSHM', 'systm', 'NDRV', 'LINK'])
+const knownKinds = new Set(['REG', 'DIR', 'CHR', 'BLK', 'FIFO', 'PIPE', 'unix', 'IPv4', 'IPv6', 'KQUEUE', 'FSEVENT', 'PSXSEM', 'PSXSHM', 'systm', 'NDRV', 'LINK', 'NPOLICY'])
+/** lsof prints these kernel objects with an empty name; every file-like kind still needs a path. */
+const nameless = new Set(['NPOLICY'])
 
 /** -F0 still terminates each process/file set with NL after its final NUL field. */
 export function parseDescriptors(output: string, pid: number, budget: NativeEvidenceBudget): NativeDescriptor[] {
@@ -40,7 +42,7 @@ export function parseDescriptors(output: string, pid: number, budget: NativeEvid
       continue
     }
     const fd = fields.get('f'), kind = fields.get('t'), path = fields.get('n')
-    if (!processSeen || !fd || !kind || !path || rows.length >= 4096) {
+    if (!processSeen || !fd || !kind || path === undefined || (!path && !nameless.has(kind)) || rows.length >= 4096) {
       return nativeUnavailable('the native descriptor pool is incomplete or exceeds its limit')
     }
     if (!/^(?:\d{1,10}|cwd|rtd|txt|mem)$/.test(fd) || !knownKinds.has(kind)) return nativeUnavailable('a native descriptor is unreadable or has an unknown type')

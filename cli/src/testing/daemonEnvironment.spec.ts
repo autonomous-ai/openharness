@@ -18,4 +18,7 @@ describe('a daemon under test', () => {
     expect(daemonEnvironment({ PATH: '/test/bin', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's', CODEX_THREAD_ID: 't', CLAUDE_CODE_USE_BEDROCK: '1' }, {}))
       .toEqual({ PATH: '/test/bin', CLAUDE_CODE_USE_BEDROCK: '1' })
   })
+  it('does not borrow a GitHub login, so a daemon\'s gh cannot act as the developer', () => {
+    expect(daemonEnvironment({ PATH: '/b', GH_TOKEN: 'a', GITHUB_TOKEN: 'b', GH_ENTERPRISE_TOKEN: 'c', GITHUB_ENTERPRISE_TOKEN: 'd' }, {})).toEqual({ PATH: '/b' })
+  })
 })

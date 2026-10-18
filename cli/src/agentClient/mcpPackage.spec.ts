@@ -49,6 +49,12 @@ describe('npx @autonomous-ai/harness-mcp', () => {
     const told = pkg.setupAnswer({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'harness_setup' } })!
     expect(told.result.content[0].text).toContain(`  ${pkg.INSTALL}\n  harness start`)
     expect(told.result.content[0].text).toContain('ask the person')
+    // Installed is not yet allowed: the agent is told what only the person does, and how it will know.
+    const text: string = told.result.content[0].text
+    expect(text).not.toContain('No account is needed for harnesses on this computer')
+    expect(text).toContain('harness login')
+    expect(text).toContain('harness settings agents-start-agents on')
+    expect(text).toContain('harness_whoami')
     expect(pkg.setupAnswer({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'harness_setup' } }, 'win32')!.result.content[0].text).toContain('WSL')
     expect(pkg.setupAnswer({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'harness_list' } })).toMatchObject({ error: { code: -32602 } })
     expect(pkg.setupAnswer({ jsonrpc: '2.0', id: 7, method: 'ping' })).toEqual({ jsonrpc: '2.0', id: 7, result: {} })

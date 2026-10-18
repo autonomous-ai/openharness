@@ -203,16 +203,7 @@ jobs:
       - name: Prepare native build tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y musl-tools tmux zsh cryptsetup-bin btrfs-progs
-          # Ubuntu's global zshrc runs compinit, which stops at "insecure directories ... continue [y]
-          # or abort compinit [n]?" for the runner image's group-writable completion folders; a zsh
-          # login shell under test then waits there (as cli-e2e.yml found). Fixed as zsh says.
-          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
-          if [ -n "$insecure" ]; then
-            echo "$insecure" | xargs sudo chown root:root
-            echo "$insecure" | xargs sudo chmod g-w,o-w
-          fi
-          zsh -fc 'autoload -U compaudit && compaudit'
+          sudo apt-get install -y musl-tools cryptsetup-bin btrfs-progs
       - name: Check encrypted cleanup with real device readers and stalled udev
         run: |
           # Fail early on real cleanup semantics, before compressing an ISO.
@@ -221,14 +212,6 @@ jobs:
       - name: Build Harness from the exact OS source
         run: |
           make -C os runtime
-      - name: Validate hn session behavior and native terminal lifecycle
-        run: |
-          npm --prefix cli run typecheck
-          cd cli
-          timeout 3m npx vitest run src/lib/engineInstall.spec.ts src/lib/engineLaunch.spec.ts --maxWorkers=2
-          cd ..
-          timeout 8m cargo test --manifest-path tui/Cargo.toml --locked --release --target x86_64-unknown-linux-musl
-          python3 scripts/validate-tui-native.py tui/target/x86_64-unknown-linux-musl/release/harness-tui
       - name: Build the pinned OS compositor
         run: bash os/tools/build-compositor-container.sh os/work/compositor
       - name: Build offline BIOS and UEFI image
@@ -238,6 +221,7 @@ jobs:
             -e SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
             -e HARNESS_OS_SOURCE_SHA="$(git rev-parse HEAD)" \
             -e HARNESS_OS_RUNTIME_DIR=/src/os/work/runtime \
+            -e HARNESS_OS_SQUASHFS_PROCESSORS="$(nproc)" \
             archlinux:base-devel \
             bash -c 'set -euo pipefail; pacman -Syu --noconfirm archiso python git; bash build.sh'
       - name: Inspect image artifact
@@ -259,13 +243,67 @@ jobs:
         with:
           name: programmer-os-build-diagnostics
           path: |
-            .harness/validation/
             os/test-results/cleanup-host/receipt.json
             os/work/profile/profiledef.sh
             os/work/profile/pacman.conf
             os/work/archiso/x86_64/airootfs/var/log/pacman.log
             os/work/hardware-build/root/var/lib/dkms/**/make.log
             os/work/profile/airootfs/usr/share/harness-os/hardware/broadcom/manifest.json
+          retention-days: 7
+
+  runtime:
+    # hn's checks do not change the image, so they run beside its build; publish.py
+    # still requires this job for every image it releases.
+    if: ${{ !inputs.image_run_id && !inputs.publish_run_id && !inputs.development_update && inputs.checks != 'zram' && inputs.checks != 'hardware-update' && inputs.checks != 'browser-suspend' && inputs.checks != 'public-update' && inputs.checks != 'network-recovery' && inputs.checks != 'lock-presentation' && inputs.checks != 'sign-in' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.2'
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: tui
+          shared-key: tui-x86_64-unknown-linux-musl
+          cache-bin: false
+      - name: Prepare native build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools tmux zsh
+          # Ubuntu's global zshrc runs compinit, which stops at "insecure directories ... continue [y]
+          # or abort compinit [n]?" for the runner image's group-writable completion folders; a zsh
+          # login shell under test then waits there (as cli-e2e.yml found). Fixed as zsh says.
+          insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
+          if [ -n "$insecure" ]; then
+            echo "$insecure" | xargs sudo chown root:root
+            echo "$insecure" | xargs sudo chmod g-w,o-w
+          fi
+          zsh -fc 'autoload -U compaudit && compaudit'
+      - name: Build Harness from the exact OS source
+        run: |
+          make -C os runtime
+      - name: Validate hn session behavior and native terminal lifecycle
+        run: |
+          npm --prefix cli run typecheck
+          cd cli
+          timeout 3m npx vitest run src/lib/engineInstall.spec.ts src/lib/engineLaunch.spec.ts --maxWorkers=2
+          cd ..
+          timeout 8m cargo test --manifest-path tui/Cargo.toml --locked --release --target x86_64-unknown-linux-musl
+          python3 scripts/validate-tui-native.py tui/target/x86_64-unknown-linux-musl/release/harness-tui
+      - name: Retain hn validation diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: programmer-os-runtime-diagnostics
+          path: .harness/validation/
           retention-days: 7
 
   machine:
@@ -291,10 +329,7 @@ jobs:
           run-id: ${{ inputs.image_run_id || github.run_id }}
           github-token: ${{ github.token }}
       - name: Install VM test tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
-          if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
+        uses: ./.github/actions/vm-tools
       - name: Install the disposable browser observer
         if: ${{ inputs.checks == 'browser' || inputs.checks == 'browser-suspend' }}
         run: sudo apt-get install -y wlrctl
@@ -484,14 +519,15 @@ jobs:
           path: os/dist
           run-id: ${{ inputs.image_run_id || github.run_id }}
           github-token: ${{ github.token }}
-      - name: Check the fixture and install VM tools
+      - name: Check the fixture
         run: |
           python3 -m unittest discover -s os/tests -p 'test_hardware*.py'
           python3 -m py_compile os/tests/hardware_install_guest.py os/tests/hardware_install_vm.py
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
-          sudo chmod a+rw /dev/kvm
+      - name: Install VM test tools
+        uses: ./.github/actions/vm-tools
+      - name: Require KVM
+        run: test -w /dev/kvm
       - name: Install the selected driver offline and reboot with 1 GiB
         env:
           HARNESS_TEST_EMAIL: ${{ secrets.HARNESS_TEST_EMAIL }}
@@ -528,12 +564,13 @@ jobs:
           path: os/dist
           run-id: ${{ inputs.image_run_id || github.run_id }}
           github-token: ${{ github.token }}
-      - name: Check the fixture and install VM tools
+      - name: Check the fixture
         run: |
           python3 -m py_compile os/tests/nvidia_install_guest.py os/tests/nvidia_install_vm.py
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
-          sudo chmod a+rw /dev/kvm
+      - name: Install VM test tools
+        uses: ./.github/actions/vm-tools
+      - name: Require KVM
+        run: test -w /dev/kvm
       - name: Install the selected NVIDIA driver offline and reboot encrypted
         env:
           HARNESS_TEST_EMAIL: ${{ secrets.HARNESS_TEST_EMAIL }}
@@ -569,10 +606,7 @@ jobs:
           make -C os check
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os.yml
       - name: Install VM test tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
-          if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
+        uses: ./.github/actions/vm-tools
       - name: Exercise Wi-Fi and audio in the real image
         run: python3 os/tests/essentials_vm.py --iso os/dist/*.iso --network-script os/network.py
       - name: Retain hardware plumbing evidence
@@ -675,6 +709,9 @@ jobs:
           python3 os/tools/build-package.py --runtime os/work/runtime --compositor os/work/compositor --output os/work/development-update --development
           python3 os/tests/build-update-fixture.py
       - name: Exercise apply, rollback, running work and encrypted reboot
+        env:
+          HARNESS_TEST_EMAIL: ${{ secrets.HARNESS_TEST_EMAIL }}
+          HARNESS_TEST_OTP: ${{ secrets.HARNESS_TEST_OTP }}
         run: python3 os/tests/update_vm.py --iso os/dist/*.iso --bundle os/work/development-update --fast-fixture os/work/fast-update-fixture
       - name: Show update failure diagnostics
         if: failure()

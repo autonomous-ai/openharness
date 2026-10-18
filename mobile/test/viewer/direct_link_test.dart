@@ -156,12 +156,16 @@ void main() {
           'CODE_MISMATCH',
           'That code didn’t match. Scan the new one on Studio Mac.',
         ),
-        ('TIMEOUT', 'Keep “Add phone” open on Studio Mac, then scan again.'),
+        ('TIMEOUT', 'Keep “Add Phone” open on Studio Mac, then scan again.'),
         (
           'PAIRING_BUSY',
           'Studio Mac is pairing with something else. Try again.',
         ),
-        ('EXPIRED', 'Couldn’t connect to Studio Mac (EXPIRED).'),
+        (
+          'EXPIRED',
+          'Couldn’t pair with Studio Mac. Open Add Phone… on it again and '
+              'scan the new code.',
+        ),
       ]) {
         final (link, socket, keys) = await linkClient();
         socket.onFrame = (frame) {

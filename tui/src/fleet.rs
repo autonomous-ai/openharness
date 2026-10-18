@@ -486,11 +486,35 @@ pub fn answer_text(q: &Question, typed: &str) -> Option<String> {
     }
 }
 
+/// A whole machine another account shares with this one (backend lib/machineAccess.ts): its owner
+/// named this account's address, or shared it with everyone at their domain ([team]) and this account
+/// added it. Used as the account's own; its owner alone renames, removes or shares it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MachineShare {
+    pub owner: String,
+    pub email: String,
+    pub team: bool,
+}
+
+impl MachineShare {
+    /// From a `sharedMachines` row's `share`.
+    pub fn of(share: &Value) -> MachineShare {
+        let text = |key: &str| share.get(key).and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let (name, email) = (text("ownerName"), text("ownerEmail"));
+        MachineShare { owner: if name.is_empty() { email.clone() } else { name }, email, team: share.get("via").and_then(Value::as_str) == Some("domain") }
+    }
+}
+
 #[derive(Default)]
 pub struct Fleet {
     pub local_id: String,
     pub machines: Vec<Machine>,
     pub agents: HashMap<(String, String), Agent>,
+    /// The machines in [machines] another account shares with this one, by id.
+    pub shares: HashMap<String, MachineShare>,
+    /// Machines shared with this account's domain, not added yet: (id, name, share). Machines &
+    /// devices lists them, and Enter adds one.
+    pub to_add: Vec<(String, String, MachineShare)>,
 }
 
 /// Match the desktop and phone: the app's saved name, or its stable machine-id label.
@@ -500,6 +524,34 @@ pub fn machine_display_name(id: &str, name: Option<&str>) -> String {
 }
 
 impl Fleet {
+    /// The machine list's rows to keep: the account's own ([owned]) and the whole machines other
+    /// accounts share with it that are its to use (named for it, or added), noted in [shares]; one
+    /// shared with its domain and not added goes to [to_add]. A list that could not say ([shared]
+    /// absent) keeps the shared machines it had.
+    pub fn take_shared(&mut self, owned: &[Value], shared: Option<&Vec<Value>>) -> Vec<Value> {
+        let mut rows = owned.to_vec();
+        let Some(shared) = shared else {
+            rows.extend(self.shares.keys().filter_map(|id| self.machine(id))
+                .map(|m| serde_json::json!({ "machineId": m.id, "name": m.name, "status": m.status })));
+            return rows;
+        };
+        self.shares.clear();
+        self.to_add.clear();
+        for row in shared {
+            let id = row.get("machineId").and_then(Value::as_str).unwrap_or("").to_string();
+            if id.is_empty() || owned.iter().any(|o| o["machineId"] == row["machineId"]) { continue }
+            let share = MachineShare::of(&row["share"]);
+            if row["share"]["added"] == true {
+                self.shares.insert(id, share);
+                rows.push(row.clone());
+            } else {
+                let name = machine_display_name(&id, row.get("name").and_then(Value::as_str));
+                self.to_add.push((id, name, share));
+            }
+        }
+        rows
+    }
+
     pub fn machine(&self, id: &str) -> Option<&Machine> { self.machines.iter().find(|m| m.id == id) }
     pub fn machine_mut(&mut self, id: &str) -> Option<&mut Machine> { self.machines.iter_mut().find(|m| m.id == id) }
     /// The account's record for this computer; the local PTY transport is not another machine.
@@ -673,6 +725,33 @@ pub fn ago(ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn whole_machines_shared_with_the_account_are_kept_and_one_for_the_team_waits_to_be_added() {
+        use serde_json::json;
+        let mut fleet = Fleet::default();
+        let owned = vec![json!({ "machineId": "own", "name": "studio" })];
+        let share = |via: &str, added: bool| json!({ "ownerName": "Dee", "ownerEmail": "dee@acme.io", "via": via, "added": added });
+        let shared = vec![
+            json!({ "machineId": "named", "name": "Dee's Mac", "share": share("email", true) }),
+            json!({ "machineId": "team", "name": "GPU box", "share": share("domain", true) }),
+            json!({ "machineId": "waiting", "name": null, "share": share("domain", false) }),
+            // Also the account's own: its own row wins.
+            json!({ "machineId": "own", "share": share("email", true) }),
+        ];
+        let rows = fleet.take_shared(&owned, Some(&shared));
+        assert_eq!(rows.iter().map(|r| r["machineId"].as_str().unwrap()).collect::<Vec<_>>(), ["own", "named", "team"]);
+        assert_eq!(fleet.shares.get("named"), Some(&MachineShare { owner: "Dee".into(), email: "dee@acme.io".into(), team: false }));
+        assert!(fleet.shares["team"].team);
+        assert_eq!(fleet.to_add, vec![("waiting".to_string(), "machine-waiting".to_string(), MachineShare { owner: "Dee".into(), email: "dee@acme.io".into(), team: true })]);
+        // A list that could not say what is shared keeps what it had.
+        fleet.machines.push(Machine { shared: false, id: "named".into(), name: "Dee's Mac".into(), local: false, status: "running".into(), reach: Reach::Ready });
+        let kept = fleet.take_shared(&owned, None);
+        assert_eq!(kept.iter().map(|r| r["machineId"].as_str().unwrap()).collect::<Vec<_>>(), ["own", "named"]);
+        assert!(fleet.shares.contains_key("named"));
+        // An owner with no name is shown by address.
+        assert_eq!(MachineShare::of(&json!({ "ownerName": " ", "ownerEmail": "dee@acme.io" })).owner, "dee@acme.io");
+    }
 
     #[test]
     fn cache_needs_the_current_accounts_owner_and_drops_legacy_unscoped_data() {

@@ -3,6 +3,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
+import 'tab_settings.dart';
+
 /// Agent Messages (docs/design/2026-10-10-agent-messages.md) as this window
 /// sees them: harnesses in the same tab message each other with `harness send`,
 /// and the daemons deliver. Whether they may is the account's experiment
@@ -246,7 +248,22 @@ class AgentMessagesController extends ChangeNotifier {
     DateTime Function()? now,
     this.remoteRecency = const Duration(seconds: 60),
     this.markLife = const Duration(seconds: 5),
-  }) : now = now ?? DateTime.now;
+    List<String> Function(String deskTabId)? logTabsOf,
+    String Function(String logTabId)? deskTabOf,
+  }) : now = now ?? DateTime.now,
+       logTabsOf = logTabsOf ?? _one,
+       deskTabOf = deskTabOf ?? _same;
+
+  static List<String> _one(String id) => [id];
+  static String _same(String id) => id;
+
+  /// The tab ids the daemons file a desk tab's log under, and the desk tab a
+  /// daemon's tab id names. Everything here speaks of desk tabs; only what is
+  /// asked of a daemon, and what one tells, is in its ids. They differ for a
+  /// member's shared tab, whose desk id is derived from the shared tab id the
+  /// daemons file it under (1c, R1).
+  final List<String> Function(String deskTabId) logTabsOf;
+  final String Function(String logTabId) deskTabOf;
 
   /// The account's desk tabs as the daemon proxies them from the backend
   /// (`GET /api/agent-messages`). Only whether it answers is used: each tab's
@@ -284,6 +301,26 @@ class AgentMessagesController extends ChangeNotifier {
   bool get loaded => _loaded;
   bool _loaded = false;
 
+  /// What the backend keeps per desk tab, as the last read told it.
+  Map<String, AgentMessageTabSetting> _settings = const {};
+
+  /// The leader chosen for [deskTabId], or null. A member's shared tab shows the
+  /// roster's instead (`AppNotifier.tabLeader`).
+  AgentMessageLeader? leaderOf(String deskTabId) =>
+      _settings[deskTabId]?.leader;
+
+  /// A change the backend just confirmed for one tab, before the next read.
+  void applyTabSetting(String deskTabId, AgentMessageLeader? leader) {
+    // A read begun before this change would answer with the old leader.
+    _reads++;
+    _settings = {
+      ..._settings,
+      deskTabId: (_settings[deskTabId] ?? const AgentMessageTabSetting())
+          .withLeader(leader),
+    };
+    _notify();
+  }
+
   /// Counts the `messages_changed` frames for [tabId], so an open log knows
   /// when to read again.
   int trafficFor(String tabId) => _traffic[tabId] ?? 0;
@@ -309,8 +346,10 @@ class AgentMessagesController extends ChangeNotifier {
     }
     if (_disposed || account != _account || read != _reads) return;
     final loaded = answer != null;
-    if (loaded == _loaded) return;
+    final settings = parseTabSettings(answer);
+    if (loaded == _loaded && mapEquals(settings, _settings)) return;
     _loaded = loaded;
+    _settings = settings;
     _notify();
   }
 
@@ -335,7 +374,7 @@ class AgentMessagesController extends ChangeNotifier {
     }
     final tabId = payload['tabId'];
     if (tabId is! String || tabId.isEmpty) return;
-    _countTraffic(tabId);
+    _countTraffic(deskTabOf(tabId));
     final id = payload['messageId'];
     // Each status change says the message again; it marks its panes once.
     if (id is String && _remember(id)) {
@@ -507,15 +546,30 @@ class AgentMessagesController extends ChangeNotifier {
     );
   }
 
+  /// Desk tab [tabId]'s log on [machineId]: each tab id the daemons file it
+  /// under ([logTabsOf]) asked; null when none answered.
   Future<List<AgentMessage>?> _historyFrom(
     String machineId,
     String tabId, {
     int? limit,
   }) async {
+    final logs = await Future.wait([
+      for (final logTab in logTabsOf(tabId))
+        _logFrom(machineId, logTab, limit: limit),
+    ]);
+    if (logs.every((log) => log == null)) return null;
+    return [for (final log in logs.nonNulls) ...log];
+  }
+
+  Future<List<AgentMessage>?> _logFrom(
+    String machineId,
+    String logTab, {
+    int? limit,
+  }) async {
     try {
       final reply = await request(machineId, {
         'action': 'history',
-        'tabId': tabId,
+        'tabId': logTab,
         'limit': ?limit,
       });
       final rows = reply['messages'];
@@ -523,7 +577,7 @@ class AgentMessagesController extends ChangeNotifier {
       return [
         for (final row in rows)
           if (AgentMessage.fromJson(row) case final message?
-              when message.tabId == tabId)
+              when message.tabId == logTab)
             message,
       ];
     } catch (_) {
@@ -541,6 +595,7 @@ class AgentMessagesController extends ChangeNotifier {
     _polling.clear();
     _stopTimers();
     _loaded = false;
+    _settings = const {};
     _notify();
   }
 

@@ -5,6 +5,12 @@
 // once it is installed.", and opened nothing, so three harnesses started with
 // no pane anywhere. In the New Harness box the same line stayed after the
 // harness had started, until Check status was pressed.
+//
+// A harness the machine is already starting needs no one either. The machine
+// answers `pending` five seconds into a create, with nothing held, and a
+// worktree from main took 13 s on the office Mac (2026-10-14): every such New
+// Harness said "office is still starting your harness. Check again in a
+// moment." in red, and opened nothing until Check status was pressed.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -33,6 +39,10 @@ class _Machine extends WsConn {
       );
 
   int holds = 0;
+
+  /// Answers `pending` with nothing held this many times: the machine has
+  /// begun starting the harness (its worktree, its pane).
+  int starts = 0;
   bool refuses = false;
 
   /// Keeps the next status answer back until it completes.
@@ -76,6 +86,8 @@ class _Machine extends WsConn {
   }
 
   Map<String, dynamic> _answer(String creationId) {
+    // Held first, then started: a request the machine has claimed is never
+    // held again.
     if (holds > 0) {
       holds--;
       return {
@@ -83,6 +95,10 @@ class _Machine extends WsConn {
         'state': 'pending',
         'held': {'service': 'install', 'detail': _installing},
       };
+    }
+    if (starts > 0) {
+      starts--;
+      return {'creationId': creationId, 'state': 'pending'};
     }
     if (refuses) {
       return {
@@ -193,6 +209,124 @@ void main() {
     });
   });
 
+  group('a harness the machine is already starting', () {
+    test(
+      'is asked after by any create until it is made, and its pane opens',
+      () async {
+        final machine = _Machine()..starts = 3;
+        final app = _app(machine);
+        final attempt = AgentCreationAttempt();
+        final error = await app.createAgent(
+          'm',
+          engine: 'claude',
+          folder: '/work',
+          attempt: attempt,
+        );
+        expect(error, isNull);
+        expect(machine.asked, [
+          'agent_create',
+          'agent_create_status',
+          'agent_create_status',
+          'agent_create_status',
+        ]);
+        expect(attempt.awaitingConfirmation, isFalse);
+        expect(_panesOf(app).where((id) => id == 'made'), hasLength(1));
+      },
+    );
+
+    test('ends on a refusal that came while it started', () async {
+      final machine = _Machine()
+        ..starts = 1
+        ..refuses = true;
+      final app = _app(machine);
+      final attempt = AgentCreationAttempt();
+      final error = await app.createAgent(
+        'm',
+        engine: 'claude',
+        folder: '/work',
+        attempt: attempt,
+      );
+      expect(error, contains('Kilo could not be installed'));
+      expect(machine.asked, ['agent_create', 'agent_create_status']);
+      expect(attempt.awaitingConfirmation, isFalse);
+    });
+
+    test('has its own wait after a hold before it, as a new computer\'s first harness does', () async {
+      final machine = _Machine()
+        ..holds = 1
+        ..starts = 2;
+      final app = _app(machine)
+        ..startingCreationWait = const Duration(milliseconds: 200);
+      // The install outlasts the start's whole wait.
+      final gate = machine.gate = Completer<void>();
+      unawaited(
+        Future<void>.delayed(const Duration(milliseconds: 400), gate.complete),
+      );
+      final attempt = AgentCreationAttempt(
+        holdWait: const Duration(minutes: 1),
+      );
+      final error = await app.createAgent(
+        'm',
+        engine: 'kilo',
+        folder: '/work',
+        attempt: attempt,
+      );
+      expect(error, isNull);
+      expect(machine.asked, [
+        'agent_create',
+        'agent_create_status',
+        'agent_create_status',
+        'agent_create_status',
+      ]);
+    });
+
+    test('a later call that never reaches the machine answers at once, not after a start\'s wait', () async {
+      final machine = _Machine()..starts = 1 << 20;
+      final app = _app(machine)
+        ..startingCreationWait = const Duration(milliseconds: 40);
+      final attempt = AgentCreationAttempt();
+      await app.createAgent(
+        'm',
+        engine: 'claude',
+        folder: '/work',
+        attempt: attempt,
+      );
+      app.startingCreationWait = const Duration(minutes: 1);
+      final asked = machine.asked.length;
+      final watch = Stopwatch()..start();
+      // Other choices for the same request: refused before the machine is asked.
+      final error = await app.createAgent(
+        'm',
+        engine: 'codex',
+        folder: '/work',
+        attempt: attempt,
+      );
+      expect(error, 'Check the original request before changing its choices.');
+      expect(watch.elapsed, lessThan(const Duration(seconds: 5)));
+      expect(machine.asked, hasLength(asked));
+    });
+
+    test('says it is still starting once the wait has passed, Check status still offered', () async {
+      final machine = _Machine()..starts = 1 << 20;
+      final app = _app(machine)
+        ..startingCreationWait = const Duration(milliseconds: 40);
+      final attempt = AgentCreationAttempt();
+      final error = await app.createAgent(
+        'm',
+        engine: 'claude',
+        folder: '/work',
+        attempt: attempt,
+      );
+      expect(error, contains('still starting your harness'));
+      expect(attempt.awaitingConfirmation, isTrue);
+      expect(attempt.canCancelPending, isFalse);
+      expect(machine.asked.where((type) => type == 'agent_create'), [
+        'agent_create',
+      ]);
+      expect(machine.asked.length, greaterThan(1));
+    });
+  });
+
   test(
     'a create not told to wait answers a hold at once with what it waits for',
     () async {
@@ -244,6 +378,26 @@ void main() {
 
       // Started: the same outcome a press of Check status would have had.
       expect(await box.followHeld(), NewHarnessOutcome.created);
+      expect(box.checking, isFalse);
+      expect(box.busy, isFalse);
+      expect(machine.asked, [
+        'agent_create',
+        'agent_create_status',
+        'agent_create_status',
+      ]);
+      expect(_panesOf(app).where((id) => id == 'made'), hasLength(1));
+    });
+
+    test('starts a harness the machine takes a while over without ever saying it is still starting', () async {
+      final machine = _Machine()..starts = 2;
+      final app = _app(machine);
+      final box = boxOn(app);
+      final errors = <String?>[];
+      void record() => errors.add(box.error);
+      box.addListener(record);
+      expect(await box.create(), NewHarnessOutcome.created);
+      box.removeListener(record);
+      expect(errors.whereType<String>(), isEmpty);
       expect(box.checking, isFalse);
       expect(box.busy, isFalse);
       expect(machine.asked, [

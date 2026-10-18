@@ -151,6 +151,16 @@ export function rowsOf(frames: Frame[], ctx: RowContext): Row[] {
   return rows.sort((a, b) => rank(a) - rank(b) || (b.lastActive ?? '').localeCompare(a.lastActive ?? ''))
 }
 
+/** How many rows an agent's `ps` shows unless asked for all: on the owner's Mac, 40 rows became about 8 to read. */
+export const AGENT_ROWS = 15
+
+/** An agent's `ps`: its own first, then those working or waiting on the person, then the rest; [max] at most. */
+export function forAgent(rows: readonly Row[], max = AGENT_ROWS): { shown: Row[]; more: number } {
+  const busy = (r: Row) => r.state === 'working' || r.state === 'needs-input'
+  const ordered = [...rows.filter((r) => r.yours), ...rows.filter((r) => !r.yours && busy(r)), ...rows.filter((r) => !r.yours && !busy(r))]
+  return { shown: ordered.slice(0, max), more: Math.max(0, ordered.length - max) }
+}
+
 /** The rows [name] means: a whole name, else a name's start, else an id's start (six characters or more). */
 export function matching<T extends { name: string; id: string }>(name: string, rows: T[]): T[] {
   const wanted = name.trim().toLowerCase()

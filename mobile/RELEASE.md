@@ -23,8 +23,18 @@ One command. Credentials are already on the release Mac, so there is nothing to 
 ```bash
 bash mobile/scripts/release-ios.sh                 # build -> validate -> upload
 bash mobile/scripts/release-ios.sh --validate-only # rehearse, upload nothing
-bash mobile/scripts/release-ios.sh --skip-build    # upload the ipa already in build/ios/ipa
+bash mobile/scripts/release-ios.sh --skip-build    # upload what the last build left in build/ios
 ```
+
+The build is `flutter build ios --config-only` followed by `xcodebuild archive` and
+`-exportArchive`, not `flutter build ipa`: Flutter cannot hand xcodebuild an API key, so on a Mac with
+no signing certificate and no Xcode account it failed at signing whatever key was configured.
+
+The archive is **unsigned**; the export signs the app and its frameworks with the team's Apple
+Distribution certificate. Signing the archive would need an Apple Development certificate on the Mac,
+and the shared release account (`mobile.dev@autonomous.ai`) has used up its quota of those — Xcode
+answers "Choose a certificate to revoke", and revoking one breaks whichever Mac holds it. Runner has
+no entitlements file, so the export's own entitlements are all the app needs.
 
 ### Where the credentials live, and why not here
 
@@ -40,30 +50,27 @@ App Store Connect session — the repo's own `.gitignore` already refuses `*.p8`
 putting the other halves in Markdown would walk straight around that.
 
 Setting up a second machine: create a Team Key at App Store Connect ▸ Users and Access ▸ Integrations
-▸ App Store Connect API (role App Manager), drop the one-time `.p8` download into
-`~/.appstoreconnect/private_keys/`, and write the two ids into the `.env` above. An Apple ID plus an
-**app-specific** password (`ASC_USERNAME` / `ASC_APP_PASSWORD`) works too.
+▸ App Store Connect API (role **Admin**), drop the one-time `.p8` download into
+`~/.appstoreconnect/private_keys/`, and write the two ids into the `.env` above. That is the whole
+setup: the script hands the same key to the export, which signs with the team's cloud-managed
+distribution certificate — nothing to sign into Xcode, nothing to import into the keychain. An App
+Manager key uploads but cannot sign that way. An Apple ID plus an **app-specific** password
+(`ASC_USERNAME` / `ASC_APP_PASSWORD`) uploads too, but then signing needs the account in Xcode (below).
 
 The script validates before uploading, which is what catches a duplicate build number or a missing
 icon size in thirty seconds instead of in an email twenty minutes later.
 
 ### Upload with an existing Xcode account
 
-If the release script stops at `no credentials`, an Apple account already signed into Xcode can
-also sign and upload. Select the Autonomous Inc. team, then build the same production archive:
+With neither credential set, the script signs **and** uploads with the Apple account signed into
+Xcode ▸ Settings ▸ Accounts (a member of the Autonomous Inc. team): it archives as above, then runs
+`xcodebuild -exportArchive -allowProvisioningUpdates` with `method = app-store-connect`,
+`destination = upload`, `signingStyle = automatic`, `teamID = 54DJVWMJCC` and
+`manageAppVersionAndBuildNumber = false` on `mobile/build/ios/archive/Runner.xcarchive`. Nothing is
+validated first — altool cannot borrow Xcode's session — so `--validate-only` refuses this path, and
+a duplicate build number shows up as the upload failing.
 
-```bash
-cd mobile
-flutter build ipa --release --export-method app-store
-```
-
-Export that archive with `xcodebuild -exportArchive -allowProvisioningUpdates`, using an export
-options plist with `method = app-store-connect`, `destination = upload`, `signingStyle = automatic`,
-`teamID = 54DJVWMJCC` and `manageAppVersionAndBuildNumber = false`. The archive is
-`mobile/build/ios/archive/Runner.xcarchive`. This uses Xcode's account session; it does not configure
-API-key credentials for `release-ios.sh`.
-
-Build 49 used this path. Apple accepted the upload and started processing it. Xcode reported a
+Build 49 used this path, by hand. Apple accepted the upload and started processing it. Xcode reported a
 non-blocking missing dSYM for the vendored WebRTC framework; native crashes inside that framework
 may lack symbolicated stacks until the matching symbols are supplied.
 
@@ -109,10 +116,29 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.0 (42)` | 2026-09-24 | TestFlight. Sign-in stays in the app: the email, then the 4-digit code sent to it (the Autonomous account API, as the Autonomous companion app signs in) — no browser and no loopback callback, which is what Play's reviewer could not get past. The New tab sheet groups agents by machine; the key bar carries its own modifiers and answers the thumb; Search stays reachable, and reaches the bottom of the screen, with the keyboard up. (41 went to Play only) |
 | `1.0.0 (43)` | 2026-09-25 | TestFlight. Relay frames to a machine are sealed under the connection's E2EE session whenever the machine asks for it (`strictDown`, security issues OH-1/OH-10, #344); key hints move into the key bar; the keyboard comes back with the app after switching away; an opt-in setting holds the connection while the app is off screen |
 | `1.0.0 (45)` | 2026-09-25 | TestFlight. The unread mark goes red and moves to the end of its row; the search sheet opens at full height; the opt-in "hold the connection while off screen" setting from 43 is taken back out (its foreground service needed a permission-and-notification walkthrough that cost more than the reconnect it saved). 44 was bumped but not recorded, so it is skipped |
-| `1.0.0 (49)` | 2026-09-28 | TestFlight upload accepted; processing started. Phone polish and cleanup, full recent-first Agent picker, Project/Find search autofocus, collapsed Options with separate Branch/Worktree controls and Model choices, and trusted-device group sync from main. 1,643 offline tests pass; analyzer clean outside existing third-party infos. Builds 46–48 were local iPhone review builds. |
+| `1.0.0 (46)` | 2026-09-25 | TestFlight. The search sheet lifts to full screen while a search is typed; a machine that locks out remote-password attempts says so (OH-5, #353); the browser setup links are gone (OH-2, #348) |
+| `1.0.0 (47)` | 2026-09-25 | TestFlight. The tabs/search sheet closes the easy way: Close beside the field, a pull of 120pt instead of half the screen, and a pull from anywhere on a list already at its top. The terminal keeps a snapshot's colours as tmux carried them (a wrapped dim line no longer turns bright after a resize or reconnect) — the fix is in the CLI, so it shows once the machine runs it; a truncated 38/48 colour no longer fails the renderer, and palette slot 15 is bright white |
+| `1.0.0 (48)` | 2026-09-26 | TestFlight. Paste in the terminal's ⋯ sheet: the clipboard's text as one paste, or, with no text, its image as an attachment (iOS and Android, #321 by jaylfc). The pager no longer counts an agent it is about to close against its cap of open streams, so the page ahead attaches after a swipe |
+| `1.0.0 (49)` | 2026-09-28 | TestFlight upload accepted; processing started. Phone polish and cleanup, full recent-first Agent picker, Project/Find search autofocus, collapsed Options with separate Branch/Worktree controls and Model choices, and trusted-device group sync from main. 1,643 offline tests pass; analyzer clean outside existing third-party infos. |
+| `1.0.0 (50)` | 2026-09-30 | TestFlight. Light mode, with Dark and Light terminal schemes (#248); an agent's question is answered by tapping its lines; Find gets a tab filter, recaps for the rows on screen, and machine status drawn like harness rows; a new project and its agent are named after the first task (#94). Terminals open over the relay without waiting for p2p, picking an agent redials a machine that had backed off, and the home agent stays while its machine is briefly offline. Camera access that is off links to Settings; analytics are gone. Built from `feat/mobile-ios-android` |
+| `1.0.1 (51)` | 2026-10-01 | TestFlight. First build on the 1.0.1 train — 1.0.0 was approved and its train closed, so ASC refused 1.0.0 (51). Faster launch to the first session; tabs named as on the desktop; Find recaps fold behind a chevron; device key log (#518). First upload from an unsigned archive signed on export (`release-ios.sh`, Xcode account). Built from `feat/mobile-ios-android` |
+| `1.0.1 (52)` | 2026-10-01 | TestFlight. The launch terminal opens before the agent list; the desktop app, web and CLI sign in by scanning a QR with the phone (#519). Built from `feat/mobile-ios-android` after merging `main` |
+| `1.0.1 (55)` | 2026-10-02 | TestFlight. Sign in with Google or Apple (an in-app SFSafariViewController over the loopback, so no Sign in with Apple entitlement); faster launch for large accounts and a full skeleton while it loads; back button on the Computers and device pages; device key codes to compare. ASC refused 54 as already uploaded — someone uploaded a 54 that is not recorded here. Built from `feat/mobile-ios-android` at `f95db4a2` |
+| `1.0.1 (56)` | 2026-10-05 | TestFlight. Copy and paste in the terminal (the key strip's `paste` asks iOS `hasImages`, which never brings up the paste prompt); computers and profiles can be renamed, removed and retried; Devices DSH frames sealed as the CLI requires. Built from `feat/mobile-ios-android` at `28e95521` |
+| `1.0.1 (57)` | 2026-10-06 | TestFlight. Typing in the terminal no longer lags or drops keys: keys echo locally and go out before the IME resets. Remote scroll is smoother, with a native-like fling and a scroll mirror that follows the finger; the stray cursor is hidden; p2p holds when late relay frames arrive. Onboarding explains its sign-in steps and sign-outs, and scanning a computer's sign-in QR signs the phone in first. Uploaded with the Xcode account from the second Mac; Xcode again reported the non-blocking missing WebRTC dSYM. Built from `feat/mobile-ios-android` at `b896acd8` |
+| `1.0.1 (58)` | 2026-10-06 | TestFlight. Remote scroll for Claude Code is faster and steadier: page keys and paced wheels fetch rows, each agent keeps its rows, and rows above are prefetched while idle. The key strip's hide-keyboard key is larger. Onboarding says where Add Phone is and which account to use, offers Scan again after a failed pairing, and shortens the scan page's sign-in hint. Uploaded with the Xcode account (`release-ios.sh`); Xcode again reported the non-blocking missing WebRTC dSYM. Built from `feat/mobile-ios-android` at `8b174045` after merging `main` |
+| `1.0.1 (59)` | 2026-10-07 | TestFlight. Onboarding gets exits and shorter sign-in waits (`fix/mobile-onboarding-exits`), on top of 58. Built from `feat/mobile-ios-android` at `421c54d3` |
+| `1.0.1 (60)` | 2026-10-07 | TestFlight. Onboarding hardened: one pairing at a time, Scan again and a way out of slow waits, sign-out clears the last account's computers; computer set-up in three steps; iOS local network usage description. Uploaded with the Xcode account (`release-ios.sh`); Xcode again reported the non-blocking missing WebRTC dSYM. Built from `feat/mobile-ios-android` at `1d58a94e` |
+| `1.0.2 (61)` | 2026-10-08 | TestFlight. Shows when a computer is asleep instead of loading, polls faster while all are asleep and adds a refresh button; reopens the terminal before the agent list on reconnect; the key strip leads with a question's key hints, Codex glyph hints (`⇧←`) included. ASC refused it as `1.0.1 (61)`: 1.0.1 had been approved, which closes its train, so it went up as 1.0.2. Built from `feat/mobile-ios-android` at `99e17f3d` |
+| `1.0.2 (62)` | 2026-10-09 | TestFlight. One-button Connect your computer onboarding (`feat/connect-your-computer`); Google sign-in on iOS reuses Safari's signed-in accounts; swipe left opens Computers and New Harness moves into Find, which opens with the keyboard down. Built from `feat/mobile-ios-android` at `bf8c4b4c` |
+| `1.0.3 (63)` | 2026-10-12 | TestFlight. Connect your computer relaid on one left edge, pinned to Computers, with the same set-up steps everywhere; Get it shows the download address to type; New Harness asks which computer, as on desktop. ASC refused it as `1.0.2 (63)`: 1.0.2 had been approved, so it went up as 1.0.3. Built in a separate worktree (`autonomous-harness-release`) from `feat/mobile-ios-android` at `d1d696fc` |
+| `1.0.3 (64)` | 2026-10-13 | TestFlight. The new phone onboarding (`feat/mobile-phone-onboarding`): a sign-in welcome with the QR sign-in back and "Use <email>" under the sign-in step, the "On your computer, go to" screen with its set-up steps and sign-out under the account, the "X is ready." moment. Also Settings ▸ Connectors, a new device confirmed once on any trusted device (#1196), and Swarm/Jev code removed. Built from `feat/mobile-ios-android` at `38e8e8ba` |
+| `1.0.3 (65)` | 2026-10-13 | TestFlight. A harness's sign-in page (Claude Code's `/login`) opens on the phone and the sign-in goes back to it; the welcome's scan button reads "Scan QR from computer"; Computers shows a refresh button and Settings sits only at home. Built from `feat/mobile-ios-android` at `3dcd4a6f` |
+| `1.0.4 (66)` | 2026-10-14 | TestFlight. A simpler welcome (Continue with Google or Apple, then "Continue with email · QR code" as words), a welcome message and pictures; download and sign-in steps under the QR camera; a dropped P2P channel redialled within seconds; a dismissed keyboard stays down; one word per machine state; Privacy settings tidied. ASC refused it as `1.0.3 (66)`: 1.0.3 had been approved, so it went up as 1.0.4. Built from `feat/mobile-ios-android` at `1399b887` |
+| `1.0.5 (67)` | 2026-10-15 | TestFlight. The terminal stays on screen while it reconnects, and a socket or stream that goes quiet is redialled or resynced; control is taken before a tapped answer or Interrupt; MCP Accept/Decline dialogs answered; a harness made from Find lands in the tab picked on the chips; the QR camera's first step matches "On your computer, go to"; onboarding stall counting; Phone set-up for a device with no screen. ASC refused it as `1.0.4 (67)`: 1.0.4 had been approved, so it went up as 1.0.5. Built from `feat/mobile-ios-android` at `cf9e70d8` |
 
-`pubspec.yaml` is now at `1.0.0+50`, the next build number. Build 49 is already uploaded; do not
-upload it again. Check App Store Connect before uploading if another release has happened meanwhile.
+`pubspec.yaml` is now at `1.0.5+68`, the next build number. Build 67 (1.0.5) is the last iOS upload and 66
+the last to both TestFlight and Play (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 to 1.0.4 are approved, so their trains are closed: new builds go up as 1.0.5. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
 
@@ -328,3 +354,9 @@ account (Autonomous Inc.) is exempt — check which kind the account is before p
 | --- | --- | --- |
 | `16` (1.0.0) | 2026-09-18 | Internal testing — the first Play upload |
 | `41` (1.0.0) | 2026-09-24 | Built for resubmission after Play rejected the build under the broken-functionality policy (its browser sign-in redirected to `127.0.0.1`, which timed out on the reviewer's device). Signs in with an emailed code instead; also carries the notices and tab marks of iOS 39–40 |
+| `53` (1.0.1) | 2026-10-01 | Internal testing. Same code as iOS 1.0.1 (52): faster launch, QR sign-in for desktop/web/CLI (#519), tab and Find polish. First Play build from the second Mac, with the upload key copied from the first (`storeFile` rewritten to this Mac's path) |
+| `60` (1.0.1) | 2026-10-07 | Internal testing. Same code as iOS 1.0.1 (60): Google/Apple sign-in, faster launch, terminal typing, paste and scroll fixes, renaming computers and profiles, the hardened onboarding |
+| `62` (1.0.2) | 2026-10-09 | Internal testing. Same code as iOS 1.0.2 (62), built with the pubspec briefly set back to `+62` so the two stores match: one-button Connect your computer onboarding, asleep computers shown with a refresh button, the terminal back first on reconnect, question key hints, swipe left for Computers, New Harness in Find |
+| `64` (1.0.3) | 2026-10-13 | Built, same code as iOS 1.0.3 (64), with the pubspec briefly set back to `+64`; whether it was uploaded to Play is not recorded, so treat 64 as used |
+| `65` (1.0.3) | 2026-10-13 | Internal testing. Same code as iOS 1.0.3 (65): the new phone onboarding, Settings ▸ Connectors, a harness's sign-in page opened on the phone, refresh on Computers. Production, published 2026-10-13 |
+| `66` (1.0.4) | 2026-10-14 | Production, sent for review 2026-10-14. iOS 1.0.4 (66)'s code plus `51ee54c3` (a copy of the agent memo sorted in `terminal_page.dart`), which landed between the two builds |

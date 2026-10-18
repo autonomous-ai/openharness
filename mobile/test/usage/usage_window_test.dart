@@ -89,7 +89,6 @@ void main() {
       expect(loading.account, isNull);
       expect(loading.hasFigures, isFalse);
       expect(loading.tightest, isNull);
-      expect(loading.railWindow, isNull);
     });
 
     test('has figures only when it answered AND reported a window', () {
@@ -119,23 +118,23 @@ void main() {
       expect(reading.tightest, same(session));
     });
 
-    test('the rail prints the weekly window, even when another is tighter', () {
-      const reading = ProviderUsage(
-        provider: UsageProvider.claude,
-        status: UsageStatus.ok,
-        windows: [session, weekly, fable],
-      );
-      expect(reading.railWindow, same(weekly));
-    });
-
-    test('with no weekly window the rail falls back to the tightest', () {
-      const reading = ProviderUsage(
-        provider: UsageProvider.codex,
-        status: UsageStatus.ok,
-        windows: [fable, session],
-      );
-      expect(reading.railWindow, same(session));
-    });
+    test(
+      'a healthy weekly window does not stand in for a spent shorter one',
+      () {
+        // The weekly window used to head the Usage page while the model sheet
+        // printed the tightest — one account, two different figures.
+        const reading = ProviderUsage(
+          provider: UsageProvider.claude,
+          status: UsageStatus.ok,
+          windows: [
+            weekly,
+            UsageWindow(label: 'Session', usedPercent: 97),
+          ],
+        );
+        expect(reading.tightest!.label, 'Session');
+        expect(reading.tightest!.remainingLabel, '3% remaining');
+      },
+    );
   });
 
   group('parseResetTimestamp', () {
@@ -214,14 +213,40 @@ void main() {
   });
 
   group('usage pressure', () {
-    test('calm below 80, amber from 80, red from 90', () {
-      expect(usagePressureOf(79.9), UsagePressure.calm);
-      expect(usagePressureOf(kUsageWarnPercent), UsagePressure.warn);
-      expect(usagePressureOf(89.9), UsagePressure.warn);
-      expect(usagePressureOf(kUsageCriticalPercent), UsagePressure.critical);
+    // The desktop's thresholds, on what is LEFT: neutral above 20%, amber from
+    // 20% down to 6%, red at 5% and below.
+    UsageWindow left(double remaining) =>
+        UsageWindow(label: 'Weekly', usedPercent: 100 - remaining);
+
+    test('calm at 21% left, amber at 20% and at 6%, red at 5%', () {
+      expect(left(21).pressure, UsagePressure.calm);
+      expect(left(kUsageLowRemaining.toDouble()).pressure, UsagePressure.warn);
+      expect(left(6).pressure, UsagePressure.warn);
       expect(
-        const UsageWindow(label: 'Weekly', usedPercent: 95).pressure,
+        left(kUsageCriticalRemaining.toDouble()).pressure,
         UsagePressure.critical,
+      );
+      expect(left(0).pressure, UsagePressure.critical);
+      expect(left(100).pressure, UsagePressure.calm);
+    });
+
+    test('judged on the whole percent it prints, as the desktop judges it', () {
+      // 20.5% left prints as 20%, and a figure printed as 20% is amber.
+      expect(left(20.5).remainingLabel, '20% remaining');
+      expect(left(20.5).pressure, UsagePressure.warn);
+      expect(left(5.9).remainingLabel, '5% remaining');
+      expect(left(5.9).pressure, UsagePressure.critical);
+    });
+
+    test('remaining is worded as the desktop words it, never rounded away', () {
+      expect(left(80).remainingLabel, '80% remaining');
+      expect(left(0.4).remainingLabel, '<1% remaining');
+      expect(left(0).remainingLabel, '0% remaining');
+      // A partly spent window never reads as untouched.
+      expect(left(99.6).remainingLabel, '99% remaining');
+      expect(
+        const UsageWindow(label: 'Weekly', usedPercent: double.nan).pressure,
+        UsagePressure.calm,
       );
     });
   });

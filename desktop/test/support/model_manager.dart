@@ -235,7 +235,11 @@ class ModelManagerTestApp extends AppNotifier {
     String label = 'harness',
   }) async => '/fixture/$label';
   @override
-  Future<void> probeDsh(String machineId, {bool force = false}) async {
+  Future<void> probeDsh(
+    String machineId, {
+    bool force = false,
+    bool userAction = false,
+  }) async {
     await probeReply?.future;
     if (probeError != null) throw StateError(probeError!);
     stateOf(machineId)!.dsh.replace([
@@ -262,7 +266,10 @@ class ModelManagerTestApp extends AppNotifier {
   }
 
   @override
-  Future<GridModels> gridModels(String machineId) async {
+  Future<GridModels> gridModels(
+    String machineId, {
+    bool userAction = false,
+  }) async {
     gridReads++;
     return inventory;
   }

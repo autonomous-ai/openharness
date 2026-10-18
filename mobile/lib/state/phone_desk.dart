@@ -225,7 +225,14 @@ class PhoneDesk {
   /// [name] is the agent's own, and it is used only by [openNextAgentInNewTab]
   /// — a tab made for one agent is named after it, which is what a window does
   /// with a tab it opens.
-  void adopt(AgentRef agent, {String? name}) {
+  ///
+  /// [tabId] is a tab the person picked for this agent before asking for it —
+  /// Find narrowed to a tab when New Harness was tapped — and it wins over the
+  /// tab the phone is in, which the agent ON SCREEN decides (`AgentHome`) and
+  /// so still names the tab Find was opened over. The phone is in the picked tab
+  /// from here, as it is after [createTabFor]. A tab closed on another computer
+  /// while the form was open falls back to the tab the phone is in.
+  void adopt(AgentRef agent, {String? name, String? tabId}) {
     if (!_state.enabled) return;
     final wanted = _newTabForNextAgent;
     _newTabForNextAgent = false;
@@ -237,13 +244,21 @@ class PhoneDesk {
       createTabFor(agent, name: name);
       return;
     }
-    final tabId = _activeTabId;
-    if (tabId == null) return;
-    final tab = _state.synced.where((t) => t.id == tabId).firstOrNull;
+    final picked = tabId == null
+        ? null
+        : _state.synced.where((t) => t.id == tabId).firstOrNull;
+    final active = _activeTabId;
+    final tab =
+        picked ??
+        (active == null
+            ? null
+            : _state.synced.where((t) => t.id == active).firstOrNull);
     if (tab == null) return;
+    // Before the write, so the notice it makes already has the phone in the tab.
+    if (picked != null) _activeTabId = picked.id;
     if (tab.panes.contains(pane)) return;
     _queue([
-      {'op': 'pane.add', 'tabId': tabId, ...pane.toJson()},
+      {'op': 'pane.add', 'tabId': tab.id, ...pane.toJson()},
     ]);
   }
 

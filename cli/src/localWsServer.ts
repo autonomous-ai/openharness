@@ -43,6 +43,8 @@ export interface LocalWsBackend {
   handleLocalBinary: (connId: string, frame: TerminalBinaryClear) => Promise<void>
   /** The agent this window has focused, or null — which of its terminals gets the short output window. */
   setLocalTerminalFocus?: (connId: string, agentId: string | null) => void
+  /** hn's `product_observe`, from a connection on this computer's own socket bound to this machine. */
+  observeProduct?: (connId: string, payload: unknown) => void
 }
 
 export interface LocalWsServerOptions {
@@ -519,6 +521,15 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           }
           return
         }
+        // hn's own measurement, for this computer's product-usage queue alone: one-way, never answered,
+        // never relayed to another machine or handed to the backend socket's dispatch. Over the owner's
+        // socket only, from a window (not a tool) bound to this machine; the backend checks it is hn's.
+        if (parsed?.type === 'product_observe') {
+          if (trusted && !tool && !relay && boundMachineId === options.machineId && windowSinks.has(connId)) {
+            options.backend.observeProduct?.(connId, parsed.payload)
+          }
+          return
+        }
         // THE APP MOVED — tell whoever wants to follow it, before the frame is dispatched either way.
         // Sniffed here rather than in the backend socket because that path never sees a RELAYED machine's
         // frames: those are forwarded upstream a few lines below and would be invisible, which is exactly
@@ -741,7 +752,9 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           }
           // Compatibility for windows that never report selection. A modern window restores every
           // terminal on reconnect; their attachment order is not the pane the person selected.
-          if (parsed?.type === 'terminal_open' && !explicitFocusClients.size && typeof agentId === 'string' && agentId) {
+          // (A watch-only open is hn with no terminal reading a pane: nobody is in front of it.)
+          if (parsed?.type === 'terminal_open' && !explicitFocusClients.size && typeof agentId === 'string' && agentId
+            && (parsed.payload as Record<string, unknown>).watch !== true) {
             options.onAppFocus?.(boundMachineId, agentId)
           }
         }

@@ -312,160 +312,178 @@ class _DevicesPageState extends State<DevicesPage> {
     final frozen =
         listing != null &&
         (listing.frozen != null || listing.frozenPeers.isNotEmpty);
+    final canPop = Navigator.of(context).canPop();
     return Scaffold(
       backgroundColor: tty.ground,
       body: SafeArea(
         bottom: false,
-        child: ListView(
-          padding: EdgeInsets.fromLTRB(
-            Tty.origin,
-            12,
-            Tty.origin,
-            MediaQuery.paddingOf(context).bottom + 24,
-          ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const TtyText(
-              'Your devices',
-              size: TtySize.title,
-              weight: FontWeight.w600,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Every computer and app signed in to your account. Each reaches your machines '
-              'end to end encrypted. Remove one you do not recognise.',
-              style: tty.style(color: tty.dim),
-            ),
-            if (frozen) ...[
-              const SizedBox(height: 12),
-              SettingsGroup(
-                children: [
-                  SettingsRow(
-                    title: 'The device list froze',
-                    detail: listing.frozen != null
-                        ? 'Harness served a list that does not match what this phone verified. '
-                              'No device is added until you review it.'
-                        : 'Frozen on ${listing.frozenPeers.join(', ')}. Review it on that computer.',
-                    destructive: true,
-                    detailLines: null,
-                    onTap: listing.frozen != null
-                        ? () => unawaited(_trustAgain())
-                        : null,
-                    value: listing.frozen != null ? 'Review' : null,
-                  ),
-                ],
-              ),
-            ],
-            if (listing?.registerError case final code?) ...[
-              const SizedBox(height: 12),
-              SettingsGroup(
-                children: [
-                  SettingsRow(
-                    key: const ValueKey('devices-refused'),
-                    title: 'This device couldn’t join',
-                    detail: code == 'TOO_MANY'
-                        ? 'Your account has too many devices. Remove ones you no longer use.'
-                        : 'Harness refused it a place on your account’s device list ($code).',
-                    destructive: true,
-                    detailLines: null,
-                  ),
-                ],
-              ),
-            ],
-            if (listing != null &&
-                !listing.baselineSeen &&
-                !_baselineHidden) ...[
-              if (_baseline(listing) case final baseline
-                  when baseline.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                _BaselinePanel(
-                  key: const Key('account-devices-baseline'),
-                  rows: baseline,
-                  onGotIt: () => unawaited(_gotIt()),
+            // Always pushed — from Settings, the new-device banner or its notification — so it
+            // carries the way back as Settings does: above the title, and outside the list, so a
+            // long list scrolled down keeps it.
+            if (canPop)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TtyBackButton(
+                  onPressed: () => Navigator.of(context).maybePop(),
                 ),
-              ],
-            ],
-            if (_error case final error?) ...[
-              const SizedBox(height: 12),
-              Text(
-                error,
-                key: const Key('account-devices-error'),
-                // Amber when the person has something to act on (another account, a list that moved):
-                // the same severity as the desktop. A failure is red.
-                style: tty.style(color: _errorWarns ? tty.yellow : tty.red),
               ),
-            ],
-            if (listing != null && _unused(listing).isNotEmpty) ...[
-              const SizedBox(height: 12),
-              SettingsGroup(
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.fromLTRB(
+                  Tty.origin,
+                  canPop ? 8 : 12,
+                  Tty.origin,
+                  MediaQuery.paddingOf(context).bottom + 24,
+                ),
                 children: [
-                  SettingsRow(
-                    key: const Key('account-devices-unused'),
-                    title:
-                        '${_unused(listing).length} app${_unused(listing).length == 1 ? '' : 's'} not used in 90 days',
-                    detail: 'Most likely a browser whose data was cleared.',
-                    value: _removingUnused ? 'Removing…' : 'Remove',
-                    destructive: true,
-                    onTap: _removingUnused
-                        ? null
-                        : () => unawaited(_removeUnused(_unused(listing))),
+                  const TtyText(
+                    'Your devices',
+                    size: TtySize.title,
+                    weight: FontWeight.w600,
                   ),
-                ],
-              ),
-            ],
-            const SizedBox(height: 12),
-            if (listing == null)
-              const SizedBox.shrink()
-            else ...[
-              if (selfRow(listing.members) case final self?) ...[
-                SettingsGroup(
-                  children: [
-                    _ThisDeviceCard(
-                      key: const Key('account-device-this'),
-                      row: self,
+                  const SizedBox(height: 8),
+                  Text(
+                    'Every computer and app signed in to your account. Each reaches your machines '
+                    'end to end encrypted. Remove one you do not recognise.',
+                    style: tty.style(color: tty.dim),
+                  ),
+                  if (frozen) ...[
+                    const SizedBox(height: 12),
+                    SettingsGroup(
+                      children: [
+                        SettingsRow(
+                          title: 'The device list froze',
+                          detail: listing.frozen != null
+                              ? 'Harness served a list that does not match what this phone verified. '
+                                    'No device is added until you review it.'
+                              : 'Frozen on ${listing.frozenPeers.join(', ')}. Review it on that computer.',
+                          destructive: true,
+                          detailLines: null,
+                          onTap: listing.frozen != null
+                              ? () => unawaited(_trustAgain())
+                              : null,
+                          value: listing.frozen != null ? 'Review' : null,
+                        ),
+                      ],
                     ),
                   ],
-                ),
-                const SizedBox(height: 12),
-              ],
-              SettingsGroup(
-                children: [
-                  for (final row in orderDeviceRows(
-                    listing.members,
-                    _seen,
-                    _newPubs,
-                  ))
-                    SettingsRow(
-                      key: ValueKey('account-device-${row.member.pub}'),
-                      title: row.member.label.trim().isEmpty
-                          ? 'Unnamed device'
-                          : row.member.label,
-                      detail: deviceDetailLine(
-                        row,
-                        _seen[row.member.pub],
-                        DateTime.now(),
-                        sameName: sharedNames(listing.members)
-                            .contains(row.member.label.trim()),
-                      ),
-                      value: row.suspended
-                          ? 'Suspended'
-                          : _newPubs.contains(row.member.pub)
-                          ? 'New'
-                          : null,
-                      onTap: () => _open(row),
+                  if (listing?.registerError case final code?) ...[
+                    const SizedBox(height: 12),
+                    SettingsGroup(
+                      children: [
+                        SettingsRow(
+                          key: const ValueKey('devices-refused'),
+                          title: 'This device couldn’t join',
+                          detail: code == 'TOO_MANY'
+                              ? 'Your account has too many devices. Remove ones you no longer use.'
+                              : 'Harness refused it a place on your account’s device list ($code).',
+                          destructive: true,
+                          detailLines: null,
+                        ),
+                      ],
                     ),
+                  ],
+                  if (listing != null &&
+                      !listing.baselineSeen &&
+                      !_baselineHidden) ...[
+                    if (_baseline(listing) case final baseline
+                        when baseline.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      _BaselinePanel(
+                        key: const Key('account-devices-baseline'),
+                        rows: baseline,
+                        onGotIt: () => unawaited(_gotIt()),
+                      ),
+                    ],
+                  ],
+                  if (_error case final error?) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      error,
+                      key: const Key('account-devices-error'),
+                      // Amber when the person has something to act on (another account, a list that moved):
+                      // the same severity as the desktop. A failure is red.
+                      style: tty.style(color: _errorWarns ? tty.yellow : tty.red),
+                    ),
+                  ],
+                  if (listing != null && _unused(listing).isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    SettingsGroup(
+                      children: [
+                        SettingsRow(
+                          key: const Key('account-devices-unused'),
+                          title:
+                              '${_unused(listing).length} app${_unused(listing).length == 1 ? '' : 's'} not used in 90 days',
+                          detail: 'Most likely a browser whose data was cleared.',
+                          value: _removingUnused ? 'Removing…' : 'Remove',
+                          destructive: true,
+                          onTap: _removingUnused
+                              ? null
+                              : () => unawaited(_removeUnused(_unused(listing))),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  if (listing == null)
+                    const SizedBox.shrink()
+                  else ...[
+                    if (selfRow(listing.members) case final self?) ...[
+                      SettingsGroup(
+                        children: [
+                          _ThisDeviceCard(
+                            key: const Key('account-device-this'),
+                            row: self,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    SettingsGroup(
+                      children: [
+                        for (final row in orderDeviceRows(
+                          listing.members,
+                          _seen,
+                          _newPubs,
+                        ))
+                          SettingsRow(
+                            key: ValueKey('account-device-${row.member.pub}'),
+                            title: row.member.label.trim().isEmpty
+                                ? 'Unnamed device'
+                                : row.member.label,
+                            detail: deviceDetailLine(
+                              row,
+                              _seen[row.member.pub],
+                              DateTime.now(),
+                              sameName: sharedNames(listing.members)
+                                  .contains(row.member.label.trim()),
+                            ),
+                            value: row.suspended
+                                ? 'Suspended'
+                                : _newPubs.contains(row.member.pub)
+                                ? 'New'
+                                : null,
+                            onTap: () => _open(row),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    SettingsGroup(
+                      children: [
+                        SettingsRow(
+                          key: const Key('account-devices-history'),
+                          title: 'History',
+                          onTap: _openHistory,
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
-              const SizedBox(height: 12),
-              SettingsGroup(
-                children: [
-                  SettingsRow(
-                    key: const Key('account-devices-history'),
-                    title: 'History',
-                    onTap: _openHistory,
-                  ),
-                ],
-              ),
-            ],
+            ),
           ],
         ),
       ),

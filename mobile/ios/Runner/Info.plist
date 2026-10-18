@@ -43,6 +43,14 @@
 	     be shown and is deliberately absent. -->
 	<key>NSCameraUsageDescription</key>
 	<string>Scan the code on your computer to connect, or take a photo to send to an agent.</string>
+	<!-- What iOS shows when the app first reaches an address on the local network.
+	     Computers are reached through the relay, so today that is a backend on a
+	     LAN address in development, or the debugger in a debug build. Set here, it
+	     also replaces the line Flutter's build puts into Debug and Profile builds
+	     ("Allow Flutter tools on your computer to connect…", `xcode_backend.dart`),
+	     which only adds its own when the app has none. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Connect to the computers running Harness on your local network.</string>
 	<!-- Voice input, what tapping a terminal opens. Asked for on the first tap,
 	     not at launch. The microphone alone: the recording is transcribed by
 	     the Harness backend (`/api/voice/stt`, the dial's own path), not by the

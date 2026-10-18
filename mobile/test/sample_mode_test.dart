@@ -96,7 +96,15 @@ void main() {
     expect(find.text('Sample'), findsOneWidget);
     final dot = find.byKey(const ValueKey('sample-guide-dot'));
     final dotBefore = tester.getRect(dot);
-    expect(dotBefore.left, 12);
+    // The dot and its words stand centred over the mic, as the mic is centred.
+    final words = find.descendant(
+      of: find.ancestor(of: dot, matching: find.byType(Row)).first,
+      matching: find.byType(Text),
+    );
+    expect(
+      (dotBefore.left + tester.getRect(words).right) / 2,
+      moreOrLessEquals(tester.getCenter(find.byType(VoiceMicCore)).dx),
+    );
     await settle(tester, const Duration(seconds: 6));
     expect(
       tester.getRect(dot),
@@ -187,7 +195,9 @@ void main() {
     await open(tester, 'sample-refactor-db');
 
     expect(screenOf(notifier, 'sample-refactor-db'), contains('❯ 1. Yes'));
-    await tester.tap(find.textContaining('1 yes', findRichText: true).first);
+    // Pressed where it is read: each answer is a band over its own lines, a button to a screen
+    // reader as well — there are no answer keys beside the mic.
+    tester.semantics.tap(find.semantics.byLabel(RegExp('^Answer 1 ')));
     await settle(tester, const Duration(seconds: 12));
 
     final screen = screenOf(notifier, 'sample-refactor-db');
@@ -221,11 +231,13 @@ void main() {
   ) async {
     final notifier = await openSample(tester);
 
-    // New is a swipe left from the terminal.
+    // New is the button at Find's foot, and Find a swipe right from the terminal.
     await tester.dragFrom(
-      tester.getCenter(find.byType(TerminalPage).first) + const Offset(120, 0),
-      const Offset(-240, 0),
+      tester.getCenter(find.byType(TerminalPage).first) - const Offset(120, 0),
+      const Offset(300, 0),
     );
+    await settle(tester, const Duration(milliseconds: 600));
+    await tester.tap(find.byKey(const ValueKey('find-new-harness')));
     await settle(tester, const Duration(seconds: 1));
     await tester.tap(find.text('project'));
     await settle(tester, const Duration(milliseconds: 500));

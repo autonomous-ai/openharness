@@ -24,6 +24,7 @@ class NewAgentDraft {
     required this.engine,
     required this.permissionMode,
     this.folder,
+    this.exactFolder,
     this.project,
     this.projectLabel,
     this.worktree,
@@ -47,6 +48,9 @@ class NewAgentDraft {
   /// A folder that exists, or ([project]) one the machine is to make. Exactly one is ever set —
   /// see the note on `_NewAgentPageState._project`.
   final String? folder;
+
+  /// The folder the person browsed to, so a worktree there stays itself.
+  final String? exactFolder;
   final ProjectFolderRequest? project;
   final String? projectLabel;
 

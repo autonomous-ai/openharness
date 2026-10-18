@@ -108,6 +108,38 @@ const _engines = <String, EngineIdentity>{
 /// All known engines, in declaration order — for the New Agent engine picker.
 List<EngineIdentity> get allEngines => _engines.values.toList(growable: false);
 
+/// Whether [id] names a domain-specific harness rather than an engine — the desktop's
+/// `isHarnessId`. The slash is the tell: engine ids are bare words, harness ids are `owner/name`.
+bool isHarnessId(String? id) => id != null && id.contains('/');
+
+/// Whether [engine] is a coding engine — the desktop's `category: 'Code'`.
+///
+/// ⚠️ **Every engine in [_engines] is one**, as every engine in the desktop's own table is (the
+/// same fourteen, claude to agy); it is the harnesses that carry other categories, and those are
+/// told apart by [isHarnessId]. An engine added here that does not write code has to be excluded
+/// by name, or a tab of it would be called `code`.
+bool isCodeEngine(String? engine) =>
+    _engines.containsKey(engine?.trim().toLowerCase());
+
+/// Harness ids that were renamed, to the id each goes by now — the desktop's `retiredHarnessIds`
+/// (`core/harness_catalog.dart`), copied as it stands, so an agent made from an old id is named
+/// by its current one on both.
+const _retiredHarnessIds = <String, String>{
+  'local/ollama': 'autonomous/ollama',
+  'local/mlx-lm': 'autonomous/mlx-lm',
+  'local/vllm': 'autonomous/vllm',
+  'autonomous/copper': 'autonomous/autonomous-circuit',
+  'autonomous/circuit': 'autonomous/autonomous-circuit',
+  'autonomous/solder': 'autonomous/kicad',
+  'autonomous/machines': 'autonomous/machine-monitor',
+  'autonomous/toymaker': 'autonomous/autonomous-workshop',
+  'autonomous/solid': 'autonomous/autonomous-workshop',
+  'autonomous/workshop': 'autonomous/autonomous-workshop',
+};
+
+/// [id] as the harness goes by now — see [_retiredHarnessIds].
+String canonicalHarnessId(String id) => _retiredHarnessIds[id] ?? id;
+
 EngineIdentity engineIdentity(String? engine, {String? displayName}) {
   final id = engine?.trim().toLowerCase() ?? '';
   final known = _engines[id];

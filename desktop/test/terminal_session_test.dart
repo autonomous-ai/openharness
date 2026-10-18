@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:harness/logging/app_log.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -1390,6 +1391,120 @@ void main() {
     expect(session.errorCode, 'TERMINAL_RESYNC_TIMEOUT');
   });
 
+  testWidgets(
+    'heartbeats and resyncs ask the daemon to report a stream it no longer has',
+    (tester) async {
+      session.dispose();
+      session = TerminalSession(
+        machineId: 'machine-1',
+        agentId: 'agent-1',
+        agentName: 'backend-api',
+        engineId: 'codex',
+        resyncTimeout: const Duration(seconds: 30),
+        send: (type, payload) async {
+          sent.add((type: type, payload: Map<String, dynamic>.from(payload)));
+          return true;
+        },
+        sendBinary: (frame) async => true,
+      );
+      await ready();
+      await session.handleBinary(
+        output(0, utf8.encode('screen'), keyframe: true, cols: 80, rows: 24),
+      );
+      await tester.pump(const Duration(seconds: 5));
+      expect(
+        sent.lastWhere((frame) => frame.type == 'terminal_alive').payload,
+        {'streamId': streamId, 'reportMissing': true},
+      );
+
+      await session.handleBinary(output(2, utf8.encode('gap')));
+      await tester.pump();
+      expect(
+        sent
+            .firstWhere((frame) => frame.type == 'terminal_resync')
+            .payload['reportMissing'],
+        isTrue,
+      );
+      await session.close();
+    },
+  );
+
+  test('a reopen that may not redial leaves the machine link alone', () async {
+    var redials = 0;
+    TerminalSession stalled() => TerminalSession(
+      machineId: 'machine-1',
+      agentId: 'agent-1',
+      agentName: 'backend-api',
+      engineId: 'codex',
+      send: (type, payload) async => type != 'terminal_open',
+      sendBinary: (frame) async => true,
+      onOpenStalled: () async => redials++,
+    );
+    final quiet = stalled();
+    addTearDown(quiet.dispose);
+    await quiet.reopen(redial: false);
+    expect(redials, 0);
+    expect(quiet.status, TerminalSessionStatus.error);
+
+    final loud = stalled();
+    final reopening = loud.reopen();
+    await pumpEventQueue();
+    expect(redials, 1);
+    loud.dispose();
+    await reopening;
+  });
+
+  test('a stream the daemon no longer has is reopened in place at once', () async {
+    await ready();
+    await session.handleBinary(
+      output(0, utf8.encode('screen'), keyframe: true, cols: 100, rows: 30),
+    );
+    await session.handleFrame('terminal_error', {
+      'streamId': streamId,
+      'code': 'TERMINAL_STREAM_NOT_FOUND',
+      'message': 'no live terminal stream',
+    });
+    await pumpEventQueue();
+
+    expect(sent.where((frame) => frame.type == 'terminal_open'), hasLength(2));
+    expect(session.status, TerminalSessionStatus.opening);
+    expect(session.errorCode, isNot('TERMINAL_STREAM_NOT_FOUND'));
+  });
+
+  test('a missing-stream report about another stream is ignored', () async {
+    await ready();
+    await session.handleFrame('terminal_error', {
+      'streamId': 'ffffffff-ffff-ffff-ffff-ffffffffffff',
+      'code': 'TERMINAL_STREAM_NOT_FOUND',
+    });
+    await pumpEventQueue();
+
+    expect(sent.where((frame) => frame.type == 'terminal_open'), hasLength(1));
+    expect(session.status, isNot(TerminalSessionStatus.error));
+  });
+
+  test('a failure is written to the file log with its code', () async {
+    final log = _RecordingLog();
+    final previous = appLog;
+    appLog = log;
+    addTearDown(() => appLog = previous);
+    await ready();
+
+    await session.handleFrame('terminal_error', {
+      'streamId': streamId,
+      'code': 'TERMINAL_SNAPSHOT_FAILED',
+      'message': 'tmux snapshot failed',
+    });
+
+    expect(
+      log.lines,
+      contains(
+        'terminal failed machine=machine-1 agent=agent-1 stream=$streamId '
+        'code=TERMINAL_SNAPSHOT_FAILED message=tmux snapshot failed',
+      ),
+    );
+  });
+
   group('composer', () {
     /// The `message` frames this session put on the wire.
     List<Map<String, dynamic>> messages() => [
@@ -1891,4 +2006,16 @@ void main() {
       },
     );
   });
+}
+
+class _RecordingLog implements AppLog {
+  final lines = <String>[];
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => lines.add('$category $message');
 }

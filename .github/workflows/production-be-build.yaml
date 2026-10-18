@@ -126,3 +126,4 @@ jobs:
           build-args: |
             BUILD_ENV=${{ env.BUILD_ENV }}
             BUILD_TAG=${{ env.IMAGE_TAG }}
+            BUILD_SHA=${{ github.sha }}

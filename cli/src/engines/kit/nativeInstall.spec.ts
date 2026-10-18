@@ -334,6 +334,17 @@ it.each(['missing', 'replaced', 'emptied', 'dispatch removed', 'witness removed'
   expect(restarted.dispatch).not.toHaveBeenCalled()
 })
 
+it('keeps its history when a reboot renumbers the disk', async () => {
+  await controller().ensure('opencode', recipe, environment, 'request', () => true)
+  complete()
+  const authority = `${directory}.authority`, saved = JSON.parse(readFileSync(authority, 'utf8'))
+  writeFileSync(authority, JSON.stringify({ ...saved, directory: saved.directory.replace(/^\d+:/, '1:') }))
+  const restarted = controller()
+  expect(await restarted.status('opencode', 'request', () => true)).toEqual({ complete: true })
+  expect(await restarted.ensure('opencode', recipe, environment, 'request', () => true)).toEqual({ complete: true })
+  expect(restarted.dispatch).not.toHaveBeenCalled()
+})
+
 it('confirms a readable result durably before crediting it or dispatching its successor', async () => {
   await controller().ensure('opencode', recipe, environment, 'request', () => true)
   complete()

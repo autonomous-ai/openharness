@@ -26,6 +26,7 @@ static ht_gallery_t gallery;
 #include "config_store.h"
 #include "cable_client.h"
 #include "pet_store.h"
+#include "../../elapsed.h"
 #include "esp_attr.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -242,6 +243,8 @@ static EXT_RAM_BSS_ATTR struct {
     uint8_t status_phase;
     unsigned bell_unread;     // the bell's count at the last home render, to see a notice arrive
     uint32_t notice_ms;       // the face clock when it last went up, 0 = none since boot (the pet's alert bubble)
+    ht_focus_working_pick_t working_pick;   // which working scene the shown agent's pet plays (Claude: chef or builder)
+    uint32_t timer_at;      // when the working line's elapsed text next changes (ms() clock), 0 = never (elapsed.h)
     uint32_t pet_next_ms;   // when the pet's (or the voice screen's listening scene's) drawn frame next changes (clock_ms), 0 = never
     int start_x, start_y, last_x, last_y;
     uint32_t touch_started;
@@ -1002,6 +1005,7 @@ static void surface_tick(uint32_t now)
     // The voice screen's listening scene runs while the finger is down (hold-to-talk); the pets do not.
     if (s.pet_next_ms && (((s.view == HOME || s.view == AGENT) && !s.touch_down) || s.view == VOICE) &&
         (int32_t)(now - s.pet_next_ms) >= 0) { s.pet_next_ms = 0; change(); }
+    if (s.timer_at && (s.view == HOME || s.view == AGENT) && (int32_t)(now - s.timer_at) >= 0) { s.timer_at = 0; change(); }
     bool main = s.view == HOME || s.view == AGENT;
     bool visible = !display_is_asleep() &&
         ((main && s.connected && !s.loading) || s.view == VOICE);
@@ -1111,7 +1115,7 @@ static void focus_bell(ht_scene_t *f, unsigned count, int bell_y)
 static void render_home(ht_scene_t *f)
 {
     s.caption_arc = (ht_rect_t){0};
-    s.pet_next_ms = 0;
+    s.pet_next_ms = 0; s.timer_at = 0;
     if (!s.connected || s.loading) { render_brand(f); return; }
     if (workspace.touching && workspace.moved && !workspace.cancelled) { render_workspace_preview(f); return; }
     agent_t *a = active();
@@ -1152,7 +1156,15 @@ static void render_home(ht_scene_t *f)
     // Seconds since THIS DIAL heard about the turn, not since it began: turn.started carries no
     // timestamp. The 25 s staleness fuse (ui_prune_stale_busy) is what keeps this from counting a
     // turn nobody is running any more.
-    uint32_t since = a && a->busy && a->busy_ms && !is_question(a->id) ? (ms() - a->busy_ms) / 1000 : 0;
+    // 0 = unknown (not busy, no start stamp, or under a second): nothing is drawn. The same stamp sets the
+    // redraw deadline: the text only changes when fmt_elapsed's displayed unit does (elapsed.h), not every tick.
+    uint32_t since_ms = a && a->busy && a->busy_ms && !is_question(a->id) ? ms() - a->busy_ms : 0;
+    uint32_t since = since_ms / 1000;
+    s.timer_at = 0;
+    if (since) {
+        uint32_t next = fmt_elapsed_next_ms(since), frac = since_ms % 1000;
+        if (next > frac) { s.timer_at = ms() + next - frac; if (!s.timer_at) s.timer_at = 1; }
+    }
     int tab_index = workspace_index(s.selected_tab);
     uint32_t clock = ms() | 1;
     // A notice arrives: the count went up. Its time drives the pet's alert bubble (focus.c THE ALERT); one that is
@@ -1167,7 +1179,7 @@ static void render_home(ht_scene_t *f)
         .tab = tab_index >= 0 ? s.tabs[tab_index].name : "",
         .engine = a ? a->engine : "",
         .activity = activity,
-        .elapsed = since > 65535 ? 65535 : (uint16_t)since,
+        .elapsed = since,
         .detail = "",
         .mood = companion_celebrating ? HT_CHARACTER_DONE : character_mood(), .pose = character.motion.reaction.pose,
         .asking = a && is_question(a->id),
@@ -1187,6 +1199,8 @@ static void render_home(ht_scene_t *f)
     }
     if (visit.available) f_.hint = "";
     bool focus_face = character.id == HT_CHARACTER_FOCUS;
+    // Chef or builder: drawn once as the working scene starts showing for this agent, kept while it shows.
+    if (focus_face) ht_focus_pick_working(&s.working_pick, &f_, recap, a ? a->id : "", esp_random);
     if (again && focus_face) {
         s.notice_ms = (clock - ht_focus_alert_pop_ms(&f_)) | 1;
         f_.notice_ms = bell ? s.notice_ms : 0;
@@ -3274,6 +3288,11 @@ uint32_t habitat_next_wake_ms(void)
         delay = home_caption.next_ms;
     if (status_animated()) {
         uint32_t due = status_wake_ms(now);
+        if (due < delay) delay = due;
+    }
+    if (s.timer_at && (s.view == HOME || s.view == AGENT) && !display_is_asleep()) {
+        int32_t left = (int32_t)(s.timer_at - now);
+        uint32_t due = left < 1 ? 1 : (uint32_t)left;
         if (due < delay) delay = due;
     }
     if (s.pet_next_ms && (((s.view == HOME || s.view == AGENT) && !s.touch_down) || s.view == VOICE)) {

@@ -14,7 +14,7 @@ pub struct State {
     starter_tab: Option<String>,
     welcome_panes: Vec<u64>,
     install_pane: Option<u64>,
-    wifi_pane: Option<u64>,
+    pub(crate) wifi_pane: Option<u64>,
     install_tab: Option<String>,
     wifi_tab: Option<String>,
     /// The Wi-Fi form was opened for this spell offline; closed, it is not forced on again until the
@@ -56,6 +56,15 @@ fn read(path: &str) -> String { std::fs::read_to_string(path).unwrap_or_default(
 /// Never in the middle of a sign-in, and never before this computer's daemon can run the form.
 pub fn offer_wifi(app: &mut App, online: bool, now: std::time::Instant) {
     if online {
+        // The form this spell offline brought forward: the network is back, however it came back
+        // (chosen there, by a phone through the setup hotspot, a router back on). It closes itself,
+        // but one opened before a sign-in belongs to the daemon from before it, which no longer
+        // tells its end: left, it would hold its tab and keep the first workspace from opening.
+        if app.os_welcome.offline_offered && app.tabs.len() > 1 {
+            if let Some(id) = app.os_welcome.wifi_pane.filter(|id| app.tabs.iter().any(|tab| tab.panes().contains(id))) {
+                app.close_pane(id);
+            }
+        }
         app.os_welcome.offline_offered = false;
         app.os_welcome.offline_since = None;
         return
@@ -70,6 +79,15 @@ pub fn offer_wifi(app: &mut App, online: bool, now: std::time::Instant) {
     if app.link(&crate::input::shell_machine(app, None)).is_none() { return }
     app.os_welcome.offline_offered = true;
     local_dialog(app, "Wi-Fi", "/usr/bin/hn-os wifi", false);
+}
+
+/// The first workspace is still to come, and all that holds the first tab is the Wi-Fi form, brought
+/// forward while the network was gone (a phone's setup hotspot): the form closes itself once the
+/// network is back, and the welcome then fills the tab it leaves (`App::maybe_start_shell`).
+pub fn welcome_waits_on_wifi(app: &App) -> bool {
+    // The form opens in a tab of its own (local_dialog), beside the empty one the welcome fills.
+    app.os_welcome.wifi_pane.is_some_and(|id| app.tabs.iter().any(|tab| tab.panes() == [id])
+        && app.tabs.iter().all(|tab| tab.root.is_none() || tab.panes() == [id]))
 }
 
 /// The Wi-Fi form is already somewhere in the workspace: offering it again would only steal focus.
@@ -191,7 +209,10 @@ pub fn command(app: &mut App, args: &[String]) {
         let Some(pane) = pane else { return app.error("That pane is not the welcome on this computer.") };
         if app.os_welcome.guide_pane == Some(pane) { return }
         app.os_welcome.guide_pane = Some(pane);
-        if app.size.0 >= 80 && app.size.1 >= 18 {
+        // `bare`: a computer set up from a phone (os/setup.py, no one at its screen) opens OpenCode
+        // alone, without the two starter terminals beside it.
+        let bare = args.get(2).map(String::as_str) == Some("bare");
+        if !bare && app.size.0 >= 80 && app.size.1 >= 18 {
             if let Some(tab) = app.tabs.iter().find(|tab| tab.panes() == [pane]) {
                 app.os_welcome.starter_tab = Some(tab.id.clone());
                 split_starter(app, pane, Dir::Horizontal, "/usr/bin/hn-os starter upper");
@@ -485,6 +506,63 @@ mod tests {
         command(&mut app, &["ready".into(), format!("%{}", pane - 1)]);
         assert_eq!(app.os_welcome.guide_pane, Some(pane));
         assert!(crate::commands::is_command_name("os-action"));
+    }
+
+    #[tokio::test]
+    async fn the_wifi_form_brought_forward_offline_goes_when_the_network_is_back() {
+        use std::time::Instant;
+        for (offered, closes) in [(true, true), (false, false)] {
+            let mut app = fixture(120, 40);
+            app.new_tab();
+            app.open_agent(crate::local::MACHINE, "wifi", Placement::Auto(None));
+            let form = app.focused().unwrap();
+            app.os_welcome.wifi_pane = Some(form);
+            // Opened by hand while online (Super+w) is the person's: it stays.
+            app.os_welcome.offline_offered = offered;
+            offer_wifi(&mut app, true, Instant::now());
+            assert_eq!(!app.panes.contains_key(&form), closes, "offered offline: {offered}");
+            assert_eq!(app.tabs.len(), if closes { 1 } else { 2 });
+        }
+    }
+
+    #[tokio::test]
+    async fn the_first_workspace_waits_for_the_wifi_form_to_give_its_tab_back() {
+        let mut app = fixture(120, 40);
+        // The form, brought forward in a tab of its own beside the empty first one.
+        app.new_tab();
+        app.open_agent(crate::local::MACHINE, "wifi", Placement::Auto(None));
+        let form = app.focused().unwrap();
+        app.os_welcome.wifi_pane = Some(form);
+        assert_eq!(app.tabs.len(), 2);
+        assert!(welcome_waits_on_wifi(&app));
+        // Back online: the form closes, its tab goes, and the first tab is the welcome's again.
+        app.close_pane(form);
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.tabs[0].root.is_none());
+        assert!(!welcome_waits_on_wifi(&app));
+        // Other work beside the form: that is a workspace already, and no welcome comes.
+        let mut busy = fixture(120, 40);
+        busy.open_agent(crate::local::MACHINE, "work", Placement::Auto(None));
+        busy.new_tab();
+        busy.open_agent(crate::local::MACHINE, "wifi", Placement::Auto(None));
+        busy.os_welcome.wifi_pane = busy.focused();
+        assert!(!welcome_waits_on_wifi(&busy));
+    }
+
+    #[tokio::test]
+    async fn a_computer_set_up_from_a_phone_opens_without_the_starter_terminals() {
+        for (bare, starters) in [(false, true), (true, false)] {
+            let mut app = fixture(120, 40);
+            app.open_agent(crate::local::MACHINE, "welcome", Placement::Auto(None));
+            let pane = app.focused().unwrap();
+            app.panes.get_mut(&pane).unwrap().start_command = Some("/usr/bin/hn-os welcome".into());
+            shell_created(&mut app, pane);
+            let mut args = vec!["ready".to_string(), crate::pane::tag(pane)];
+            if bare { args.push("bare".into()); }
+            command(&mut app, &args);
+            assert_eq!(app.os_welcome.guide_pane, Some(pane));
+            assert_eq!(app.os_welcome.starter_tab.is_some(), starters, "bare: {bare}");
+        }
     }
 
     #[tokio::test]

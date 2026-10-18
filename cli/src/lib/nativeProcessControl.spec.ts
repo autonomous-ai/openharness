@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { parseDescriptors } from '../engines/kit/nativeDescriptors.js'
 import { NativeEvidenceBudget } from '../engines/kit/nativeEvidence.js'
 import { controlDescriptors, nativeProcessControl, parseNativeProcessControl } from './nativeProcessControl.js'
 import { env } from '../config/env.js'
@@ -69,6 +70,9 @@ describe('strict Darwin control protocol', () => {
     output({ ...record(), fds: [{ ...regular, type: 8 }] }),
     output({ ...record(), fds: [{ ...regular, mode: 0 }] }),
     output({ ...record(), fds: [{ ...regular, type: 2 }] }),
+    output({ ...record(), fds: [{ fd: 33, type: 9, mode: 1, device: '0', inode: '0' }] }),
+    output({ ...record(), fds: [{ fd: 33, type: 9, mode: 0, device: '1', inode: '0' }] }),
+    output({ ...record(), fds: [{ fd: 33, type: 9, mode: 0, device: '0', inode: '5' }] }),
   ])('holds incomplete or invalid native output', text => { expect(() => parse(text)).toThrow('identity is held') })
   it('requires the entire requested pool, including unique child enumeration and all descriptor slots', () => {
     const text = output(record(), { schema: 2, mode: 'control', parent: 42, children: [43, 43] })
@@ -78,6 +82,14 @@ describe('strict Darwin control protocol', () => {
   })
   it.each(['unix', 'IPv4', 'IPv6', 'systm', 'NDRV', 'LINK'])('matches the proven lsof socket family %s', kind => {
     expect(controlDescriptors([{ fd: '7', path: 'irrelevant', kind }])).toBe(controlDescriptors([{ fd: '7', path: '', kind: 'SOCKET' }]))
+  })
+  it('accepts the network-policy descriptor every native Codex holds and joins it with the lsof pool', () => {
+    const netpolicy = { fd: 33, type: 9, mode: 0, device: '0', inode: '0' }
+    const row = parse(output({ ...record(), fds: [regular, netpolicy] })).rows.get(42)!
+    expect(row.fds[1]).toEqual({ fd: '33', path: '', kind: 'NPOLICY' })
+    const lsof = parseDescriptors('p42\0\nf3\0tREG\0D0x11\0i9007199254740993\0n/x\0\nf33\0tNPOLICY\0n\0\n', 42, budget())
+    expect(controlDescriptors(lsof.filter(d => d.fd === '33'))).toBe(controlDescriptors([row.fds[1]]))
+    expect(controlDescriptors(row.fds.filter(d => d.fd === '3'))).toBe(controlDescriptors([{ ...lsof[0], path: '' }]))
   })
   it('rejects error or stderr even when the helper returned a complete plausible reply', async () => {
     for (const failure of ['exit', 'stderr']) {

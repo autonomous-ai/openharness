@@ -28,7 +28,8 @@ import 'package:flutter/foundation.dart';
 /// so it measures exactly like a family that does not exist. It stays in the
 /// lists as a last resort for other engines, but it is not a safety net — every
 /// chain has to name a real face it can reach. On Linux that anchor is DejaVu
-/// Sans Mono, the only monospace `ubuntu-desktop-minimal` depends on.
+/// Sans Mono, the only monospace `ubuntu-desktop-minimal` depends on. On
+/// Android it is `monospace` itself — see [androidTerminalFontFamily].
 ///
 /// The live, user-chosen typography lives in `terminalFontStore`, not here;
 /// these are what a fresh install opens with and what `reset()` returns to.
@@ -62,6 +63,24 @@ const linuxTerminalFontFallback = <String>[
   'Liberation Mono',
   'monospace',
 ];
+
+/// Droid Sans Mono, by the only name Android gives it.
+///
+/// Android ships two monospace faces and no others: Droid Sans Mono, which its
+/// `fonts.xml` declares as the family `monospace`, and Cutive Mono, declared as
+/// `serif-monospace`. Skia's Android font manager looks families up by the
+/// names `fonts.xml` declares, so those generic names are the real families
+/// here — the opposite of Linux, where Skia ignores fontconfig's generic
+/// aliases and `monospace` is inert (above). Every Linux and Apple face names
+/// nothing on a phone, so before Android had a list of its own each of them
+/// fell through to this same face: the Font sheet offered five names for one
+/// font.
+///
+/// No fallback of its own: Cutive Mono covers less than this does, and a glyph
+/// missing here goes to the system's own fallback chain.
+const androidTerminalFontFamily = 'monospace';
+
+const androidTerminalFontFallback = <String>[];
 
 /// The default terminal font size: 13 on a desktop, 14 on a phone.
 ///

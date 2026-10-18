@@ -220,17 +220,19 @@ def mascot_centred(w, h, bias):
 def pack_rows(cols, rows, grid):
     """A frame's cells packed (terminal.h ht_cell_frame_t): per row, (skip, count) byte pairs each followed by `count`
     indices, until the row's cols are covered; and each row's start. Transparent runs cost two bytes, not their
-    length (owner, 2026-10-06)."""
+    length (owner, 2026-10-06). A frame wider than 255 (the builder's widest props, 259) splits a longer run into
+    pairs of at most 255."""
+    assert cols <= 480    # terminal.h HT_CELL_COLS_MAX
     out, at = [], []
     for r in range(rows):
         at.append(len(out))
         row, x = grid[r * cols:(r + 1) * cols], 0
         while x < cols:
             skip = 0
-            while x < cols and not row[x]:
+            while x < cols and not row[x] and skip < 255:
                 skip += 1; x += 1
             run = []
-            while x < cols and row[x]:
+            while x < cols and row[x] and len(run) < 255:
                 run.append(row[x]); x += 1
             out += [skip, len(run)] + run
     assert len(out) < 65536
@@ -600,7 +602,7 @@ def generate_claude_scene(prefix, name, levels, bias, pet=None, scenes=None):
         out.append(f'static const ht_pet_overlay_t {ov} = {{{ov}_frames,{ov}_loop,{ov}_at}};\n')
         ov_ref, obytes = '&' + ov, obytes + len(opal) * 2
     dx, dy = x0 - (466 - w) // 2, y0 - (233 - h // 2 + bias)
-    if name == 'work':
+    if name in ('work', 'build'):
         dx, dy = mascot_centred(w, h, bias)
     waves = 'NULL'
     if 'waves' in meta:
@@ -974,6 +976,11 @@ SCENES = {
     'muse': (('muse_work', 'mwork'), ('muse_listen', 'mlisten'), ('muse_send', 'msend')),
     'fo': (('fo_work', 'fwork'), ('fo_listen', 'flisten'), ('fo_send', 'fsend')),
 }
+# engine -> its second working scene (ht_pet_t.working_alt), which focus.c picks at random against the first each time
+# the working face starts showing (owner, 2026-10-16: mockup/clawd_build.py, Clawd in a hard hat hammering a nail,
+# 32 steps of 55 ms). The alert stays the chef's (generate_alert reads SCENES' working scene); focus.c places its bubble
+# from the scene that plays, which puts it beside the builder's hat as beside the chef's.
+WORKING_ALT = {'claude': 'claude_build'}
 
 
 def generate():
@@ -1016,6 +1023,12 @@ def generate():
             out += code
             scene_stats.append((sprefix, n, nbytes))
             refs_to.append('&' + sprefix)
+        alt = 'NULL'
+        if engine in WORKING_ALT:
+            code, n, nbytes = generate_claude_scene(WORKING_ALT[engine], 'build', 1, 4)
+            out += code
+            scene_stats.append((WORKING_ALT[engine], n, nbytes))
+            alt = '&' + WORKING_ALT[engine]
         code, n, nbytes = generate_alert(f'{engine}_alert', engine, ''.join(out), SCENES[engine][0][0])
         out += code
         scene_stats.append((f'{engine}_alert', n, nbytes))
@@ -1026,7 +1039,7 @@ def generate():
             out += code
             scene_stats.append((rprefix, n, nbytes))
             relax = '&' + rprefix
-        table.append(f'{{"{engine}",{w},{h},{"NULL" if cells_out else prefix + "_frames"},{prefix}_loops,{prefix}_step_ms,{",".join(refs_to)},{prefix + "_frames" if cells_out else "NULL"},&{engine}_alert,{0 if n_steps == STEPS else n_steps},{relax}}}')
+        table.append(f'{{"{engine}",{w},{h},{"NULL" if cells_out else prefix + "_frames"},{prefix}_loops,{prefix}_step_ms,{",".join(refs_to)},{prefix + "_frames" if cells_out else "NULL"},&{engine}_alert,{0 if n_steps == STEPS else n_steps},{relax},{alt}}}')
     out.append('const ht_pet_t ht_pets[] = {' + ','.join(table) + '};\n')
     out.append(f'const unsigned ht_pet_count = {len(PETS)};\n')
     return ''.join(out), counts, scene_stats

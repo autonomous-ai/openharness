@@ -3,57 +3,93 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance, type InjectOptions } from 'fastify'
 
 type Row = Record<string, unknown> & { id: string; createdAt: Date }
-type Query = { where?: Record<string, unknown>; select?: Record<string, boolean>; take?: number; skip?: number; cursor?: { id: string }; orderBy?: unknown; by?: string[] }
+type Query = { where?: Record<string, unknown>; select?: Record<string, boolean>; take?: number; skip?: number; cursor?: { id: string }; orderBy?: Record<string, 'asc' | 'desc'>[] | { _max: Record<string, 'asc' | 'desc'> }; by?: string[]; _max?: Record<string, boolean> }
 const db = vi.hoisted(() => {
   function matches(row: Row, where: Record<string, unknown> = {}): boolean {
     return Object.entries(where).every(([key, value]) => {
       if (key === 'OR') return (value as Record<string, unknown>[]).some(branch => matches(row, branch))
+      if (key === 'AND') return (value as Record<string, unknown>[]).every(branch => matches(row, branch))
       if (value && typeof value === 'object' && !(value instanceof Date)) {
         const filter = value as Record<string, unknown>
+        if ('startsWith' in filter) return typeof row[key] === 'string' && (row[key] as string).startsWith(filter.startsWith as string)
         if ('contains' in filter) return typeof row[key] === 'string' && (row[key] as string).toLowerCase().includes((filter.contains as string).toLowerCase())
         if ('in' in filter) return (filter.in as unknown[]).includes(row[key])
+        if ('notIn' in filter) return !(filter.notIn as unknown[]).includes(row[key])
         if ('gt' in filter) return (row[key] as Date) > (filter.gt as Date)
+        if ('lt' in filter) return (row[key] as number | Date) < (filter.lt as number | Date)
+        if ('gte' in filter) return (row[key] as number | Date) >= (filter.gte as number | Date)
         if ('isSet' in filter || 'not' in filter) return (!filter.isSet || row[key] !== undefined) && (!('not' in filter) || row[key] !== filter.not)
         return matches(row, filter)
       }
-      return row[key] === value
+      return value instanceof Date ? (row[key] as Date)?.getTime() === value.getTime() : row[key] === value
     })
   }
-  function table() {
+  const picked = (row: Row, select?: Record<string, boolean>) => select ? Object.fromEntries(Object.keys(select).map(key => [key, row[key]])) : { ...row }
+  const compare = (a: unknown, b: unknown) => a instanceof Date ? a.getTime() - (b as Date).getTime() : typeof a === 'number' ? a - (b as number) : String(a).localeCompare(String(b))
+  /** `defaults` stand in for Prisma's on rows a test pushes directly; `unique` refuses a second create, as the index does. */
+  function table({ defaults = {}, unique }: { defaults?: Record<string, unknown>; unique?: string[] } = {}) {
     const rows: Row[] = []
     const find = (query: Query = {}) => {
-      let result = rows.filter(row => matches(row, query.where)).slice().sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id))
+      for (const row of rows) for (const [key, value] of Object.entries(defaults)) row[key] ??= value
+      const order = Array.isArray(query.orderBy) ? query.orderBy : [{ createdAt: 'desc' as const }, { id: 'desc' as const }]
+      let result = rows.filter(row => matches(row, query.where)).slice().sort((a, b) => {
+        for (const [key, direction] of order.flatMap(Object.entries)) {
+          const difference = compare(a[key], b[key])
+          if (difference) return direction === 'desc' ? -difference : difference
+        }
+        return 0
+      })
       if (query.cursor) result = result.slice(result.findIndex(row => row.id === query.cursor!.id) + (query.skip || 0))
       if (query.take) result = result.slice(0, query.take)
       return result
     }
     return {
       rows,
-      findMany: vi.fn(async (query: Query = {}) => find(query).map(row => query.select ? Object.fromEntries(Object.keys(query.select).map(key => [key, row[key]])) : { ...row })),
-      findFirst: vi.fn(async (query: Query) => find(query)[0] || null),
+      findMany: vi.fn(async (query: Query = {}) => find(query).map(row => picked(row, query.select))),
+      findFirst: vi.fn(async (query: Query) => { const row = find(query)[0]; return row ? picked(row, query.select) : null }),
       findUnique: vi.fn(async (query: Query) => find(query)[0] || null),
       count: vi.fn(async (query: Query) => find(query).length),
       groupBy: vi.fn(async (query: Query) => {
-        const counts = new Map<string, number>()
-        const key = query.by?.[0] ?? 'harnessId'
-        for (const row of find(query)) counts.set(row[key] as string, (counts.get(row[key] as string) || 0) + 1)
-        return [...counts].map(([value, count]) => ({ [key]: value, _count: { _all: count } }))
+        const keys = query.by ?? ['harnessId'], groups = new Map<string, { row: Row; count: number; latest: Date }>()
+        for (const row of find({ where: query.where })) {
+          const id = keys.map(key => row[key]).join('|'), group = groups.get(id)
+          if (group) { group.count++; if (row.createdAt > group.latest) group.latest = row.createdAt } else groups.set(id, { row, count: 1, latest: row.createdAt })
+        }
+        let result = [...groups.values()]
+        if (query.orderBy && !Array.isArray(query.orderBy)) result = result.sort((a, b) => b.latest.getTime() - a.latest.getTime())
+        if (query.take) result = result.slice(0, query.take)
+        return result.map(({ row, count, latest }) => ({ ...Object.fromEntries(keys.map(key => [key, row[key]])), _count: { _all: count }, ...(query._max ? { _max: { createdAt: latest } } : {}) }))
       }),
-      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => { const row = { id: crypto.randomUUID(), createdAt: new Date(), ...data } as Row; rows.push(row); return row }),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        if (unique && rows.some(row => unique.every(key => row[key] === data[key]))) throw Object.assign(new Error('Unique constraint failed'), { code: 'P2002' })
+        const row = { id: crypto.randomUUID(), createdAt: new Date(), ...defaults, ...data } as Row; rows.push(row); return row
+      }),
       upsert: vi.fn(async ({ where, create, update }: { where: Record<string, unknown>; create: Record<string, unknown>; update: Record<string, unknown> }) => {
         let row = rows.find(row => matches(row, where));
         if (row) Object.assign(row, update)
         else { row = { id: crypto.randomUUID(), createdAt: new Date(), ...create } as Row; rows.push(row) }
         return row
       }),
+      createMany: vi.fn(async ({ data }: { data: Record<string, unknown>[] }) => { for (const row of data) rows.push({ id: crypto.randomUUID(), createdAt: new Date(), ...defaults, ...row } as Row); return { count: data.length } }),
       deleteMany: vi.fn(async ({ where }: Query) => { const removed = rows.filter(row => matches(row, where)); removed.forEach(row => rows.splice(rows.indexOf(row), 1)); return { count: removed.length } }),
-      updateMany: vi.fn(async ({ where, data }: Query & { data: Record<string, unknown> }) => { const found = rows.filter(row => matches(row, where)); found.forEach(row => Object.assign(row, data)); return { count: found.length } }),
+      updateMany: vi.fn(async ({ where, data }: Query & { data: Record<string, unknown> }) => {
+        const found = rows.filter(row => matches(row, where))
+        for (const row of found) for (const [key, value] of Object.entries(data)) {
+          row[key] = value && typeof value === 'object' && 'increment' in value ? ((row[key] as number) ?? 0) + (value.increment as number) : value
+        }
+        return { count: found.length }
+      }),
     }
   }
-  return { communityHarness: table(), communityLike: table(), communityComment: table(), communityFollow: table(), user: { findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({ name: where.id === 'alice' ? 'Alice' : 'Bob' })) } }
+  return { communityHarness: table({ defaults: { likeCount: 0 } }), communityLike: table({ unique: ['autonomousEnv', 'harnessId', 'userId'] }), communityComment: table(), communityFollow: table(),
+    communityReport: table({ unique: ['autonomousEnv', 'targetType', 'targetId', 'userId'] }), communityHidden: table({ defaults: { restoredAt: null } }), communityNotification: table(), user: { findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({ name: where.id === 'alice' ? 'Alice' : 'Bob' })) } }
 })
 vi.mock('../lib/prisma.js', () => ({ prisma: db }))
 import { communityRoutes, publicationSchema } from './community.js'
+import { communityCommentRoutes } from './communityComments.js'
+import { communityCreatorRoutes } from './communityCreators.js'
+import { communityNotificationRoutes } from './communityNotifications.js'
+import { communityReportRoutes, resetReportRateLimits } from './communityReports.js'
 import { communityEditRoutes, resetEditRateLimits } from './communityEdit.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
@@ -71,14 +107,14 @@ async function publish(token = 'alice', payload = sample, env = 'prod') {
   return response.json().data.id as string
 }
 beforeEach(async () => {
-  for (const model of [db.communityHarness, db.communityLike, db.communityComment, db.communityFollow]) model.rows.splice(0)
-  vi.clearAllMocks(); resetEditRateLimits()
+  for (const model of [db.communityHarness, db.communityLike, db.communityComment, db.communityFollow, db.communityReport, db.communityHidden, db.communityNotification]) model.rows.splice(0)
+  vi.clearAllMocks(); resetEditRateLimits(); resetReportRateLimits()
   app = Fastify(); app.setErrorHandler(errorHandler)
   registerAuthMiddleware(app, async (token, autonomousEnv = 'prod') => {
-    if (!['alice', 'bob'].includes(token)) throw new Error('Invalid token')
-    return { sub: token, email: `${token}@example.com`, role: 'user', autonomousEnv }
+    if (!['alice', 'bob', 'carol', 'dave', 'admin'].includes(token)) throw new Error('Invalid token')
+    return { sub: token, email: `${token}@example.com`, role: token === 'admin' ? 'admin' : 'user', autonomousEnv }
   })
-  await app.register(communityRoutes); await app.register(communityEditRoutes); await app.ready()
+  await app.register(communityRoutes); await app.register(communityEditRoutes); await app.register(communityCommentRoutes); await app.register(communityCreatorRoutes); await app.register(communityReportRoutes); await app.register(communityNotificationRoutes); await app.ready()
 })
 afterEach(async () => app.close())
 
@@ -114,6 +150,17 @@ describe('publications and access', () => {
     expect((await send(Buffer.from('not gzip'))).statusCode).toBe(400)
     // Bounded: a small body that would inflate past the snapshot is refused, not unpacked.
     expect((await send(gzipSync(Buffer.alloc(7_000_000, 32)))).statusCode).toBe(400)
+  })
+  it('finds a publication by its web address, the title and its id’s first characters, even after a retitle', async () => {
+    const id = await publish('alice', { ...sample, title: 'PAC-MAN: Neon Maze Chase' })
+    const short = id.slice(0, 8)
+    const read = await call('GET', `harnesses/pac-man-neon-maze-chase-${short}?files=viewer`)
+    expect(read.statusCode).toBe(200)
+    expect(read.json().data.harness.id).toBe(id)
+    expect((await call('GET', `harnesses/an-older-title-${short}`)).json().data.harness.id).toBe(id)
+    expect((await call('GET', `harnesses/${short}`)).json().data.harness.id).toBe(id)
+    expect((await call('GET', `harnesses/pac-man-neon-maze-chase-${short}`, undefined, undefined, 'stag')).statusCode).toBe(404)
+    expect((await call('GET', 'harnesses/pac-man-neon-maze-chase-00000000')).statusCode).toBe(404)
   })
   it('lets the author edit a publication in place, keeping its address, likes, origin and cover', async () => {
     const cover = 'data:image/png;base64,' + Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64')
@@ -168,7 +215,8 @@ describe('publications and access', () => {
     for (const [method, path, payload] of [['POST', 'harnesses', sample], ['PUT', `harnesses/${starter}/like`, { liked: true }], ['POST', `harnesses/${starter}/comments`, { body: 'Hi', clientId: crypto.randomUUID() }], ['PUT', 'creators/harness/follow', { following: true }], ['DELETE', `harnesses/${starter}`, undefined]] as const)
       expect((await call(method, path, undefined, payload)).statusCode).toBe(401)
     expect(isPublicCommunityRead('POST', '/api/community/harnesses')).toBe(false)
-    expect(isPublicCommunityRead('GET', '/api/community/harnesses/x/comments')).toBe(false)
+    expect(isPublicCommunityRead('POST', '/api/community/harnesses/x/comments')).toBe(false)
+    expect(isPublicCommunityRead('GET', '/api/community/harnesses/x/like')).toBe(false)
     expect((await call('GET', 'harnesses?following=true')).statusCode).toBe(401)
     expect((await call('GET', 'harnesses', 'forged')).statusCode).toBe(401)
     expect((await call('GET', 'harnesses', undefined, undefined, 'invalid')).statusCode).toBe(400)
@@ -355,6 +403,58 @@ describe('persistent social actions', () => {
     expect(second.harnesses).toHaveLength(1); expect(second.nextCursor).toBeNull()
     expect(first.harnesses.map((row: Row) => row.id)).not.toContain(second.harnesses[0].id)
   })
+  it('keeps a publication’s like count exact across repeats and requests at once', async () => {
+    const id = await publish('alice')
+    const count = () => db.communityHarness.rows.find(row => row.id === id)?.likeCount
+    await Promise.all([call('PUT', `harnesses/${id}/like`, 'bob', { liked: true }), call('PUT', `harnesses/${id}/like`, 'bob', { liked: true })])
+    expect(count()).toBe(1)
+    expect((await call('PUT', `harnesses/${id}/like`, 'alice', { liked: true })).json().data).toEqual({ liked: true, likes: 2 })
+    await call('PUT', `harnesses/${id}/like`, 'bob', { liked: false })
+    await call('PUT', `harnesses/${id}/like`, 'bob', { liked: false })
+    expect(count()).toBe(1)
+  })
+  it('pages a popular feed by its like counts, every publication and starter once, most liked first', async () => {
+    const likes = (index: number) => index % 4
+    for (let i = 0; i < 45; i++) db.communityHarness.rows.push({ ...sample, id: crypto.randomUUID(), createdAt: new Date(Date.now() - i * 1000), autonomousEnv: 'prod', authorId: 'alice', authorName: 'Alice', deletedAt: null, credits: [], likeCount: likes(i) })
+    for (const token of ['alice', 'bob']) await call('PUT', 'harnesses/starter-orbit/like', token, { liked: true })
+    const seen: string[] = []
+    let cursor: string | null = null
+    do {
+      const page: { order: string[]; nextCursor: string | null } = (await call('GET', `harnesses?sort=popular${cursor ? `&cursor=${cursor}` : ''}`)).json().data
+      seen.push(...page.order); cursor = page.nextCursor
+    } while (cursor)
+    expect(new Set(seen).size).toBe(45 + communityStarters.size)
+    expect(seen).toHaveLength(45 + communityStarters.size)
+    const count = (id: string) => id === 'starter-orbit' ? 2 : communityStarters.has(id) ? 0 : db.communityHarness.rows.find(row => row.id === id)!.likeCount as number
+    expect(seen.map(count)).toEqual(seen.map(count).slice().sort((a, b) => b - a))
+    // Among equal likes the publications come first: the starter with two follows every publication with two.
+    expect(seen.indexOf('starter-orbit')).toBe(seen.filter(id => count(id) >= 2).length - 1)
+  })
+  it('trends by this week’s likes, then every other publication newest first, then the unliked starters', async () => {
+    const [old, quiet, liked, likedMore] = [await publish('alice', { ...sample, title: 'Old favourite' }), await publish('alice', { ...sample, title: 'Quiet' }), await publish('bob', { ...sample, title: 'Liked' }), await publish('bob', { ...sample, title: 'Liked more' })]
+    db.communityHarness.rows.forEach((row, index) => { row.createdAt = new Date(Date.now() + index * 1000) })
+    const like = (harnessId: string, userId: string, daysAgo = 0) => db.communityLike.rows.push({ id: crypto.randomUUID(), autonomousEnv: 'prod', harnessId, userId, createdAt: new Date(Date.now() - daysAgo * 86_400_000) })
+    for (const user of ['a', 'b', 'c', 'd']) like(old, user, 30)
+    like(liked, 'a'); like(likedMore, 'a'); like(likedMore, 'b'); like('starter-orbit', 'a')
+    const cold = [...communityStarters].filter(id => id !== 'starter-orbit')
+    const first = (await call('GET', 'harnesses?sort=trending')).json().data
+    expect(first.order).toEqual([likedMore, liked, 'starter-orbit', quiet, old, ...cold])
+    expect(first.harnesses.map((row: Row) => row.id)).toEqual([likedMore, liked, quiet, old])
+    expect((await call('GET', `harnesses?sort=trending&cursor=${cold[3]}`)).json().data.order).toEqual(cold.slice(4))
+  })
+  it('pages a trending feed with every publication and starter once', async () => {
+    for (let i = 0; i < 45; i++) db.communityHarness.rows.push({ ...sample, id: crypto.randomUUID(), createdAt: new Date(Date.now() - i * 1000), autonomousEnv: 'prod', authorId: 'alice', authorName: 'Alice', deletedAt: null, credits: [] })
+    for (const row of db.communityHarness.rows.slice(10, 13)) db.communityLike.rows.push({ id: crypto.randomUUID(), autonomousEnv: 'prod', harnessId: row.id, userId: 'bob', createdAt: new Date() })
+    const seen: string[] = []
+    let cursor: string | null = null
+    do {
+      const page: { order: string[]; nextCursor: string | null } = (await call('GET', `harnesses?sort=trending${cursor ? `&cursor=${cursor}` : ''}`)).json().data
+      seen.push(...page.order); cursor = page.nextCursor
+    } while (cursor)
+    expect(seen).toHaveLength(45 + communityStarters.size)
+    expect(new Set(seen).size).toBe(seen.length)
+    expect(seen.slice(0, 3)).toEqual(db.communityHarness.rows.slice(10, 13).map(row => row.id))
+  })
   it('counts and lists a harness’s public forks, and every comment beyond the latest hundred', async () => {
     const id = await publish('alice')
     const fork = await publish('bob', { ...sample, title: 'My version', forkedFrom: id } as typeof sample)
@@ -366,6 +466,138 @@ describe('persistent social actions', () => {
     const social = (await call('GET', `harnesses/${id}/social`)).json().data.social
     expect(social).toMatchObject({ forks: 1, commentCount: 101 })
     expect(social.comments).toHaveLength(100)
+  })
+  it('names the publication a fork came from, and says when it is gone', async () => {
+    const id = await publish('alice', { ...sample, title: 'The original' })
+    const fork = await publish('bob', { ...sample, title: 'My version', forkedFrom: id } as typeof sample)
+    const ofStarter = await publish('bob', { ...sample, forkedFrom: starter } as typeof sample)
+    expect((await call('GET', `harnesses/${fork}?files=viewer`)).json().data.harness.origin).toEqual({ title: 'The original', authorName: 'Alice' })
+    expect((await call('GET', `harnesses/${ofStarter}`)).json().data.harness).not.toHaveProperty('origin')
+    expect((await call('GET', `harnesses/${id}`)).json().data.harness).not.toHaveProperty('origin')
+    await call('DELETE', `harnesses/${id}`, 'alice')
+    expect((await call('GET', `harnesses/${fork}`)).json().data.harness.origin).toBeNull()
+  })
+  it('says when its author last edited a publication, for a page drawn before then', async () => {
+    const id = await publish('alice')
+    expect((await call('GET', `harnesses/${id}/social`)).json().data.social.updatedAt).toBeNull()
+    expect((await call('PUT', `harnesses/${id}`, 'alice', { ...sample, title: 'Edited' })).statusCode).toBe(200)
+    const { updatedAt } = (await call('GET', `harnesses/${id}/social`)).json().data.social
+    expect(updatedAt).toBe((await call('GET', `harnesses/${id}`)).json().data.harness.updatedAt)
+    expect(updatedAt).toEqual(expect.any(String))
+    expect((await call('GET', `harnesses/${starter}/social`)).json().data.social.updatedAt).toBeNull()
+  })
+  it('reads further back than the latest hundred comments, a page at a time, to anyone', async () => {
+    const id = await publish('alice')
+    for (let i = 0; i < 250; i++) db.communityComment.rows.push({ id: crypto.randomUUID(), createdAt: new Date(Date.now() + i * 1000), autonomousEnv: 'prod', harnessId: id, userId: i % 2 ? 'bob' : 'carol', authorName: 'Someone', body: `${i}`, clientId: crypto.randomUUID() })
+    const latest = (await call('GET', `harnesses/${id}/social`, 'bob')).json().data.social.comments
+    expect(latest.map((comment: { body: string }) => comment.body)).toEqual(Array.from({ length: 100 }, (_, i) => `${150 + i}`))
+    const earlier = (await call('GET', `harnesses/${id}/comments?before=${latest[0].id}`, 'bob')).json().data
+    expect(earlier.comments.map((comment: { body: string }) => comment.body)).toEqual(Array.from({ length: 100 }, (_, i) => `${50 + i}`))
+    expect(earlier.more).toBe(true)
+    expect(earlier.comments.find((comment: { body: string }) => comment.body === '51')).toMatchObject({ mine: true, creator: false })
+    expect(earlier.comments.find((comment: { body: string }) => comment.body === '50')).toMatchObject({ mine: false })
+    expect(isPublicCommunityRead('GET', `/api/community/harnesses/${id}/comments?before=${earlier.comments[0].id}`)).toBe(true)
+    const first = await call('GET', `harnesses/${id}/comments?before=${earlier.comments[0].id}`)
+    expect(first.json().data.comments).toHaveLength(50); expect(first.json().data.more).toBe(false)
+    expect(first.headers['cache-control']).toBe('no-store')
+    expect((await call('GET', `harnesses/${id}/comments?before=${crypto.randomUUID()}`)).json().data).toEqual({ comments: [], more: false })
+    expect((await call('GET', `harnesses/${id}/comments`)).statusCode).toBe(400)
+  })
+  it('gives a creator a page: their name, followers and harnesses, and the reader’s follow', async () => {
+    const first = await publish('alice', { ...sample, title: 'First' })
+    await publish('alice', { ...sample, title: 'Second' })
+    await publish('bob', { ...sample, title: 'Not hers' })
+    db.communityHarness.rows.forEach((row, index) => { row.createdAt = new Date(Date.now() + index * 1000) })
+    await call('PUT', 'creators/alice/follow', 'bob', { following: true })
+    expect((await call('GET', 'creators/alice')).json().data.creator).toEqual({ id: 'alice', name: 'Alice', followers: 1, following: false, mine: false, signedIn: false })
+    expect((await call('GET', 'creators/alice', 'bob')).json().data.creator).toMatchObject({ following: true, signedIn: true })
+    expect((await call('GET', 'creators/alice', 'alice')).json().data.creator).toMatchObject({ mine: true })
+    const feed = (await call('GET', 'harnesses?author=alice')).json().data
+    expect(feed.harnesses.map((row: Row) => row.title)).toEqual(['Second', 'First'])
+    expect((await call('GET', 'harnesses?author=alice&sort=popular')).json().data.order).toHaveLength(2)
+    expect((await call('GET', 'harnesses?author=harness&sort=popular')).json().data.order).toEqual([...communityStarters])
+    expect((await call('GET', 'harnesses?author=alice&mine=true', 'alice')).statusCode).toBe(400)
+    expect((await call('GET', 'creators/harness')).json().data.creator).toMatchObject({ name: 'Harness' })
+    // Nothing published, no page: an account's id names no one who has not chosen to publish.
+    expect((await call('GET', 'creators/carol')).statusCode).toBe(404)
+    await call('DELETE', `harnesses/${first}`, 'alice')
+    expect(isPublicCommunityRead('GET', '/api/community/creators/alice')).toBe(true)
+    expect(isPublicCommunityRead('GET', '/api/community/creators/alice/follow')).toBe(false)
+  })
+  it('hides a reported harness from its reporter at once, and from everyone after three readers', async () => {
+    const id = await publish('alice', { ...sample, title: 'Reported' })
+    const report = (token: string, targetId = id, targetType = 'harness') => call('POST', 'reports', token, { targetType, targetId, reason: 'spam' })
+    const titles = async (token?: string) => (await call('GET', 'harnesses', token)).json().data.harnesses.map((row: Row) => row.title)
+    expect((await report('alice')).statusCode).toBe(400)
+    expect((await call('POST', 'reports', undefined, { targetType: 'harness', targetId: id, reason: 'spam' })).statusCode).toBe(401)
+    expect((await report('bob')).json().data).toEqual({ reported: true })
+    expect(await titles('bob')).toEqual([])
+    expect((await call('GET', `harnesses/${id}`, 'bob')).statusCode).toBe(404)
+    expect(await titles()).toEqual(['Reported'])
+    await report('bob'); await report('carol')
+    expect(await titles()).toEqual(['Reported'])
+    await report('dave')
+    expect(await titles()).toEqual([])
+    expect((await call('GET', `harnesses/${id}`)).statusCode).toBe(404)
+    expect((await call('PUT', `harnesses/${id}/like`, 'admin', { liked: true })).statusCode).toBe(404)
+    // Its author still has it, among their own.
+    expect((await call('GET', `harnesses/${id}`, 'alice')).statusCode).toBe(200)
+    expect((await call('GET', 'harnesses?mine=true', 'alice')).json().data.harnesses).toHaveLength(1)
+    expect((await report('bob', 'starter-orbit')).statusCode).toBe(404)
+  })
+  it('lets a reviewer see reports and restore or remove what they hid', async () => {
+    const id = await publish('alice', { ...sample, title: 'Reported' })
+    const comment = (await call('POST', `harnesses/${id}/comments`, 'bob', { body: 'Buy now', clientId: crypto.randomUUID() })).json().data.comment
+    for (const token of ['carol', 'dave', 'admin']) {
+      await call('POST', 'reports', token, { targetType: 'harness', targetId: id, reason: 'spam' })
+      await call('POST', 'reports', token, { targetType: 'comment', targetId: comment.id, reason: 'harassment' })
+    }
+    expect((await call('GET', `harnesses/${id}/social`, 'alice')).json().data.social.comments).toEqual([])
+    expect((await call('GET', 'reports', 'bob')).statusCode).toBe(403)
+    const queue = (await call('GET', 'reports', 'admin')).json().data.reports
+    expect(queue).toEqual(expect.arrayContaining([
+      expect.objectContaining({ targetType: 'harness', targetId: id, reports: 3, reasons: { spam: 3 }, state: 'hidden', text: 'Reported', authorName: 'Alice' }),
+      expect.objectContaining({ targetType: 'comment', targetId: comment.id, reports: 3, state: 'hidden', text: 'Buy now' }),
+    ]))
+    const review = (targetType: string, targetId: string, decision: string, token = 'admin') => call('POST', 'reports/review', token, { targetType, targetId, decision })
+    expect((await review('harness', id, 'restore', 'bob')).statusCode).toBe(403)
+    await review('harness', id, 'restore')
+    expect((await call('GET', 'harnesses')).json().data.harnesses).toHaveLength(1)
+    // One more report after a review does not hide it again: three new ones would.
+    await call('POST', 'reports', 'bob', { targetType: 'harness', targetId: id, reason: 'other' })
+    expect((await call('GET', 'harnesses')).json().data.harnesses).toHaveLength(1)
+    await review('comment', comment.id, 'remove')
+    expect(db.communityComment.rows).toHaveLength(0)
+    await review('harness', id, 'remove')
+    expect((await call('GET', `harnesses/${id}`, 'alice')).statusCode).toBe(404)
+    expect((await call('GET', 'reports', 'admin')).json().data.reports.find((row: { targetId: string }) => row.targetId === id).state).toBe('removed')
+  })
+  it('tells a creator of comments, replies and forks on their work, never of their own', async () => {
+    const id = await publish('alice', { ...sample, title: 'Orbit' })
+    const post = (token: string, body: string, parentId?: string) => call('POST', `harnesses/${id}/comments`, token, { body, clientId: crypto.randomUUID(), ...(parentId ? { parentId } : {}) })
+    const question = (await post('bob', 'How?')).json().data.comment
+    await post('alice', 'Like this.', question.id)
+    await post('alice', 'Talking to myself.')
+    const fork = await publish('bob', { ...sample, title: 'My orbit', forkedFrom: id } as typeof sample)
+    await publish('bob', { ...sample, forkedFrom: starter } as typeof sample)
+    const bell = async (token: string) => (await call('GET', 'notifications', token)).json().data
+    const alice = await bell('alice'), bob = await bell('bob')
+    expect(alice.unread).toBe(2)
+    expect(alice.notifications.map((row: { kind: string; actorName: string; harnessTitle: string }) => [row.kind, row.actorName, row.harnessTitle]).sort())
+      .toEqual([['comment', 'Bob', 'Orbit'], ['fork', 'Bob', 'Orbit']])
+    expect(alice.notifications.find((row: { kind: string }) => row.kind === 'fork').targetId).toBe(fork)
+    expect(bob.notifications).toEqual([expect.objectContaining({ kind: 'reply', actorName: 'Alice', harnessId: id, read: false })])
+    expect(JSON.stringify(alice)).not.toContain('How?')
+    expect((await call('GET', 'notifications/unread', 'alice')).json().data).toEqual({ unread: 2 })
+    expect((await call('POST', 'notifications/read', 'alice')).json().data).toEqual({ read: 2 })
+    expect((await call('GET', 'notifications/unread', 'alice')).json().data).toEqual({ unread: 0 })
+    expect((await call('GET', 'notifications')).statusCode).toBe(401)
+  })
+  it('tells a comment writer of a reply on their own harness once, as a reply', async () => {
+    const id = await publish('alice')
+    const mine = (await call('POST', `harnesses/${id}/comments`, 'alice', { body: 'Ask me anything', clientId: crypto.randomUUID() })).json().data.comment
+    await call('POST', `harnesses/${id}/comments`, 'bob', { body: 'Why?', clientId: crypto.randomUUID(), parentId: mine.id })
+    expect((await call('GET', 'notifications', 'alice')).json().data.notifications.map((row: { kind: string }) => row.kind)).toEqual(['reply'])
   })
   it('sends a harness page only its output when asked', async () => {
     const payload = { ...sample, files: [...sample.files, { path: 'src/app.js', content: 'console.log(1)' }] }

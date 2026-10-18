@@ -9,6 +9,8 @@ import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/external_session.dart';
 
 import 'agent_index.dart';
+import 'desk_groups.dart';
+import 'desk_tab_filter_bar.dart';
 import 'find_row.dart';
 import 'fzf.dart' show fzfAge;
 import 'phone_destination.dart';
@@ -17,6 +19,7 @@ import 'phone_search_catalog.dart' show phoneAgentId;
 import 'phone_search_commands.dart';
 import 'phone_search_controller.dart';
 import 'phone_search_rank.dart';
+import 'phone_status.dart';
 import 'resume_agent.dart';
 import 'search_result_text.dart'
     show phoneResultMatches, snippetLead, snippetRuns;
@@ -49,7 +52,12 @@ class PhoneSearchResults extends StatefulWidget {
     this.onOpen,
     this.showing,
     this.onNewHarness,
+    this.opening,
   });
+
+  /// The sheet this list slides up in, while it does: the machines are reached once it is up
+  /// rather than during the slide. Null — a page of its own — reaches after the first frame.
+  final Animation<double>? opening;
 
   /// Find's `+ New Harness` row — with a project's machine and folder when the query matched one
   /// (`+ New Harness in api`). Null leaves the row out.
@@ -80,12 +88,13 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
   void openFirst() {
     final search = widget.controller;
     final showing = widget.showing;
+    final shown = _narrowed(search.rows, _tab(_tabs(search)));
     final rows = search.matchQuery.trim().isEmpty && showing != null
         ? [
-            for (final row in search.rows)
+            for (final row in shown)
               if (!_isShowing(row, showing)) row,
           ]
-        : search.rows;
+        : shown;
     for (final row in rows) {
       if (search.canSubmit(row)) {
         _tap(row);
@@ -94,12 +103,23 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     }
   }
 
+  /// The desk tab the list is narrowed to as drawn — the chip lit — or null on All, and off the
+  /// plain list, where no chips are drawn. Where New Harness puts what it makes: a harness made
+  /// with a tab picked joins THAT tab, not the tab of the harness Find was opened over
+  /// (`NewAgentPage.deskTabId`).
+  String? get deskTabId => _tab(_tabs(widget.controller))?.id;
+
   /// The row whose agent is being brought back, if any — see [_open].
   ///
   /// One at a time: the resume is a round trip to the machine, and a list that
   /// let a second tap start another would leave two agents restarting for one
   /// person who only meant to open one.
   String? _resuming;
+
+  /// The desk tab the list is narrowed to; null is All. Only ever a choice: a tab closed on another
+  /// computer while it was picked leaves the list on All ([_tab]) rather than on a filter nothing
+  /// on screen names.
+  String? _tabId;
 
   /// The order Find opened with — each row's section (needs you, recent, the one on screen,
   /// paused) and place in it, by id. Held while Find is open: a harness that starts or stops
@@ -126,6 +146,8 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
   void initState() {
     super.initState();
     final notifier = widget.notifier;
+    final sliding = widget.opening?.status;
+    _rowsDue = sliding == null || sliding == AnimationStatus.completed;
     // ⚠️ **Opening the search is what re-reaches the fleet.** Until here the app
     // has only the machines that happened to answer at launch, and a machine the
     // account reported down was never even dialled. Asked on the way in, not
@@ -134,13 +156,61 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     //
     // ⚠️ After the frame, not in it: reaching can notify synchronously, and a notify while this
     // list is being mounted marks the page above it dirty mid-build.
+    //
+    // ⚠️ **And not while the sheet is still sliding up.** Reaching releases the launch's held
+    // machines and dials every machine whose list is not current — a token, an end-to-end session
+    // and a socket each, all on this thread — and every answer redraws. Started on the first
+    // frame, that work landed in the middle of the slide, and the slide stuttered (frames of
+    // 300–900ms measured in a debug build, 2026-10-05). The rows already on screen are the lists
+    // the phone has; the reach only adds to them, a few hundred milliseconds later.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(notifier.reachAllMachines());
+      if (!mounted) return;
+      if (!_rowsDue) setState(() => _rowsDue = true);
+      final opening = widget.opening;
+      if (opening == null || opening.status == AnimationStatus.completed) {
+        unawaited(notifier.reachAllMachines());
+        return;
+      }
+      _opening = opening..addStatusListener(_reachOnceOpen);
     });
-    notifier.sessionPreviews.warm([
-      for (final entry in recentAgents(agentIndex(notifier)))
-        notifier.previewKey(entry.machineId, entry.agent),
-    ], prioritize: true);
+    // ⚠️ **No `agent_recent` reads from Find, not on open and not per row (owner, 2026-10-01).**
+    // Each row used to ask for its session's last words as it was built, so opening Find — or
+    // the app, which opens on it — put a read per visible session on the relay beside the
+    // terminal being attached. What a session said is found by the machines' own index
+    // (`session_search`, [PhoneSearchController.contentHitFor]); the store still answers from
+    // the live events and from whatever the agents list read. See `AppNotifier.sessionPreviews`.
+  }
+
+  /// The sheet still sliding up, waited on before the machines are reached — see [initState].
+  Animation<double>? _opening;
+
+  /// False on the sheet's first frame alone, while it is on its way up: the rows are built on the
+  /// next one.
+  ///
+  /// ⚠️ **One frame carried the sheet, its field and a screen of rows at once** — 16–23ms, a
+  /// dropped frame on every opening, most of it the rows being built and their text laid out
+  /// (measured on a phone, 2026-10-05). On that first frame the sheet has barely left the
+  /// screen's edge, so the list arriving a frame later is not something anyone sees.
+  bool _rowsDue = true;
+
+  /// Only `completed` ends the wait: a sheet dragged by a finger passes through every other
+  /// status on its way up, and one closed again before it was up takes this list — and the
+  /// listener, in [dispose] — down with it.
+  void _reachOnceOpen(AnimationStatus status) {
+    if (status != AnimationStatus.completed) return;
+    _stopWaiting();
+    if (mounted) unawaited(widget.notifier.reachAllMachines());
+  }
+
+  void _stopWaiting() {
+    _opening?.removeStatusListener(_reachOnceOpen);
+    _opening = null;
+  }
+
+  @override
+  void dispose() {
+    _stopWaiting();
+    super.dispose();
   }
 
   @override
@@ -149,27 +219,104 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     builder: (context, _) {
       AppTheme.watch(context);
       final search = widget.controller;
-      return _find(search, search.rows);
+      final all = search.rows;
+      final tabs = _tabs(search);
+      final tab = _tab(tabs);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Under the field, and only over the plain list of harnesses: a mode lists commands,
+          // models or places, none of which is on a tab.
+          if (tabs.isNotEmpty)
+            DeskTabFilterBar(
+              choices: [
+                DeskTabFilterChoice(
+                  id: null,
+                  name: 'All',
+                  count: _sessions(all),
+                ),
+                for (final each in tabs)
+                  DeskTabFilterChoice(
+                    id: each.id,
+                    name: each.name,
+                    count: all.where((row) => _inTab(each, row)).length,
+                  ),
+              ],
+              selected: tab?.id,
+              onSelected: (id) => setState(() => _tabId = id),
+            ),
+          Expanded(
+            child: _rowsDue
+                ? _find(
+                    search,
+                    _narrowed(all, tab),
+                    tab: tab,
+                    everywhere: _sessions(all),
+                  )
+                : const SizedBox.shrink(),
+          ),
+        ],
+      );
     },
   );
+
+  /// Whether this is Find's plain list of harnesses — no mode (`>`, `?`, a group, `:`) and not
+  /// walked into one project or machine. The only list the tab chips narrow.
+  static bool _plain(PhoneSearchController search) =>
+      !search.isCommandMode &&
+      !search.isHelpMode &&
+      !search.isGroupMode &&
+      !search.isModelMode &&
+      !search.canGoBack;
+
+  /// The desk's tabs as the chips offer them: none off the plain list, and none where the desk has
+  /// no tabs or has not answered — and then no chips are drawn at all.
+  List<DeskTabFilter> _tabs(PhoneSearchController search) =>
+      _plain(search) ? deskTabFilters(widget.notifier) : const [];
+
+  /// The picked tab among [tabs]; null is All.
+  DeskTabFilter? _tab(List<DeskTabFilter> tabs) =>
+      tabs.where((tab) => tab.id == _tabId).firstOrNull;
+
+  static bool _inTab(DeskTabFilter tab, PhoneDestination row) {
+    final entry = row.entry;
+    return entry != null && tab.holds(entry);
+  }
+
+  /// [rows] narrowed to [tab] — to harnesses only, since a tab holds nothing else: a machine, a
+  /// project, a conversation Harness did not start are on no tab.
+  static List<PhoneDestination> _narrowed(
+    List<PhoneDestination> rows,
+    DeskTabFilter? tab,
+  ) => tab == null
+      ? rows
+      : [
+          for (final row in rows)
+            if (_inTab(tab, row)) row,
+        ];
+
+  /// The sessions among [rows] — harnesses and the conversations Harness did not start — which is
+  /// what All's chip counts.
+  static int _sessions(List<PhoneDestination> rows) =>
+      rows.where((row) => row.isAgent || row.external != null).length;
 
   /// Find's list: grows down from the field at the top. With nothing typed, `needs you` (newest
   /// question first) then `recent`, the harness on screen last, `+ New Harness` at the end; typed,
   /// the matches in their order, then the commands that match, then `+ New Harness in <project>`.
   /// See docs/plans/2026-09-26-003-mobile-find-new-spec.md.
-  Widget _find(PhoneSearchController search, List<PhoneDestination> rows) {
+  Widget _find(
+    PhoneSearchController search,
+    List<PhoneDestination> rows, {
+    required DeskTabFilter? tab,
+    required int everywhere,
+  }) {
     // The words, less any time ("dial last week" lights "dial").
     final terms = phoneSearchTerms(search.wordsQuery);
     final showing = widget.showing;
     final now = DateTime.now();
     final tty = Tty.of(context);
     final typed = search.matchQuery.trim().isNotEmpty;
-    final plain =
-        !search.isCommandMode &&
-        !search.isHelpMode &&
-        !search.isGroupMode &&
-        !search.isModelMode &&
-        !search.canGoBack;
+    final plain = _plain(search);
     bool asking(PhoneDestination row) => row.entry?.isWaiting ?? false;
     DateTime since(PhoneDestination row) {
       final entry = row.entry;
@@ -239,36 +386,67 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     final selectedAt = typed ? ordered.indexWhere(search.canSubmit) : -1;
     final newHarness = widget.onNewHarness;
     final project = search.projectMatch;
-    final children = <Widget>[];
+    // ⚠️ **Built as they scroll in, not all at once.** Each entry makes its widget only when the
+    // list asks for it, so a hundred sessions cost the rows in view: their state words and their
+    // lit matches. An eager list did that for every row on every rebuild, and this screen rebuilds
+    // on every preview the store publishes.
+    final items = <Widget Function()>[];
+    // Where each session's entry is, so a row keeps its own element when the ranking moves it.
+    final rowAt = <String, int>{};
     var index = 0;
-    Widget row(PhoneDestination row) =>
-        _findRow(row, terms, now, tty, selected: index++ == selectedAt);
-    if (needsYou.isNotEmpty) {
-      children.add(FindHeader('needs you', color: tty.yellow));
-      children.addAll(needsYou.map(row));
-      children.add(const FindHeader('recent'));
+    void row(PhoneDestination row) {
+      final selected = index++ == selectedAt;
+      rowAt[row.id] = items.length;
+      items.add(() => _session(row, terms, now, tty, selected: selected));
     }
-    children.addAll(rest.map(row));
-    if (current != null) children.add(row(current));
+
+    if (needsYou.isNotEmpty) {
+      items.add(() => FindHeader('needs you', color: tty.yellow));
+      needsYou.forEach(row);
+      items.add(() => const FindHeader('recent'));
+    }
+    rest.forEach(row);
+    if (current != null) row(current);
     // At the end and without a heading: each one's own word on the right says `paused`.
-    children.addAll(pausedRows.map(row));
+    pausedRows.forEach(row);
     if (ordered.isEmpty) {
-      children.add(
-        Padding(
+      items.add(
+        () => Padding(
           padding: const EdgeInsets.fromLTRB(Tty.origin, 20, Tty.origin, 8),
           child: TtyText(
-            search.total == 0 && !typed ? 'No harnesses running.' : 'No match.',
+            switch (tab) {
+              null =>
+                search.total == 0 && !typed
+                    ? 'No harnesses running.'
+                    : 'No match.',
+              _ when typed => 'No match in ${tab.name}.',
+              _ when tab.isEmpty => 'No harnesses in ${tab.name} yet.',
+              _ => 'Nothing in ${tab.name} can be reached right now.',
+            },
             color: tty.faint,
             size: TtySize.row,
           ),
         ),
       );
+      // The way out of an empty tab, where the eye already is — rather than back up at a chip the
+      // rail may have scrolled away.
+      if (tab != null && (!typed || everywhere > 0)) {
+        items.add(
+          () => FindRow(
+            title: 'Show all tabs',
+            detail: typed
+                ? '$everywhere ${everywhere == 1 ? 'match' : 'matches'} in all tabs'
+                : null,
+            onTap: () => setState(() => _tabId = null),
+          ),
+        );
+      }
     }
     if (search.commandMatches.isNotEmpty) {
-      children.add(const FindHeader('commands'));
+      items.add(() => const FindHeader('commands'));
       for (final command in search.commandMatches) {
-        children.add(
-          FindRow(
+        items.add(
+          () => FindRow(
             title: command.title,
             terms: terms,
             state: command.shortcut,
@@ -279,9 +457,9 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     }
     if (newHarness != null && plain) {
       final place = project == null ? null : _projectPlace(project);
-      children.add(const SizedBox(height: 8));
-      children.add(
-        FindAddRow(
+      items.add(() => const SizedBox(height: 8));
+      items.add(
+        () => FindAddRow(
           label: place == null
               ? 'New Harness'
               : 'New Harness in ${project!.title}',
@@ -290,11 +468,37 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
         ),
       );
     }
-    children.add(const SizedBox(height: 24));
-    return ListView(
-      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+    items.add(() => const SizedBox(height: 24));
+    return ListView.builder(
+      // ⚠️ **A scroll keeps the keyboard.** Scrolling is looking through what the query found, not
+      // done with the query — put away on every drag, the next letter meant tapping the field
+      // again. A row picked ([_tap]) or the return key is what puts the keys away.
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.manual,
       padding: EdgeInsets.zero,
-      children: children,
+      itemCount: items.length,
+      itemBuilder: (context, i) => items[i](),
+      findChildIndexCallback: (key) =>
+          key is ValueKey<String> ? rowAt[key.value] : null,
+    );
+  }
+
+  /// One session's entry in the list: its row.
+  ///
+  /// ⚠️ **No recap under it any more (owner, 2026-09-30),** and no read of what the session last
+  /// said either (2026-10-01) — see the note at the end of [initState].
+  ///
+  /// Keyed by the row's id — what [ListView.builder]'s `findChildIndexCallback` looks it up by — so
+  /// the row keeps its element when a match moves it up the list.
+  Widget _session(
+    PhoneDestination row,
+    List<String> terms,
+    DateTime now,
+    Tty tty, {
+    required bool selected,
+  }) {
+    return KeyedSubtree(
+      key: ValueKey(row.id),
+      child: _findRow(row, terms, now, tty, selected: selected),
     );
   }
 
@@ -318,10 +522,9 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
         title: row.title,
         detail: row.detail,
         branch: null,
-        tail: [
-          external.engineLabel,
-          if (row.lastAt case final at?) fzfAge(at, now),
-        ].join(' · '),
+        tail: external.engineLabel,
+        // Beside the state, as a harness row's age is.
+        stateTail: fzfAge(row.lastAt, now),
         said: hit == null || hit.snippet.isEmpty || hit.field == 'name'
             ? null
             : (lead: snippetLead(hit.field), runs: snippetRuns(hit.snippet)),
@@ -338,9 +541,14 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       );
     }
     if (entry == null) {
+      final machine = row.isMachine ? _machineStateOf(row, tty) : null;
       return FindRow(
         title: row.title,
         detail: row.detail,
+        // A locked machine's line is the one thing on it to act on.
+        detailColor: (machine?.asks ?? false) ? tty.text : null,
+        state: machine?.word,
+        stateColor: machine?.color,
         terms: terms,
         selected: selected,
         enabled: openable,
@@ -367,19 +575,20 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       title: row.title,
       strict: true,
       said: said,
-      // `M2:site ⑂ docs-v2 · 2m` — or, while it asks, its question.
+      // `M2:site ⑂ docs-v2` — or, while it asks, its question.
       detail: asking
           ? '"${question.split('\n').first}"'
           : '${entry.machineName}:${entry.agent.displayProject?.label ?? entry.project?.name ?? ''}',
       branch: asking || branch == null || branch.isEmpty ? null : branch,
-      tail: asking
+      detailColor: question != null && entry.isWaiting ? tty.text : null,
+      state: state.word,
+      stateColor: state.color,
+      // `idle · 2m` on line 1, where a long folder and branch on line 2 cannot cut the age off.
+      stateTail: asking
           ? null
           : onScreen
           ? 'current'
           : fzfAge(entry.agent.updatedAt, now),
-      detailColor: question != null && entry.isWaiting ? tty.text : null,
-      state: state.word,
-      stateColor: state.color,
       terms: terms,
       selected: selected,
       enabled: openable || _resuming == row.id,
@@ -392,7 +601,42 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     );
   }
 
-  ({String word, Color color}) _stateOf(
+  /// A machine's word at the right edge, in a harness row's colours: green for one that answers,
+  /// yellow for one that needs something from the person, faint for the rest. Read off the
+  /// machine live, like the harness rows' words; the line under it comes with the catalog, which
+  /// rebuilds on the same changes (`PhoneSearchCatalogCache`). Null for a row without its machine.
+  ({String word, Color color, bool asks})? _machineStateOf(
+    PhoneDestination row,
+    Tty tty,
+  ) {
+    final machine = row.machine;
+    if (machine == null) return null;
+    final status = phoneMachineStatusOf(machine);
+    // Computers' word for the same state ([phoneMachineWord]), so a computer reads the same here.
+    final word = phoneMachineWord(status);
+    return switch (status) {
+      PhoneMachineStatus.ready => (word: word, color: tty.green, asks: false),
+      PhoneMachineStatus.needsPassword => (
+        word: word,
+        color: tty.yellow,
+        asks: true,
+      ),
+      PhoneMachineStatus.connecting => (
+        word: word,
+        color: tty.faint,
+        asks: false,
+      ),
+      PhoneMachineStatus.offline => (word: word, color: tty.faint, asks: false),
+    };
+  }
+
+  /// The word at a harness row's right edge, or null for an idle one.
+  ///
+  /// ⚠️ **Idle says nothing (owner, 2026-09-30).** It is what a harness is when none of the words
+  /// above apply — most of the list, most of the time — so `idle` stood on nearly every row and
+  /// said nothing any of them needed saying, while the words that DO ask for something (`asking`,
+  /// `done`, `exited`) were lost among them. The row keeps its age (`1h`) in that place.
+  ({String? word, Color color}) _stateOf(
     AgentEntry entry,
     bool openable,
     Tty tty, {
@@ -410,7 +654,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
       agentId: entry.agent.id,
     ));
     if (unread == NoticeKind.done) return (word: 'done', color: tty.faint);
-    return (word: 'idle', color: tty.faint);
+    return (word: null, color: tty.faint);
   }
 
   /// Where a project lives, for `+ New Harness in <project>`: its machine and folder, read from the
@@ -533,10 +777,21 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     // The neighbours are the rows as drawn, not the Agents tab's list: swiping
     // walks exactly what the query returned, in the order the person was
     // looking at when they tapped.
+    final search = widget.controller;
+    final tab = _tab(_tabs(search));
+    // ⚠️ **The tab picked here is the tab Home opens in (owner, 2026-10-01).** The chips narrowed
+    // this list to one tab, and the session tapped is that tab's — but Home chose its tab on its
+    // own, from the tab the phone was last in ([activeDeskGroup]), so a session that sits in two
+    // tabs opened in the other one, and the swipe then walked that tab's panes rather than the ones
+    // just looked at. Selected before the open, so the pager is built in it. Only for a session the
+    // tab holds, and never on All: there the phone's own last tab still decides.
+    if (tab != null && tab.holds(entry)) {
+      widget.notifier.selectDeskTab(tab.id);
+    }
     openAgentPager(
       context,
       widget.notifier,
-      phoneSearchAgentEntries(widget.controller.rows),
+      phoneSearchAgentEntries(_narrowed(search.rows, tab)),
       entry,
     );
   }

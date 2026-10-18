@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/models.dart';
+import 'package:harness_mobile/phone/agent_home.dart';
+import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/phone/tty.dart';
-import 'package:harness_mobile/phone/welcome/connect_computer.dart';
 import 'package:harness_mobile/phone/welcome/focus_hints.dart';
 import 'package:harness_mobile/phone/welcome/how_it_works.dart';
+import 'package:harness_mobile/phone/welcome/onboarding_copy.dart';
 import 'package:harness_mobile/phone/welcome/pairing_with_code.dart';
 import 'package:harness_mobile/phone/welcome/phone_boot.dart';
 import 'package:harness_mobile/phone/welcome/phone_welcome.dart';
@@ -20,8 +22,8 @@ import 'edge_fixture.dart';
 /// phone, scale and brightness, with an account and a computer whose names are long. None may
 /// report an overflow.
 ///
-/// ⚠️ Nothing here reaches anything real: the downloads manifest, the camera, the account service
-/// and the computer are all stand-ins, and no screen is left up long enough for a poll to fire.
+/// ⚠️ Nothing here reaches anything real: the camera, the account service and the computer are all
+/// stand-ins, and no screen is left up long enough for a poll to fire.
 void main() {
   setUpAll(loadRealFontsIfAsked);
 
@@ -39,33 +41,46 @@ void main() {
 
   Widget welcome(AppNotifier app) => PhoneWelcome(
     notifier: app,
-    onTrySample: (_) async => null,
     sendCode: (_) async {},
     signIn: (_, _) async => throw Exception(
       'That code has expired. Ask for a new one and try again within ten minutes.',
     ),
-    signInWithScan: (_) async {},
-    scanCamera: const SizedBox(),
-    loadDownloads: () async => const {},
+    scanCamera: const SizedBox.expand(),
   );
 
-  testWidgets('the first screen', (tester) async {
+  /// Home as the shell mounts it, for an account with no computer yet.
+  Widget home(AppNotifier app) => PhoneShellScope(
+    onMachineLinked: (_) {},
+    onOpenAgent: (_, _) {},
+    child: AgentHome(notifier: app),
+  );
+
+  testWidgets('the first screen, and why it was signed out', (tester) async {
     await expectNoLayoutErrors(tester, (scale, brightness) async {
-      final app = edgeApp(noMachines: true);
+      final app = edgeApp(noMachines: true)
+        ..signedOutReason =
+            'You were signed out because this phone was removed from your account on another device.';
       addTearDown(app.dispose);
       await pump(tester, welcome(app), scale, brightness);
-      expect(find.text('Yes — scan to connect'), findsOneWidget);
+      // The reason in the headline's place, the headline back once a way in is pressed.
+      expect(
+        find.textContaining('removed from your account on another device'),
+        findsOneWidget,
+      );
+      expect(find.text(OnboardingCopy.welcome), findsNothing);
     });
   });
 
-  testWidgets('scan, then email, then a code that fails', (tester) async {
+  testWidgets('the email, then a code that fails', (tester) async {
     await expectNoLayoutErrors(tester, (scale, brightness) async {
       final app = edgeApp(noMachines: true);
       addTearDown(app.dispose);
       await pump(tester, welcome(app), scale, brightness);
-      await tapInView(tester, find.text('Yes — scan to connect'));
-      await frames(tester);
-      await tapInView(tester, find.text('Use email instead'));
+      // The emailed code's way in: Continue with email, under the accounts.
+      await tapInView(
+        tester,
+        find.byKey(const ValueKey('welcome-continue-email')),
+      );
       await frames(tester);
       await tester.enterText(
         find.byType(TextField),
@@ -84,17 +99,34 @@ void main() {
     });
   });
 
-  testWidgets('the set-up page', (tester) async {
-    await expectNoLayoutErrors(tester, (scale, brightness) async {
-      final app = edgeApp(noMachines: true);
-      addTearDown(app.dispose);
-      await pump(tester, welcome(app), scale, brightness);
-      await tapInView(tester, find.text('Not yet — set it up'));
-      await frames(tester);
-      await tester.drag(find.byType(ListView), const Offset(0, -2000));
-      await frames(tester);
-    });
-  });
+  testWidgets(
+    'On your computer, go to — a long account — then a computer with a long name joining',
+    (tester) async {
+      await expectNoLayoutErrors(tester, (scale, brightness) async {
+        final app = edgeApp(noMachines: true)
+          ..currentUser = const CurrentUserProfile(
+            id: 'u',
+            name: longName,
+            email: 'ada.lovelace.the.first.programmer@analytical-engine.example.com',
+          );
+        addTearDown(app.dispose);
+        // ⚠️ Kept under five seconds of the test's clock: the page re-reads the account's machines
+        // every five.
+        await pump(tester, home(app), scale, brightness);
+        expect(find.text(OnboardingCopy.goToHeadline), findsOneWidget);
+
+        const joining = Machine(
+          machineId: 'm',
+          authMode: MachineAuthMode.remote,
+          name: longMachine,
+        );
+        app.machines = [joining];
+        app.notifyListeners();
+        await frames(tester);
+        expect(find.text(OnboardingCopy.ready(longMachine)), findsOneWidget);
+      });
+    },
+  );
 
   testWidgets('scanning, signing in', (tester) async {
     await expectNoLayoutErrors(tester, (scale, brightness) async {
@@ -114,34 +146,6 @@ void main() {
         scale,
         brightness,
       );
-    });
-  });
-
-  testWidgets('set up your computer, signed in, both ways', (tester) async {
-    await expectNoLayoutErrors(tester, (scale, brightness) async {
-      final app = edgeApp(noMachines: true);
-      addTearDown(app.dispose);
-      app.currentUser = const CurrentUserProfile(
-        id: 'u',
-        name: longName,
-        email:
-            'ada.lovelace.the.first.programmer@analytical-engine.example.com',
-      );
-      // ⚠️ Kept under five seconds of the test's clock: the page re-reads the account's machines
-      // every five, and that read is the real service's.
-      await pump(
-        tester,
-        ConnectComputerPage(
-          notifier: app,
-          onBack: () {},
-          onTrySample: (_) async => null,
-          loadDownloads: () async => const {},
-        ),
-        scale,
-        brightness,
-      );
-      await tester.drag(find.byType(ListView), const Offset(0, -2000));
-      await frames(tester, count: 1);
     });
   });
 
@@ -205,7 +209,7 @@ void main() {
     });
   });
 
-  testWidgets('the first-time hints over Focus', (tester) async {
+  testWidgets('the hints over Focus, asked for again', (tester) async {
     await expectNoLayoutErrors(tester, (scale, brightness) async {
       await pump(
         tester,
@@ -214,7 +218,12 @@ void main() {
             color: Tty.of(context).ground,
             child: FocusHints(
               micBottom: 34 + 4 + 30,
-              store: FocusHintsSeen(storage: MemoryKeyValueStore()),
+              // As the terminal has them: the notification prompt after, and its line with them.
+              onDone: () {},
+              store: FocusHintsSeen(
+                storage: MemoryKeyValueStore()
+                  ..values['phone_focus_hints_v1'] = 'again',
+              ),
             ),
           ),
         ),

@@ -51,7 +51,7 @@ pub(crate) fn ensure(app: &mut App, from: Option<(String, String)>, cwd: Option<
         form.first_run = first;
         let machine = form.draft.machine.clone();
         store_form(app, form);
-        crate::input::load_dsh(app, machine);
+        crate::input::load_dsh(app, machine, false);
     }
 }
 

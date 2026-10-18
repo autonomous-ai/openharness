@@ -252,6 +252,14 @@ class ApiClient {
     );
   }
 
+  /// A sign-in already approved for this account, for a device with no screen to show a QR on:
+  /// `{ticket, expiresIn}`. Handed to the device over its setup hotspot; it spends it once it is
+  /// on the person's Wi-Fi (`harness login --ticket`).
+  Future<Map<String, dynamic>> boxTicket() async {
+    final res = await _dio.post('/api/auth/box/ticket', data: const {});
+    return Map<String, dynamic>.from(unwrapApiResponse(res) as Map);
+  }
+
   // -- the desk: the account's tabs, the same on every computer --
 
   /// `{revision, tabs}` as the backend holds it (its `routes/desk.ts`); null on

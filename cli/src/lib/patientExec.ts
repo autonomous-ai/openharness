@@ -16,6 +16,7 @@
  * timed out, as Node's does (`killed`, `signal`).
  */
 import type { ExecFileException } from 'node:child_process'
+import { execFileOffThread, offThreadExecActive } from './offThreadExec.js'
 
 /** A timer this much later than its due time was held up: the loop did not run meanwhile. */
 export const HELD_MS = 250
@@ -57,6 +58,13 @@ export function patientDeadline(ms: number, expire: () => void, clock: () => num
   }
 }
 
+/** The error a timed-out child is reported with, on either path: `tmuxBackend.ts` reads its shape. */
+function timedOut(file: string, args: readonly string[], timeout: number, killSignal: NodeJS.Signals): ExecFileException {
+  return Object.assign(new Error(`${file} did not answer within ${timeout} ms`), {
+    killed: true, signal: killSignal, code: 'ETIMEDOUT', cmd: [file, ...args].join(' '),
+  }) as ExecFileException
+}
+
 /**
  * Wrap a module's own `execFile` (passed in, so a test's mock of `child_process` still applies) as one
  * that takes the same arguments and calls back the same way, with the timeout above.
@@ -64,25 +72,33 @@ export function patientDeadline(ms: number, expire: () => void, clock: () => num
 export function patientExec(execFile: (...args: any[]) => unknown) {
   return (file: string, args: readonly string[], options: PatientExecOptions, done: ExecDone): void => {
     const { timeout = 0, killSignal = 'SIGTERM', ...rest } = options
+    if (offThreadExecActive()) {
+      // The worker's loop is not held when this one is: its own timeout is a real one, and an answer
+      // waits in the port until this loop reads it (offThreadExec.ts). No deadline is armed here.
+      execFileOffThread(file, args, { ...rest, timeout, killSignal }, (error, stdout, stderr, outcome) => {
+        // As below: exit 0 is an answer even when the kill raced it.
+        if (error && outcome?.timedOut) { done(timedOut(file, args, timeout, killSignal), stdout, stderr); return }
+        done(error, stdout, stderr)
+      })
+      return
+    }
     let finished = false
-    let timedOut = false
+    let timedOutHere = false
     let cancel = (): void => {}
     const child = execFile(file, [...args], { ...rest, encoding: 'utf8' }, (error: ExecFileException | null, stdout: string, stderr: string) => {
       finished = true
       cancel()
       // Exit 0 is an answer even when the kill raced it: unlike Node's own timeout, this one never
       // throws the output away.
-      if (error && timedOut) {
-        done(Object.assign(new Error(`${file} did not answer within ${timeout} ms`), {
-          killed: true, signal: killSignal, code: 'ETIMEDOUT', cmd: [file, ...args].join(' '),
-        }), stdout ?? '', stderr ?? '')
+      if (error && timedOutHere) {
+        done(timedOut(file, args, timeout, killSignal), stdout ?? '', stderr ?? '')
         return
       }
       done(error, stdout ?? '', stderr ?? '')
     }) as { kill?: (signal: NodeJS.Signals) => boolean } | undefined
     if (timeout > 0 && !finished) {
       cancel = patientDeadline(timeout, () => {
-        timedOut = true
+        timedOutHere = true
         child?.kill?.(killSignal)
       })
     }

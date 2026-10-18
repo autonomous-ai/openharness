@@ -24,6 +24,31 @@ static int tab_list(const pod_model_t *m, int tab, const pod_agent_t *out[], int
     return n;
 }
 
+// Home pages: the TABS frame's scroll is the tab index, or -1 for the Notices card, which exists only while there are notices (so it
+// is a position that does not move when notices come or go: the tab under the person stays the tab under the person). Lowest valid scroll.
+static int home_lo(const pod_model_t *m) { return pod_notice_count(m) > 0 ? -1 : 0; }
+// The valid range of Home's scroll: lo (-1 with notices, else 0) .. the last tab (or lo with no tabs).
+static int16_t home_clamp(const pod_model_t *m, int s)
+{
+    const int lo = home_lo(m), hi = m->tab_count - 1 > lo ? m->tab_count - 1 : lo;
+    return (int16_t)(s < lo ? lo : s > hi ? hi : s);
+}
+// Leaving a room for Home lands on that room's tab card, never on the Notices card.
+static void land_on_tab(pod_nav_t *n, const pod_model_t *m, const pod_frame_t *from)
+{
+    if (n->depth != 1 || n->stack[0].view != POD_V_TABS) return;
+    int idx = -1;
+    if (from->tab_id[0]) {
+        for (int t = 0; t < m->tab_count; t++) if (!strcmp(m->tabs[t].id, from->tab_id)) { idx = t; break; }
+    } else if (from->tab >= 0 && from->tab < m->tab_count) {
+        idx = from->tab;
+    }
+    if (idx >= 0) n->stack[0].scroll = (int16_t)idx;
+    else if (n->stack[0].scroll < 0) n->stack[0].scroll = 0;   // Recent has no card: the first tab
+}
+
+static int index_in(const pod_model_t *m, int tab, const char *id);
+
 static bool is_agent_view(pod_view_t v) { return v == POD_V_AGENT || v == POD_V_RECAP || v == POD_V_TALK; }
 
 // The list a frame's agent steps through. For an agent frame in the Recent tab the open agent stays in the list
@@ -60,7 +85,11 @@ static bool push(pod_nav_t *n, const pod_frame_t *f) {
 static pod_view_t view_for(const pod_model_t *m, const pod_agent_t *a) { return pod_model_opens_on_recap(m, a) ? POD_V_RECAP : POD_V_AGENT; }
 
 // An agent shown on the Pod is read: its unread entry goes (and a token one is queued for notif.read).
-static void opened(pod_model_t *m, const char *id) { pod_model_unread_read(m, id); }
+// It is read only when the recap is what is on screen (a RECAP frame on top): a room has no recap to show.
+static void opened(const pod_nav_t *n, pod_model_t *m, const char *id)
+{
+    if (n->depth && n->stack[n->depth - 1].view == POD_V_RECAP) pod_model_unread_read(m, id);
+}
 
 static pod_out_t step(pod_nav_t *n, pod_model_t *m, int dir) {
     pod_frame_t *f = &n->stack[n->depth - 1];
@@ -81,11 +110,11 @@ static pod_out_t step(pod_nav_t *n, pod_model_t *m, int dir) {
     memcpy(f->tab_id, tab_id, sizeof tab_id);
     set_id(f->agent, to->id);
     if (!talking) o = out_fx(POD_FX_AGENT_OPEN, to->id);
-    opened(m, f->agent);
+    opened(n, m, f->agent);
     return o;
 }
 
-pod_out_t pod_nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, uint32_t now_ms) {
+static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, uint32_t now_ms) {
     if (!n->depth) pod_nav_init(n);
     pod_frame_t *f = &n->stack[n->depth - 1];
     switch (a) {
@@ -96,6 +125,23 @@ pod_out_t pod_nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, uin
           if (arg != POD_TAB_RECENT) { size_t k = strnlen(m->tabs[arg].id, SWARM_ID_MAX - 1); memcpy(t.tab_id, m->tabs[arg].id, k); }
           push(n, &t); }
         break;
+    case POD_A_ENTER_TAB: {   // Home: a tab opens straight on its first agent, with the TAB frame below it (never drawn)
+        if (f->view != POD_V_TABS || arg < 0 || arg >= m->tab_count || n->depth + 2 > 4) break;
+        const pod_agent_t *l[POD_AGENTS_MAX];
+        if (tab_list(m, arg, l, POD_AGENTS_MAX) < 1) break;
+        pod_frame_t t, af;
+        memset(&t, 0, sizeof t);
+        t.view = POD_V_TAB;
+        t.tab = (int8_t)arg;
+        { size_t k = strnlen(m->tabs[arg].id, SWARM_ID_MAX - 1); memcpy(t.tab_id, m->tabs[arg].id, k); }
+        af = t;
+        af.view = view_for(m, l[0]);
+        set_id(af.agent, l[0]->id);
+        push(n, &t);
+        push(n, &af);
+        opened(n, m, af.agent);
+        return out_fx(POD_FX_AGENT_OPEN, af.agent);
+    }
     case POD_A_OPEN_AGENT: {
         if (f->view != POD_V_TAB) break;
         const pod_agent_t *l[POD_AGENTS_MAX];
@@ -106,7 +152,7 @@ pod_out_t pod_nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, uin
         t.tab = f->tab;
         memcpy(t.tab_id, f->tab_id, sizeof t.tab_id);
         set_id(t.agent, l[arg]->id);
-        if (push(n, &t)) { opened(m, t.agent); return out_fx(POD_FX_AGENT_OPEN, t.agent); }
+        if (push(n, &t)) { opened(n, m, t.agent); return out_fx(POD_FX_AGENT_OPEN, t.agent); }
         break;
     }
     case POD_A_INBOX: {
@@ -122,47 +168,31 @@ pod_out_t pod_nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, uin
         char id[ID_MAX];
         set_id(id, m->unread[arg].agent);
         const pod_agent_t *ag = pod_model_find(m, id);
-        pod_model_unread_read(m, id);
+        if (!ag) pod_model_unread_read(m, id);   // an agent shown on its recap reads it there (opened, below)
         if (!ag) break;   // not on the roster: nothing to open, but it is read
         pod_frame_t t; memset(&t, 0, sizeof t);
-        t.view = view_for(m, ag);
+        const pod_state_t st = pod_model_eff(m, ag);
+        t.view = st != POD_WORKING && st != POD_ASKING && st != POD_OFFLINE ? POD_V_RECAP : view_for(m, ag);   // an entry is a finished or failed run, told by the recap
         t.tab = POD_TAB_RECENT;
+        // the room is the agent's own tab, so a sideways swipe stays among its tab-mates (Recent only when no tab holds it)
+        for (int k = 0; k < m->tab_count; k++)
+                if (index_in(m, k, id) >= 0) { t.tab = (int8_t)k; set_id(t.tab_id, m->tabs[k].id); break; }
         set_id(t.agent, id);
         if (n->depth >= 4) { n->stack[1] = *f; n->depth = 2; }   // the stack is full: drop what the Inbox was opened over
-        if (push(n, &t)) return out_fx(POD_FX_AGENT_OPEN, id);
+        if (push(n, &t)) {
+            opened(n, m, id);
+            return out_fx(POD_FX_AGENT_OPEN, id);
+        }
         break;
     }
     case POD_A_PREV:
     case POD_A_NEXT:
         if (is_agent_view(f->view)) return step(n, m, a == POD_A_NEXT ? 1 : -1);
-        if (n->skin == POD_SKIN_CONSOLE && f->view == POD_V_TAB) {   // the tab cycle is Recent, tab 0 .. last, wrapping; Recent sits first
-            int cnt = m->tab_count + 1, at = f->tab == POD_TAB_RECENT ? 0 : f->tab + 1;
-            if (f->tab != POD_TAB_RECENT && (f->tab < 0 || f->tab >= m->tab_count)) break;
-            int t = (at + (a == POD_A_NEXT ? 1 : -1) + cnt) % cnt - 1;   // -1 is Recent
-            memset(f, 0, sizeof *f);
-            f->view = POD_V_TAB;
-            if (t < 0) f->tab = POD_TAB_RECENT;
-            else { f->tab = (int8_t)t; set_id(f->tab_id, m->tabs[t].id); }
-        }
         break;
     case POD_A_FOLLOW:
         if (arg >= 0 && arg < m->agent_count && pod_nav_follow(n, m, m->agents[arg].id, now_ms))
             return out_fx(POD_FX_AGENT_OPEN, m->agents[arg].id);
         break;
-    case POD_A_ATTENTION: {   // the ▲ chip counts every asking agent: walk them all, in model order, from after the open one
-        if (f->view == POD_V_TALK) break;
-        int at = -1, cnt = m->agent_count;
-        if (is_agent_view(f->view)) for (int i = 0; i < cnt; i++) if (!strcmp(m->agents[i].id, f->agent)) { at = i; break; }
-        for (int k = 1; k <= cnt; k++) {
-            const pod_agent_t *c = &m->agents[(at + k + cnt) % cnt];
-            if (pod_model_eff(m, c) != POD_ASKING || !strcmp(c->id, f->agent)) continue;
-            char id[ID_MAX];
-            set_id(id, c->id);
-            if (pod_nav_follow(n, m, id, now_ms)) return out_fx(POD_FX_AGENT_OPEN, id);
-            break;
-        }
-        break;
-    }
     case POD_A_TALK:
         if (f->view == POD_V_AGENT || f->view == POD_V_RECAP) {
             const pod_agent_t *talk_to = pod_model_find(m, f->agent);
@@ -188,14 +218,19 @@ pod_out_t pod_nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, uin
         // TABS pops to the root; BACK and PANES pop one frame (an agent screen's parent is its tab's list).
         int up = a == POD_A_BACK && arg > 1 ? arg : 1;   // BACK's arg: levels to pop
         uint8_t to = a == POD_A_TABS ? 1 : n->depth > up ? (uint8_t)(n->depth - up) : 1;
+        // The TAB frame is never drawn: back from a room goes Home, or to the Notices it was opened over.
+        if (a != POD_A_TABS && up == 1 && is_agent_view(f->view))
+            to = n->depth >= 2 && n->stack[n->depth - 2].view == POD_V_INBOX ? (uint8_t)(n->depth - 1) : 1;
         if (f->view == POD_V_TALK) {
             pod_out_t o = out_fx(POD_FX_VOICE_ABORT, f->agent);
             n->sending = false;
             n->depth = to;
+            if (is_agent_view(f->view)) land_on_tab(n, m, f);
             return o;
         }
-        if (from_agent && !is_agent_view(f->view) && !(a == POD_A_TABS && n->skin == POD_SKIN_CONSOLE)) break;   // Console: TABS is home from any screen
+        if (from_agent && !is_agent_view(f->view) && a != POD_A_TABS) break;   // TABS is home from any screen
         n->depth = to;
+        if (is_agent_view(f->view)) land_on_tab(n, m, f);
         break;
     }
     case POD_A_RECAP:
@@ -207,15 +242,22 @@ pod_out_t pod_nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, uin
         break;
     case POD_A_SCROLL: {
         long s = (long)f->scroll + arg;
-        f->scroll = (int16_t)(s < 0 ? 0 : s > 32767 ? 32767 : s);
+        const long lo = f->view == POD_V_TABS ? home_lo(m) : 0;   // Home: -1 is the Notices card
+        f->scroll = (int16_t)(s < lo ? lo : s > 32767 ? 32767 : s);
         break;
     }
     case POD_A_NONE:
     case POD_A_BANNER:
-    case POD_A_BANNER_CLOSE:
         break;
     }
     return out_none();
+}
+
+pod_out_t pod_nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, uint32_t now_ms) {
+    pod_out_t o = nav_act(n, m, a, arg, now_ms);
+    // A RECAP frame on top (opened or toggled to by any action) has its recap on screen: that agent's unread entry is read.
+    if (n->depth && n->stack[n->depth - 1].view == POD_V_RECAP) pod_model_unread_read(m, n->stack[n->depth - 1].agent);
+    return o;
 }
 
 void pod_nav_talk_over(pod_nav_t *n) {
@@ -248,7 +290,7 @@ static void release_send(pod_nav_t *n, const pod_model_t *m, pod_frame_t *f) {
 // an agent open on its Recap that STARTS working or asking shows its Agent screen: on the edge only, so a Recap the
 // person chose on a working agent (POD_A_RECAP) stays. TALK neither flips nor updates what was seen, so the edge
 // that happened under it still fires when the talk is over.
-void pod_nav_flip_recaps(pod_nav_t *n, const pod_model_t *m) {
+void pod_nav_flip_recaps(pod_nav_t *n, pod_model_t *m) {
     if (n->depth <= 1) { n->seen_agent[0] = 0; n->seen_active = false; return; }
     pod_frame_t *f = &n->stack[n->depth - 1];
     if (f->view == POD_V_TALK && n->sending) release_send(n, m, f);
@@ -261,15 +303,15 @@ void pod_nav_flip_recaps(pod_nav_t *n, const pod_model_t *m) {
     } else if (f->view == POD_V_AGENT) {
         if (a && pod_model_opens_on_recap(m, a)) f->view = POD_V_RECAP;
     }
+    if (f->view == POD_V_RECAP) pod_model_unread_read(m, f->agent);   // the recap is on screen: read
     if (is_agent_view(f->view) && a) { set_id(n->seen_agent, f->agent); n->seen_active = active; }
     else { n->seen_agent[0] = 0; n->seen_active = false; }
 }
 
-pod_out_t pod_nav_sync(pod_nav_t *n, const pod_model_t *m) {
+pod_out_t pod_nav_sync(pod_nav_t *n, pod_model_t *m) {
     if (!n->depth) { pod_nav_init(n); return out_none(); }
-    if (n->skin == POD_SKIN_CONSOLE && n->stack[0].view == POD_V_TABS) {   // Overview pages two rows at a time: tabs that went away take their pages with them
-        int last = (pod_tabs_pages_of(n, m) - 1) * 2;
-        if (n->stack[0].scroll > last) n->stack[0].scroll = (int16_t)(last < 0 ? 0 : last);
+    if (n->stack[0].view == POD_V_TABS) {   // tabs that went away take their pages with them
+        n->stack[0].scroll = home_clamp(m, n->stack[0].scroll);   // Home: the scroll is the tab index (-1: the Notices card, while there are notices)
     }
     uint8_t keep = n->depth;
     for (uint8_t i = 1; i < n->depth; i++) {
@@ -298,6 +340,8 @@ pod_out_t pod_nav_sync(pod_nav_t *n, const pod_model_t *m) {
         n->sending = false;
         n->depth = keep;
     }
+    // The TAB frame is never shown: an agent popped from under it (or a tab closed) lands on Home.
+    if (n->depth > 1 && n->stack[n->depth - 1].view == POD_V_TAB) n->depth = 1;
     pod_nav_flip_recaps(n, m);
     return o;
 }
@@ -337,7 +381,52 @@ bool pod_nav_follow(pod_nav_t *n, pod_model_t *m, const char *agent_id, uint32_t
     n->stack[0] = tabs; n->stack[1] = tf; n->stack[2] = af;
     n->depth = 3;
     n->sending = false;
-    opened(m, a->id);
+    opened(n, m, a->id);
+    pod_nav_flip_recaps(n, m);
+    return true;
+}
+
+// The app window's selected tab changed (the model's `selected`). Device-local, so no effect is emitted. On Home the card follows. In a room
+// of another tab the device moves with the app: the same agent when it is a member of the new tab (only the frames' tab is updated, so sideways
+// stays inside it), else the new tab's first agent (TABS -> TAB -> room). A room on Recent (an agent no tab holds) keeps its list, a tab with no agents
+// and a selection that is not a model tab (hidden) leave the screen alone. Returns whether the stack changed.
+bool pod_nav_follow_tab(pod_nav_t *n, pod_model_t *m) {
+    if (n->depth < 1 || m->selected < 0 || m->selected >= m->tab_count) return false;
+    const int sel = m->selected;
+    pod_frame_t *cur = &n->stack[n->depth - 1];
+    if (cur->view == POD_V_TABS && n->depth == 1) {
+        if (cur->scroll == sel) return false;
+        cur->scroll = (int16_t)sel;
+        return true;
+    }
+    if (cur->view != POD_V_AGENT && cur->view != POD_V_RECAP) return false;
+    if (cur->tab < 0 || n->depth < 3) return false;   // Recent (an agent no tab holds): its own list
+    if (!strcmp(cur->tab_id, m->tabs[sel].id)) return false;
+    if (index_in(m, sel, cur->agent) >= 0) {
+        for (int i = 1; i < n->depth; i++) {
+            if (n->stack[i].view != POD_V_TAB && n->stack[i].view != POD_V_AGENT && n->stack[i].view != POD_V_RECAP) continue;
+            n->stack[i].tab = (int8_t)sel;
+            set_id(n->stack[i].tab_id, m->tabs[sel].id);
+        }
+        n->stack[0].scroll = (int16_t)sel;
+        return true;
+    }
+    const pod_agent_t *l[POD_AGENTS_MAX];
+    if (tab_list(m, sel, l, POD_AGENTS_MAX) < 1) return false;
+    pod_frame_t tabs, tf, af;
+    memset(&tabs, 0, sizeof tabs); memset(&tf, 0, sizeof tf);
+    tabs.view = POD_V_TABS;
+    tabs.scroll = (int16_t)sel;
+    tf.view = POD_V_TAB;
+    tf.tab = (int8_t)sel;
+    set_id(tf.tab_id, m->tabs[sel].id);
+    af = tf;
+    af.view = view_for(m, l[0]);
+    set_id(af.agent, l[0]->id);
+    n->stack[0] = tabs; n->stack[1] = tf; n->stack[2] = af;
+    n->depth = 3;
+    n->sending = false;
+    opened(n, m, af.agent);
     pod_nav_flip_recaps(n, m);
     return true;
 }

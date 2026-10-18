@@ -1,0 +1,929 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mobile onboarding · An account comes first</title>
+<style>
+  /* Single dark look, matching the phone app and the desktop review page: phones drawn at 390 x 844 pt, scaled with cqw. */
+  :root {
+    color-scheme: dark;
+    --page: #0f0f0e; --text: #f5f5f0; --muted: #9a9a90; --line: rgba(255,250,240,.10);
+    --bg: #141413; --surface: #1c1c1a; --elev: #262624; --sub: #3a3a36;
+    --amber: #ff9f0a; --green: #32d74b; --red: #ff453a; --blue: #0a84ff; --gold: #d4a574;
+    /* The phone app's own palette (mobile/lib/phone/tty.dart, dark). */
+    --pg: #181818; --pt: #f2f2ee; --praised: #2a2a2a; --pgreen: #0dbc79; --pyellow: #e5e510; --pred: #f14c4c; --pfaint: #8e8e88; --pink: #061a11;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text); font: 16px/1.5 var(--sans); }
+  main { max-width: 1180px; margin: 0 auto; padding-block: 40px 96px; padding-inline: 16px; }
+  h1, h2, h3 { text-wrap: balance; }
+  code { overflow-wrap: anywhere; }
+  h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -.01em; }
+  h2 { font-size: 22px; margin: 64px 0 6px; }
+  h3 { font-size: 16px; margin: 28px 0 8px; color: var(--muted); font-weight: 600; }
+  p.lede { color: var(--muted); margin: 0 0 18px; max-width: 800px; }
+  p.lede b { color: var(--text); font-weight: 600; }
+  code { font-family: var(--mono); font-size: .9em; color: #d8d8cf; }
+  a { color: var(--amber); }
+  .principles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 22px 0 6px; }
+  .principles div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; font-size: 15px; }
+  .principles b { display: block; margin-bottom: 2px; }
+  .note { color: var(--muted); font-size: 14px; margin: 10px 2px 0; max-width: 900px; }
+  .note b { color: var(--text); font-weight: 600; }
+  .cap { margin: 8px 2px 0; font-size: 13.5px; color: var(--muted); line-height: 1.45; }
+  .cap b { color: var(--text); }
+  .new { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #1a1205; background: var(--amber);
+    border-radius: 20px; padding: 2px 9px; vertical-align: 3px; margin-left: 8px; }
+  .later { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #cfe0ff; border: 1px solid rgba(10,132,255,.5);
+    border-radius: 20px; padding: 1px 9px; vertical-align: 3px; margin-left: 8px; }
+  .update { background: var(--surface); border: 1px solid rgba(255,159,10,.35); border-radius: 12px; padding: 14px 16px; margin: 18px 0 6px; font-size: 15px; max-width: 900px; }
+  .update b { color: var(--text); }
+  table { border-collapse: collapse; width: 100%; max-width: 1000px; font-size: 14px; margin: 12px 0 0; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; }
+  td.m { font-family: var(--mono); font-size: 13px; color: var(--text); }
+  .tablewrap { overflow-x: auto; }
+
+  /* Screens side by side, with an arrow between steps. */
+  .flow { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 22px 14px; margin-top: 16px; }
+  .step { width: 220px; flex: none; }
+  .arrow { flex: none; align-self: center; color: var(--muted); font-size: 13px; text-align: center; width: 56px; line-height: 1.35; padding-bottom: 40px; }
+  .arrow i { display: block; font-style: normal; font-size: 22px; color: var(--amber); }
+  .flow.wide .step.mac { width: 560px; }
+  @media (max-width: 560px) {
+    .step { width: calc(50% - 7px); }
+    .flow.wide .step.mac { width: 100%; }
+    .arrow { display: none; }
+  }
+
+  /* A phone drawn at 390 x 844 pt and scaled with its container: 1cqw = 3.9pt. */
+  .ph { container-type: inline-size; position: relative; width: 100%; aspect-ratio: 390 / 844; border-radius: 30px; overflow: hidden;
+    background: var(--pg); border: 5px solid #2a2a28; box-shadow: 0 14px 30px rgba(0,0,0,.5); color: var(--pt); font-family: var(--mono); }
+  .ph .sb { position: absolute; top: 0; left: 0; right: 0; height: 12cqw; display: flex; align-items: center; justify-content: space-between;
+    padding: 1.6cqw 8cqw 0; font: 600 3.9cqw var(--sans); z-index: 6; }
+  .ph .sb .bat { width: 6.4cqw; height: 3cqw; border: .45cqw solid currentColor; border-radius: .9cqw; opacity: .9; position: relative; }
+  .ph .sb .bat::after { content: ""; position: absolute; inset: .4cqw 1.4cqw .4cqw .4cqw; background: currentColor; border-radius: .3cqw; }
+  .ph .island { position: absolute; top: 2.6cqw; left: 50%; width: 30cqw; height: 8.6cqw; transform: translateX(-50%); background: #000; border-radius: 5cqw; z-index: 7; }
+  .ph .home { position: absolute; bottom: 2.2cqw; left: 50%; width: 34cqw; height: 1.3cqw; border-radius: 1cqw; background: #e8e8e2; transform: translateX(-50%); opacity: .85; z-index: 7; }
+  .ph svg.i { width: 1em; height: 1em; display: inline-block; flex: none; }
+  /* The 44pt row under the status bar: back at the left, Settings at the right. */
+  .ph .bk, .ph .gear { position: absolute; top: 12cqw; height: 11.3cqw; width: 11.3cqw; display: grid; place-items: center; font-size: 6.2cqw; color: var(--pt); z-index: 4; }
+  .ph .bk { left: 1.6cqw; } .ph .gear { right: 1.6cqw; font-size: 5.6cqw; color: #cfcfc8; }
+
+  /* Onboarding's one frame (onboarding_frame.dart): words on top, the picture in the middle, actions at the foot. */
+  .ph .words { position: absolute; left: 9cqw; right: 9cqw; top: 27.4cqw; }
+  .ph .hl { margin: 0; font: 600 5.64cqw/1.32 var(--mono); letter-spacing: -.012em; color: var(--pt); }
+  .ph svg.pic { position: absolute; height: auto; }
+  .ph svg.pic.w { left: 6.9cqw; top: 61.2cqw; width: 86.15cqw; }
+  .ph svg.pic.g { left: 10cqw; top: 103cqw; width: 80cqw; }
+  .ph .st { position: absolute; left: 9cqw; right: 9cqw; text-align: center; font: 500 3.33cqw/1.45 var(--mono); color: #dadad4; }
+  .ph .st.g { top: 180.6cqw; }
+  .ph .st .cur { display: inline-block; width: 1.6cqw; height: 3.33cqw; background: var(--pgreen); vertical-align: -.45cqw; margin-left: .5cqw; animation: blink 1s steps(1) infinite; }
+  .ph .st.err { color: var(--pred); }
+  .ph .st .ic { color: var(--pyellow); font-size: 3.6cqw; vertical-align: -.6cqw; margin-right: 1.5cqw; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .ph .st .cur, .ph .caret { animation: none; } }
+  .ph .foot { position: absolute; left: 9cqw; right: 9cqw; bottom: 10.8cqw; }
+  .ph .foot > * + .btn { margin-top: 2.56cqw; }
+  .ph .quiet { height: 11.3cqw; display: grid; place-items: center; font: 500 3.33cqw var(--mono); color: var(--pfaint); }
+  .ph .quiet b { color: var(--pt); font-weight: 600; }
+  .ph .btn { height: 13.33cqw; display: flex; align-items: center; justify-content: center; gap: 2.56cqw; white-space: nowrap; }
+  .ph .btn.pri { border-radius: 1.54cqw; background: var(--pgreen); color: var(--pink); font: 600 4.36cqw var(--mono); }
+  .ph .btn.pri svg.i { font-size: 5.13cqw; }
+  .ph .btn.goog, .ph .btn.appl { border-radius: 2.56cqw; font: 600 3.85cqw var(--mono); }
+  .ph .btn.goog { background: #fff; color: #1f1f1f; }
+  .ph .btn.appl { background: #000; color: #fff; border: 1px solid rgba(255,255,255,.24); }
+  .ph .btn svg.mk { width: 4.6cqw; height: 4.6cqw; }
+  .ph .btn.off { opacity: .5; }
+  .ph .spin { width: 4.6cqw; height: 4.6cqw; border-radius: 50%; border: .55cqw solid rgba(31,31,31,.25); border-top-color: #1f1f1f; animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ① Welcome (phone_welcome.dart), placed by onboarding_frame.dart's own measures on a 390 x 844 phone with the usage line under
+     the screen: two accounts, the lesser ways in as words, a message in the headline's place. */
+  .ph .words.w { top: 27.4cqw; }
+  .ph .said { margin-top: .6cqw; font: 3.33cqw/1.45 var(--mono); color: var(--pt); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .ph .said.err { color: var(--pred); }
+  .ph .said .ic { color: var(--pyellow); font-size: 3.6cqw; vertical-align: -.6cqw; margin-right: 1.5cqw; }
+  .ph .foot.w { bottom: 22.05cqw; }
+  .ph .foot.w > .ways, .ph .foot.w > .quiet { margin-top: 2.56cqw; }
+  .ph .ways { height: 11.3cqw; display: flex; align-items: center; justify-content: center; font: 3.33cqw var(--mono); color: var(--pfaint); white-space: nowrap; }
+  .ph .ways .l { display: inline-flex; align-items: center; gap: 1.8cqw; padding: 0 2cqw; }
+  .ph .ways svg.i { font-size: 3.85cqw; }
+  .ph .ways .dot { color: #66665f; }
+  .ph .ways.off { color: #5a5a55; }
+  .ph .usage { position: absolute; left: 4.1cqw; right: 4.1cqw; bottom: 8.7cqw; height: 11.3cqw; display: flex; align-items: center; justify-content: center;
+    font: 3.33cqw var(--mono); color: var(--pfaint); white-space: nowrap; z-index: 3; }
+  .ph .usage .box { width: 4.1cqw; height: 4.1cqw; border: 1.5px solid #66665f; border-radius: 1cqw; margin-right: 2.3cqw; flex: none; }
+  .ph .usage svg.i { margin-left: 3.4cqw; font-size: 3.85cqw; }
+  .ph .alert.light { background: rgba(214,214,214,.97); color: #000; }
+  .ph .alert.light .m { color: #111; }
+  .ph .alert.light .b { border-top-color: rgba(60,60,67,.3); }
+  .ph .alert.light .b span { color: #0a7aff; font-weight: 400; }
+  .ph .alert.light .b span + span { border-left-color: rgba(60,60,67,.3); }
+
+  /* Google's page in the app: an ASWebAuthenticationSession sheet over Harness. */
+  .ph.gsh { background: #000; }
+  .ph.gsh .behind { position: absolute; left: 4cqw; right: 4cqw; top: 15.2cqw; height: 10cqw; background: #1c1c1c; border-radius: 3cqw; }
+  .ph .gs { position: absolute; left: 0; right: 0; top: 17.9cqw; bottom: 0; background: #fff; border-radius: 3.5cqw 3.5cqw 0 0; overflow: hidden; font-family: var(--sans); color: #1f1f1f; }
+  .ph .gs .bar { height: 13.9cqw; background: #f6f6f6; display: flex; align-items: center; justify-content: space-between; padding: 0 3.7cqw; font-size: 4.2cqw; border-bottom: 1px solid #ddd; position: relative; }
+  .ph .gs .bar .c { color: #0a7aff; }
+  .ph .gs .bar .u { font-weight: 600; color: #000; display: inline-flex; align-items: center; gap: 1cqw; }
+  .ph .gs .bar .u svg { width: 3.4cqw; height: 3.4cqw; }
+  .ph .gs .bar .r { color: #0a7aff; display: inline-flex; gap: 4.4cqw; font-size: 4.6cqw; }
+  .ph .gs .bar .r svg { width: 4.4cqw; height: 4.4cqw; }
+  .ph .gs .bar::after { content: ""; position: absolute; left: 0; bottom: -1px; width: 84%; height: .45cqw; background: #0a84ff; }
+  .ph .gs .hd { height: 12.4cqw; display: flex; align-items: center; gap: 3cqw; padding: 0 4cqw; border-bottom: 1px solid #ddd; font-size: 3.6cqw; color: #3c4043; }
+  .ph .gs .hd svg { width: 5cqw; height: 5cqw; }
+  .ph .gs .lg { position: absolute; left: 6cqw; top: 31.8cqw; width: 12cqw; height: 12cqw; background: #111; color: #fff; display: grid; place-items: center; font: 7cqw Georgia, serif; }
+  .ph .gs .h1 { position: absolute; left: 6cqw; top: 49.4cqw; font: 400 7.4cqw/1.1 var(--sans); letter-spacing: -.02em; }
+  .ph .gs .h2 { position: absolute; left: 6cqw; top: 64.2cqw; font-size: 3.9cqw; color: #1f1f1f; }
+  .ph .gs .h2 b { color: #0b57d0; font-weight: 500; }
+  .ph .gs .acs { position: absolute; left: 6cqw; right: 6cqw; top: 77.6cqw; }
+  .ph .gs .ac { height: 17.1cqw; display: flex; align-items: center; gap: 3.3cqw; border-bottom: 1px solid #dadce0; }
+  .ph .gs .ac:last-child { height: 13.2cqw; }
+  .ph .gs .ac i { width: 7cqw; height: 7cqw; border-radius: 50%; display: grid; place-items: center; color: #fff; font: 500 3.4cqw var(--sans); font-style: normal; flex: none; }
+  .ph .gs .ac i.o { background: none; color: #444; }
+  .ph .gs .ac i.o svg { width: 6cqw; height: 6cqw; }
+  .ph .gs .ac b { display: block; font-size: 4.1cqw; font-weight: 500; }
+  .ph .gs .ac span { display: block; font-size: 3.6cqw; color: #5f6368; }
+  .ph .gs .ft { position: absolute; left: 6cqw; right: 6cqw; top: 152.6cqw; font-size: 3.5cqw; line-height: 1.45; color: #3c4043; }
+  .ph .gs .ft b { color: #0b57d0; font-weight: 500; }
+  .ph .gs .lng { position: absolute; left: 6cqw; right: 6cqw; top: 174.6cqw; display: flex; justify-content: space-between; font-size: 3.1cqw; color: #1f1f1f; }
+  .ph .gs .tool { position: absolute; left: 0; right: 0; bottom: 0; top: 178.7cqw; background: #f6f6f6; border-top: 1px solid #ccc; display: flex; align-items: flex-start; padding: 3.4cqw 4cqw 0; gap: 14cqw; color: #8e8e93; font-size: 6cqw; line-height: 1; }
+  .ph .gs .tool svg { margin-left: auto; width: 5.4cqw; height: 5.4cqw; color: #0a7aff; }
+  .ph .home.dk { background: #222; }
+
+  /* ② The address that sends the link, and the steps on the computer. */
+  .ph .addr { margin-top: 5.9cqw; height: 13.33cqw; border-radius: 3.6cqw; background: var(--pgreen); color: var(--pink); display: flex; align-items: center;
+    justify-content: space-between; padding: 0 4.6cqw; font: 600 4.36cqw var(--mono); }
+  .ph .addr svg.i { font-size: 5.13cqw; }
+  .ph .steps { margin-top: 6.15cqw; }
+  .ph .stp { display: grid; grid-template-columns: 6.15cqw 1fr; column-gap: 3.6cqw; position: relative; }
+  .ph .stp:not(:last-child) { padding-bottom: 5.13cqw; }
+  .ph .stp:not(:last-child)::before { content: ""; position: absolute; left: 3.07cqw; top: 7.2cqw; bottom: 1cqw; width: 1px; background: rgba(140,140,134,.6); }
+  .ph .stp .rg { width: 6.15cqw; height: 6.15cqw; border-radius: 50%; border: 1px solid rgba(140,140,134,.6); display: grid; place-items: center; font: 3.33cqw var(--mono); color: var(--pfaint); }
+  .ph .stp .t { font: 600 3.85cqw/6.15cqw var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ph .stp .n { font: 3.33cqw/1.45 var(--mono); color: var(--pfaint); padding-top: .5cqw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ph .stp .n b { color: var(--pt); font-weight: 500; }
+  /* The camera's step 1 address: green words with the share mark, 36 pt tall to the thumb (GoAddressButton inline). */
+  .ph .stp .lk { display: flex; align-items: center; gap: 2cqw; height: 9.2cqw; font: 600 3.85cqw var(--mono); color: var(--pgreen); white-space: nowrap; }
+  .ph .stp .lk u { text-decoration-color: rgba(13,188,121,.45); text-underline-offset: .9cqw; }
+  .ph .stp .lk svg.i { font-size: 4.1cqw; }
+
+  /* The camera page (scan_to_connect.dart). */
+  .ph .cam { position: absolute; left: 0; right: 0; top: 23.3cqw; height: 92cqw; overflow: hidden; background: radial-gradient(60cqw 55cqw at 50% 45%, #3b3a35, #121210 75%); }
+  .ph .cam .lap { position: absolute; left: 14%; top: 17%; width: 72%; height: 54%; background: #0d0d0c; border: 1.2cqw solid #2b2b28; border-radius: 1.6cqw;
+    transform: perspective(60cqw) rotateX(9deg); display: grid; place-items: center; }
+  .ph .cam .lap .dlg { background: #1c1c1a; border-radius: 1cqw; padding: 1.8cqw; display: grid; justify-items: center; gap: 1cqw; width: 46%; }
+  .ph .cam .lap .dlg span { font: 600 1.8cqw var(--sans); color: #ddd; }
+  .ph .cam .lap svg { width: 100%; height: auto; display: block; border-radius: .4cqw; }
+  .ph .cam .c { position: absolute; width: 11cqw; height: 11cqw; border: 1.1cqw solid #fff; opacity: .92; }
+  .ph .cam .c.tl { left: 25%; top: 18%; border-right: 0; border-bottom: 0; border-radius: 2.4cqw 0 0 0; }
+  .ph .cam .c.tr { right: 25%; top: 18%; border-left: 0; border-bottom: 0; border-radius: 0 2.4cqw 0 0; }
+  .ph .cam .c.bl { left: 25%; bottom: 18%; border-right: 0; border-top: 0; border-radius: 0 0 0 2.4cqw; }
+  .ph .cam .c.br { right: 25%; bottom: 18%; border-left: 0; border-top: 0; border-radius: 0 0 2.4cqw 0; }
+  .ph .under { position: absolute; left: 4.1cqw; right: 4.1cqw; top: 121cqw; }
+  .ph .under .h { font: 3.33cqw var(--mono); color: var(--pfaint); margin-bottom: 3.1cqw; }
+  .ph .under .h.big { font: 600 4.36cqw var(--mono); color: var(--pt); }
+  .ph .under .steps { margin-top: 0; }
+  .ph .tb { font: 500 3.85cqw var(--mono); color: var(--pt); text-align: center; }
+  .ph .tb.faint { color: var(--pfaint); }
+
+  /* Email sign-in (email_sign_in.dart). */
+  .ph .form { position: absolute; left: 9cqw; right: 9cqw; top: 26.4cqw; }
+  .ph .form .l { font: 3.85cqw/1.4 var(--mono); color: var(--pfaint); margin-top: 3.1cqw; }
+  .ph .field { margin-top: 6cqw; height: 13.33cqw; border-radius: 2.56cqw; background: var(--praised); display: flex; align-items: center; padding: 0 4cqw; font: 4.1cqw var(--mono); color: #85857f; }
+  .ph .digits { margin-top: 6cqw; display: grid; grid-template-columns: repeat(4, 1fr); gap: 3cqw; }
+  .ph .digits span { height: 16cqw; border-radius: 2.56cqw; background: var(--praised); display: grid; place-items: center; font: 600 6.6cqw var(--mono); }
+  .ph .digits span.on { box-shadow: inset 0 0 0 .5cqw var(--pgreen); }
+  .ph .form .btn { margin-top: 5cqw; }
+  .ph .row2 { display: flex; justify-content: space-between; margin-top: 3cqw; font: 500 3.33cqw var(--mono); }
+  .ph .row2 .dim { color: var(--pfaint); }
+  .ph .caret { display: inline-block; width: .5cqw; height: 4.6cqw; background: var(--pgreen); vertical-align: -.9cqw; animation: blink 1s steps(1) infinite; }
+
+  /* The session (terminal_page.dart): a three-line title, the terminal, the mic alone at the foot. */
+  .ph .ttl { position: absolute; left: 4.1cqw; right: 4.1cqw; top: 13.4cqw; z-index: 2; }
+  .ph .ttl b { display: block; font: 600 4.36cqw/1.3 var(--mono); }
+  .ph .ttl span { display: block; font: 3.33cqw/1.45 var(--mono); color: var(--pfaint); }
+  .ph .out { position: absolute; left: 4.1cqw; right: 4.1cqw; top: 33cqw; font: 3.33cqw/1.5 var(--mono); white-space: pre; color: #cfcfc8; overflow: hidden; }
+  .ph .out .u { color: var(--pt); } .ph .out .ok { color: var(--pgreen); } .ph .out .dim { color: #6e6e68; } .ph .out .bl { color: #6d8cff; } .ph .out .cc { color: #e8927c; }
+  .ph .out .box { display: block; border-left: .6cqw solid #6d8cff; background: #222220; padding: 2.4cqw 3cqw; margin: 3cqw 0 1.4cqw; white-space: pre-wrap; }
+  .ph .out .logo { font-size: 2.15cqw; line-height: 1.05; color: #d4d4cc; display: block; width: max-content; margin: 4cqw auto 0; }
+  .ph .out .cur { display: inline-block; width: 1.8cqw; height: 3.6cqw; background: #e5e5e0; vertical-align: -.6cqw; }
+  .ph .sline { position: absolute; left: 4cqw; right: 4cqw; bottom: 30cqw; text-align: center; font: 3.33cqw/1.45 var(--mono); color: var(--pt); background: var(--pg); padding: 2cqw 0 1.5cqw; z-index: 2; }
+  .ph .mic { position: absolute; left: 50%; bottom: 12cqw; width: 15.4cqw; height: 15.4cqw; transform: translateX(-50%); border-radius: 50%; background: #262626;
+    border: .4cqw solid #44443f; display: grid; place-items: center; z-index: 2; box-shadow: 0 1.5cqw 4cqw rgba(0,0,0,.6); font-size: 6.6cqw; color: var(--pt); }
+
+  /* iOS's own alerts, drawn over the app. */
+  .ph .veil { position: absolute; inset: 0; background: rgba(0,0,0,.5); z-index: 8; }
+  .ph .alert { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); width: 69%; background: rgba(48,48,50,.98); border-radius: 3.6cqw; z-index: 9;
+    font-family: var(--sans); text-align: center; overflow: hidden; color: #fff; }
+  .ph .alert .t { font-weight: 600; font-size: 3.9cqw; padding: 4.6cqw 4.2cqw 1.2cqw; line-height: 1.3; }
+  .ph .alert .m { font-size: 3.1cqw; color: #e2e2e2; padding: 0 4.6cqw 4.2cqw; line-height: 1.35; }
+  .ph .alert .b { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid #58585a; }
+  .ph .alert .b span { padding: 3cqw 0; color: #0a84ff; font-size: 4cqw; }
+  .ph .alert .b span + span { border-left: 1px solid #58585a; font-weight: 600; }
+
+  /* Pages with a heading (pairing, unlock, settings). */
+  .ph .pg { position: absolute; left: 4.1cqw; right: 4.1cqw; top: 25cqw; }
+  .ph .disp { font: 600 7.18cqw/1.21 var(--mono); letter-spacing: -.15cqw; }
+  .ph .rowt { font: 3.85cqw/1.45 var(--mono); color: var(--pfaint); margin-top: 3.1cqw; }
+  .ph .meta { font: 3.33cqw/1.45 var(--mono); color: var(--pfaint); }
+  .ph .pwd { margin-top: 2.6cqw; height: 12.3cqw; border-radius: 2.56cqw; background: var(--praised); display: flex; align-items: center; justify-content: space-between; padding: 0 3.6cqw;
+    font: 3.85cqw var(--mono); color: #85857f; }
+  .ph .pwd b { color: var(--pt); font-weight: 500; }
+  .ph .cmd { margin-top: 1.6cqw; border-radius: 2cqw; background: var(--praised); padding: 2.6cqw 3.2cqw; display: flex; justify-content: space-between; font: 3.33cqw var(--mono); }
+  .ph .cmd b { font-weight: 500; color: var(--pgreen); }
+  .ph .ptitle { position: absolute; left: 13cqw; top: 12cqw; height: 11.3cqw; display: flex; align-items: center; font: 600 4.36cqw var(--mono); }
+  .ph .cap2 { font: 3.33cqw var(--mono); color: var(--pfaint); margin: 5.6cqw 1cqw 2cqw; }
+  .ph .grp { background: #222222; border-radius: 3.1cqw; overflow: hidden; }
+  .ph .grp .r { display: flex; align-items: center; gap: 3cqw; padding: 3.4cqw 3.6cqw; font: 3.85cqw var(--mono); border-top: 1px solid rgba(255,255,255,.06); }
+  .ph .grp .r:first-child { border-top: 0; }
+  .ph .grp .r .v { margin-left: auto; color: var(--pfaint); font-size: 3.33cqw; }
+  .ph .grp .r .ch { color: #5c5c58; margin-left: 2cqw; }
+  .ph .grp .r .v + .ch { margin-left: 2cqw; }
+  .ph .grp .r .sp { margin-left: auto; }
+  .ph .ava { width: 9.2cqw; height: 9.2cqw; border-radius: 50%; background: rgba(189,203,220,.18); border: 1px solid rgba(189,203,220,.4); color: #bdcbdc;
+    display: grid; place-items: center; font: 600 4cqw var(--sans); flex: none; }
+  .ph .grp .r .who b { display: block; font-weight: 600; }
+  .ph .grp .r .who span { display: block; font-size: 3.33cqw; color: var(--pfaint); }
+  .ph .dimall { position: absolute; inset: 0; background: rgba(0,0,0,.55); z-index: 8; }
+  .ph .sheet { position: absolute; left: 0; right: 0; bottom: 0; background: #232323; border-radius: 5cqw 5cqw 0 0; padding: 3.2cqw 4.1cqw 12cqw; z-index: 9; }
+  .ph .sheet .grab { width: 10cqw; height: 1.2cqw; border-radius: 1cqw; background: #555; margin: 0 auto 4cqw; }
+  .ph .sheet .sh { font: 3.33cqw var(--mono); color: var(--pfaint); margin: 0 1cqw 2.6cqw; }
+  .ph .sheet .act { display: flex; align-items: center; gap: 3.4cqw; padding: 3.8cqw 3.6cqw; border-radius: 3.1cqw; background: #2c2c2c; font: 500 3.85cqw var(--mono); }
+  .ph .sheet .act.red { color: var(--pred); }
+  .ph .sheet .act svg.i { font-size: 5cqw; }
+  .ph .dlgc { position: absolute; left: 6cqw; right: 6cqw; top: 50%; transform: translateY(-50%); background: #262626; border-radius: 4.4cqw; padding: 5cqw 5cqw 4.4cqw; z-index: 9;
+    border: 1px solid rgba(255,255,255,.08); box-shadow: 0 3cqw 8cqw rgba(0,0,0,.6); }
+  .ph .dlgc .hd { display: flex; gap: 3cqw; align-items: center; }
+  .ph .dlgc .tile { width: 10cqw; height: 10cqw; border-radius: 2.6cqw; background: rgba(241,76,76,.18); color: var(--pred); display: grid; place-items: center; font-size: 5cqw; flex: none; }
+  .ph .dlgc .hd b { display: block; font: 600 4.36cqw var(--mono); }
+  .ph .dlgc .hd span { display: block; font: 3.33cqw var(--mono); color: var(--pfaint); }
+  .ph .dlgc p { font: 3.6cqw/1.45 var(--mono); color: #d5d5cf; margin: 4cqw 0 5cqw; }
+  .ph .dlgc .bb { display: grid; grid-template-columns: 1fr 1fr; gap: 2.6cqw; }
+  .ph .dlgc .bb span { height: 11.3cqw; border-radius: 2.56cqw; display: grid; place-items: center; font: 600 3.85cqw var(--mono); background: #333; }
+  .ph .dlgc .bb span.red { background: var(--pred); color: #1a0505; }
+  .ph .dlgc .bb span.go { background: var(--pgreen); color: var(--pink); }
+
+  /* A macOS window, from the desktop onboarding page (1280 x 800, scaled with cqw). */
+  .win { container-type: inline-size; width: 100%; aspect-ratio: 16 / 10; border-radius: 1cqw; overflow: hidden; position: relative;
+    background: var(--bg); border: 1px solid rgba(255,255,255,.08); box-shadow: 0 2cqw 5cqw rgba(0,0,0,.55); }
+  .win .bar { height: 4.6cqw; display: flex; align-items: center; gap: .6cqw; padding: 0 1.4cqw; border-bottom: 1px solid var(--line); background: #171716; }
+  .dots { display: flex; gap: .65cqw; margin-right: 1.6cqw; }
+  .dots i { width: 1.05cqw; height: 1.05cqw; border-radius: 50%; display: block; }
+  .dots i:nth-child(1) { background: #ff5f57; } .dots i:nth-child(2) { background: #febc2e; } .dots i:nth-child(3) { background: #28c840; }
+  .win .tab { font-size: 1.6cqw; color: var(--muted); padding: .6cqw 1.6cqw; border-radius: .6cqw; white-space: nowrap; }
+  .win .tab.on { background: var(--elev); color: var(--text); }
+  .win .sp { flex: 1; }
+  .win .avatar { width: 2.8cqw; height: 2.8cqw; border-radius: 50%; background: rgba(189,203,220,.18); border: 1px solid rgba(189,203,220,.4); color: #bdcbdc;
+    display: grid; place-items: center; font-size: 1.4cqw; font-weight: 600; }
+  .win .panes { position: absolute; inset: 4.6cqw 0 0 0; display: grid; grid-template-columns: 1.2fr 1fr; gap: 1cqw; padding: 1.4cqw; filter: brightness(.45); }
+  .win .pn { background: #161615; border: 1px solid var(--line); border-radius: .8cqw; font: 1.5cqw/1.6 var(--mono); color: #a9a9a0; padding: 1.4cqw; }
+  .win .pn b { color: #d4d4cc; font-family: var(--sans); font-weight: 600; display: block; margin-bottom: 1cqw; }
+  .addph { position: absolute; left: 50%; top: 54%; transform: translate(-50%, -50%); width: 44cqw; background: var(--surface); border: 1px solid rgba(255,250,240,.14);
+    border-radius: 1.8cqw; padding: 3cqw 3cqw 2.4cqw; box-shadow: 0 3cqw 6cqw rgba(0,0,0,.6); text-align: center; }
+  .addph .t { font-size: 2.6cqw; font-weight: 700; }
+  .addph svg { width: 20cqw; height: 20cqw; display: block; margin: 2.4cqw auto 1.8cqw; border-radius: 1cqw; }
+  .addph .l1 { font-size: 1.8cqw; color: var(--text); }
+  .addph .l2 { font-size: 1.6cqw; color: var(--muted); margin-top: .8cqw; }
+  .addph .l2 u { text-decoration: none; color: #cfcfc6; }
+  .addph .cl { display: inline-block; margin-top: 2.4cqw; font-size: 1.7cqw; padding: .7cqw 2.4cqw; border-radius: .8cqw; background: var(--elev); }
+
+  /* The join, frame by frame. */
+  .timeline { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-top: 12px; max-width: 1000px; }
+  .timeline .tf { background: #141414; border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  .timeline .tf svg { width: 100%; height: auto; display: block; }
+  .timeline .tt { font-size: 13px; color: var(--muted); margin-top: 8px; line-height: 1.45; }
+  .timeline .tt b { display: block; color: var(--text); font-family: var(--mono); font-size: 13px; }
+  .growbox { aspect-ratio: 320 / 300; display: grid; place-items: center; }
+  .growscreen { width: 34%; height: 70%; border-radius: 14px; border: 1.5px solid #ededed;
+    background: radial-gradient(120% 90% at 50% 40%, rgba(13,188,121,.35), rgba(13,188,121,.06) 70%), #0c0c0c; box-shadow: 0 0 28px rgba(13,188,121,.35); }
+  @media (max-width: 860px) { .timeline { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="qr" viewBox="-2 -2 25 25"><rect x="-2" y="-2" width="25" height="25" fill="#fff"/><g fill="#111"><rect x="0" y="0" width="1" height="1"/><rect x="1" y="0" width="1" height="1"/><rect x="2" y="0" width="1" height="1"/><rect x="3" y="0" width="1" height="1"/><rect x="4" y="0" width="1" height="1"/><rect x="5" y="0" width="1" height="1"/><rect x="6" y="0" width="1" height="1"/><rect x="8" y="0" width="1" height="1"/><rect x="10" y="0" width="1" height="1"/><rect x="12" y="0" width="1" height="1"/><rect x="14" y="0" width="1" height="1"/><rect x="15" y="0" width="1" height="1"/><rect x="16" y="0" width="1" height="1"/><rect x="17" y="0" width="1" height="1"/><rect x="18" y="0" width="1" height="1"/><rect x="19" y="0" width="1" height="1"/><rect x="20" y="0" width="1" height="1"/><rect x="0" y="1" width="1" height="1"/><rect x="6" y="1" width="1" height="1"/><rect x="10" y="1" width="1" height="1"/><rect x="14" y="1" width="1" height="1"/><rect x="20" y="1" width="1" height="1"/><rect x="0" y="2" width="1" height="1"/><rect x="2" y="2" width="1" height="1"/><rect x="3" y="2" width="1" height="1"/><rect x="4" y="2" width="1" height="1"/><rect x="6" y="2" width="1" height="1"/><rect x="8" y="2" width="1" height="1"/><rect x="9" y="2" width="1" height="1"/><rect x="11" y="2" width="1" height="1"/><rect x="14" y="2" width="1" height="1"/><rect x="16" y="2" width="1" height="1"/><rect x="17" y="2" width="1" height="1"/><rect x="18" y="2" width="1" height="1"/><rect x="20" y="2" width="1" height="1"/><rect x="0" y="3" width="1" height="1"/><rect x="2" y="3" width="1" height="1"/><rect x="3" y="3" width="1" height="1"/><rect x="4" y="3" width="1" height="1"/><rect x="6" y="3" width="1" height="1"/><rect x="8" y="3" width="1" height="1"/><rect x="11" y="3" width="1" height="1"/><rect x="12" y="3" width="1" height="1"/><rect x="14" y="3" width="1" height="1"/><rect x="16" y="3" width="1" height="1"/><rect x="17" y="3" width="1" height="1"/><rect x="18" y="3" width="1" height="1"/><rect x="20" y="3" width="1" height="1"/><rect x="0" y="4" width="1" height="1"/><rect x="2" y="4" width="1" height="1"/><rect x="3" y="4" width="1" height="1"/><rect x="4" y="4" width="1" height="1"/><rect x="6" y="4" width="1" height="1"/><rect x="8" y="4" width="1" height="1"/><rect x="10" y="4" width="1" height="1"/><rect x="14" y="4" width="1" height="1"/><rect x="16" y="4" width="1" height="1"/><rect x="17" y="4" width="1" height="1"/><rect x="18" y="4" width="1" height="1"/><rect x="20" y="4" width="1" height="1"/><rect x="0" y="5" width="1" height="1"/><rect x="6" y="5" width="1" height="1"/><rect x="9" y="5" width="1" height="1"/><rect x="11" y="5" width="1" height="1"/><rect x="12" y="5" width="1" height="1"/><rect x="14" y="5" width="1" height="1"/><rect x="20" y="5" width="1" height="1"/><rect x="0" y="6" width="1" height="1"/><rect x="1" y="6" width="1" height="1"/><rect x="2" y="6" width="1" height="1"/><rect x="3" y="6" width="1" height="1"/><rect x="4" y="6" width="1" height="1"/><rect x="5" y="6" width="1" height="1"/><rect x="6" y="6" width="1" height="1"/><rect x="8" y="6" width="1" height="1"/><rect x="10" y="6" width="1" height="1"/><rect x="12" y="6" width="1" height="1"/><rect x="14" y="6" width="1" height="1"/><rect x="15" y="6" width="1" height="1"/><rect x="16" y="6" width="1" height="1"/><rect x="17" y="6" width="1" height="1"/><rect x="18" y="6" width="1" height="1"/><rect x="19" y="6" width="1" height="1"/><rect x="20" y="6" width="1" height="1"/><rect x="11" y="7" width="1" height="1"/><rect x="0" y="8" width="1" height="1"/><rect x="1" y="8" width="1" height="1"/><rect x="2" y="8" width="1" height="1"/><rect x="3" y="8" width="1" height="1"/><rect x="6" y="8" width="1" height="1"/><rect x="8" y="8" width="1" height="1"/><rect x="12" y="8" width="1" height="1"/><rect x="13" y="8" width="1" height="1"/><rect x="16" y="8" width="1" height="1"/><rect x="17" y="8" width="1" height="1"/><rect x="18" y="8" width="1" height="1"/><rect x="20" y="8" width="1" height="1"/><rect x="1" y="9" width="1" height="1"/><rect x="2" y="9" width="1" height="1"/><rect x="3" y="9" width="1" height="1"/><rect x="5" y="9" width="1" height="1"/><rect x="11" y="9" width="1" height="1"/><rect x="12" y="9" width="1" height="1"/><rect x="13" y="9" width="1" height="1"/><rect x="15" y="9" width="1" height="1"/><rect x="16" y="9" width="1" height="1"/><rect x="20" y="9" width="1" height="1"/><rect x="1" y="10" width="1" height="1"/><rect x="6" y="10" width="1" height="1"/><rect x="7" y="10" width="1" height="1"/><rect x="8" y="10" width="1" height="1"/><rect x="10" y="10" width="1" height="1"/><rect x="12" y="10" width="1" height="1"/><rect x="16" y="10" width="1" height="1"/><rect x="17" y="10" width="1" height="1"/><rect x="18" y="10" width="1" height="1"/><rect x="1" y="11" width="1" height="1"/><rect x="2" y="11" width="1" height="1"/><rect x="4" y="11" width="1" height="1"/><rect x="7" y="11" width="1" height="1"/><rect x="9" y="11" width="1" height="1"/><rect x="12" y="11" width="1" height="1"/><rect x="13" y="11" width="1" height="1"/><rect x="16" y="11" width="1" height="1"/><rect x="17" y="11" width="1" height="1"/><rect x="1" y="12" width="1" height="1"/><rect x="3" y="12" width="1" height="1"/><rect x="4" y="12" width="1" height="1"/><rect x="6" y="12" width="1" height="1"/><rect x="7" y="12" width="1" height="1"/><rect x="8" y="12" width="1" height="1"/><rect x="11" y="12" width="1" height="1"/><rect x="13" y="12" width="1" height="1"/><rect x="14" y="12" width="1" height="1"/><rect x="15" y="12" width="1" height="1"/><rect x="8" y="13" width="1" height="1"/><rect x="10" y="13" width="1" height="1"/><rect x="11" y="13" width="1" height="1"/><rect x="12" y="13" width="1" height="1"/><rect x="14" y="13" width="1" height="1"/><rect x="16" y="13" width="1" height="1"/><rect x="19" y="13" width="1" height="1"/><rect x="0" y="14" width="1" height="1"/><rect x="1" y="14" width="1" height="1"/><rect x="2" y="14" width="1" height="1"/><rect x="3" y="14" width="1" height="1"/><rect x="4" y="14" width="1" height="1"/><rect x="5" y="14" width="1" height="1"/><rect x="6" y="14" width="1" height="1"/><rect x="10" y="14" width="1" height="1"/><rect x="13" y="14" width="1" height="1"/><rect x="15" y="14" width="1" height="1"/><rect x="17" y="14" width="1" height="1"/><rect x="19" y="14" width="1" height="1"/><rect x="20" y="14" width="1" height="1"/><rect x="0" y="15" width="1" height="1"/><rect x="6" y="15" width="1" height="1"/><rect x="9" y="15" width="1" height="1"/><rect x="14" y="15" width="1" height="1"/><rect x="17" y="15" width="1" height="1"/><rect x="18" y="15" width="1" height="1"/><rect x="0" y="16" width="1" height="1"/><rect x="2" y="16" width="1" height="1"/><rect x="3" y="16" width="1" height="1"/><rect x="4" y="16" width="1" height="1"/><rect x="6" y="16" width="1" height="1"/><rect x="9" y="16" width="1" height="1"/><rect x="14" y="16" width="1" height="1"/><rect x="17" y="16" width="1" height="1"/><rect x="19" y="16" width="1" height="1"/><rect x="0" y="17" width="1" height="1"/><rect x="2" y="17" width="1" height="1"/><rect x="3" y="17" width="1" height="1"/><rect x="4" y="17" width="1" height="1"/><rect x="6" y="17" width="1" height="1"/><rect x="8" y="17" width="1" height="1"/><rect x="9" y="17" width="1" height="1"/><rect x="11" y="17" width="1" height="1"/><rect x="14" y="17" width="1" height="1"/><rect x="15" y="17" width="1" height="1"/><rect x="16" y="17" width="1" height="1"/><rect x="17" y="17" width="1" height="1"/><rect x="19" y="17" width="1" height="1"/><rect x="0" y="18" width="1" height="1"/><rect x="2" y="18" width="1" height="1"/><rect x="3" y="18" width="1" height="1"/><rect x="4" y="18" width="1" height="1"/><rect x="6" y="18" width="1" height="1"/><rect x="8" y="18" width="1" height="1"/><rect x="11" y="18" width="1" height="1"/><rect x="12" y="18" width="1" height="1"/><rect x="13" y="18" width="1" height="1"/><rect x="16" y="18" width="1" height="1"/><rect x="0" y="19" width="1" height="1"/><rect x="6" y="19" width="1" height="1"/><rect x="8" y="19" width="1" height="1"/><rect x="9" y="19" width="1" height="1"/><rect x="10" y="19" width="1" height="1"/><rect x="12" y="19" width="1" height="1"/><rect x="13" y="19" width="1" height="1"/><rect x="15" y="19" width="1" height="1"/><rect x="17" y="19" width="1" height="1"/><rect x="0" y="20" width="1" height="1"/><rect x="1" y="20" width="1" height="1"/><rect x="2" y="20" width="1" height="1"/><rect x="3" y="20" width="1" height="1"/><rect x="4" y="20" width="1" height="1"/><rect x="5" y="20" width="1" height="1"/><rect x="6" y="20" width="1" height="1"/><rect x="8" y="20" width="1" height="1"/><rect x="12" y="20" width="1" height="1"/><rect x="14" y="20" width="1" height="1"/><rect x="15" y="20" width="1" height="1"/><rect x="17" y="20" width="1" height="1"/><rect x="18" y="20" width="1" height="1"/><rect x="19" y="20" width="1" height="1"/></g></symbol>
+  <symbol id="i-qr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="3" width="6" height="6" rx="1"/><rect x="3" y="15" width="6" height="6" rx="1"/><path d="M15 15h3v3M21 15v.01M15 21h6M21 18v3M12 3v3M12 9v3H9M3 12h3"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M16 6l-4-4-4 4"/><path d="M12 2v13"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M19 10.5v1a7 7 0 0 1-14 0v-1M12 18.5V22"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 7l-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><path fill="currentColor" d="M7 10V7a5 5 0 0 1 10 0v3h1a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h1zm2 0h6V7a3 3 0 0 0-6 0v3z"/></symbol>
+  <symbol id="i-reader" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="10" rx="1.5"/><path d="M5 18h14M5 21h10"/></symbol>
+  <symbol id="i-reload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4h-4"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M6.17 18.9a7 7 0 0 1 11.66 0"/></symbol>
+  <symbol id="i-google" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/></symbol>
+  <symbol id="i-apple" viewBox="0 0 814 1000"><path fill="currentColor" d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57-155.5-127C46.7 790.7 0 663 0 541.8c0-194.4 126.4-297.5 250.8-297.5 66.1 0 121.2 43.4 162.7 43.4 39.5 0 101.1-46 176.3-46 28.5 0 130.9 2.6 198.3 99.2zm-234-181.5c31.1-36.9 53.1-88.1 53.1-139.3 0-7.1-.6-14.3-1.9-20.1-50.6 1.9-110.8 33.7-147.1 75.8-28.5 32.4-55.1 83.6-55.1 135.5 0 7.8 1.3 15.6 1.9 18.1 3.2.6 8.4 1.3 13.6 1.3 45.4 0 102.5-30.4 135.5-71.3z"/></symbol>
+  <symbol id="pic-welcome" viewBox="0 0 320 300"><defs><filter id="blur-w" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="6"/></filter><filter id="glow-w" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M112 50 L 208 48 M60 100 L 132 232 M260 98 L 188 232" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.2" stroke-dasharray="2 5"/><path d="M240 98 Q 204 116 184 140" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"/><circle r="2.6" fill="#8dffcf" filter="url(#glow-w)"><animateMotion path="M240 98 Q 204 116 184 140" dur="1.4s" begin="0.47s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.5;1" calcMode="linear"/><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1.4s" begin="0.47s" repeatCount="indefinite"/></circle><path d="M160 232 L 160 206" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"/><circle r="2.6" fill="#8dffcf" filter="url(#glow-w)"><animateMotion path="M160 232 L 160 206" dur="1.4s" begin="0.93s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.5;1" calcMode="linear"/><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1.4s" begin="0.93s" repeatCount="indefinite"/></circle><path d="M96 98 Q 120 116 136 140" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"/><circle r="2.6" fill="#8dffcf" filter="url(#glow-w)"><animateMotion path="M96 98 Q 120 116 136 140" dur="1.4s" begin="0s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.5;1" calcMode="linear"/><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1.4s" begin="0s" repeatCount="indefinite"/></circle><ellipse cx="257" cy="98" rx="48" ry="7" fill="#0dbc79" opacity=".18" filter="url(#blur-w)"/><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="208" y="18" width="98" height="64" rx="6"/><rect x="214" y="24" width="86" height="52" rx="3" fill="#0dbc79" fill-opacity=".10" stroke-opacity=".5"/><path d="M257 82 v12 M240 96 h34"/></g><text x="219" y="42" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9">opencode</text><rect x="264.1" y="35" width="4.6" height="8" fill="#0dbc79"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1s" repeatCount="indefinite"/></rect><ellipse cx="160" cy="288" rx="56" ry="7" fill="#0dbc79" opacity=".18" filter="url(#blur-w)"/><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="108" y="232" width="104" height="23" rx="4"/><rect x="108" y="255" width="104" height="23" rx="4"/><path d="M118 285 h84"/></g><circle cx="200" cy="244" r="1.7" fill="#0dbc79"/><circle cx="200" cy="266" r="1.7" fill="#0dbc79"/><text x="122" y="247" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9">codex</text><rect x="150.75" y="240" width="4.6" height="8" fill="#0dbc79"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1s" repeatCount="indefinite"/></rect><ellipse cx="62" cy="100" rx="54" ry="8" fill="#0dbc79" opacity=".22" filter="url(#blur-w)"/><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="22" width="98" height="64" rx="6"/><rect x="20" y="28" width="86" height="52" rx="3" fill="#0dbc79" fill-opacity=".10" stroke-opacity=".5"/><path d="M4 90 h118 l-8 7 h-102 z"/></g><text x="26" y="44" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9">claude</text><rect x="60.2" y="37" width="4.6" height="8" fill="#0dbc79"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1s" repeatCount="indefinite"/></rect><text x="26" y="56" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9">codex</text><ellipse cx="160" cy="206" rx="34" ry="6" fill="#0dbc79" opacity="0.14" filter="url(#blur-w)"/><rect x="136" y="110" width="48" height="94" rx="10" fill="#0c0c0c" stroke="#EDEDED" stroke-width="1.6"/><rect x="141" y="119" width="38" height="74" rx="5" fill="#0dbc79" fill-opacity="0.05"/><rect x="154" y="113.5" width="12" height="3" rx="1.5" fill="#EDEDED" opacity=".6"/><rect x="146" y="128" width="22" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="136" width="16" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="144" width="26" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="152" width="12" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="160" width="20" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/></symbol>
+  <symbol id="pic-looking" viewBox="0 0 320 300"><defs><filter id="blur-l" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="6"/></filter><filter id="glow-l" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M112 50 L 208 48 M60 100 L 132 232 M260 98 L 188 232" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.2" stroke-dasharray="2 5"/><circle cx="160" cy="157" r="8" fill="none" stroke="#0dbc79" stroke-width="1.2"><animate attributeName="r" values="8;120" dur="2.4s" begin="0.0s" repeatCount="indefinite"/><animate attributeName="opacity" values=".55;0" dur="2.4s" begin="0.0s" repeatCount="indefinite"/></circle><circle cx="160" cy="157" r="8" fill="none" stroke="#0dbc79" stroke-width="1.2"><animate attributeName="r" values="8;120" dur="2.4s" begin="0.8s" repeatCount="indefinite"/><animate attributeName="opacity" values=".55;0" dur="2.4s" begin="0.8s" repeatCount="indefinite"/></circle><circle cx="160" cy="157" r="8" fill="none" stroke="#0dbc79" stroke-width="1.2"><animate attributeName="r" values="8;120" dur="2.4s" begin="1.6s" repeatCount="indefinite"/><animate attributeName="opacity" values=".55;0" dur="2.4s" begin="1.6s" repeatCount="indefinite"/></circle><path d="M240 98 Q 204 116 184 140" fill="none" stroke="#5a5a58" stroke-width="1.4" stroke-dasharray="1.2 4" stroke-linecap="round"/><path d="M160 232 L 160 206" fill="none" stroke="#5a5a58" stroke-width="1.4" stroke-dasharray="1.2 4" stroke-linecap="round"/><path d="M96 98 Q 120 116 136 140" fill="none" stroke="#5a5a58" stroke-width="1.4" stroke-dasharray="1.2 4" stroke-linecap="round"/><g stroke="#EDEDED" opacity=".3" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="208" y="18" width="98" height="64" rx="6"/><rect x="214" y="24" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M257 82 v12 M240 96 h34"/></g><g stroke="#EDEDED" opacity=".3" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="108" y="232" width="104" height="23" rx="4"/><rect x="108" y="255" width="104" height="23" rx="4"/><path d="M118 285 h84"/></g><g stroke="#EDEDED" opacity=".3" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><animate attributeName="opacity" values=".25;.6;.25" dur="2.4s" repeatCount="indefinite"/><rect x="14" y="22" width="98" height="64" rx="6"/><rect x="20" y="28" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M4 90 h118 l-8 7 h-102 z"/></g><ellipse cx="160" cy="206" rx="34" ry="6" fill="#0dbc79" opacity="0.14" filter="url(#blur-l)"/><rect x="136" y="110" width="48" height="94" rx="10" fill="#0c0c0c" stroke="#EDEDED" stroke-width="1.6"/><rect x="141" y="119" width="38" height="74" rx="5" fill="#0dbc79" fill-opacity="0.05"/><rect x="154" y="113.5" width="12" height="3" rx="1.5" fill="#EDEDED" opacity=".6"/><rect x="146" y="128" width="22" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="136" width="16" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="144" width="26" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="152" width="12" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="160" width="20" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/></symbol>
+  <symbol id="pic-joined-oc" viewBox="0 0 320 300"><defs><filter id="blur-f" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="6"/></filter><filter id="glow-f" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M112 50 L 208 48 M60 100 L 132 232 M260 98 L 188 232" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.2" stroke-dasharray="2 5"/><path d="M96 98 Q 120 116 136 140" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"/><circle r="2.6" fill="#8dffcf" filter="url(#glow-f)"><animateMotion path="M96 98 Q 120 116 136 140" dur="0.7s" begin="0s" repeatCount="indefinite"/></circle><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="208" y="18" width="98" height="64" rx="6"/><rect x="214" y="24" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M257 82 v12 M240 96 h34"/></g><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="108" y="232" width="104" height="23" rx="4"/><rect x="108" y="255" width="104" height="23" rx="4"/><path d="M118 285 h84"/></g><ellipse cx="62" cy="100" rx="54" ry="8" fill="#0dbc79" opacity=".22" filter="url(#blur-f)"/><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="22" width="98" height="64" rx="6"/><rect x="20" y="28" width="86" height="52" rx="3" fill="#0dbc79" fill-opacity=".10" stroke-opacity=".5"/><path d="M4 90 h118 l-8 7 h-102 z"/></g><text x="26" y="44" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9">opencode</text><rect x="71.1" y="37" width="4.6" height="8" fill="#0dbc79"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1s" repeatCount="indefinite"/></rect><ellipse cx="160" cy="206" rx="34" ry="6" fill="#0dbc79" opacity="0.28" filter="url(#blur-f)"/><rect x="136" y="110" width="48" height="94" rx="10" fill="#0c0c0c" stroke="#EDEDED" stroke-width="1.6"/><rect x="141" y="119" width="38" height="74" rx="5" fill="#0dbc79" fill-opacity="0.1"/><rect x="154" y="113.5" width="12" height="3" rx="1.5" fill="#EDEDED" opacity=".6"/><rect x="146" y="128" width="22" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="136" width="16" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="144" width="26" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="152" width="12" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="160" width="20" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/></symbol>
+  <symbol id="pic-joined-cc" viewBox="0 0 320 300"><defs><filter id="blur-fc" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="6"/></filter><filter id="glow-fc" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M112 50 L 208 48 M60 100 L 132 232 M260 98 L 188 232" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.2" stroke-dasharray="2 5"/><path d="M96 98 Q 120 116 136 140" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"/><circle r="2.6" fill="#8dffcf" filter="url(#glow-fc)"><animateMotion path="M96 98 Q 120 116 136 140" dur="0.7s" begin="0s" repeatCount="indefinite"/></circle><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="208" y="18" width="98" height="64" rx="6"/><rect x="214" y="24" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M257 82 v12 M240 96 h34"/></g><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="108" y="232" width="104" height="23" rx="4"/><rect x="108" y="255" width="104" height="23" rx="4"/><path d="M118 285 h84"/></g><ellipse cx="62" cy="100" rx="54" ry="8" fill="#0dbc79" opacity=".22" filter="url(#blur-fc)"/><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="22" width="98" height="64" rx="6"/><rect x="20" y="28" width="86" height="52" rx="3" fill="#0dbc79" fill-opacity=".10" stroke-opacity=".5"/><path d="M4 90 h118 l-8 7 h-102 z"/></g><text x="26" y="44" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9">claude</text><rect x="60.4" y="37" width="4.6" height="8" fill="#0dbc79"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1s" repeatCount="indefinite"/></rect><ellipse cx="160" cy="206" rx="34" ry="6" fill="#0dbc79" opacity="0.28" filter="url(#blur-fc)"/><rect x="136" y="110" width="48" height="94" rx="10" fill="#0c0c0c" stroke="#EDEDED" stroke-width="1.6"/><rect x="141" y="119" width="38" height="74" rx="5" fill="#0dbc79" fill-opacity="0.1"/><rect x="154" y="113.5" width="12" height="3" rx="1.5" fill="#EDEDED" opacity=".6"/><rect x="146" y="128" width="22" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="136" width="16" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="144" width="26" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="152" width="12" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="160" width="20" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/></symbol>
+  <symbol id="pic-joined-none" viewBox="0 0 320 300"><defs><filter id="blur-fn" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="6"/></filter><filter id="glow-fn" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M112 50 L 208 48 M60 100 L 132 232 M260 98 L 188 232" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.2" stroke-dasharray="2 5"/><path d="M96 98 Q 120 116 136 140" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"/><circle r="2.6" fill="#8dffcf" filter="url(#glow-fn)"><animateMotion path="M96 98 Q 120 116 136 140" dur="0.7s" begin="0s" repeatCount="indefinite"/></circle><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="208" y="18" width="98" height="64" rx="6"/><rect x="214" y="24" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M257 82 v12 M240 96 h34"/></g><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="108" y="232" width="104" height="23" rx="4"/><rect x="108" y="255" width="104" height="23" rx="4"/><path d="M118 285 h84"/></g><ellipse cx="62" cy="100" rx="54" ry="8" fill="#0dbc79" opacity=".22" filter="url(#blur-fn)"/><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="22" width="98" height="64" rx="6"/><rect x="20" y="28" width="86" height="52" rx="3" fill="#0dbc79" fill-opacity=".10" stroke-opacity=".5"/><path d="M4 90 h118 l-8 7 h-102 z"/></g><text x="26" y="44" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9"></text><rect x="27.5" y="37" width="4.6" height="8" fill="#0dbc79"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1s" repeatCount="indefinite"/></rect><ellipse cx="160" cy="206" rx="34" ry="6" fill="#0dbc79" opacity="0.28" filter="url(#blur-fn)"/><rect x="136" y="110" width="48" height="94" rx="10" fill="#0c0c0c" stroke="#EDEDED" stroke-width="1.6"/><rect x="141" y="119" width="38" height="74" rx="5" fill="#0dbc79" fill-opacity="0.1"/><rect x="154" y="113.5" width="12" height="3" rx="1.5" fill="#EDEDED" opacity=".6"/><rect x="146" y="128" width="22" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="136" width="16" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="144" width="26" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="152" width="12" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="160" width="20" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/></symbol>
+</svg>
+<main>
+  <h1>Mobile onboarding: an account comes first</h1>
+  <p class="lede">The phone's flow for review · 2026-10-14, drawn from the code on <code>feat/mobile-ios-android</code> (<code>1399b887d</code>). You sign in on the first screen,
+    the phone finds your computer, then that computer's session opens. The screens below show each step; names, emails and sessions are examples.
+    Companion to the <a href="../2026-10-08-onboarding-redesign/index.html">desktop onboarding page</a>.</p>
+  <div class="update"><b>The flow:</b>
+    <a href="#welcome">1 · Welcome &amp; sign-in</a> →
+    <a href="#your-computer">2 · Your computer</a> →
+    <a href="#ready">3 · Ready</a> →
+    <a href="#session">4 · Your session</a>.<br>
+    Google or Apple; Continue with email and QR code sit under them as one line of words. No Skip, no sample, no tour.
+    <a href="#existing-users">Phones already in use</a> that are signed out enter at the welcome; signed-in phones open on their last session.</div>
+  <p class="note">Every word on these screens comes from one file, <code>mobile/lib/phone/welcome/onboarding_copy.dart</code>, so the same step reads the same on every screen.</p>
+  <div class="principles">
+    <div><b>One screen, then your work</b>No tour on the phone. The first screen says what Harness does in one line, and two buttons sign you in right there.</div>
+    <div><b>The phone finds the computer</b>"On your computer, go to autonomous.ai/go". Signed in there with the same account, the computer joins and the phone moves on by itself.</div>
+    <div><b>Straight into the session</b>The phone opens the session the computer opened, with one line by the mic. No list to pick from, no tips.</div>
+    <div><b>Nothing else on these screens</b>No page dots, no sample link, no notification prompt. Notifications are asked for after the first thing you send.</div>
+  </div>
+
+  <!-- ===================== 1. WELCOME ===================== -->
+  <h2 id="welcome">1. First launch: the welcome is the sign-in</h2>
+  <p class="lede">The mark shows while the app starts, a second at most and nothing to read. Then one screen: the promise, a picture of three computers around your phone with everything lit,
+    Google and Apple as the only buttons, and the lesser ways in as one line of words under them. There is no Skip. Once an account arrives, the app swaps this screen for home by itself.</p>
+  <div class="flow">
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div style="position:absolute;inset:0;display:grid;place-items:center"><div style="font:600 4.36cqw var(--mono);display:flex;align-items:center">harness<i style="display:inline-block;width:2.3cqw;height:4.6cqw;background:var(--pgreen);margin-left:.5cqw"></i></div></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Boot.</b> The terminal's ground and the mark. No spinner: nothing moves while nothing is asked of you.</p>
+    </div>
+    <div class="arrow"><i>→</i></div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="words w"><h5 class="hl">Manage all your agents on all your computers from your phone.</h5></div>
+        <svg class="pic w" viewBox="0 0 320 300"><use href="#pic-welcome"/></svg>
+        <div class="foot w">
+          <div class="btn goog"><svg class="mk"><use href="#i-google"/></svg>Continue with Google</div>
+          <div class="btn appl"><svg class="mk" style="color:#fff"><use href="#i-apple"/></svg>Continue with Apple</div>
+          <div class="ways"><span class="l"><svg class="i"><use href="#i-mail"/></svg>Continue with email</span><span class="dot">·</span><span class="l"><svg class="i"><use href="#i-qr"/></svg>QR code</span></div>
+        </div>
+        <div class="usage"><span class="box"></span>Share setup and sign-in counts<svg class="i"><use href="#i-info"/></svg></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>① Welcome.</b> Google and Apple in their own colours, the only buttons. Under them, as words: Continue with email · QR code. At the foot, one optional line: Share setup and sign-in counts.</p>
+    </div>
+    <div class="arrow"><i>→</i>Continue with Google</div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="words w"><h5 class="hl">Manage all your agents on all your computers from your phone.</h5></div>
+        <svg class="pic w" viewBox="0 0 320 300"><use href="#pic-welcome"/></svg>
+        <div class="foot w">
+          <div class="btn goog"><span class="spin"></span>Waiting for Google…</div>
+          <div class="btn appl off"><svg class="mk" style="color:#fff"><use href="#i-apple"/></svg>Continue with Apple</div>
+          <div class="quiet"><b style="font-weight:500">Cancel</b></div>
+        </div>
+        <div class="usage"><span class="box"></span>Share setup and sign-in counts<svg class="i"><use href="#i-info"/></svg></div>
+        <div class="veil" style="background:rgba(0,0,0,.3)"></div>
+        <div class="alert light"><div class="t">“harness” Wants to Use “autonomous.ai” to Sign In</div><div class="m">This allows the app and website to share information about you.</div><div class="b"><span>Cancel</span><span>Continue</span></div></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>iOS asks first.</b> The pressed button already says what it waits for; Apple steps back; Cancel takes the line of other ways in, so the foot never changes height.</p>
+    </div>
+  </div>
+  <div class="flow">
+    <div class="step">
+      <div class="ph gsh"><div class="sb"><span>9:41</span><span class="bat"></span></div>
+        <div class="behind"></div>
+        <div class="gs">
+          <div class="bar"><span class="c">Cancel</span><span class="u"><svg><use href="#i-lock"/></svg>accounts.google.com</span><span class="r"><svg><use href="#i-reader"/></svg><svg><use href="#i-reload"/></svg></span></div>
+          <div class="hd"><svg><use href="#i-google"/></svg>Sign in with Google</div>
+          <div class="lg">λ</div>
+          <div class="h1">Choose an account</div>
+          <div class="h2">to continue to <b>Autonomous</b></div>
+          <div class="acs">
+            <div class="ac"><i style="background:#2e7d32">A</i><div><b>Ada Lovelace</b><span>ada@example.com</span></div></div>
+            <div class="ac"><i style="background:#5e35b1">A</i><div><b>Ada at Studio</b><span>ada@studio.example</span></div></div>
+            <div class="ac"><i style="background:#ab47bc">M</i><div><b>Mobile Team</b><span>mobile@example.com</span></div></div>
+            <div class="ac"><i class="o"><svg><use href="#i-user"/></svg></i><div><b>Use another account</b></div></div>
+          </div>
+          <div class="ft">Before using this app, you can review Autonomous’s <b>Privacy Policy</b> and <b>Terms of Service</b>.</div>
+          <div class="lng"><span>English (United States) ▾</span><span>Help</span><span>Privacy</span><span>Terms</span></div>
+          <div class="tool"><span>‹</span><span>›</span><svg><use href="#i-share"/></svg></div>
+        </div>
+        <div class="home dk"></div></div>
+      <p class="cap"><b>Google's page, in the app.</b> A sheet over Harness with Safari's own sign-ins, so Google offers the accounts already on the phone (a Custom Tab on Android). The accounts here are examples.</p>
+    </div>
+    <div class="arrow"><i>→</i>an account</div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="words w"><h5 class="hl">Manage all your agents on all your computers from your phone.</h5></div>
+        <svg class="pic w" viewBox="0 0 320 300"><use href="#pic-welcome"/></svg>
+        <div class="foot w">
+          <div class="btn goog"><span class="spin"></span>Signing in…</div>
+          <div class="btn appl off"><svg class="mk" style="color:#fff"><use href="#i-apple"/></svg>Continue with Apple</div>
+          <div class="ways off"><span class="l"><svg class="i"><use href="#i-mail"/></svg>Continue with email</span><span class="dot">·</span><span class="l"><svg class="i"><use href="#i-qr"/></svg>QR code</span></div>
+        </div>
+        <div class="usage"><span class="box"></span>Share setup and sign-in counts<svg class="i"><use href="#i-info"/></svg></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Back in the app.</b> "Signing in…" until the account arrives, with nothing left to cancel. Then home: <a href="#your-computer">section 2</a>, or <a href="#arrival">section 5</a> when the account already has a computer.</p>
+    </div>
+  </div>
+  <p class="note" style="line-height:1.7"><b>Who sees it:</b> every phone without an account, including phones that were signed out. A phone already signed in skips it and opens on its last session.<br>
+    <b>One picture, in one place:</b> the same drawing is on every onboarding screen and only its state changes: everything lit here, looking on step 2, the laptop lighting on step 3. Words change by rising 8 pt over 250 ms; Reduce Motion makes every change a 200 ms fade.<br>
+    <b>Why a sign-in did not finish</b> takes the headline's place, in red ("✗ …"), until any way in is pressed; then the headline comes back. The picture never moves for it. Cancel on Google's page, or here, says nothing. Android's Back on this screen asks before leaving the app.<br>
+    <b>Share setup and sign-in counts:</b> under every signed-out screen, unchecked by default, for this app session only; it never blocks setup or sign-in. ⓘ says: "Optional for this app session. Help us find setup problems without sharing account details, prompts, or files."<br>
+    <b>What is counted once the account shares product usage:</b> which way in was used (Google, Apple, email or QR code), then each step after sign-in: waiting for a computer, opening its session, the first message, and the answer to the notification prompt.
+    Counts and duration buckets only, with no account, computer, session or message text. The fields are in <a href="../2026-10-14-mobile-app-tracking/index.html"><code>docs/research/2026-10-14-mobile-app-tracking</code></a>.<br>
+    <b>Not here on purpose:</b> the offline sample (Settings ▸ Try the sample, once signed in), tips, page dots.</p>
+
+  <!-- ===================== 1b. QR CODE AND EMAIL ===================== -->
+  <h2 id="ways-in">1b. QR code and email <span class="new">Required</span></h2>
+  <p class="lede">QR code opens the camera on the code a signed-in computer's Add Phone shows. That code signs this phone in to the computer's account with nothing to type, and pairs it with that computer.
+    Continue with email sends a 4-digit code. Both sit in the line under the accounts, and back from either returns to the welcome.</p>
+  <div class="flow">
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div><div class="bk"><svg class="i"><use href="#i-chev"/></svg></div>
+        <div class="cam"><div class="lap"><div class="dlg"><span>Add your phone</span><svg viewBox="-2 -2 25 25" shape-rendering="crispEdges"><use href="#qr"/></svg></div></div><i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i></div>
+        <div class="under">
+          <div class="h">How to get the QR code</div>
+          <div class="steps">
+            <div class="stp"><div class="rg">1</div><div><div class="t">On your computer, go to</div><div class="lk"><u>autonomous.ai/go</u><svg class="i"><use href="#i-share"/></svg></div><div class="n">Install Harness</div></div></div>
+            <div class="stp"><div class="rg">2</div><div><div class="t">Sign in</div></div></div>
+            <div class="stp"><div class="rg">3</div><div><div class="t">Click "Add Phone"</div><div class="n">Harness menu → Add Phone</div></div></div>
+          </div>
+        </div>
+        <div class="usage"><span class="box"></span>Share setup and sign-in counts<svg class="i"><use href="#i-info"/></svg></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>QR code: the camera.</b> The camera says to scan; the three steps under it start from nothing on the computer: get Harness, sign in, open Add Phone.
+        Step 1 says it in ②'s words, with the address as green words rather than ②'s button: a tap sends the link, and the camera stays the biggest thing on the screen. A stray QR in frame does nothing. Back is the only way out.</p>
+    </div>
+    <div class="arrow"><i>→</i>a code read</div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div><div class="bk"><svg class="i"><use href="#i-chev"/></svg></div>
+        <div class="cam"><div class="lap"><div class="dlg"><span>Add your phone</span><svg viewBox="-2 -2 25 25" shape-rendering="crispEdges"><use href="#qr"/></svg></div></div><i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i></div>
+        <div class="under">
+          <div class="h big">Signing in…</div>
+          <div class="h">How to get the QR code</div>
+          <div class="steps">
+            <div class="stp"><div class="rg">1</div><div><div class="t">On your computer, go to</div><div class="lk"><u>autonomous.ai/go</u><svg class="i"><use href="#i-share"/></svg></div><div class="n">Install Harness</div></div></div>
+            <div class="stp"><div class="rg">2</div><div><div class="t">Sign in</div></div></div>
+            <div class="stp"><div class="rg">3</div><div><div class="t">Click "Add Phone"</div><div class="n">Harness menu → Add Phone</div></div></div>
+          </div>
+        </div>
+        <div class="usage"><span class="box"></span>Share setup and sign-in counts<svg class="i"><use href="#i-info"/></svg></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Signing in.</b> The computer's account, nothing typed. The phone then pairs with that computer (<a href="#arrival">section 5</a>).</p>
+    </div>
+    <div class="arrow"><i>→</i>or Continue with email</div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div><div class="bk"><svg class="i"><use href="#i-chev"/></svg></div>
+        <div class="form">
+          <h5 class="hl">Your email</h5>
+          <div class="l">We’ll send you a 4-digit code.</div>
+          <div class="field">ada@example.com<span class="caret" style="margin-left:.4cqw"></span></div>
+          <div class="btn pri">Send code</div>
+        </div>
+        <div class="usage"><span class="box"></span>Share setup and sign-in counts<svg class="i"><use href="#i-info"/></svg></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Your email.</b> A typo is caught before anything is sent: "That doesn’t look like an email address."</p>
+    </div>
+    <div class="arrow"><i>→</i></div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div><div class="bk"><svg class="i"><use href="#i-chev"/></svg></div>
+        <div class="form">
+          <h5 class="hl">Check your email</h5>
+          <div class="l">We sent a 4-digit code to ada@example.com.</div>
+          <div class="digits"><span>4</span><span>8</span><span class="on"></span><span></span></div>
+          <div class="btn pri" style="opacity:.5">Sign in</div>
+          <div class="row2"><span class="dim">Resend in 24s</span><span>Change email</span></div>
+        </div>
+        <div class="usage"><span class="box"></span>Share setup and sign-in counts<svg class="i"><use href="#i-info"/></svg></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Check your email.</b> The fourth digit signs in by itself. Resend unlocks after 30 s.</p>
+    </div>
+  </div>
+  <p class="note" style="line-height:1.7"><b>What the camera can read:</b>
+    an Add Phone code with a sign-in in it signs in and pairs (the pairing is held until that computer appears);
+    an older or expired Add Phone code fills in its email and sends a code, so signing in is the four digits;
+    a computer's own sign-in code (<code>harness login --qr</code>, or the web's "Scan with your phone") is held, and the welcome says <i>"Sign in first, then approve your computer."</i> Once in, home asks for the approval (<a href="#account">section 6</a>).<br>
+    <b>No camera:</b> "Camera access is off" with Open Settings ›, and the camera comes back on the way back; or "No camera on this device". There is no "Use email instead" under this camera any more: Continue with email is one back away, beside QR code.<br>
+    <b>Leaving for another way in</b> takes an open Google or Apple page with it, so it can't sign the phone in behind the step you chose. While that page is up, email and QR code can't be pressed.</p>
+
+  <!-- ===================== 1c. EXISTING USERS ===================== -->
+  <h2 id="existing-users">1c. Phones already in use: the next launch after updating</h2>
+  <p class="lede">Nothing is repeated. The account is the same on every device, so a phone that was signed in stays signed in through the update.</p>
+  <div class="principles">
+    <div><b>Signed in</b>The mark, then your last session, exactly where you left it. No welcome, no "ready" moment, no line by the mic.</div>
+    <div><b>Signed out</b>The welcome above. Sign in once, and the account's computers are there; the phone opens the session in focus (<a href="#arrival">section 5</a>).</div>
+    <div><b>Your work is safe</b>Harnesses run on your computers, not on the phone. Signing out or in never stops one.</div>
+  </div>
+
+  <!-- ===================== 1d. SESSION ENDS ===================== -->
+  <h2 id="session-ended">1d. If your session ends</h2>
+  <p class="lede">The same welcome returns, with why in the headline's place: the sign-out mark in yellow, not red, because you did nothing wrong and signing in again is all there is to do.
+    A sign-out by hand says nothing; a failed sign-in says why, in red. Pressing any way in (Google, Apple, Continue with email, QR code) lets the message go, and the headline comes back.</p>
+  <div class="flow">
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="words w"><div class="said"><svg class="i ic"><use href="#i-logout"/></svg>You were signed out. Sign in again to reach your computers.</div></div>
+        <svg class="pic w" viewBox="0 0 320 300"><use href="#pic-welcome"/></svg>
+        <div class="foot w">
+          <div class="btn goog"><svg class="mk"><use href="#i-google"/></svg>Continue with Google</div>
+          <div class="btn appl"><svg class="mk" style="color:#fff"><use href="#i-apple"/></svg>Continue with Apple</div>
+          <div class="ways"><span class="l"><svg class="i"><use href="#i-mail"/></svg>Continue with email</span><span class="dot">·</span><span class="l"><svg class="i"><use href="#i-qr"/></svg>QR code</span></div>
+        </div>
+        <div class="usage"><span class="box"></span>Share setup and sign-in counts<svg class="i"><use href="#i-info"/></svg></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Session ended.</b> The server refused the saved session for good.</p>
+    </div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="words w"><div class="said"><svg class="i ic"><use href="#i-logout"/></svg>This phone was removed from your account on another device. Sign in again to use it here.</div></div>
+        <svg class="pic w" viewBox="0 0 320 300"><use href="#pic-welcome"/></svg>
+        <div class="foot w">
+          <div class="btn goog"><svg class="mk"><use href="#i-google"/></svg>Continue with Google</div>
+          <div class="btn appl"><svg class="mk" style="color:#fff"><use href="#i-apple"/></svg>Continue with Apple</div>
+          <div class="ways"><span class="l"><svg class="i"><use href="#i-mail"/></svg>Continue with email</span><span class="dot">·</span><span class="l"><svg class="i"><use href="#i-qr"/></svg>QR code</span></div>
+        </div>
+        <div class="usage"><span class="box"></span>Share setup and sign-in counts<svg class="i"><use href="#i-info"/></svg></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Removed elsewhere.</b> Another device took this phone out of Your devices.</p>
+    </div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="words w"><div class="said err">✗ Could not open the sign-in page. Check your connection and try again.</div></div>
+        <svg class="pic w" viewBox="0 0 320 300"><use href="#pic-welcome"/></svg>
+        <div class="foot w">
+          <div class="btn goog"><svg class="mk"><use href="#i-google"/></svg>Continue with Google</div>
+          <div class="btn appl"><svg class="mk" style="color:#fff"><use href="#i-apple"/></svg>Continue with Apple</div>
+          <div class="ways"><span class="l"><svg class="i"><use href="#i-mail"/></svg>Continue with email</span><span class="dot">·</span><span class="l"><svg class="i"><use href="#i-qr"/></svg>QR code</span></div>
+        </div>
+        <div class="usage"><span class="box"></span>Share setup and sign-in counts<svg class="i"><use href="#i-info"/></svg></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>A sign-in that failed.</b> The service's own reason, in red. The buttons are ready to try again.</p>
+    </div>
+  </div>
+  <p class="note"><b>Offline is different:</b> a phone that is signed in stays signed in through a network outage and reconnects by itself. Only a session the server rejects, a removal from another device, or Sign out brings the welcome back.
+    The tabs and kept screens are the account's, so they go with it; harnesses keep running on the computers.</p>
+
+  <!-- ===================== 2. YOUR COMPUTER ===================== -->
+  <h2 id="your-computer">2. After sign-in: an account with no computer yet</h2>
+  <p class="lede">The welcome's picture eases into this one: three dashed computers, the laptop breathing, rings going out from the phone. The address is the button: it opens the share sheet (AirDrop to the Mac beside you, or a message to yourself).
+    Under it, what to do there. The phone asks the account for its computers every 5 s; the first one to appear moves the screen on by itself.</p>
+  <div class="flow">
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <svg class="pic g" viewBox="0 0 320 300"><use href="#pic-looking"/></svg>
+        <div class="st g">Looking for your computer<span class="cur"></span></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Just signed in.</b> The account's computers are still on their way. No headline yet; the picture carries straight on from the welcome.</p>
+    </div>
+    <div class="arrow"><i>→</i>none yet</div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div><div class="gear"><svg class="i"><use href="#i-gear"/></svg></div>
+        <div class="words">
+          <h5 class="hl">On your computer, go to</h5>
+          <div class="addr">autonomous.ai/go<svg class="i"><use href="#i-share"/></svg></div>
+          <div class="steps">
+            <div class="stp"><div class="rg">1</div><div><div class="t">Install Harness</div></div></div>
+            <div class="stp"><div class="rg">2</div><div><div class="t">Sign in</div><div class="n">Use ada@example.com</div><div class="n" style="padding-top:0">Not you? <b>Sign out</b></div></div></div>
+          </div>
+        </div>
+        <svg class="pic g" viewBox="0 0 320 300"><use href="#pic-looking"/></svg>
+        <div class="st g">Looking for your computer<span class="cur"></span></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>② Your computer.</b> Settings at the top right is the way out. "Not you? Sign out" sits under the account it asks about, because the wrong account is where people get stuck.</p>
+    </div>
+    <div class="arrow"><i>→</i>Not you? Sign out</div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div><div class="gear"><svg class="i"><use href="#i-gear"/></svg></div>
+        <div class="words">
+          <h5 class="hl">On your computer, go to</h5>
+          <div class="addr">autonomous.ai/go<svg class="i"><use href="#i-share"/></svg></div>
+          <div class="steps">
+            <div class="stp"><div class="rg">1</div><div><div class="t">Install Harness</div></div></div>
+            <div class="stp"><div class="rg">2</div><div><div class="t">Sign in</div><div class="n">Use ada@example.com</div><div class="n" style="padding-top:0">Not you? <b>Sign out</b></div></div></div>
+          </div>
+        </div>
+        <svg class="pic g" viewBox="0 0 320 300"><use href="#pic-looking"/></svg>
+        <div class="dimall"></div>
+        <div class="dlgc"><div class="hd"><div class="tile"><svg class="i"><use href="#i-logout"/></svg></div><div><b>Sign out?</b><span>ada@example.com</span></div></div>
+          <p>When you sign in again, your other devices will see this phone as a new device.</p>
+          <div class="bb"><span>Cancel</span><span class="red">Sign out</span></div></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Asked first.</b> With no computer there is no "your harnesses keep running" to say, so the sentence is shorter than in Settings.</p>
+    </div>
+  </div>
+  <p class="note" style="line-height:1.7"><b>On the computer:</b> <code>autonomous.ai/go</code> sends on to Harness's download page, which picks the file for the computer that opens it. While ② is up, the phone also offers the page by Handoff, so a Mac signed in to the same Apple account shows it in its Dock.
+    The desktop then runs its own tour and its required sign-in (<a href="../2026-10-08-onboarding-redesign/index.html#signin-step">desktop page, section 1b</a>). Signed in there with this account, the computer joins it.<br>
+    <b>A slow wait:</b> on the first screen above, Settings appears at the top right and "See your computers ›" at the foot once the wait is slow. A wait is never without a way out.<br>
+    <b>A list that couldn't be read is not an empty account:</b> if the first fetch fails, the phone shows Computers with its reason and Try again, not ②.<br>
+    <b>Never the word "network",</b> no sample link, no tips. The account line under step 2 goes away once the phone can add the computer itself (<a href="#next">Next</a>).</p>
+
+  <!-- ===================== 3. READY ===================== -->
+  <h2 id="ready">3. The computer joins: "MacBook Pro is ready."</h2>
+  <p class="lede">About two seconds, on the same picture: the laptop draws itself, links to the phone and lights, and the agent about to open types its name on it. The headline names the computer as the account knows it. Then its session opens by itself; a tap goes sooner.</p>
+  <div class="flow">
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="words"><h5 class="hl">MacBook Pro is ready.</h5></div>
+        <svg class="pic g" viewBox="0 0 320 300"><use href="#pic-joined-oc"/></svg>
+        <div class="home"></div></div>
+      <p class="cap"><b>The moment.</b> Three quickening taps while the outline draws, then the success buzz and the only sound in setup: two soft glass notes.</p>
+    </div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div><div class="gear"><svg class="i"><use href="#i-gear"/></svg></div>
+        <div class="words"><h5 class="hl">MacBook Pro is ready.</h5></div>
+        <svg class="pic g" viewBox="0 0 320 300"><use href="#pic-joined-none"/></svg>
+        <div class="st g">Waiting for its first session<span class="cur"></span></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>No session yet.</b> The desktop's tour may still be fetching agents. The phone holds here for up to 90 s, says what it waits on, and gives Settings back.</p>
+    </div>
+  </div>
+  <h3>Frame by frame (about two seconds; a tap skips it)</h3>
+  <div class="timeline"><div class="tf"><svg viewBox="0 0 320 300" xmlns="http://www.w3.org/2000/svg"><defs><filter id="blur-t0" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="6"/></filter><filter id="glow-t0" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M112 50 L 208 48 M60 100 L 132 232 M260 98 L 188 232" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.2" stroke-dasharray="2 5"/><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="208" y="18" width="98" height="64" rx="6"/><rect x="214" y="24" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M257 82 v12 M240 96 h34"/></g><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="108" y="232" width="104" height="23" rx="4"/><rect x="108" y="255" width="104" height="23" rx="4"/><path d="M118 285 h84"/></g><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="22" width="98" height="64" rx="6" stroke-dasharray="170 400"/><rect x="20" y="28" width="86" height="52" rx="3" fill="none" stroke-opacity=".5" stroke-dasharray="170 400"/><path d="M4 90 h118 l-8 7 h-102 z" stroke-dasharray="170 400"/></g><ellipse cx="160" cy="206" rx="34" ry="6" fill="#0dbc79" opacity="0.14" filter="url(#blur-t0)"/><rect x="136" y="110" width="48" height="94" rx="10" fill="#0c0c0c" stroke="#EDEDED" stroke-width="1.6"/><rect x="141" y="119" width="38" height="74" rx="5" fill="#0dbc79" fill-opacity="0.05"/><rect x="154" y="113.5" width="12" height="3" rx="1.5" fill="#EDEDED" opacity=".6"/><rect x="146" y="128" width="22" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="136" width="16" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="144" width="26" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="152" width="12" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="160" width="20" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/></svg><div class="tt"><b>0 ms</b>The laptop's outline draws itself solid, with three quickening taps.</div></div><div class="tf"><svg viewBox="0 0 320 300" xmlns="http://www.w3.org/2000/svg"><defs><filter id="blur-t1" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="6"/></filter><filter id="glow-t1" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M112 50 L 208 48 M60 100 L 132 232 M260 98 L 188 232" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.2" stroke-dasharray="2 5"/><path d="M96 98 Q 120 116 136 140" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="40 200"/><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="208" y="18" width="98" height="64" rx="6"/><rect x="214" y="24" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M257 82 v12 M240 96 h34"/></g><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="108" y="232" width="104" height="23" rx="4"/><rect x="108" y="255" width="104" height="23" rx="4"/><path d="M118 285 h84"/></g><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="22" width="98" height="64" rx="6"/><rect x="20" y="28" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M4 90 h118 l-8 7 h-102 z"/></g><ellipse cx="160" cy="206" rx="34" ry="6" fill="#0dbc79" opacity="0.14" filter="url(#blur-t1)"/><rect x="136" y="110" width="48" height="94" rx="10" fill="#0c0c0c" stroke="#EDEDED" stroke-width="1.6"/><rect x="141" y="119" width="38" height="74" rx="5" fill="#0dbc79" fill-opacity="0.05"/><rect x="154" y="113.5" width="12" height="3" rx="1.5" fill="#EDEDED" opacity=".6"/><rect x="146" y="128" width="22" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="136" width="16" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="144" width="26" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="152" width="12" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="160" width="20" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/></svg><div class="tt"><b>350 ms</b>The link draws from the laptop to the phone.</div></div><div class="tf"><svg viewBox="0 0 320 300" xmlns="http://www.w3.org/2000/svg"><defs><filter id="blur-t2" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="6"/></filter><filter id="glow-t2" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M112 50 L 208 48 M60 100 L 132 232 M260 98 L 188 232" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.2" stroke-dasharray="2 5"/><path d="M96 98 Q 120 116 136 140" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"/><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="208" y="18" width="98" height="64" rx="6"/><rect x="214" y="24" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M257 82 v12 M240 96 h34"/></g><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="108" y="232" width="104" height="23" rx="4"/><rect x="108" y="255" width="104" height="23" rx="4"/><path d="M118 285 h84"/></g><ellipse cx="62" cy="100" rx="54" ry="8" fill="#0dbc79" opacity=".22" filter="url(#blur-t2)"/><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="22" width="98" height="64" rx="6"/><rect x="20" y="28" width="86" height="52" rx="3" fill="#0dbc79" fill-opacity=".10" stroke-opacity=".5"/><path d="M4 90 h118 l-8 7 h-102 z"/></g><text x="26" y="44" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9"></text><rect x="27.5" y="37" width="4.6" height="8" fill="#0dbc79"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1s" repeatCount="indefinite"/></rect><ellipse cx="160" cy="206" rx="34" ry="6" fill="#0dbc79" opacity="0.14" filter="url(#blur-t2)"/><rect x="136" y="110" width="48" height="94" rx="10" fill="#0c0c0c" stroke="#EDEDED" stroke-width="1.6"/><rect x="141" y="119" width="38" height="74" rx="5" fill="#0dbc79" fill-opacity="0.05"/><rect x="154" y="113.5" width="12" height="3" rx="1.5" fill="#EDEDED" opacity=".6"/><rect x="146" y="128" width="22" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="136" width="16" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="144" width="26" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="152" width="12" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/><rect x="146" y="160" width="20" height="2.4" rx="1.2" fill="#0dbc79" opacity="0.85"/></svg><div class="tt"><b>600 ms</b>The screen lights: a success buzz, and the only sound in setup, two soft glass notes.</div></div><div class="tf"><svg viewBox="0 0 320 300" xmlns="http://www.w3.org/2000/svg"><defs><filter id="blur-t3" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="6"/></filter><filter id="glow-t3" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur stdDeviation="1.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path d="M112 50 L 208 48 M60 100 L 132 232 M260 98 L 188 232" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.2" stroke-dasharray="2 5"/><path d="M96 98 Q 120 116 136 140" fill="none" stroke="#0dbc79" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"/><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="208" y="18" width="98" height="64" rx="6"/><rect x="214" y="24" width="86" height="52" rx="3" fill="none" stroke-opacity=".5"/><path d="M257 82 v12 M240 96 h34"/></g><g stroke="#EDEDED" opacity=".2" stroke-dasharray="3 3" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="108" y="232" width="104" height="23" rx="4"/><rect x="108" y="255" width="104" height="23" rx="4"/><path d="M118 285 h84"/></g><ellipse cx="62" cy="100" rx="54" ry="8" fill="#0dbc79" opacity=".22" filter="url(#blur-t3)"/><g stroke="#EDEDED" opacity="1" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="22" width="98" height="64" rx="6"/><rect x="20" y="28" width="86" height="52" rx="3" fill="#0dbc79" fill-opacity=".10" stroke-opacity=".5"/><path d="M4 90 h118 l-8 7 h-102 z"/></g><text x="26" y="44" fill="#0dbc79" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="9">opencode</text><rect x="71.1" y="37" width="4.6" height="8" fill="#0dbc79"><animate attributeName="opacity" values="1;1;0;0" keyTimes="0;.5;.5;1" dur="1s" repeatCount="indefinite"/></rect><ellipse cx="160" cy="206" rx="34" ry="6" fill="#0dbc79" opacity="0.28" filter="url(#blur-t3)"/><rect x="136" y="110" width="48" height="94" rx="10" fill="#0c0c0c" stroke="#EDEDED" stroke-width="1.6"/><rect x="141" y="119" width="38" height="74" rx="5" fill="#0dbc79" fill-opacity="0.1"/><rect x="154" y="113.5" width="12" height="3" rx="1.5" fill="#EDEDED" opacity=".6"/><rect x="146" y="128" width="22" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="136" width="16" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="144" width="26" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="152" width="12" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><rect x="146" y="160" width="20" height="2.4" rx="1.2" fill="#0dbc79" opacity="1"/><circle cx="136" cy="140" r="2.8" fill="#8dffcf" filter="url(#glow-t3)"/></svg><div class="tt"><b>800 ms</b>The agent's name types itself on the laptop; the first packet lands on the phone, which brightens.</div></div><div class="tf"><div class="growbox"><div class="growscreen"></div></div><div class="tt"><b>2.2 s</b>The session grows in and takes the screen. A tap goes there sooner.</div></div></div>
+  <p class="note">Reduce Motion: no packets or rings, and every change is a 200 ms fade. Muted: no sound; the haptics stay. A computer that joins while the app is in the background gets its moment the next time the app is opened.
+    A computer that turns out to want a password, or that the account says is down, ends the wait: what home shows for those is what to do about them (<a href="#arrival">section 5</a>).</p>
+
+  <!-- ===================== 4. SESSION ===================== -->
+  <h2 id="session">4. Your session: one line by the mic</h2>
+  <p class="lede">The phone has no first-session logic of its own: it opens the session the computer opened and says one line over the mic until the first thing is sent. Every other session is in Find, a swipe right away.</p>
+  <div class="flow">
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="ttl"><b>first-project</b><span>MacBook Pro:first-project</span></div>
+        <div class="out"><span class="logo">                                 ▄
+█▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+█  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀</span><span class="box"><span class="u">make a small web page that shows today's date</span><span class="cur" style="margin-left:.6cqw"></span>
+<span class="bl">Build</span> <span class="dim">·</span> Muse Spark 1.3 Free</span><span class="dim"> ctrl+p commands</span></div>
+        <div class="sline">Send it, or say anything.</div>
+        <div class="mic"><svg class="i"><use href="#i-mic"/></svg></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>New to coding agents.</b> OpenCode with the desktop's starter task typed in, not sent.</p>
+    </div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="ttl"><b>rate-limits</b><span>MacBook Pro:api-server</span><span>⑂ rate-limits</span></div>
+        <div class="out" style="top:38cqw"><span class="dim">yesterday 18:02</span>
+<span class="u">&gt; add per-key rate limits</span>
+
+<span class="ok">⏺</span> <span class="u">Write(src/limits.ts)</span>
+  <span class="dim">⎿  +64 lines</span>
+
+<span class="ok">⏺</span> All 214 tests pass. Want me
+  to write the migration?
+
+<span class="u">&gt;</span> <span class="cur"></span></div>
+        <div class="sline">Pick up where you left off.</div>
+        <div class="mic"><svg class="i"><use href="#i-mic"/></svg></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Already uses Claude Code or Codex.</b> Their latest conversation, resumed where they left it.</p>
+    </div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="ttl"><b>my-app</b><span>MacBook Pro:my-app</span></div>
+        <div class="out"><span class="cc">╭───────────────────────────────╮</span>
+<span class="cc">│</span> <span class="cc">✻</span> <span class="u">Welcome to Claude Code!</span>     <span class="cc">│</span>
+<span class="cc">│</span>   <span class="dim">/help for help</span>              <span class="cc">│</span>
+<span class="cc">│</span>   <span class="dim">cwd: ~/my-app</span>               <span class="cc">│</span>
+<span class="cc">╰───────────────────────────────╯</span>
+
+<span class="u">&gt;</span> <span class="cur"></span></div>
+        <div class="sline">Say what to build.</div>
+        <div class="mic"><svg class="i"><use href="#i-mic"/></svg></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Agents, but no past sessions.</b> A fresh session at an empty prompt.</p>
+    </div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="ttl"><b>docs-review</b><span>studio:harness</span><span>⑂ main</span></div>
+        <div class="out" style="top:38cqw"><span class="ok">⏺</span> <span class="u">Update(docs/onboarding.html)</span>
+  <span class="dim">⎿  +41 −12</span>
+
+<span class="ok">⏺</span> The page is ready for
+  review. Push it?
+
+<span class="u">&gt;</span> <span class="cur"></span></div>
+        <div class="sline">Talk to it.</div>
+        <div class="mic"><svg class="i"><use href="#i-mic"/></svg></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Harness was already on the computer.</b> The session most recently in use there, whatever it is.</p>
+    </div>
+  </div>
+  <div class="tablewrap"><table>
+    <tr><th>Who</th><th>The desktop's first tab</th><th>The phone opens</th><th>By the mic, once</th></tr>
+    <tr><td>New to coding agents</td><td>OpenCode with a starter task typed, not sent; Codex and Claude Code beside it on their own sign-in</td><td>OpenCode, the task waiting</td><td class="m">Send it, or say anything.</td></tr>
+    <tr><td>Already uses Claude Code or Codex</td><td>Their most recently active conversations, resumed</td><td>The most recent one, history and all</td><td class="m">Pick up where you left off.</td></tr>
+    <tr><td>Has agents, no past sessions</td><td>A fresh session for each agent</td><td>That agent, at an empty prompt</td><td class="m">Say what to build.</td></tr>
+    <tr><td>Harness already on the computer</td><td>Nothing changes</td><td>The session most recently in use</td><td class="m">Talk to it.</td></tr>
+  </table></div>
+
+  <h3>After the first send: notifications</h3>
+  <div class="flow">
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="ttl"><b>rate-limits</b><span>MacBook Pro:api-server</span><span>⑂ rate-limits</span></div>
+        <div class="out" style="top:38cqw"><span class="ok">⏺</span> All 214 tests pass. Want me
+  to write the migration?
+
+<span class="u">&gt; yes, and run it on staging</span>
+
+<span class="ok">⏺</span> <span class="u">Write(migrations/0043.sql)</span></div>
+        <div class="mic"><svg class="i"><use href="#i-mic"/></svg></div>
+        <div class="veil"></div>
+        <div class="alert"><div class="t">“Harness” Would Like to Send You Notifications</div><div class="m">Notifications may include alerts, sounds, and icon badges. These can be configured in Settings.</div><div class="b"><span>Don’t Allow</span><span>Allow</span></div></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>The system's own prompt,</b> 1.2 s after the first thing this phone sends to a harness, once per install. Not during setup.</p>
+    </div>
+  </div>
+  <p class="note" style="line-height:1.7"><b>Which session:</b> after ②, the computer set up for this phone; signed in to an account that already has computers, the first of them to be ready. The phone opens the session most recently in use there.<br>
+    <b>The line</b> sits centred over the mic in the terminal's ground and goes with the first send. It is never shown in the sample.<br>
+    <b>No tips before the first look.</b> The four Focus tips used to come over the first session, then the notification prompt. Now neither: the tips come back only from Settings ▸ Show the tips again.<br>
+    <b>A computer linked by its password</b> (not by sign-in) opens on "Pick up where you left off", a list of every session to tap into, rather than guessing one.</p>
+
+  <!-- ===================== 5. ARRIVAL ===================== -->
+  <h2 id="arrival">5. Arrival: someone with Harness already on a computer</h2>
+  <p class="lede">The fastest route. The computer is already on the account, so there is no step 2: after signing in, the phone has the computer's moment and opens its session. With the Add Phone code it is one scan and nothing typed.</p>
+  <div class="flow wide">
+    <div class="step mac">
+      <div class="win">
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="tab on">harness</span><span class="tab">docs</span><span class="sp"></span><span class="avatar">A</span></div>
+        <div class="panes"><div class="pn"><b>Claude Code · docs-review</b>⏺ Update(docs/onboarding.html)<br>&nbsp;&nbsp;⎿ +41 −12<br><br>⏺ The page is ready for review. Push it?</div><div class="pn"><b>Codex · api-server</b>• Tracing the 9am spike…</div></div>
+        <div class="addph"><div class="t">Add your phone</div><svg viewBox="-2 -2 25 25" shape-rendering="crispEdges"><use href="#qr"/></svg>
+          <div class="l1">Scan with the Harness app.</div><div class="l2">No app yet? <u>App Store</u> · <u>Google Play</u></div><span class="cl">Close</span></div>
+      </div>
+      <p class="cap"><b>On the Mac: Add Phone.</b> In the Harness menu, the avatar menu, and the phone icon in the tab row until the account has a phone. When the phone arrives it turns to "Ada's iPhone is ready."</p>
+    </div>
+    <div class="arrow"><i>→</i>QR code</div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="pg" style="top:16cqw"><div class="disp">Connecting to<br>MacBook Pro…</div><div class="rowt">Keep “Add Phone” open on MacBook Pro.</div></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Pairing with the code.</b> Signed in by the scan, the phone pairs with that computer: no password. If it fails: the reason in red, Scan again, and Use its password instead.</p>
+    </div>
+  </div>
+  <div class="flow">
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="words"><h5 class="hl">MacBook Pro is ready.</h5></div>
+        <svg class="pic g" viewBox="0 0 320 300"><use href="#pic-joined-cc"/></svg>
+        <div class="home"></div></div>
+      <p class="cap"><b>The moment,</b> the same as for a new computer.</p>
+    </div>
+    <div class="arrow"><i>→</i></div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div>
+        <div class="ttl"><b>docs-review</b><span>studio:harness</span><span>⑂ main</span></div>
+        <div class="out" style="top:38cqw"><span class="ok">⏺</span> <span class="u">Update(docs/onboarding.html)</span>
+  <span class="dim">⎿  +41 −12</span>
+
+<span class="ok">⏺</span> The page is ready for
+  review. Push it?
+
+<span class="u">&gt;</span> <span class="cur"></span></div>
+        <div class="sline">Talk to it.</div>
+        <div class="mic"><svg class="i"><use href="#i-mic"/></svg></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>The session on the Mac,</b> live. "Yes, push it."</p>
+    </div>
+  </div>
+  <p class="note">With Google or Apple instead of the scan, the same account reaches the same computer: the welcome hands over to "Looking for your computer", then the moment, then the session. Signing in is what makes the account's devices trust each other, so there is no pairing step at all.</p>
+
+  <h3>A computer that wants its password</h3>
+  <div class="flow">
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div><div class="bk"><svg class="i"><use href="#i-chev"/></svg></div>
+        <div class="pg">
+          <div class="disp" style="font-size:6.4cqw">Unlock M2</div>
+          <div class="rowt" style="font-size:3.6cqw">In Harness on M2, open Add Phone…, then scan the QR code. On a Mac, it’s in the Harness menu.</div>
+          <div class="btn pri" style="margin-top:5cqw">Scan its code</div>
+          <div class="meta" style="margin-top:6cqw">or enter its Harness phone password</div>
+          <div class="meta">For a server, or a computer without the Harness app open.</div>
+          <div class="pwd"><span>Phone password</span><b>Show</b></div>
+          <div style="text-align:right;margin-top:2.4cqw;font:600 3.85cqw var(--mono);color:var(--pgreen)">Unlock</div>
+          <div class="meta" style="margin-top:4cqw">Forgot it, or never set one? In Harness on M2, open Machines (⌘M on a Mac), choose M2, then Password.</div>
+          <div class="meta" style="margin-top:2.4cqw">On a server, run this on M2:</div>
+          <div class="cmd"><span>$ harness remote-password set</span><b>Copy</b></div>
+        </div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Unlock.</b> The scan first, the password under it for a server. With one such computer and nothing else, home is this page itself, not a list of one.</p>
+    </div>
+  </div>
+
+  <!-- ===================== 6. ACCOUNT ===================== -->
+  <h2 id="account">6. Your account on the phone</h2>
+  <p class="lede">Settings opens on who is signed in. The account row's sheet holds Sign out, which asks first: signing out takes this phone's key off the account, and signing in again makes a new one that your other devices announce as new.</p>
+  <div class="flow">
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div><div class="bk"><svg class="i"><use href="#i-chev"/></svg></div><div class="ptitle">Settings</div>
+        <div class="pg" style="top:22cqw">
+          <div class="cap2">Account</div>
+          <div class="grp">
+            <div class="r"><span class="ava">A</span><span class="who"><b>Ada</b><span>ada@example.com</span></span><span class="sp"></span><span class="ch">›</span></div>
+            <div class="r">Usage<span class="sp"></span><span class="ch">›</span></div>
+            <div class="r">Privacy<span class="sp"></span><span class="ch">›</span></div>
+            <div class="r">Computers<span class="sp"></span><span class="ch">›</span></div>
+            <div class="r">Connectors<span class="sp"></span><span class="ch">›</span></div>
+            <div class="r">Sign in a computer<span class="sp"></span><span class="ch">›</span></div>
+            <div class="r">Your devices<span class="sp"></span><span class="ch">›</span></div>
+            <div class="r">Notifications<span class="sp"></span><span class="ch">›</span></div>
+            <div class="r">Phone name<span class="v">Ada’s iPhone</span><span class="ch">›</span></div>
+          </div>
+          <div class="cap2">Terminal</div>
+        </div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Settings.</b> Your initial in a circle, your name and email. Everything about the account's computers is in this one group.</p>
+    </div>
+    <div class="arrow"><i>→</i>the account row</div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div><div class="bk"><svg class="i"><use href="#i-chev"/></svg></div><div class="ptitle">Settings</div>
+        <div class="pg" style="top:22cqw">
+          <div class="cap2">Account</div>
+          <div class="grp">
+            <div class="r"><span class="ava">A</span><span class="who"><b>Ada</b><span>ada@example.com</span></span><span class="sp"></span><span class="ch">›</span></div>
+            <div class="r">Usage<span class="sp"></span><span class="ch">›</span></div>
+            <div class="r">Privacy<span class="sp"></span><span class="ch">›</span></div>
+            <div class="r">Computers<span class="sp"></span><span class="ch">›</span></div>
+          </div>
+        </div>
+        <div class="dimall"></div>
+        <div class="sheet"><div class="grab"></div><div class="sh">ada@example.com</div><div class="act red"><svg class="i"><use href="#i-logout"/></svg>Sign out</div></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>The account's sheet.</b> One action.</p>
+    </div>
+    <div class="arrow"><i>→</i></div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div><div class="bk"><svg class="i"><use href="#i-chev"/></svg></div><div class="ptitle">Settings</div>
+        <div class="pg" style="top:22cqw">
+          <div class="cap2">Account</div>
+          <div class="grp">
+            <div class="r"><span class="ava">A</span><span class="who"><b>Ada</b><span>ada@example.com</span></span><span class="sp"></span><span class="ch">›</span></div>
+            <div class="r">Usage<span class="sp"></span><span class="ch">›</span></div>
+          </div>
+        </div>
+        <div class="dimall"></div>
+        <div class="dlgc"><div class="hd"><div class="tile"><svg class="i"><use href="#i-logout"/></svg></div><div><b>Sign out?</b><span>ada@example.com</span></div></div>
+          <p>Your harnesses keep running on your computers. When you sign in again, your other devices will see this phone as a new device.</p>
+          <div class="bb"><span>Cancel</span><span class="red">Sign out</span></div></div>
+        <div class="home"></div></div>
+      <p class="cap"><b>Asked first.</b> Then "Signing out…" until the welcome comes up; there is nothing to go back to.</p>
+    </div>
+    <div class="step">
+      <div class="ph"><div class="sb"><span>9:41</span><span class="bat"></span></div><div class="island"></div><div class="bk"><svg class="i"><use href="#i-chev"/></svg></div><div class="ptitle">Settings</div>
+        <div class="dimall"></div>
+        <div class="sheet" style="padding-bottom:14cqw"><div class="grab"></div>
+          <div style="font:600 5cqw var(--mono);margin:1cqw 1cqw 0">Sign in a computer?</div>
+          <div class="rowt" style="margin:3cqw 1cqw 0;font-size:3.6cqw">A computer, to your account — it will run your agents and reach your other computers.</div>
+          <div class="meta" style="margin:3cqw 1cqw 5cqw;color:var(--pgreen)">✓ On the same network as this phone.</div>
+          <div class="dlgc" style="position:static;transform:none;background:none;border:0;box-shadow:none;padding:0"><div class="bb"><span>Deny</span><span class="go">Approve</span></div></div>
+        </div>
+        <div class="home"></div></div>
+      <p class="cap"><b>The phone signs a computer in.</b> Scan a server's <code>harness login --qr</code>, then approve it. On another network it says so and asks you to hold to approve.</p>
+    </div>
+  </div>
+  <p class="note" style="line-height:1.7"><b>Sign out</b> is in two places: this sheet, and "Not you? Sign out" on ② (<a href="#your-computer">section 2</a>). Both ask first. Harnesses keep running on the computers.<br>
+    <b>Add a computer later:</b> Computers ▸ Add computer is step ② again, with back instead of Settings and without "Not you?". When the computer joins it has its moment, then the list has it.<br>
+    <b>Another phone:</b> install and sign in with the same account, or scan Add Phone on any of the account's computers.</p>
+
+  <!-- ===================== EVERY WORD ===================== -->
+  <h2 id="every-word">Every word</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Screen</th><th>Headline</th><th>Under it</th><th>Buttons</th><th>Quiet line</th></tr>
+    <tr><td>Boot</td><td class="m">harness▌</td><td></td><td></td><td></td></tr>
+    <tr><td>① Welcome</td><td class="m">Manage all your agents on all your computers from your phone.</td><td>the picture, all lit</td><td class="m">Continue with Google · Continue with Apple</td><td class="m">✉ Continue with email · ⊞ QR code (Cancel in their place while an account's page is up)</td></tr>
+    <tr><td>While Google's page is up</td><td class="m">“harness” Wants to Use “autonomous.ai” to Sign In (iOS)</td><td></td><td class="m">Waiting for Google… → Signing in…</td><td class="m">Cancel</td></tr>
+    <tr><td>Welcome, in the headline's place</td><td colspan="4" class="m">✗ &lt;the reason&gt; · You were signed out. Sign in again to reach your computers. · This phone was removed from your account on another device. Sign in again to use it here. · Sign in first, then approve your computer.</td></tr>
+    <tr><td>Camera</td><td class="m">How to get the QR code</td><td class="m">1 On your computer, go to, the address, Install Harness · 2 Sign in (Use ada@example.com, when the phone knows the account) · 3 Click "Add Phone" (Harness menu → Add Phone)</td><td class="m">autonomous.ai/go ⇪ (green words in step 1, not a button)</td><td>none; back</td></tr>
+    <tr><td>Every signed-out screen, at the foot</td><td class="m">☐ Share setup and sign-in counts ⓘ</td><td class="m">ⓘ Optional for this app session. Help us find setup problems without sharing account details, prompts, or files.</td><td></td><td></td></tr>
+    <tr><td>Email</td><td class="m">Your email</td><td class="m">We’ll send you a 4-digit code.</td><td class="m">Send code</td><td></td></tr>
+    <tr><td>Code</td><td class="m">Check your email</td><td class="m">We sent a 4-digit code to ada@example.com.</td><td class="m">Sign in</td><td class="m">Resend in 30s · Change email</td></tr>
+    <tr><td>② Your computer</td><td class="m">On your computer, go to</td><td class="m">1 Install Harness · 2 Sign in, Use ada@example.com, Not you? Sign out</td><td class="m">autonomous.ai/go ⇪</td><td></td></tr>
+    <tr><td>Under the picture, while looking</td><td class="m">Looking for your computer▌</td><td></td><td></td><td class="m">See your computers › (slow waits only)</td></tr>
+    <tr><td>The computer joins</td><td class="m">MacBook Pro is ready.</td><td class="m">Waiting for its first session▌ (only if there is none yet)</td><td></td><td></td></tr>
+    <tr><td>Pairing by the scan</td><td class="m">Connecting to MacBook Pro…</td><td class="m">Keep “Add Phone” open on MacBook Pro.</td><td class="m">Scan again · Use its password instead (after a failure)</td><td></td></tr>
+    <tr><td>③ The session, by the mic</td><td colspan="4" class="m">Send it, or say anything. · Pick up where you left off. · Say what to build. · Talk to it.</td></tr>
+    <tr><td>Desktop, Add Phone</td><td class="m">Add your phone</td><td class="m">Scan with the Harness app. · No app yet? App Store · Google Play</td><td class="m">Close</td><td></td></tr>
+  </table></div>
+  <p class="note" style="line-height:1.7"><b>Type and space:</b> 35 pt side margins and one left edge on every onboarding screen. The headline is 22 pt mono semibold, up to three lines, always at the same height. The picture sits in the middle and never moves between screens of a layout. Buttons are 52 pt; the quiet line and the status line are 13 pt.</p>
+
+  <!-- ===================== NEXT ===================== -->
+  <h2 id="next">Next <span class="later">Phase 2</span></h2>
+  <p class="note" style="font-size:15px;line-height:1.7">
+    <b>Nobody signs in on a new computer:</b> the phone waiting at ② finds the new Harness on the same Wi-Fi during its tour and adds it to the account. The Mac's tour ends on "✓ Added by Ada's iPhone" and skips its sign-in page.
+    Step 2 under the address ("Sign in, Use ada@example.com, Not you? Sign out") then goes away. Needs the desktop and the backend.<br>
+    <b>Sign in with Apple in the app,</b> with the backend accepting its token, in place of the web page.<br>
+    <b>Push notifications:</b> the phone notices a new computer only while it is open today, and catches up when it is opened again.</p>
+  <h2>Decided</h2>
+  <p class="note" style="font-size:15px;line-height:1.7">
+    <b>2026-10-15.</b> The camera's step 1 uses ②'s words: "On your computer, go to", autonomous.ai/go, Install Harness. The address there is green words with the share mark, not ②'s green button, which outweighed the camera and stood step 1 three times as tall as the others.<br>
+    <b>2026-10-14.</b> Google and Apple are the only buttons; Continue with email · QR code are one line of words under them. The camera opened from it has no "Use email instead", and its steps start from the download: Go to autonomous.ai/go, Sign in, Click "Add Phone".
+    A message (why the phone was signed out, why a sign-in did not finish) takes the headline's place until a way in is pressed. One optional line under every signed-out screen: Share setup and sign-in counts.<br>
+    <b>2026-10-12.</b> No account, no app: there is no Skip and no sample before signing in.
+    ② says what to do on the computer: install, and sign in with this account, with "Not you? Sign out" right under it.
+    The phone opens the session in focus on the computer, and says one line over the mic.
+    No tips and no notification prompt during setup; notifications after the first send.<br>
+    Plan and drawings: <code>docs/research/2026-10-11-phone-onboarding</code> (branch <code>phone-onboarding</code>).</p>
+</main>
+</body>
+</html>

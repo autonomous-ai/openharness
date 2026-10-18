@@ -5,12 +5,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/settings/sections/privacy_section.dart';
 
 void main() {
-  Future<void> show(WidgetTester tester, UsagePreferenceRequest request) async {
+  Future<void> show(
+    WidgetTester tester,
+    UsagePreferenceRequest request, {
+    bool compact = false,
+  }) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: ProductUsagePreference(
             request: request,
+            compact: compact,
             feedback: (_, _) async {},
           ),
         ),
@@ -18,6 +23,31 @@ void main() {
     );
     await tester.pumpAndSettle();
   }
+
+  testWidgets('one-row sharing keeps failed saves honest and can reload', (
+    tester,
+  ) async {
+    await show(tester, ({bool? enabled}) async {
+      if (enabled != null) throw StateError('PRIVATE_CANARY');
+      return {'enabled': enabled ?? true};
+    }, compact: true);
+    expect(find.byType(Switch), findsOneWidget);
+    expect(find.text('Share product usage data'), findsOneWidget);
+    expect(find.text('See what’s shared'), findsNothing);
+    expect(find.text('How did your latest task go?'), findsNothing);
+    expect(find.text('Rate task outcome'), findsNothing);
+    // A row like Experimental's others: its one line of what it does, without the page's rating and receipts.
+    expect(find.textContaining('Help improve'), findsOneWidget);
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+    expect(find.byType(Switch), findsNothing);
+    expect(find.text('Unavailable'), findsOneWidget);
+    expect(find.textContaining('PRIVATE_CANARY'), findsNothing);
+    await tester.tap(find.text('Reload'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('offers task feedback directly from the privacy controls', (
     tester,

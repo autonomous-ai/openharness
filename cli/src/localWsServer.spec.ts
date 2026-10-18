@@ -45,6 +45,10 @@ class FakeBackend implements LocalWsBackend {
   setLocalTerminalFocus(connId: string, agentId: string | null): void {
     this.focuses.push([connId, agentId])
   }
+  observed: Array<[string, unknown]> = []
+  observeProduct(connId: string, payload: unknown): void {
+    this.observed.push([connId, payload])
+  }
 }
 
 function onceOpen(ws: WebSocket): Promise<void> {
@@ -776,6 +780,8 @@ describe('local CLI WebSocket', () => {
     ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
     await connected
 
+    // hn with no terminal reading a pane is no one's focus.
+    ws.send(JSON.stringify({ type: 'terminal_open', payload: { agentId: 'agent-watched', watch: true } }))
     // Opening a terminal still counts: that is all an older app build sends.
     ws.send(JSON.stringify({ type: 'terminal_open', payload: { agentId: 'agent-opened' } }))
     // And a window that MOVED without opening anything now says so — which is every click on a pane
@@ -790,7 +796,7 @@ describe('local CLI WebSocket', () => {
     ])
     // Consumed locally: it describes a hand at this desk, and the machine has no use for an unknown
     // frame type arriving on every pane click.
-    expect(backend.frames.map((frame) => frame.type)).toEqual(['terminal_open', 'terminal_open'])
+    expect(backend.frames.map((frame) => frame.type)).toEqual(['terminal_open', 'terminal_open', 'terminal_open'])
     ws.close()
   })
 
@@ -1019,6 +1025,37 @@ describe('local CLI WebSocket', () => {
       expect(await result).toEqual({ type: 'daemon_act_result', payload: { requestId: 'r1', id: 'need:x', ok: false, error: 'UNSUPPORTED' } })
       expect(backend.frames).toEqual([])
       ws.close()
+    } finally {
+      await w.cleanup()
+    }
+  })
+
+  it('takes hn\'s product_observe over the owner\'s socket from a window here, and never passes it on', async () => {
+    const backend = new FakeBackend(), relayed: Frame[] = []
+    const relayPool = {
+      acquire: async (_id: string, _env: string, _select: Frame, sink: LocalClientSink) => {
+        sink.sendFrame({ type: 'connected', payload: { machineId: 'remote', e2ee: false } })
+        return { send: async (frame: Frame) => { relayed.push(frame) }, sendBinary: async () => {}, detach: () => {} }
+      },
+      acquireIsolated: async () => { throw new Error('unused') }, invalidate: () => {},
+    }
+    const w = await unixWorld(backend, { autonomousEnv: 'test', relayPool: relayPool as unknown as NonNullable<LocalWsServerOptions['relayPool']> })
+    try {
+      const observe = { type: 'product_observe', payload: { flow: 'viewer_open', outcome: 'ok', durationMs: 12 } }
+      const hn = await w.open(w.unix, { machineId, client: 'tui' })
+      const hnId = backend.connId
+      const others = [await w.open(w.tcp, { machineId, client: 'tui' }), await w.open(w.unix, { machineId, tool: true }),
+        await w.open(w.unix, { machineId: 'remote', client: 'tui' })]
+      // Each connection's frames are handled in order: its marker arriving means its observation was handled.
+      for (const [i, ws] of [hn, ...others].entries()) {
+        ws.send(JSON.stringify(observe))
+        ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: `after-${i}` } }))
+      }
+      await vi.waitFor(() => expect([...backend.frames, ...relayed].map(f => (f.payload as { requestId?: string }).requestId).sort())
+        .toEqual(['after-0', 'after-1', 'after-2', 'after-3']))
+      expect(backend.observed).toEqual([[hnId, observe.payload]])
+      expect([...backend.frames, ...relayed].some(f => f.type === 'product_observe')).toBe(false)
+      for (const ws of [hn, ...others]) ws.close()
     } finally {
       await w.cleanup()
     }

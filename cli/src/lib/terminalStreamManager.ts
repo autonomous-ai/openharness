@@ -118,6 +118,9 @@ interface ActiveStream {
   /** A stream opened as a WATCHER: it renders, but it never took the control lease and its input is
    *  refused. See the `takeover: false` branch of `open()`. */
   watching: boolean
+  /** A watcher by its own ask (`watch: true` on open): a client with no person in front of it — hn
+   *  with no terminal — reading the pane. It holds nothing, so no other open is answered as if it did. */
+  watchOnly: boolean
   agentId: string
   engineId: string
   placementKey: string
@@ -395,6 +398,9 @@ export class TerminalStreamManager {
         // client has to see this before relying on it: a CLI that predates it ignores the key and
         // takes the terminal over like any other open, which is the one thing the key is for.
         noTakeover: !this.deps.readOnly,
+        // `terminal_open` honours `watch: true`: always a watcher, even of a terminal nobody holds,
+        // and never counted as holding it when another client opens politely. See `open()`.
+        watchOnly: !this.deps.readOnly,
       },
       engines: terminalEngineCapabilities(this.deps.streamingAvailable),
     })
@@ -452,6 +458,12 @@ export class TerminalStreamManager {
     // it, and the client asks again, without the key, once a person actually lands there. Absent
     // (every older client) is the takeover it has always been.
     const takeover = payload.takeover !== false
+    // `watch: true` is a client nobody sits at — hn with no terminal, holding the sessions a closed
+    // window left — reading a pane for the commands it answers. It never takes the terminal, nor its
+    // size: before this it opened like any other on every reconnect, and when it came first after a
+    // daemon restart the agent was resized to its 80x24 layout and the window the person was looking
+    // at could only watch until they typed (2026-10-14). A daemon that predates the key ignores it.
+    const watchOnly = payload.watch === true
     // Older clients have one owner per connection. A pooled relay supplies a stable identity
     // for each attached view; this partitions leases, not authentication or stream access.
     const viewId = typeof payload.viewId === 'string' && payload.viewId.length > 0 && payload.viewId.length <= 128
@@ -470,10 +482,14 @@ export class TerminalStreamManager {
       // its output, and only typing is withheld until a person asks for it. So the open succeeds as
       // a WATCHER: tmux attaches read-only (no control lease, no resize, no input), the incumbent
       // keeps the terminal, and the client is told which it got by `readOnly` on `terminal_ready`.
-      const watching = !this.deps.readOnly && !takeover && incumbents.length > 0
+      //
+      // A watch-only stream is not anyone holding it: a window reconnecting politely beside one is
+      // answered as it would be alone, not made to watch a terminal nobody drives.
+      const holders = incumbents.filter((state) => !state.watchOnly)
+      const watching = !this.deps.readOnly && (watchOnly || (!takeover && holders.length > 0))
       // Who a watcher is watching, named on its banner — "MacBook Pro is using this terminal" — as
       // `takenBy` names the winner on the incumbent's. Read now, before any stream below moves.
-      const heldBy = watching ? this.holderOf(incumbents, reservedPlacement) : undefined
+      const heldBy = watching ? this.holderOf(holders, reservedPlacement) : undefined
       // A terminal is single-controller. A later client explicitly wins the lease and the incumbent
       // receives a targeted close notification; it must not be broadcast to other clients. The
       // notification names the winner when it can (`takenBy`), so the incumbent's banner can too.
@@ -548,6 +564,7 @@ export class TerminalStreamManager {
         ...(client ? { client } : {}),
         streamId,
         watching,
+        watchOnly: watching && watchOnly,
         agentId: session.agentId,
         engineId: session.engine,
         placementKey,
@@ -600,7 +617,8 @@ export class TerminalStreamManager {
         await this.closeStream(state, 'backend disconnected', false)
         return
       }
-      this.diagnostic(state, 'opened', { cols: size.cols, rows: size.rows, compression: state.compression })
+      // Whether it holds the terminal: who resized an agent is read from here.
+      this.diagnostic(state, 'opened', { cols: size.cols, rows: size.rows, compression: state.compression, watching, ...(watchOnly ? { watchOnly } : {}) })
       await this.sendKeyframe(state, 'open')
     })
   }
@@ -622,8 +640,19 @@ export class TerminalStreamManager {
 
   private alive(connId: string, payload: FramePayload): void {
     const state = this.streamFor(connId, payload)
-    if (!state) return
+    if (!state) { this.reportMissing(connId, payload); return }
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
+  }
+
+  /**
+   * Tell a client that asked (`reportMissing`) that the stream it names is gone. A host that lost its
+   * backend link closes its remote streams without notice, and the client used to learn it only after
+   * 15 s of silence and three resyncs this manager ignored, then gave up on the pane (2026-10-16). Opt-in,
+   * so an older client keeps the silence its own recovery was built around.
+   */
+  private reportMissing(connId: string, payload: FramePayload): void {
+    if (payload.reportMissing !== true || typeof payload.streamId !== 'string') return
+    this.sendError(connId, 'TERMINAL_STREAM_NOT_FOUND', { streamId: payload.streamId, message: 'no live terminal stream' })
   }
 
   private ack(connId: string, payload: FramePayload): void {
@@ -993,11 +1022,10 @@ export class TerminalStreamManager {
 
   private async resyncRequested(connId: string, payload: FramePayload): Promise<void> {
     const state = this.streamFor(connId, payload)
-    if (state) {
-      state.resyncs++
-      this.diagnostic(state, 'resync_requested', { attempt: payload.attempt })
-      await this.sendKeyframe(state, 'resync')
-    }
+    if (!state) { this.reportMissing(connId, payload); return }
+    state.resyncs++
+    this.diagnostic(state, 'resync_requested', { attempt: payload.attempt })
+    await this.sendKeyframe(state, 'resync')
   }
 
   private async closeRequested(connId: string, payload: FramePayload): Promise<void> {

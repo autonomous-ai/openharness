@@ -1,11 +1,14 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/widgets/app_menu.dart';
 import 'box_chrome.dart';
 import 'desktop_chrome.dart';
 
@@ -18,6 +21,13 @@ import 'desktop_chrome.dart';
 /// since messages arrive when they arrive, and its on/off is Settings ▸
 /// Experimental's. The 💬 that sat beside × was easy to hit by mistake and turned
 /// the tab off, failing a message that was waiting (owner, 2026-10-12).
+///
+/// A tab shared with other accounts (1c) shows a two-person mark and its
+/// harness count after the name; the name gives way first, the count never.
+/// Right-click (or the context-menu key, or the "Tab options" accessibility
+/// action) opens the menu the native tab has: Invite People…, Show Agent
+/// Messages, Stop Sharing Tab, Move Here, Leave Tab — each row only where its
+/// callback is given.
 class DesktopWorkspaceTab extends StatefulWidget {
   const DesktopWorkspaceTab({
     super.key,
@@ -33,6 +43,12 @@ class DesktopWorkspaceTab extends StatefulWidget {
     this.highlighted = false,
     this.onRename,
     this.shortcutHint,
+    this.sharedCount,
+    this.onInvitePeople,
+    this.onShowAgentMessages,
+    this.onStopSharing,
+    this.onMoveHere,
+    this.onLeave,
   });
 
   final String id, label;
@@ -44,6 +60,32 @@ class DesktopWorkspaceTab extends StatefulWidget {
 
   /// The status cell: an [ActivityMark].
   final Widget? activity;
+
+  /// How many harnesses the shared tab holds; null for an unshared tab.
+  final int? sharedCount;
+
+  /// The tab menu's rows; a null callback leaves its row out.
+  final VoidCallback? onInvitePeople,
+      onShowAgentMessages,
+      onStopSharing,
+      onMoveHere,
+      onLeave;
+
+  /// What the shared mark says to a screen reader: "shared tab, 7 harnesses".
+  static String sharedLabel(int count) =>
+      'shared tab, $count ${count == 1 ? 'harness' : 'harnesses'}';
+
+  static const _sharedIconSize = 13.0, _sharedIconGap = 3.0;
+
+  static TextStyle _sharedStyle({Color? color}) =>
+      DesktopChrome.metadata(color: color);
+
+  /// The mark and count's width; 0 for an unshared tab.
+  static double sharedWidth(BuildContext context, int? count) => count == null
+      ? 0
+      : _sharedIconSize +
+            _sharedIconGap +
+            _measure(context, '$count', _sharedStyle());
 
   static double _measure(BuildContext context, String text, TextStyle style) {
     final painter = TextPainter(
@@ -93,10 +135,14 @@ class DesktopWorkspaceTab extends StatefulWidget {
     String label, {
     bool hasActivity = false,
     String? shortcutHint,
+    int? sharedCount,
   }) =>
       labelWidth(context, label) +
       _restingInset +
       _revealedInset +
+      (sharedCount == null
+          ? 0
+          : sharedWidth(context, sharedCount) + _indicatorGap) +
       ((hasActivity || (shortcutHint?.isNotEmpty ?? false))
           ? indicatorWidth(context, shortcutHint, hasActivity: hasActivity) +
                 _indicatorGap
@@ -111,8 +157,11 @@ class DesktopWorkspaceTab extends StatefulWidget {
     required bool hasActivity,
     required bool revealed,
     double indicatorWidth = _statusWidth,
+    double sharedWidth = 0,
   }) {
-    final status = hasActivity ? indicatorWidth + _indicatorGap : 0.0;
+    final status =
+        (hasActivity ? indicatorWidth + _indicatorGap : 0.0) +
+        (sharedWidth > 0 ? sharedWidth + _indicatorGap : 0.0);
     final right = revealed ? _revealedInset : _restingInset;
     final width = math.min(
       labelWidth,
@@ -143,6 +192,74 @@ class DesktopWorkspaceTab extends StatefulWidget {
 
 class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
   bool _hovered = false, _focused = false;
+  final _menu = MenuController();
+
+  bool get _hasMenu =>
+      widget.onInvitePeople != null ||
+      widget.onShowAgentMessages != null ||
+      widget.onStopSharing != null ||
+      widget.onMoveHere != null ||
+      widget.onLeave != null;
+
+  /// In a browser, its own context menu would open over the tab menu on a
+  /// right-click. It is off only while the pointer is over a tab that has a
+  /// menu, so a right-click anywhere else (a terminal, a text field) keeps the
+  /// browser's Copy and Paste.
+  bool _browserMenuOff = false;
+
+  void _syncBrowserMenu() {
+    final off = kIsWeb && _hovered && _hasMenu && mounted;
+    if (off == _browserMenuOff) return;
+    _browserMenuOff = off;
+    unawaited(
+      off
+          ? BrowserContextMenu.disableContextMenu()
+          : BrowserContextMenu.enableContextMenu(),
+    );
+  }
+
+  @override
+  void didUpdateWidget(DesktopWorkspaceTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncBrowserMenu();
+  }
+
+  @override
+  void dispose() {
+    if (_browserMenuOff) {
+      _browserMenuOff = false;
+      unawaited(BrowserContextMenu.enableContextMenu());
+    }
+    super.dispose();
+  }
+
+  void _openMenu([Offset? position]) {
+    if (_hasMenu && widget.onSelect != null) _menu.open(position: position);
+  }
+
+  /// The tab menu's rows, in the native tab menu's order.
+  List<Widget> _menuRows() {
+    Widget row(String key, String label, VoidCallback? onPressed) =>
+        AppMenuItem(
+          key: ValueKey('tab-menu:$key:${widget.id}'),
+          label: label,
+          onPressed: () {
+            _menu.close();
+            onPressed!();
+          },
+        );
+    return [
+      if (widget.onInvitePeople != null)
+        row('invite', 'Invite People…', widget.onInvitePeople),
+      if (widget.onShowAgentMessages != null)
+        row('messages', 'Show Agent Messages', widget.onShowAgentMessages),
+      if (widget.onStopSharing != null)
+        row('stop', 'Stop Sharing Tab', widget.onStopSharing),
+      if (widget.onMoveHere != null)
+        row('move', 'Move Here', widget.onMoveHere),
+      if (widget.onLeave != null) row('leave', 'Leave Tab', widget.onLeave),
+    ];
+  }
 
   /// The tab's trailing control: shown, it takes the pointer, focus and
   /// semantics; hidden, it keeps its place and none of them.
@@ -240,6 +357,14 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
                   showHint ? widget.shortcutHint : null,
                   hasActivity: widget.activity != null,
                 );
+                final shared = widget.sharedCount;
+                final sharedWidth = DesktopWorkspaceTab.sharedWidth(
+                  context,
+                  shared,
+                );
+                final sharedSpace = shared == null
+                    ? 0.0
+                    : sharedWidth + DesktopWorkspaceTab._indicatorGap;
                 final (groupLeft, labelWidth) = DesktopWorkspaceTab.titleLayout(
                   tabWidth: constraints.maxWidth,
                   labelWidth: DesktopWorkspaceTab.labelWidth(
@@ -249,6 +374,7 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
                   hasActivity: hasActivity,
                   revealed: revealed,
                   indicatorWidth: indicator,
+                  sharedWidth: sharedWidth,
                 );
                 return Stack(
                   children: [
@@ -256,21 +382,46 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
                       child: Semantics(
                         button: true,
                         enabled: enabled,
-                        label: [widget.label, ?widget.activityLabel].join(', '),
+                        label: [
+                          widget.label,
+                          if (shared != null)
+                            DesktopWorkspaceTab.sharedLabel(shared),
+                          ?widget.activityLabel,
+                        ].join(', '),
                         onTap: widget.onSelect,
                         customSemanticsActions: {
                           if (widget.onClose != null)
                             const CustomSemanticsAction(label: 'Close tab'):
                                 widget.onClose!,
+                          if (_hasMenu && enabled)
+                            const CustomSemanticsAction(label: 'Tab options'):
+                                _openMenu,
                         },
                         child: FocusableActionDetector(
                           enabled: enabled,
                           onShowFocusHighlight: (value) =>
                               setState(() => _focused = value),
+                          shortcuts: _hasMenu
+                              ? const {
+                                  SingleActivator(
+                                    LogicalKeyboardKey.contextMenu,
+                                  ): _TabMenuIntent(),
+                                  SingleActivator(
+                                    LogicalKeyboardKey.f10,
+                                    shift: true,
+                                  ): _TabMenuIntent(),
+                                }
+                              : const {},
                           actions: {
                             ActivateIntent: CallbackAction<ActivateIntent>(
                               onInvoke: (_) {
                                 widget.onSelect?.call();
+                                return null;
+                              },
+                            ),
+                            _TabMenuIntent: CallbackAction<_TabMenuIntent>(
+                              onInvoke: (_) {
+                                _openMenu();
                                 return null;
                               },
                             ),
@@ -300,11 +451,46 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
                                       ),
                                     ),
                                   ),
+                                  if (shared != null)
+                                    Positioned(
+                                      key: ValueKey('tab-shared:${widget.id}'),
+                                      left:
+                                          groupLeft +
+                                          labelWidth +
+                                          DesktopWorkspaceTab._indicatorGap,
+                                      width: sharedWidth,
+                                      top: 0,
+                                      bottom: 0,
+                                      child: Row(
+                                        children: [
+                                          Icon(
+                                            AppIcons.users,
+                                            size: DesktopWorkspaceTab
+                                                ._sharedIconSize,
+                                            color: ink,
+                                          ),
+                                          const SizedBox(
+                                            width: DesktopWorkspaceTab
+                                                ._sharedIconGap,
+                                          ),
+                                          Text(
+                                            '$shared',
+                                            maxLines: 1,
+                                            softWrap: false,
+                                            style:
+                                                DesktopWorkspaceTab._sharedStyle(
+                                                  color: ink,
+                                                ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
                                   if (hasActivity)
                                     Positioned(
                                       left:
                                           groupLeft +
                                           labelWidth +
+                                          sharedSpace +
                                           DesktopWorkspaceTab._indicatorGap,
                                       width: indicator,
                                       top: 0,
@@ -368,16 +554,33 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
     if (widget.tooltip case final tooltip? when tooltip.isNotEmpty) {
       tab = Tooltip(message: tooltip, excludeFromSemantics: true, child: tab);
     }
-    return GestureDetector(
+    tab = GestureDetector(
       behavior: HitTestBehavior.opaque,
       excludeFromSemantics: true,
       onTap: widget.onSelect,
+      onSecondaryTapDown: _hasMenu && enabled
+          ? (details) => _openMenu(details.localPosition)
+          : null,
       child: MouseRegion(
         cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
+        onEnter: (_) {
+          setState(() => _hovered = true);
+          _syncBrowserMenu();
+        },
+        onExit: (_) {
+          setState(() => _hovered = false);
+          _syncBrowserMenu();
+        },
         child: tab,
       ),
     );
+    // Always the anchor, menu or not: a tab whose share arrives keeps its
+    // subtree (and keyboard focus); [_openMenu] opens nothing without rows.
+    return MenuAnchor(controller: _menu, menuChildren: _menuRows(), child: tab);
   }
+}
+
+/// Opens the tab menu from the keyboard.
+class _TabMenuIntent extends Intent {
+  const _TabMenuIntent();
 }

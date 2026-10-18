@@ -40,6 +40,14 @@ it('a file from another workspace cannot hold this workspace on a late marker', 
 it.each(['', 'bad\n', 'null\n', '[]\n', '{"header":[]}\n', header + '{"run":'])('holds an incomplete or invalid identity: %j', async text => {
   await expect(readRunIdentity(rule, pathFor(text), async () => true)).rejects.toThrow('identity is held')
 })
+it('skips declared preamble records before the workspace header, and only those', async () => {
+  const framed: RunIdentity = { ...rule, bytes: [64, 512], preamble: ['frame'] }
+  const frame = JSON.stringify({ frame: 'permission', children: [] }) + '\n'
+  await expect(readRunIdentity(framed, pathFor(frame + frame + header + run), async () => true)).resolves.toEqual({ cwd: '/work' })
+  await expect(readRunIdentity(rule, pathFor(frame + header + run), async () => true)).rejects.toThrow('identity is held')
+  await expect(readRunIdentity(framed, pathFor(frame + 'bad\n' + header + run), async () => true)).rejects.toThrow('identity is held')
+  await expect(readRunIdentity(framed, pathFor(frame), async () => true)).rejects.toThrow('identity is held')
+})
 it('excludes a complete background task with a valid workspace header', async () => {
   await expect(readRunIdentity(rule, pathFor(header + '{"run":{"kind":"task"}}'), async () => true)).resolves.toBeNull()
 })

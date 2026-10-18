@@ -38,7 +38,9 @@ const SETUP_TEXT = (platform) => platform === 'win32'
     `  ${INSTALL}`,
     '  harness start',
     '',
-    'No account is needed for harnesses on this computer. Then restart this MCP server (or your client) to get the Harness tools.',
+    'Then restart this MCP server (or your client) to get the Harness tools, and call harness_whoami: it says whether you may start harnesses.',
+    'Only the person can let you: they sign in (harness login, in a browser) and turn on "Agents can start other agents"',
+    '(Settings ▸ Experimental, or harness settings agents-start-agents on in their own terminal). Ask them; until then, do the work yourself.',
     'More: https://harness.autonomous.ai/agents',
   ].join('\n')
 

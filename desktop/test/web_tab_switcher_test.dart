@@ -12,7 +12,9 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/state/terminal_pane.dart';
+import 'package:harness/state/workspace_chrome.dart';
 import 'package:harness/web/shell/web_chrome.dart';
+import 'package:harness/web/tabs/web_tab_menu.dart';
 import 'package:harness/widgets/web_download_button.dart';
 
 import 'support/real_fonts.dart';
@@ -263,5 +265,71 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
     app.dispose();
+  });
+  testWidgets('the tab menu shares the tab with other accounts by role', (
+    tester,
+  ) async {
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+    );
+    addTearDown(app.dispose);
+    const rows = {
+      'shared_tab.invite': 'Invite People…',
+      'agent_messages.show': 'Show Agent Messages',
+      'shared_tab.stop': 'Stop Sharing Tab',
+      'shared_tab.leave': 'Leave Tab',
+    };
+    Future<WebTabChoice?> pick(Set<String> runnable, String? row) async {
+      WebTabChoice? chosen;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Material(
+            child: SingleChildScrollView(
+              child: Column(
+                children: webTabMenuRows(
+                  app,
+                  WorkspaceCommands(
+                    enabled: () => true,
+                    canRun: runnable.contains,
+                    run: (_) {},
+                  ),
+                  (choice) => chosen = choice,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      for (final MapEntry(key: command, value: label) in rows.entries) {
+        expect(
+          find.text(label),
+          runnable.contains(command) ? findsOneWidget : findsNothing,
+          reason: label,
+        );
+      }
+      if (row != null) await tester.tap(find.text(row));
+      return chosen;
+    }
+
+    // Unshared, owner, member: what each can do, and nothing it cannot.
+    // Move Here is never offered in a browser: there is no "here".
+    for (final runnable in [
+      {'shared_tab.invite', 'agent_messages.show'},
+      {'shared_tab.invite', 'agent_messages.show', 'shared_tab.stop'},
+      {'agent_messages.show', 'shared_tab.leave'},
+      <String>{},
+    ]) {
+      for (final command in runnable) {
+        final choice = await pick(runnable, rows[command]);
+        expect(choice, isA<WebRunCommand>());
+        expect((choice! as WebRunCommand).command, command);
+      }
+      if (runnable.isEmpty) await pick(runnable, null);
+    }
+    expect(find.textContaining('Move'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 }

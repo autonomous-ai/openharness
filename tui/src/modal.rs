@@ -51,8 +51,9 @@ pub enum PickerKind {
     Commands,
     /// Keybinds: the prefixes and each command's key after them — Enter on one changes it.
     Keybinds,
-    /// A task routed to a harness; [voice]: the dial's spoken task it answers.
-    Route { text: String, voice: Option<String> },
+    /// A task routed to a harness; [voice]: the dial's spoken task it answers; [typed]: the person
+    /// typed it in hn's Send box (not `send-task` from a command), so the message is marked theirs.
+    Route { text: String, voice: Option<String>, typed: bool },
     /// `show-messages`, `list-keys`, `choose-buffer`.
     Messages,
     Keys,

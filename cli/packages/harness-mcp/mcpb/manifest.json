@@ -27,6 +27,10 @@
   },
   "tools": [
     {
+      "name": "harness_whoami",
+      "description": "Who you are to Harness: which agent, on which machine, whether you may start harnesses now and who can change that, and how much of your limit is left."
+    },
+    {
       "name": "harness_list",
       "description": "The harnesses on this machine: name, agent, state, who started each, when it was last active, its folder, and what it is about."
     },

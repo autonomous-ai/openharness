@@ -44,6 +44,7 @@ AppNotifier _notifier({required bool local}) {
 Future<TerminalSession> _liveSession(
   List<String> outbound, {
   bool live = true,
+  List<Map<String, dynamic>>? messages,
 }) async {
   const streamId = '00112233-4455-6677-8899-aabbccddeeff';
   Object? openRequestId;
@@ -52,11 +53,15 @@ Future<TerminalSession> _liveSession(
     agentId: 'a1',
     agentName: 'a1',
     engineId: 'claude',
+    client: const TerminalClientDescriptor(kind: 'desktop', name: 'Fixture'),
     send: (type, payload) async {
       // The session ignores a `terminal_ready` whose requestId is not the one it sent, so the
       // handshake has to answer the real request rather than a placeholder.
       if (type == 'terminal_open') openRequestId = payload['requestId'];
-      if (type == 'message') outbound.add(payload['content'] as String);
+      if (type == 'message') {
+        outbound.add(payload['content'] as String);
+        messages?.add(Map.of(payload));
+      }
       return true;
     },
     sendBinary: (_) async => true,
@@ -299,8 +304,9 @@ void main() {
 
   testWidgets('Enter sends the message and clears the box', (tester) async {
     final outbound = <String>[];
+    final messages = <Map<String, dynamic>>[];
     final app = _notifier(local: false);
-    final session = await _liveSession(outbound);
+    final session = await _liveSession(outbound, messages: messages);
     await tester.pumpWidget(_host(app, session));
     await tester.pump();
 
@@ -313,6 +319,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 12));
 
     expect(outbound, ['deploy it']);
+    expect(messages.single['usageIntent'], 'interactive');
     expect(
       tester.widget<TextField>(find.byType(TextField)).controller?.text,
       '',

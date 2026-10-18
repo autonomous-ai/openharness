@@ -4,31 +4,15 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/empty_state.dart';
 import 'package:harness_mobile/state/app_state.dart';
-import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 import 'package:harness_mobile/usage/usage_accounts.dart';
 import 'package:harness_mobile/usage/usage_controller.dart';
 import 'package:harness_mobile/usage/usage_pressure.dart';
+import 'package:harness_mobile/usage/usage_summary.dart';
 import 'package:harness_mobile/usage/usage_window.dart';
 import 'package:harness_mobile/widgets/engine_identity.dart';
 
 import 'phone_card.dart';
 import 'phone_header.dart';
-
-/// The last figure this page resolved, so the Settings row that opens it can
-/// print something rather than a dash every single time.
-///
-/// ⚠️ **A cache, deliberately, and not a second poller.** That row is one line
-/// in a list; giving it a [UsageController] of its own would put a minute-ly
-/// relay round trip behind a screen whose whole job is to OFFER the screen that
-/// already does that — two pollers asking the same machines the same question,
-/// and a phone spending radio on a figure nobody asked to see. So the row shows
-/// what this page last measured, and this page is where a fresh reading is
-/// taken.
-///
-/// In memory only: a display convenience rather than a fact worth keeping
-/// across launches, and a figure restored from disk would be printed with no
-/// way to say how old it is.
-final ValueNotifier<String?> lastUsageSummary = ValueNotifier<String?>(null);
 
 /// What the agent accounts have spent, as a phone page.
 ///
@@ -80,7 +64,8 @@ class _UsagePageState extends State<UsagePage> {
     super.dispose();
   }
 
-  /// Hands the Settings row the figure this cycle came to.
+  /// Hands the Settings row the figure this cycle came to — see
+  /// [lastUsageSummary].
   ///
   /// Only once a cycle has actually LANDED: a controller still on its first
   /// round trip would otherwise clear a perfectly good figure from the row
@@ -258,8 +243,8 @@ class _EmptyUsage extends StatelessWidget {
   }
 }
 
-/// One account: its provider, where it was read, its weekly figure — and, once
-/// expanded, every window it reports.
+/// One account: its provider, where it was read, what is left of its tightest
+/// window — and, once expanded, every window it reports.
 ///
 /// Expanding in place rather than pushing a page of its own: an account has at
 /// most three windows, which is less than a page's worth of anything, and the
@@ -280,11 +265,12 @@ class _AccountCardState extends State<_AccountCard> {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final reading = widget.account.reading;
-    // ⚠️ ONE window in the headline — the weekly one, never all of them. See
-    // [ProviderUsage.railWindow]: Claude reports three and Codex one, so a
-    // headline showing every window would make one account three figures tall
-    // and the other one, two cards that read as different KINDS of thing.
-    final headline = reading.railWindow;
+    // ⚠️ ONE window in the headline — the tightest, never all of them: Claude
+    // reports three and Codex one, so a headline showing every window would
+    // make one account three figures tall and the other one, two cards that
+    // read as different KINDS of thing. The tightest, as on the desktop and on
+    // this phone's own model sheet — see [ProviderUsage.tightest].
+    final headline = reading.tightest;
     final colour = engineIdentity(reading.provider.engineId).color;
     // Every window BUT the headline is what expanding adds; a card whose
     // provider reports only the one has nothing to expand and says so by not
@@ -460,9 +446,9 @@ class _WindowRow extends StatelessWidget {
               ),
             ),
             Text(
-              '${window.usedPercent.round()}% used',
+              window.remainingLabel,
               style: TextStyle(
-                // Amber past 80, red past 90. The figure is exact either way,
+                // Amber at 20% left, red at 5%. The figure is exact either way,
                 // so the colour is not carrying the number — it is carrying the
                 // moment the number starts to matter.
                 color: usagePressureInk(window.pressure, AppPalette.textPrimary),
@@ -493,24 +479,26 @@ class _WindowRow extends StatelessWidget {
 /// colour it wears the rest of the time.
 ///
 /// One function for the figure and the bar under it, so a window cannot be
-/// amber in one and plain in the other.
-///
-/// ⚠️ [AppColors.danger] rather than `AppPalette.dangerFill`: this is ink on a
-/// surface, and the fill is tuned to carry white lettering ON it.
+/// amber in one and plain in the other. The desktop's allowance colours, so one
+/// subscription reads the same on both — muted, and a red of their own, since a
+/// limit coming up is not an app error.
 Color usagePressureInk(UsagePressure pressure, Color calm) =>
     switch (pressure) {
       UsagePressure.calm => calm,
-      UsagePressure.warn => AppPalette.warn,
-      UsagePressure.critical => AppColors.danger,
+      UsagePressure.warn => AppPalette.usageLow,
+      UsagePressure.critical => AppPalette.usageCritical,
     };
 
-/// How full one window is.
+/// What is left of one window.
+///
+/// Filled with the REMAINDER, as the desktop's meter is: under a figure that
+/// says `80% remaining`, a bar a fifth full would read as the opposite.
 ///
 /// Drawn 6px and fully rounded, in the **account's own colour** — the same
-/// colour as the mark at the head of the card. Turns amber past
-/// [kUsageWarnPercent] and red past [kUsageCriticalPercent], from the same
-/// [usagePressureOf] the figure above it uses: a bar that changed hue at a
-/// different number would make one window look like two readings.
+/// colour as the mark at the head of the card. Turns amber at
+/// [kUsageLowRemaining] left and red at [kUsageCriticalRemaining], from the
+/// same [usagePressureOf] the figure above it uses: a bar that changed hue at
+/// a different number would make one window look like two readings.
 class UsageBar extends StatelessWidget {
   const UsageBar({
     super.key,
@@ -519,6 +507,8 @@ class UsageBar extends StatelessWidget {
     this.height = 6,
   });
 
+  /// How much of the window is spent, as the vendor reports it. The bar draws
+  /// what is left of it.
   final double usedPercent;
 
   /// The account's colour. Overridden once the window is nearly spent, because
@@ -531,8 +521,9 @@ class UsageBar extends StatelessWidget {
   ///
   /// Below this a band of colour reads as a rendering artefact rather than a
   /// quantity, so a small percentage is over-represented on purpose. A window
-  /// at 2% is *not* a window at 0%, and the bar has to be able to say so — the
-  /// exact figure is printed right above it, so nothing is lost by rounding up.
+  /// with 2% left is *not* one with nothing left, and the bar has to be able to
+  /// say so — the exact figure is printed right above it, so nothing is lost by
+  /// rounding up.
   static const double _minFill = 4;
 
   @override
@@ -546,9 +537,12 @@ class UsageBar extends StatelessWidget {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final full = constraints.maxWidth;
-            final measured = full * (usedPercent / 100).clamp(0.0, 1.0);
-            // Zero stays zero: an untouched window draws no colour at all, or
-            // the bar would claim usage nobody has spent.
+            final left = usageRemainingOf(usedPercent);
+            final measured = left.isFinite
+                ? full * (left / 100).clamp(0.0, 1.0)
+                : 0.0;
+            // Zero stays zero: a spent window draws no colour at all, or the
+            // bar would claim an allowance that is gone.
             final width = measured <= 0
                 ? 0.0
                 : measured.clamp(_minFill, full).toDouble();
@@ -575,20 +569,20 @@ class UsageBar extends StatelessWidget {
   }
 }
 
-/// The summary a settings row prints for the whole page — the tightest weekly
-/// figure across every account, because the one worth a glance from a list of
-/// rows is the account closest to running out.
+/// The summary a settings row prints for the whole page — the headline of the
+/// account with the least left, worded as its card words it, because the one
+/// worth a glance from a list of rows is the account closest to running out.
 ///
-/// Null when there is nothing to summarise, which the row draws as `—` rather
-/// than as a zero it never measured.
+/// Null when there is nothing to summarise, which the row leaves blank rather
+/// than printing a figure it never measured.
 String? usageSummaryLabel(List<UsageAccount> accounts) {
-  double? worst;
+  UsageWindow? worst;
   for (final account in accounts) {
-    final window = account.reading.railWindow;
+    final window = account.reading.tightest;
     if (window == null || !account.reading.hasFigures) continue;
-    if (worst == null || window.usedPercent > worst) {
-      worst = window.usedPercent;
+    if (worst == null || window.usedPercent > worst.usedPercent) {
+      worst = window;
     }
   }
-  return worst == null ? null : '${worst.round()}% used';
+  return worst?.remainingLabel;
 }

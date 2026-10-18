@@ -42,7 +42,6 @@ a,b=json.load(open(src)),json.load(open(dst))
 if not isinstance(b,dict) or any(k != key and (k not in b or b[k] != v) for k,v in a.items()):
     sys.exit("abort: merge changed or dropped a key other than %s" % key)'
 NOCACHE='--cache-control=no-cache, no-store, must-revalidate'
-PANEL_TURN=${PANEL_TURN:-180}   # every Pro panel is mounted upside down (owner, 2026-10-11)
 
 # gcs_generation gs://obj -> prints the generation, or 0 when the object does not exist; any other failure aborts.
 gcs_generation() {
@@ -111,7 +110,7 @@ cd "$HERE"
 [ -f "$IDF_DIR/export.sh" ] && . "$IDF_DIR/export.sh" >/dev/null
 rm -rf "$BUILD_DIR"
 # throwaway sdkconfig: only sdkconfig.defaults applies, never the local project-root sdkconfig
-idf.py -B "$BUILD_DIR" -DSDKCONFIG="$BUILD_DIR/sdkconfig.release" -DPROJECT_VER="$VER" -DPOD_PANEL_TURN="$PANEL_TURN" build
+idf.py -B "$BUILD_DIR" -DSDKCONFIG="$BUILD_DIR/sdkconfig.release" -DPROJECT_VER="$VER" build
 BIN="$HERE/$BUILD_DIR/harness_pro.bin"
 check_image "$BIN" || exit 1
 

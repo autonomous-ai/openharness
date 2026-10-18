@@ -8,6 +8,11 @@
  * dialer sends its roster and itself, the dialed machine merges, answers with its own, and the dialer
  * merges that. Whatever changed is then pushed on to the other members, so a link made anywhere
  * reaches everyone who is online, and the rest catch up on their next contact.
+ *
+ * A machine shared across accounts (gateway/sharedTrust.ts, marked `shared` in both stores) is never part
+ * of this: rosters are not exchanged with it, it is not seeded from its pin or its trust, and a
+ * `group_sync` from it is refused. Otherwise sharing one machine would make the colleague's other
+ * machines trusted here, and this account's trusted by theirs.
  */
 import type { Frame, LocalClientSink } from '../../backendSocket.js'
 import type { RelaySession } from '../remoteRelay.js'
@@ -58,6 +63,9 @@ export interface GroupSyncerDeps {
   suspended?: () => ReadonlySet<string>
   /** Machines worth dialing now; null = unknown, try every member. */
   reachable?: () => Set<string> | null
+  /** Whether `pub` is a machine of another account trusted only because it is shared with this one (or this
+   *  one with it): it never takes part in the group. */
+  shared?: (pub: string) => boolean
   /** Whether the roster here is the account's this machine is signed in to (deviceLogSyncer `current`).
    *  While not, nothing is swapped: a daemon started after a switch of accounts read the new account's
    *  log only after its first rounds, and handed the roster of the account it left to the new one's
@@ -199,6 +207,7 @@ export class GroupSyncer {
 
   /** Responder side of `group_sync`, for a sealed request from the session identity `peerPub`. */
   handle(peerPub: string, payload: Record<string, unknown>): Record<string, unknown> {
+    if (this.deps.shared?.(peerPub)) return { error: 'SHARED' }
     if (this.deps.ready?.() === false) {
       const none: Roster = { members: [], removed: [] }
       return { ...none, digest: rosterDigest(none) }
@@ -240,7 +249,7 @@ export class GroupSyncer {
     const targets = new Set<string>()
     const suspended = this.deps.suspended?.() ?? new Set<string>()
     for (const m of this.deps.store.read().members) if (m.kind === 'machine' && m.machineId && !suspended.has(m.pub)) targets.add(m.machineId)
-    for (const p of this.deps.peers.list()) if (!suspended.has(p.pub)) targets.add(p.machineId)
+    for (const p of this.deps.peers.list()) if (!suspended.has(p.pub) && !p.shared) targets.add(p.machineId)
     if (self) targets.delete(self)
     // All at once: one machine that never answers (offline, or too old to know the frame) must not
     // hold up the rest for its whole timeout.
@@ -261,7 +270,7 @@ export class GroupSyncer {
 
   private async exchange(machineId: string): Promise<boolean> {
     const pin = this.deps.peers.get(machineId)
-    if (!pin || this.deps.ready?.() === false) return false
+    if (!pin || pin.shared || this.deps.ready?.() === false) return false
     const generation = this.generation
     const local = this.deps.store.read()
     const devlog = this.devlog?.gossip()
@@ -313,11 +322,12 @@ export class GroupSyncer {
   private seedFromExistingLinks(): void {
     const seed: GroupMember[] = []
     for (const p of this.deps.peers.list()) {
+      if (p.shared) continue
       const m = parseMember({ pub: p.pub, machineId: p.machineId, kind: 'machine', label: p.label, at: p.linkedAt || SELF_STAMP }, this.now())
       if (m) seed.push(m)
     }
     for (const p of this.deps.paired()) {
-      if (!p.kind) continue
+      if (!p.kind || p.shared) continue
       const m = parseMember({ pub: p.identityPub, machineId: p.machineId, kind: p.kind, label: p.label, at: p.pairedAt || SELF_STAMP }, this.now())
       if (m) seed.push(m)
     }

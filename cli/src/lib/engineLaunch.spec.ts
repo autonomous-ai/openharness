@@ -57,6 +57,7 @@ import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
 import { launchScriptOf } from '../testing/launchScript.js'
 import { buildGridEngineLaunch, gridConflictingEnvToClear } from './gridLaunch.js'
 import { TmuxBackend } from './tmuxBackend.js'
+import { resumeSessionId } from './processTable.js'
 
 // What these cases test is what real shells make of the scripts this module writes: sh, dash, bash and
 // zsh run each one, and nothing here could be faked without faking the subject. Each run carries its own
@@ -852,6 +853,13 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       .toEqual([engineBin('claude'), '--resume', 'abc-123'])
     expect(buildEngineCommandArgv('opencode', { resumeSessionId: 'ses_1' }))
       .toEqual([engineBin('opencode'), '--session', 'ses_1'])
+  })
+
+  it('reopens a Pi by its exact id, which Pi creates when nothing was written to it yet', () => {
+    // `pi --session <id>` exits with "No session found matching" until the first reply writes the file.
+    const id = '019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b'
+    expect(buildEngineCommandArgv('pi', { resumeSessionId: id })).toEqual([engineBin('pi'), '--session-id', id])
+    expect(resumeSessionId('pi', `pi --session-id ${id}`)).toBe(id)
   })
 
   it('puts a subcommand-style resume FIRST, ahead of any other flag', () => {

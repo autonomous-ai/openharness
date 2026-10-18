@@ -1,9 +1,13 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { emptyPorts, type TerminalWatchOutput } from '../core/api.js'
-import { b64d, b64e, newEphemeral, newIdentity, welcomeSig } from '../lib/e2ee/core.js'
+import { b64d, b64e, newEphemeral, newIdentity, sign, welcomeSig } from '../lib/e2ee/core.js'
+import { encodeRoster, rosterBytes, type Roster } from '../messages/roster.js'
+import { RosterStore } from '../messages/rosterStore.js'
+import { ConsentStore } from '../messages/consentStore.js'
+import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSettings.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { observerContext, recipientHandshake } from '../sharing/crypto.js'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -15,7 +19,7 @@ const agent = { agentId: 'agent', sessionId: 's', engine: 'codex', active: true 
 describe('Share, as a service', () => {
   let dataDir: string
   beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'sharing-service-')) })
-  afterEach(() => rmSync(dataDir, { recursive: true, force: true }))
+  afterEach(() => { rmSync(dataDir, { recursive: true, force: true }); signedOutForTest() })
 
   const start = (over: Parameters<typeof fakeCore>[0] = {}) => {
     const outputs: Array<(viewer: string, output: TerminalWatchOutput) => void> = []
@@ -30,6 +34,7 @@ describe('Share, as a service', () => {
         dsh: () => ({ viewerUrl: 'http://127.0.0.1:7/' } as never),
       },
       account: {
+        ...over.account,
         observerKey: {
           publicKey: async () => b64e(identity.pub),
           signWelcome: async (machineId, shareId, peer, ephemeral) => b64e(welcomeSig(identity.priv, observerContext(machineId, shareId), b64d(peer), b64d(ephemeral))),
@@ -91,6 +96,57 @@ describe('Share, as a service', () => {
     startSharing(core, ports)
     await ports.sharing!.stop()
     expect(viewerPage(fakeCore({ agents: { resolve: () => agent, dsh: () => null } }))('agent')).toBeNull()
+  })
+
+  it('derives its observers from the shared tabs Agent Messages holds here, read only, for the account signed in', async () => {
+    setAgentSettingsForTest(dataDir, { agentMessages: true })
+    const tabOwner = newIdentity(), TAB = 'a1b2c3d4e5f6a1b2c3d4e5f6', dir = join(dataDir, 'agent-messages')
+    const file = join(dir, 'shared-tabs.json'), consentFile = join(dir, 'shared-tabs-consent.json')
+    let version = 0
+    const roster = (members: string[]): Roster => ({ sharedTabId: TAB, version, name: 'app',
+      owner: { accountId: 'u-alice', email: 'alice@x.io', machineId: 'alice-mac', machinePublicKey: b64e(tabOwner.pub) }, leader: null,
+      members: ['u-bob', ...members].map((id) => ({ accountId: id, email: `${id.slice(2)}@x.io`, name: id, acceptedAt: '2026-10-15T00:00:00.000Z' })),
+      harnesses: [{ accountId: 'u-bob', machineId: 'machine', machinePublicKey: b64e(identity.pub), agentId: 'agent', name: 'api', engine: 'codex' }], invites: [] })
+    const hold = (members: string[]) => {
+      const rosters = new RosterStore(file)
+      rosters.pin(TAB, b64e(tabOwner.pub))
+      version++
+      const body = encodeRoster(roster(members))
+      rosters.offer({ body, signature: b64e(sign(tabOwner.priv, rosterBytes(TAB, version, body))) })
+    }
+    let account: { accountId: string; email: string } | null = { accountId: 'u-bob', email: 'bob@x.io' }
+    const { requests, core } = start({ account: { identity: async () => account } })
+    const asker = { local: true, owner: true }
+    const derive = async () => { const answer = await requests.harness_share_rosters({}, asker); for (let i = 0; i < 5; i++) await new Promise((done) => setTimeout(done, 0)); return answer }
+    const shared = () => vi.mocked(core.account.backend).mock.calls.filter(([, path]) => path.startsWith('/api/harness-shares/')).map(([method, , body]) => [method, (body as { recipientEmail?: string } | undefined)?.recipientEmail])
+    // No shared tab here yet: nothing to grant.
+    expect(await derive()).toEqual({ invited: 0, revoked: 0 })
+    hold(['u-carol'])
+    // Listed by the owner, but never asked for from this machine: nobody watches it.
+    expect(await derive()).toEqual({ invited: 0, revoked: 0 })
+    new ConsentStore(consentFile).grant(TAB, 'machine', 'agent', true)
+    expect(await derive()).toEqual({ invited: 2, revoked: 0 })
+    expect(shared()).toEqual([['PUT', 'alice@x.io'], ['PUT', 'carol@x.io']])
+    // An account the core cannot say, or a file Agent Messages has not finished writing, takes nobody's view away.
+    hold([])
+    account = null
+    expect(await derive()).toEqual({ invited: 0, revoked: 0 })
+    account = { accountId: 'u-bob', email: 'bob@x.io' }
+    for (const path of [file, consentFile]) {
+      const whole = readFileSync(path, 'utf8')
+      writeFileSync(path, '{"tabs":')
+      expect(await derive()).toEqual({ invited: 0, revoked: 0 })
+      // Only read: the file is neither moved aside nor rewritten, which is the messages process's alone.
+      expect(readFileSync(path, 'utf8')).toBe('{"tabs":')
+      writeFileSync(path, whole)
+    }
+    expect(await derive()).toEqual({ invited: 0, revoked: 1 })
+    expect(shared().at(-1)).toEqual(['DELETE', undefined])
+    // Agent Messages off here: its rosters stop following the tabs, so every derived grant goes.
+    setAgentSettingsForTest(dataDir, { agentMessages: false })
+    expect(await derive()).toEqual({ invited: 0, revoked: 1 })
+    setAgentSettingsForTest(dataDir, { agentMessages: true })
+    expect(await derive()).toEqual({ invited: 1, revoked: 0 })
   })
 
   it('hands the owner the core\'s streams: frames to the core, what each viewer is shown back to it', async () => {

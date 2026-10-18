@@ -30,6 +30,7 @@ set(BOARD_SRCS
     "last_words.c"
     "fw_update.c"
     "pet_store.c"
+    "elapsed.c"
     "audio_capture.c"
     "audio_client_habitat.c"
     "audio_probe.c"

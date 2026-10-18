@@ -368,6 +368,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _Row.branch when box.gitError != null => box.gitError,
     _Row.branch when !box.isGitProject => 'Not a Git repository',
     _Row.worktree when box.gitError != null => box.gitError,
+    _Row.worktree when box.inWorktree => 'Already a worktree',
     _Row.worktree when !box.canUseWorktree => 'Not a Git repository',
     _ => null,
   };

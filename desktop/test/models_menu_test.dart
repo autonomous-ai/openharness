@@ -51,7 +51,11 @@ class _GridApp extends AppNotifier {
   Future<void> probeEngines(String machineId, {bool force = false}) async {}
 
   @override
-  Future<void> probeDsh(String machineId, {bool force = false}) async {
+  Future<void> probeDsh(
+    String machineId, {
+    bool force = false,
+    bool userAction = false,
+  }) async {
     final installed = grid[machineId];
     machineStates[machineId]!.dsh.replace([
       if (installed != null)

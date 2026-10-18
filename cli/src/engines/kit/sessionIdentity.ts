@@ -17,6 +17,9 @@ export interface RunIdentity {
   bytes: readonly number[]
   cwd: Field
   run: readonly { field: Field; value: string }[]
+  /** A field that marks a record the engine writes ahead of the workspace header (Muse 1.4's retained permission
+   *  frame): such records are skipped, and the header is the first record without it. */
+  preamble?: Field
 }
 export interface NativeSessionHead { sessionId: string; cwd: string }
 
@@ -67,7 +70,18 @@ export async function readRunIdentity(rule: RunIdentity, path: string, matches: 
     const lines = head.subarray(0, bytes).toString('utf8').split('\n')
     if (!complete) lines.pop()
     if (!lines.length) continue
-    const cwd = valueAt(parsed(lines[0]!), rule.cwd)
+    let first = 0
+    while (rule.preamble && first < lines.length) {
+      const record = parsed(lines[first]!)
+      if (record === null || valueAt(record, rule.preamble) === undefined) break
+      first++
+    }
+    if (first === lines.length) {
+      // Only preamble so far: the header lies beyond this head, or nowhere.
+      if (complete) throw new IdentityReadUnavailable('the workspace header is incomplete or invalid')
+      continue
+    }
+    const cwd = valueAt(parsed(lines[first]!), rule.cwd)
     if (typeof cwd !== 'string' || !isAbsolute(cwd)) throw new IdentityReadUnavailable('the workspace header is incomplete or invalid')
     if (!await matches(cwd)) return null
     let malformed = false

@@ -301,7 +301,7 @@ fn voice(app: &mut App, p: &Value) {
         picker.heading = Some(picker.title.clone());
         app.toast = None;
         app.dial.voice = Some(id.clone());
-        app.modal = Some(Modal::Picker { kind: PickerKind::Route { text, voice: Some(id) }, picker });
+        app.modal = Some(Modal::Picker { kind: PickerKind::Route { text, voice: Some(id), typed: false }, picker });
         if !app.terminal_focused { crate::bell() }
     });
 }

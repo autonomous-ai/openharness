@@ -40,7 +40,8 @@ void main() {
       ),
     );
     await tester.pump();
-    // A new phone opens on its sessions to pick from (`PickUpPage`): `a` is picked there.
+    // A new phone has its computer's moment ("Test host is ready."): `a`, picked by hand meanwhile,
+    // opens at once.
     request.value = (machineId: 'm', agentId: 'a');
     await tester.pump();
     return app;

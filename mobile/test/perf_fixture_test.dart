@@ -19,6 +19,26 @@ void main() {
     addTearDown(tester.view.reset);
   }
 
+  /// [terminal]'s keyframe, written to the end. A long one is written in
+  /// slices a frame apart (`writeKeyframeInSlices`), and under the test's fake
+  /// clock the next slice only comes once the clock moves.
+  Future<void> keyframe(
+    WidgetTester tester,
+    FixtureTerminal terminal,
+    String text, {
+    required int cols,
+    required int rows,
+  }) async {
+    var written = false;
+    final writing = terminal
+        .keyframe(text, cols: cols, rows: rows)
+        .whenComplete(() => written = true);
+    while (!written) {
+      await tester.pump(Duration.zero);
+    }
+    await writing;
+  }
+
   testWidgets('an idle terminal page draws nothing', (tester) async {
     phone(tester);
     final fixture = PerfFixture.create();
@@ -29,11 +49,19 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     // The attach as the benchmark does it: the machine's size, the phone's
     // resize, and a keyframe back at the phone's grid.
-    await a.keyframe(ClaudeOutput(cols: 80).keyframe(20), cols: 80, rows: 24);
+    await keyframe(
+      tester,
+      a,
+      ClaudeOutput(cols: 80).keyframe(20),
+      cols: 80,
+      rows: 24,
+    );
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 100));
     final (cols, rows) = a.lastResize!;
-    await a.keyframe(
+    await keyframe(
+      tester,
+      a,
       ClaudeOutput(cols: cols).keyframe(2000),
       cols: cols,
       rows: rows,
@@ -64,7 +92,7 @@ void main() {
       final fixture = PerfFixture.create();
       final a = fixture.terminals['agent-a']!;
       final output = ClaudeOutput(cols: 40);
-      await a.keyframe(output.keyframe(200), cols: 40, rows: 49);
+      await keyframe(tester, a, output.keyframe(200), cols: 40, rows: 49);
       final buffer = a.session.terminal.buffer;
       final lines = buffer.lines.length;
       final cursor = buffer.cursorY;
@@ -95,7 +123,9 @@ void main() {
       ),
     );
     for (final id in ['agent-a', 'agent-b']) {
-      await fixture.terminals[id]!.keyframe(
+      await keyframe(
+        tester,
+        fixture.terminals[id]!,
         ClaudeOutput(cols: 40).keyframe(100),
         cols: 40,
         rows: 49,

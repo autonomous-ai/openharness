@@ -222,6 +222,16 @@ def validate_examples(folder, kind):
     return rows
 
 
+def validate_image_build(manifest, image, jobs):
+    conclusions = {job['name']: job['conclusion'] for job in jobs}
+    if image['head_sha'] != manifest['source_commit'] or conclusions.get('image') != 'success':
+        raise ValueError('The image does not match a successful build job.')
+    # hn's session and native terminal checks run beside the image build. Image
+    # runs from before that split checked them inside the image job instead.
+    if conclusions.get('runtime', 'success') != 'success':
+        raise ValueError('The image build has no successful hn runtime validation.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input', type=Path, required=True)
@@ -249,8 +259,7 @@ def main():
     jobs = json.loads(gh('api', f'repos/{args.repo}/actions/runs/{args.image}/jobs?filter=latest&per_page=100'))
     if run['conclusion'] != 'success' or run['status'] != 'completed' or run['path'] != '.github/workflows/os.yml':
         raise ValueError('The machine workflow did not finish successfully.')
-    if image['head_sha'] != manifest['source_commit'] or not any(j['name'] == 'image' and j['conclusion'] == 'success' for j in jobs['jobs']):
-        raise ValueError('The image does not match a successful build job.')
+    validate_image_build(manifest, image, jobs['jobs'])
     hardware = None
     if 'broadcom-offline' in manifest.get('capabilities', []):
         if not any(j['name'] == 'hardware' and j['conclusion'] == 'success' for j in jobs['jobs']):

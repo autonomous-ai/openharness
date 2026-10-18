@@ -8,6 +8,10 @@ import { hostPlatform } from './windowsFiles.js'
 export const nativeFileKey = (info: Pick<BigIntStats, 'dev' | 'ino'>) => `${info.dev}:${info.ino}`
 const identity = (info: BigIntStats | null) => info && `${nativeFileKey(info)}:${info.mode}:${info.uid}`
 const version = (info: BigIntStats) => `${identity(info)}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
+/** Saved evidence outlives a reboot, and st_dev does not: macOS numbers /dev/diskN as disks appear at boot, so one
+ * restart moved a user's data volume from 1,4 to 1,7 and held every launch for good (2026-10-16). Saved identities
+ * and versions lead with st_dev; they are compared without it. */
+export const withoutDevice = <T extends string | null | undefined>(saved: T): T => (saved && saved.slice(saved.indexOf(':') + 1)) as T
 type Part = { info: BigIntStats | null; target?: string }
 type Location = { path: string; info: BigIntStats } | null
 /** Immutable route facts can cross a service boundary; timestamps matter for aliases, not sibling churn. */
@@ -28,7 +32,8 @@ export function verifyNativePathFacts(facts: readonly NativePathFact[]): void {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return nativeUnavailable('the retained route became unreadable')
       info = null
     }
-    if (identity(info) !== fact.identity || (fact.alias && (!info || version(info) !== fact.alias.version || target !== fact.alias.target))) {
+    if (withoutDevice(identity(info)) !== withoutDevice(fact.identity)
+      || (fact.alias && (!info || withoutDevice(version(info)) !== withoutDevice(fact.alias.version) || target !== fact.alias.target))) {
       return nativeUnavailable('the retained route changed during preparation')
     }
   }

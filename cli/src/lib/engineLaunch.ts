@@ -315,7 +315,11 @@ export const LAUNCH_RESUME_FLAG: Readonly<Partial<Record<AgentEngine, string[]>>
   cursor: ['--resume'],
   opencode: ['--session'],
   kilo: ['--session'],
-  pi: ['--session'],
+  // Not `--session`: Pi writes a session's file only once its first reply lands, and `--session <id>`
+  // with no file answers "No session found matching" and exits, so a Pi nobody had written to yet died
+  // on a model switch or a restart. `--session-id` opens that project's session when it exists and
+  // creates it under the same id when it does not (Pi 1.0 `createSessionManager`).
+  pi: ['--session-id'],
   hermes: ['--resume'],
   commandcode: ['--resume'],
   muse: ['resume'],

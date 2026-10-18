@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -387,6 +388,71 @@ void main() {
       },
     );
 
+    test('what a daemon counts says it is the phone\'s, inside the seal; nothing else does', () async {
+      final (conn, link) = await connected();
+      // Never answered here: what matters is what reached the machine.
+      void ask(String type, Map<String, dynamic> payload) => unawaited(
+        conn.request(type, payload: payload).then((_) {}, onError: (_) {}),
+      );
+      ask('agent_create', {'engine': 'claude'});
+      ask('agents_list', {'scope': 'all'});
+      conn.sendRaw('message', {'content': 'hi', 'agentId': 'a'});
+      conn.sendRaw('app_presence', {'focused': true});
+      await eventually(
+        () => [
+          'agent_create',
+          'agents_list',
+          'message',
+          'app_presence',
+        ].every((type) => link.frames.any((f) => f['type'] == type)),
+      );
+
+      final create = link.frames.firstWhere((f) => f['type'] == 'agent_create');
+      expect((create['payload'] as Map).keys, [
+        '__e2e',
+      ], reason: 'the relay sees no more than before');
+      expect(link.opened('agent_create').single['usageSurface'], 'phone');
+      expect(link.opened('message').single['usageSurface'], 'phone');
+      expect(
+        link.opened('agents_list').single.containsKey('usageSurface'),
+        isFalse,
+      );
+      expect(link.opened('app_presence').single, {'focused': true});
+      final hello = link.frames.firstWhere((f) => f['type'] == 'e2e_hello');
+      expect(jsonEncode(hello), isNot(contains('usageSurface')));
+    });
+
+    test('the phone marks every request it sends that the daemon counts, and no other', () {
+      final signals = File('../cli/src/lib/productUsageSignals.ts')
+          .readAsStringSync();
+      final actions = RegExp(r'const actions = \{([^}]*)\}')
+          .firstMatch(signals)!
+          .group(1)!;
+      final counted = {
+        for (final match in RegExp(r'(\w+):').allMatches(actions))
+          match.group(1)!,
+        // Counted by its own name there, not through the table.
+        'message',
+      };
+      // Sent: named anywhere in the app outside the list itself.
+      final sent = <String>{};
+      for (final file in Directory('lib').listSync(recursive: true)) {
+        if (file is! File || !file.path.endsWith('.dart')) continue;
+        if (file.path.endsWith('ws/ws_conn.dart')) continue;
+        final source = file.readAsStringSync();
+        for (final type in counted) {
+          if (source.contains("'$type'")) sent.add(type);
+        }
+      }
+      expect(WsConn.usageMeasuredRequests.difference(counted), isEmpty);
+      expect(sent.difference(WsConn.usageMeasuredRequests), isEmpty);
+      expect(
+        WsConn.usageMeasuredRequests.difference(sent),
+        isEmpty,
+        reason: 'a type the phone never sends is not named in lib/',
+      );
+    });
+
     test('sendRaw goes out as it is when its type is not sealed', () async {
       final (conn, link) = await connected();
       conn.sendRaw('app_presence', {'focused': true});
@@ -624,5 +690,41 @@ void main() {
         await conn.waitUntilReady(timeout: const Duration(seconds: 3));
       },
     );
+  });
+
+  // Read before the app takes a machine's terminals down for a redial (a socket gone quiet, a
+  // return from the background): when it is false, `forceReconnect` would do nothing, and the
+  // terminals would wait on "Connection lost" for a socket that never comes.
+  group('whether a redial would dial', () {
+    test('a relay connection, up, can be dialled again', () async {
+      final (conn, _) = await connected();
+
+      expect(conn.canForceReconnect, isTrue);
+    });
+
+    test('and is: a forced redial opens a fresh socket', () async {
+      final (conn, _) = await connected();
+      final next = relay.nextLink();
+
+      await conn.forceReconnect();
+
+      await next.timeout(const Duration(seconds: 3));
+      await conn.waitUntilReady(timeout: const Duration(seconds: 3));
+      expect(conn.canForceReconnect, isTrue);
+    });
+
+    test('one closed on purpose cannot', () async {
+      final (conn, _) = await connected();
+
+      await conn.close();
+
+      expect(conn.canForceReconnect, isFalse);
+    });
+
+    test('one with no relay codecs cannot — its forced redial is a no-op', () {
+      final conn = newConn(noCodecs: true);
+
+      expect(conn.canForceReconnect, isFalse);
+    });
   });
 }

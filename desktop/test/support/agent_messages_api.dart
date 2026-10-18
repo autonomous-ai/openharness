@@ -1,6 +1,7 @@
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/settings/experimental_features.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/desk_sync.dart';
 
@@ -70,5 +71,40 @@ Future<AgentMessagesApi> joinAgentMessagesDesk(
   for (var i = 0; i < 10 && !app.agentMessages.loaded; i++) {
     await Future<void>.value();
   }
+  await agentMessagesSwitch(app, true);
   return fake;
+}
+
+/// The account's Agent Messages switch (Settings ▸ Experimental), as the
+/// backend answers it. Tab Activity, the leader and the People and Tasks of a
+/// tab that is not shared need it on beside the daemon's and backend's support
+/// (final review I1); [joinAgentMessagesDesk] turns it on.
+Future<void> agentMessagesSwitch(AppNotifier app, bool on) async {
+  final store = app.experimentalFeatures;
+  final account = store.accountId ?? 'u-test';
+  store.bind(account, transport: _AgentMessagesSwitch(account, on));
+  await store.refresh();
+}
+
+class _AgentMessagesSwitch implements ExperimentalSettingsTransport {
+  _AgentMessagesSwitch(this.accountId, this.on);
+  final String accountId;
+  final bool on;
+
+  @override
+  Future<Map<String, dynamic>> read() async => {
+    'accountId': accountId,
+    'revision': 0,
+    'features': {
+      for (final feature in ExperimentalFeature.values)
+        feature.id: feature == ExperimentalFeature.agentMessages && on,
+    },
+  };
+
+  @override
+  Future<Map<String, dynamic>> write(
+    String account,
+    ExperimentalFeature feature,
+    bool enabled,
+  ) => throw UnsupportedError('The switch is set by agentMessagesSwitch.');
 }

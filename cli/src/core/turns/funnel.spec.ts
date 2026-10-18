@@ -111,6 +111,39 @@ describe('the event funnel', () => {
     expect(end.replay).toBe(true)
   })
 
+  it('keeps the prompt of the turn that started for the agent, replaces it at the next, and does not drop it when the turn ends', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const prompts = new Map<string, string>()
+    const { funnel } = setup('claude', { prompts })
+    funnel('s1', [started('Fix the login')])
+    expect(prompts.get('a1')).toBe('Fix the login')
+    // After the turn the agent is idle, and its summary falls back to the last prompt when it has no recap.
+    funnel('s1', [ended()])
+    expect(prompts.get('a1')).toBe('Fix the login')
+    funnel('s1', [started('Now the logout')])
+    expect(prompts.get('a1')).toBe('Now the logout')
+    expect([...prompts.keys()]).toEqual(['a1'])
+  })
+
+  it('keeps only the first non-empty line of the prompt, capped, and forgets a blank one: the map stays small', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const prompts = new Map<string, string>()
+    const { funnel } = setup('claude', { prompts })
+    funnel('s1', [started(`\n\nFix the login\n${'pasted log line\n'.repeat(10_000)}`)])
+    expect(prompts.get('a1')).toBe('Fix the login')
+    funnel('s1', [started('x'.repeat(5_000))])
+    expect(prompts.get('a1')).toHaveLength(400)
+    funnel('s1', [started('  \n ')])
+    expect(prompts.has('a1')).toBe(false)
+  })
+
+  it('runs with no prompt map as it did: a funnel not asked to keep prompts keeps none', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { funnel, calls } = setup()
+    funnel('s1', [started('Fix the login')])
+    expect(calls).toContain('input started')
+  })
+
   it('tells every screen a sub-agent\'s turn end is one, and times a live turn', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const { funnel, deps } = setup('claude', { isSubagentSession: vi.fn(() => true) })

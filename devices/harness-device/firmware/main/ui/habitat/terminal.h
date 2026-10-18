@@ -64,8 +64,11 @@ typedef struct { uint16_t w, h; const uint16_t *px; const uint8_t *a; } ht_icon_
 // each — a palette index, 0 transparent — and the palette in RGB565 panel order, entry 0 unused.
 // Packed when `row_at` is set (owner, 2026-10-06: transparent runs cost bytes): row r starts at cells + row_at[r]
 // and is pairs of (transparent cells to skip, opaque cells that follow) bytes, each pair followed by those cells'
-// indices, until the row's `cols` are covered. Unset, `cells` is the plain cols x rows grid.
-typedef struct { uint8_t cols, rows, cell; const uint16_t *palette; const uint8_t *cells; const uint16_t *row_at; }
+// indices, until the row's `cols` are covered. Unset, `cells` is the plain cols x rows grid. At most HT_CELL_COLS_MAX
+// cols (the rasters unpack a row into a buffer that wide): wider than a byte for the builder's props (259, owner
+// 2026-10-16: its sweat drop flies off left while the hammer is out right), each packed run still at most 255.
+enum { HT_CELL_COLS_MAX = 480 };
+typedef struct { uint16_t cols; uint8_t rows, cell; const uint16_t *palette; const uint8_t *cells; const uint16_t *row_at; }
     ht_cell_frame_t;
 // One cell of a frame, plain or packed (0 transparent).
 uint8_t ht_cell_at(const ht_cell_frame_t *frame, int col, int row);

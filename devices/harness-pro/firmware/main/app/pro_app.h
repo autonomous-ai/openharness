@@ -52,8 +52,6 @@ void pro_app_note_update(void);                       // after fw_mark_valid: th
 // ---- the render task's steps, public so the host tests drive them with a fake clock ----
 void pro_app_tick(void);                 // clock edge, talk_over, library sweep
 uint32_t pro_app_next_wake_ms(void);     // how long the renderer may sleep
-bool pro_app_apply_skin(void);           // the same for a requested interface switch; true if it did
-bool pro_app_apply_turn(void);           // the frame's first step: switch a requested screen turn (full redraw, touch cancelled); true if it did
 bool pro_app_take_scene(ht_scene_t *scene);   // draw the model into `scene` when it changed
 
 // ---- host test seams ----

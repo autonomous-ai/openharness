@@ -4,6 +4,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'phone_shell_scope.dart';
+import 'settings_page.dart' show PhoneSettingsButton;
 import 'tty.dart';
 import 'tty_controls.dart';
 import 'welcome/unlock_computer.dart';
@@ -119,6 +120,13 @@ class _LinkPageState extends State<LinkPage> {
                 child: TtyBackButton(
                   onPressed: () => Navigator.of(context).maybePop(),
                 ),
+              )
+            else
+              // Embedded, this form IS the home screen — the account's one computer, locked — and
+              // the person on it may be on the wrong account: Settings, and its Sign out, from here.
+              Align(
+                alignment: Alignment.centerRight,
+                child: PhoneSettingsButton(notifier: widget.notifier),
               ),
             if (machine != null)
               Expanded(

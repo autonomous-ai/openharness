@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -9,6 +10,7 @@ import '../logging/app_log.dart';
 import '../logging/redact.dart';
 import '../logging/startup_trace.dart';
 import '../core/models.dart';
+import '../core/test_run.dart';
 import 'relay_codec.dart';
 import 'terminal_transport_plugin.dart';
 
@@ -128,6 +130,19 @@ class WsConn {
   Timer? _reconnectTimer;
   String? _tokenUsed;
 
+  /// The relay said this connection's machine is offline, and the connection is waiting for it to
+  /// come back rather than redialling — see [parkUntilOnline].
+  bool _parked = false;
+  bool get isParked => _parked;
+
+  /// How long a parked connection waits before it dials again of its own accord, with nothing having
+  /// said the machine is back — the fallback under [wake], not the way back.
+  static const _parkedRecheck = Duration(seconds: 60);
+
+  /// This socket's `e2e_hello` went out right behind its `machine_select`, so the select's ack must
+  /// not send another — see [connect]. Reset on every dial.
+  bool _helloAhead = false;
+
   /// How long a dial may take to open before it counts as failed. Without one, a socket dialled
   /// into a network that swallows packets waits out the OS's own TCP timeout — over a minute on
   /// iOS — with the machine showing "reconnecting" the whole time.
@@ -140,6 +155,19 @@ class WsConn {
   Future<void> _inboundTail = Future<void>.value();
 
   bool get isReady => _ready && _channel != null;
+
+  /// When this connection last opened a frame its MACHINE sealed — proof the end-to-end session
+  /// with the machine is alive, as against the relay merely being up. Null until the first.
+  ///
+  /// ⚠️ **Sealed frames only, never the relay's own.** `node_status`, `machines_status` and the
+  /// handshake come from the backend, and keep coming while the session behind them is dead (the
+  /// machine's Harness restarted and dropped it); counted, they would make a stale session look
+  /// like a slow one. Read by a terminal's open watchdog (`TerminalSession.lastHeardFromMachine`)
+  /// and by the agent-list timeout, to tell a machine that is slow from one that is gone.
+  DateTime? get lastHeardFromMachineAt => _lastHeardFromMachineAt;
+  DateTime? _lastHeardFromMachineAt;
+
+  void _heardFromMachine() => _lastHeardFromMachineAt = DateTime.now();
 
   /// Wait for this machine's handshake without queuing a request or changing
   /// its timeout. Callers can then start independent RPCs with their own budgets.
@@ -171,6 +199,11 @@ class WsConn {
   /// True once this connection has permanently given up (a deliberate [close], or a non-retryable
   /// local failure like NO_PEER_LINK) — [WsPool] must not hand a closed connection back out.
   bool get isClosed => _closing;
+
+  /// Whether [forceReconnect] would dial again: a relay connection nobody has closed. Read it
+  /// before taking this machine's terminals down for a redial — when it is false, the redial is a
+  /// no-op, and the terminals would sit on "Connection lost" waiting for a socket that never comes.
+  bool get canForceReconnect => !_closing && relayCodecs != null;
   String get endpointKey => 'cloud:$wsBaseUrl:$autonomousEnv';
 
   WsConn({
@@ -191,6 +224,8 @@ class WsConn {
     if (_closing || _connecting) return;
     _connecting = true;
     _ready = false;
+    // A dial is under way: whatever parked the last one is over ([parkUntilOnline]).
+    _parked = false;
     // ⚠️ **The outbound queue starts empty on every dial, and it did not used
     // to.** `_outboundTail` is a chain each send appends itself to, so one link
     // that never completes stalls every frame queued behind it — for the life of
@@ -202,6 +237,7 @@ class WsConn {
     // Anything still pending on it was addressed to a channel that is gone, and
     // `_flushQueue` re-sends what actually matters once the session is ready.
     _outboundTail = Future<void>.value();
+    _helloAhead = false;
     WebSocketChannel? dialing;
     onStatus(
       _attempt == 0
@@ -213,7 +249,7 @@ class WsConn {
       // (and may go to the network to refresh), while the codec comes off disk
       // and mints an ephemeral key — neither has ever needed the other's result.
       // In series they were two waits stacked in front of the dial, on the
-      // stretch the phone shows as "Connecting to your machine…", and every
+      // stretch the phone shows as "Connecting to your computer…", and every
       // reconnect paid it again.
       final codecs = relayCodecs;
       final pendingToken = StartupTrace.time(
@@ -241,28 +277,39 @@ class WsConn {
               (codec) => (codec: codec, error: null),
               onError: (Object error) => (codec: null, error: error),
             );
+      // What the codec said while the credential was being fetched, if it has said it yet.
+      ({RelayCodec? codec, Object? error})? codecAnswered;
+      unawaited(pendingCodec?.then((result) => codecAnswered = result));
       final token = await pendingToken;
       if (token.isEmpty) {
         throw StateError('WebSocket credential is missing');
       }
       if (_closing) return;
-      _tokenUsed = token;
-      if (pendingCodec != null) {
-        final result = await pendingCodec;
-        if (_closing) return;
-        final failure = result.error;
-        if (failure != null) throw failure;
-        final codec = result.codec;
-        if (codec == null) {
-          _refusePeer('NO_PEER_LINK');
-          return;
-        }
-        _codec = codec;
-        // A dial that failed past this point left one behind; this connect owns a new one.
-        _disposePlugin();
-        final plugins = transportPlugins;
-        if (plugins != null) _plugin = plugins(_PluginHost(this), machineId);
+      // The codec's "no link" comes from links held in memory, a handful of microtasks behind its
+      // start — and the credential, also from memory, often lands in the same turn, just ahead of
+      // it: measured, Find dialled three unlinked machines that way. A few microtask hops let an
+      // answer already on its way arrive. Microtasks only, so this never waits on the event loop or
+      // a frame; a codec still reading the disk or minting a key is not waited for.
+      for (
+        var hop = 0;
+        hop < _codecAnswerHops && pendingCodec != null && codecAnswered == null;
+        hop++
+      ) {
+        await Future<void>.value();
       }
+      if (_closing) return;
+      // ⚠️ **No link, no dial (owner, 2026-10-02).** The codec answers "no link to this machine"
+      // from the links this device holds in memory, usually before the credential is back — and
+      // the dial below went out anyway, a TCP + TLS + upgrade opened only to be dropped by
+      // [_refusePeer] the moment the codec was awaited. Opening Find did that for every machine
+      // this phone never linked, on every opening. Said already, it is said here, with no socket;
+      // not said yet, the dial goes ahead as before and the same refusal follows it.
+      final early = codecAnswered;
+      if (early != null && early.codec == null && early.error == null) {
+        _refusePeer('NO_PEER_LINK');
+        return;
+      }
+      _tokenUsed = token;
       final base = Uri.parse('$wsBaseUrl/api/web-ws');
       final uri = base.replace(
         queryParameters: {
@@ -272,15 +319,51 @@ class WsConn {
           'client': 'mobile',
         },
       );
-      final channel = dialing = (connectChannel ?? WebSocketChannel.connect)(
+      // ⚠️ **Dialled BEFORE the codec is awaited (owner, 2026-10-01).** The socket needs only the
+      // credential; the codec is not used until the first frame. Awaited first, its disk read and key
+      // mint (~65ms at launch) stood in front of a TCP + TLS + upgrade that could have been under way.
+      //
+      // ⚠️ But NOT made [_channel] until the codec is in place: a frame sent in between would go
+      // out with no codec to seal it — in the clear. Until then the socket is this method's alone,
+      // and closed here on every way out.
+      final channel = (connectChannel ?? WebSocketChannel.connect)(
         uri,
         protocols: [token],
       );
-      _channel = channel;
-      await StartupTrace.time(
+      void dropChannel() =>
+          unawaited(channel.sink.close().catchError((Object _) {}));
+      // Its outcome captured here, where the future is made: the ways out below leave without
+      // awaiting it, and an unhandled rejection would be reported as a crash.
+      final opening = StartupTrace.time(
         'ws.dial',
         () => channel.ready.timeout(_dialTimeout),
-      );
+      ).then<Object?>((_) => null, onError: (Object error) => error);
+      if (pendingCodec != null) {
+        final result = await pendingCodec;
+        if (_closing) {
+          dropChannel();
+          return;
+        }
+        final failure = result.error;
+        if (failure != null) {
+          dropChannel();
+          throw failure;
+        }
+        final codec = result.codec;
+        if (codec == null) {
+          dropChannel();
+          _refusePeer('NO_PEER_LINK');
+          return;
+        }
+        _codec = codec;
+        // A dial that failed past this point left one behind; this connect owns a new one.
+        _disposePlugin();
+        final plugins = transportPlugins;
+        if (plugins != null) _plugin = plugins(_PluginHost(this), machineId);
+      }
+      _channel = dialing = channel;
+      final dialFailure = await opening;
+      if (dialFailure != null) throw dialFailure;
       if (_closing || !identical(_channel, channel)) {
         // Logged because this is a silent exit from a dial that otherwise looks
         // successful — the trace shows `ws.dial` completing and then nothing at
@@ -319,10 +402,25 @@ class WsConn {
       // relay. Cancelled by [_markReady], by [_onDone] and by [close].
       _armSelectWatchdog();
       appLog.debug('ws', '→ machine_select $machineId');
-      await sendFrame({
+      final selected = await _enqueueFrame({
         'type': 'machine_select',
         'payload': {'machineId': machineId},
       });
+      // ⚠️ **The hello goes right behind the select, not on its ack (owner, 2026-10-01).** The
+      // relay takes a socket's frames strictly in order (`backend/src/lib/orderedInbox.ts`), so it
+      // reaches the machine only once the select has bound — waiting for the ack added a whole
+      // phone↔relay round trip in front of every handshake. A select the relay refuses drops it
+      // (no machine bound), which is harmless. The ack still reaches the plugin before the welcome:
+      // the relay sends it before it handles the hello. See the `connected` case in [_onRelayFrame].
+      final codec = _codec;
+      if (selected &&
+          codec != null &&
+          !_closing &&
+          !_ready &&
+          identical(_channel, channel)) {
+        channel.sink.add(jsonEncode(codec.helloFrame()));
+        _helloAhead = true;
+      }
     } on WsCredentialRevoked catch (error) {
       // ⚠️ Not for a connection somebody already closed. Signing out closes every connection, and
       // one still waiting on its credential then learns the session is gone — which is the
@@ -362,6 +460,37 @@ class WsConn {
     onAuthFailure(message);
   }
 
+  /// How many microtask hops [connect] gives the codec's answer before dialling — more than the
+  /// in-memory link lookup takes to reach it (~6), and still nothing a person could measure.
+  static const _codecAnswerHops = 12;
+
+  /// From this many characters a relay text frame is decoded off the UI isolate — see [_onRaw].
+  static const _decodeOffThreadFrom = 64 * 1024;
+
+  /// [raw]'s JSON object, decoded on a background isolate; null for anything that is not one. An
+  /// isolate that will not start is the decode done here.
+  static Future<Map<String, dynamic>?> _decodeOffThread(String raw) async {
+    Object? decoded;
+    try {
+      decoded = await Isolate.run(() => jsonDecode(raw));
+    } on FormatException {
+      return null;
+    } on Object {
+      try {
+        decoded = jsonDecode(raw);
+      } on Object {
+        return null;
+      }
+    }
+    return decoded is Map<String, dynamic> ? decoded : null;
+  }
+
+  static String _typeOf(Map<String, dynamic> message) =>
+      message['type'] is String ? message['type'] as String : '?';
+
+  static String _short(String machineId) =>
+      machineId.length <= 8 ? machineId : machineId.substring(0, 8);
+
   void _onRaw(dynamic raw) {
     final codec = _codec;
     if (raw is List<int>) {
@@ -372,11 +501,41 @@ class WsConn {
           .then((_) async {
             final local = codec == null ? bytes : codec.decodeBinary(bytes);
             if (local == null) return;
+            // Every relay binary frame is sealed by the machine — see [lastHeardFromMachineAt].
+            if (codec != null) _heardFromMachine();
             await _plugin?.observeWsBinary(local);
             await onBinaryFrame?.call(local);
           })
           .catchError((_) {
             // Binary E2EE/session code owns recovery for bad frames.
+          });
+      return;
+    }
+    // ⚠️ **A large frame is decoded off the UI isolate, in its place in the line (owner,
+    // 2026-10-02).** A machine's whole agent list arrives as one frame of hundreds of KB, and its
+    // JSON was decoded right here on the thread drawing the screen — then opened (below), then
+    // decoded again. Done inside the inbound chain rather than before it, so it keeps its place:
+    // the frames behind it wait for it exactly as they waited for the decode done here.
+    if (codec != null &&
+        raw is String &&
+        raw.length >= _decodeOffThreadFrom &&
+        !kUnderTest) {
+      _inboundTail = _inboundTail
+          .then((_) async {
+            final clock = Stopwatch()..start();
+            final message = await _decodeOffThread(raw);
+            if (message == null) return;
+            final decodeMs = clock.elapsedMilliseconds;
+            await _onRelayFrame(codec, message);
+            appLog.info(
+              'ws',
+              'large frame · ${(raw.length / 1024).round()}KB '
+                  '${_typeOf(message)} · decoded off-thread in ${decodeMs}ms, '
+                  'handled in ${clock.elapsedMilliseconds}ms · ${_short(machineId)}',
+            );
+          })
+          .catchError((_) {
+            // Keep the FIFO alive: a frame that will not open is dropped, never dispatched.
           });
       return;
     }
@@ -461,9 +620,66 @@ class WsConn {
     });
   }
 
+  /// The relay has just said this connection's machine is offline: stop treating the silence that
+  /// follows as a dial gone wrong, and wait for the machine instead.
+  ///
+  /// ⚠️ **Why (owner, 2026-10-02).** Without this, a machine that is switched off was redialled for
+  /// as long as the app ran: [_armSelectWatchdog] read the welcome that never came as a relay gone
+  /// quiet, and every redial on its 1–30s backoff paid a fresh credential, a key mint and a TLS
+  /// dial — the key mint pure Dart on the UI thread. Opening Find dials every machine on the
+  /// account, so four machines that were off cost about twenty of those in Find's first minute.
+  ///
+  /// The socket is KEPT, not closed. The relay pushes every one of the account's machines'
+  /// status changes down every socket (`machines_status`), so the app hears this machine come back
+  /// through it — or through any other machine's socket, or `/api/machines` — and calls [wake]. A
+  /// welcome that arrives anyway (the relay was wrong) still makes it ready ([_markReady]). With
+  /// nothing heard at all, it dials again after [_parkedRecheck].
+  ///
+  /// Only a connection that never became ready: a live session's machine going away is the
+  /// `node_status` the app already handles, on a socket that is still up.
+  void parkUntilOnline() {
+    if (_closing || _ready || _parked || _channel == null) return;
+    _parked = true;
+    _selectWatchdog?.cancel();
+    _selectWatchdog = null;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(_parkedRecheck, () => wake('recheck'));
+    appLog.info(
+      'ws',
+      'parked $machineId · the relay says it is offline; '
+          'waiting for it (recheck ${_parkedRecheck.inSeconds}s)',
+    );
+  }
+
+  /// Dial a parked connection now — its machine was reported back ([reason] goes to the log).
+  /// Nothing for a connection that is not parked.
+  void wake(String reason) {
+    if (!_parked) return;
+    _parked = false;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    if (_closing || _ready) return;
+    appLog.info('ws', 'woken $machineId · $reason');
+    _abandonDial(_channel);
+    _attempt = 0;
+    // A dial still finishing would turn [connect] away, and nothing would dial after it: the
+    // ordinary backoff picks it up instead.
+    if (_connecting) {
+      _scheduleReconnect();
+      return;
+    }
+    unawaited(connect());
+  }
+
   void _markReady() {
     _selectWatchdog?.cancel();
     _selectWatchdog = null;
+    // The machine answered after all: the recheck a park armed is not wanted.
+    if (_parked) {
+      _parked = false;
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+    }
     _ready = true;
     _attempt = 0;
     onStatus(ConnectionStatus.connected);
@@ -487,6 +703,12 @@ class WsConn {
           // The policy rides the ack; the plugin must have it before the welcome
           // that decides whether to act on it.
           _plugin?.onConnectedAck(payload);
+          // Already sent behind this socket's select — see [connect]. Exactly one hello per
+          // session: a second one would have the machine start the handshake over.
+          if (_helloAhead) {
+            _helloAhead = false;
+            return;
+          }
           _channel?.sink.add(jsonEncode(codec.helloFrame()));
         }
         return;
@@ -517,8 +739,14 @@ class WsConn {
         codec.handleRekey(payload);
         return;
     }
-    final clear = codec.decodeFrame(message);
+    // A large sealed payload is opened off the UI isolate, by a codec that can.
+    final clear = codec is OffThreadRelayDecoder
+        ? await (codec as OffThreadRelayDecoder).decodeFrameOffThread(message)
+        : codec.decodeFrame(message);
     if (clear == null) return;
+    // Only a frame that arrived sealed and opened: the relay's own frames pass through
+    // [RelayCodec.decodeFrame] in the clear — see [lastHeardFromMachineAt].
+    if (payload['__e2e'] is Map) _heardFromMachine();
     final plain = <String, dynamic>{
       ...clear,
       'payload': (clear['payload'] as Map<String, dynamic>?) ?? {},
@@ -584,9 +812,35 @@ class WsConn {
     }
     final eventType = message['type'];
     if (eventType is String && worthLogging(eventType)) {
-      appLog.debug('ws', '↓ $eventType ${summariseForLog(payload)}');
+      appLog.debug('ws', '↓ $eventType ${_summaryOf(eventType, payload)}');
     }
     await onEvent({...message, 'payload': payload});
+  }
+
+  /// [payload] for the log line of a [type] frame.
+  ///
+  /// ⚠️ **The two that come in bursts say which agent and what state, not the whole agent.** A
+  /// machine re-sends every agent it has as `agent_synced` each time it reconciles (every five
+  /// minutes), and `agent_activity` beats for every agent mid-turn: rendered in full, each was a
+  /// whole agent — project, git context, model — turned into 1,200 characters on the UI thread,
+  /// four thousand lines a day of it. Which agent, and whether it is up, is what the timeline is
+  /// read for.
+  static String _summaryOf(String type, Map<String, dynamic> payload) {
+    switch (type) {
+      case 'agent_synced':
+        final agent = payload['agent'];
+        if (agent is! Map) break;
+        final launch = agent['launch'];
+        final terminal = agent['terminal'];
+        return '{id: ${agent['id']}, status: ${agent['status']}'
+            '${launch is Map ? ', launch: ${launch['state']}' : ''}'
+            '${terminal is Map ? ', terminal: ${terminal['available']}' : ''}}';
+      case 'agent_activity':
+        final activity = payload['activity'];
+        return '{agentId: ${payload['agentId']}'
+            '${activity is Map ? ', state: ${activity['state']}' : ''}}';
+    }
+    return summariseForLog(payload);
   }
 
   Future<void> _handleE2ee(Map<String, dynamic> frame) async {
@@ -633,6 +887,34 @@ class WsConn {
 
   @visibleForTesting
   static bool worthLogging(String type) => !_unlogged.contains(type);
+
+  /// The requests this phone sends that a machine's daemon counts by who sent them — of `actions` and
+  /// `message` in cli/src/lib/productUsageSignals.ts, the ones it sends (never a type it does not:
+  /// every machine request named in `lib/` must be sealed, `encrypted_down_types_test.dart`). Over the
+  /// relay the phone is a remote app client like the browser, so these carry `usageSurface: 'phone'`
+  /// (as a model list a person opened carries `userAction`) and are counted as the phone's. Nothing
+  /// else gets the word: not the E2EE handshake, not the relay's own frames. A daemon from before it
+  /// reads past it.
+  @visibleForTesting
+  static const usageMeasuredRequests = {
+    'agent_create',
+    'agent_resume',
+    'agent_restart',
+    'agent_retarget',
+    'agent_recent',
+    'agent_fork',
+    'agent_delete',
+    'session_search',
+    'session_tail',
+    'dsh_list',
+    'dsh_install',
+    'dsh_update',
+    'dsh_remove',
+    'models_list',
+    'grid_models_list',
+    'browser_open',
+    'message',
+  };
 
   Future<Map<String, dynamic>> request(
     String type, {
@@ -807,6 +1089,11 @@ class WsConn {
     final type = frame['type'] as String;
     var payload = (frame['payload'] as Map<String, dynamic>?) ?? {};
     if (onOutgoing != null) payload = await onOutgoing!(type, payload);
+    // Every JSON frame goes out through here — a request, a terminal's `message`, one held in the
+    // queue across a redial — so this is the one place the word is added.
+    if (usageMeasuredRequests.contains(type)) {
+      payload = {...payload, 'usageSurface': 'phone'};
+    }
     final channel = _channel;
     if (channel == null) throw StateError('WS is not connected');
     final out = <String, dynamic>{'type': type, 'payload': payload};
@@ -857,6 +1144,8 @@ class WsConn {
     if (!identical(_channel, channel)) return;
     _channel = null;
     _sub = null;
+    // A parked socket that closed is redialled on the backoff below, which replaces the recheck.
+    _parked = false;
     _codec = null;
     _disposePlugin();
     _ready = false;
@@ -938,12 +1227,18 @@ class WsConn {
   /// sending `machine_select`, and the second never sent one either because
   /// `connect()`'s own `_connecting` guard had turned it away. The socket was
   /// open, the relay was waiting to be told which machine, and neither side ever
-  /// spoke: the launch hung on "Connecting to your machine…" indefinitely.
+  /// spoke: the launch hung on "Connecting to your computer…" indefinitely.
   ///
   /// Reachable on every launch, not just on a real resume: the phone's shell
   /// calls `handleAppResumed` as it mounts, which is a few hundred milliseconds
   /// after the warm start has begun dialling.
   void reconnectNow() {
+    // Parked, the socket is open but waiting on a machine the relay called offline
+    // ([parkUntilOnline]): somebody arriving is worth asking again, once, as it always was.
+    if (_parked) {
+      wake('asked for');
+      return;
+    }
     if (_closing || _connecting || _channel != null) {
       return;
     }
@@ -971,6 +1266,7 @@ class WsConn {
   Future<void> close() async {
     _closing = true;
     _ready = false;
+    _parked = false;
     _codec = null;
     _disposePlugin();
     _reconnectTimer?.cancel();
@@ -1081,6 +1377,8 @@ class _PluginHost implements TerminalTransportHost {
 
   @override
   Future<void> deliverBinary(Uint8List localFrame) async {
+    // Opened from the data channel with this session's keys: the machine's own, as on the relay.
+    _conn._heardFromMachine();
     await _conn.onBinaryFrame?.call(localFrame);
   }
 }

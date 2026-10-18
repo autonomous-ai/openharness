@@ -1,0 +1,7 @@
+OpenHarness: service icons for Settings ▸ Connectors
+
+Copied by cli/scripts/connector-assets.mjs from cli/src/lib/connectors/assets/web/icons; do not edit here.
+
+Sources: Autonomous's connector icons (cdn.autonomous.ai), Simple Icons (CC0) and the services' own
+favicons, resized to 64 px PNG or coloured SVG. Names and marks identify the services; they do not imply
+sponsorship or endorsement.

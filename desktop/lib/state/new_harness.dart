@@ -67,24 +67,31 @@ class NewHarnessProject {
   const NewHarnessProject.fresh([this.name])
     : folder = null,
       repository = null,
-      generated = null;
+      generated = null,
+      exact = false;
   NewHarnessProject.generated(ProjectFolderRequest request)
     : name = request.name,
       generated = request,
       folder = null,
-      repository = null;
-  const NewHarnessProject.folder(String this.folder)
+      repository = null,
+      exact = false;
+  const NewHarnessProject.folder(String this.folder, {this.exact = false})
     : name = null,
       repository = null,
       generated = null;
   const NewHarnessProject.clone(GitHubRepository this.repository)
     : name = null,
       folder = null,
-      generated = null;
+      generated = null,
+      exact = false;
   final String? name;
   final String? folder;
   final GitHubRepository? repository;
   final ProjectFolderRequest? generated;
+
+  /// The person picked this very folder (browsed or typed): a worktree stays
+  /// itself instead of showing as its repository.
+  final bool exact;
   bool get isNew => folder == null;
 
   @override
@@ -94,11 +101,13 @@ class NewHarnessProject {
       other.generated?.generatedAt == generated?.generatedAt &&
       other.generated?.generatedLabel == generated?.generatedLabel &&
       other.folder == folder &&
+      other.exact == exact &&
       other.repository?.url == repository?.url;
   @override
   int get hashCode => Object.hash(
     name,
     folder,
+    exact,
     repository?.url,
     generated?.generatedAt,
     generated?.generatedLabel,
@@ -739,9 +748,13 @@ class NewHarnessController extends ChangeNotifier {
   String? branchRefreshError;
   DateTime? _branchesCheckedAt;
   bool get isGitProject => _gitProject.isGit && !isTerminal && !isCloud;
-  bool get canUseWorktree => isGitProject && !checkingGit;
+
+  /// A worktree the person picked: the harness works in it, on its branch.
+  bool get inWorktree => _project.exact && _gitProject.mainFolder != null;
+  bool get canUseWorktree => isGitProject && !checkingGit && !inWorktree;
   bool get worktree =>
       isGitProject &&
+      !inWorktree &&
       (_worktree ??
           (_desktopChoices
               ? app.agentPreference.successfulWorktree ?? true
@@ -756,7 +769,7 @@ class NewHarnessController extends ChangeNotifier {
   /// Fresh desktop work starts on main, with or without a worktree. A retry
   /// must instead keep the branch of the folder its first attempt prepared.
   bool get _defaultsToMain =>
-      _desktopChoices && _attempt?.preparedFolder == null;
+      _desktopChoices && _attempt?.preparedFolder == null && !inWorktree;
   String? get branchRef {
     if (_branchRef != null) return _branchRef;
     if (_defaultsToMain) {
@@ -975,7 +988,9 @@ class NewHarnessController extends ChangeNotifier {
     // A worktree is a temporary folder, so the launcher shows its repository.
     // With Worktree off its branch stays chosen and Start reopens that
     // worktree; otherwise new work starts from the repository's own branch.
-    if (info.mainFolder case final main? when _project.folder == key.$2) {
+    // One the person picked stays itself ([inWorktree]).
+    if (info.mainFolder case final main?
+        when _project.folder == key.$2 && !_project.exact) {
       if (!_defaultsToMain &&
           _worktree == false &&
           _branchRef == null &&
@@ -2032,7 +2047,7 @@ class NewHarnessController extends ChangeNotifier {
   /// The folder the system chooser (or the remote browser) came back with.
   void setFolder(String folder) {
     if (locked) return;
-    _project = NewHarnessProject.folder(folder);
+    _project = NewHarnessProject.folder(folder, exact: true);
     field = NewHarnessField.launch;
     _cycle = null;
     query = field == NewHarnessField.task ? task : '';
@@ -3150,7 +3165,10 @@ class NewHarnessController extends ChangeNotifier {
             title:
                 '${machine.machine.displayName}:${names[name]! > 1 ? tildePath(folder, id) : name}',
             detail: location(folder, id),
-            project: NewHarnessProject.folder(folder),
+            project: NewHarnessProject.folder(
+              folder,
+              exact: folder == _project.folder && _project.exact,
+            ),
             machineId: id,
             enabled: _machineUsable(machine),
             why: machine.needsLink ? 'Link required' : 'Offline',
@@ -3286,7 +3304,7 @@ class NewHarnessController extends ChangeNotifier {
           id: 'project:$parent',
           title: p.basename(parent),
           detail: 'Use ${location(parent)}',
-          project: NewHarnessProject.folder(parent),
+          project: NewHarnessProject.folder(parent, exact: true),
           synthetic: true,
         ),
     ];
@@ -3302,7 +3320,7 @@ class NewHarnessController extends ChangeNotifier {
           id: 'project:$folder',
           title: name,
           detail: location(folder),
-          project: NewHarnessProject.folder(folder),
+          project: NewHarnessProject.folder(folder, exact: true),
         ),
       );
     }
@@ -3700,8 +3718,10 @@ class NewHarnessController extends ChangeNotifier {
       profile: base == 'codex' && _model == null ? _profile : null,
       profileMachineId: _machineId,
     );
+    // Working in a picked worktree says nothing about the next harness's.
     final launchedWorktree =
-        _recoveredWorktreePreference ?? (isGitProject ? worktree : null);
+        _recoveredWorktreePreference ??
+        (isGitProject && !inWorktree ? worktree : null);
     final failure = await app.createAgent(
       _machineId,
       engine: base,
@@ -3756,7 +3776,11 @@ class NewHarnessController extends ChangeNotifier {
       // goes into it rather than making a second one beside it.
       if (!checking && attempt.preparedFolder != null) {
         _recoveredWorktreePreference = launchedWorktree;
-        _project = NewHarnessProject.folder(attempt.preparedFolder!);
+        _project = NewHarnessProject.folder(
+          attempt.preparedFolder!,
+          // A picked worktree prepared in place is still the one picked.
+          exact: _project.exact && attempt.preparedFolder == _project.folder,
+        );
         _gitKey = (_machineId, _project.folder, isTerminal);
         _worktree = false;
         _branchRef = null;

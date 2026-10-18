@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import { closeBus } from './lib/bus.js'
+import { reconcileCommunityLikeCounts } from './lib/db/communityLikeCounts.js'
 import { backfillMachineFreeEntitlements } from './lib/db/freeEntitlement.js'
 import {
   backfillMachineAuthMode,
@@ -39,6 +40,7 @@ async function start(): Promise<void> {
   await pruneLegacyDeviceBindings()
   await backfillMachineFreeEntitlements()
   await backfillMachinePresenceTurnsStarted()
+  await reconcileCommunityLikeCounts()
 
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, stopping backend worker...`)

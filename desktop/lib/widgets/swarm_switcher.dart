@@ -1228,8 +1228,14 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                       padding: const EdgeInsets.symmetric(vertical: 2),
                       child: Material(
                         key: ValueKey('swarm-search-line:${row.id}'),
+                        // Blue while the list has the keys; a quiet fill while the row's actions
+                        // beside it have them, so it still says whose actions those are. Dropping
+                        // it left only the pointer's hover tint, which read as a second colour of
+                        // selection (owner, 2026-10-15).
                         color: highlighted
                             ? DesktopChrome.activeSelection
+                            : selected && search.managing
+                            ? grid.AppSurface.selectedFill
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(10),
                         child: tile,

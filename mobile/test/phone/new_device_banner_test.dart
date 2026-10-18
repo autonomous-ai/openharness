@@ -278,8 +278,8 @@ void main() {
     },
   );
 
-  testWidgets('Mine on a suspended entry opens its page instead of dismissing '
-      '(a dismissal could not hold: the next read brings it back)', (
+  testWidgets('It’s mine on a suspended entry opens its page instead of '
+      'dismissing (a dismissal could not hold: the next read brings it back)', (
     tester,
   ) async {
     final m = member(pubOf(7), label: 'iPad', addedAt: 1);
@@ -288,7 +288,7 @@ void main() {
       ..suspendedNew.add(m.pub)
       ..newDevices.add(m);
     await pump(tester);
-    await tester.tap(find.text('Mine'));
+    await tester.tap(find.text('It’s mine'));
     await tester.pumpAndSettle();
 
     expect(app.dismissed, isEmpty);
@@ -313,16 +313,35 @@ void main() {
     expect(find.textContaining('Not trusted here'), findsOneWidget);
   });
 
-  testWidgets('Mine on the banner keeps a fork suspension (pubs only)', (
+  testWidgets('It’s mine on the banner keeps a fork suspension (pubs only)', (
     tester,
   ) async {
     final m = member(pubOf(7), label: 'iPad', addedAt: 1);
     app.newDevices.add(m);
     await pump(tester);
-    await tester.tap(find.text('Mine'));
+    await tester.tap(find.text('It’s mine'));
     await tester.pumpAndSettle();
     expect(app.dismissed, [(pub: m.pub, liftSuspension: false)]);
     expect(app.newDevices, isEmpty);
+  });
+
+  testWidgets('the banner answers in the device page\'s words: It’s mine, '
+      'as the desktop says it', (tester) async {
+    final m = member(pubOf(7), label: 'iPad', addedAt: 1);
+    app
+      ..rows = [row(m, pending: true)]
+      ..newDevices.add(m);
+    await pump(tester);
+    expect(find.text('It’s mine'), findsOneWidget);
+    expect(find.text('Mine'), findsNothing);
+
+    await tester.tap(find.text('Review'));
+    await tester.pumpAndSettle();
+    final mine = find.byKey(const Key('device-detail-mine'));
+    expect(
+      find.descendant(of: mine, matching: find.text('It’s mine')),
+      findsOneWidget,
+    );
   });
 
   group('a device that joined and left before anyone looked', () {
@@ -667,7 +686,7 @@ void main() {
       );
     });
 
-    testWidgets('the new-device sentence wraps beside Mine and Review: '
+    testWidgets('the new-device sentence wraps beside It’s mine and Review: '
         '"(+N more)" is not clipped', (tester) async {
       tester.view.physicalSize = const Size(360, 800);
       tester.view.devicePixelRatio = 1;
@@ -687,7 +706,7 @@ void main() {
       // It has the room left of the buttons, and is taller than one line.
       expect(
         tester.getRect(text).right,
-        lessThanOrEqualTo(tester.getRect(find.text('Mine')).left),
+        lessThanOrEqualTo(tester.getRect(find.text('It’s mine')).left),
       );
       expect(find.textContaining('(+2 more)'), findsOneWidget);
     });

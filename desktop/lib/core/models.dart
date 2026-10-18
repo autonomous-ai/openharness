@@ -102,6 +102,36 @@ class SharedHarness {
 bool sameMachineId(String a, String b) =>
     a.replaceAll('-', '').toLowerCase() == b.replaceAll('-', '').toLowerCase();
 
+/// A whole machine another account shares with this one (backend lib/machineAccess.ts): its owner
+/// named this account's address ([via] `email`), or shared it with everyone at their domain and this
+/// account added it ([via] `domain`, [added]). Used with the owner's own rights, unlike [Machine.isShared],
+/// one harness shared to watch.
+class MachineShare {
+  final String ownerName;
+  final String ownerEmail;
+  final String via;
+  final bool added;
+
+  const MachineShare({
+    required this.ownerName,
+    required this.ownerEmail,
+    required this.via,
+    required this.added,
+  });
+
+  bool get viaDomain => via == 'domain';
+
+  factory MachineShare.fromJson(Map<String, dynamic> j) => MachineShare(
+    ownerName: j['ownerName'] as String? ?? '',
+    ownerEmail: j['ownerEmail'] as String? ?? '',
+    via: j['via'] == 'domain' ? 'domain' : 'email',
+    added: j['added'] == true,
+  );
+
+  /// Who shared it, as a person reads it: their name, or their address.
+  String get owner => ownerName.isNotEmpty ? ownerName : ownerEmail;
+}
+
 class Machine {
   final String machineId;
 
@@ -117,6 +147,9 @@ class Machine {
   final List<SharedHarness> sharedHarnesses;
   final String? status;
 
+  /// Set when another account shares this whole machine with this one; null for the account's own.
+  final MachineShare? machineShare;
+
   const Machine({
     required this.machineId,
     this.apiKey = '',
@@ -129,7 +162,12 @@ class Machine {
     this.ownerName,
     this.sharedHarnesses = const [],
     this.status,
+    this.machineShare,
   });
+
+  /// Another account's machine, shared whole with this one: used as the account's own, managed (renamed,
+  /// removed, shared on) by its owner alone.
+  bool get isSharedMachine => machineShare != null;
 
   String get displayName => (name != null && name!.isNotEmpty)
       ? name!
@@ -172,6 +210,9 @@ class Machine {
         SharedHarness.fromJson(Map<String, dynamic>.from(row as Map)),
     ],
     status: j['status'] as String?,
+    machineShare: j['share'] is Map
+        ? MachineShare.fromJson(Map<String, dynamic>.from(j['share'] as Map))
+        : null,
   );
 
   Machine copyWith({String? name}) => Machine(
@@ -186,6 +227,7 @@ class Machine {
     ownerName: ownerName,
     sharedHarnesses: sharedHarnesses,
     status: status,
+    machineShare: machineShare,
   );
 }
 

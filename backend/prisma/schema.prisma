@@ -28,8 +28,12 @@ model CommunityHarness {
   createdAt     DateTime @default(now())
   // Set when its author edits it (routes/communityEdit.ts); never on publishing.
   updatedAt     DateTime?
+  // Its likes, moved with each one saved (lib/communityLikes.ts) and reconciled at worker boot: what a
+  // popular feed orders by, instead of counting every publication's likes for each page.
+  likeCount     Int      @default(0)
 
   @@index([autonomousEnv, deletedAt, createdAt])
+  @@index([autonomousEnv, deletedAt, likeCount, createdAt])
   @@index([autonomousEnv, authorId])
   @@index([autonomousEnv, forkedFrom])
   @@index([autonomousEnv, category, deletedAt, createdAt])
@@ -45,6 +49,8 @@ model CommunityLike {
 
   @@unique([autonomousEnv, harnessId, userId])
   @@index([autonomousEnv, harnessId])
+  // A trending feed reads only the last week's likes.
+  @@index([autonomousEnv, createdAt])
   @@map("community_likes")
 }
 
@@ -64,6 +70,60 @@ model CommunityComment {
   @@index([autonomousEnv, harnessId, createdAt])
   @@index([autonomousEnv, userId, createdAt])
   @@map("community_comments")
+}
+
+/// One reader's report of a publication or a comment (lib/communityReports.ts). It hides that one from
+/// its reader at once; reports from three readers hide it from everyone (CommunityHidden).
+model CommunityReport {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  autonomousEnv String   @default("prod")
+  targetType    String   // 'harness' | 'comment'
+  targetId      String
+  harnessId     String   // the publication, or the one the comment is on
+  userId        String
+  reason        String
+  createdAt     DateTime @default(now())
+
+  @@unique([autonomousEnv, targetType, targetId, userId])
+  @@index([autonomousEnv, userId, targetType])
+  @@index([autonomousEnv, targetType, targetId, createdAt])
+  @@map("community_reports")
+}
+
+/// A publication or comment hidden from everyone after reports, until a reviewer restores it (kept,
+/// with `restoredAt`: only reports after that count again) or removes it.
+model CommunityHidden {
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  autonomousEnv String    @default("prod")
+  targetType    String
+  targetId      String
+  harnessId     String
+  createdAt     DateTime  @default(now())
+  restoredAt    DateTime?
+
+  @@unique([autonomousEnv, targetType, targetId])
+  @@index([autonomousEnv, targetType, restoredAt])
+  @@map("community_hidden")
+}
+
+/// Something that happened to a creator's work on the Hub, for their bell (lib/communityNotifications.ts):
+/// a comment on their harness, a reply to their comment, a fork of their harness. It names who did it and
+/// where, never what they wrote.
+model CommunityNotification {
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  autonomousEnv String    @default("prod")
+  userId        String    // who is told
+  kind          String    // 'comment' | 'reply' | 'fork'
+  harnessId     String    // the harness commented on, or the one forked
+  harnessTitle  String
+  actorName     String
+  targetId      String    // the comment, or the fork
+  createdAt     DateTime  @default(now())
+  readAt        DateTime?
+
+  @@index([autonomousEnv, userId, createdAt])
+  @@index([autonomousEnv, userId, readAt])
+  @@map("community_notifications")
 }
 
 model CommunityFollow {
@@ -777,6 +837,43 @@ model HarnessShare {
   @@map("harness_shares")
 }
 
+/// A whole machine its owner shares with other accounts (docs/plans/2026-10-15-share-machine-plan.md):
+/// with these addresses, and with everyone at `domain` when the owner turned that on. Off by default, so
+/// a machine with no row is shared with no one. The backend's copy decides who is LISTED the machine and
+/// who may select it on the relay; the machine's own daemon keeps the policy it published and trusts
+/// only the keys of accounts that policy names (cli services/sharedMachines.ts), as Share's owner does.
+model MachineShare {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  machineId     String   @unique
+  ownerId       String
+  autonomousEnv String
+  /// Normalized (trimmed, lower case), never the owner's own.
+  emails        String[]
+  /// The owner's email domain while "Everyone at @domain" is on; null when off. Written by the backend
+  /// from the owner's verified address, never taken from the client, and never a public domain.
+  domain        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([emails, autonomousEnv])
+  @@index([domain, autonomousEnv])
+  @@index([ownerId])
+  @@map("machine_shares")
+}
+
+/// Someone at a machine's domain added it to their machines (a domain share takes one click to add; an
+/// address the owner named needs none). Only the accounts that added it are trusted by the machine.
+model MachineShareAdd {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  machineId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  @@unique([machineId, userId])
+  @@index([userId])
+  @@map("machine_share_adds")
+}
+
 /// The account's DESK: its tabs, in order, and the agents each holds — one document per user, the
 /// same on every computer the person signs in on (owner, 2026-09-21: "tab là global"). Holds only
 /// what the person would call "my tabs": ids, names, order, `(machineId, agentId)` pairs. Nothing
@@ -817,11 +914,64 @@ model AgentMessageTab {
   userId    String
   tabId     String
   enabled   Boolean  @default(false)
+  /// The tab's leader: a pane of the tab on one of the owner's machines. Written as explicit nulls at create.
+  leaderMachineId String?
+  leaderAgentId   String?
   revision  Int      @default(0)
   updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@map("agent_message_tabs")
+}
+
+/// A tab its owner shared with other accounts (docs/superpowers/specs/2026-10-15-agent-messages-across-accounts-design.md).
+/// `roster` is the owner's signed blob, stored and never read: members verify it against the owner's key.
+model AgentMessageShare {
+  id             String    @id @map("_id") // sharedTabId: sha256(['amsg-share', ownerUserId, tabId])[:24]
+  ownerUserId    String
+  ownerMachineId String
+  tabId          String
+  autonomousEnv  String
+  rosterVersion  Int       @default(0)
+  roster         Json?
+  stoppedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([ownerUserId, tabId])
+  @@map("agent_message_shares")
+}
+
+model AgentMessageInvite {
+  id             String    @id @map("_id")
+  shareId        String
+  ownerUserId    String
+  ownerMachineId String
+  email          String
+  autonomousEnv  String
+  expiresAt      DateTime
+  acceptedBy     String?
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@unique([shareId, email])
+  @@index([email, autonomousEnv, expiresAt])
+  @@map("agent_message_invites")
+}
+
+model AgentMessageMember {
+  id         String    @id @map("_id") // sha256(['amsg-member', shareId, userId])[:24]
+  shareId    String
+  userId     String
+  email      String
+  inviteId   String
+  acceptedAt DateTime  @default(now())
+  removedAt  DateTime?
+
+  @@index([userId])
+  @@index([shareId])
+  @@map("agent_message_members")
 }
 
 /// Explicit account opt-ins; missing choices stay off. Each write changes one feature.
@@ -836,6 +986,8 @@ model ExperimentalSettings {
   agentsStartAgents    Boolean @default(false)
   agentPullRequestLine Boolean @default(false)
   agentMessages        Boolean @default(false)
+  /// Inverted on purpose: off shares a one-line summary of what each harness does with the shared tab's other accounts.
+  agentMessagesHideSummary Boolean @default(false)
   revision         Int     @default(0)
 
   @@index([userId])

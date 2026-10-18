@@ -14,8 +14,18 @@
  *   A core from before says nothing of it, and is taken as signed in, as the service took every core then.
  * - That the core's copy of the account's switch changed (`service_event` kind `settings`), which a core from before
  *   never says: off, the service then hears it only from the setting's file.
+ * - Shared tabs' keys (`core.account.tabKey`), asked of the core one use at a time (`tab_key`): the gateway holds them.
+ * - Their relay (`core.account.tabRelay`), asked of the core the same way (`tab_relay`), and what it said, which the core
+ *   tells as the gateway hears it (`service_event` kind `tab_frame`), handed to the service (`onTabFrame`).
+ * - The account signed in here (`core.account.identity`), asked of the core (`account`), which reads it.
+ * A core from before shared tabs answers those four `UNKNOWN_QUERY`: this process is the master's build and the core may
+ * not be (a master that cannot re-execute keeps an old core running, e2e/messagesSkew.e2e.ts). Every share action then
+ * answers `DAEMON_TOO_OLD` with `CORE_TOO_OLD_TEXT`, the restart it needs, and the rest of Agent Messages runs on.
  */
-import type { BackendNotice, DaemonAddress } from '../core/api.js'
+import type { AccountIdentity, BackendNotice, DaemonAddress, TabFrame } from '../core/api.js'
+import { askTabKey } from '../lib/tabKeyWire.js'
+import { askTabRelay, tabFrameOf } from '../lib/tabRelayWire.js'
+import { MessageError } from '../messages/model.js'
 import { startAgentMessages } from '../messages/service.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { agentsIn, daemonIn, processCoreApi, type ShownAgent } from './processCoreApi.js'
@@ -31,6 +41,11 @@ export const WRITABLE_EVERY_MS = 1_000
 export const WATCHED = 1_000
 /** How old the agents it read may be before its mailbox's next look asks again. */
 export const AGENTS_FRESH_MS = 1_000
+
+/** What shared tabs say under a core from before them: the person restarts Harness, and core and master both run the
+ *  new build. Without it, a share action under such a core said "try again in a moment" or that the backend could not
+ *  be reached, neither of which a moment or the network would ever change. */
+export const CORE_TOO_OLD_TEXT = 'This computer runs an older Harness core than its Agent Messages. Quit and reopen Harness, or run harness stop and then harness start, to restart it and share tabs.'
 
 export interface MessagesServiceOptions {
   dataDir: string
@@ -79,6 +94,7 @@ export function runMessagesService(options: MessagesServiceOptions): ServiceProc
   }
 
   const noticeListeners = new Set<(notice: BackendNotice) => void>()
+  const tabFrameListeners = new Set<(event: TabFrame) => void>()
   /** The deliveries handed to the core, newest last: those whose writing this process watches. */
   const handed = new Set<string>()
   let told = ''
@@ -90,9 +106,29 @@ export function runMessagesService(options: MessagesServiceOptions): ServiceProc
     ask, deliveries, daemon: () => daemon,
     onNotice: (listener) => { noticeListeners.add(listener); return () => { noticeListeners.delete(listener) } },
   })
+  // Shared tabs' keys, which the gateway holds: each use asked of the core (core/messagesLink.ts `tab_key`), which asks
+  // the gateway. This process holds no key; the other services in theirs keep TAB_KEY_OFF. A core from before them
+  // refuses with why: it needs a restart (lib/tabKeyWire.ts passes a refusal's words on).
+  const tabKey = askTabKey(async (payload) => {
+    const answer = await ask('tab_key', payload)
+    return answer.error === 'UNKNOWN_QUERY' ? { error: CORE_TOO_OLD_TEXT } : answer
+  })
+  // Their relay, whose sockets the gateway holds too (core/messagesLink.ts `tab_relay`); not connected, nothing is sent.
+  const tabRelay = askTabRelay((payload) => ask('tab_relay', payload))
+  // The account signed in here, which the core reads (core/messagesLink.ts `account`): this process may call only the
+  // backend routes the core allows it, and `/api/auth/me` is not one. A core that cannot say now: null, and shared tabs
+  // say the account is unavailable for a moment. A core from before `account` never will, so that is a different answer,
+  // DAEMON_TOO_OLD: the computer needs a restart, and a window must not show it as a wait. Every share action asks the
+  // identity first (messages/service.ts `shareAction`), so each one gets it.
+  const identity = async (): Promise<AccountIdentity | null> => {
+    const answer = await ask('account', {}).catch(() => null)
+    if (answer?.error === 'UNKNOWN_QUERY') throw new MessageError('DAEMON_TOO_OLD', CORE_TOO_OLD_TEXT)
+    return typeof answer?.accountId === 'string' && answer.accountId && typeof answer.email === 'string' && answer.email
+      ? { accountId: answer.accountId, email: answer.email } : null
+  }
   const api = {
     ...base,
-    account: { ...base.account, signedIn: () => signedIn },
+    account: { ...base.account, signedIn: () => signedIn, identity, tabKey, tabRelay },
     turns: {
       ...base.turns,
       deliver: (agentId: string, text: string, deliveryId: string) => {
@@ -107,7 +143,12 @@ export function runMessagesService(options: MessagesServiceOptions): ServiceProc
       cancelDelivery: () => false,
     },
   }
-  const build = () => (options.start ?? startAgentMessages)(api, { dataDir: options.dataDir, changed: () => tell() })
+  const build = () => (options.start ?? startAgentMessages)(api, {
+    dataDir: options.dataDir, changed: () => tell(),
+    // A shared tab's roster changed here: the core hands it to Share (core/messagesLink.ts `observers`), never waited on.
+    observers: () => { void ask('observers', {}).catch(() => {}) },
+    onTabFrame: (listener) => { tabFrameListeners.add(listener); return () => { tabFrameListeners.delete(listener) } },
+  })
   let messages = build()
   /** The machine the running service was started under, and whether it was. */
   let builtFor: string | null = null
@@ -161,6 +202,11 @@ export function runMessagesService(options: MessagesServiceOptions): ServiceProc
       // Heard once the service runs for a known machine: the tabs it would read are that machine's.
       if (started && payload.kind === 'notice' && payload.notice && typeof payload.notice === 'object') {
         for (const listener of noticeListeners) listener(payload.notice as BackendNotice)
+      }
+      // What a shared tab's relay said, as the shape it must be, for the running service's shared tabs.
+      if (started && payload.kind === 'tab_frame') {
+        const event = tabFrameOf(payload.event)
+        if (event) for (const listener of tabFrameListeners) listener(event)
       }
     },
     onConnected: (connection) => {

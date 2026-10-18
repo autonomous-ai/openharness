@@ -56,9 +56,13 @@ class ViewerServices {
 
   final ViewerKeyStore keys;
   final DirectAuth auth;
+
+  /// The session's state and sign-out, and the welcome screen's "Continue with Google" and
+  /// "Continue with Apple": the SSO page, opened in the app (`direct_login.dart`).
   final DirectLogin login;
 
-  /// How a phone signs in — an emailed code, never the browser. See `email_code_api.dart`.
+  /// The other ways a phone signs in — an emailed code, or a scanned one. See
+  /// `email_code_api.dart`.
   final EmailCodeLogin emailLogin;
   final DirectLink links;
   final RelayCodecFactory relayCodecs;

@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentLaunch, RegisteredSession } from '../../lib/registry.js'
 import { heldLaunch, type RestoreSummary } from '../../lib/restoreAgents.js'
-import { createHeldLaunches, heldFor, heldPaneArgv } from './heldLaunches.js'
+import { createHeldLaunches, heldFor, heldPaneArgv, heldRetryMs } from './heldLaunches.js'
 
 const running: ReturnType<typeof createHeldLaunches>[] = []
 afterEach(() => { for (const held of running.splice(0)) held.close() })
@@ -300,5 +300,65 @@ it('retries a held sibling while another agent’s observation has not settled',
     expect(h.restore.mock.calls.map(([only]) => [...only])).toEqual([['a'], ['b'], ['b']])
     finish(summary({ held: ['a'] }))
     await pass
+  } finally { vi.useRealTimers() }
+})
+
+it('waits longer after each timer pass that launched nothing, up to half a minute', () => {
+  expect([0, 1, 2, 3, 4, 5, 40].map(heldRetryMs)).toEqual([2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000])
+})
+
+it('backs off a hold nothing else wakes, and climbs again from the start once something changes', async () => {
+  vi.useFakeTimers()
+  try {
+    const h = setup([row('a', heldLaunch('native'))], () => summary({ held: ['a'] }))
+    await h.held.boot(async () => {})
+    await h.held.restoreHeld()
+    const passesAfter = async (ms: number) => { await vi.advanceTimersByTimeAsync(ms); return h.restore.mock.calls.length }
+    // 2 s, 4 s, 8 s, 16 s, then every 30 s: a day of it is about 2,900 passes, not 43,000.
+    expect(await passesAfter(1_999)).toBe(1)
+    expect(await passesAfter(1)).toBe(2)
+    expect(await passesAfter(4_000)).toBe(3)
+    expect(await passesAfter(8_000)).toBe(4)
+    expect(await passesAfter(16_000)).toBe(5)
+    expect(await passesAfter(29_999)).toBe(5)
+    expect(await passesAfter(1)).toBe(6)
+    expect(await passesAfter(30_000)).toBe(7)
+    // A service connecting is news: it is asked at once, the waiting pass keeps its time, and the one after
+    // that is 4 s later again rather than 30.
+    await h.held.restoreHeld('native')
+    expect(h.restore).toHaveBeenCalledTimes(8)
+    expect(await passesAfter(30_000)).toBe(9)
+    expect(await passesAfter(3_999)).toBe(9)
+    expect(await passesAfter(1)).toBe(10)
+  } finally { vi.useRealTimers() }
+})
+
+it('climbs again from the start once a pass launches an agent, and when a person restarts a held one', async () => {
+  vi.useFakeTimers()
+  try {
+    let launch = false
+    const h = setup([row('a', heldLaunch('native')), row('b', heldLaunch('native'))],
+      only => only.has('b') && launch ? summary({ restored: ['b'] }) : summary({ held: [...only] }))
+    await h.held.boot(async () => {})
+    await h.held.restoreHeld()
+    await vi.advanceTimersByTimeAsync(2_000 + 4_000 + 8_000 + 16_000 + 30_000)
+    const nextPass = async () => {
+      const before = h.restore.mock.calls.length
+      for (let ms = 1; ms <= 30_000; ms++) {
+        await vi.advanceTimersByTimeAsync(1)
+        if (h.restore.mock.calls.length > before) return ms
+      }
+      return null
+    }
+    launch = true
+    expect(await nextPass()).toBe(30_000)
+    expect(h.registry.get('b')?.launch?.state).toBe('starting')
+    // The pass after the one that launched waits 4 s, not 30.
+    expect(await nextPass()).not.toBeNull()
+    expect(await nextPass()).toBe(4_000)
+    await vi.advanceTimersByTimeAsync(8_000 + 16_000 + 30_000)
+    expect(await h.held.restartHeld('a')).toMatchObject({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+    expect(await nextPass()).not.toBeNull()
+    expect(await nextPass()).toBe(4_000)
   } finally { vi.useRealTimers() }
 })

@@ -88,9 +88,17 @@ async fn open(url: &str) -> bool {
 }
 
 pub fn show(app: &mut App, key: (String, String), options: Options) {
+    use crate::measure::Outcome;
     let Some(agent) = app.fleet.agent(&key.0, &key.1) else { return app.error("can't find harness") };
+    // viewer_open (measure.rs), as the Desktop counts its viewer pane opened for the person: the
+    // browser opening it, or its link shown to open (over SSH); failed when it could not open, or
+    // with the harness's launch error. Opening is not rendering. A copied link or a shell asking for
+    // it (`hn view -p`) opens nothing.
+    let launch_error = !agent.viewer_error.is_empty();
+    let opens = opens_for_person(app.capture.is_some(), &options);
     let url = match destination(agent, &app.fleet.local_id, &app.viewer_web_url, options.web || options.copy || (app.capture.is_none() && ssh())) {
-        Ok(url) => url, Err(e) => return app.error(e),
+        Ok(url) => url,
+        Err(e) => { if opens && launch_error { crate::measure::once(app, "viewer_open", Outcome::Failed) } return app.error(e) }
     };
     if app.capture.is_some() || options.print { app.print("Viewer", vec![url]); return }
     if options.copy {
@@ -98,11 +106,20 @@ pub fn show(app: &mut App, key: (String, String), options: Options) {
         app.say("Viewer link sent to the terminal clipboard", crate::theme::ONLINE);
         return
     }
-    if ssh() { show_link(app, &url); return }
-    app.spawn(async move { let opened = open(&url).await; (url, opened) }, |app, (url, opened)| {
+    if ssh() {
+        show_link(app, &url);
+        crate::measure::once(app, "viewer_open", if launch_error { Outcome::Failed } else { Outcome::Ok });
+        return
+    }
+    let measured = crate::measure::begin(app, "viewer_open");
+    app.spawn(async move { let opened = open(&url).await; (url, opened) }, move |app, (url, opened)| {
+        measured.finish(app, if opened && !launch_error { Outcome::Ok } else { Outcome::Failed });
         if opened { app.say("Opened viewer in your browser", crate::theme::ONLINE) } else { show_link(app, &url) }
     });
 }
+
+/// Whether showing a viewer opens it for the person: not a shell's capture, `-p` or a copied link.
+fn opens_for_person(captured: bool, options: &Options) -> bool { !captured && !options.print && !options.copy }
 
 fn show_link(app: &mut App, url: &str) {
     app.print("Viewer", vec!["Open this link in your browser:".into(), url.into(), String::new(), "Use :view -c to copy the browser link. Sign in and link this machine if asked.".into()]);
@@ -181,6 +198,33 @@ mod tests {
             assert!(web_link(base, "m", "a").is_err(), "{base}");
         }
     }
+    /// viewer_open counts a viewer opened for the person, as the Desktop's pane: never a copied link
+    /// or a shell's `-p`; a harness's launch error is a failed open.
+    #[tokio::test]
+    async fn only_a_viewer_opened_for_the_person_is_measured() {
+        assert!(opens_for_person(false, &Options::default()));
+        assert!(opens_for_person(false, &Options { web: true, ..Options::default() }));
+        assert!(!opens_for_person(false, &Options { copy: true, ..Options::default() }));
+        assert!(!opens_for_person(false, &Options { print: true, ..Options::default() }));
+        assert!(!opens_for_person(true, &Options::default()));
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19814, sink, (80, 24));
+        app.viewer_web_url = "https://harness.example".into();
+        app.fleet.local_id = "m".into();
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "m".into(), name: "m".into(), local: true, status: "running".into(), reach: crate::fleet::Reach::Ready });
+        app.follow_account(true);
+        // (A copied link is not shown here: it would be written to the terminal running the tests.)
+        for (id, row) in [("printed", json!({"id": "printed", "viewerName": "3D Viewer"})), ("broken", json!({"id": "broken", "viewerError": "the viewer did not start"}))] {
+            let agent = crate::fleet::agent_from("m", &row, None);
+            app.fleet.agents.insert(agent.key(), agent);
+            show(&mut app, ("m".into(), id.into()), Options { print: id == "printed", ..Options::default() });
+        }
+        crate::measure::tick(&mut app);
+        let viewer: Vec<&serde_json::Value> = app.measure.sent.iter().filter(|v| v["flow"] == "viewer_open").collect();
+        assert_eq!(viewer.len(), 2, "the broken one's start and failure, nothing for the printed link: {viewer:?}");
+        assert_eq!(viewer[1]["outcome"], "failed");
+    }
+
     #[test]
     fn no_viewer_is_an_error_and_waiting_viewer_gets_its_own_page() {
         let mut a = crate::fleet::agent_from("m", &json!({"id":"a"}), None);

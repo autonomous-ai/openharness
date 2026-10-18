@@ -70,4 +70,32 @@ void main() {
     expect(matchSpokenAnswer('the fast one', choice), isNull);
     expect(matchSpokenAnswer('two', choice)?.number, '2');
   });
+
+  test('an MCP server\'s Accept and Decline answer to yes and no', () {
+    final elicitation = parseQuestionLines([
+      '───────────────────────────────────────────────',
+      '  MCP server “claude.ai Supabase” requests your input',
+      '',
+      '  This SQL includes destructive operations…',
+      '',
+      '  ❯ Accept    Decline',
+      '',
+      '  Esc to cancel · ↑/↓ to navigate',
+    ], QuestionEngine.claude)!;
+    String? press(String said) =>
+        matchSpokenAnswer(said, elicitation)?.number;
+    expect(questionKeys(elicitation), [
+      (label: 'accept', number: '1'),
+      (label: 'decline', number: '2'),
+    ]);
+    expect(press('Accept.'), '1');
+    expect(press('yes'), '1');
+    expect(press('go ahead'), '1');
+    expect(press('Decline'), '2');
+    expect(press('no'), '2');
+    expect(press('reject it'), '2');
+    expect(press('cancel'), '2');
+    // Nowhere to put other words: nothing is sent.
+    expect(press('drop the other table too'), isNull);
+  });
 }

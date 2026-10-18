@@ -39,7 +39,8 @@ export 'sample_runtime.dart' show SampleConnection, SampleRuntime;
 /// Opens sample mode over whatever is on screen, and completes when it is left.
 ///
 /// A route of its own on the root navigator, so it is independent of the app under it — signed
-/// out or signed in — and leaving it (Settings → Leave sample, or the system back at its root)
+/// out or signed in — and leaving it (Settings → Leave sample, the back chevron on its first screen,
+/// or the system back at its root)
 /// takes all of it away: the harnesses, their timers and its app state.
 /// Opens the sample. Completes when it is left — with [SampleExit.setUp] when it was left to set up
 /// a real computer (the end card's green button), so the caller can go there next.

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:harness_mobile/core/last_opened_agent.dart' show AgentRef;
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/state/terminal_pane.dart';
 
 /// Closes the streams of agents a pager is no longer showing.
 ///
@@ -25,6 +26,31 @@ void releaseAgentPanes(
     // desk for nothing.
     unawaited(notifier.closePane(pane.id, persist: !pane.warm));
   }
+}
+
+/// How many of [panes] hold an agent stream that is STAYING open: every agent pane but the ones a
+/// pending [AgentPanePruner.keep] for [keeping] is about to close — on [attached], outside
+/// [keeping], and not spared by [heldElsewhere].
+///
+/// ⚠️ **Why the pending prune has to be discounted.** A pager's prefetch fires a quarter second
+/// after landing, before [AgentPanePruner.delay] has closed what the swipe left behind. Counted,
+/// those agents fill places under the pager's cap, the new ring's far side is never attached, and
+/// nothing re-arms it: the next page in the direction of travel comes up "Attaching…".
+int stayingAgentPanes(
+  Iterable<TerminalPane> panes, {
+  required Set<AgentRef> keeping,
+  required Set<AgentRef> attached,
+  required bool Function(AgentRef) heldElsewhere,
+}) {
+  bool closing(AgentRef agent) =>
+      attached.contains(agent) &&
+      !keeping.contains(agent) &&
+      !heldElsewhere(agent);
+  return panes.where((pane) {
+    final agentId = pane.agentId;
+    if (agentId == null) return false;
+    return !closing((machineId: pane.machineId, agentId: agentId));
+  }).length;
 }
 
 /// Keeps the phone down to a HANDFUL of open agents — the one on screen, the ones a swipe away, and

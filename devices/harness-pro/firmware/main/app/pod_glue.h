@@ -14,15 +14,10 @@
 #include "pod/pod_view.h"
 
 enum { POD_MEMBERS_MAX = 24 };   // == POD_PANES_MAX == SWARM_MEMBERS_MAX
-enum { POD_TAP_SLOP = 24 };
-// Console gestures: hold this long to talk; slide down this far after it to cancel; the command bar's height and the
-// travel of a swipe down from it.
-enum { POD_HOLD_MS = 400, POD_BAR_H = 72, POD_BAR_SWIPE = 80, POD_BOTTOM_Y = 620, POD_EDGE_SWIPE = 80 };
-// Console Tab and Recent (cards) and the Inbox fill the screen to its bottom margin, so their bottom zone (a swipe up goes
-// back) starts below the content instead of at POD_BOTTOM_Y: a swipe up from the last row or card scrolls or pages.
-enum { POD_LIST_BOTTOM_Y = 692 };
-enum { POD_PG_IDLE, POD_PG_DRAG, POD_PG_ANIM };
-enum { POD_PG_ANIM_MS = 170, POD_PG_STEP_MS = 16, POD_PG_FLICK = 300 };   // settle time; animation step; flick velocity, px/s (0.3 px/ms)      // px: farther than this from the DOWN and the contact is a drag, not a tap
+enum { POD_TAP_SLOP = 24 };   // px: farther than this from the DOWN and the contact is a drag, not a tap
+// Gestures: the top band's height (a swipe down from it opens Notices) and the travel of that
+// swipe; the travel of a swipe up (Home).
+enum { POD_BAR_H = 72, POD_BAR_SWIPE = 80, POD_EDGE_SWIPE = 80, POD_BOTTOM_Y = 620 };   // POD_BOTTOM_Y: a swipe up that starts at or below it goes Home from a room or a recap
 
 typedef struct { const char *id, *name, *engine, *machine; } pod_roster_row_t;
 
@@ -39,17 +34,24 @@ typedef struct {
     const char *const *sw_list[SWARMS_MAX];
     pod_member_meta_t sw_meta[SWARMS_MAX][POD_MEMBERS_MAX];   // the daemon's member metadata of the same frame (see pod_model_swarms_meta)
     char sw_selected[ID_MAX];
+    char sw_prev_sel[ID_MAX];    // the window's selected tab of the previous swarms frame of this link (pod_ui_swarms)
+    bool sw_prev_valid;          // sw_prev_sel is set: the first frame after link-up only records it
+    uint32_t followed_ms;        // when a host focus last landed (a selected-tab change right after it does not undo it)
+    bool followed;
     cable_tile_t sw_tiles[SWARM_TILES_MAX];
     int sw_n, sw_tile_n;
     uint32_t seen_revision;
     uint32_t clock_stamp;
+    bool started;                // the start (pod_ui_start) is over for this link: it ran, was disarmed, the person touched or pressed, or a host focus landed
+    bool fresh_swarms;           // swarms have arrived since this link came up (the start never acts on the previous link's retained roster)
+    bool rows_moved;             // this contact scrolled at least one row (the Inbox's swipe up goes back only when it did not)
     bool dirty;                  // a change the model's revision does not show (the notice)
     // The one-line notice under the status bar (a refused start, say).
     char notice[80];
     uint32_t notice_until;
     bool notice_on;
     bool notice_bad;             // the red pill (a failure), not the dark one
-    // The notification banner (see pod_ui_notify): which entry (by agent), until when, and a contact that began on it.
+    // The notice toast (ph_toast, POD_TOAST_MS) (see pod_ui_notify): which entry (by agent), until when, and a contact that began on it.
     char ban_agent[ID_MAX];
     uint32_t ban_until;
     bool ban_on, ban_touch;
@@ -62,21 +64,10 @@ typedef struct {
     // touch
     bool down, cancelled, dragging, hit_valid;
     int start_x, start_y, anchor_y;
-    bool edge;                   // Console: this contact began in the bottom zone (y >= POD_BOTTOM_Y) of a non-root, non-Talk screen: an up swipe goes back
     bool sw_ok, sw_on;           // a horizontal pane swipe may come from this contact / is under way (see swipes in pod_glue.c)
     int sw_vx, sw_last_x;        // finger velocity along x, px per second
     uint32_t sw_last_ms;
     int scroll_px;               // finger travel not yet turned into a row (see scroll_rows)
-    // The Tabs grid scrolls by pages in pixels (see pg_* in pod_glue.c): the resting page is the TABS frame's scroll, this
-    // is the gesture on top of it.
-    uint8_t pg_mode;             // POD_PG_IDLE, POD_PG_DRAG (follows the finger), POD_PG_ANIM (settling after the release)
-    int pg_base, pg_dy;          // DRAG: the offset at the DOWN (px from the top of page 0) and the finger's travel since
-    int pg_vel;                  // finger velocity, px per second (negative: up)
-    int pg_last_y;
-    uint32_t pg_last_ms;
-    int pg_from, pg_to;          // ANIM: the offsets it runs between
-    uint32_t pg_t0;
-    bool pg_t0_pending;          // ANIM started by a cancel (no clock): the next render stamps t0
     pod_hit_t hit;
     // Recap drag -> the agent's pane in the desktop app, as the round dial scrolls it (ht_scroll: DOWN, MOVEs, UP with the
     // fling). Begun when the vertical drag is recognised (a tap sends nothing), at the DOWN's point and time; the host
@@ -86,25 +77,24 @@ typedef struct {
     void *scroll_ctx;
     bool scroll_reversed, scroll_begun;
     uint32_t down_ms;
-    // Console hold to talk: armed at a DOWN that may talk, fired by the first still sample at or after hold_due_ms (pod_ui_touch, on the touch task); hold_voice is a recording
-    // under way for this contact. bar: the contact began in the command bar below the root.
-    bool hold_armed, hold_fired, hold_voice, bar;
-    bool hands_free;   // Console: the hold started a recording that outlives the finger; the next new tap sends it (cleared by END, ABORT, talk_over, a skin switch)
-    uint32_t hold_due_ms;
-    uint8_t hold_depth;
-    pod_view_t hold_view;            // the screen (nav depth and view) and agent the hold was armed on: it fires only there
-    char hold_agent[ID_MAX];
+    // Tap to talk: armed at a DOWN that may talk, fired by its lift if the finger stayed within POD_TAP_SLOP (pod_ui_touch, on the touch task).
+    bool talk_armed, bar, edge;   // bar: the contact began in the top edge (y < POD_BAR_H) of a non-Talk screen: a swipe down opens the Inbox; edge: the contact began in the bottom zone (y >= POD_BOTTOM_Y) of a room or a recap: a swipe up goes Home, and it scrolls nothing
+    bool hands_free;   // a tap started a recording; the next new tap sends it (cleared by END, ABORT, talk_over)
+    uint8_t talk_depth;
+    pod_view_t talk_view;            // the screen (nav depth and view) and agent the tap was armed on: it fires only there
+    char talk_agent[ID_MAX];
     // Following the host (see pod_ui_focus): the last contact, and a focus whose agent the model does not know yet.
     bool touched;
     uint32_t last_touch_ms;
     char pending_focus[ID_MAX];
     uint32_t pending_focus_ms;
-    // The software update (see pod_ui_ota): while on, the stack stays as it was and pod_view_ota is what is drawn.
+    // The software update (see pod_ui_ota): while on, the stack stays as it was and ph_view_ota is what is drawn.
     bool ota, ota_restarting;
     int ota_pct;
     char ota_from[24], ota_to[24];
 } pod_ui_t;
 
+// The root is Home; the start (pod_ui_start) waits for the next link-up.
 void pod_ui_init(pod_ui_t *);
 
 // Draw into `scene` (already cleared) and keep its hits for touch.
@@ -120,8 +110,6 @@ pod_out_t pod_ui_status(pod_ui_t *, const char *id, const char *status, uint32_t
 pod_out_t pod_ui_turn(pod_ui_t *, const char *id, const char *kind, const char *text, int elapsed_s, uint32_t now_ms);
 // turn.stats for an agent (-1 leaves a field unknown); unknown agents are ignored.
 pod_out_t pod_ui_turn_stats(pod_ui_t *, const char *id, int32_t passed, int32_t failed, int32_t commits, int32_t tokens_in, int32_t tokens_out);
-// Switch the interface and reset the nav to its root (no effect is emitted: the caller ended any voice first).
-pod_out_t pod_ui_set_skin(pod_ui_t *, pod_skin_t skin);
 pod_out_t pod_ui_question(pod_ui_t *, const char *id, const char *text);
 // The daemon took a recording for this agent (voice.result): Working now, before its turn starts (pod_model_sent).
 pod_out_t pod_ui_sent(pod_ui_t *, const char *id, uint32_t now_ms);
@@ -135,6 +123,15 @@ pod_out_t pod_ui_recap(pod_ui_t *, const char *id, const char *recap, bool resto
 #define POD_FOLLOW_ECHO_MS 800   // on the Tabs screen: the daemon's echo of the device's own move settles within 750 ms
 #define POD_FOLLOW_PENDING_MS 5000
 pod_out_t pod_ui_focus(pod_ui_t *, const char *agent_id, uint32_t now_ms);
+
+// The start, armed by a real link down -> up (pod_ui_link): once swarms of this link have arrived, if the stack is at the
+// root (TABS) and tab 0 has agents, enter tab 0 on its first agent (POD_A_ENTER_TAB). It is device-local: no AGENT_OPEN
+// goes to the host (that message only moves the desktop's focused pane). Any other outcome ends the start for this link:
+// tab 0 empty, the person already elsewhere, a touch or the side button (pod_ui_navigated), or a host focus that landed.
+// True when it entered. Call after every model change. An update and a contact in progress: false.
+bool pod_ui_start(pod_ui_t *, uint32_t now_ms);
+// The person navigated (the side button): the start never runs over them. Touches do this themselves.
+void pod_ui_navigated(pod_ui_t *);
 
 // The roster's second source, player.library. A sweep walks the pages: begin, one pod_ui_library_page per page
 // received (it feeds the rows and says where to go next), end. A sweep is due on link up, when the swarms change, and
@@ -158,24 +155,22 @@ pod_out_t pod_ui_library_rows(pod_ui_t *, const pod_library_row_t *rows, int cou
 void pod_ui_notice(pod_ui_t *, const char *text, uint32_t now_ms);
 void pod_ui_notice_bad(pod_ui_t *, const char *text, uint32_t now_ms);   // the same, in red (#b3261e): "Update failed"
 
-// The software update screen (owner, 2026-10-11): pod_view_ota is drawn instead of the stack, touches do nothing, no banner.
+// The software update screen (owner, 2026-10-11): ph_view_ota is drawn instead of the stack, touches do nothing, no banner.
 // pct 0..100 is the progress; `restarting` the last screen before the reboot. pct < 0 ends the screen and the stack
 // underneath (untouched) is back. Notifications still fill the Inbox meanwhile, quietly.
 void pod_ui_ota(pod_ui_t *, const char *from, const char *to, int pct, bool restarting);
 bool pod_ui_updating(const pod_ui_t *);
 
 // ---- notifications ----
-// A live summary ended a turn: file an unread entry for the agent (its recap, name, elapsed) and show the banner for
-// POD_BANNER_MS (a newer one replaces it; none while TALK is on top; a tap opens the agent, a swipe up dismisses). False,
-// and nothing filed, when the agent is not on the roster or its Agent/Recap screen is already open (already looking):
-// the caller beeps only on true.
-#define POD_BANNER_MS 6000
+// A live summary ended a turn: file an unread entry for the agent (its recap, name, elapsed) and show the toast for
+// POD_TOAST_MS over a room (a newer one replaces it; none while TALK is on top; a tap opens Notices, a swipe up dismisses). False,
+// and nothing filed, when the agent is not on the roster. The caller beeps only on true.
 #define POD_BANNER_SWIPE_PX 40
 // `awake`: the glass is lit. A dark one is not looking, even when it rests on that agent's screen.
-// When the current banner started (it shows for POD_BANNER_MS); the banner draw reads it for its timer line.
+// When the current toast started (it shows for POD_TOAST_MS); the toast draw reads it for its timer line.
 uint32_t pod_ui_banner_shown_ms(const pod_ui_t *);
 bool pod_ui_notify(pod_ui_t *, const char *agent_id, bool awake, uint32_t now_ms);
-// notif.replace: begin (clears the list), one row per item, end. The banner is not shown for these.
+// notif.replace: begin (clears the list), one row per item, end. The toast is not shown for these.
 void pod_ui_notif_begin(pod_ui_t *);
 void pod_ui_notif_row(pod_ui_t *, const char *agent_id, const char *name, const char *token, const char *summary, uint32_t now_ms);
 void pod_ui_notif_end(pod_ui_t *);
@@ -191,10 +186,7 @@ bool pod_ui_take_changed(pod_ui_t *);
 // Where Recap drags are reported (NULL: nowhere) and which way the person's setting reads them. Cheap: call before each contact.
 void pod_ui_scroll_sink(pod_ui_t *, ht_scroll_emit_t emit, void *ctx, bool reversed);
 pod_out_t pod_ui_touch(pod_ui_t *, bool down, int x, int y, uint32_t now_ms, bool *changed);
-pod_out_t pod_ui_touch_cancel(pod_ui_t *);   // a recording the hold had open comes back as VOICE_ABORT: perform it
-// Fires the Console hold once its deadline has passed. The device never calls it: the hold fires from pod_ui_touch's held
-// samples, on the task that also ends the recording. Kept for tests that drive a deadline without a sample.
-pod_out_t pod_ui_tick(pod_ui_t *, uint32_t now_ms);
+pod_out_t pod_ui_touch_cancel(pod_ui_t *);   // the contact is dropped; an open recording does not depend on it and stays
 
 // ---- voice and clock ---------------------------------------------------------------------------------------
 bool pod_ui_talking(const pod_ui_t *);
@@ -204,10 +196,9 @@ void pod_ui_talk_over(pod_ui_t *);
 // SEND was tapped but the recorder had not started, so nothing is sent: forget the send (no send scene), say
 // "Not sent" for a moment. The frame is already back on the Agent screen.
 void pod_ui_unsend(pod_ui_t *, uint32_t now_ms);
-// Whether the top screen shows a pet (AGENT, RECAP, TALK) and is linked.
+// Whether the top screen shows a pet (AGENT, RECAP, TALK, Home's equaliser) and is linked.
 bool pod_ui_pet_on_screen(const pod_ui_t *);
-// The next clock edge: 16 ms while the Tabs grid settles onto a page, the pet's step while one is on screen, 150 ms while
-// an agent works on Tab (the equaliser), else the next second (the elapsed clocks).
+// The next clock edge: the pet's step while one is on screen, 66 ms while Home's equaliser moves, else the next second.
 uint32_t pod_ui_wake_ms(const pod_ui_t *, uint32_t now_ms);
 // True when the clock has crossed an edge since the last call: the caller redraws.
 bool pod_ui_clock_tick(pod_ui_t *, uint32_t now_ms);

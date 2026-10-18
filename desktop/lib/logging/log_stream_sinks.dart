@@ -18,9 +18,9 @@ class FanoutAppLog implements FlushableAppLog {
   final List<AppLog> sinks;
 
   @override
-  void flush() {
+  void flush({bool durable = false}) {
     for (final sink in sinks) {
-      if (sink is FlushableAppLog) sink.flush();
+      if (sink is FlushableAppLog) sink.flush(durable: durable);
     }
   }
 

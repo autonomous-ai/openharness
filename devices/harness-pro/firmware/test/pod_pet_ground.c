@@ -30,7 +30,7 @@ int main(int argc, char **argv)
             long bg_total = 0;
             for (int c = 0; c < COLS; c++) {
                 ht_scene_t s; ht_scene_clear(&s, 0);
-                pod_pet_draw(&s, 0, 0, S, pet->engine, (pod_scene_t)k, at[c], 0);
+                pod_pet_draw(&s, 0, 0, S, pet->engine, (pod_scene_t)k, at[c], 0, 8);
                 static uint16_t tile[S * S];
                 for (int i = 0; i < S * S; i++) tile[i] = ground;
                 ht_rect_t clip = {0, 0, S, S};

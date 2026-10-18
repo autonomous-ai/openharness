@@ -7,6 +7,7 @@ import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/phone/agent_swipe.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/phone/welcome/onboarding_copy.dart';
 import 'package:harness_mobile/phone/welcome/pick_up_page.dart';
 
 import 'agent_pager_fixture.dart';
@@ -131,30 +132,63 @@ void main() {
     expect(openedAgent(tester), 'c');
   });
 
-  testWidgets(
-    'a new phone opens on its sessions; the one picked is recorded for the next launch',
-    (tester) async {
-      final storage = MemoryKeyValueStore();
-      final notifier = await app(tester, storage: storage);
-      machineLists(notifier, [
-        for (final id in pagerAgentIds) agent(id, terminal: true),
-      ]);
-      await pumpHome(tester, notifier);
-      // Nothing remembered: "Pick up where you left off", not a session guessed for it.
-      expect(find.byType(PickUpPage), findsOneWidget);
-      expect(storage.values['phone_last_agent_v1'], isNull);
+  testWidgets('a new phone has its computer\'s moment, then opens the session used there last, and '
+      'records it for the next launch', (tester) async {
+    final storage = MemoryKeyValueStore();
+    final notifier = await app(tester, storage: storage);
+    final now = DateTime.now();
+    machineLists(notifier, [
+      for (final id in pagerAgentIds)
+        Agent(
+          id: id,
+          name: id,
+          engine: 'claude',
+          project: const AgentProject(name: 'work', cwd: '/work'),
+          terminalAvailable: true,
+          // `c` moved last, but `b` is the one the desktop has in focus — opened since.
+          updatedAt: id == 'c'
+              ? now.subtract(const Duration(minutes: 5))
+              : null,
+          lastOpenedAt: id == 'b'
+              ? now.subtract(const Duration(minutes: 1))
+              : null,
+        ),
+    ]);
+    await pumpHome(tester, notifier);
+    // Nothing remembered: not "Pick up where you left off", and no session guessed — the
+    // computer's moment, then what the computer is on.
+    expect(find.byType(PickUpPage), findsNothing);
+    expect(find.text(OnboardingCopy.ready('Test host')), findsOneWidget);
+    expect(storage.values['phone_last_agent_v1'], isNull);
 
-      // A row tapped there opens through the shell, as Find's do.
-      picked!.value = (machineId: 'm', agentId: 'b');
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 700));
-      expect(openedAgent(tester), 'b');
-      expect(storage.values['phone_last_agent_v1'], contains('"agentId":"b"'));
-      // The welcome's list reaches the machines, and the storage persists: let the timers run out.
-      await tester.pumpWidget(const SizedBox());
-      await tester.pump(const Duration(seconds: 30));
-    },
-  );
+    await tester.pump(const Duration(milliseconds: 1600));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 700));
+    expect(openedAgent(tester), 'b');
+    expect(storage.values['phone_last_agent_v1'], contains('"agentId":"b"'));
+    // The machines' reach and the storage persist on timers: let them run out.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 30));
+  });
+
+  testWidgets('a session picked by hand during the moment opens at once', (
+    tester,
+  ) async {
+    final notifier = await app(tester, storage: MemoryKeyValueStore());
+    machineLists(notifier, [
+      for (final id in pagerAgentIds) agent(id, terminal: true),
+    ]);
+    await pumpHome(tester, notifier);
+    expect(find.text(OnboardingCopy.ready('Test host')), findsOneWidget);
+
+    // From a notice, or Find, while "Test host is ready." is still up.
+    picked!.value = (machineId: 'm', agentId: 'c');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 700));
+    expect(openedAgent(tester), 'c');
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 30));
+  });
 
   testWidgets('the next launch opens the agent picked last, not the first', (
     tester,

@@ -17,11 +17,15 @@ class AppIconButton extends StatefulWidget {
     this.hoverFill,
     this.destructive = false,
     this.spinning = false,
+    this.focusNode,
   });
 
   final IconData icon;
   final VoidCallback? onPressed;
   final String? tooltip;
+
+  /// For a form that moves the keys between its controls itself (the picker's editors).
+  final FocusNode? focusNode;
 
   /// The glyph turns, and the button stops taking presses.
   ///
@@ -163,6 +167,7 @@ class _AppIconButtonState extends State<AppIconButton>
     return Semantics(
       value: widget.spinning ? 'Working' : null,
       child: IconButton(
+        focusNode: widget.focusNode,
         tooltip: widget.tooltip,
         onPressed: enabled ? widget.onPressed : null,
         iconSize: widget.size,

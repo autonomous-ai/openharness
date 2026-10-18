@@ -63,6 +63,7 @@ Use the same words everywhere.
 
   | Tool | What it does |
   |---|---|
+  | `harness_whoami` | who the agent is, on which machine, whether it may start harnesses now, and its limits |
   | `harness_list` | the harnesses on this machine: state, who started each, what each is about |
   | `harness_start` | start Claude Code or Codex on a task in a folder, by name; returns at once |
   | `harness_wait` | wait until harnesses stop working (up to 600 seconds a call) |
@@ -272,7 +273,7 @@ One top-level folder with `.claude-plugin/plugin.json` (the portal converts it t
 | Short description | 30 | Run coding agents in parallel |
 | Long description | 4,000 | the long text above |
 | Category | list | Developer Tools |
-| Capabilities | 20, 120 each | Start Claude Code or Codex on a task in a folder of its own · Wait for one or several agents and read their answers · Send a follow-up to an agent it started · Close agents once done; the person can resume them |
+| Capabilities | 20, 120 each | Start Claude Code or Codex on a task in a folder of its own · Wait for one or several agents and read their answers · Run an agent on another of your machines · Close agents once done; the person can resume them |
 | Starter prompts | 3, 128 each | Have Codex review this branch and give me the findings · Fix the api and ui tests in parallel, one agent each · Start an agent on the docs and tell me when it is done |
 | Logo | square, 48 px or more | `desktop/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png` |
 

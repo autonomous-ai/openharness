@@ -149,14 +149,12 @@ class FontTests(unittest.TestCase):
                                 '%s: non-sparse text at 42/56: %s' % (where, line.strip()))
 
 
-CS = {'cs_sb_48': ('Inter-SemiBold', 48), 'cs_sb_34': ('Inter-SemiBold', 34), 'cs_sb_26': ('Inter-SemiBold', 26),
-      'cs_sb_22': ('Inter-SemiBold', 22), 'cs_rg_24': ('Inter-Regular', 24), 'cs_rg_20': ('Inter-Regular', 20),
-      'cs_rg_17': ('Inter-Regular', 17), 'cs_mono_26': ('JetBrainsMono-Medium', 26),
-      'cs_mono_18': ('JetBrainsMono-Medium', 18), 'cs_mono_15': ('JetBrainsMono-Medium', 15),
-      # v2
-      'cs_md_28': ('Inter-Medium', 28), 'cs_sb_32': ('Inter-SemiBold', 32), 'cs_rg_36': ('Inter-Regular', 36),
-      'cs_rg_27': ('Inter-Regular', 27), 'cs_rg_22': ('Inter-Regular', 22),
-      'cs_mono_24': ('JetBrainsMono-Medium', 24), 'cs_mono_22': ('JetBrainsMono-Medium', 22)}
+CS = {'ph_sb_48': ('Inter-SemiBold', 48), 'ph_sb_34': ('Inter-SemiBold', 34), 'ph_sb_26': ('Inter-SemiBold', 26),
+      'ph_sb_22': ('Inter-SemiBold', 22), 'ph_rg_24': ('Inter-Regular', 24), 'ph_mono_26': ('JetBrainsMono-Medium', 26),
+      'ph_mono_18': ('JetBrainsMono-Medium', 18), 'ph_sb_32': ('Inter-SemiBold', 32), 'ph_rg_36': ('Inter-Regular', 36),
+      'ph_mono_22': ('JetBrainsMono-Medium', 22), 'ph_rg_28': ('Inter-Regular', 28),
+      'ph_num_230': ('Inter-SemiBold', 230),
+      'ph_bd_84': ('Inter-Bold', 84)}   # Home's cover-card counts: digits only
 
 
 def parse_cs(text, name):
@@ -179,7 +177,7 @@ def ink_cs(font, cp):
 
 
 class ConsoleFontTests(unittest.TestCase):
-    """The Console faces always come from fonts/, whatever --font says."""
+    """The Pets faces always come from fonts/, whatever --font says."""
 
     @classmethod
     def setUpClass(cls):
@@ -191,7 +189,7 @@ class ConsoleFontTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def test_cs_symbols(self):
+    def test_ph_symbols(self):
         text = self.out.read_text()
         total, sizes = 0, []
         for name, (_, size) in CS.items():
@@ -202,29 +200,29 @@ class ConsoleFontTests(unittest.TestCase):
             self.assertLessEqual(abs(height - size * 1.375), 1, name)   # the cell is ceil(size * 1.375)
             self.assertEqual(len(f['glyphs']), len(CODEPOINTS) + 9, name)   # same table shape, plus the 9 marks
             # a few faces keep only what their view draws (gen_fonts.CONSOLE_CUT); every other face is full
-            cut = {'cs_sb_48': '0123456789.-+_ abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ', 'cs_mono_24': 'Aa0:'}
-            if name == 'cs_sb_48':   # a cut long version ends in the ellipsis
+            cut = {'ph_sb_48': '0123456789.-+_% abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ', 'ph_num_230': '0123456789', 'ph_bd_84': 'Harness0123456789'}
+            if name == 'ph_sb_48':   # a cut long version ends in the ellipsis
                 off, width, _, _, rows = f['glyphs'][len(CODEPOINTS)]
-                self.assertTrue(any(f['alpha'][off:off + (width * rows + 1) // 2]), 'cs_sb_48 U+2026')
+                self.assertTrue(any(f['alpha'][off:off + (width * rows + 1) // 2]), 'ph_sb_48 U+2026')
             for cp in ([ord(c) for c in cut[name]] if name in cut else [ord('A')] + [ord(c) for c in 'ạốữ']):
                 self.assertTrue(ink_cs(f, cp) or cp == 32, '%s U+%04X' % (name, cp))
         print('console font total: %d bytes (%s)' % (total, ', '.join(sizes)))
-        # Owner decision (Console v2): flash is plentiful, so the cap is 900 KB.
+        # Only the faces the Pets views draw are baked; ph_num_230 (Home's numerals) is about 125 KB of it. Flash is plentiful: the cap is 900 KB.
         self.assertLessEqual(total, 900 * 1000)
 
-    def test_cs_marks_have_ink(self):
+    def test_ph_marks_have_ink(self):
         # the marks the chrome draws (the ← replaces ⇠, which no face carries); order is CONSOLE_EXTRA, the face's extras table
         marks = [0x2026, 0x2192, 0x2191, 0x2193, 0x2190, 0x21e2, 0x25b2, 0x25c6, 0x2713]
         text = self.out.read_text()
         for name in CS:
-            if name in ('cs_sb_48', 'cs_mono_24'): continue   # cut to what their view draws (gen_fonts.CONSOLE_CUT)
+            if name in ('ph_sb_48', 'ph_num_230', 'ph_bd_84'): continue   # cut to what their view draws (gen_fonts.CONSOLE_CUT)
             f = parse_cs(text, name)
             for i, cp in enumerate(marks):
                 if cp == 0x21e2: continue
                 off, width, _, _, rows = f['glyphs'][len(CODEPOINTS) + i]
                 self.assertTrue(any(f['alpha'][off:off + (width * rows + 1) // 2]), '%s U+%04X' % (name, cp))
 
-    def test_cs_independent_of_font(self):
+    def test_ph_independent_of_font(self):
         out = Path(self.tmp.name) / 'other.c'
         helv = HELVETICA if HELVETICA.exists() else LIBERATION
         self.assertEqual(generate(helv, out).returncode, 0)
@@ -234,22 +232,9 @@ class ConsoleFontTests(unittest.TestCase):
 
 
 CONSOLE_MARKS = [0x2026, 0x2192, 0x2191, 0x2193, 0x2190, 0x21e2, 0x25b2, 0x25c6, 0x2713]
-CI_RG = (20, 22, 23, 24, 25, 26, 28, 30, 32, 33, 41, 43, 48)
-CI_BD = (20, 23, 24, 26, 30, 45)
-CI = {**{'ci_rg_%d' % n: n for n in CI_RG}, **{'ci_bd_%d' % n: n for n in CI_BD}}
 
 
-def ci_ink(font, cp):
-    """Summed alpha of a glyph (cp in Latin-1, Vietnamese, then U+2026 and U+2014 after them)."""
-    index = len(CODEPOINTS) + {0x2026: 0, 0x2014: 1}[cp] if cp in (0x2026, 0x2014) else CODEPOINTS.index(cp)
-    off, width, _, _, rows = font['glyphs'][index]
-    data = font['alpha'][off:off + (width * rows + 1) // 2]
-    return sum((b >> 4) + (b & 15) for b in data)
-
-
-class ClassicFontTests(unittest.TestCase):
-    """The Classic faces (ci_*): Liberation Sans Regular / Bold, always from fonts/."""
-
+class ExtrasTableTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
@@ -261,70 +246,16 @@ class ClassicFontTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def face(self, name):
-        return parse_cs(self.text, name)
-
-    def word(self, name, s):
-        return sum(ci_ink(self.face(name), ord(c)) for c in s)
-
-    def test_classic_faces_exist(self):
-        for name, size in CI.items():
-            f = self.face(name)
-            self.assertEqual(f['header'][2], math.ceil(size * 1.375), name)
-            self.assertEqual(len(f['glyphs']), len(CODEPOINTS) + 2, name)   # plus the ellipsis and the em dash
-
-    def test_classic_em_dash(self):
-        # U+2014 is the second Classic mark (after U+2026); every ci_* face draws it, the Console faces keep their own nine marks
-        for name in CI:
-            if name in ('ci_rg_43', 'ci_rg_48', 'ci_bd_45'): continue   # cut to a fixed string (gen_fonts.CLASSIC_CUT)
-            self.assertGreater(ci_ink(self.face(name), 0x2014), 0, name)
-        f = self.face('ci_rg_22')
-        off, width, _, _, rows = f['glyphs'][len(CODEPOINTS) + 1]
-        self.assertTrue(any(f['alpha'][off:off + (width * rows + 1) // 2]))
-        for name in CS:
-            self.assertEqual(len(self.face(name)['glyphs']), len(CODEPOINTS) + 9, name)
-
-    def test_classic_bold_is_bold(self):
-        self.assertGreater(self.word('ci_bd_30', 'Tabs'), 1.25 * self.word('ci_rg_30', 'Tabs'))
-
-    def test_classic_coverage(self):
-        for c in '\u1ea1\u01b0\u2026\u00b7':
-            self.assertGreater(ci_ink(self.face('ci_rg_32'), ord(c)), 0, 'U+%04X' % ord(c))
-
-    def test_classic_cut(self):
-        f = self.face('ci_bd_45')
-        self.assertGreater(ci_ink(f, ord('S')), 0)
-        for c in '\u00e9\u1ea1':   # printable ASCII is kept; Latin-1 high half and Vietnamese are cut
-            self.assertEqual(ci_ink(f, ord(c)), 0, c)
-        self.assertGreater(ci_ink(self.face('ci_rg_43'), ord('N')), 0)
-        self.assertEqual(ci_ink(self.face('ci_rg_43'), ord('q')), 0)
-
-    def test_classic_ascii_cut(self):
-        f = self.face('ci_rg_25')
-        self.assertGreater(ci_ink(f, ord('A')), 0)
-        self.assertEqual(ci_ink(f, 0x1ea1), 0)   # \u1ea1 is cut
-
-    def test_classic_budget(self):
-        total = sum(len(self.face(n)['alpha']) for n in CI)
-        print('classic font total: %d bytes' % total)
-        self.assertLessEqual(total, 800 * 1000)
-
     def test_extras_tables(self):
-        # every face lists the marks baked after the Vietnamese entries; the old faces list none
+        # every Pets face lists the marks baked after the Vietnamese entries; the base faces list none
         for name in CS:
-            self.assertEqual(self.face(name)['extras'], CONSOLE_MARKS, name)
-        for name in CI:
-            self.assertEqual(self.face(name)['extras'], [0x2026, 0x2014], name)
+            self.assertEqual(parse_cs(self.text, name)['extras'], CONSOLE_MARKS, name)
         for size in SIZES:
             self.assertRegex(self.text, r'ht_pro_%d=\{32,255,\d+,326,glyphs_%d,alpha_%d,0,0\}' % (size, size, size))
 
-    def test_classic_bd_45_printable_ascii(self):
-        # pod_view_ota.c draws "Updating to %s" with any version string: ci_bd_45 keeps all printable ASCII
-        f = self.face('ci_bd_45')
-        for c in range(0x21, 0x7f):
-            self.assertGreater(ci_ink(f, c), 0, chr(c))
-        self.assertGreater(ci_ink(f, 0x2026), 0)
-        self.assertEqual(ci_ink(f, ord('\u00e9')), 0)   # the Latin-1 high half stays cut
+    def test_no_classic_faces(self):
+        self.assertNotIn('ci_rg_', self.text)
+        self.assertNotIn('ci_bd_', self.text)
 
 
 if __name__ == '__main__':

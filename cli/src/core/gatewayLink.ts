@@ -25,8 +25,10 @@ import type { GatewayMachines } from './api.js'
 import { LANE_OFF } from './api.js'
 import type {
   BackendNotice, GatewayEvents, LocalWindows, GatewayOps, GatewayPort, GatewayRefusal, GatewayStatus, HttpAnswer, LaneSeal,
-  RemoteClient, RemoteRole, RemoteTransport, WindowRelay, WindowRelaySession, WindowRelaySink,
+  RemoteClient, RemoteRole, RemoteTransport, TabFrame, TabKey, TabRelay, WindowRelay, WindowRelaySession, WindowRelaySink,
 } from './api.js'
+import { askTabKey } from '../lib/tabKeyWire.js'
+import { askTabRelay, tabFrameOf } from '../lib/tabRelayWire.js'
 import { ON_DEMAND_START_MS, type ServiceFrame } from './serviceLinks.js'
 
 export interface GatewayLinkDeps {
@@ -74,6 +76,11 @@ export const OWED_MAX = 256
 /** How long the fleet's lane waits on the gateway to seal or open a frame. The frames behind it wait too,
  *  in order; a gateway that has not answered in this long is hung, and the master ends it soon after. */
 export const LANE_WAIT_MS = 5_000
+
+/** How long a shared tab's relay call waits on the gateway: a send there answers within 8 s of being asked
+ *  (gateway/tabRelay.ts `TAB_RELAY_SEND_DEADLINE_MS`: the relay admitting its socket, then its turn within the rate),
+ *  so the gateway's answer is the one the core gives, and a frame answered false here is never sent there. */
+export const TAB_RELAY_WAIT_MS = 10_000
 
 const UNAVAILABLE: HttpAnswer = { status: 503, body: { error: 'GATEWAY_UNAVAILABLE' } }
 
@@ -244,6 +251,13 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     throw new Error(typeof answer.error === 'string' && !answer.error.startsWith('SERVICE_') ? answer.error : 'the gateway holds no key just now: it is not running')
   }
 
+  /** Shared tabs' keys, held by the gateway (gateway/tabKey.ts): one call a method, the drop too, so the gateway takes
+   *  them in the order Agent Messages made them. While it is away: no signature, no session, nothing sealed. */
+  const tabKeyOps: TabKey = askTabKey((payload) => deps.call(GATEWAY_CALLS.tabKey, payload, LANE_WAIT_MS))
+  /** Shared tabs' relay, whose sockets the gateway holds (gateway/tabRelay.ts): one call a method. While it is away,
+   *  nothing is opened or sent; what the sockets hear comes back as `tabFrame` notices. */
+  const tabRelayOps: TabRelay = askTabRelay((payload) => deps.call(GATEWAY_CALLS.tabRelay, payload, TAB_RELAY_WAIT_MS))
+
   const ops: GatewayOps = {
     backend: (method, path, body) => http(GATEWAY_CALLS.backend, { method, path, ...(body === undefined ? {} : { body }) }, 25_000),
     machines: async (fallback = false) => {
@@ -322,6 +336,8 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       publicKey: () => ownerKey({ op: 'public' }),
       signWelcome: (machineId, shareId, peer, ephemeral) => ownerKey({ op: 'sign', machineId, shareId, peer, ephemeral }),
     },
+    tabKey: tabKeyOps,
+    tabRelay: tabRelayOps,
     // The account's connected services, sealed and opened by the gateway (lib/e2ee/connectorVault.ts).
     connectorVault: {
       seal: async (plaintext) => {
@@ -333,6 +349,12 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
         const answer = await deps.call(GATEWAY_CALLS.connectorVault, { op: 'open', envelope }, LANE_WAIT_MS)
         return typeof answer.plaintext === 'string' ? { plaintext: answer.plaintext, complete: answer.complete === true } : null
       },
+    },
+    // Machines shared across accounts, pinned and trusted by the gateway (gateway/sharedTrust.ts).
+    sharedTrust: async (desired) => {
+      const answer = await deps.call(GATEWAY_CALLS.sharedTrust, { ...desired }, LANE_WAIT_MS)
+      if (typeof answer.pins === 'number' && typeof answer.keys === 'number') return { pins: answer.pins, keys: answer.keys }
+      throw new Error(typeof answer.error === 'string' && !answer.error.startsWith('SERVICE_') ? answer.error : 'the gateway is not running')
     },
   }
 
@@ -448,6 +470,11 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       case 'toWindows':
         events.toWindows(record(payload.frame))
         return
+      case 'tabFrame': {
+        const event = tabFrameOf(payload.event)
+        if (event) events.tabFrame(event)
+        return
+      }
       case 'windowOpened': {
         const window = windows.get(text(payload.id))
         if (!window?.opening) return
@@ -545,5 +572,53 @@ export function laneOf(gateway: () => LaneSeal): LaneSeal {
     seal: (machineId, frame) => gateway().seal(machineId, frame),
     open: (machineId, frame) => gateway().open(machineId, frame),
     drop: (machineId) => gateway().drop(machineId),
+  }
+}
+
+/**
+ * Shared tabs' relay as the core hands it to its services (`core.account.tabRelay`): read from the gateway each time, as
+ * the lane is (`laneOf`). The core keeps which tabs were opened and not closed since (`opened`), because the sockets
+ * and the service that wants them can each go without the other noticing:
+ *   - The gateway alone restarting drops every socket without a word to Agent Messages, which would hear nothing more
+ *     from its tabs until its next refresh: as the gateway connects again, every tab opened is opened again
+ *     (`connected`). Its first connection opens nothing: every open went to it then.
+ *   - A tab the relay closed for good (`closed`: 4403, 4409) is the service's to open again or not (messages/sharedTabs.ts).
+ *   - Agent Messages out of the core's process going leaves the gateway holding sockets nobody listens to: they are
+ *     closed (`closeOpened`), and the process opens them again as it starts.
+ */
+export function tabRelayOf(gateway: () => TabRelay): TabRelay & { heard(event: TabFrame): void; connected(): void; closeOpened(): void } {
+  const opened = new Set<string>()
+  let connectedBefore = false
+  return {
+    open: (sharedTabId) => { opened.add(sharedTabId); return gateway().open(sharedTabId) },
+    send: (sharedTabId, to, payload) => gateway().send(sharedTabId, to, payload),
+    close: (sharedTabId) => { opened.delete(sharedTabId); gateway().close(sharedTabId) },
+    /** What a tab's relay said (`GatewayEvents.tabFrame`): a close is the tab no longer open. */
+    heard: (event) => { if (event.closed) opened.delete(event.sharedTabId) },
+    /** The gateway's process connected: after its first time, it holds none of the sockets it had. */
+    connected: () => {
+      if (connectedBefore) for (const sharedTabId of opened) void gateway().open(sharedTabId)
+      connectedBefore = true
+    },
+    /** Agent Messages out of the core's process went: no one listens to its tabs' sockets until it is back. */
+    closeOpened: () => {
+      for (const sharedTabId of [...opened]) { opened.delete(sharedTabId); gateway().close(sharedTabId) }
+    },
+  }
+}
+
+/** Shared tabs' keys as the core hands them to its services (`core.account.tabKey`): read from the gateway each
+ *  time, as the lane is (`laneOf`). */
+export function tabKeyOf(gateway: () => TabKey): TabKey {
+  return {
+    publicKey: () => gateway().publicKey(),
+    signRoster: (sharedTabId, version, body) => gateway().signRoster(sharedTabId, version, body),
+    signKeyChange: (sharedTabId, nextPub) => gateway().signKeyChange(sharedTabId, nextPub),
+    hello: (link) => gateway().hello(link),
+    welcome: (link, payload) => gateway().welcome(link, payload),
+    accept: (link, hello) => gateway().accept(link, hello),
+    seal: (link, frame) => gateway().seal(link, frame),
+    open: (link, frame) => gateway().open(link, frame),
+    drop: (link) => gateway().drop(link),
   }
 }

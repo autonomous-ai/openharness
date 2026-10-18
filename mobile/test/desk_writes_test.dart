@@ -1,30 +1,46 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/ws/ws_conn.dart' show WsRequestTimeout;
 
 import 'agent_pager_fixture.dart';
 import 'desk_fixture.dart';
 
 /// A machine that starts and deletes the agents it is asked to, and answers
 /// everything else with nothing.
+///
+/// [losesFirstReply] drops the answer to the first `agent_create` the way a
+/// relay that went away does, and answers the Check status after it.
 class _Conn extends PagerConn {
+  _Conn({this.losesFirstReply = false});
+
+  final bool losesFirstReply;
+  var _creates = 0;
+
+  static Map<String, dynamic> _created(Map<String, dynamic> payload) => {
+    'creationId': payload['creationId'],
+    'state': 'created',
+    'agent': {
+      'id': 'new',
+      'name': 'new',
+      'engine': 'claude',
+      'terminal': {'available': true},
+    },
+  };
+
   @override
   Future<Map<String, dynamic>> request(
     String type, {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
-  }) async => switch (type) {
-    'agent_create' => {
-      'creationId': payload['creationId'],
-      'state': 'created',
-      'agent': {
-        'id': 'new',
-        'name': 'new',
-        'engine': 'claude',
-        'terminal': {'available': true},
-      },
-    },
-    _ => {},
-  };
+  }) async {
+    if (type == 'agent_create' && losesFirstReply && _creates++ == 0) {
+      throw const WsRequestTimeout('agent_create');
+    }
+    return switch (type) {
+      'agent_create' || 'agent_create_status' => _created(payload),
+      _ => {},
+    };
+  }
 }
 
 /// What the phone tells the desk, and what the desk tells the phone.
@@ -59,6 +75,71 @@ void main() {
     expect(deskApiOf(app).written, [
       {'op': 'pane.add', 'tabId': 't2', 'machineId': 'm', 'agentId': 'new'},
     ]);
+  });
+
+  test(
+    'an agent created for a picked tab joins it, not the tab the phone is in',
+    () async {
+      final app = await deskApp(
+        _Conn(),
+        opensTerminals: false,
+        tabs: [
+          deskTab('t1', 'Desktop', ['a']),
+          deskTab('t2', 'Docker', ['c']),
+        ],
+      );
+      addTearDown(app.dispose);
+      // The tab of the harness Find was opened over; Find was narrowed to Docker.
+      app.noteDeskTab('t1');
+
+      final error = await app.createAgent(
+        'm',
+        engine: 'claude',
+        folder: '/work',
+        deskTabId: 't2',
+      );
+      await pumpEventQueue();
+
+      expect(error, isNull);
+      expect(agentsOf(app, 't1'), ['a']);
+      expect(agentsOf(app, 't2'), ['c', 'new']);
+      expect(app.activeDeskTabId, 't2');
+      expect(deskApiOf(app).written, [
+        {'op': 'pane.add', 'tabId': 't2', 'machineId': 'm', 'agentId': 'new'},
+      ]);
+    },
+  );
+
+  test('a Check status after a lost reply keeps the tab picked', () async {
+    final app = await deskApp(
+      _Conn(losesFirstReply: true),
+      opensTerminals: false,
+      tabs: [
+        deskTab('t1', 'Desktop', ['a']),
+        deskTab('t2', 'Docker', ['c']),
+      ],
+    );
+    addTearDown(app.dispose);
+    app.noteDeskTab('t1');
+    final attempt = AgentCreationAttempt();
+
+    final lost = await app.createAgent(
+      'm',
+      engine: 'claude',
+      folder: '/work',
+      deskTabId: 't2',
+      attempt: attempt,
+    );
+    expect(lost, contains('has not confirmed the new harness yet'));
+    expect(deskApiOf(app).written, isEmpty);
+
+    // Asked about with what it was first made with — no tab handed in again.
+    final checked = await app.checkAgentCreation(attempt);
+    await pumpEventQueue();
+
+    expect(checked, isNull);
+    expect(agentsOf(app, 't1'), ['a']);
+    expect(agentsOf(app, 't2'), ['c', 'new']);
   });
 
   test('an agent deleted on the phone leaves the tabs it was on', () async {

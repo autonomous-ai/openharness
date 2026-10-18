@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/local_key_value_store.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/first_arrival.dart';
 import 'package:harness/state/session_content_search.dart';
@@ -15,6 +18,36 @@ class _MemoryStore implements LocalKeyValueStore {
   Future<void> write(String key, String value) async => values[key] = value;
   @override
   Future<void> delete(String key) async => values.remove(key);
+}
+
+class _PreparingApp extends AppNotifier {
+  _PreparingApp()
+    : super(config: AppConfig.dev, authSession: AuthSession(), configStore: null);
+
+  final engineCheck = Completer<void>();
+  bool probing = false;
+  final local = MachineState(const Machine(machineId: 'local', name: 'Mac', authMode: MachineAuthMode.self));
+  @override
+  MachineState get localMachineState => local;
+  @override
+  Iterable<String> get searchableMachineIds => ['local'];
+  @override
+  Future<void> probeEngines(String machineId, {bool force = false}) {
+    probing = true;
+    return engineCheck.future;
+  }
+}
+
+class _PreparingArrival extends FirstArrival {
+  _PreparingArrival(super.storage);
+  final index = Completer<List<ArrivalSession>>();
+  bool searching = false;
+  @override
+  Future<List<ArrivalSession>> recentSessions(AppNotifier app, String machineId,
+      {required Duration budget}) {
+    searching = true;
+    return index.future;
+  }
 }
 
 final _base = DateTime(2026, 10, 8, 12);
@@ -301,6 +334,25 @@ void main() {
   });
 
   group('FirstArrival', () {
+    test('the index and engine check start together and both finish before planning', () async {
+      final app = _PreparingApp();
+      addTearDown(app.dispose);
+      final arrival = _PreparingArrival(_MemoryStore())..begin(downloads: false);
+      await arrival.restore();
+      final opening = arrival.run(app);
+      await Future<void>.delayed(Duration.zero);
+      expect(arrival.searching, isTrue);
+      expect(app.probing, isTrue, reason: 'a slow index must not delay the engine check');
+      var finished = false;
+      opening.then((_) => finished = true);
+      arrival.index.complete([]);
+      await Future<void>.delayed(Duration.zero);
+      expect(finished, isFalse, reason: 'do not infer no installed engines while the probe is pending');
+      app.engineCheck.complete();
+      expect(await opening, isFalse); // No installed engines or conversations.
+      expect(arrival.pending, isFalse);
+    });
+
     // Production order: setup's begin runs before the signed-in restore.
     test(
       'runs only on a computer setup has just reached, and only once',

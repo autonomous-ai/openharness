@@ -89,7 +89,10 @@ void main() {
 
     expect(find.textContaining('Not trusted here'), findsOneWidget);
     await tester.tap(find.byKey(const Key('device-detail-mine')));
-    await tester.pumpAndSettle();
+    // Not `pumpAndSettle`: the page goes back to home, which with no computer on the account is
+    // "On your computer, go to" — its picture looks for the computer for as long as it is up.
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
     expect(app.dismissed, [(pub: m.pub, liftSuspension: true)]);
   });
 

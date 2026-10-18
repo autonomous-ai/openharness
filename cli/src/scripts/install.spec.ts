@@ -142,7 +142,10 @@ const installedFixture = (scratch: string) => {
   return { home, node: join(scratch, "node") };
 };
 
-const runFinale = (mode: "standalone" | "desktop", pathHasBin: boolean, script = finaleOf) => {
+/** What tells the installer an agent ran it: removed from this test's own environment, which may be an agent's. */
+const AGENT_KEYS = ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "AI_AGENT", "HARNESS_AGENT_SESSION"];
+
+const runFinale = (mode: "standalone" | "desktop", pathHasBin: boolean, script = finaleOf, agent: Record<string, string> = {}) => {
   const source = readFileSync(installer, "utf8");
   const scratch = mkdtempSync(join(tmpdir(), "harness-finale-"));
   try {
@@ -151,7 +154,8 @@ const runFinale = (mode: "standalone" | "desktop", pathHasBin: boolean, script =
     return spawnSync("/bin/sh", ["-c", script(source)], {
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !AGENT_KEYS.includes(key))),
+        ...agent,
         HOME: home,
         INSTALL_MODE: mode,
         NODE_BIN: node,
@@ -211,11 +215,33 @@ describe("scripts/install.sh: what it says once it is done", () => {
     expect(onPath).not.toContain("'harness' is installed in ~/.local/bin");
   }, 20_000);
 
+  it("tells an agent what to run next and what only the person can do, after the person's guide", () => {
+    const out = runFinale("standalone", true).stdout;
+    expect(out).toMatch(/^ {6}Next: harness start +\(starts Harness here; no account is needed\)$/m);
+    expect(out).toMatch(/^ {6}Then: harness whoami +\(whether you may start harnesses, and if not, what to ask the person\)$/m);
+    expect(out).toContain("harness login");
+    expect(out).toContain("harness settings agents-start-agents on");
+    expect(out).toContain("https://harness.autonomous.ai/agents");
+    // The person reads their guide first.
+    expect(out.indexOf("harness --help")).toBeLessThan(out.indexOf("Next: harness start"));
+  }, 20_000);
+
+  it("puts that first when an agent ran it, before the person's guide", () => {
+    for (const agent of [{ CLAUDECODE: "1" }, { CODEX_THREAD_ID: "t" }, { AI_AGENT: "cursor" }] as Array<Record<string, string>>) {
+      const out = runFinale("standalone", true, finaleOf, agent).stdout;
+      expect(out.indexOf("Next: harness start")).toBeGreaterThan(0);
+      expect(out.indexOf("Next: harness start")).toBeLessThan(out.indexOf("harness login  "));
+      // Said once.
+      expect(out.split("Next: harness start")).toHaveLength(2);
+    }
+  }, 20_000);
+
   it("desktop mode gets the one line and no guide: the app takes the person through sign-in", () => {
     const out = runFinale("desktop", true).stdout;
     expect(out).toContain("harness 0.2.60 installed.");
     expect(out).not.toContain("Get started");
     expect(out).not.toContain(LOGO[1]);
+    expect(out).not.toContain("Next: harness start");
   }, 20_000);
 });
 

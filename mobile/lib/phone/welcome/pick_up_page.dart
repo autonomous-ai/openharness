@@ -39,6 +39,9 @@ class _PickUpPageState extends State<PickUpPage> {
     modes: false,
   );
 
+  /// The list, for the tab its chips are narrowed to — see [_newHarness].
+  final _results = GlobalKey<PhoneSearchResultsState>();
+
   @override
   void dispose() {
     _search.dispose();
@@ -56,14 +59,17 @@ class _PickUpPageState extends State<PickUpPage> {
         : '$sessions on ${computers.length} computers';
   }
 
-  /// `+ New Harness`: in the project a row names, else on the first computer that can take one.
+  /// `+ New Harness`: in the project a row names, else on the first computer that can take one —
+  /// and into the tab the chips are narrowed to, as in Find (`PhoneSearchResultsState.deskTabId`).
   void _newHarness(({String machineId, String folder, String label})? place) {
+    final deskTabId = _results.currentState?.deskTabId;
     if (place != null) {
       openNewAgent(
         context,
         widget.notifier,
         place.machineId,
         folder: place.folder,
+        deskTabId: deskTabId,
       );
       return;
     }
@@ -74,7 +80,12 @@ class _PickUpPageState extends State<PickUpPage> {
         )
         .firstOrNull;
     if (ready != null) {
-      openNewAgent(context, widget.notifier, ready.machine.machineId);
+      openNewAgent(
+        context,
+        widget.notifier,
+        ready.machine.machineId,
+        deskTabId: deskTabId,
+      );
     }
   }
 
@@ -84,6 +95,7 @@ class _PickUpPageState extends State<PickUpPage> {
     builder: (context, _) {
       AppTheme.watch(context);
       final tty = Tty.of(context);
+      final sample = SampleMode.maybeOf(context);
       return Scaffold(
         backgroundColor: tty.ground,
         body: SafeArea(
@@ -91,16 +103,23 @@ class _PickUpPageState extends State<PickUpPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // The sample's way back to the welcome screen it was opened from, placed where the
+              // set-up pages put theirs.
+              if (sample != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TtyBackButton(onPressed: sample.leave),
+                ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(
+                padding: EdgeInsets.fromLTRB(
                   Tty.origin,
-                  20,
+                  sample != null ? 8 : 20,
                   Tty.origin,
                   0,
                 ),
                 child: Text(
                   // Broken by hand: at 28pt it wraps with "off" alone on the second line.
-                  SampleMode.maybeOf(context) != null
+                  sample != null
                       ? 'Try a sample\nharness'
                       : 'Pick up where\nyou left off',
                   key: const ValueKey('pick-up-title'),
@@ -120,6 +139,7 @@ class _PickUpPageState extends State<PickUpPage> {
               ),
               Expanded(
                 child: PhoneSearchResults(
+                  key: _results,
                   notifier: widget.notifier,
                   controller: _search,
                   onNewHarness: _newHarness,

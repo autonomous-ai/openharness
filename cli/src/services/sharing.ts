@@ -11,7 +11,10 @@
  * - its observers' terminals, read-only, by the core's stream manager (`core.terminals.watch`), what each is
  *   shown sealed here and sent on through the gateway (`core.clients.observer`);
  * - its invitations and links published through the account (`core.account.backend`);
- * - the agents it shares, and their viewers, which it captures in headless Chrome itself (sharing/viewer.ts).
+ * - the agents it shares, and their viewers, which it captures in headless Chrome itself (sharing/viewer.ts);
+ * - the account signed in here (`core.account.identity`), and the shared tabs Agent Messages holds here, read only from
+ *   its file (messages/rosterStore.ts `readRosters`, each roster checked against its pin), which the observers each tab
+ *   wants are derived from (sharing/rosterGrants.ts): the messages process is that file's only writer.
  * The observers' frames reach it through its port, as the relay hands them over.
  */
 import { join } from 'node:path'
@@ -20,6 +23,9 @@ import { SHARE_REQUESTS } from '../core/api.js'
 import { b64d, b64e } from '../lib/e2ee/core.js'
 import { HarnessCollaborationStore } from '../sharing/collaboration.js'
 import { HarnessGrantStore } from '../sharing/grants.js'
+import { RosterStore } from '../messages/rosterStore.js'
+import { ConsentStore } from '../messages/consentStore.js'
+import { readAgentSettings } from '../lib/agentSettings.js'
 import { HarnessShareOwner, type ObserverStreams } from '../sharing/owner.js'
 import { SharedViewerPool } from '../sharing/viewer.js'
 
@@ -67,6 +73,20 @@ export function startSharing(core: CoreApi, ports: CorePorts, options: SharingOp
     publish: (method, path, body) => core.account.backend(method, path, body),
     watchViewer: (id, send) => viewers.watch(id, send),
     streams: (targets) => watchStreams(core.terminals.watch, targets),
+    // Read as the file stands each time, never through a store that writes: a file being written, or one that cannot be
+    // read, is null, which revokes nothing (sharing/owner.ts `deriveRosters`).
+    rosters: async () => {
+      // Signed out (or the core cannot say who is), nothing is revoked: no observer reaches this computer without the
+      // sign-in anyway, and a passing failure to read the account must not take every member's view away.
+      const account = await core.account.identity()
+      if (!account) return null
+      // Agent Messages off here: its rosters stop following the tabs, so a member removed meanwhile would keep a view,
+      // renewed, for weeks (review of C1). Read from the copy Agent Messages reads; off, every derived grant goes.
+      if (!readAgentSettings(core.dataDir).agentMessages) return { accountId: account.accountId, rosters: [], consent: new Set<string>() }
+      const dir = join(core.dataDir, 'agent-messages')
+      const rosters = RosterStore.readRosters(join(dir, 'shared-tabs.json')), consent = ConsentStore.read(join(dir, 'shared-tabs-consent.json'))
+      return rosters && consent ? { accountId: account.accountId, rosters, consent } : null
+    },
   })
   ports.sharing = {
     observer: (connId, type, payload) => owner.receive(connId, type, payload),

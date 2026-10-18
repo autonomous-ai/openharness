@@ -20,6 +20,7 @@ import { promisify } from 'node:util'
 import { isolatedTmux, type IsolatedTmux } from '../../src/testing/isolatedTmux.js'
 import { artifactLog, artifactsEnabled } from './artifacts.js'
 import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
+import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 
 const exec = promisify(execFile)
@@ -254,6 +255,8 @@ export class IsolatedDaemon {
         `#!${process.execPath}\nimport(${JSON.stringify(engine)}).then((m) => m.run(${JSON.stringify(name)}, ${JSON.stringify(config)}))\n`,
         { mode: 0o755 })
     }
+    // A daemon never finds the developer's own gh (shared tabs' tasks run it): a stub that refuses, until a test writes its own.
+    await writeFile(join(dirs.bin, 'gh'), GH_FORBIDDEN_STUB, { mode: 0o755 })
     const env = daemonEnvironment(tmux.env, {
       NODE_ENV: 'test',
       HOME: dirs.home,

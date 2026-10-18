@@ -65,5 +65,8 @@ export const GATEWAY_CALLS = {
   wifi: 'gateway_wifi',
   lane: 'gateway_lane',
   observerKey: 'gateway_observer_key',
+  tabKey: 'gateway_tab_key',
+  tabRelay: 'gateway_tab_relay',
   connectorVault: 'gateway_connector_vault',
+  sharedTrust: 'gateway_shared_trust',
 } as const

@@ -84,7 +84,11 @@ class _FirstApp extends AppNotifier {
   }
 
   @override
-  Future<void> probeDsh(String machineId, {bool force = false}) async {}
+  Future<void> probeDsh(
+    String machineId, {
+    bool force = false,
+    bool userAction = false,
+  }) async {}
   @override
   Future<Map<String, dynamic>> listRemoteFolder(
     String machineId,

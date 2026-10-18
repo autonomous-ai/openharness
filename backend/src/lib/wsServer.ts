@@ -27,6 +27,8 @@ export const WS_LIMITS = {
   /** App-proxy frames ride these sockets: 8 MiB of body → ~11.2 MiB once base64'd into JSON. */
   manager: 16 * 1024 * 1024,
   adapter: 16 * 1024 * 1024,
+  /** Sealed shared-tab frames between daemons are capped at 128 KiB by the relay; leave room for the envelope. */
+  agentMessages: 256 * 1024,
 } as const
 
 const servers = new Set<WebSocketServer>()

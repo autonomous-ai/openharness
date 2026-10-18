@@ -2,7 +2,7 @@ name: harness_mobile
 description: "Harness viewer for iOS and Android."
 publish_to: 'none'
 
-version: 1.0.0+50
+version: 1.0.5+68
 
 environment:
   sdk: ^3.13.0
@@ -30,8 +30,9 @@ dependencies:
   dio: ^5.11.0
   # The relay socket every machine is reached over (`ws/`).
   web_socket_channel: ^3.0.3
-  # Sign-in hands the SSO URL to the system browser (`viewer/sign_in_browser.dart`)
-  # and the terminal opens links a program printed (`terminal/terminal_link_opener.dart`).
+  # "Continue with Google / Apple" opens the SSO page in an Android Custom Tab
+  # (`viewer/sign_in_browser.dart`; iOS's is native, `SignInPageChannel`), and the terminal
+  # opens links a program printed (`terminal/terminal_link_opener.dart`).
   url_launcher: ^6.3.2
   # X25519/HKDF/ChaCha20-Poly1305 for the end-to-end encryption this app
   # terminates itself, being a viewer (`e2ee/`).
@@ -73,11 +74,12 @@ dependencies:
   # (`lib/notify/system_notices.dart`). Local only — it fires from the machine socket,
   # so it reaches a phone whose app is still alive, not one iOS has suspended.
   flutter_local_notifications: ^22.2.0
-  # Connecting a computer: the first screen's "scan to connect" reads the code the desktop app
-  # shows (`phone/welcome/scan_to_connect.dart`). The camera only while that screen is up.
+  # Pairing with a desktop from before the 2026-10-12 onboarding, which shows an Add Phone QR code
+  # (Computers ▸ "Or scan the QR code on your computer"), and Settings ▸ Sign in a computer
+  # (`phone/welcome/scan_to_connect.dart`). The camera only while that screen is up.
   mobile_scanner: ^7.4.2
-  # "Send link to my Mac": the system share sheet, so AirDrop, Messages or email carry the
-  # download link to the computer (`phone/welcome/set_up_computer.dart`).
+  # "On your computer, go to": the address is the button, and the system share sheet — AirDrop,
+  # Messages or email — carries the download link to the computer (`phone/welcome/your_computer.dart`).
   share_plus: ^13.3.0
   # "See how it works": the 30-second recording of the app the set-up page plays
   # (`phone/welcome/how_it_works_video.dart`, `assets/video/how_it_works.mp4`) — in place of an
@@ -108,6 +110,8 @@ flutter:
   uses-material-design: true
   assets:
     - assets/engine-icons/
+    # Each connected service's icon for Settings ▸ Connectors, PNG only (cli/scripts/connector-assets.mjs).
+    - assets/connector-icons/
     # The real app icon, shown on the sign-in and bootstrapping screens.
     #
     # ⚠️ `assets/app_icon.svg` beside it is the MASTER this and all 20 launcher
@@ -115,6 +119,14 @@ flutter:
     # NOT listed: Flutter cannot draw an SVG without a package this app does not
     # depend on, so bundling it would only add its weight to every install.
     - assets/app_icon.png
+    # The marks on the welcome screen's two accounts (`phone/welcome/sign_in_provider_button.dart`),
+    # PNG at 1x/2x/3x for the reason above: drawn from `desktop/assets/sign-in/*.svg` by
+    # `scripts/render_svg.swift` (Apple's 814x1000 mark centred in a square tile first).
+    - assets/sign-in/
+    # The onboarding's one sound, when a computer joins (`lib/core/chime.dart`): two glass notes a
+    # fifth apart, rendered by `scripts/make_joined_chime.py`. A WAV, which iOS's System Sound
+    # Services plays and Android stores uncompressed.
+    - assets/sound/
     # "See how it works" — recorded from the sample on a simulator by
     # `integration_test/demo_video_test.dart`, trimmed and encoded at 604px, ~630 KB.
     - assets/video/how_it_works.mp4

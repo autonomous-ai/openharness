@@ -27,3 +27,12 @@ export function threadComments(comments: HarnessComment[]): HarnessComment[] {
 
 /** How many comments a harness has: the backend's count, or the ones read from an older backend. */
 export const commentTotal = (social: { comments: HarnessComment[]; commentCount?: number }) => social.commentCount ?? social.comments.length;
+
+/**
+ * A refresh's latest comments, with those read further back still before them: every comment older
+ * than all the refresh has. Without them a reader who went back would lose their place on each refresh.
+ */
+export function keepEarlier(previous: HarnessComment[], latest: HarnessComment[]): HarnessComment[] {
+  const oldest = latest[0]?.createdAt;
+  return oldest ? [...previous.filter(comment => comment.createdAt < oldest), ...latest] : latest;
+}

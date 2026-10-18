@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { refreshHubSession, rememberHubReturn } from './session';
+import { onSessionChange, refreshHubSession, rememberHubReturn } from './session';
 const key = (name: string) => `harness.web.v1.${name}`;
 let queue = Promise.resolve();
 beforeEach(() => {
@@ -32,5 +32,24 @@ describe('shared Harness sign-in', () => {
     window.history.replaceState(null, '', '/hub/publish?draft=123'); rememberHubReturn();
     expect(sessionStorage.getItem('harness.hub.returnTo')).toBe('/hub/publish?draft=123');
     window.history.replaceState(null, '', '/');
+  });
+});
+
+describe('session changes', () => {
+  const storage = (name: string | null, oldValue: string | null, newValue: string | null) =>
+    window.dispatchEvent(new StorageEvent('storage', { key: name === null ? null : key(name), oldValue, newValue }));
+  it('answers a sign-in or sign-out, not the web app’s own writes or a renewed token', () => {
+    const listener = vi.fn(), stop = onSessionChange(listener);
+    storage('snapshot.harness-stats', '{}', '{"turns":1}');
+    storage('auth_access_token', 'old', 'renewed');
+    expect(listener).not.toHaveBeenCalled();
+    storage('auth_access_token', 'old', null);
+    storage('auth_access_token', null, 'new');
+    storage(null, null, null);
+    window.dispatchEvent(new Event('harness-session'));
+    expect(listener).toHaveBeenCalledTimes(4);
+    stop();
+    window.dispatchEvent(new Event('harness-session'));
+    expect(listener).toHaveBeenCalledTimes(4);
   });
 });

@@ -38,7 +38,16 @@ enum SettingsSection {
   shortcuts(AppIcons.keyboard, 'Keyboard shortcuts'),
   connectors(AppIcons.plug, 'Connectors'),
   usage(AppIcons.chartNoAxesColumn, 'Usage'),
-  experimental(AppIcons.flaskConical, 'Experimental'),
+  tabInvites(
+    AppIcons.users,
+    'Tab invites',
+    keywords: ['invite', 'shared tab', 'trust'],
+  ),
+  experimental(
+    AppIcons.flaskConical,
+    'Experimental',
+    keywords: kIsWeb ? [] : ['privacy', 'sharing', 'product usage data'],
+  ),
   about(AppIcons.info, 'About'),
   debug(AppIcons.bug, 'Debug');
 
@@ -95,6 +104,7 @@ List<SettingsGroup> settingsGroupsFor({required bool debugSurface}) {
   bool visible(SettingsSection section) =>
       // This computer's own: the services its agents use.
       (!kIsWeb || section != SettingsSection.connectors) &&
+      (kIsWeb || section != SettingsSection.privacy) &&
       (debugSurface || !_kDeveloperSections.contains(section));
   return [
     for (final group in _kSettingsGroups)
@@ -130,7 +140,7 @@ const _kSettingsGroups = [
     // are read at all — the pane is off until somebody sets it.
     SettingsSection.usage,
   ]),
-  SettingsGroup('Labs', [SettingsSection.experimental]),
+  SettingsGroup('Labs', [SettingsSection.tabInvites, SettingsSection.experimental]),
   // Debug, in builds that have it, beside the version a report has to name.
   SettingsGroup('Help', [SettingsSection.about, SettingsSection.debug]),
 ];

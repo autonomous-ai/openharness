@@ -9,6 +9,16 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/update/desktop_updater.dart';
 import 'package:harness/update/manual_update_check.dart';
 import 'package:harness/widgets/update_notice.dart';
+import 'package:harness/measurement/product_runtime_health.dart';
+
+class _UpdateHealth extends ProductRuntimeHealth {
+  _UpdateHealth(super.measurement);
+  String? expected;
+  @override
+  void expectUpdate(String version) => expected = version;
+  @override
+  void cancelUpdate() => expected = null;
+}
 
 /// A 45 MB build on a slow link used to look like a hang: the band said
 /// "Installing…" behind an indeterminate bar. The manifest carries the exact
@@ -56,6 +66,22 @@ void main() {
     await tester.pump();
     expect(installer.progress, isNotNull, reason: 'the hook must be passed in');
   }
+
+  test(
+    'records the next-version flag during download and clears a failed stage',
+    () async {
+      app.productRuntimeHealth?.dispose();
+      final health = _UpdateHealth(app.productMeasurement);
+      app.productRuntimeHealth = health;
+      final installing = app.installAvailableUpdate();
+      await Future<void>.delayed(Duration.zero);
+      expect(installer.progress, isNotNull);
+      expect(health.expected, _update.version);
+      installer.staged.complete(null);
+      await installing;
+      expect(health.expected, isNull);
+    },
+  );
 
   testWidgets('the banner counts the download, then goes quiet to unpack', (
     tester,

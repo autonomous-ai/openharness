@@ -1,4 +1,5 @@
-import { PRODUCT_FEEDBACK, PRODUCT_USAGE_UI_METRICS } from './lib/productUsageContract.js'
+import { PRODUCT_FEEDBACK } from './lib/productUsageContract.js'
+import { isAppProductUsageReport } from './lib/appProductUsageReport.js'
 /**
  * Tiny localhost HTTP server for the Claude Code hook callbacks. `hook/notify.mjs` POSTs here on
  * SessionStart/SessionEnd (127.0.0.1:<PORT>). This replaces the old Fastify routes — the browser
@@ -1055,18 +1056,11 @@ export function startHookServer(
           const raw = await readBody(req, 8192)
           body = JSON.parse(raw)
         } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        const report = body as { schemaVersion?: unknown; revision?: unknown; id?: unknown; day?: unknown; counters?: unknown } | null
-        if (!report || typeof report !== 'object' || Object.keys(report).length !== 5 || report.schemaVersion !== 1
-            || typeof report.revision !== 'number' || !Number.isSafeInteger(report.revision) || report.revision < 0
-            || typeof report.id !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(report.id)
-            || typeof report.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(report.day)
-            || !report.counters || typeof report.counters !== 'object' || Array.isArray(report.counters)
-            || Object.entries(report.counters).some(([key, value]) => !PRODUCT_USAGE_UI_METRICS.includes(key as never)
-              || !Number.isSafeInteger(value) || value < 1 || value > 1000)) {
+        if (!isAppProductUsageReport(body)) {
           json(400, { error: 'BAD_REQUEST' }); return
         }
         try {
-          const result = await handlers.onProductUsageReport(report)
+          const result = await handlers.onProductUsageReport(body)
           json(result.status, result.body)
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return

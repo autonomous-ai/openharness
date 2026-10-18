@@ -28,6 +28,13 @@ class LastOpenedAgent {
 
   AgentRef? _value;
   String? _tab;
+
+  /// The agent this record names right now, as far as this run knows — the last one [remember]ed,
+  /// or what the previous run left once a read has brought it in. Null when neither has happened.
+  /// For the machine cache's launch record (`MachineCache.save`), which is written for the machine
+  /// the NEXT launch reopens.
+  AgentRef? get current => _value ?? _readBack;
+  AgentRef? _readBack;
   Future<void> _writes = Future.value();
   Future<AgentRef?>? _read;
 
@@ -44,6 +51,11 @@ class LastOpenedAgent {
   /// and the machine fetch, and [read] finds the answer waiting. Idempotent, so
   /// the prefetch and the screen share one read rather than racing for the lock.
   void prefetch() => _read ??= _load();
+
+  /// The [prefetch] in flight or landed, WITHOUT taking it — for the launch to learn which machine
+  /// to dial first (`AppNotifier._warmStartMachines`), while [read] stays the home screen's own
+  /// one-shot. Null when nothing was prefetched, or the home screen has already taken it.
+  Future<AgentRef?>? get prefetched => _read;
 
   /// What the previous run left, or null. Anything malformed reads as nothing — a missing
   /// preference must never hold the app on its launch screen.
@@ -70,7 +82,9 @@ class LastOpenedAgent {
       final agentId = decoded['agentId'];
       if (machineId is! String || machineId.isEmpty) return null;
       if (agentId is! String || agentId.isEmpty) return null;
-      return (machineId: machineId, agentId: agentId);
+      final read = (machineId: machineId, agentId: agentId);
+      _readBack = read;
+      return read;
     } catch (_) {
       return null;
     }

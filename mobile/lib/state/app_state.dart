@@ -1,24 +1,32 @@
+import '../core/app_version.dart';
 import '../core/test_run.dart';
+import '../measurement/launch_measurement.dart';
+import '../measurement/onboarding_measurement.dart';
+import '../measurement/product_connections.dart';
 import '../measurement/product_measurement.dart';
+import '../measurement/product_resumes.dart';
 import '../measurement/setup_transport.dart';
 
 import 'dart:async';
 import 'dart:math' show Random;
 
 import 'package:dio/dio.dart';
-import 'package:xterm/xterm.dart' show Terminal;
+import 'package:xterm/xterm.dart' show RemoteScrollMemory, Terminal;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_client.dart';
 import '../viewer/direct_auth_api.dart';
 import '../viewer/direct_link.dart';
+import '../viewer/direct_login.dart';
 import '../viewer/group_sync.dart';
 import '../e2ee/bytes.dart' show b64e;
+import '../viewer/sign_in_browser.dart';
 import '../viewer/viewer_services.dart';
 import '../auth/auth_session.dart';
 import '../auth/peer_link_client.dart';
 import '../auth/sign_in_client.dart';
+import '../auth/sign_in_provider.dart';
 import '../auth/cli_link.dart';
 import '../core/config.dart';
 import '../core/agent_git_context.dart';
@@ -35,6 +43,7 @@ import '../core/project_history.dart';
 import '../core/retry.dart';
 import '../logging/app_log.dart';
 import '../logging/startup_trace.dart';
+import '../logging/typing_trace.dart';
 import '../notify/agent_announcer.dart';
 import '../notify/done_notice.dart';
 import '../notify/system_notices.dart';
@@ -44,11 +53,13 @@ import '../terminal/terminal_session.dart';
 import '../terminal/remote_media_download.dart';
 import '../widgets/engine_identity.dart' show allEngines, engineIdentity;
 import 'dial_status.dart';
+import 'kept_screens.dart';
 import 'retarget_refusal.dart';
 import 'pane_layout_store.dart';
 import 'session_preview.dart';
 import 'terminal_pane.dart';
 import 'desk_sync.dart';
+import 'machine_profile.dart';
 import 'phone_desk.dart';
 import '../daemons/daemon_habits.dart';
 import '../daemons/individual_art.dart';
@@ -62,6 +73,7 @@ import 'search_when.dart';
 import 'session_content_search.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
+import '../usage/usage_summary.dart';
 import '../phone/phone_name_store.dart';
 import '../viewer/device_log.dart';
 import '../viewer/device_history.dart';
@@ -98,6 +110,10 @@ class AgentCreationAttempt {
 
   final String _id;
   String? _machineId, _targetId;
+
+  /// The desk tab the agent joins once started, picked before it was asked for — see
+  /// [PhoneDesk.adopt]. Null joins the tab the phone is in.
+  String? _deskTabId;
   Map<String, dynamic>? _choices;
   Future<String?>? _inFlight;
   bool _awaitingConfirmation = false, _finished = false;
@@ -143,6 +159,11 @@ class MachineState {
   /// Cleared by `_replaceAgents`, i.e. by the first real `agents_list` — from
   /// that moment the list is the machine's own and nothing is provisional.
   bool agentsFromCache = false;
+
+  /// When this machine last answered `agents_list` over the socket it is on now — null before the
+  /// first answer, and again once that socket drops, since the pushes that keep a list current
+  /// went nowhere while it was down. What Find asks before asking again (`_listStillCurrent`).
+  DateTime? agentsListedAt;
 
   AgentLoadStatus agentLoadStatus = AgentLoadStatus.idle;
   bool agentsRefreshing = false;
@@ -262,7 +283,19 @@ class AppNotifier extends ChangeNotifier {
   AppConfig config;
   late ApiClient api;
   late final ProductMeasurement productMeasurement;
+
+  /// The phone's onboarding steps after sign-in, counted through [productMeasurement].
+  late final onboardingMeasurement = OnboardingMeasurement(productMeasurement);
   final _measurementConnections = <String, void Function(ProductOutcome)>{};
+
+  /// Each machine's dials, the person's (`connect_user`) apart from the app's own (`connect_auto`).
+  late final productConnections = ProductConnections(productMeasurement);
+
+  /// A stopped harness resumed from here, until it works again (`resume_recovery`).
+  late final productResumes = ProductResumes(productMeasurement);
+
+  /// This launch, to its first computer (`app_start`). The app's alone: none in a test or the sample.
+  LaunchMeasurement? launchMeasurement;
 
   /// Says whether this device is signed in, and signs it out: [ViewerServices.login], the app's own
   /// session. The name is the desktop's, where the harness CLI holds the session instead.
@@ -283,9 +316,19 @@ class AppNotifier extends ChangeNotifier {
   final Map<String, Timer> _turnActivityWatchdogs = {};
 
   /// What each agent was last asked and answered, as search matches it — the
-  /// desktop's own store (see `session_preview.dart`), fed the same two ways:
-  /// a small `agent_recent` read whenever the agent list arrives, and every
-  /// turn event this socket carries, so a reply is findable the moment it lands.
+  /// desktop's own store (see `session_preview.dart`), fed by every turn event
+  /// this socket carries, so a reply is findable the moment it lands, and by an
+  /// `agent_recent` read ONLY where a screen asks for one (`agents_list_page.dart`).
+  ///
+  /// ⚠️ **No reads in the background, on purpose (owner, 2026-10-01).** It used
+  /// to be read for every agent whenever an agent list arrived (32 a machine, again
+  /// after every reconnect), for every agent a push updated, and for every row
+  /// Find drew — a hundred-odd reads at launch on one machine, and several hundred
+  /// on eight, all on the same relay socket as the terminal somebody was waiting
+  /// for. A launch measured with them showed that socket going silent for 4–7s
+  /// with the terminal's open queued behind them. What they fed is gone (the recap
+  /// under Find's rows) or answered by the machines themselves (`session_search`
+  /// finds what a session said), so the reads went and the store stayed.
   ///
   /// Read again after [freshFor] at the soonest, not the desktop's minute: a
   /// phone pays for the bytes, and the live events already keep a connected
@@ -293,6 +336,7 @@ class AppNotifier extends ChangeNotifier {
   late final sessionPreviews = SessionPreviewStore(
     canFetch: _canFetchPreview,
     freshFor: const Duration(minutes: 5),
+    maxInFlight: 4,
     fetchRecent: (key) => _conn(key.machineId).request(
       'agent_recent',
       payload: {'agentId': key.agentId, 'n': 3},
@@ -321,10 +365,6 @@ class AppNotifier extends ChangeNotifier {
               agent.id == key.agentId && agent.sessionId == key.sessionId,
         );
   }
-
-  void _warmPreviews(MachineState machine) => sessionPreviews.warm(
-    machine.agents.map((agent) => previewKey(machine.machine.machineId, agent)),
-  );
 
   /// Has the next warm re-read [agent]'s content when its machine says the
   /// conversation moved since [before] — a turn this phone may have slept
@@ -359,6 +399,10 @@ class AppNotifier extends ChangeNotifier {
     _profileInFlight = null;
     _retryInFlight = null;
     machinesLoading = false;
+    _registeringDevice = false;
+    _deviceRegisteredAt = null;
+    _awaitingVouched.clear();
+    _vouchedRedials.clear();
     return ++_authRevision;
   }
 
@@ -458,6 +502,65 @@ class AppNotifier extends ChangeNotifier {
   /// or has not answered — the phone then swipes the whole account, as it did
   /// before the desk existed.
   List<DeskTab> get deskTabs => _desk.tabs;
+
+  /// The tabs this phone SHOWS: [deskTabs] narrowed to the computer chosen under Settings ▸ Profile
+  /// ([machineProfileId]). What the swipe's groups, Find's tab chips and the launch's choice of tab
+  /// read (`phone/desk_groups.dart`). [deskTabs] stays the whole desk for what has to agree with
+  /// every other computer — what each tab is called, above all.
+  List<DeskTab> get profileDeskTabs =>
+      deskTabsForMachineProfile(_desk.tabs, machineProfileId);
+
+  /// The computer whose tabs this phone shows, or null for every computer.
+  ///
+  /// A choice naming a computer the account no longer has — removed here or elsewhere — reads as
+  /// every computer, rather than hiding tabs behind a machine that is not coming back. Before the
+  /// list has arrived nothing is known either way, so the choice stands.
+  String? get machineProfileId {
+    final chosen = machineProfile.value;
+    if (chosen == null) return null;
+    if (machines.isEmpty || machines.any((m) => m.machineId == chosen)) {
+      return chosen;
+    }
+    return null;
+  }
+
+  /// Show every computer's tabs ([machineId] null), or only [machineId]'s. Only this phone changes:
+  /// the desk keeps every tab, and no other computer's view moves — the desktop's
+  /// `setMachineProfile`.
+  void setMachineProfile(String? machineId) {
+    if (!machineProfile.select(machineId)) return;
+    _keepActiveDeskTabShown();
+    notifyListeners();
+  }
+
+  /// The tab this phone counts itself in, moved to the first one still shown when a profile hides it
+  /// — the desktop's `_ensureProfileFocus`, for the reason that matters most on a phone: a harness
+  /// made here joins that tab ([PhoneDesk.adopt]), and must not land in one the phone no longer
+  /// shows. Silent ([PhoneDesk.note]): the caller notifies.
+  void _keepActiveDeskTabShown() {
+    final active = _desk.activeTabId;
+    if (active == null) return;
+    // ⚠️ Nothing to judge before the desk has answered: the profile lands from disk long before the
+    // tabs do from the network, and an empty list would read as "the tab is hidden" and lose the
+    // tab the last run was in.
+    if (_desk.tabs.isEmpty) return;
+    final shown = profileDeskTabs;
+    if (shown.any((tab) => tab.id == active)) return;
+    final first = shown.firstOrNull?.id;
+    _desk.note(first);
+    _rememberDeskTab(first);
+  }
+
+  /// The profile kept from the last run. Disk only, and off the launch's critical path: the screen
+  /// waits for the desk's network read before it picks a tab (`AgentHome._target`), and this lands
+  /// long before that.
+  Future<void> _loadMachineProfile() async {
+    final before = machineProfile.value;
+    await machineProfile.load();
+    if (_disposed || machineProfile.value == before) return;
+    _keepActiveDeskTabShown();
+    notifyListeners();
+  }
 
   /// The tab the phone is in, or null for an agent no tab holds.
   String? get activeDeskTabId => _desk.activeTabId;
@@ -952,6 +1055,22 @@ class AppNotifier extends ChangeNotifier {
   /// while it is set, rather than dropping them onto a bare full-screen spinner.
   bool signingIn = false;
 
+  /// The account whose sign-in page is up, from the press of its button until the flow settles —
+  /// so the welcome screen's pressed button says what it is waiting on, and only it.
+  SignInProvider? signInProvider;
+
+  /// Signed in on this phone during this run — from the welcome — rather than a session the app
+  /// came back with. The onboarding after a sign-in reads it: home draws its waits on the
+  /// onboarding's picture, eased from the welcome's, and the computer joining gets its moment
+  /// (`phone/welcome/onboarding_frame.dart`). Cleared with the session.
+  bool signedInThisRun = false;
+
+  /// The one line the phone says by the mic the first time the onboarding opens a session — "Send
+  /// it, or say anything." — and the session it is for. Set by home as it hands over
+  /// (`phone/agent_home.dart`), spent by that session's page on its first send or when it goes
+  /// (`phone/terminal_page.dart`). Null the rest of the time; cleared with the session.
+  ({String machineId, String agentId, String text})? firstSessionLine;
+
   AppNotifier({
     required AppConfig config,
     required AuthSession authSession,
@@ -964,9 +1083,15 @@ class AppNotifier extends ChangeNotifier {
     PaneLayoutStore? paneLayoutStore,
     SystemNotices? systemNotices,
     MachineCache? machineCache,
+    KeptScreenStore? keptScreenStore,
     GroupSync? groupSync,
     this.turnActivityTimeout = const Duration(seconds: 12),
   }) : _paneLayout = paneLayoutStore,
+       // On the machine cache's terms, below: a real app keeps screens (in memory), a test only
+       // when it hands over a store of its own.
+       _keptScreenStore =
+           keptScreenStore ??
+           (paneLayoutStore == null ? null : KeptScreenStore()),
        // On the same terms as the stores below: no layout store means a test,
        // which must never reach the OS notification centre.
        agentNotices = AgentAnnouncer(
@@ -983,6 +1108,7 @@ class AppNotifier extends ChangeNotifier {
        agentPreference = AgentPreference(paneLayoutStore?.storage),
        projectHistory = ProjectHistory(paneLayoutStore?.storage),
        lastOpenedAgent = LastOpenedAgent(paneLayoutStore?.storage),
+       machineProfile = MachineProfileStore(paneLayoutStore?.storage),
        searchHistory = PhoneSearchHistory(paneLayoutStore?.storage),
        // On the same terms as the stores above: a layout store means this is a
        // real app with a real Harness home to cache into, and its absence means
@@ -1009,11 +1135,45 @@ class AppNotifier extends ChangeNotifier {
         ProductMeasurement(
           surface: kIsWeb ? 'web' : 'phone',
           automatic: !kUnderTest,
+          // Signed-out counts start on, as the desktop's do, where an opt-out can be kept: the app's
+          // own store. A test or the sample (`demo/`) has none, and stays off.
+          setupStorage: paneLayoutStore?.storage,
           sendSetup: (report) =>
               sendSetupMeasurement(this.config.apiBaseUrl, report),
         );
+    // On the stores' terms above: no layout store is a test or the sample (`demo/`), and neither is
+    // a launch of this app.
+    if (!kUnderTest && paneLayoutStore != null) {
+      launchMeasurement = LaunchMeasurement(this.productMeasurement);
+    }
     addListener(_syncProductMeasurement);
+    unawaited(_measurementContext());
     _initDeviceLog();
+  }
+
+  /// Which build this phone's reports come from ([ProductMeasurement.context]): the public release
+  /// and the OS family, nothing that tells one phone from another. A debug build reports as
+  /// `development`, which the backend does not keep. Not the web, which has no such context.
+  Future<void> _measurementContext() async {
+    if (kIsWeb || kUnderTest) return;
+    var release = 'unknown';
+    try {
+      release = await runningAppVersion();
+    } catch (_) {}
+    if (_disposed) return;
+    productMeasurement.context = {
+      'surface': 'phone',
+      // The backend refuses a whole report whose release is not a plain x.y.z.
+      'release': RegExp(r'^(0|[1-9]\d{0,2})(\.(0|[1-9]\d{0,2})){2}$').hasMatch(release)
+          ? release
+          : 'unknown',
+      'platform': switch (defaultTargetPlatform) {
+        TargetPlatform.iOS => 'ios',
+        TargetPlatform.android => 'android',
+        _ => 'other',
+      },
+      'channel': kReleaseMode ? 'production' : 'development',
+    };
   }
 
   void _syncProductMeasurement() {
@@ -1025,10 +1185,29 @@ class AppNotifier extends ChangeNotifier {
         : null;
     productMeasurement.account(
       scope,
-      choice: () => api.productUsageSettings(),
+      choice: () => productUsageSettings(),
       send: api.productUsageReport,
     );
-    if (scope == null) _measurementConnections.clear();
+    launchMeasurement?.account(
+      signedIn: scope != null,
+      restored: !signedInThisRun,
+    );
+    if (scope == null) {
+      _measurementConnections.clear();
+      productConnections.clear();
+      productResumes.clear();
+    }
+  }
+
+  /// The account's product-usage choice — or, while an opt-out made before sign-in waits to be
+  /// carried to the account, set off: the desktop's rule. Pending until the server confirms it, so a
+  /// failed request or a default-on answer never quietly restores sharing.
+  Future<Map<String, dynamic>> productUsageSettings({bool? enabled}) async {
+    await productMeasurement.setupChoiceReady;
+    return api.productUsageSettings(
+      enabled:
+          enabled ?? (productMeasurement.accountOptOutPending ? false : null),
+    );
   }
 
   // Connection keys already belong to the app. Only fixed outcomes reach measurement, never the key.
@@ -1076,10 +1255,36 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Why this phone was signed out while it was in use — its session ended for good, or another
+  /// device removed it from the account — for the welcome screen to say. Without it the phone lands
+  /// on the first-run welcome as if it had never been signed in. Null after a Sign out by hand, and
+  /// cleared the moment a sign-in starts.
+  String? signedOutReason;
+
+  /// A Sign out by hand is under way or done, until the next sign-in. ⚠️ That sign-out takes this
+  /// phone's key out of the device log, and the log reading its own removal back calls
+  /// [ViewerDeviceLog.onSignedOut] — the very call a removal from another device makes. This is what
+  /// tells the two apart, so the person who pressed Sign out is not told the phone was removed.
+  bool _leftByHand = false;
+
+  static const _signedOutEnded =
+      'You were signed out. Sign in again to reach your computers.';
+  static const _signedOutRemoved =
+      'This phone was removed from your account on another device. Sign in again to use it here.';
+
   String get autonomousEnv => _autonomousEnv;
 
   static const offlineRetryInterval = Duration(seconds: 5);
-  static const agentSyncInterval = Duration(seconds: 60);
+
+  /// How often a connected machine's agent list is read again, under the pushes — see
+  /// [_syncAgentsIfChanged].
+  ///
+  /// ⚠️ **Two minutes, not one.** The pushes keep the list live; this catches only what they miss,
+  /// and a relay session gone stale ([agentSyncStaleTicks] of these timing out in a row). And it is
+  /// not cheap where it lands: the machine reads every agent's git state and history to answer —
+  /// one to two seconds for 150 of them — and every keystroke sent to it meanwhile waits behind
+  /// that answer. Once a minute, on each machine, was a stall in somebody's typing every minute.
+  static const agentSyncInterval = Duration(seconds: 120);
 
   MachineState? stateOf(String machineId) => machineStates[machineId];
 
@@ -1109,6 +1314,10 @@ class AppNotifier extends ChangeNotifier {
 
   /// The agent the phone's terminal had open, kept across launches — see [LastOpenedAgent].
   final LastOpenedAgent lastOpenedAgent;
+
+  /// Which computer's tabs this phone shows — Settings ▸ Profile. See [MachineProfileStore] and
+  /// [profileDeskTabs].
+  final MachineProfileStore machineProfile;
 
   /// The agents and commands reached from the search, most recent first — what
   /// ranks the box before a word is typed. See [PhoneSearchHistory].
@@ -1235,6 +1444,25 @@ class AppNotifier extends ChangeNotifier {
   }
 
   Future<void> bootstrap() async {
+    // ⚠️ **Started before anything is awaited (owner, 2026-10-01).** The launch's dial waits on
+    // these two reads: the last-opened agent names its machine, the cache says that machine was up
+    // ([_warmStartMachines]). Started after the config and the sign-in check, they landed after
+    // the first frame, ~250ms into the dial's wait. Disk only; dropped when nobody is signed in.
+    lastOpenedAgent.prefetch();
+    final cache = _machineCache;
+    if (cache != null) {
+      // Read before the first frame by `startHarness` — see [_preDialFromHint].
+      _launchHint = MachineCache.takeLaunchHint();
+      _launchCacheRead = StartupTrace.time(
+        'boot.machineCacheRead',
+        cache.readRaw,
+      );
+      // The small one beside it, which the launch's own machine is drawn from first.
+      _launchRecordRead = StartupTrace.time(
+        'boot.machineLaunchRead',
+        cache.readLaunchRaw,
+      );
+    }
     try {
       if (_store != null) {
         try {
@@ -1264,8 +1492,50 @@ class AppNotifier extends ChangeNotifier {
       currentUser = null;
       status = AppStatus.unauthenticated;
       notifyListeners();
+    } finally {
+      // Taken by the warm start when signed in; otherwise last run's text has no reader.
+      _launchCacheRead = null;
+      _launchRecordRead = null;
+      _launchHint = null;
     }
   }
+
+  /// The machine the launch hint names ([MachineCache.preloadLaunchHint]), for [_preDialFromHint]
+  /// — during the bootstrap that took it, and only then.
+  String? _launchHint;
+
+  /// The machine [_preDialFromHint] dialled, until the warm start has read which agent the launch
+  /// reopens and either keeps that dial as its own or lets it go ([_warmStartMachines]).
+  String? _preDialled;
+
+  /// Dial the machine the launch hint names, now — before the first frame, before anything else is
+  /// read — when the launch is signed in and nothing is on screen yet.
+  ///
+  /// ⚠️ **A head start, not a decision (owner, 2026-10-02).** Which agent the launch reopens is
+  /// still [lastOpenedAgent]'s to say, and the hold on the other machines is still the warm start's
+  /// to make; this only puts the socket — TCP, TLS, the upgrade — under way ~400ms sooner than the
+  /// warm start could, which had to wait out the first frame to read anything. The warm start takes
+  /// the dial over when the agent it reopens is on this machine, which is what the hint is written
+  /// for; otherwise the socket is closed again, one dial wasted, as a hint behind a crash is.
+  void _preDialFromHint() {
+    final hint = _launchHint;
+    _launchHint = null;
+    if (hint == null || _pool == null || _disposed) return;
+    if (machines.isNotEmpty || machineStates.isNotEmpty) return;
+    _preDialled = hint;
+    StartupTrace.mark(
+      'launch: dialling ${_shortId(hint)} from the launch hint',
+    );
+    _conn(hint);
+  }
+
+  /// The machine cache as [bootstrap] began reading it, for the launch's [_warmStartMachines] —
+  /// once, and only during the bootstrap that started it.
+  Future<String?>? _launchCacheRead;
+
+  /// The cache's launch record ([MachineCache.readLaunchRaw]), read beside [_launchCacheRead] and
+  /// on the same terms.
+  Future<String?>? _launchRecordRead;
 
   /// Whether this device is signed in, and everything behind the login screen when it is — what
   /// `bootstrap()` does once its config is loaded.
@@ -1307,16 +1577,31 @@ class AppNotifier extends ChangeNotifier {
     // end in a read of the device log, which must be judged by THIS sign-in (a hand sign-in mints its
     // id here), not the previous account's. Synchronous: no await may come first.
     _beginDeviceLogSignIn(revision);
+    // Signed in again: a removal the log reads from here on was made by another device. Not before
+    // this line — the last Sign out by hand may still be reading its own removal back until the log
+    // knows about this sign-in, which the line above just told it.
+    _leftByHand = false;
     // Stays on the pre-navigation `bootstrapping` screen (main.dart) until the local state is
     // restored. A phone has no local service to start — the desktop's "Starting local service…"
     // was a sentence about somebody else's computer shown while this one read its own disk.
     _bootStatusMessage = 'Getting your machines…';
     notifyListeners();
     // Which agent to reopen is the first thing the phone's home screen asks for
-    // and the last thing it can draw without, so the read starts here rather
-    // than when that screen mounts — several state-file operations later, behind
-    // every one of their locks. See [LastOpenedAgent.prefetch].
+    // and the last thing it can draw without, so the read starts no later than
+    // here rather than when that screen mounts — several state-file operations
+    // later, behind every one of their locks. A launch has already started it
+    // (top of [bootstrap]); a sign-in in this run starts it here. See
+    // [LastOpenedAgent.prefetch].
     lastOpenedAgent.prefetch();
+    // Which computer's tabs to show (Settings ▸ Profile). Queued behind the record above on
+    // purpose, and not awaited: nothing picks a tab before the desk's network read lands.
+    unawaited(_loadMachineProfile());
+    // No screen from the last run: the agent that record names is drawn as the skeleton until its
+    // keyframe lands — see [KeptScreenStore]. What an earlier build kept of it on disk goes. Only in
+    // the app, on the store's terms: a test never reaches the real cache directory.
+    if (_keptScreenStore != null) {
+      unawaited(KeptScreenStore.deleteLegacyFile());
+    }
     // Before the machines, deliberately: the tiles are intent, they render as
     // "waiting for that machine" on their own, and each attaches as its machine
     // answers. Waiting for the machine list first would leave the window empty
@@ -1333,7 +1618,7 @@ class AppNotifier extends ChangeNotifier {
     // last thing started, behind several exclusive locks on one state file. The
     // request now overlaps that disk work instead of queueing behind it, which
     // takes a whole HTTP round-trip off the stretch the phone spends saying
-    // "Connecting to your machine…".
+    // "Connecting to your computer…".
     //
     // ⚠️ The pool is built BEFORE the fetch is started, not after the restore
     // below. A returning list dials each machine through `_conn`, which reads
@@ -1347,6 +1632,8 @@ class AppNotifier extends ChangeNotifier {
     // that await, where the existing handler words it for the user and offers
     // the retry.
     _ensurePool();
+    // The launch's machine first of all, from the hint read before the first frame.
+    _preDialFromHint();
     final machineRefresh = StartupTrace.time<Object?>(
       'boot.refreshMachines',
       () async {
@@ -1447,19 +1734,61 @@ class AppNotifier extends ChangeNotifier {
     if (status == AppStatus.unauthenticated) {
       return; // idempotent: several sources can race here
     }
+    // ⚠️ A Sign out by hand is under way ([_leftByHand]): it clears the saved session before it
+    // closes the sockets, and one dialling in between finds the session gone and says so. That is
+    // the sign-out in progress, not news — answered here, it invalidated the auth work under that
+    // sign-out, which then stopped halfway, and put "You were signed out" in front of the person
+    // who had just pressed Sign out. The sign-out finishes the job itself.
+    if (_leftByHand) return;
     _invalidateAuthWork();
     currentUser = null;
     signingIn = false;
+    signInProvider = null;
     // The code was scanned into the session that just ended — see [logout].
     pendingPairing = null;
+    pendingComputerSignIn = null;
     _clearDeviceNotices();
     _stopAccountTimers();
     _desk.reset();
     zoo.reset();
+    _forgetLaunchHold();
+    // Signed out from elsewhere: the kept screens go as on a sign-out here (see [logout]).
+    _keptScreens.clear();
+    _forgetScrollMemories();
+    _keptScreenStore?.clear();
     unawaited(_pool?.closeAll());
     _pool = null;
+    // ⚠️ **The account's machines go with it, as on a sign-out by hand ([_endSession]).** Kept,
+    // the next sign-in — perhaps another account's — started on this account's list: it was not
+    // empty, so no "Looking for your computers…", and this account's computers were drawn as the
+    // next one's until its own fetch landed. The warm-start cache on disk went on naming them too,
+    // and the next launch dialled them with the new session.
+    _stopAllOfflineRetries();
+    _stopAllAgentSyncTimers();
+    _relaySaid.clear();
+    // Reads [machineStates], so before it is emptied.
+    _clearAllTurnActivity();
+    machines = [];
+    machineStates.clear();
+    unawaited(_machineCache?.clear());
+    sessionPreviews.clear();
+    agentNotices.reset();
+    // The Settings row's usage figure was this account's — see [lastUsageSummary].
+    lastUsageSummary.value = null;
+    expandedMachines.clear();
+    selectedMachineId = null;
+    // ⚠️ The saved session goes too. The socket that said so (a refresh refused, 4403) is the only
+    // judge of it, and a session left on disk signed the NEXT launch straight back in — only to be
+    // refused again, with the person never told why. Best effort, as [logout]'s own: a store that
+    // cannot be written to must not surface as an unhandled error on the way out.
+    unawaited(cliLogin.logout().catchError((Object _) {}));
     _lastError = message;
     _lastErrorRetryable = true;
+    signedOutReason = _signedOutEnded;
+    signedInThisRun = false;
+    onboardingMeasurement.reset();
+    welcomedMachines.clear();
+    firstSessionLine = null;
     status = AppStatus.unauthenticated;
     notifyListeners();
   }
@@ -1475,6 +1804,25 @@ class AppNotifier extends ChangeNotifier {
   /// `viewer/email_code_api.dart`.
   Future<void> sendLoginCode(String email) => viewer.emailLogin.sendCode(email);
 
+  /// A sign-in attempt, counted as `sign_in` and under the welcome-screen button that started it:
+  /// every outcome for a signed-out session that opted in, and a success once more under the
+  /// account's own sharing ([OnboardingMeasurement.signedIn]).
+  void Function(ProductOutcome) _measureSignIn(ProductFlow method) {
+    final finish = productMeasurement.beginEach([ProductFlow.signIn, method]);
+    final watch = Stopwatch()..start();
+    var done = false;
+    return (outcome) {
+      finish(outcome);
+      // Called again by each attempt's `finally`: only its first outcome is the attempt's.
+      if (done) return;
+      done = true;
+      onboardingMeasurement.attempted(method, outcome);
+      if (outcome == ProductOutcome.ok) {
+        onboardingMeasurement.signedIn(method, watch.elapsed);
+      }
+    };
+  }
+
   /// The phone's sign-in, second step: trade the emailed [code] for a session
   /// and go in.
   ///
@@ -1489,15 +1837,17 @@ class AppNotifier extends ChangeNotifier {
   }) async {
     final login = viewer.emailLogin;
     if (_disposed || signingIn) return;
-    final measureSignIn = productMeasurement.begin(ProductFlow.signIn);
+    final measureSignIn = _measureSignIn(ProductFlow.signInEmail);
     final revision = _invalidateAuthWork();
     _closedHistory.clear();
     _lastError = null;
+    signedOutReason = null;
     signingIn = true;
     notifyListeners();
     try {
       await login.signIn(email: email, code: code);
       if (!_authWorkCurrent(revision)) return;
+      signedInThisRun = true;
       measureSignIn(ProductOutcome.ok);
       status = AppStatus.bootstrapping;
       notifyListeners();
@@ -1527,15 +1877,17 @@ class AppNotifier extends ChangeNotifier {
   Future<void> signInWithScan(String code) async {
     final login = viewer.emailLogin;
     if (_disposed || signingIn) return;
-    final measureSignIn = productMeasurement.begin(ProductFlow.signIn);
+    final measureSignIn = _measureSignIn(ProductFlow.signInScan);
     final revision = _invalidateAuthWork();
     _closedHistory.clear();
     _lastError = null;
+    signedOutReason = null;
     signingIn = true;
     notifyListeners();
     try {
       await login.signInWithScan(code, label: phoneClientDescriptor().name);
       if (!_authWorkCurrent(revision)) return;
+      signedInThisRun = true;
       measureSignIn(ProductOutcome.ok);
       status = AppStatus.bootstrapping;
       notifyListeners();
@@ -1559,7 +1911,143 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  Future<void> logout() async {
+  /// Sign in with [provider]'s account — "Continue with Google", "Continue with Apple" — through
+  /// the SSO page, opened in the app (`viewer/direct_login.dart`, `viewer/sign_in_browser.dart`),
+  /// and go in.
+  ///
+  /// Thrown and kept like [signInWithCode], for the welcome screen to show — except a cancel
+  /// ([cancelProviderSignIn]), which the person chose and needs no sentence.
+  Future<void> signInWithProvider(SignInProvider provider) async {
+    final login = viewer.login;
+    if (_disposed || signingIn) return;
+    final measureSignIn = _measureSignIn(switch (provider) {
+      SignInProvider.google => ProductFlow.signInGoogle,
+      SignInProvider.apple => ProductFlow.signInApple,
+    });
+    final revision = _invalidateAuthWork();
+    _closedHistory.clear();
+    _lastError = null;
+    signedOutReason = null;
+    signingIn = true;
+    signInProvider = provider;
+    notifyListeners();
+    try {
+      await login.login(
+        provider: provider,
+        onAuthorizeUrl: (url) =>
+            unawaited(_openSignInPage(url, login, revision)),
+      );
+      // iOS takes its sheet down here; Android's Custom Tab is the person's to close.
+      unawaited(closeSignInPage());
+      if (!_authWorkCurrent(revision)) return;
+      signedInThisRun = true;
+      measureSignIn(ProductOutcome.ok);
+      status = AppStatus.bootstrapping;
+      notifyListeners();
+      await _enterSignedIn(revision);
+    } on SignInCancelled {
+      measureSignIn(ProductOutcome.cancelled);
+      unawaited(closeSignInPage());
+      if (_authWorkCurrent(revision)) status = AppStatus.unauthenticated;
+    } catch (_) {
+      measureSignIn(ProductOutcome.failed);
+      unawaited(closeSignInPage());
+      if (_authWorkCurrent(revision)) status = AppStatus.unauthenticated;
+      rethrow;
+    } finally {
+      measureSignIn(
+        _authWorkCurrent(revision)
+            ? ProductOutcome.unknown
+            : ProductOutcome.cancelled,
+      );
+      if (_authWorkCurrent(revision)) {
+        signingIn = false;
+        signInProvider = null;
+        notifyListeners();
+      }
+    }
+  }
+
+  /// The page [signInWithProvider] waits on, shown. One that cannot be shown ends that sign-in
+  /// with the reason — it would otherwise wait out its timeout on a page nobody can see — and one
+  /// the person closes ends it as a cancel ([DirectLogin.pageClosed]): the welcome screen is back
+  /// as it was, with nothing to say. Either only while it is still the sign-in in flight: a later
+  /// one is not this page's to end.
+  Future<void> _openSignInPage(Uri url, DirectLogin login, int revision) async {
+    bool inFlight() => _authWorkCurrent(revision) && signInProvider != null;
+    try {
+      await openSignInPage(
+        url,
+        onClosed: () {
+          if (inFlight()) login.pageClosed();
+        },
+      );
+    } catch (error) {
+      debugPrint('signInWithProvider: could not open the sign-in page: $error');
+      if (inFlight()) {
+        login.cancel(
+          const DirectAuthException(
+            'Could not open the sign-in page. Check your connection and try again.',
+          ),
+        );
+      }
+    }
+  }
+
+  /// Stop the sign-in [signInWithProvider] is waiting on — the person closed the page, or chose
+  /// another way in. The welcome screen settles back with nothing to report.
+  void cancelProviderSignIn() {
+    if (signInProvider == null) return;
+    viewer.login.cancel();
+  }
+
+  /// The Sign out by hand under way, from the confirm to the welcome screen — see [logout].
+  Future<void>? _signingOut;
+
+  /// A Sign out by hand is under way: it takes a few seconds (the device log, the sockets) before
+  /// the welcome screen comes up, and the screens that offer it say so meanwhile.
+  bool get signingOut => _signingOut != null;
+
+  /// Sign out by hand — Settings ▸ account ▸ Sign out. The welcome screen it lands on says nothing:
+  /// the person knows why they are there.
+  ///
+  /// ⚠️ **One at a time: a second call joins the first.** The first can take up to 5 seconds with
+  /// nothing on screen changing ([_endSession] waits on the device log), long enough to press Sign
+  /// out again — and the second, finishing after the first, invalidated the auth work of a sign-in
+  /// the person had started on the welcome screen meanwhile (Continue with Google, into the right
+  /// account): dropped, with nothing said.
+  Future<void> logout() {
+    final running = _signingOut;
+    if (running != null) return running;
+    _leftByHand = true;
+    late final Future<void> run;
+    run = () async {
+      try {
+        await _endSession();
+      } finally {
+        if (identical(_signingOut, run)) {
+          _signingOut = null;
+          // A sign-out cut short (another sign-in or -out moved the session on) changes no status
+          // of its own: whatever drew "Signing out…" is told it is over.
+          if (!_disposed) notifyListeners();
+        }
+      }
+    }();
+    _signingOut = run;
+    notifyListeners();
+    return run;
+  }
+
+  /// Everything a sign-out does, whoever asked for it. [reason] is what the welcome screen says
+  /// ([signedOutReason]): null when the person chose it.
+  Future<void> _endSession({String? reason}) async {
+    // Chosen by the person, the sign-out is itself a step's end ("Not you? Sign out"): end the steps
+    // it abandons, then send what is queued while the session can still send it — the queue goes
+    // with the account.
+    if (reason == null) {
+      onboardingMeasurement.reset();
+      await productMeasurement.sendBeforeSignOut();
+    }
     // Signing out takes this phone's key out of the account's devices, while the sign-in still works
     // to say so. Best effort, and brief.
     if (_deviceLog case final log?) {
@@ -1569,12 +2057,18 @@ class AppNotifier extends ChangeNotifier {
     }
     final revision = _invalidateAuthWork();
     signingIn = false;
+    signInProvider = null;
     // A scanned code belongs to the session it was scanned into. Held past this,
     // the next sign-in — perhaps another account's — would spend it on the first
     // locked machine of that id and show a pairing error where its password form
     // belongs. Not in [_invalidateAuthWork]: signing IN starts there too, and the
-    // code is set before that sign-in on purpose (`phone_welcome.dart`).
+    // code is set before that sign-in on purpose (`phone_welcome.dart`). The same for a computer's
+    // sign-in code: held for the sign-in it asked for, not the one after this.
     pendingPairing = null;
+    pendingComputerSignIn = null;
+    // The Settings row's usage figure was this account's — see [lastUsageSummary]. Here, before the
+    // awaits below: a sign-in started meanwhile ends this early, and must not inherit the figure.
+    lastUsageSummary.value = null;
     _closedHistory.clear();
     // Best-effort and fire-and-forget: local state is cleared below regardless, but the saved
     // session goes too, so the NEXT launch doesn't silently sign back in without ever showing the
@@ -1582,6 +2076,8 @@ class AppNotifier extends ChangeNotifier {
     unawaited(cliLogin.logout());
     _stopAllOfflineRetries();
     _stopAllAgentSyncTimers();
+    _relaySaid.clear();
+    _forgetLaunchHold();
     _stopAccountTimers();
     // Tiles go, the saved layout stays: signing out and back in is the same
     // person at the same desk, and the file is only read once machines exist.
@@ -1608,6 +2104,8 @@ class AppNotifier extends ChangeNotifier {
     // Not awaited: sign-out must not wait on a disk write, and the cache is only
     // ever read after a sign-in that this clears the way for.
     unawaited(_machineCache?.clear());
+    // The kept screens are this account's terminals — they go with it, as the cache does.
+    _keptScreenStore?.clear();
     sessionPreviews.clear();
     agentNotices.reset();
     // The account's device notices go with it: the next sign-in may be another account's, and what
@@ -1615,6 +2113,11 @@ class AppNotifier extends ChangeNotifier {
     _clearDeviceNotices();
     expandedMachines.clear();
     selectedMachineId = null;
+    signedOutReason = reason;
+    signedInThisRun = false;
+    onboardingMeasurement.reset();
+    welcomedMachines.clear();
+    firstSessionLine = null;
     status = AppStatus.unauthenticated;
     notifyListeners();
   }
@@ -1676,6 +2179,9 @@ class AppNotifier extends ChangeNotifier {
     // few seconds for a `harness link connect` run elsewhere, which a phone's links never come from.
     machine.needsLink = true;
     machine.agentLoadStatus = AgentLoadStatus.needsLink;
+    // …unless the log already vouches for it and this phone's key is new to it: then the machine
+    // has only not read that key yet — see [_redialOnceVouched].
+    unawaited(_redialOnceVouched(machine.machine.machineId));
     // A 4404 can also arrive MID-SESSION ("peer revoked trust" in the CLI's
     // remoteRelay.ts) with terminals open on this machine. The disconnect
     // that follows deliberately no longer marks the node offline (see the
@@ -1713,6 +2219,8 @@ class AppNotifier extends ChangeNotifier {
   @visibleForTesting
   void Function(String machineId)? onRedialForTest;
 
+  /// The first eight characters of a machine id — enough to tell an account's machines apart in
+  /// a log line.
   static String _shortId(String id) => id.length > 8 ? id.substring(0, 8) : id;
 
   /// One round of settling [machineId]'s refusal ([reason]: `NO_PEER_LINK`, no key here for it, or
@@ -1866,12 +2374,28 @@ class AppNotifier extends ChangeNotifier {
       settling ? ConnectionStatus.connecting : nextStatus,
       ProductFlow.remoteConnect,
     );
+    productConnections.status(
+      machineId,
+      connecting:
+          settling ||
+          nextStatus == ConnectionStatus.connecting ||
+          nextStatus == ConnectionStatus.reconnecting,
+      connected: nextStatus == ConnectionStatus.connected,
+      failed: machine.needsLink || machine.nodeOnline == false,
+    );
     machine.connectionStatus = settling
         ? ConnectionStatus.connecting
         : nextStatus;
+    if (kTypingTrace) {
+      typingEvent('link ${_shortId(machineId)} → ${nextStatus.name}');
+    }
     if (nextStatus == ConnectionStatus.connected) {
+      // The first computer to answer ends the launch.
+      launchMeasurement?.ready();
       _refreshDeviceLogAfterReconnect();
       machine.needsLink = false;
+      // Let in: a later refusal is a new story ([_redialOnceVouched], [_settleTrust]).
+      _vouchedRedials.remove(machineId);
       _forgetTrustSettle(machineId);
       // A relay socket reports `connected` only after the machine's welcome
       // proved the link (`WsConn._markReady`), so a code held to pair this
@@ -1889,6 +2413,10 @@ class AppNotifier extends ChangeNotifier {
       unawaited(_syncGroup(machineId));
     } else if (nextStatus == ConnectionStatus.reconnecting ||
         nextStatus == ConnectionStatus.disconnected) {
+      // A dial that failed is a turn spent: the next machine need not wait out its limit.
+      _endReleaseTurn(machineId, 'dial failed');
+      // Pushes sent while this socket is down reach nobody: the list is no longer current.
+      machine.agentsListedAt = null;
       _stopAgentSyncTimer(machineId);
       _clearMachineActivity(machine);
       // Same reasoning as above, mirrored: capture pendingOfflineAgentId from the currently-open
@@ -1915,7 +2443,7 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// One tick of the agent-list safety net ([_syncAgentsIfChanged]), which the
-  /// app itself only reaches through a 60-second timer.
+  /// app itself only reaches through its [agentSyncInterval] timer.
   @visibleForTesting
   Future<void> syncAgentsForTest(String machineId) async {
     final machine = machineStates[machineId];
@@ -1935,16 +2463,50 @@ class AppNotifier extends ChangeNotifier {
   /// machines", which an empty list alone cannot say.
   bool machinesLoading = false;
 
+  /// The sign-in ([_authRevision]) whose machine list has been asked for at least once — answered
+  /// or failed. From then on the list is what the account HAS, empty included.
+  ///
+  /// ⚠️ **"The first fetch", and not "a fetch over an empty list".** An account with no computer
+  /// yet has an empty list after every fetch, so every refresh used to raise [machinesLoading] —
+  /// and the phone's "Waiting for your computer…" page (`phone/welcome/connect_computer.dart`),
+  /// which refreshes every 5 seconds, was swapped for "Looking for your computers…" by the home
+  /// screen each time and built again from scratch: a flash every 5 seconds, a scan's result
+  /// dropped with the page that started it. Keyed to the sign-in, so the next one starts over.
+  int? _machinesFetchedFor;
+
+  /// The sign-in whose machine list has come back from the account — unlike [_machinesFetchedFor],
+  /// not set by a fetch that failed.
+  int? _machinesAnsweredFor;
+
+  /// Whether this sign-in's machine list has come back at least once, empty or not: from then on a
+  /// machine missing from [machines] is one the account does not have, not one still on its way.
+  ///
+  /// ⚠️ An empty [machines] cannot say this alone — it is also what a list not asked for yet looks
+  /// like. The home screen read "empty" as "not answered" and held the agent of a previous run (a
+  /// record never cleared, `core/last_opened_agent.dart`) as still coming: an account with no
+  /// computer — a first sign-in on a phone used before, another account's agent remembered — sat
+  /// on "Connecting to your computer…" for the whole 30-second restore wait (`AgentHome`).
+  bool get machinesAnswered => _machinesAnsweredFor == _authRevision;
+
   Future<void> refreshMachines() async {
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return;
-    if (machines.isEmpty && !machinesLoading) {
+    if (machines.isEmpty &&
+        !machinesLoading &&
+        _machinesFetchedFor != revision) {
       machinesLoading = true;
       notifyListeners();
     }
     try {
       await _refreshMachines(revision);
+      if (_authWorkCurrent(revision) && _machinesAnsweredFor != revision) {
+        _machinesAnsweredFor = revision;
+        // The list's own notify came before this was set. The first fetch notifies again below
+        // (dropping [machinesLoading]); one that answers only after an earlier failure does not.
+        if (!machinesLoading) notifyListeners();
+      }
     } finally {
+      if (_authWorkCurrent(revision)) _machinesFetchedFor = revision;
       // Said out loud: the list's own notify fires before this, so a flag
       // dropped silently here would leave the rail on its placeholders.
       if (_authWorkCurrent(revision) && machinesLoading) {
@@ -1979,11 +2541,9 @@ class AppNotifier extends ChangeNotifier {
     if (log == null) return;
     // Normally already begun at the top of [_finishBootstrapSignedIn]; a no-op then.
     _beginDeviceLogSignIn(revision);
-    unawaited(
-      log.register()
-      // Then what is still pending from before (a restart) comes back as the banner.
-      .whenComplete(_syncPendingDevices),
-    );
+    // Through [_registerDevice], which holds [deviceTrustSettling] while it runs and stamps the
+    // moment a machine the log vouches for may still not have read this key ([_redialOnceVouched]).
+    unawaited(_registerDevice(log, revision));
   }
 
   Future<void> _refreshMachines(int revision) async {
@@ -2021,6 +2581,7 @@ class AppNotifier extends ChangeNotifier {
     }
     machineStates.removeWhere((id, _) => !visible.contains(id));
     for (final machine in machines) {
+      final isNew = !machineStates.containsKey(machine.machineId);
       final state = machineStates.update(
         machine.machineId,
         (state) => state..machine = machine,
@@ -2031,21 +2592,32 @@ class AppNotifier extends ChangeNotifier {
           (state.nodeOnline == null || state.nodeOnline != reportedOnline)) {
         unawaited(_applyNodeStatus(state, reportedOnline));
       }
+      // The launch's machine may already be dialled with no state to report to — when this fetch
+      // beats the cache parse it was dialled ahead of. See [_adoptConnection].
+      if (isNew) _adoptConnection(state);
     }
+    // A machine come or gone changes how often the deaf poll reads — one asleep or several.
+    _retuneDeafPoll();
     _autoConnectAndLoadMachines();
     // The list that just landed is what the NEXT launch starts from. Never
     // awaited: it is a hint for a future run and must not add a disk write to
     // the one a person is waiting on right now.
     final cache = _machineCache;
-    if (cache != null) {
-      unawaited(
-        cache.save(
-          machines,
-          isOnline: (machine) => _nodeOnlineFromStatus(machine.status) == true,
-        ),
-      );
-    }
+    if (cache != null) _writeMachineCache(cache);
     notifyListeners();
+  }
+
+  /// [cache] written out with this run's machines, and the launch record for the machine the next
+  /// launch reopens ([MachineCache.save]). Never awaited: it is for a future launch, and must not
+  /// add a disk write to anything a person is waiting on now.
+  void _writeMachineCache(MachineCache cache) {
+    unawaited(
+      cache.save(
+        machines,
+        isOnline: (machine) => _nodeOnlineFromStatus(machine.status) == true,
+        launchMachineId: lastOpenedAgent.current?.machineId,
+      ),
+    );
   }
 
   // The daemon reports `connected` only once its own backend socket is open, but
@@ -2090,18 +2662,94 @@ class AppNotifier extends ChangeNotifier {
 
   void _startAgentSyncTimer(String machineId) {
     if (_agentSyncTimers.containsKey(machineId)) return;
-    _agentSyncTimers[machineId] = Timer.periodic(agentSyncInterval, (_) {
-      final machine = machineStates[machineId];
-      if (machine == null) {
-        _stopAgentSyncTimer(machineId);
-        return;
+    _agentSyncTimers[machineId] = Timer.periodic(
+      agentSyncInterval,
+      (_) => _agentSyncTick(machineId, DateTime.now()),
+    );
+  }
+
+  /// How recently a keystroke must have gone to a machine for its agent-list tick to wait.
+  static const _typingQuiet = Duration(seconds: 8);
+
+  /// The longest a tick waits on somebody typing before it goes anyway: a safety net held back
+  /// for as long as somebody keeps typing would never run at all.
+  static const _typingWaitLimit = Duration(seconds: 60);
+
+  /// How far short of a whole [agentSyncInterval] a list may have been read and still let a tick
+  /// run: a tick's own list is read a second or two after the tick, so the next one finds it a
+  /// little under an interval old, and that is the clock working, not a list read lately.
+  static const _listedLatelySlack = Duration(seconds: 15);
+
+  /// Per machine, a tick waiting — for the typing on it to stop, or for its list to come due —
+  /// see [_agentSyncTick].
+  final Map<String, Timer> _agentSyncHolds = {};
+
+  /// Whether somebody is typing into a terminal on [machineId]: a keystroke sent to it in the last
+  /// [_typingQuiet].
+  bool _typingOn(String machineId, DateTime now) =>
+      panesFor(machineId).any((pane) {
+        final at = pane.session?.lastInputAt;
+        return at != null && now.difference(at) < _typingQuiet;
+      });
+
+  /// One tick of the agent-list safety net, first due at [dueSince].
+  ///
+  /// ⚠️ **Held while somebody types on that machine.** The machine answers `agents_list` on the
+  /// same queue it takes keystrokes from, and the answer takes it a second or two (see
+  /// [agentSyncInterval]) — a tick landing mid-sentence froze the echo for that long. So a tick
+  /// that finds a keystroke gone in the last [_typingQuiet] waits that long and looks again, up to
+  /// [_typingWaitLimit] from when it was due; the periodic ticks meanwhile leave it to the one
+  /// waiting.
+  ///
+  /// ⚠️ **Due one interval after the list was last read, not on the timer's own clock.** Find
+  /// opening ([reachAllMachines]) and a push that falls back to a reload read the whole list as
+  /// well, and a tick landing a minute later asked the machine for the same answer again — a second
+  /// or two of its queue, keystrokes included, for nothing. A list read over this socket within the
+  /// interval did the tick's job, liveness included (it was answered), so the tick waits until that
+  /// list comes due and looks again. The gap between two answered lists stays one interval, which
+  /// is what [agentSyncStaleTicks] counts on.
+  void _agentSyncTick(String machineId, DateTime dueSince) {
+    final machine = machineStates[machineId];
+    if (machine == null) {
+      _stopAgentSyncTimer(machineId);
+      return;
+    }
+    if (_agentSyncHolds.containsKey(machineId)) return;
+    final now = DateTime.now();
+    final listedAt = machine.agentsListedAt;
+    final sinceListed = listedAt == null ? null : now.difference(listedAt);
+    // A clock set back puts the list in the future: no telling when it was read, so the tick runs.
+    if (sinceListed != null &&
+        !sinceListed.isNegative &&
+        sinceListed < agentSyncInterval - _listedLatelySlack) {
+      if (kTypingTrace) {
+        typingEvent(
+          'list tick ${_shortId(machineId)}: read ${sinceListed.inSeconds}s ago,'
+          ' waits ${(agentSyncInterval - sinceListed).inSeconds}s',
+        );
       }
-      unawaited(_syncAgentsIfChanged(machine));
-    });
+      _agentSyncHolds[machineId] = Timer(agentSyncInterval - sinceListed, () {
+        _agentSyncHolds.remove(machineId);
+        if (_disposed || !_agentSyncTimers.containsKey(machineId)) return;
+        _agentSyncTick(machineId, DateTime.now());
+      });
+      return;
+    }
+    if (_typingOn(machineId, now) &&
+        now.difference(dueSince) < _typingWaitLimit) {
+      _agentSyncHolds[machineId] = Timer(_typingQuiet, () {
+        _agentSyncHolds.remove(machineId);
+        if (_disposed || !_agentSyncTimers.containsKey(machineId)) return;
+        _agentSyncTick(machineId, dueSince);
+      });
+      return;
+    }
+    unawaited(_syncAgentsIfChanged(machine));
   }
 
   void _stopAgentSyncTimer(String machineId) {
     _agentSyncTimers.remove(machineId)?.cancel();
+    _agentSyncHolds.remove(machineId)?.cancel();
     _agentSyncTimeouts.remove(machineId);
   }
 
@@ -2110,6 +2758,10 @@ class AppNotifier extends ChangeNotifier {
       timer.cancel();
     }
     _agentSyncTimers.clear();
+    for (final hold in _agentSyncHolds.values) {
+      hold.cancel();
+    }
+    _agentSyncHolds.clear();
     _agentSyncTimeouts.clear();
   }
 
@@ -2117,8 +2769,8 @@ class AppNotifier extends ChangeNotifier {
   /// is treated as gone and redialled ([_recoverStaleSession]).
   ///
   /// Two, not one: a single missed tick is a busy machine or a slow relay, and a
-  /// forced redial costs every terminal on it a resync. Two in a row is a minute
-  /// of a machine not answering the cheapest request there is, which nothing
+  /// forced redial costs every terminal on it a resync. Two in a row is minutes
+  /// of a machine not answering a request it always answers, which nothing
   /// healthy does.
   @visibleForTesting
   static const agentSyncStaleTicks = 2;
@@ -2144,7 +2796,25 @@ class AppNotifier extends ChangeNotifier {
   /// list from before its Harness restarted, with every agent made since
   /// invisible — and, with the list feeding `deskGroups`, a desk tab whose
   /// harnesses had all silently vanished off the phone.
+  ///
+  /// ⚠️ **One at a time per machine.** A phone back from minutes in the background finds every
+  /// timer due at once — a tick held for a fresh list ([_agentSyncTick]) and the periodic one
+  /// beside it — and both asked the machine for the whole list in the same instant (measured,
+  /// 2026-10-08).
   Future<void> _syncAgentsIfChanged(MachineState machine) async {
+    final machineId = machine.machine.machineId;
+    if (!_agentSyncInFlight.add(machineId)) return;
+    try {
+      await _syncAgentsOnce(machine);
+    } finally {
+      _agentSyncInFlight.remove(machineId);
+    }
+  }
+
+  /// Per machine, a [_syncAgentsIfChanged] still waiting on its answer.
+  final Set<String> _agentSyncInFlight = {};
+
+  Future<void> _syncAgentsOnce(MachineState machine) async {
     if (machine.connectionStatus != ConnectionStatus.connected) return;
     if (machine.agentsLoadInFlight != null) {
       return; // a real (foreground) load already owns this tick
@@ -2152,12 +2822,20 @@ class AppNotifier extends ChangeNotifier {
     final machineId = machine.machine.machineId;
     final revision = _authRevision;
     final connection = _conn(machineId);
+    final tickAsked = kTypingTrace ? (Stopwatch()..start()) : null;
+    if (kTypingTrace) typingEvent('list tick ${_shortId(machineId)}: ask');
     try {
       final response = await connection.request(
         'agents_list',
         payload: kAgentsListPayload,
         timeout: const Duration(seconds: 10),
       );
+      if (tickAsked != null) {
+        typingEvent(
+          'list tick ${_shortId(machineId)}: answered'
+          ' in ${tickAsked.elapsedMilliseconds}ms',
+        );
+      }
       _agentSyncTimeouts.remove(machineId);
       if (!_machineWorkCurrent(machine, revision)) return;
       // ⚠️ A terminal switched off by a negotiation that never got an answer stayed off until
@@ -2165,12 +2843,49 @@ class AppNotifier extends ChangeNotifier {
       if (machine.terminalCapabilityUnanswered) {
         unawaited(_loadTerminalCapabilities(machine, connection, revision));
       }
-      final agents = (response['agents'] as List<dynamic>? ?? [])
+      final handling = kTypingTrace ? (Stopwatch()..start()) : null;
+      final rawAgents = response['agents'] as List<dynamic>? ?? const [];
+      final agents = rawAgents
           .map((item) => Agent.fromJson(item as Map<String, dynamic>))
           .toList();
-      if (agentsEqual(machine.agents, agents)) return;
+      // Answered over this socket, changed or not: the list is current as of now. Only once the
+      // machine's list has been confirmed — a tick never stands in for that first one.
+      if (machine.agentLoadStatus == AgentLoadStatus.loaded &&
+          !machine.agentsFromCache) {
+        machine.agentsListedAt = DateTime.now();
+      }
+      if (agentsEqual(machine.agents, agents)) {
+        if (handling != null) {
+          typingEvent(
+            'agents sync: ${agents.length} unchanged · parsed and compared on this'
+            ' thread in ${handling.elapsedMilliseconds}ms',
+          );
+        }
+        return;
+      }
+      // The machine's own list for the next launch too: what changed reached this phone without a
+      // push (one sent while the socket was away). A harness added or gone goes out soon, the rest
+      // with the app leaving the screen — see [_saveMachineCacheSoon].
+      final cache = _machineCache;
+      if (cache != null) {
+        final had = {for (final agent in machine.agents) agent.id};
+        cache.rememberAgents(machineId, [
+          for (final item in rawAgents)
+            if (item is Map<String, dynamic>) item,
+        ]);
+        if (agents.length != had.length ||
+            !agents.every((agent) => had.contains(agent.id))) {
+          _saveMachineCacheSoon();
+        }
+      }
       _replaceAgents(machine, agents);
       notifyListeners();
+      if (handling != null) {
+        typingEvent(
+          'agents sync: ${agents.length} changed · parsed, replaced and redrawn on'
+          ' this thread in ${handling.elapsedMilliseconds}ms',
+        );
+      }
     } on WsRequestTimeout {
       if (!_machineWorkCurrent(machine, revision)) return;
       final missed = (_agentSyncTimeouts[machineId] ?? 0) + 1;
@@ -2202,7 +2917,16 @@ class AppNotifier extends ChangeNotifier {
     final byId = {for (final agent in a) agent.id: agent};
     for (final agent in b) {
       final prev = byId[agent.id];
-      if (prev == null ||
+      if (prev == null || !agentEqual(prev, agent)) return false;
+    }
+    return true;
+  }
+
+  /// One agent of [agentsEqual]: the same agent, with nothing the UI reads changed. The same
+  /// hand-kept list, and the same rule — a field added to [Agent] is added here.
+  @visibleForTesting
+  static bool agentEqual(Agent prev, Agent agent) =>
+      !(prev.id != agent.id ||
           prev.name != agent.name ||
           // What search and the Recent list read: a turn that ends moves
           // `updatedAt` and often `title`, and a sync that ignored them left
@@ -2214,6 +2938,8 @@ class AppNotifier extends ChangeNotifier {
           // The model sheet's sentence under a Local model.
           prev.gridWebSearch != agent.gridWebSearch ||
           prev.selectedModel != agent.selectedModel ||
+          // What a tab's name votes with — see `identityEngine`.
+          prev.dsh != agent.dsh ||
           prev.dshName != agent.dshName ||
           prev.sessionId != agent.sessionId ||
           prev.engine != agent.engine ||
@@ -2235,12 +2961,7 @@ class AppNotifier extends ChangeNotifier {
           prev.tokensUpdatedAt != agent.tokensUpdatedAt ||
           prev.outputStats != agent.outputStats ||
           // Whether a stopped row can be opened at all ([Agent.canPauseAndResume]).
-          prev.resumeMode != agent.resumeMode) {
-        return false;
-      }
-    }
-    return true;
-  }
+          prev.resumeMode != agent.resumeMode);
 
   /// Public retry hook used by the offline join guide's "Retry now" action.
   Future<void> retryOfflineMachine(String machineId) =>
@@ -2269,7 +2990,8 @@ class AppNotifier extends ChangeNotifier {
       if (result.error != null) return result.error;
       final targetId = result.linkedMachineId ?? machineId;
       final state = machineStates[targetId];
-      if (state != null) {
+      // Already in by another way meanwhile — see [_keepsOpenConnection]: nothing to redial.
+      if (state != null && !_keepsOpenConnection(state)) {
         state.needsLink = false;
         state.agentLoadStatus = AgentLoadStatus.idle;
         notifyListeners();
@@ -2328,6 +3050,23 @@ class AppNotifier extends ChangeNotifier {
   /// Devices that joined the account and this phone had never trusted, not yet dismissed. Rebuilt
   /// from the log's persisted `pending` ([_syncPendingDevices]), so a restart does not lose them.
   final List<DevLogMember> newDevices = [];
+
+  /// Computers this phone was waiting for when they joined the account — the onboarding's "On your
+  /// computer, go to" — and so already named on its screen ("MacBook Pro is ready."). The device
+  /// log's "New device" for one of them is what the person just did: confirmed as theirs, with no
+  /// banner and no notice ([welcomeMachine]). Cleared with the session.
+  final Set<String> welcomedMachines = {};
+
+  /// [machineId] joined while this phone waited for it: see [welcomedMachines]. A "New device" for
+  /// it the log already announced goes too.
+  void welcomeMachine(String machineId) {
+    if (!welcomedMachines.add(machineId)) return;
+    for (final device in [...newDevices]) {
+      if (device.kind == 'machine' && device.machineId == machineId) {
+        dismissNewDevice(device.pub);
+      }
+    }
+  }
 
   /// Which of [newDevices] a fork suspended (not trusted here until the list is reviewed), as of the
   /// last read of the log. "Mine" on the banner cannot lift that, so for these it opens the device's
@@ -2434,6 +3173,12 @@ class AppNotifier extends ChangeNotifier {
       onAnnounce: (m) => _whenSignedIn(() {
         _failedDismissals.remove(m.pub);
         if (newDevices.any((d) => d.pub == m.pub)) return;
+        // The computer the onboarding was waiting for: the person is looking at its name already.
+        if (m.kind == 'machine' && welcomedMachines.contains(m.machineId)) {
+          _pendingSyncGen++;
+          unawaited(_dismissInLog(pubs: [m.pub], confirm: true));
+          return;
+        }
         newDevices.add(m);
         devicesRevision++;
         final name = m.label.isEmpty ? 'A device' : m.label;
@@ -2451,7 +3196,10 @@ class AppNotifier extends ChangeNotifier {
       onRemoved: (n) => _whenSignedIn(() => announceDeviceRemoval(n)),
       onSignedOut: () async {
         // Sign out first: it takes this phone's key out of the log, which needs the key it is about.
-        await logout();
+        // After a Sign out by hand this is that sign-out reading its own removal back — nothing to
+        // tell anyone ([_leftByHand]). Otherwise another device removed this phone, and the welcome
+        // screen it lands on says so.
+        await _endSession(reason: _leftByHand ? null : _signedOutRemoved);
         await viewer.keys.forgetIdentity();
       },
       onChanged: () {
@@ -2463,6 +3211,128 @@ class AppNotifier extends ChangeNotifier {
     );
     final links = peerLinks;
     if (links is DirectLink) links.deviceLog = log;
+  }
+
+  /// True while trust between this phone and the account's machines is still being settled by the
+  /// device key log: this phone reading the log and putting its own key into it
+  /// ([ViewerDeviceLog.register]), or a machine the log vouches for being dialled again because it
+  /// had not caught up with this phone's key yet ([_redialOnceVouched]).
+  ///
+  /// ⚠️ **A machine is "locked" the moment a fresh phone dials it, and that is not yet an answer.**
+  /// With nothing pinned, the relay codec refuses the dial on the spot (`NO_PEER_LINK`, 16ms in), long
+  /// before the log has been read and verified — seconds on a phone; and once it is, the machine
+  /// itself still has to read this phone's new key before it stops answering `e2e_denied`. The home
+  /// screen fell through to the machines list, "locked · scan its code", in between. While this is
+  /// set it waits on a locked machine instead (`phone/agent_home.dart` `_loadingMessage`); once it
+  /// clears, a machine still locked really wants its password.
+  ///
+  /// ⚠️ **Only the first [_vouchedRedialsHeld] redials count, not all of them.** Every step of
+  /// [_vouchedRedialDelays] used to: a machine that never read this phone's key held a fresh sign-in
+  /// on "Connecting to your computer…" for the whole schedule — 36s, measured — before its "scan its
+  /// code" came up, the one thing that could let the phone in.
+  bool get deviceTrustSettling =>
+      _registeringDevice ||
+      _awaitingVouched.any(
+        (id) => (_vouchedRedials[id] ?? 0) <= _vouchedRedialsHeld,
+      );
+
+  bool _registeringDevice = false;
+
+  /// When this phone's key last went into the log, in this sign-in — see [_vouchedRedialWindow].
+  DateTime? _deviceRegisteredAt;
+
+  /// Machines waiting out a [_vouchedRedialDelays] step, and how many each has been through (the
+  /// step under way included).
+  final Set<String> _awaitingVouched = {};
+  final Map<String, int> _vouchedRedials = {};
+
+  /// How many of [_vouchedRedialDelays] hold the screen ([deviceTrustSettling]): a machine that
+  /// reads the log when it hears `device_keys_changed` has read this phone's key by then. The rest
+  /// are dialled behind the machine shown locked, and one that lets the phone in opens it by itself.
+  static const _vouchedRedialsHeld = 2;
+
+  /// [_deviceTrustSettleCap]: a log that never answers still lets the screen move on.
+  static const _deviceTrustSettleCap = Duration(seconds: 20);
+
+  /// How long after this phone's key went into the log a machine the log vouches for may still not
+  /// have read it — its CLI hears `device_keys_changed` and reads the log itself, a few seconds.
+  static const _vouchedRedialWindow = Duration(minutes: 1);
+  static const _vouchedRedialDelays = [
+    Duration(milliseconds: 1500),
+    Duration(seconds: 3),
+    Duration(seconds: 5),
+    Duration(seconds: 8),
+    Duration(seconds: 12),
+  ];
+
+  Future<void> _registerDevice(ViewerDeviceLog log, int revision) async {
+    _registeringDevice = true;
+    notifyListeners();
+    try {
+      // Whether the sign-in is fresh was told the log already ([_beginDeviceLogSignIn]).
+      await log
+          .register()
+          // Then what is still pending from before (a restart) comes back as the banner.
+          .whenComplete(_syncPendingDevices)
+          .timeout(_deviceTrustSettleCap);
+    } catch (_) {
+      // Timed out: the register goes on by itself, and a machine it vouches for is still redialled.
+    } finally {
+      if (_authWorkCurrent(revision)) {
+        _registeringDevice = false;
+        _deviceRegisteredAt = DateTime.now();
+        notifyListeners();
+      }
+    }
+  }
+
+  /// A machine refused this phone ([_onLocalFailure]) although the device key log vouches for it —
+  /// this phone pins it — while this phone's own key is new to the log: the machine has most likely
+  /// just not read that key yet, so it is dialled again, a few times, a little later each time.
+  ///
+  /// ⚠️ **Nothing else would ever dial it again.** [_redialNewlyTrusted] runs when the log CHANGES,
+  /// and from this phone's side it already has: the pin landed, the dial went out, and THEN the
+  /// phone's key went in — so the machine, still behind, answered `e2e_denied` to a dial nobody
+  /// retried, and a fresh sign-in sat on "locked" over a machine that would have let it in seconds
+  /// later. Outside [_vouchedRedialWindow] a refusal stands: that is trust revoked, not trust late.
+  ///
+  /// Past [_vouchedRedialsHeld] the machine stays locked through the redial: on screen it is the
+  /// machine to pair by its code, and a dial that gets in unlocks it ([_onConnectionStatus]).
+  Future<void> _redialOnceVouched(String machineId) async {
+    final revision = _authRevision;
+    final attempt = _vouchedRedials[machineId] ?? 0;
+    if (attempt >= _vouchedRedialDelays.length) return;
+    final held = attempt < _vouchedRedialsHeld;
+    final registeredAt = _deviceRegisteredAt;
+    final keyIsNew =
+        _registeringDevice ||
+        (registeredAt != null &&
+            DateTime.now().difference(registeredAt) < _vouchedRedialWindow);
+    if (!keyIsNew) return;
+    if (await viewer.keys.peer(machineId) == null) return;
+    if (!_authWorkCurrent(revision) || _awaitingVouched.contains(machineId)) {
+      return;
+    }
+    _vouchedRedials[machineId] = attempt + 1;
+    _awaitingVouched.add(machineId);
+    notifyListeners();
+    await Future<void>.delayed(_vouchedRedialDelays[attempt]);
+    // A sign-out meanwhile emptied the set and moved the revision on: nothing here is ours.
+    if (!_authWorkCurrent(revision)) return;
+    _awaitingVouched.remove(machineId);
+    final state = machineStates[machineId];
+    // Still locked: a password or a code that linked it meanwhile already redialled it.
+    if (state != null && state.needsLink && state.nodeOnline != false) {
+      if (held) {
+        // Unlocked before the socket goes, as [_redialNewlyTrusted] does: the screen reads it as
+        // connecting from here on, never as locked in between.
+        state.needsLink = false;
+        state.agentLoadStatus = AgentLoadStatus.idle;
+      }
+      await _pool?.closeMachine(machineId);
+      _connectMachine(state);
+    }
+    notifyListeners();
   }
 
   /// A device was taken out of the account (not by this phone): say so, once. A removal by a new
@@ -2679,12 +3549,110 @@ class AppNotifier extends ChangeNotifier {
   /// See `phone/welcome/connect_code.dart`. Null the rest of the time.
   ({String machineId, String code})? pendingPairing;
 
+  /// A computer's own sign-in QR (the bare `hnq_…` code, [SignInCode] in
+  /// `phone/welcome/connect_code.dart`) read on the welcome screen by a phone not yet signed in —
+  /// `harness login --qr`'s. Only a signed-in phone can approve it, so the welcome
+  /// signs this one in first and holds the code across that sign-in; the signed-in shell then asks
+  /// to approve it (`phone/phone_shell.dart`), and spends it. Null the rest of the time.
+  ///
+  /// Like [pendingPairing], set before the sign-in on purpose and so not cleared by
+  /// [_invalidateAuthWork]: a sign-out drops it instead.
+  String? pendingComputerSignIn;
+
   /// The scanned code is spent (it failed, or the person chose the password): the computer's
   /// password form is what the home screen shows next.
   void dropPendingPairing() {
     if (pendingPairing == null) return;
     pendingPairing = null;
     notifyListeners();
+  }
+
+  /// A code scanned, signed in, on "Waiting for your computer…" (`phone/welcome/connect_computer.dart`)
+  /// — a page the very computer it was waiting for takes away. Held like a code scanned at sign-in:
+  /// the home screen pairs with it once that computer is there and locked ([pendingPairing]).
+  ///
+  /// That page looks the computer up on the account first, and holds no code the account answered
+  /// without; one held while the account could not be asked is let go by the next list that
+  /// answers without its computer ([_refreshMachines]).
+  ///
+  /// Not for a computer already open: nothing is left to pair, and a code kept would be spent the
+  /// next time it locks, in place of its password form (see where [pendingPairing] is cleared on
+  /// connect). Not once signed out either: the page then went because the account did, and its
+  /// code is for a computer on that account — a sign-out clears [pendingPairing] for the same reason.
+  void holdPendingPairing(String machineId, String code) {
+    if (status != AppStatus.authenticated) return;
+    if (machineStates[machineId]?.connectionStatus ==
+        ConnectionStatus.connected) {
+      return;
+    }
+    pendingPairing = (machineId: machineId, code: code);
+    notifyListeners();
+  }
+
+  /// The pairing [pendingPairing]'s code is being spent on, while it runs — see [pairPendingCode].
+  ({String machineId, String code, Future<String?> result})? _pairingRun;
+
+  /// The code [pendingPairing] held when the home screen began pairing by it — see
+  /// [pendingPairingTried].
+  ({String machineId, String code})? _pairingTried;
+
+  /// Whether the home screen has begun pairing by the code [pendingPairing] holds now.
+  ///
+  /// From then on its pairing page (`phone/welcome/pairing_with_code.dart`) stays up until the code
+  /// is spent or dropped, and not only while the machine reads locked: a redial that clears
+  /// [MachineState.needsLink] for a moment — the vouched redials of a fresh sign-in
+  /// ([_redialOnceVouched]) — took the page down mid-pairing, hid an error it then had, and built
+  /// it again a second later to pair a second time by the same one-time code.
+  bool get pendingPairingTried {
+    final pending = pendingPairing, tried = _pairingTried;
+    return pending != null &&
+        tried != null &&
+        pending.machineId == tried.machineId &&
+        pending.code == tried.code;
+  }
+
+  /// Pairs with [machineId] by [code], the code [pendingPairing] holds — once per code at a time.
+  ///
+  /// ⚠️ **A second call for the same code while the first runs joins it.** The code is one-time: a
+  /// pairing page built again while one is still pairing (see [pendingPairingTried]) spent it a
+  /// second time, and the computer, mid-pairing, answered PAIRING_BUSY or CODE_MISMATCH while the
+  /// first went through. A call after one that has FINISHED pairs again: "Scan again" after a
+  /// timeout reads the same code back off Add Phone, and it is good again.
+  ///
+  /// Success lets the code go here, not on the page: the page can be gone by then.
+  Future<String?> pairPendingCode(String machineId, String code) {
+    final running = _pairingRun;
+    if (running != null &&
+        running.machineId == machineId &&
+        running.code == code) {
+      return running.result;
+    }
+    _pairingTried = (machineId: machineId, code: code);
+    late final Future<String?> result;
+    result = () async {
+      String? error;
+      try {
+        error = await connectWithCode(machineId, code);
+      } catch (e) {
+        // [connectWithCode] answers with a result, not an exception; one that slips through must
+        // not leave "Connecting to…" up with nothing behind it.
+        appLog.warn('pair', 'pairing by code with $machineId threw: $e');
+        error = 'Couldn’t connect. Scan again.';
+      } finally {
+        if (identical(_pairingRun?.result, result)) _pairingRun = null;
+      }
+      final pending = pendingPairing;
+      if (error == null &&
+          pending != null &&
+          pending.machineId == machineId &&
+          pending.code == code) {
+        pendingPairing = null;
+        notifyListeners();
+      }
+      return error;
+    }();
+    _pairingRun = (machineId: machineId, code: code, result: result);
+    return result;
   }
 
   /// Pairs with [machineId] by the one-time code its desktop app showed, then reconnects it — the
@@ -2701,7 +3669,7 @@ class AppNotifier extends ChangeNotifier {
       finish(result.error == null ? ProductOutcome.ok : ProductOutcome.failed);
       if (result.error != null) return result.error;
       final state = machineStates[result.linkedMachineId ?? machineId];
-      if (state != null) {
+      if (state != null && !_keepsOpenConnection(state)) {
         state.needsLink = false;
         state.agentLoadStatus = AgentLoadStatus.idle;
         notifyListeners();
@@ -2717,6 +3685,18 @@ class AppNotifier extends ChangeNotifier {
       finish(ProductOutcome.unknown);
     }
   }
+
+  /// Whether a machine just linked (by password or code) is already connected — let in meanwhile
+  /// by another way, the device log's vouched redial above all ([_redialOnceVouched]), which goes
+  /// on dialling behind a machine shown locked.
+  ///
+  /// ⚠️ **Then the link leaves its connection alone.** Both links used to close the machine and
+  /// dial it again whatever its state, to replace a socket that refused this phone — and an open
+  /// one went with it: the terminal on screen read "Connection lost. Reconnecting…" a moment after
+  /// the unlock that was meant to open it. A connected socket has passed the machine's welcome
+  /// (`WsConn._markReady`), so it is no refused one.
+  bool _keepsOpenConnection(MachineState state) =>
+      state.connectionStatus == ConnectionStatus.connected;
 
   /// A test's stand-in for the trust-group roster swap; null uses [DirectLink.syncGroup].
   late final GroupSync? _groupSyncOverride;
@@ -2920,6 +3900,12 @@ class AppNotifier extends ChangeNotifier {
         StartupTrace.mark('skipped offline machine ${machine.machineId}');
         continue;
       }
+      // Held until the launch's own terminal is up — see [_launchMachineId]. The cached ones were
+      // held by the warm start already; this catches the machines the cache did not know.
+      if (_heldForLaunch(machine.machineId)) {
+        _holdForLaunch(machine.machineId);
+        continue;
+      }
       dial.add(state);
     }
     unawaited(_connectAfterDeviceLog(dial, load: true));
@@ -3104,6 +4090,14 @@ class AppNotifier extends ChangeNotifier {
     return _pool?[machineId]?.isReady == true;
   }
 
+  /// [machineId]'s connection as the app already HOLDS it, or null — never one built for the
+  /// asking, for the same reason as [_connectionReady].
+  WsConn? _heldConnection(String machineId) {
+    final testConnection = connectionForTest;
+    if (testConnection != null) return testConnection(machineId);
+    return _pool?[machineId];
+  }
+
   // Every machine hands over the same loopback (HTRL) frames: the relay codec has opened the E2EE
   // envelope before a frame gets here (see `ws/relay_codec.dart`), so there is no per-machine
   // branching left here at all.
@@ -3149,6 +4143,322 @@ class AppNotifier extends ChangeNotifier {
     return _conn(machineId).sendTerminalBinary(encoded);
   }
 
+  /// How long a `terminal_open` waits for its machine's handshake — see [_sendTerminalFrame].
+  /// The dial's own limit and a select's, near enough: past it the socket is not about to be up.
+  static const _openWaitsForHandshake = Duration(seconds: 15);
+
+  /// A terminal frame for [machineId]'s connection — a `terminal_open` held until the handshake
+  /// is done, every other frame sent (or refused) at once, as before.
+  ///
+  /// ⚠️ **Why the open waits (owner, 2026-10-01).** A launch builds its terminal from the cached
+  /// agent and capabilities, so the open is made while the socket is still handshaking, and the
+  /// socket refused it: the session gave up on it ("Could not send terminal_open"), and nothing
+  /// asked again until the machine answered `terminal_capabilities` or its agent list, which reattach
+  /// waiting panes — measured at 0.6–0.75s after the socket was ready, every launch. Held here
+  /// instead, it leaves the moment the handshake lands, with the request it was made with. Bounded:
+  /// a handshake that does not land in [_openWaitsForHandshake] refuses it as before, and the
+  /// usual reattach on connect takes over.
+  Future<bool> _sendTerminalFrame(
+    String machineId,
+    String type,
+    Map<String, dynamic> payload,
+  ) async {
+    final connection = _conn(machineId);
+    if (type == 'terminal_open' && !connection.isReady) {
+      try {
+        await connection.waitUntilReady(timeout: _openWaitsForHandshake);
+      } catch (_) {
+        // Timed out, or the connection was closed meanwhile: the socket refuses the frame below,
+        // which is the answer the session already knows how to take.
+      }
+    }
+    return connection.sendTerminalFrame(type, payload);
+  }
+
+  /// The machine a launch dials ALONE — the one the phone last had an agent open on — while every
+  /// other machine waits in [_heldMachines]; null once they have been let go, and on a launch that
+  /// had nothing to put first.
+  ///
+  /// ⚠️ **Why a launch dials one machine first (owner, 2026-10-01).** Every machine the account
+  /// had was dialled at once: a relay socket, an E2EE handshake, `terminal_capabilities`, a full
+  /// agent list and a P2P negotiation EACH, seven or eight of them on a phone, all in the same
+  /// second as the one terminal the person is waiting to see — which is on one machine. On one
+  /// machine a launch measured 3.3s to a ready socket; the work on the others added nothing anybody
+  /// was looking at. The rest are let go the moment that terminal shows its first frame
+  /// ([_releaseOnFirstFrame]), when Find opens ([reachAllMachines]), or after
+  /// [_heldMachinesRelease] whatever happens; and a machine is dialled the moment one of its own
+  /// agents is opened, held or not ([_conn] dials what it does not hold).
+  ///
+  /// What it costs: for those few seconds the other machines' sessions read from the cache, as
+  /// `connecting`, and anything they announce in that time (a finished turn, a question) arrives
+  /// as soon as they are dialled rather than at once.
+  String? _launchMachineId;
+  final Set<String> _heldMachines = {};
+  Timer? _heldMachinesTimer;
+  static const _heldMachinesRelease = Duration(seconds: 5);
+
+  /// Whether [machineId] is one the launch is holding back — see [_launchMachineId] — or one it has
+  /// let go of that is still waiting for its turn to dial ([_releaseQueue]).
+  bool _heldForLaunch(String machineId) =>
+      (_launchMachineId != null && machineId != _launchMachineId) ||
+      _releaseQueue.contains(machineId);
+
+  /// Hold [machineId] back for the launch — a machine [_heldForLaunch] says is held. Nothing to do
+  /// for one already let go: it is waiting in [_releaseQueue], which dials it in its turn.
+  void _holdForLaunch(String machineId) {
+    if (_launchMachineId != null) _heldMachines.add(machineId);
+  }
+
+  /// The machines the launch let go of that have not dialled yet, in the order they go — see
+  /// [_dialReleasedInTurn].
+  final List<String> _releaseQueue = [];
+
+  /// The let-go machines dialling now, each with the timer that ends its turn if nothing else does
+  /// first ([_endReleaseTurn]).
+  final Map<String, Timer> _releaseTurns = {};
+
+  /// How many let-go machines dial at once, and how long one may hold its turn.
+  static const _releaseTurnsAtOnce = 3;
+  static const _releaseTurnLimit = Duration(seconds: 4);
+
+  /// Since the launch let its held machines go — the offsets in their timeline lines.
+  Stopwatch? _releaseClock;
+
+  /// Let go of every machine the launch held back. Idempotent; [why] goes to the startup timeline.
+  ///
+  /// [atOnce] dials all of them now, and with them any still waiting their turn — for a person
+  /// asking for every machine (Find), and for a launch that turned out to have nothing to put
+  /// first. Otherwise they dial a few at a time ([_dialReleasedInTurn]).
+  void _releaseHeldMachines(String why, {bool atOnce = false}) {
+    if (_launchMachineId != null) {
+      _launchMachineId = null;
+      _heldMachinesTimer?.cancel();
+      _heldMachinesTimer = null;
+      final held = _heldMachines.toList();
+      _heldMachines.clear();
+      if (_disposed) return;
+      StartupTrace.mark(
+        'launch: letting ${held.length} held machine(s) go '
+        '${atOnce ? 'at once' : '$_releaseTurnsAtOnce at a time'} · $why',
+      );
+      for (final machineId in held) {
+        if (!_releaseQueue.contains(machineId)) _releaseQueue.add(machineId);
+      }
+      _releaseClock = Stopwatch()..start();
+    } else if (!atOnce || _releaseQueue.isEmpty || _disposed) {
+      return;
+    } else {
+      StartupTrace.mark(
+        'launch: dialling the ${_releaseQueue.length} machine(s) still '
+        'waiting their turn · $why',
+      );
+    }
+    if (!atOnce) {
+      _dialReleasedInTurn();
+      return;
+    }
+    final waiting = _releaseQueue.toList();
+    _releaseQueue.clear();
+    for (final timer in _releaseTurns.values) {
+      timer.cancel();
+    }
+    _releaseTurns.clear();
+    _releaseClock = null;
+    for (final machineId in waiting) {
+      _dialReleased(machineId);
+    }
+  }
+
+  /// Dial the next let-go machines while fewer than [_releaseTurnsAtOnce] are dialling.
+  ///
+  /// ⚠️ **Why a few at a time (owner, 2026-10-02).** Let go all at once, the six to nine other
+  /// machines of a large account each made a credential, a key mint and a signature, decrypted and
+  /// parsed an agent list, and wrote the machine cache — all on the UI thread, in the same second,
+  /// right after the terminal somebody had just opened came up. That second is the stutter in the
+  /// terminal at the start of every launch. A turn is over when the machine's list has been read
+  /// or its dial failed ([_endReleaseTurn]), or after [_releaseTurnLimit] whatever happens: a slow
+  /// machine never stops the next from dialling.
+  ///
+  /// What it costs: the last of ten machines dials a few seconds later than it did. Anything that
+  /// asks for a machine still waiting dials it on the spot — opening one of its agents ([_conn]),
+  /// Find ([reachAllMachines]), a pull to refresh ([retryMachines]).
+  void _dialReleasedInTurn() {
+    while (!_disposed &&
+        _releaseTurns.length < _releaseTurnsAtOnce &&
+        _releaseQueue.isNotEmpty) {
+      final machineId = _releaseQueue.removeAt(0);
+      if (!_dialReleased(machineId)) continue;
+      StartupTrace.mark(
+        'launch: dialling ${_shortId(machineId)} · ${_releaseQueue.length} '
+        'still waiting${_sinceRelease()}',
+      );
+      _releaseTurns[machineId] = Timer(
+        _releaseTurnLimit,
+        () => _endReleaseTurn(machineId, 'turn limit'),
+      );
+    }
+    if (_releaseQueue.isEmpty &&
+        _releaseTurns.isEmpty &&
+        _releaseClock != null) {
+      StartupTrace.mark('launch: every held machine dialled${_sinceRelease()}');
+      _releaseClock = null;
+    }
+  }
+
+  /// [machineId]'s turn is over — its list landed, its dial failed, or its time ran out ([why]) —
+  /// and the next machine may dial. Nothing for a machine that has no turn.
+  void _endReleaseTurn(String machineId, String why) {
+    final turn = _releaseTurns.remove(machineId);
+    if (turn == null) return;
+    turn.cancel();
+    StartupTrace.mark(
+      'launch: ${_shortId(machineId)} turn over · $why${_sinceRelease()}',
+    );
+    _dialReleasedInTurn();
+  }
+
+  /// Dial one let-go machine. True when that started a dial; false for a machine gone from the
+  /// account, one it reports down, and one something else has dialled already.
+  bool _dialReleased(String machineId) {
+    final state = machineStates[machineId];
+    // Gone from the account since — `_refreshMachines` dropped it.
+    if (state == null) return false;
+    final listed = machines
+        .where((machine) => machine.machineId == machineId)
+        .firstOrNull;
+    // Down as the account last said: the launch skips those too ([_autoConnectAndLoadMachines]).
+    if (listed != null && _nodeOnlineFromStatus(listed.status) == false) {
+      return false;
+    }
+    final dialledAlready = _pool?[machineId] != null;
+    _connectMachine(state);
+    return !dialledAlready && _pool?[machineId] != null;
+  }
+
+  String _sinceRelease() {
+    final clock = _releaseClock;
+    return clock == null ? '' : ' +${clock.elapsedMilliseconds}ms';
+  }
+
+  /// A state just made for a machine whose socket the app ALREADY holds — dialled before there was
+  /// a state to report to (`_warmStartMachines` dials the launch's machine ahead of the cache parse).
+  /// Whatever that socket said meanwhile went nowhere ([_onConnectionStatus] needs the state), so it
+  /// is said again here: a socket that is up replays its `connected`, which is what starts the agent
+  /// list, the sync timer and the rest; one still dialling is at least shown as dialling.
+  void _adoptConnection(MachineState state) {
+    final machineId = state.machine.machineId;
+    final connection = _pool?[machineId];
+    if (connection == null) return;
+    if (connection.isReady) {
+      _onConnectionStatus(machineId, ConnectionStatus.connected);
+    } else if (state.connectionStatus == ConnectionStatus.disconnected) {
+      state.connectionStatus = ConnectionStatus.connecting;
+    }
+  }
+
+  /// Drop the launch's hold without dialling anything — signing out, or the notifier going away.
+  void _forgetLaunchHold() {
+    _preDialled = null;
+    _launchMachineId = null;
+    _heldMachines.clear();
+    _heldMachinesTimer?.cancel();
+    _heldMachinesTimer = null;
+    _releaseQueue.clear();
+    for (final turn in _releaseTurns.values) {
+      turn.cancel();
+    }
+    _releaseTurns.clear();
+    _releaseClock = null;
+  }
+
+  /// Let the held machines go once [terminal] shows its first frame — the screen a launch is for
+  /// is up, and nothing on it is waiting any more. See [_launchMachineId].
+  void _releaseOnFirstFrame(TerminalSession terminal) {
+    void check() {
+      if (!terminal.hasRenderedFrame) return;
+      terminal.removeListener(check);
+      _releaseHeldMachines('first terminal live');
+    }
+
+    terminal.addListener(check);
+  }
+
+  /// The longest an agent list waits for the terminal on screen — see [_yieldToFocusedTerminal].
+  static const _listYield = Duration(milliseconds: 1500);
+
+  /// Let the terminal on screen answer before [machine]'s agent list is asked for — at launch, and
+  /// on a reconnect.
+  ///
+  /// ⚠️ **Why the list waits (owner, 2026-10-01).** The terminal a launch reopens and the machine's
+  /// agent list left on the same connection in the same instant, and the terminal came second: on
+  /// every launch measured (ten of ten) its `terminal_ready` arrived in the same second as the
+  /// list's reply, which took 1.1–3.0s for 134 agents. The machine builds that reply for every
+  /// agent at once, stopped ones included (`agents_list` in the CLI's `backendSocket.ts`), and the
+  /// one stream somebody was waiting to type into queued behind it.
+  ///
+  /// Nothing on screen needs the list first. A launch draws from last run's
+  /// ([MachineState.agentsFromCache]); a reconnect — back after minutes in the background, or
+  /// across a network change — still holds the list it read before the drop
+  /// ([_listHeldThroughDrop]), and reopens the
+  /// terminal from it ([_reopenFromHeldList]). Any other read waits for nothing: the list there
+  /// is the news somebody asked for. Over the moment the terminal shows its first live frame or
+  /// stops opening (failed, taken, gone), and after [_listYield] whatever happens: the list never
+  /// waits on a terminal that is not coming.
+  ///
+  /// What it costs: for up to that long, an agent deleted elsewhere since the list was read is
+  /// still drawn (`_AgentGone` in `terminal_page.dart` needs the real list), and the list's news —
+  /// a new agent, a rename — arrives that much later.
+  Future<void> _yieldToFocusedTerminal(MachineState machine) async {
+    if (!machine.agentsFromCache && !_listHeldThroughDrop(machine)) return;
+    final pane = focusedPane;
+    final terminal = pane?.session;
+    if (pane == null ||
+        terminal == null ||
+        pane.machineId != machine.machine.machineId) {
+      return;
+    }
+    await _untilTerminalLive(terminal, _listYield);
+  }
+
+  /// Whether [machine]'s agent list was read from it, but over a socket that has dropped since
+  /// ([MachineState.agentsListedAt] is cleared by the drop): a reconnect's list, still on screen
+  /// while the machine is asked again.
+  bool _listHeldThroughDrop(MachineState machine) =>
+      machine.agentLoadStatus == AgentLoadStatus.loaded &&
+      !machine.agentsFromCache &&
+      machine.agentsListedAt == null;
+
+  /// Until [terminal] shows its first live frame or stops opening (failed, taken, gone) — and never
+  /// longer than [bound], so nothing waits on a terminal that is not coming.
+  Future<void> _untilTerminalLive(
+    TerminalSession terminal,
+    Duration bound,
+  ) async {
+    // `controlling` without a frame is a `terminal_ready` whose keyframe is on its way: still worth
+    // the wait, the screen is not live until it lands.
+    bool over() {
+      if (terminal.hasRenderedFrame) return true;
+      final status = terminal.status;
+      return status != TerminalSessionStatus.opening &&
+          status != TerminalSessionStatus.controlling;
+    }
+
+    if (over()) return;
+    final done = Completer<void>();
+    void check() {
+      if (!done.isCompleted && over()) done.complete();
+    }
+
+    // A session closed meanwhile never notifies again; this is what ends the wait then.
+    final timer = Timer(bound, () {
+      if (!done.isCompleted) done.complete();
+    });
+    terminal.addListener(check);
+    await done.future;
+    timer.cancel();
+    terminal.removeListener(check);
+  }
+
   /// Start dialling last run's machines without waiting for `/api/machines`.
   ///
   /// ⚠️ **The whole point is the socket, not the list.** A relay dial plus the
@@ -3179,10 +4489,201 @@ class AppNotifier extends ChangeNotifier {
     final cache = _machineCache;
     if (cache == null || _disposed) return;
     final revision = _authRevision;
-    final cached = await StartupTrace.time('boot.machineCache', cache.read);
-    if (cached.isEmpty || _disposed || !_authWorkCurrent(revision)) return;
-    // The fetch got there first — it is the truth, and this has nothing to add.
-    if (machines.isNotEmpty || machineStates.isNotEmpty) return;
+    // The reads were started at the top of [bootstrap] and are normally in hand by now. Taken
+    // before any await; the cache's once, so a later warm start (a sign-in in this run) reads what
+    // is on disk then.
+    final launchRead = lastOpenedAgent.prefetched;
+    final pendingRaw =
+        _launchCacheRead ??
+        StartupTrace.time('boot.machineCacheRead', cache.readRaw);
+    _launchCacheRead = null;
+    final pendingRecord =
+        _launchRecordRead ??
+        StartupTrace.time('boot.machineLaunchRead', cache.readLaunchRaw);
+    _launchRecordRead = null;
+    AgentRef? launchAgent;
+    if (launchRead != null) {
+      try {
+        // Bounded: a record slower than the cache is not worth holding the dial for, and a launch
+        // without it simply dials everything, as it always did.
+        launchAgent = await launchRead.timeout(
+          const Duration(milliseconds: 300),
+          onTimeout: () => null,
+        );
+      } catch (_) {
+        launchAgent = null;
+      }
+    }
+    if (_disposed || !_authWorkCurrent(revision)) return;
+    final launchMachine = launchAgent?.machineId;
+    // ⚠️ **The launch's machine is dialled before the cache is parsed (owner, 2026-10-01).** A dial
+    // needs nothing but the id, and the parse of every agent of every machine is the longest step
+    // before it (273–629ms measured, more on a bigger account). Only when the text names that
+    // machine, which means this account had it, up, at the end of the last run — the cache keeps
+    // nothing else. The state for it is made below, from the parse, and adopts the socket
+    // ([_adoptConnection]); a parse that turns out not to list it closes the socket again.
+    //
+    // The hold on the other machines ([_launchMachineId]) starts here too, not after the parse:
+    // `/api/machines` can land while the cache is still being parsed, and the dial-everything it
+    // does then ([_autoConnectAndLoadMachines]) has to find the hold already in place.
+    String? dialledEarly;
+    void holdAndDialEarly(String machineId, String source) {
+      _launchMachineId = machineId;
+      _heldMachinesTimer?.cancel();
+      _heldMachinesTimer = Timer(
+        _heldMachinesRelease,
+        () => _releaseHeldMachines('launch budget spent'),
+      );
+      if (_pool != null) {
+        final already = dialledEarly == machineId;
+        dialledEarly = machineId;
+        StartupTrace.mark(
+          already
+              ? 'launch: its machine is already dialling from the hint · $source'
+              : 'launch: dialling its machine before the cache parse · $source',
+        );
+        _conn(machineId);
+      }
+    }
+
+    // A socket dialled above for a machine nothing went on to make a state for — closed, or it
+    // would redial for the rest of the session with nobody listening.
+    void dropUnclaimedDial() {
+      final machineId = dialledEarly;
+      if (machineId != null && !machineStates.containsKey(machineId)) {
+        unawaited(_pool?.closeMachine(machineId));
+      }
+    }
+
+    bool nothingYet() => machines.isEmpty && machineStates.isEmpty;
+
+    // The hint's dial ([_preDialFromHint]): this launch's early dial when the agent it reopens is
+    // on that machine — kept, adopted with its state below, closed by [dropUnclaimedDial] if no
+    // state ever claims it. A hint naming another machine was a guess that missed: let go.
+    final preDialled = _preDialled;
+    _preDialled = null;
+    if (preDialled != null) {
+      if (preDialled == launchMachine) {
+        dialledEarly = preDialled;
+      } else if (!machineStates.containsKey(preDialled)) {
+        StartupTrace.mark(
+          'launch: the hint dialled ${_shortId(preDialled)}, the agent reopened '
+          'is elsewhere — closing it',
+        );
+        unawaited(_pool?.closeMachine(preDialled));
+      }
+    }
+
+    // ⚠️ **The launch's own machine first, from the launch record (owner, 2026-10-02).** The
+    // record holds that one machine — its agents and its capabilities — and nothing else, so it is
+    // read and parsed in a fraction of the time the whole cache takes (see
+    // [MachineCache.parseLaunch]). Its terminal is drawn from it, and the rest of the account
+    // follows when the whole cache has been parsed below. Only when the record has the very agent
+    // being reopened: anything less, and the launch waits for the whole cache as it did before.
+    final record = await pendingRecord;
+    if (_disposed || !_authWorkCurrent(revision)) return;
+    CachedMachine? first;
+    List<Machine>? firstMachines;
+    if (launchAgent != null &&
+        record != null &&
+        nothingYet() &&
+        record.contains('"${launchAgent.machineId}"')) {
+      holdAndDialEarly(launchAgent.machineId, 'launch record');
+      first = await StartupTrace.time(
+        'boot.machineLaunchParse',
+        () => cache.parseLaunch(
+          record,
+          machineId: launchAgent!.machineId,
+          agentId: launchAgent.agentId,
+        ),
+      );
+      if (_disposed || !_authWorkCurrent(revision)) {
+        dropUnclaimedDial();
+        return;
+      }
+      // The fetch landed during the parse: it is the truth, and made the state itself.
+      if (first != null && !nothingYet()) first = null;
+      if (first != null) {
+        final machine = first.machine;
+        final state = machineStates.putIfAbsent(
+          machine.machineId,
+          () => MachineState(machine),
+        );
+        _warmFromCache(state, first);
+        // Not held: it is the machine the hold puts first.
+        _connectMachine(state);
+        if (machine.machineId == dialledEarly) _adoptConnection(state);
+        // Kept to tell, after the parse below, whether the fetch has replaced it since.
+        firstMachines = [machine];
+        machines = firstMachines;
+        StartupTrace.mark(
+          'warm-started its machine from the launch record, '
+          '${first.agents.length} agent(s)',
+        );
+        notifyListeners();
+      }
+    }
+    final raw = await pendingRaw;
+    if (_disposed || !_authWorkCurrent(revision)) {
+      dropUnclaimedDial();
+      return;
+    }
+    if (raw == null) {
+      // No cache beside the record: whatever the record started is all there is. A hold it put in
+      // place has nothing else to hold — the fetch dials the rest.
+      _releaseHeldMachines('cache unreadable', atOnce: true);
+      dropUnclaimedDial();
+      return;
+    }
+    if (dialledEarly == null &&
+        _launchMachineId == null &&
+        launchMachine != null &&
+        nothingYet() &&
+        raw.contains('"$launchMachine"')) {
+      holdAndDialEarly(launchMachine, 'cache');
+    }
+    final cached = await StartupTrace.time(
+      'boot.machineCache',
+      () => cache.parse(raw),
+    );
+    if (_disposed || !_authWorkCurrent(revision)) {
+      dropUnclaimedDial();
+      return;
+    }
+    if (cached.isEmpty) {
+      // Nothing usable after all: the hold has no machine to put first, so it is let go — the
+      // fetch dials everything, as a launch with no cache always did.
+      _releaseHeldMachines('cache unreadable', atOnce: true);
+      dropUnclaimedDial();
+      return;
+    }
+    // The fetch got there first — it is the truth, and this has nothing to add. Its own dial
+    // honoured the hold; a launch machine the account no longer lists ends it. With the launch
+    // record drawn, `machines` is that record's list until the fetch replaces it.
+    final fetchLanded = firstMachines == null
+        ? !nothingYet()
+        : !identical(machines, firstMachines);
+    if (fetchLanded) {
+      final held = _launchMachineId;
+      if (held != null && !machineStates.containsKey(held)) {
+        _releaseHeldMachines('launch machine not on the account', atOnce: true);
+      }
+      dropUnclaimedDial();
+      return;
+    }
+    // The text named the launch machine, but the parse did not list it as one to dial — a match
+    // elsewhere in the document. Nothing to put first, then. Not once the record has drawn it:
+    // that machine is real, and dialling.
+    final held = _launchMachineId;
+    if (first == null &&
+        held != null &&
+        !cached.any(
+          (entry) =>
+              entry.machine.machineId == held &&
+              entry.machine.authMode == MachineAuthMode.remote,
+        )) {
+      _releaseHeldMachines('launch machine not cached', atOnce: true);
+    }
     var warmed = 0;
     var warmedAgents = 0;
     final warmMachines = <Machine>[];
@@ -3193,48 +4694,19 @@ class AppNotifier extends ChangeNotifier {
       // claims to be this computer has no meaning on a phone and no local
       // endpoint to dial, so it waits for the fetch like it always did.
       if (machine.authMode != MachineAuthMode.remote) continue;
+      // Drawn already, from the launch record, and dialling: kept where the cache lists it.
+      if (first != null && machine.machineId == first.machine.machineId) {
+        warmMachines.add(first.machine);
+        warmed++;
+        warmedAgents += first.agents.length;
+        continue;
+      }
       final state = machineStates.putIfAbsent(
         machine.machineId,
         () => MachineState(machine),
       );
-      // ⚠️ **The agents go in as PROVISIONAL, and the flag below is what keeps
-      // them honest.** With them the phone draws its terminal — the right
-      // agent's name on it, from the record it already had — while the real list
-      // is still crossing the network, instead of showing a spinner for two
-      // seconds and then the same screen.
-      //
-      // `agentLoadStatus` stays `loading`, not `loaded`: every screen reads that
-      // to mean the machine still owes a list, so the refresh indicators, the
-      // empty states and `_machineStillComing` all keep behaving as though
-      // nothing had arrived — which is the truth. What these give is a name to
-      // draw and an id to open, not a claim that the list is settled.
-      if (entry.agents.isNotEmpty) {
-        state.agents = entry.agents;
-        state.agentsFromCache = true;
-        warmedAgents += entry.agents.length;
-      }
-      // ⚠️ **The capability reply is replayed so a terminal can attach without
-      // waiting for the negotiation round-trip.** `_canAttachAgent` requires
-      // `terminalCapabilityAvailable`, which is otherwise only true once
-      // `terminal_capabilities` has crossed the network — the last gate on the
-      // launch, and worth about 700ms of it.
-      //
-      // Safe in the direction that matters. Only a reply that SAID the terminal
-      // works is ever cached, the live negotiation runs regardless and
-      // overwrites this within the second, and a machine that has genuinely lost
-      // its tmux answers `available: false` — at which point
-      // `_applyTerminalCapabilities` clears the flag and every screen reverts to
-      // what it would have shown anyway. The narrow cost of being wrong is one
-      // `terminal_open` that fails and is retried, against a second saved on
-      // every launch that is right.
-      final capabilities = entry.capabilities;
-      if (capabilities != null) {
-        _applyTerminalCapabilities(state, capabilities);
-        // ⚠️ NOT `terminalCapabilityLoaded`-as-settled: the live negotiation
-        // still has to run, and `_loadTerminalCapabilities` keys off its own
-        // in-flight future rather than this flag, so replaying here cannot
-        // suppress it.
-      }
+      _warmFromCache(state, entry);
+      warmedAgents += entry.agents.length;
       // ⚠️ **The dial, and ONLY the dial. No `_loadMachineData` here.**
       //
       // Asking for the agent list at this point was a real bug, and an ugly one
@@ -3256,11 +4728,31 @@ class AppNotifier extends ChangeNotifier {
       // from the cache are already on screen meanwhile. The warm start's job is
       // to have the socket ALREADY OPEN when that happens, which is where its
       // second and a half comes from; the request itself was never the part
-      // worth racing. A machine with no key here reads the device log first
-      // ([_connectAfterDeviceLog]).
-      warmStates.add(state);
+      // worth racing.
+      //
+      // Except for a machine the launch holds back — see [_launchMachineId]. Its cached
+      // agents are on screen all the same; only the socket waits.
+      if (_heldForLaunch(machine.machineId)) {
+        _holdForLaunch(machine.machineId);
+      } else if (machine.machineId == dialledEarly) {
+        // Its socket came up before this state existed — see `dialledEarly` above — and is taken
+        // now, before `dropUnclaimedDial` below closes it: not one to wait on the device log.
+        _connectMachine(state);
+        _adoptConnection(state);
+      } else {
+        // A machine with no key here reads the device log first ([_connectAfterDeviceLog]).
+        warmStates.add(state);
+      }
       warmMachines.add(machine);
       warmed++;
+    }
+    dropUnclaimedDial();
+    // The record's machine, which a cache from another write may not list: still on screen.
+    if (first != null &&
+        !warmMachines.any(
+          (machine) => machine.machineId == first!.machine.machineId,
+        )) {
+      warmMachines.insert(0, first.machine);
     }
     if (warmed == 0) return;
     unawaited(_connectAfterDeviceLog(warmStates, load: false));
@@ -3277,6 +4769,48 @@ class AppNotifier extends ChangeNotifier {
       'warm-started $warmed machine(s), $warmedAgents agent(s)',
     );
     notifyListeners();
+  }
+
+  /// What last run cached for [state]'s machine — its agents and its capability reply — put in
+  /// place for the launch to draw from ([_warmStartMachines]).
+  void _warmFromCache(MachineState state, CachedMachine entry) {
+    // ⚠️ **The agents go in as PROVISIONAL, and the flag below is what keeps
+    // them honest.** With them the phone draws its terminal — the right
+    // agent's name on it, from the record it already had — while the real list
+    // is still crossing the network, instead of showing a spinner for two
+    // seconds and then the same screen.
+    //
+    // `agentLoadStatus` stays `loading`, not `loaded`: every screen reads that
+    // to mean the machine still owes a list, so the refresh indicators, the
+    // empty states and `_machineStillComing` all keep behaving as though
+    // nothing had arrived — which is the truth. What these give is a name to
+    // draw and an id to open, not a claim that the list is settled.
+    if (entry.agents.isNotEmpty) {
+      state.agents = entry.agents;
+      state.agentsFromCache = true;
+    }
+    // ⚠️ **The capability reply is replayed so a terminal can attach without
+    // waiting for the negotiation round-trip.** `_canAttachAgent` requires
+    // `terminalCapabilityAvailable`, which is otherwise only true once
+    // `terminal_capabilities` has crossed the network — the last gate on the
+    // launch, and worth about 700ms of it.
+    //
+    // Safe in the direction that matters. Only a reply that SAID the terminal
+    // works is ever cached, the live negotiation runs regardless and
+    // overwrites this within the second, and a machine that has genuinely lost
+    // its tmux answers `available: false` — at which point
+    // `_applyTerminalCapabilities` clears the flag and every screen reverts to
+    // what it would have shown anyway. The narrow cost of being wrong is one
+    // `terminal_open` that fails and is retried, against a second saved on
+    // every launch that is right.
+    final capabilities = entry.capabilities;
+    if (capabilities != null) {
+      _applyTerminalCapabilities(state, capabilities);
+      // ⚠️ NOT `terminalCapabilityLoaded`-as-settled: the live negotiation
+      // still has to run, and `_loadTerminalCapabilities` keys off its own
+      // in-flight future rather than this flag, so replaying here cannot
+      // suppress it.
+    }
   }
 
   /// The least time `agents_list` gets, however long the handshake before it
@@ -3300,6 +4834,14 @@ class AppNotifier extends ChangeNotifier {
       if (identical(machine.agentsLoadInFlight, load)) {
         machine.agentsLoadInFlight = null;
       }
+      // A machine the launch let go of has had its say: the next one may dial
+      // ([_dialReleasedInTurn]).
+      _endReleaseTurn(
+        machine.machine.machineId,
+        machine.agentLoadStatus == AgentLoadStatus.loaded
+            ? 'listed ${machine.agents.length} agent(s)'
+            : 'list not read',
+      );
     });
     machine.agentsLoadInFlight = load;
     return load;
@@ -3319,7 +4861,16 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
     final connection = _conn(machine.machine.machineId);
     final deadline = Stopwatch()..start();
+    // When the list was asked for — what a timeout is measured against, to tell a machine that
+    // went quiet from one that is answering everything else first (see the catch below).
+    DateTime? listAskedAt;
     debugPrint('agents_list start: ${machine.machine.machineId}');
+    if (kTypingTrace) {
+      typingEvent(
+        'list load ${_shortId(machine.machine.machineId)}: start'
+        ' (had list: $hadAgents)',
+      );
+    }
     try {
       const inventoryTimeout = Duration(seconds: 10);
       // ⚠️ **The handshake has its OWN budget, and running out of it is not a
@@ -3370,6 +4921,15 @@ class AppNotifier extends ChangeNotifier {
         connection,
         revision,
       );
+      // The terminal on screen first, at launch and on a reconnect — see [_yieldToFocusedTerminal].
+      // Outside [remaining]: the wait is the phone's choice, not the machine being slow to answer.
+      await _yieldToFocusedTerminal(machine);
+      if (!_machineWorkCurrent(machine, revision)) return;
+      listAskedAt = DateTime.now();
+      final asked = kTypingTrace ? (Stopwatch()..start()) : null;
+      if (kTypingTrace) {
+        typingEvent('list load ${_shortId(machine.machine.machineId)}: ask');
+      }
       final response = await StartupTrace.time(
         'agents.list',
         () => connection.request(
@@ -3380,9 +4940,13 @@ class AppNotifier extends ChangeNotifier {
       );
       if (!_machineWorkCurrent(machine, revision)) return;
       final rawAgents = response['agents'] as List<dynamic>? ?? [];
-      final agents = rawAgents
-          .map((item) => Agent.fromJson(item as Map<String, dynamic>))
-          .toList();
+      final agents = StartupTrace.timeSync(
+        'agents.parse ${_shortId(machine.machine.machineId)} '
+        '(${rawAgents.length} agent(s))',
+        () => rawAgents
+            .map((item) => Agent.fromJson(item as Map<String, dynamic>))
+            .toList(),
+      );
       // Kept for the next launch, as the daemon sent it — see [MachineCache].
       //
       // ⚠️ Written out HERE, not left to the next refresh. The machine list is
@@ -3397,15 +4961,19 @@ class AppNotifier extends ChangeNotifier {
           for (final item in rawAgents)
             if (item is Map<String, dynamic>) item,
         ]);
-        unawaited(
-          cache.save(
-            machines,
-            isOnline: (item) => _nodeOnlineFromStatus(item.status) == true,
-          ),
+        // Several machines answering together write once: a save asked for while an older one
+        // still waits replaces it, and the encode is off the UI thread ([MachineCache.save]).
+        _writeMachineCache(cache);
+      }
+      if (asked != null) {
+        typingEvent(
+          'list load ${_shortId(machine.machine.machineId)}: answered'
+          ' in ${asked.elapsedMilliseconds}ms (${agents.length} agents)',
         );
       }
       _replaceAgents(machine, agents);
       machine.agentLoadStatus = AgentLoadStatus.loaded;
+      machine.agentsListedAt = DateTime.now();
       machine.agentsRefreshing = false;
       machine.agentsLoadError = null;
       debugPrint(
@@ -3425,7 +4993,20 @@ class AppNotifier extends ChangeNotifier {
     } catch (error) {
       if (!_machineWorkCurrent(machine, revision)) return;
       machine.agentsRefreshing = false;
-      if (error is WsRequestTimeout) {
+      final heard = connection.lastHeardFromMachineAt;
+      if (error is WsRequestTimeout &&
+          listAskedAt != null &&
+          heard != null &&
+          heard.isAfter(listAskedAt)) {
+        // ⚠️ **Slow, not gone (owner, 2026-10-01).** The machine sealed frames to this connection
+        // after the list was asked for, so its session is alive and the list is only behind the
+        // rest of its traffic. Read as offline, this took the machine down — its agents off every
+        // screen, the one on Home included — and redialled, which started the whole launch over
+        // on a relay already behind. Nothing is reported; the list is asked again shortly, while
+        // the cached one, if any, keeps standing in.
+        machine.agentsLoadError = null;
+        if (!hadAgents) _askSlowMachineAgain(machine, revision);
+      } else if (error is WsRequestTimeout) {
         machine.agentsLoadError =
             'Harness is offline — run harness start on that machine';
         _recoverStaleSession(machine, connection);
@@ -3467,6 +5048,17 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// A machine whose list timed out while it was plainly alive — see the catch in
+  /// [_performMachineDataLoad] — is asked again after a short pause, rather than left to the
+  /// next sync tick. Only a list never confirmed: a confirmed one stands until that sync.
+  void _askSlowMachineAgain(MachineState machine, int revision) {
+    Timer(const Duration(seconds: 2), () {
+      if (_disposed || !_machineWorkCurrent(machine, revision)) return;
+      if (machine.agentLoadStatus == AgentLoadStatus.loaded) return;
+      unawaited(_loadMachineData(machine, force: true));
+    });
+  }
+
   /// An RPC timed out on a machine whose transport still calls itself connected:
   /// take the machine down and dial it again.
   ///
@@ -3488,6 +5080,50 @@ class AppNotifier extends ChangeNotifier {
       unawaited(_applyNodeStatus(machine, false));
     }
     unawaited(connection.forceReconnect());
+  }
+
+  /// A socket that still calls itself open but has stopped bringing anything from its machine:
+  /// put its terminals down as a dropped socket's are, and dial it again. True when it did; false
+  /// leaves everything as it was, for the caller's own repair.
+  ///
+  /// Two callers, one rule each:
+  /// - a terminal stream quiet for 15s on a socket that heard nothing from the machine in that time
+  ///   ([TerminalSession.onTransportSilent]);
+  /// - the app back from the background after [resumeRedialAfter], on a socket that heard nothing
+  ///   while it was away ([handleAppResumed]).
+  ///
+  /// ⚠️ **The sessions go down first, because [WsConn.forceReconnect] does not say so.** It drops
+  /// the old channel without a close event and dials again reporting `connecting`, which
+  /// [_onConnectionStatus] — rightly — does not read as a lost socket. Without this, every
+  /// terminal would stay `controlling` on a stream that left with the old socket, and wait out its
+  /// own watchdog all over again. Marked lost here, as the `reconnecting` branch there marks them,
+  /// the new socket's `connected` puts them back: the one on screen through
+  /// [MachineState.pendingOfflineAgentId], the rest through `_attachPendingPanes`, each in place
+  /// with its screen kept ([_reattachPane]).
+  ///
+  /// ⚠️ **Not offline.** The machine may be perfectly fine — it is the phone's own line to the
+  /// relay that went (a network switch, a tunnel), so this is [_recoverStaleSession]'s redial
+  /// without its offline flag, which would flash "Offline" over a machine nobody lost.
+  ///
+  /// ⚠️ **Only a connection that is up and can redial.** One mid-dial is already on its way back,
+  /// and redialling it would throw that dial away; one that cannot redial
+  /// ([WsConn.canForceReconnect]) would leave the sessions marked lost with no socket coming.
+  bool _redialStaleTransport(
+    MachineState machine,
+    WsConn connection, {
+    required String why,
+  }) {
+    if (_disposed || !connection.isReady || !connection.canForceReconnect) {
+      return false;
+    }
+    appLog.info(
+      'ws',
+      '${_shortId(machine.machine.machineId)}: $why — dialling the relay again',
+    );
+    _markSessionsUnreachable(machine, 'Connection lost. Reconnecting…');
+    notifyListeners();
+    unawaited(connection.forceReconnect());
+    return true;
   }
 
   bool _machineWorkCurrent(MachineState machine, int revision) =>
@@ -3690,6 +5326,8 @@ class AppNotifier extends ChangeNotifier {
       (agent) => !nextIds.contains(agent.id),
     )) {
       sessionPreviews.removeAgent(machine.machine.machineId, old.id);
+      // Gone from its machine's list: its kept screen is a terminal nobody can open again.
+      _keptScreenStore?.remove('${machine.machine.machineId}/${old.id}');
     }
     for (final agent in agents) {
       sessionPreviews.retainAgent(
@@ -3725,13 +5363,35 @@ class AppNotifier extends ChangeNotifier {
       machine.pendingProcessingSessions.remove(sessionId);
       _markAgentProcessing(machine, agentId);
     }
-    _warmPreviews(machine);
+    // No preview reads from here — see [sessionPreviews].
   }
 
-  void _upsertAgent(MachineState machine, Agent agent) {
+  /// [json] is [agent] as the daemon sent it, where the caller has it: kept for the next launch
+  /// ([_cacheAgentJson]).
+  ///
+  /// False when it changed nothing — the agent is held already, equal in everything a screen reads
+  /// ([agentEqual]), with the machine's list loaded and no turn waiting on its session — and then
+  /// nothing here is touched either. See `agent_synced` in [_handleEvent], the caller that skips
+  /// its redraw for it.
+  bool _upsertAgent(
+    MachineState machine,
+    Agent agent, {
+    Map<String, dynamic>? json,
+  }) {
+    if (json != null) _cacheAgentJson(machine, json);
     final index = machine.agents.indexWhere((item) => item.id == agent.id);
     final previous = index == -1 ? null : machine.agents[index];
     agent = retainNewerGitContext(agent, previous);
+    final heldSession = agent.sessionId;
+    if (previous != null &&
+        agentEqual(previous, agent) &&
+        machine.agentLoadStatus == AgentLoadStatus.loaded &&
+        machine.agentsLoadError == null &&
+        (heldSession == null ||
+            (machine.sessionAgentIds[heldSession] == agent.id &&
+                !machine.pendingProcessingSessions.contains(heldSession)))) {
+      return false;
+    }
     if (index == -1) {
       machine.agents = [...machine.agents, agent];
     } else {
@@ -3742,8 +5402,8 @@ class AppNotifier extends ChangeNotifier {
       agent.id,
       agent.sessionId,
     );
+    // Marked, not read: the next screen that asks reads it again — see [sessionPreviews].
     _staleIfMoved(machine, previous, agent);
-    sessionPreviews.warm([previewKey(machine.machine.machineId, agent)]);
     machine.sessionAgentIds.removeWhere((_, id) => id == agent.id);
     final sessionId = agent.sessionId;
     if (sessionId != null) {
@@ -3760,25 +5420,40 @@ class AppNotifier extends ChangeNotifier {
       // install failed) — reloading the machine list will not install it.
       _lastErrorRetryable = false;
     }
+    return true;
   }
 
-  void _renameAgent(MachineState machine, String agentId, String name) {
+  /// False when it changed nothing — no such agent, no name, or the name it already has.
+  bool _renameAgent(MachineState machine, String agentId, String name) {
     final index = machine.agents.indexWhere((agent) => agent.id == agentId);
-    if (index == -1 || name.trim().isEmpty) return;
+    if (index == -1 || name.trim().isEmpty) return false;
     final cleanName = name.trim();
+    if (machine.agents[index].name == cleanName) return false;
     machine.agents = [...machine.agents]
       ..[index] = machine.agents[index].copyWith(name: cleanName);
+    // Written with the rest when the app leaves the screen — see [_keepMachineCache].
+    _machineCache?.renameAgent(machine.machine.machineId, agentId, cleanName);
     for (final pane in panesFor(machine.machine.machineId)) {
       if (pane.agentId != agentId) continue;
       pane.session?.renameAgent(cleanName);
     }
+    return true;
   }
 
   Future<void> _removeAgent(MachineState machine, String agentId) async {
     machine.agents = machine.agents
         .where((agent) => agent.id != agentId)
         .toList();
+    // Out of the next launch's list too, and soon: reopening a harness that is gone is the one
+    // thing a stale entry would do — see [_saveMachineCacheSoon].
+    if (_machineCache?.forgetAgent(machine.machine.machineId, agentId) ??
+        false) {
+      _saveMachineCacheSoon();
+    }
     sessionPreviews.removeAgent(machine.machine.machineId, agentId);
+    _keptScreens.remove('${machine.machine.machineId}/$agentId');
+    _keptScreenStore?.remove('${machine.machine.machineId}/$agentId');
+    _scrollMemories.remove('${machine.machine.machineId}/$agentId')?.clear();
     agentNotices.forgetAgent((
       machineId: machine.machine.machineId,
       agentId: agentId,
@@ -3797,7 +5472,8 @@ class AppNotifier extends ChangeNotifier {
     final machineId = machine.machine.machineId;
     for (final pane in allPanes.toList()) {
       if (pane.machineId != machineId || pane.agentId != agentId) continue;
-      await _detachSession(pane, sendClose: false);
+      // Not kept: the agent is deleted, and its screen was just forgotten above.
+      await _detachSession(pane, sendClose: false, keepScreen: false);
       for (final swarm in swarms) {
         swarm.remove(pane);
       }
@@ -3940,8 +5616,21 @@ class AppNotifier extends ChangeNotifier {
     await _loadMachineData(machine, force: true);
   }
 
-  /// Dial and re-ask EVERY machine on the account, whatever the account last
-  /// said about any of them.
+  /// Dial and re-ask every machine on the account whose list is not already current, whatever the
+  /// account last said about any of them.
+  ///
+  /// ⚠️ **Not the ones already current, nor the ones waiting for a password (owner, 2026-10-02).**
+  /// Every opening of Find asked every machine for its whole agent list again — stopped work
+  /// included, 1.1–1.4s and ~400KB for 167 agents, decrypted and parsed on the phone — though a
+  /// machine on a live socket keeps its list current by itself: `agent_synced`, `agent_created`,
+  /// `agent_deleted` and the turn events land as they happen, and [_syncAgentsIfChanged] re-reads
+  /// it every [agentSyncInterval] to catch what they miss. So a machine that answered over the
+  /// socket it is on now, within that interval and a margin, is left as it is ([_listStillCurrent]);
+  /// everything this method was written for — a machine launch skipped, one not answering, one back
+  /// from a dropped socket — has no such answer, and is asked as before. A machine that refused this
+  /// phone for want of a link is not dialled again: a password, a code or the group dials it the
+  /// moment one lands (`connectWithPassword`, `_afterGroupSync`, `_redialNewlyTrusted`), and until
+  /// then a dial can only be refused again.
   ///
   /// For the screen that offers the whole fleet in one list — the search, which
   /// is the one place somebody asks "where is that agent" without knowing which
@@ -3977,10 +5666,64 @@ class AppNotifier extends ChangeNotifier {
     // The same guard [_canFetchPreview] uses, and for the same reason: `_conn`
     // would build one out of a null pool.
     if (_disposed || (_pool == null && connectionForTest == null)) return;
-    await Future.wait([
-      for (final machine in machines) reloadMachineData(machine.machineId),
+    final reaching = kTypingTrace ? (Stopwatch()..start()) : null;
+    // Somebody is looking for a session, on any machine: the launch's hold is over — see
+    // [_launchMachineId]. Before the reloads below, so the held ones dial with the rest.
+    _releaseHeldMachines('search opened', atOnce: true);
+    final now = DateTime.now();
+    final asking = <String>[];
+    var current = 0;
+    var locked = 0;
+    var off = 0;
+    for (final machine in machines) {
+      final state = machineStates[machine.machineId];
+      if (state != null && state.needsLink) {
+        locked++;
+      } else if (state != null && _listStillCurrent(state, now)) {
+        current++;
+      } else if (_relaySaysOffline(machine.machineId, now)) {
+        // ⚠️ **Not dialled: the relay has just said it is off**, and a dial would only hear that
+        // again — a token, an end-to-end session and a socket for each, all on this thread while
+        // Find draws itself (four of them measured under a 936ms frame, 2026-10-05). Its list
+        // stays the one the phone has; once the relay says it is back, the next Find asks it.
+        off++;
+      } else {
+        asking.add(machine.machineId);
+      }
+    }
+    appLog.info(
+      'search',
+      'Find asks ${asking.length} machine(s) for their lists · '
+          '$current current already, $locked waiting for a password, $off offline',
+    );
+    final reloads = Future.wait([
+      for (final machineId in asking) reloadMachineData(machineId),
     ]);
+    if (reaching != null) {
+      typingEvent(
+        'find reach: ${asking.length} asked, $off offline skipped'
+        ' — ${reaching.elapsedMilliseconds}ms on this thread before the replies',
+      );
+    }
+    await reloads;
   }
+
+  /// Whether [state]'s list was answered over the socket it is on now, recently enough that the
+  /// pushes since have kept it current — see [reachAllMachines].
+  bool _listStillCurrent(MachineState state, DateTime now) {
+    final listedAt = state.agentsListedAt;
+    // Asked first, so a machine with no answer yet never reaches [_connectionReady].
+    if (listedAt == null) return false;
+    return state.agentLoadStatus == AgentLoadStatus.loaded &&
+        !state.agentsFromCache &&
+        state.connectionStatus == ConnectionStatus.connected &&
+        _connectionReady(state.machine.machineId) &&
+        now.difference(listedAt) < agentSyncInterval + _listCurrentMargin;
+  }
+
+  /// How far past one [agentSyncInterval] a list still counts as current: a sync tick lands a little
+  /// late, or a slow machine answers it late, and that is not a list gone stale.
+  static const _listCurrentMargin = Duration(seconds: 30);
 
   /// What every connected machine's agent accounts have spent, asked in
   /// parallel and read there with that machine's own credentials (`usage_read`).
@@ -4128,6 +5871,102 @@ class AppNotifier extends ChangeNotifier {
         machine.machine.machineId,
   ];
 
+  /// The computers whose services can be connected from this phone: linked and online. Their
+  /// daemon answers `connectors` for the account's owner only, end to end encrypted.
+  List<MachineState> get connectorMachines => [
+    for (final machine in machineStates.values)
+      if (!machine.needsLink && machine.nodeOnline != false) machine,
+  ];
+
+  /// `connectors` on [machineId] (cli/src/services/connectors.ts): `list`, `connect`, `flow`,
+  /// `callback`, `disconnect`. A machine that cannot answer reads as `{error: UNAVAILABLE}`.
+  /// Set by the phone shell: opens a page a harness's program asked for (`browser_open`,
+  /// phone/browser_handoff.dart).
+  void Function(String machineId, String agentId, String url)? onBrowserOpen;
+
+  /// Hands a sign-in this phone caught back to [machineId], to the program waiting for it there
+  /// (`browser_callback`, cli core/terminals/browser.ts). `{'error': 'UNAVAILABLE'}` when the line is down.
+  Future<Map<String, dynamic>> browserCallback(String machineId, String url) async {
+    final machine = machineStates[machineId];
+    if (machine == null || machine.needsLink) return {'error': 'UNAVAILABLE'};
+    try {
+      return await _conn(machineId).request(
+        'browser_callback',
+        payload: {'url': url},
+      );
+    } catch (_) {
+      return {'error': 'UNAVAILABLE'};
+    }
+  }
+
+  /// A Harness OS computer, managed from here (CLI services/osDevice.ts): `status`, `update`,
+  /// `wifi_scan`, `wifi_join` {ssid, password}, `wifi_result`. `{error: 'UNAVAILABLE'}` while it
+  /// cannot be reached — as it is for a while after `update` and `wifi_join`.
+  Future<Map<String, dynamic>> osDevice(
+    String machineId,
+    Map<String, dynamic> payload, {
+    Duration timeout = const Duration(seconds: 25),
+  }) async {
+    final machine = machineStates[machineId];
+    if (machine == null || machine.needsLink) return {'error': 'UNAVAILABLE'};
+    try {
+      return await _conn(
+        machineId,
+      ).request('os_device', payload: payload, timeout: timeout);
+    } catch (_) {
+      return {'error': 'UNAVAILABLE'};
+    }
+  }
+
+  /// What each computer's `os_device` `status` said: whether it runs Harness OS, its update and its
+  /// Wi-Fi. Asked again at most every few minutes ([refreshOsStatus]).
+  final Map<String, Map<String, dynamic>> osStatus = {};
+  final Map<String, DateTime> _osAsked = {};
+
+  bool runsHarnessOs(String machineId) => osStatus[machineId]?['harnessOs'] == true;
+
+  bool updateAvailable(String machineId) {
+    final update = osStatus[machineId]?['update'];
+    return update is Map && update['available'] == true;
+  }
+
+  /// Asks [machineId] what it is and whether it has an update, unless asked lately ([force] asks now).
+  Future<void> refreshOsStatus(String machineId, {bool force = false}) async {
+    final asked = _osAsked[machineId];
+    if (!force &&
+        asked != null &&
+        DateTime.now().difference(asked) < const Duration(minutes: 5)) {
+      return;
+    }
+    _osAsked[machineId] = DateTime.now();
+    final status = await osDevice(machineId, {'action': 'status'});
+    // An older CLI answers it UNSUPPORTED/SERVICE_UNAVAILABLE: not Harness OS as far as the phone knows.
+    if (status['error'] == 'UNAVAILABLE') {
+      _osAsked.remove(machineId);
+      return;
+    }
+    osStatus[machineId] = status;
+    notifyListeners();
+  }
+
+  Future<Map<String, dynamic>> connectors(
+    String machineId,
+    Map<String, dynamic> payload, {
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    final machine = machineStates[machineId];
+    if (machine == null || machine.needsLink) return {'error': 'UNAVAILABLE'};
+    try {
+      return await _conn(machineId).request(
+        'connectors',
+        payload: payload,
+        timeout: timeout,
+      );
+    } catch (_) {
+      return {'error': 'UNAVAILABLE'};
+    }
+  }
+
   /// Every turn of every session on [machineId], searched by its daemon (`session_search`,
   /// cli/src/lib/sessionSearch/) — the desktop's `searchSessions`, unchanged. Null when the machine
   /// cannot answer: offline, or a CLI that predates the request, which goes silent rather than
@@ -4252,6 +6091,9 @@ class AppNotifier extends ChangeNotifier {
   /// instruction to make one would have to guess which was meant. `cli/src/lib/projectFolder.ts`
   /// reads the pair, and `[folder]` stays required so the ordinary case — a folder the person
   /// picked — cannot be forgotten.
+  ///
+  /// [deskTabId] is the desk tab the agent joins once started — the one Find was narrowed to —
+  /// instead of the tab the phone is in. See [PhoneDesk.adopt].
   Future<String?> createAgent(
     String machineId, {
     required String engine,
@@ -4261,6 +6103,7 @@ class AppNotifier extends ChangeNotifier {
     String? codexHome,
     GridModel? model,
     String? swarmId,
+    String? deskTabId,
     AgentCreationAttempt? attempt,
     String? prompt,
     String? name,
@@ -4269,8 +6112,8 @@ class AppNotifier extends ChangeNotifier {
     final task = prompt?.trim();
     final choices = <String, dynamic>{
       'engine': engine,
-      // The harness's first task — the machine types it into the agent once it is up. Only
-      // claude, codex and opencode take one (see `kFirstTaskEngines`); an empty one is left out.
+      // The harness's first task — the machine types it into the agent once it is up. Only the
+      // engines in `kFirstTaskEngines` take one; an empty one is left out.
       if (task != null && task.isNotEmpty) 'prompt': task,
       // What the agent is called until its engine titles the session. Absent, the machine names it
       // after the engine and the time ("Codex harness 9-17 15:26").
@@ -4291,7 +6134,13 @@ class AppNotifier extends ChangeNotifier {
       'gridModel': ?model?.id,
       'gridName': ?model?.grid,
     };
-    return _create(machineId, choices, swarmId: swarmId, attempt: creation);
+    return _create(
+      machineId,
+      choices,
+      swarmId: swarmId,
+      deskTabId: deskTabId,
+      attempt: creation,
+    );
   }
 
   /// A Claude Code or Codex conversation Harness did not start, opened as a harness that resumes
@@ -4314,10 +6163,32 @@ class AppNotifier extends ChangeNotifier {
     'resumeSessionId': sessionId,
   }, attempt: attempt);
 
+  /// Asks what became of [attempt] — `agent_create_status`, under the same `creationId` — with
+  /// the choices it was first made with. The New form's Check status, the desktop's.
+  ///
+  /// ⚠️ **Not [createAgent] again with the form's rows as they read now.** An answer that lands
+  /// after the first press — a Git read, a machine's only Codex profile — changes the request the
+  /// form would build, and a changed request is refused ("Check the original request…") rather
+  /// than checked, so the form would be stuck saying so. The attempt holds what was asked; this
+  /// asks about exactly that.
+  ///
+  /// Never a creation: an attempt that was not sent has nothing to check, and nothing is sent.
+  Future<String?> checkAgentCreation(AgentCreationAttempt attempt) {
+    if (attempt._finished) return Future.value(attempt._outcome);
+    final machineId = attempt._machineId, choices = attempt._choices;
+    if (!attempt.awaitingConfirmation || machineId == null || choices == null) {
+      return Future.value(
+        'This request was never sent. Start the harness again.',
+      );
+    }
+    return _create(machineId, choices, attempt: attempt);
+  }
+
   Future<String?> _create(
     String machineId,
     Map<String, dynamic> choices, {
     String? swarmId,
+    String? deskTabId,
     AgentCreationAttempt? attempt,
   }) {
     final creation = attempt ?? AgentCreationAttempt();
@@ -4334,6 +6205,8 @@ class AppNotifier extends ChangeNotifier {
       creation._choices = choices;
       creation._machineId = machineId;
       creation._targetId = swarmId ?? activeSwarmId;
+      // With the request, not read again on a Check status: the tab picked is the one asked for.
+      creation._deskTabId = deskTabId;
     }
     final work = _createAgentWithReceipt(creation);
     creation._inFlight = work;
@@ -4349,8 +6222,38 @@ class AppNotifier extends ChangeNotifier {
     return null;
   }
 
-  String _creationFailureMessage(String code, String? detail, String machine) =>
+  String _creationFailureMessage(
+    String code,
+    String? detail,
+    String machine, {
+    Map<String, dynamic>? choices,
+  }) =>
       switch (code) {
+        // A New Folder named after its first task (`projectNameMode:
+        // suggested`). A current machine numbers that name past a folder that
+        // exists (`robot-2`), so only one that predates the mode refuses it, and
+        // its sentence is written for a name somebody typed. The phone has no
+        // name field to change instead, so it says the way to a fresh folder.
+        'PROJECT_EXISTS' when choices?['projectNameMode'] == 'suggested' =>
+          'A folder named after this task already exists on $machine. '
+              'Choose it from your projects, or update Harness there to make '
+              'a new one.',
+        // Making the project folder (a new one, a clone, a worktree or a
+        // branch) before anything starts in it: `cli/src/lib/projectFolder.ts`
+        // and `gitProject.ts`. The machine's sentence says what to change: the
+        // URL, the branch, Worktree.
+        'INVALID_PROJECT_SOURCE' ||
+        'INVALID_REPOSITORY' ||
+        'PROJECT_PREPARATION_FAILED' ||
+        'PROJECT_EXISTS' ||
+        'CLONE_FAILED' ||
+        'CLONE_TIMEOUT' ||
+        'GIT_PROJECT_UNAVAILABLE' ||
+        'INVALID_BRANCH' ||
+        'BRANCH_SWITCH_FAILED' ||
+        'WORKTREE_FAILED' ||
+        'GIT_UNAVAILABLE' =>
+          detail ?? 'Could not prepare the project folder on $machine.',
         'CWD_NOT_FOUND' || 'INVALID_CWD' =>
           'The project folder is unavailable on $machine. '
               'Choose another folder and try again.',
@@ -4364,8 +6267,33 @@ class AppNotifier extends ChangeNotifier {
           detail != null && detail.isNotEmpty
           ? detail
           : 'This engine cannot start on $machine. Nothing was started.',
+        // The machine's own sentence names the engine and the flag it lacks.
+        // Without one, the phone's Approvals names the way out.
+        'CODEX_CLI_TOO_OLD' =>
+          detail ??
+              'The installed Codex CLI on $machine is too old for '
+                  'Auto-approve. Update Codex there, or choose Ask first under '
+                  'Approvals.',
         'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
           'Update the harness CLI on this machine to create a harness',
+        'INVALID_DSH' =>
+          'This harness is not installed on $machine. '
+              '${detail ?? 'Install it there, then try again.'}',
+        'PROMPT_UNSUPPORTED' =>
+          'This engine cannot be opened with a first message on $machine.',
+        'PROMPT_TOO_LONG' =>
+          'This first task is too long for $machine. Shorten it and try again.',
+        'AGENT_UNSUPPORTED' =>
+          'This engine cannot be opened as a named agent on $machine.',
+        'INVALID_AGENT' =>
+          'This engine cannot be opened as that named agent on $machine.',
+        'INVALID_PERMISSION_MODE' =>
+          'This engine has no such permission mode on $machine.',
+        // A daemon older than the engine refuses it by name, with no detail;
+        // the fix is the update the UNSUPPORTED codes ask for. A detail is a
+        // reason of its own (the sample runs only Claude Code and Codex).
+        'INVALID_ENGINE' =>
+          detail ?? 'Update the harness CLI on $machine to start this agent.',
         // Opening a conversation Harness did not start (`resumeSessionId`). The machine says what
         // stopped it: open elsewhere, already a harness, gone.
         'SESSION_OPEN_ELSEWHERE' ||
@@ -4468,15 +6396,39 @@ class AppNotifier extends ChangeNotifier {
       }
       // Refusals that happen before a launch are safe to correct. INTERNAL,
       // spawn timeouts and connection failures cannot prove nothing started.
+      //
+      // A code missing here reads as a lost reply ("has not confirmed the new
+      // harness yet. Check status before creating another."), which asks for
+      // a second create of something the machine already turned down. The CLI
+      // checks every one before any pane exists (`create` in its
+      // core/agents/launches.ts, and core/agents/create.ts before the spawn).
+      // The desktop's set is the same list; keep the two in step.
       const refusedBeforeLaunch = {
+        // The project folder as asked for, refused before one is made or
+        // cloned.
+        'INVALID_PROJECT_SOURCE',
+        'INVALID_REPOSITORY',
+        'PROJECT_EXISTS',
         'CWD_NOT_FOUND',
         'INVALID_CWD',
         'INVALID_ENGINE',
         'INVALID_GRID',
+        'GRID_UNAVAILABLE',
         'INVALID_CODEX_HOME',
+        'INVALID_DSH',
+        // The first task, a named agent and the approval mode.
+        'PROMPT_UNSUPPORTED',
+        'PROMPT_TOO_LONG',
+        'INVALID_PROMPT',
+        'AGENT_UNSUPPORTED',
+        'INVALID_AGENT',
+        'INVALID_PERMISSION_MODE',
         'TMUX_UNAVAILABLE',
         'PTY_HOST_UNAVAILABLE',
         'ENGINE_LAUNCH_REFUSED',
+        // An engine too old for the approval mode's flag: refused rather than
+        // left printing its help in a pane.
+        'CODEX_CLI_TOO_OLD',
         'TMUX_TOO_OLD_FOR_GRID',
         'GRID_CONFIG_FAILED',
         'UNSUPPORTED_ON_REMOTE',
@@ -4498,7 +6450,12 @@ class AppNotifier extends ChangeNotifier {
       };
       if (refusedBeforeLaunch.contains(failure.code)) {
         return creation._complete(
-          _creationFailureMessage(failure.code, failure.detail, machineName),
+          _creationFailureMessage(
+            failure.code,
+            failure.detail,
+            machineName,
+            choices: choices,
+          ),
         );
       }
       return unconfirmed;
@@ -4536,6 +6493,7 @@ class AppNotifier extends ChangeNotifier {
             failure['code'] as String,
             failure['detail'] is String ? failure['detail'] as String : null,
             machineName,
+            choices: choices,
           ),
         );
       case 'created':
@@ -4548,16 +6506,20 @@ class AppNotifier extends ChangeNotifier {
     if (raw is! Map || raw['id'] is! String || (raw['id'] as String).isEmpty) {
       return unconfirmed;
     }
+    final Map<String, dynamic> json;
     final Agent agent;
     try {
-      agent = Agent.fromJson(Map<String, dynamic>.from(raw));
+      json = Map<String, dynamic>.from(raw);
+      agent = Agent.fromJson(json);
     } catch (_) {
       return unconfirmed;
     }
     creation._agentId = agent.id;
     creation._complete(null);
     if (_disposed || machineStates[machineId] != machine) return null;
-    _upsertAgent(machine, agent);
+    // Into the next launch's list at once — the harness just made is the one most likely to be
+    // reopened by it. See [_cacheAgentJson].
+    _upsertAgent(machine, agent, json: json);
     // ⚠️ Read from the AGENT the machine answered with, not from what was asked for. "New project"
     // and a clone send no `cwd` at all — the folder is whatever the machine made — so taking it
     // from the request would record nothing for exactly the two sources that produce a folder
@@ -4578,47 +6540,143 @@ class AppNotifier extends ChangeNotifier {
       return null;
     }
     // Created HERE, so it joins the tab this phone is in — the way an agent
-    // created in a window joins that window's tab. See [PhoneDesk.adopt] for
-    // what happens when the phone is in no tab.
-    _desk.adopt((
-      machineId: machineId,
-      agentId: agent.id,
-    ), name: agent.displayName);
+    // created in a window joins that window's tab — or the tab picked for it.
+    // See [PhoneDesk.adopt] for what happens when the phone is in no tab.
+    _desk.adopt(
+      (machineId: machineId, agentId: agent.id),
+      name: agent.displayName,
+      tabId: creation._deskTabId,
+    );
     await assignAgentToPane(null, machineId, agent.id, swarmId: targetId);
     return null;
+  }
+
+  /// The longest name the backend keeps for a computer — `renameBody` in
+  /// `backend/src/routes/machines.ts` refuses anything longer.
+  static const machineNameMaxLength = 40;
+
+  /// Computers this phone just set up (Settings ▸ Set up a device): Computers marks them "new" until
+  /// one is opened. This run only.
+  final Set<String> _newMachines = {};
+
+  bool isNewMachine(String machineId) => _newMachines.contains(machineId);
+
+  void markMachineNew(String machineId) {
+    if (_newMachines.add(machineId)) notifyListeners();
+  }
+
+  void sawMachine(String machineId) {
+    if (_newMachines.remove(machineId)) notifyListeners();
   }
 
   /// Renames a machine via `PATCH /api/machines/:machineId` (control-plane REST — the machine's
   /// `name` is backend-owned, unlike an agent's, which lives on the harness CLI). Returns null on
   /// success, or an error message to show inline in the caller's dialog.
   Future<String?> renameMachine(String machineId, String name) async {
-    final state = machineStates[machineId];
-    if (state == null) return 'Machine not found';
+    final revision = _authRevision;
+    if (machineStates[machineId] == null) {
+      return 'This computer is no longer on your account.';
+    }
     final trimmed = name.trim();
     if (trimmed.isEmpty) return 'Name cannot be empty';
+    if (trimmed.length > machineNameMaxLength) {
+      return 'Use $machineNameMaxLength characters or fewer.';
+    }
     try {
       await api.renameMachine(machineId: machineId, name: trimmed);
     } catch (error) {
-      return 'Rename failed: $error';
+      return 'Rename failed: ${describeApiError(error)}';
     }
+    // Signed out, or into another account, while the request was out: nothing here is theirs.
+    if (!_authWorkCurrent(revision)) return null;
+    // Looked up again — a refresh may have replaced the state while the request was out.
+    final state = machineStates[machineId];
+    if (state == null) return null;
     state.machine = state.machine.copyWith(name: trimmed);
     final index = machines.indexWhere((m) => m.machineId == machineId);
     if (index != -1) machines[index] = state.machine;
+    // The next launch draws its rows from the cache before `/api/machines` answers: the old name
+    // there would come back for those seconds.
+    final cache = _machineCache;
+    if (cache != null) _writeMachineCache(cache);
     notifyListeners();
     return null;
   }
 
-  /// Permanently deletes a machine from the account (backend `DELETE /api/machines/:id`) — not to
-  /// be confused with [unlinkMachine], which only drops this computer's local E2EE trust pin and
-  /// leaves the machine itself intact. Returns null on success, or an error message to show inline.
-  Future<String?> deleteMachine(String machineId) async {
-    final state = machineStates[machineId];
-    if (state == null) return 'Machine not found';
+  /// Machines being removed right now ([deleteMachine]). Their rows say so, and a second press joins
+  /// the first rather than sending a second `DELETE`, which the backend would answer with a 404.
+  final Map<String, Future<String?>> _machineDeletes = {};
+
+  bool machineRemoving(String machineId) =>
+      _machineDeletes.containsKey(machineId);
+
+  /// Permanently takes a machine off the account — not to be confused with [unlinkMachine], which
+  /// only drops this computer's local E2EE trust pin and leaves the machine itself intact. Two steps,
+  /// in the order desktop takes them (`MachineDevices.removeComputer`): the computer's key out of the
+  /// account's device log ([removeDevice]), then its machine record (backend
+  /// `DELETE /api/machines/:id`). Returns null on success, or an error message to show inline.
+  ///
+  /// ⚠️ **The record alone does not take it out of Your devices.** The backend's delete pushes
+  /// `machine_revoked` down to a daemon that is connected (`MachineService.destroy`), which clears
+  /// its session and stops — one that is off finds out on its next dial — but it never touches the
+  /// device log: the computer's key stayed in Your devices, and every other device of the account
+  /// went on trusting it. The confirmation that leads here says both.
+  ///
+  /// A sign-out that fails stops before the record is touched, so the next press does the whole of
+  /// it again. A record that fails after the sign-out worked says so, and the next press finds no
+  /// key left to sign out and deletes only the record. A computer the log has no key for — an
+  /// account or a computer from before the log, one already signed out, a log this phone could not
+  /// read — loses its record alone, as before the log existed: removing it is never held up for good.
+  Future<String?> deleteMachine(String machineId) {
+    final inFlight = _machineDeletes[machineId];
+    if (inFlight != null) return inFlight;
+    if (machineStates[machineId] == null) {
+      return Future.value('This computer is no longer on your account.');
+    }
+    late final Future<String?> run;
+    run = _performDeleteMachine(machineId).whenComplete(() {
+      if (identical(_machineDeletes[machineId], run)) {
+        _machineDeletes.remove(machineId);
+      }
+      if (!_disposed) notifyListeners();
+    });
+    _machineDeletes[machineId] = run;
+    notifyListeners();
+    return run;
+  }
+
+  Future<String?> _performDeleteMachine(String machineId) async {
+    final revision = _authRevision;
+    final name = machineStates[machineId]?.machine.displayName ?? 'This computer';
+    final device = await _machineDeviceKey(machineId);
+    // Signed out, or into another account, while the log was read: nothing here is theirs.
+    if (!_authWorkCurrent(revision)) return null;
+    if (device != null) {
+      String? failure;
+      try {
+        failure = await removeDevice(device.pub);
+      } catch (_) {
+        failure = 'UNREACHABLE';
+      }
+      // Signed out meanwhile: a DELETE now would go out under whoever is signed in next, and a
+      // failure is no longer anyone's to read.
+      if (!_authWorkCurrent(revision)) return null;
+      // Gone from the log already — another device signed it out after this phone read the log:
+      // what this step was for is done.
+      if (failure == 'NOT_IN_LOG') failure = null;
+      if (failure != null) return 'Couldn’t sign $name out ($failure). Try again.';
+      // The account let it go meanwhile (removed from another device): no record is left to delete.
+      if (machineStates[machineId] == null) return null;
+    }
     try {
       await api.deleteMachine(machineId: machineId);
     } catch (error) {
-      return 'Delete failed: $error';
+      final reason = describeApiError(error);
+      return device == null
+          ? 'Could not remove it: $reason'
+          : '$name is signed out, but its machine record could not be deleted: $reason';
     }
+    if (!_authWorkCurrent(revision)) return null;
     // Any tile still showing this machine would otherwise sit forever in the "waiting to answer"
     // busy state, since the machine can never be found again after this.
     for (final pane in panesFor(machineId).toList()) {
@@ -4627,13 +6685,127 @@ class AppNotifier extends ChangeNotifier {
       }
       await _detachSession(pane, sendClose: true);
     }
+    if (!_authWorkCurrent(revision)) return null;
     _persistLayout();
+    // Everything [_refreshMachines] lets go of for a machine that left the account — the SOCKET
+    // above all, which would otherwise go on dialling a machine nothing refers to any more.
+    final state = machineStates[machineId];
+    if (state != null) _clearMachineActivity(state);
+    _stopOfflineRetry(machineId);
     _stopAgentSyncTimer(machineId);
+    unawaited(_pool?.closeMachine(machineId));
     machineStates.remove(machineId);
     machines.removeWhere((m) => m.machineId == machineId);
+    _retuneDeafPoll();
+    expandedMachines.remove(machineId);
     if (selectedMachineId == machineId) selectedMachineId = null;
+    if (pendingPairing?.machineId == machineId) pendingPairing = null;
+    // A profile on the computer that just left would show its tabs no longer; back to every one.
+    if (machineProfile.value == machineId) machineProfile.select(null);
+    _keepActiveDeskTabShown();
+    final cache = _machineCache;
+    if (cache != null) _writeMachineCache(cache);
     notifyListeners();
     return null;
+  }
+
+  /// How long [_machineDeviceKey] waits on the device log before it goes on with what it has.
+  static const _machineKeyReadCap = Duration(seconds: 5);
+
+  /// [machineId]'s key in the account's device log, when this phone's copy of the log has one — what
+  /// [deleteMachine] signs out before the record goes. The log holds one key per computer at most
+  /// (`MACHINE_TAKEN`). Null when there is none to sign out: an account or a computer from before the
+  /// log, one already signed out, a log this phone could not read, or one that is still the account
+  /// just left (its keys are not this account's to remove).
+  ///
+  /// The log is read again first, briefly ([_connectAfterDeviceLog] waits as long): a computer that
+  /// signed in after the last read would otherwise be missed, and one signed out elsewhere since would
+  /// be signed out again, for nothing. Never throws — no answer is no key, and the record still goes.
+  Future<DevLogMember?> _machineDeviceKey(String machineId) async {
+    final log = _deviceLog;
+    if (log == null) return null;
+    await log.refresh().timeout(_machineKeyReadCap, onTimeout: () {});
+    try {
+      return await () async {
+        if (!await log.ownsLog()) return null;
+        final listing = await deviceListing();
+        for (final row in listing.members) {
+          final m = row.member;
+          if (m.kind == 'machine' && m.machineId == machineId) return m;
+        }
+        return null;
+      }().timeout(_machineKeyReadCap);
+    } catch (error) {
+      debugPrint('devices: could not read the key of ${_shortId(machineId)}: $error');
+      return null;
+    }
+  }
+
+  /// Computers being tried again by hand ([retryMachine]) — the row says so while it runs.
+  final Map<String, Future<String?>> _machineRetries = {};
+
+  bool machineRetrying(String machineId) =>
+      _machineRetries.containsKey(machineId);
+
+  /// One computer asked again, by hand — Settings ▸ Computers' "Try again", for a machine that reads
+  /// asleep or is stuck connecting.
+  ///
+  /// ⚠️ **Not [retryOfflineMachine].** That one only polls for a machine somebody is waiting on an
+  /// agent of (`pendingOfflineAgentId`), which on a phone is almost never set — it would do nothing
+  /// here. Nor [retryMachines], which re-reads the account but never dials a machine the account
+  /// calls down ([_autoConnectAndLoadMachines]), and that status is exactly what is being doubted.
+  ///
+  /// So: the account's word on it now, then a dial whatever that word is — the way [reachAllMachines]
+  /// dials for Find — cutting short any backoff and waking a socket the relay parked as offline
+  /// ([_redialNow]). A machine waiting on its password is not dialled: that is refused again until
+  /// one lands.
+  ///
+  /// Returns null, or why the account could not be read; the dial is made either way, on the list
+  /// the phone already has.
+  Future<String?> retryMachine(String machineId) {
+    final inFlight = _machineRetries[machineId];
+    if (inFlight != null) return inFlight;
+    late final Future<String?> run;
+    run = _performRetryMachine(machineId).whenComplete(() {
+      if (identical(_machineRetries[machineId], run)) {
+        _machineRetries.remove(machineId);
+      }
+      if (!_disposed) notifyListeners();
+    });
+    _machineRetries[machineId] = run;
+    notifyListeners();
+    return run;
+  }
+
+  Future<String?> _performRetryMachine(String machineId) async {
+    final revision = _authRevision;
+    if (!_authWorkCurrent(revision) || status == AppStatus.unauthenticated) {
+      return null;
+    }
+    String? failure;
+    try {
+      await refreshMachines();
+    } catch (error) {
+      failure = 'Could not load computers: ${describeApiError(error)}';
+    }
+    if (_disposed || !_authWorkCurrent(revision)) return null;
+    final state = machineStates[machineId];
+    if (state == null) {
+      return failure ?? 'This computer is no longer on your account.';
+    }
+    if (state.needsLink) return failure;
+    // No transport — the same guard [reachAllMachines] keeps: [_conn] would build one out of a
+    // null pool.
+    if (_pool == null && connectionForTest == null) return failure;
+    // Before the dial, whose `connecting` may be reported at once: this one is the person's.
+    productConnections.manual(
+      machineId,
+      connected: state.connectionStatus == ConnectionStatus.connected,
+    );
+    _connectMachine(state);
+    _redialNow(machineId);
+    await _loadMachineData(state, force: true);
+    return failure;
   }
 
   /// Renames an agent via `agent_update`. Returns null on success, or an error message to show
@@ -4677,8 +6849,20 @@ class AppNotifier extends ChangeNotifier {
     final last = _touchedAt[key];
     if (last != null && now.difference(last) < _touchEvery) return;
     _touchedAt[key] = now;
+    final revision = _authRevision;
     unawaited(() async {
       try {
+        // ⚠️ **After the agent's own terminal, never ahead of it (owner, 2026-10-01).** The machine
+        // takes a connection's frames one at a time (`enqueueDown` in the CLI's backendSocket.ts),
+        // and this one costs it a whole agent frame (`toProject`, git context and all). At launch
+        // it is queued before the socket is up and flushed first, so the `terminal_open` behind it
+        // waited for that. A recency stamp can wait a second; the screen cannot.
+        await _yieldToTerminalOpen(_conn(machineId), machineId, agentId);
+        if (_disposed ||
+            !_authWorkCurrent(revision) ||
+            machineStates[machineId]?.needsLink != false) {
+          return;
+        }
         await _conn(machineId).request(
           'agent_update',
           payload: {'agentId': agentId, 'opened': true},
@@ -4691,6 +6875,39 @@ class AppNotifier extends ChangeNotifier {
 
   static const _touchEvery = Duration(seconds: 3);
   final _touchedAt = <String, DateTime>{};
+
+  /// The longest [touchAgent] holds its stamp for the socket, and then for the terminal.
+  static const _touchYield = Duration(seconds: 3);
+
+  /// Until [agentId]'s terminal on [machineId] is live — see [touchAgent]. The socket first: a frame
+  /// asked for before it is up is queued, and that queue goes out ahead of the terminal's open
+  /// (`WsConn._flushQueue` runs before the open's wait for readiness ends).
+  Future<void> _yieldToTerminalOpen(
+    WsConn connection,
+    String machineId,
+    String agentId,
+  ) async {
+    // Read as the app shows it too: a machine already `connected` here has nothing to wait for.
+    if (!connection.isReady &&
+        machineStates[machineId]?.connectionStatus !=
+            ConnectionStatus.connected) {
+      try {
+        await connection.waitUntilReady(timeout: _touchYield);
+      } catch (_) {
+        // Not up in time, or closed: the stamp goes the way it always did.
+      }
+    }
+    if (_disposed) return;
+    TerminalSession? terminal;
+    for (final pane in allPanes) {
+      if (pane.machineId == machineId && pane.agentId == agentId) {
+        terminal = pane.session;
+        if (terminal != null) break;
+      }
+    }
+    if (terminal == null) return;
+    await _untilTerminalLive(terminal, _touchYield);
+  }
 
   /// Deletes an agent via `agent_delete`. Returns null on success, or an error message to show
   /// inline in the caller's dialog.
@@ -4779,8 +6996,12 @@ class AppNotifier extends ChangeNotifier {
     final checking = _agentResumes[key];
     final receipt = checking ?? _newReceiptId();
     _agentResumes[key] = receipt;
-    RestartAgentResult settle(String error) {
+    // Counted from the resume being sent — the desktop's rule — not from a status check on one.
+    final measured = _turnActivityKey(machine.machine.machineId, stopped.id);
+    if (checking == null) productResumes.sent(measured);
+    RestartAgentResult settle(String error, {bool refused = true}) {
       _agentResumes.remove(key);
+      if (refused) productResumes.refused(measured);
       return RestartAgentResult(error: error);
     }
 
@@ -4832,7 +7053,11 @@ class AppNotifier extends ChangeNotifier {
           error: 'The machine is still resuming this harness. Tap it again in a moment.',
         );
       case 'unavailable':
-        return settle('That harness is no longer available. Search again.');
+        // Gone rather than refused: the desktop leaves its resume open for this one too.
+        return settle(
+          'That harness is no longer available. Search again.',
+          refused: false,
+        );
       case 'failed':
         final failure = result['failure'];
         if (failure is! Map || failure['code'] is! String) return unconfirmed;
@@ -4844,9 +7069,11 @@ class AppNotifier extends ChangeNotifier {
     }
     final raw = result['agent'];
     if (raw is! Map || raw['id'] != stopped.id) return unconfirmed;
+    final Map<String, dynamic> json;
     final Agent resumed;
     try {
-      resumed = Agent.fromJson(Map<String, dynamic>.from(raw));
+      json = Map<String, dynamic>.from(raw);
+      resumed = Agent.fromJson(json);
     } catch (_) {
       return unconfirmed;
     }
@@ -4865,7 +7092,7 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || machineStates[machine.machine.machineId] != machine) {
       return const RestartAgentResult();
     }
-    _upsertAgent(machine, resumed);
+    _upsertAgent(machine, resumed, json: json);
     notifyListeners();
     return const RestartAgentResult();
   }
@@ -4910,7 +7137,8 @@ class AppNotifier extends ChangeNotifier {
     final raw = result['agent'];
     if (raw is Map) {
       try {
-        _upsertAgent(machine, Agent.fromJson(Map<String, dynamic>.from(raw)));
+        final json = Map<String, dynamic>.from(raw);
+        _upsertAgent(machine, Agent.fromJson(json), json: json);
         notifyListeners();
       } catch (_) {
         // Malformed reply agent — harmless, the CLI's own agent_synced push still lands.
@@ -4933,10 +7161,19 @@ class AppNotifier extends ChangeNotifier {
   /// Never throws — a machine whose daemon is too old to know the RPC, one with
   /// no grid, and one that timed out are all "nothing to offer", which is what
   /// the sheet shows.
-  Future<GridModels> gridModels(String machineId) async {
+  ///
+  /// [userAction] marks the read as a person opening a model sheet: the only
+  /// read the model list's reach counts (`model_list_user_*`).
+  Future<GridModels> gridModels(
+    String machineId, {
+    bool userAction = false,
+  }) async {
     try {
-      final response = await _conn(machineId)
-          .request('grid_models_list', timeout: const Duration(seconds: 12));
+      final response = await _conn(machineId).request(
+        'grid_models_list',
+        payload: userAction ? const {'userAction': true} : const {},
+        timeout: const Duration(seconds: 12),
+      );
       List<GridModel> parseModels(Object? raw, {String? grid}) =>
           (raw as List<dynamic>? ?? [])
               .whereType<Map<String, dynamic>>()
@@ -5093,6 +7330,8 @@ class AppNotifier extends ChangeNotifier {
     final machineId = machine.machine.machineId;
     final wasOnline = machine.nodeOnline;
     machine.nodeOnline = online;
+    // Asleep or awake decides how often a phone with nothing connected reads the list again.
+    if (wasOnline != online) _retuneDeafPoll();
 
     if (!online) {
       _markSessionsUnreachable(
@@ -5102,6 +7341,8 @@ class AppNotifier extends ChangeNotifier {
       _startOfflineRetry(machine);
     } else {
       _stopOfflineRetry(machineId);
+      // A socket waiting for this machine to come back need wait no longer ([_parkUntilOnline]).
+      _pool?[machineId]?.wake('reported online');
       if (wasOnline == false) {
         for (final pane in panesFor(machineId)) {
           pane.session?.transportLost(
@@ -5111,7 +7352,15 @@ class AppNotifier extends ChangeNotifier {
       }
       final pending = machine.pendingOfflineAgentId;
       if (pending != null) {
-        unawaited(_recoverPendingAgent(machine, pending));
+        // Back from off, the list held is from before its Harness went away; otherwise only a
+        // socket dropped, and the list held still stands.
+        unawaited(
+          _recoverPendingAgent(
+            machine,
+            pending,
+            listStands: wasOnline != false,
+          ),
+        );
       } else if (_connectionReady(machineId) &&
           (wasOnline == false || panesFor(machineId).any(_paneNeedsAttach))) {
         // ⚠️ **A machine that was OFF and is back owes a fresh list, whether or
@@ -5151,11 +7400,88 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The relay said [machine] is offline: a socket of the app's that never reached it waits for
+  /// it to come back instead of redialling on its backoff ([WsConn.parkUntilOnline]). It is woken
+  /// by any word that the machine is back — `machines_status` down any socket
+  /// ([_wakeMachinesBackOnline]), its own `node_status`, `/api/machines` ([_applyNodeStatus]) — and
+  /// by a person opening one of its agents ([_redialNow] → [WsConn.reconnectNow] once the parked
+  /// socket is gone, or the parked socket itself answering).
+  ///
+  /// Nothing for a socket that is up: a live session's machine going away is [_applyNodeStatus]'s.
+  void _parkUntilOnline(MachineState machine) {
+    final machineId = machine.machine.machineId;
+    final connection = _pool?[machineId];
+    if (connection == null || connection.isReady) return;
+    connection.parkUntilOnline();
+    // Waiting on a machine that is off is no reason to keep the next one from dialling.
+    if (connection.isParked) _endReleaseTurn(machineId, 'parked: offline');
+  }
+
+  /// `machines_status` — the relay's word on every machine of the account, sent down every socket
+  /// as it changes. Read for one thing: a machine reported online whose socket is parked waiting
+  /// for it ([_parkUntilOnline]) dials now.
+  ///
+  /// ⚠️ **Not applied as each machine's status.** That stays with `/api/machines` and each
+  /// socket's own `node_status`, as it was; this frame was ignored before, and taking it up for
+  /// everything would change what every machine's row says on a feed nothing here was built on.
+  void _wakeMachinesBackOnline(Object? statuses) {
+    if (statuses is! List) return;
+    final now = DateTime.now();
+    for (final status in statuses) {
+      if (status is! Map) continue;
+      final machineId = status['machineId'];
+      if (machineId is! String || machineId.isEmpty) continue;
+      final online = status['online'] == true;
+      _relaySaid[machineId] = (online: online, at: now);
+      if (online) _pool?[machineId]?.wake('the relay says it is online');
+    }
+  }
+
+  /// What `machines_status` last said of each machine, and when — read by [reachAllMachines], and
+  /// by nothing else (see [_wakeMachinesBackOnline] for why it is not the machine's status).
+  final Map<String, ({bool online, DateTime at})> _relaySaid = {};
+
+  /// How long the relay's "offline" stands for [reachAllMachines]. It says so again as it changes,
+  /// so this is only the bound on trusting a word that may have gone unrepeated.
+  static const _relayOfflineStands = Duration(minutes: 2);
+
+  /// Whether the relay said, a moment ago, that [machineId] is off — so there is nothing to dial.
+  bool _relaySaysOffline(String machineId, DateTime now) {
+    final said = _relaySaid[machineId];
+    return said != null &&
+        !said.online &&
+        now.difference(said.at) < _relayOfflineStands;
+  }
+
+  /// Machines whose [_recoverPendingAgent] began on a machine that had been away — see
+  /// [_reopenFromHeldList], which a later call must not run for them.
+  final Set<String> _recoveringAfterAway = {};
+
+  /// Bring the agent a lost socket was showing back on screen, once [machine] can be asked again.
+  ///
+  /// [listStands] says the machine itself never went away — only this phone's socket to it — so
+  /// the list read before the drop still names its agents ([_reopenFromHeldList]).
   Future<void> _recoverPendingAgent(
     MachineState machine,
-    String agentId,
-  ) async {
+    String agentId, {
+    bool listStands = false,
+  }) async {
     final machineId = machine.machine.machineId;
+    // ⚠️ **Before the in-flight check, and without a single await before it.** A return to the
+    // app usually starts a recovery from `/api/machines` while the socket is still dialling, and
+    // that one polls every 250ms — so when the socket came up, this call returned as a duplicate,
+    // the reconnect sent its `agents_list`, and the poll's reopen went out 40ms behind it, to wait
+    // out the whole list on the machine's queue all the same (measured on a phone, 254 agents,
+    // 2026-10-08). Run here, the reopen leaves inside `_onConnectionStatus`, before the list it
+    // starts, and the list then waits for it ([_yieldToFocusedTerminal]).
+    if (listStands &&
+        !_recoveringAfterAway.contains(machineId) &&
+        _reopenFromHeldList(machine, agentId)) {
+      return;
+    }
+    // Marked even when one is already running: that one asks the machine, and none after it may
+    // reopen from the held list while it does.
+    if (!listStands) _recoveringAfterAway.add(machineId);
     if (!_offlineRecoveryInFlight.add(machineId)) return;
     try {
       // E2EE and agents_list can become ready in separate frames after a
@@ -5205,7 +7531,40 @@ class AppNotifier extends ChangeNotifier {
       }
     } finally {
       _offlineRecoveryInFlight.remove(machineId);
+      _recoveringAfterAway.remove(machineId);
     }
+  }
+
+  /// [_recoverPendingAgent]'s first move on a socket that only dropped: the agent reopened from the
+  /// list read before the drop, now, rather than after the machine has listed every agent again.
+  /// False — nothing done — unless the socket is up, that list stands ([_listHeldThroughDrop]) and
+  /// it names the agent with a terminal to open; the caller then asks the machine, as it always did.
+  ///
+  /// Synchronous to the reopen: [selectAgent] moves the terminal to `opening` before its first
+  /// await, which is what the list's wait for it reads.
+  bool _reopenFromHeldList(MachineState machine, String agentId) {
+    final machineId = machine.machine.machineId;
+    if (_disposed ||
+        machine.nodeOnline != true ||
+        machine.pendingOfflineAgentId != agentId ||
+        !_connectionReady(machineId) ||
+        !_listHeldThroughDrop(machine) ||
+        !machine.terminalCapabilityAvailable) {
+      return false;
+    }
+    final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+    if (agent == null || !agent.terminalAvailable) return false;
+    machine.pendingOfflineAgentId = null;
+    // The same two roads as the loop in [_recoverPendingAgent]: focus is not taken back from
+    // somebody who has moved to another machine meanwhile.
+    if (selectedMachineId == machineId) {
+      unawaited(
+        selectAgent(machineId, agentId, intent: AttachIntent.automatic),
+      );
+    } else {
+      notifyListeners();
+    }
+    return true;
   }
 
   /// Enable-time fallback: preserve the user's current choice and acknowledge it.
@@ -5282,6 +7641,9 @@ class AppNotifier extends ChangeNotifier {
     AttachIntent intent = AttachIntent.person,
   }) async {
     final person = intent == AttachIntent.person;
+    // ⚠️ **A person arriving does not wait out a reconnect backoff — see [_redialNow].** First,
+    // before anything below can return early on a machine that is not up.
+    if (person) _redialNow(machineId);
     final existing = paneOfAgent(machineId, agentId);
     if (existing != null) {
       selectedMachineId = machineId;
@@ -5332,6 +7694,29 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     await addAgentToSwarm(machineId, agentId, takeControl: person);
+  }
+
+  /// Dial [machineId] now if its socket is down and sitting out a reconnect backoff — somebody has
+  /// just arrived on one of its agents ([selectAgent]).
+  ///
+  /// ⚠️ **Why (owner, 2026-09-30).** A socket that fails several dials in a row waits longer before
+  /// each next one — 1, 2, 4, 8, 16, then 30 seconds (`WsConn._scheduleReconnect`) — and the only
+  /// thing that cut that short was the app coming back to the foreground ([handleAppResumed]).
+  /// Picking an agent in Find, swiping onto one, or tapping its terminal all waited it out: the
+  /// terminal sat on "Reconnecting…" for up to half a minute, for a machine that would have
+  /// answered the moment anything dialled it. A person looking at the agent is exactly who that
+  /// backoff was never meant to keep waiting.
+  ///
+  /// [WsConn.reconnectNow] decides whether there is anything to do — nothing for a socket that is
+  /// open or already dialling, nothing for one closed on purpose — so a healthy machine costs
+  /// nothing, and one that is still down costs one dial per arrival, which a person sets the pace
+  /// of. The connection is only ever the one the app already holds: building one here would dial
+  /// a machine the launch deliberately left alone (see [_autoConnectAndLoadMachines]).
+  ///
+  /// Not for a machine waiting on its link: that one comes back with a password, not a redial.
+  void _redialNow(String machineId) {
+    if (machineStates[machineId]?.needsLink == true) return;
+    _pool?[machineId]?.reconnectNow();
   }
 
   /// Opens [agentId]'s stream for a tile nobody is looking at yet — the phone's
@@ -5570,6 +7955,7 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || !allPanes.contains(pane) || pane.session != null) return;
     final wantedAgentId = pane.agentId;
     if (wantedAgentId == null) return;
+    if (kTypingTrace) typingEvent('switch: attaching a session to the pane');
     final machine = machineStates[pane.machineId];
     if (machine == null) return;
     if (machine.nodeOnline == false) return;
@@ -5588,10 +7974,16 @@ class AppNotifier extends ChangeNotifier {
       agentId: agent.id,
       agentName: agent.name,
       engineId: agent.engine,
+      scrollMemory: _scrollMemoryFor('${pane.machineId}/${agent.id}'),
       client: phoneClientDescriptor(),
       send: (type, payload) =>
-          _conn(pane.machineId).sendTerminalFrame(type, payload),
+          _sendTerminalFrame(pane.machineId, type, payload),
       sendBinary: (frame) => _sendTerminalBinary(pane.machineId, frame),
+      // What tells the open watchdog a SLOW machine from a gone one — see
+      // [TerminalSession.lastHeardFromMachine]. Read off the connection the pane
+      // already has, never one built for the asking.
+      lastHeardFromMachine: () =>
+          _heldConnection(pane.machineId)?.lastHeardFromMachineAt,
       // ⚠️ **A socket that has not finished its handshake is not a stalled one,
       // and forcing a reconnect on it destroys the dial that was about to
       // succeed.** `terminal_open` can now be sent very early — the agent and
@@ -5613,6 +8005,19 @@ class AppNotifier extends ChangeNotifier {
         await connection.forceReconnect();
         return true;
       },
+      // A live stream gone quiet on a socket that heard nothing from the machine either — see
+      // [TerminalSession.onTransportSilent]. The socket held now, never one built for the asking:
+      // a pane whose machine has no socket has nothing to redial.
+      onTransportSilent: () {
+        final machine = machineStates[pane.machineId];
+        final connection = _heldConnection(pane.machineId);
+        if (machine == null || connection == null) return false;
+        return _redialStaleTransport(
+          machine,
+          connection,
+          why: 'a terminal stream and its socket went quiet',
+        );
+      },
       // ⚠️ **Opening IS taking, for everything a person does.** A page opened, swiped onto or
       // restored at launch claims the terminal; the one open that still asks politely is the warm
       // tile the pager builds ahead of the thumb, which is a guess and must not cost the desktop
@@ -5621,9 +8026,19 @@ class AppNotifier extends ChangeNotifier {
     );
     pane.session = terminal;
     // Back to an agent read a moment ago: its last screen, at once, until the stream's arrives.
-    final kept = _keptScreens.remove('${pane.machineId}/${agent.id}');
-    if (kept != null) terminal.seedScreen(kept);
+    final keptKey = '${pane.machineId}/${agent.id}';
+    final kept = _keptScreens.remove(keptKey);
+    if (kept != null) {
+      terminal.seedScreen(kept);
+    } else {
+      // Or its visible screen, kept when this run last left it — see [_keptScreenStore]. Nothing
+      // from an earlier run: a launch's agent is the skeleton until its keyframe lands.
+      final saved = _keptScreenStore?.read(keptKey);
+      if (saved != null) terminal.seedSnapshot(saved);
+    }
     terminal.addListener(notifyListeners);
+    // The launch's held machines go once a terminal is live — see [_launchMachineId].
+    if (_launchMachineId != null) _releaseOnFirstFrame(terminal);
     notifyListeners();
     // Wait for the pane's actual measured viewport before asking the daemon to open anything.
     // Sending the 80x24 fallback here used to make the daemon spawn the remote TTY (and render its
@@ -5638,20 +8053,25 @@ class AppNotifier extends ChangeNotifier {
   Future<void> _detachSession(
     TerminalPane pane, {
     required bool sendClose,
+
+    /// False where the screen must not outlive the stream: a sign-out, a reset, a deleted agent.
+    bool keepScreen = true,
   }) async {
     final terminal = pane.session;
     pane.session = null;
     if (terminal == null) return;
     terminal.removeListener(notifyListeners);
-    // The screen as the reader left it, for the next time this agent opens — see [_keptScreens].
+    // The screen as the reader left it, for the next time this agent opens in this run — see
+    // [_keptScreens], and [_keptScreenStore] for one opened again after those three have moved on.
     final agentId = pane.agentId;
-    if (agentId != null && terminal.hasRenderedFrame) {
+    if (keepScreen && agentId != null && terminal.hasRenderedFrame) {
       final key = '${pane.machineId}/$agentId';
       _keptScreens.remove(key);
       _keptScreens[key] = terminal.terminal;
       while (_keptScreens.length > _keptScreenLimit) {
         _keptScreens.remove(_keptScreens.keys.first);
       }
+      _keepScreen(key, terminal);
     }
     if (sendClose) await terminal.close();
     terminal.dispose();
@@ -5733,9 +8153,111 @@ class AppNotifier extends ChangeNotifier {
   final _keptScreens = <String, Terminal>{};
   static const _keptScreenLimit = 3;
 
+  /// What the terminal view's scroll mirror knew of each agent opened most
+  /// recently in this run — its rows, which of them scroll — so that a reopen,
+  /// or a keyframe, does not fetch them again ([RemoteScrollMemory]). In memory
+  /// only, as [_keptScreens] are, and cleared with them.
+  final _scrollMemories = <String, RemoteScrollMemory>{};
+
+  /// A few, not all — each holds up to two grids of 1,500 rows, about a
+  /// kilobyte a row. Eight: the pager attaches the agents either side of the
+  /// one on screen, and at four, going back to an agent a few swipes away
+  /// found its rows already let go.
+  static const _scrollMemoryLimit = 8;
+
+  /// Every agent's scroll memory forgotten — this account's terminals' rows.
+  void _forgetScrollMemories() {
+    for (final memory in _scrollMemories.values) {
+      memory.clear();
+    }
+    _scrollMemories.clear();
+  }
+
+  /// [key]'s scroll memory — `machineId/agentId` — made the most recent.
+  RemoteScrollMemory _scrollMemoryFor(String key) {
+    final memory = _scrollMemories.remove(key) ?? RemoteScrollMemory();
+    _scrollMemories[key] = memory;
+    while (_scrollMemories.length > _scrollMemoryLimit) {
+      _scrollMemories.remove(_scrollMemories.keys.first)?.clear();
+    }
+    return memory;
+  }
+
+  /// The visible screens of the agents opened most recently in this run, in memory only — see
+  /// [KeptScreenStore]. Where [_keptScreens] has no exact terminal for an agent (it holds three),
+  /// this has the screen it showed. Null in tests that do not hand one over.
+  final KeptScreenStore? _keptScreenStore;
+
+  /// [terminal]'s screen into [_keptScreenStore] under [key], when it has a live one to keep.
+  void _keepScreen(String key, TerminalSession terminal) {
+    final store = _keptScreenStore;
+    if (store == null) return;
+    final snapshot = terminal.snapshotForKeeping();
+    if (snapshot != null) store.put(key, snapshot);
+  }
+
+  /// [json] — one agent as the daemon sent it — into the machine cache's copy of [machine]'s list,
+  /// for the next launch to draw from ([MachineCache.rememberAgent]). A harness NEW to that list is
+  /// written out in a moment ([_saveMachineCacheSoon]); any other change waits for the app to leave
+  /// the screen ([_keepMachineCache]).
+  void _cacheAgentJson(MachineState machine, Map<String, dynamic> json) {
+    final cache = _machineCache;
+    if (cache == null) return;
+    if (cache.rememberAgent(machine.machine.machineId, json)) {
+      _saveMachineCacheSoon();
+    }
+  }
+
+  /// When the machine cache goes out after a harness was added to or removed from it — see
+  /// [_saveMachineCacheSoon].
+  Timer? _machineCacheSaveTimer;
+  static const _machineCacheSaveDelay = Duration(seconds: 3);
+
+  /// Write the machine cache in [_machineCacheSaveDelay], not only when the app leaves the screen.
+  ///
+  /// ⚠️ **For a harness made or deleted — not for every push.** The background write
+  /// ([_keepMachineCache]) is the one that matters, and it is enough for everything else: a status, a
+  /// title, a branch drawn a run late costs nothing, the machine's list replaces it a second in.
+  /// A harness missing from the list costs the launch that reopens it its whole head start (the
+  /// terminal waits for that list — see [MachineCache.rememberAgent]), and an app closed without
+  /// passing through the background — killed from a debugger, or crashed — would lose it. Made
+  /// rarely and by hand, so writing for each is a few writes an hour; the delay lets the pushes
+  /// that follow a creation (its name, its terminal coming up) land in the same write. Not
+  /// re-armed by them: the first change starts the clock.
+  void _saveMachineCacheSoon() {
+    if (_machineCacheSaveTimer != null || _disposed) return;
+    _machineCacheSaveTimer = Timer(_machineCacheSaveDelay, _keepMachineCache);
+  }
+
+  /// The machine cache written out if anything in it changed since it last was — the agents this
+  /// run learned one at a time, between lists ([MachineCache.hasUnsaved]). Called as the app leaves
+  /// the screen ([handleAppPaused], [handleAppInactive]) and by [_saveMachineCacheSoon]. Never
+  /// awaited, and nothing when nothing changed: an idle run writes nothing.
+  void _keepMachineCache() {
+    _machineCacheSaveTimer?.cancel();
+    _machineCacheSaveTimer = null;
+    final cache = _machineCache;
+    if (cache == null || _disposed) return;
+    // Nothing learned, and the launch record already names the machine the next launch reopens:
+    // nothing to write. A person who moved to another machine's agent since is a launch record
+    // to rewrite, even with every list unchanged.
+    if (!cache.hasUnsaved &&
+        !cache.launchRecordStale(lastOpenedAgent.current?.machineId)) {
+      return;
+    }
+    // Signed out, or not yet signed in: the file is the account's, and [logout] clears it.
+    if (status != AppStatus.authenticated) return;
+    // A list not there to write would write the cache EMPTY — every machine gone from the next
+    // launch's warm start. The fetch that fills it saves on landing anyway.
+    if (machines.isEmpty) return;
+    _writeMachineCache(cache);
+  }
+
   Future<void> _closeAllPanes({bool persist = true}) async {
-    // Everything closing at once is a sign-out or a reset: nothing of it is kept.
+    // Everything closing at once is a sign-out or a reset: nothing of it is kept
+    // ([_detachSession]'s `keepScreen`).
     _keptScreens.clear();
+    _forgetScrollMemories();
     final open = allPanes.toList();
     for (final swarm in swarms) {
       swarm.panes.clear();
@@ -5743,7 +8265,7 @@ class AppNotifier extends ChangeNotifier {
       swarm.zoomedPaneId = null;
     }
     for (final pane in open) {
-      await _detachSession(pane, sendClose: true);
+      await _detachSession(pane, sendClose: true, keepScreen: false);
     }
     if (persist) _persistLayout();
   }
@@ -6113,8 +8635,13 @@ class AppNotifier extends ChangeNotifier {
         return;
       case 'node_status':
         final online = payload['online'] == true;
+        if (!online) _parkUntilOnline(machine);
         await _applyNodeStatus(machine, online);
         break;
+      case 'machines_status':
+        // Read only to wake a parked socket, and nothing else changed here: no redraw.
+        _wakeMachinesBackOnline(payload['statuses']);
+        return;
       case 'machine_select_error':
         _lastError =
             'Machine selection failed: ${payload['error'] ?? 'unknown error'}';
@@ -6125,14 +8652,20 @@ class AppNotifier extends ChangeNotifier {
         final raw = payload['agent'];
         if (raw is Map) {
           try {
-            final agent = Agent.fromJson(Map<String, dynamic>.from(raw));
-            _upsertAgent(machine, agent);
+            final json = Map<String, dynamic>.from(raw);
+            final agent = Agent.fromJson(json);
+            final changed = _upsertAgent(machine, agent, json: json);
             if (agent.terminalAvailable) {
               // A pane created before this agent's terminal was verified is still sitting on
               // "Attaching…" with no session — nothing else re-checks it once agentLoadStatus is
               // already `loaded`, so this push is the only signal that it can attach now.
               // A push about an agent synced elsewhere.
               _attachPendingPanes(machine, intent: AttachIntent.automatic);
+              // ⚠️ **No redraw for a push that changed nothing**, which is most of them: the
+              // machine re-sends every agent it has every five minutes (its reconcile), and a
+              // fleet of eighty was eighty redraws of every screen in two seconds — under
+              // somebody typing. An attach started above redraws for itself when it lands.
+              if (!changed) return;
             } else {
               // ⚠️ **Kept, not removed — the desktop's rule.** This is how a STOP arrives
               // (`publishStoppedAgent` pushes the agent with `status: 'stopped'`), and also how an
@@ -6140,10 +8673,14 @@ class AppNotifier extends ChangeNotifier {
               // stopped work vanish from the phone until the next full reload, so there was no row
               // left to resume. `agent_deleted` is what removes an agent; this only lets go of the
               // streams, which have no terminal behind them any more.
+              var detached = false;
               for (final pane in panesFor(machine.machine.machineId).toList()) {
                 if (pane.agentId != agent.id) continue;
+                // `_detachSession` redraws nothing itself — the redraw below is this one's.
+                if (pane.session != null) detached = true;
                 await _detachSession(pane, sendClose: false);
               }
+              if (!changed && !detached) return;
             }
           } catch (_) {
             unawaited(_loadMachineData(machine, force: true));
@@ -6156,8 +8693,9 @@ class AppNotifier extends ChangeNotifier {
         final raw = payload['agent'];
         if (raw is Map && raw['terminal'] is Map) {
           try {
-            final agent = Agent.fromJson(Map<String, dynamic>.from(raw));
-            _upsertAgent(machine, agent);
+            final json = Map<String, dynamic>.from(raw);
+            final agent = Agent.fromJson(json);
+            _upsertAgent(machine, agent, json: json);
             // Same reattach as `agent_synced` above — a pane can be waiting on this exact agent
             // (e.g. one this window's own New Agent dialog just opened) with no session yet.
             // A push about an agent created elsewhere.
@@ -6173,7 +8711,10 @@ class AppNotifier extends ChangeNotifier {
         final agentId = _eventAgentId(machine, event, payload);
         final name = payload['name'];
         if (agentId != null && name is String) {
-          _renameAgent(machine, agentId, name);
+          // ⚠️ **No redraw for a name it already has.** A machine coming back online re-sends
+          // `agent_renamed` for every agent it holds — eighty in one second, measured — and each
+          // one redrew every screen.
+          if (!_renameAgent(machine, agentId, name)) return;
         } else {
           unawaited(_loadMachineData(machine, force: true));
         }
@@ -6186,7 +8727,7 @@ class AppNotifier extends ChangeNotifier {
         // stopped harness in the same breath, and says only this; the stopped
         // row is in the next `agents_list` (`includeStopped`), never in a push.
         // Without the read the harness vanished from the phone until the
-        // 60-second sync — the one row somebody opens to resume it.
+        // next sync tick — the one row somebody opens to resume it.
         if (agentId == null || payload['retained'] == true) {
           unawaited(_loadMachineData(machine, force: true));
         }
@@ -6258,6 +8799,12 @@ class AppNotifier extends ChangeNotifier {
             stats.onTurnStarted(
               _turnActivityKey(machine.machine.machineId, agentId),
             );
+            // Live work, not a reconnect's replay: a harness resumed from here is back.
+            if (event['replay'] != true) {
+              productResumes.worked(
+                _turnActivityKey(machine.machine.machineId, agentId),
+              );
+            }
           }
         } else {
           final sessionId = _eventSessionId(event, payload);
@@ -6283,6 +8830,14 @@ class AppNotifier extends ChangeNotifier {
           }
         }
         break;
+      // A program in a harness's pane opened a page (Claude Code's `/login`) while this phone was the one
+      // typing there (cli core/terminals/browser.ts): it opens on this phone. Nothing here to redraw.
+      case 'browser_open':
+        final url = payload['url'];
+        if (url is String && url.isNotEmpty) {
+          onBrowserOpen?.call(machineId, payload['agentId'] as String? ?? '', url);
+        }
+        return;
       // ⚠️ Everything else changed nothing here, so it must not redraw. The machine streams every
       // agent's live chat — `text_delta`, `tool_start`, … — down this socket, several per second
       // per agent, and each one used to rebuild every screen listening to this notifier.
@@ -6362,7 +8917,19 @@ class AppNotifier extends ChangeNotifier {
   @override
   void notifyListeners() {
     _seeWatchedAgent();
+    if (!kTypingTrace) {
+      super.notifyListeners();
+      return;
+    }
+    typingCount('app.notify');
+    // What every listener does with the tick, right here on this thread — the builds come later,
+    // in the frame (`frame SLOW`).
+    final listening = Stopwatch()..start();
     super.notifyListeners();
+    final took = listening.elapsedMicroseconds / 1000;
+    if (took >= 4) {
+      typingEvent('notify: listeners took ${took.toStringAsFixed(1)}ms');
+    }
   }
 
   /// [agent] on [machine], as a notice names it.
@@ -6425,8 +8992,26 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// Safe to call on every resume. [WsPool.reconnectAll] skips connections that are already open
   /// and connections somebody closed on purpose, so a tab switch that cost nothing costs nothing.
+  ///
+  /// An open socket is not always a live one, though: after [resumeRedialAfter] away, one that
+  /// heard nothing from its machine meanwhile is dialled again too — see [_redialSocketsSilentSince].
   void handleAppResumed() {
+    if (kTypingTrace) {
+      final pane = focusedPane;
+      typingEvent(
+        'resume: app back in front, on'
+        ' ${pane == null ? '-' : '${_shortId(pane.machineId)}/${_shortId(pane.agentId ?? '-')}'}',
+      );
+    }
+    final pausedAt = _pausedAt;
+    _pausedAt = null;
     _pool?.reconnectAll();
+    // After reconnectAll, not before: a socket it has just started dialling is not ready, and is
+    // left to that dial.
+    if (pausedAt != null &&
+        DateTime.now().difference(pausedAt) >= resumeRedialAfter) {
+      _redialSocketsSilentSince(pausedAt);
+    }
     // Back in front of the agent that was on screen: whatever it finished
     // while the phone was in a pocket has now been seen.
     _seeWatchedAgent();
@@ -6453,10 +9038,76 @@ class AppNotifier extends ChangeNotifier {
   /// The app went into a pocket: stop the reads that only make sense in front
   /// of somebody. The sockets are left to the OS, which suspends them anyway —
   /// [handleAppResumed] is what puts both back.
+  ///
+  /// And write the machine cache now ([_keepMachineCache]): this is the last moment the app is sure
+  /// to run, since closing it from the app switcher starts by sending it here.
   void handleAppPaused() {
+    // The first pause of this time away: a second without a resume between (the OS repeating
+    // itself) does not move the moment the phone actually left.
+    _pausedAt ??= DateTime.now();
     _desk.pause();
     _stopDeafPoll();
+    // The agents this run learned between lists, for the next launch — see [_keepMachineCache].
+    _keepMachineCache();
   }
+
+  /// When the app last went into the background ([handleAppPaused]); null while it is in front.
+  DateTime? _pausedAt;
+
+  /// How long the app has to have been away before [handleAppResumed] stops trusting an open
+  /// socket that heard nothing from its machine in that time.
+  ///
+  /// ⚠️ **Thirty seconds, the daemon's terminal lease** (`HEARTBEAT_TIMEOUT_MS`,
+  /// `cli/src/lib/terminalStreamManager.ts`). A phone the OS suspended sends no `terminal_alive`, so
+  /// past this the daemon has closed this phone's terminal streams anyway, and they have to be
+  /// opened again whatever the socket: a fresh socket costs nothing they were not going to cost.
+  /// Shorter, a glance at another app would redial a socket that was fine and reopen terminals
+  /// that were still live — the "every tab switch costs a handshake" [WsConn.reconnectNow] warns
+  /// about.
+  ///
+  /// A field rather than a constant only so a test can stand in for half a minute in a pocket, as
+  /// [trustSettleRound] does for its wait.
+  @visibleForTesting
+  Duration resumeRedialAfter = const Duration(seconds: 30);
+
+  /// Back after [resumeRedialAfter] away: dial again every socket that still calls itself open
+  /// but heard nothing from its machine since [since], the moment the app left.
+  ///
+  /// ⚠️ **Why an open socket is not taken at its word.** The phone's line to the relay is lost by
+  /// being backgrounded, and above all by the network changing under it — Wi-Fi giving way to 4G
+  /// in a pocket — and the OS does not always say so: the old socket stays "open", bound to a
+  /// network that is gone, and takes every send while nothing comes back. Waited out, that was the
+  /// terminal's 15s watchdog plus its repairs, about twenty seconds of a screen that looked live
+  /// and took no keys; dialled now, the terminal is back in a couple of seconds.
+  ///
+  /// ⚠️ **Nothing heard while away is the test, not the time away alone.** A phone whose OS let it
+  /// run in the background (Android often does, for a while) kept its streams alive and heard
+  /// their sync frames: that socket is proved alive and left alone, terminals and all.
+  ///
+  /// Only a machine with a terminal attached: this exists to bring terminals back, and a machine
+  /// with none has nothing on screen waiting — its socket keeps its own repairs, as it did.
+  void _redialSocketsSilentSince(DateTime since) {
+    if (status != AppStatus.authenticated) return;
+    final away = DateTime.now().difference(since).inSeconds;
+    for (final machine in machineStates.values.toList()) {
+      final machineId = machine.machine.machineId;
+      if (!panesFor(machineId).any((pane) => pane.session != null)) continue;
+      final connection = _heldConnection(machineId);
+      if (connection == null) continue;
+      final heard = connection.lastHeardFromMachineAt;
+      if (heard != null && heard.isAfter(since)) continue;
+      _redialStaleTransport(
+        machine,
+        connection,
+        why: 'back after ${away}s away with nothing heard from it',
+      );
+    }
+  }
+
+  /// The app lost the foreground for a moment — the app switcher, a system sheet. Nothing stops;
+  /// only the machine cache is written ([_keepMachineCache]), because the switcher is where an app
+  /// is closed, and closing it there need not pass through [handleAppPaused] first.
+  void handleAppInactive() => _keepMachineCache();
 
   /// How often a phone with no machine connected reads the machine list again. Every push
   /// (`machines_changed`, `device_keys_changed`) reaches the phone over a machine's socket; with none
@@ -6465,20 +9116,90 @@ class AppNotifier extends ChangeNotifier {
   @visibleForTesting
   Duration deafMachineListInterval = const Duration(seconds: 20);
 
+  /// The same read, when the account's ONLY machine is asleep. Switched on, it shows up here on its
+  /// own within this — the computer the person is standing at, waiting to see it come back.
+  @visibleForTesting
+  Duration asleepMachineListInterval = const Duration(seconds: 4);
+
+  /// The same read, when every one of SEVERAL machines is asleep.
+  @visibleForTesting
+  Duration asleepMachinesListInterval = const Duration(seconds: 8);
+
   Timer? _deafMachineListTimer;
   Future<void>? _machineReread;
 
+  /// The interval [_deafMachineListTimer] was set to, and the time since — so [_retuneDeafPoll] can
+  /// tell when that interval no longer fits, and how much of it has already gone.
+  Duration? _deafPollInterval;
+  final Stopwatch _deafPollSince = Stopwatch();
+
+  /// How long the deaf poll waits between two reads: [asleepMachineListInterval] when the account's
+  /// one machine is asleep, [asleepMachinesListInterval] when every one of several is, and
+  /// [deafMachineListInterval] otherwise — no machine at all, or one that is on but not connected
+  /// (still connecting, or waiting for its password).
+  ///
+  /// "Asleep" is what its row on the Computers screen says (`phoneMachineStatusOf`): the machine
+  /// reported off. A machine with no state yet counts as not asleep — the slower, safer interval.
+  Duration _deafPollIntervalNow() {
+    if (machines.isEmpty) return deafMachineListInterval;
+    for (final machine in machines) {
+      if (machineStates[machine.machineId]?.nodeOnline != false) {
+        return deafMachineListInterval;
+      }
+    }
+    return machines.length == 1
+        ? asleepMachineListInterval
+        : asleepMachinesListInterval;
+  }
+
   void _startDeafPoll() {
     if (_disposed || status != AppStatus.authenticated) return;
-    _deafMachineListTimer ??= Timer.periodic(
-      deafMachineListInterval,
-      (_) => _rereadMachinesWhileDeaf(),
-    );
+    if (_deafMachineListTimer != null) return;
+    final interval = _deafPollIntervalNow();
+    _setDeafPoll(interval, firstIn: interval);
+  }
+
+  /// One read [firstIn] from now, then one every interval the machines call for at the time of each
+  /// — see [_deafPollIntervalNow]. A timer set again after every read rather than a periodic one,
+  /// because the interval follows the machines.
+  void _setDeafPoll(Duration interval, {required Duration firstIn}) {
+    _deafMachineListTimer?.cancel();
+    _deafPollInterval = interval;
+    _deafPollSince
+      ..reset()
+      ..start();
+    late final Timer timer;
+    timer = Timer(firstIn < Duration.zero ? Duration.zero : firstIn, () {
+      _rereadMachinesWhileDeaf();
+      // Stopped meanwhile — paused, signed out, disposed — or set again already: nothing to do.
+      if (_disposed || !identical(_deafMachineListTimer, timer)) return;
+      final next = _deafPollIntervalNow();
+      _setDeafPoll(next, firstIn: next);
+    });
+    _deafMachineListTimer = timer;
+  }
+
+  /// The machines changed (one went to sleep or woke, or the list itself changed): a poll running at
+  /// an interval that no longer fits is set to the one that does, counting the wait already spent.
+  ///
+  /// ⚠️ Without this the new interval would only take over after the old one ran out: on launch the
+  /// poll can start before the machine list has landed — so at [deafMachineListInterval] — and a
+  /// computer asleep from the start would be read again only after those 20 seconds.
+  void _retuneDeafPoll() {
+    final current = _deafPollInterval;
+    if (_disposed || _deafMachineListTimer == null || current == null) return;
+    final interval = _deafPollIntervalNow();
+    if (interval == current) return;
+    _setDeafPoll(interval, firstIn: interval - _deafPollSince.elapsed);
   }
 
   void _stopDeafPoll() {
     _deafMachineListTimer?.cancel();
     _deafMachineListTimer = null;
+    _deafPollInterval = null;
+    _deafPollSince
+      ..stop()
+      ..reset();
   }
 
   /// A phone that hears nothing reads the machine list again: the computer the person is signing in on
@@ -6514,13 +9235,22 @@ class AppNotifier extends ChangeNotifier {
 
   @override
   void dispose() {
+    launchMeasurement?.dispose();
+    productConnections.dispose();
+    productResumes.dispose();
+    onboardingMeasurement.dispose();
     productMeasurement.dispose();
     _measurementConnections.clear();
     _disposed = true;
+    // A sign-in page still up has nobody left to come back to: its listener goes.
+    if (signInProvider != null) viewer.login.cancel();
     _closedHistory.clear();
     _stopAccountTimers();
     _stopAllOfflineRetries();
     _stopAllAgentSyncTimers();
+    _forgetLaunchHold();
+    _machineCacheSaveTimer?.cancel();
+    _machineCacheSaveTimer = null;
     _clearAllTurnActivity();
     for (final pane in allPanes) {
       pane.session?.removeListener(notifyListeners);

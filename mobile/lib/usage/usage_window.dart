@@ -10,9 +10,7 @@ library;
 ///
 /// Claude names it outright; Codex's label is derived from
 /// `limit_window_seconds` and lands on the same word at seven days. Written
-/// down once because the rail MATCHES on it — see [ProviderUsage.railWindow] —
-/// and a match against a string spelled in two files is a match that breaks
-/// silently the day one of them is reworded.
+/// down once so the two sources cannot spell it differently.
 const String kWeeklyWindowLabel = 'Weekly';
 
 /// Which account a reading belongs to.
@@ -132,30 +130,15 @@ class ProviderUsage {
 
   /// The window closest to being spent — the limit that will actually stop the
   /// work first.
+  ///
+  /// The ONE window an account's figure is read off, on the Usage page and on
+  /// the model sheet alike, as on the desktop. It used to be the weekly one on
+  /// the page, which made the app contradict itself — and a weekly figure can
+  /// look healthy while a shorter window is already exhausted. The detail
+  /// behind the figure still shows every window.
   UsageWindow? get tightest {
     if (windows.isEmpty) return null;
     return windows.reduce((a, b) => b.usedPercent > a.usedPercent ? b : a);
-  }
-
-  /// The ONE window the status rail prints.
-  ///
-  /// The weekly one. Claude reports three windows and Codex usually one, so
-  /// printing them all made one account three figures wide and the other one —
-  /// two readouts that looked like different KINDS of thing rather than the
-  /// same thing about two accounts. Weekly is also the figure worth a glance:
-  /// the five-hour window refills all day and is back to nothing by the time
-  /// anyone reads it, while the week is the budget somebody actually plans
-  /// against.
-  ///
-  /// Falls back to [tightest] for a provider that reports no weekly window at
-  /// all — one figure is the rule, and an empty strip would be a worse answer
-  /// than the wrong window. The panel behind the figure still shows every
-  /// window, which is where the detail belongs.
-  UsageWindow? get railWindow {
-    for (final window in windows) {
-      if (window.label == kWeeklyWindowLabel) return window;
-    }
-    return tightest;
   }
 }
 

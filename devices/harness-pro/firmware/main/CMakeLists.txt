@@ -26,39 +26,30 @@ idf_component_register(
         "cable/cable_scroll.c"
         "cable/pro_cable.c"
         "display/pro_display.c"
-        "display/pro_turn.c"
         "display/pro_panel_bus.c"
         "display/touch_gt911.c"
         "display/pro_frame.c"
         "display/pro_canvas.c"
         "display/terminal.c"
         "display/scroll.c"
-        "pod/classic/ci_chrome.c"
-        "pod/classic/ci_connection.c"
-        "pod/classic/pod_chrome.c"
-        "pod/classic/pod_view_agent.c"
-        "pod/classic/pod_view_inbox.c"
-        "pod/classic/pod_view_ota.c"
-        "pod/classic/pod_view_recap.c"
-        "pod/classic/pod_view_tab.c"
-        "pod/classic/pod_view_tabs.c"
-        "pod/classic/pod_view_talk.c"
-        "pod/console/cs_agent.c"
-        "pod/console/cs_chrome.c"
-        "pod/console/cs_inbox.c"
-        "pod/console/cs_ota.c"
-        "pod/console/cs_overview.c"
-        "pod/console/cs_recap.c"
-        "pod/console/cs_tab.c"
-        "pod/console/cs_talk.c"
-        "pod/console/cs_toast.c"
-        "pod/console/cs_view.c"
+        "pod/home/ph_agent.c"
+        "pod/home/ph_bubble.c"
+        "pod/home/ph_chrome.c"
+        "pod/home/ph_inbox.c"
+        "pod/home/ph_ota.c"
+        "pod/home/ph_overview.c"
+        "pod/home/ph_recap.c"
+        "pod/home/ph_talk.c"
+        "pod/home/ph_toast.c"
+        "pod/home/ph_view.c"
         "pod/engine_logos.c"
         "pod/pets.c"
         "pod/pod_draw.c"
         "pod/pod_model.c"
+        "pod/pod_time.c"
         "pod/pod_nav.c"
         "pod/pod_pet.c"
+        "pod/pod_shared.c"
         "pod/pod_view.c"
         "sys/config_store.c"
         "sys/device_mac.c"
@@ -92,14 +83,6 @@ idf_component_register(
         nvs_flash
         mbedtls
 )
-
-# POD_PANEL_TURN=180 is the DEFAULT of the runtime screen-turn flag (display/pro_turn.c); the owner's NVS setting overrides it.
-if(POD_PANEL_TURN)
-    if(NOT POD_PANEL_TURN EQUAL 180)
-        message(FATAL_ERROR "POD_PANEL_TURN must be 180")
-    endif()
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE POD_PANEL_TURN=180)
-endif()
 
 # snprintf() is bounded (it truncates, never overflows), but -O2 enables a noisy format-truncation
 # analysis that errors on safe same-size copies. Keep it as a warning, not error.
@@ -142,8 +125,8 @@ endif()
 add_custom_command(
     OUTPUT ${PRO_FONTS_C}
     COMMAND ${PRO_PYTHON} ${PROJECT_DIR}/scripts/gen_fonts.py ${PRO_FONT_ARGS} --out ${PRO_FONTS_C}
-    DEPENDS ${PROJECT_DIR}/scripts/gen_fonts.py ${PRO_FONT_SRC} ${PROJECT_DIR}/fonts/Inter-SemiBold.ttf
-            ${PROJECT_DIR}/fonts/Inter-Regular.ttf ${PROJECT_DIR}/fonts/JetBrainsMono-Medium.ttf   # the Console faces gen_fonts.py bakes too
+    DEPENDS ${PROJECT_DIR}/scripts/gen_fonts.py ${PRO_FONT_SRC} ${PROJECT_DIR}/fonts/Inter-SemiBold.ttf ${PROJECT_DIR}/fonts/Inter-Bold.ttf
+            ${PROJECT_DIR}/fonts/Inter-Regular.ttf ${PROJECT_DIR}/fonts/JetBrainsMono-Medium.ttf   # the Pets faces gen_fonts.py bakes too
     COMMENT "Baking Pro text atlases"
     VERBATIM)
 target_sources(${COMPONENT_LIB} PRIVATE ${PRO_FONTS_C})

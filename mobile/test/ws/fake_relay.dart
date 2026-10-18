@@ -62,7 +62,9 @@ class FakeRelay {
   /// Close each new socket with this code as soon as the phone selects.
   int? closeOnSelect;
 
-  /// Never answer the select.
+  /// Never answer the select — nor the hello the phone sends right behind it: the real relay
+  /// takes a socket's frames strictly in order (`backend/src/lib/orderedInbox.ts`), so nothing
+  /// queued behind a select it is stuck on ever reaches the machine.
   bool silentOnSelect = false;
 
   /// Answer the hello with `e2e_denied` instead.
@@ -153,6 +155,8 @@ class FakeRelay {
           },
         });
       case 'e2e_hello':
+        // Behind a select the relay never answered — see [silentOnSelect].
+        if (silentOnSelect) break;
         if (deny) {
           link.send({
             'type': 'e2e_denied',

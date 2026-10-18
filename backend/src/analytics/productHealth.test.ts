@@ -11,6 +11,15 @@ it('keeps the CLI contract identical and every Desktop enum in the server vocabu
   const flows = readFileSync('../desktop/lib/measurement/product_measurement.dart', 'utf8')
   for (const flow of HEALTH_FLOWS) expect(flows).toContain(`'${flow}'`)
 })
+it('shows hn\'s session milestones beside the Desktop\'s', () => {
+  const row = (metric: string, value: number) => ({ dayUtc: new Date('2026-10-01'), metric, value })
+  const data = dailyProductHealth([row('health_tui_funnel_first_work', 3), row('health_tui_first_work_under_1m', 2),
+    row('health_desktop_funnel_first_work', 7)], new Date('2026-10-04'))
+  const [, desktop, tui] = data.daily[0].activation
+  expect(desktop.milestones.first_work).toBe(7)
+  expect(tui).toMatchObject({ milestones: { first_work: 3, setup_seen: null }, waitBuckets: { first_work_under_1m: 2 } })
+  expect(tui.population).toBe('Consented signed-in hn sessions')
+})
 it('creates two independent margins with no joint dimensions or arbitrary labels', () => {
   expect(healthBreakdowns(context, 'turns_started')).toEqual(['breakdown:release:desktop:1.2.73:turns_started', 'breakdown:platform:desktop:macos:turns_started'])
   expect(healthBreakdowns({ ...context, channel: 'development' }, 'turns_started')).toEqual([])
@@ -18,6 +27,22 @@ it('creates two independent margins with no joint dimensions or arbitrary labels
   expect(cleanUsageContext({ ...context, release: 'PRIVATE/custom-build', private: 'PRIVATE' })).toEqual({ ...context, release: 'unknown' })
   expect(cleanUsageContext({ ...context, platform: 'PRIVATE' })).toBeUndefined()
 })
+it('splits phone onboarding counts by release and platform, and drops a development build', () => {
+  const phone = { surface: 'phone', release: '1.0.3', platform: 'android', channel: 'production' } as const
+  expect(healthBreakdowns(phone, 'ui_phone_computer_wait_started')).toEqual([
+    'breakdown:release:phone:1.0.3:ui_phone_computer_wait_started', 'breakdown:platform:phone:android:ui_phone_computer_wait_started'])
+  expect(healthBreakdowns({ ...phone, channel: 'development' }, 'ui_phone_computer_wait_started')).toEqual([])
+  const row = (metric: string, value: number) => ({ dayUtc: new Date('2026-10-01'), metric, value })
+  const data = dailyProductHealth([
+    row('health_phone_collector_days', 25),
+    row('breakdown:platform:phone:android:health_phone_collector_days', 25),
+    row('breakdown:platform:phone:android:ui_phone_computer_wait_started', 12),
+  ], new Date('2026-10-04'))
+  expect(data.daily[0].coverage.phoneSessions).toBe(25)
+  expect(data.breakdowns).toEqual([expect.objectContaining({ dimension: 'platform', surface: 'phone', bucket: 'android',
+    counters: expect.objectContaining({ ui_phone_computer_wait_started: 12 }) })])
+})
+
 it('suppresses sparse labels, distinguishes missing from zero, and matures first-work cohorts', () => {
   const row = (day: string, metric: string, value: number) => ({ dayUtc: new Date(day), metric, value })
   const data = dailyProductHealth([

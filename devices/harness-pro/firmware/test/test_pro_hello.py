@@ -42,9 +42,6 @@ static cJSON *cJSON_AddBoolToObject(cJSON *o, const char *k, bool v) { printf("S
 static cJSON *cJSON_AddStringToObject(cJSON *o, const char *k, const char *v) { printf("S.%s=str:%s\n", k, v); return o; }
 static uint8_t config_load_brightness(void) { return 220; }
 static bool config_load_muted(void) { return true; }
-static bool pro_turn_build_default(void) { return false; }
-static bool config_load_turn(bool f) { return !f; }
-static int config_load_skin(int f) { (void)f; return 0; }
 static void config_load_voicelang(char *o, size_t n) { snprintf(o, n, "en"); }
 #define CFG_VLANG_MAX 8
 #define CABLE_PRODUCT "harness"
@@ -64,7 +61,7 @@ with tempfile.TemporaryDirectory() as d:
 # drops the whole object.
 sett = {l[2:].split("=", 1)[0]: l.split("=", 1)[1] for l in lines if l.startswith("S.")}
 want = {"brightness": "num:86", "character": "num:0", "face": "num:0", "voiceLang": "str:en", "muted": "bool:1",
-        "quiet": "bool:0", "straightTitle": "bool:0", "focusFace": "bool:0", "scrollReversed": "bool:0", "round": "bool:0", "screenTurned": "bool:1", "uiSkin": "str:classic"}
+        "quiet": "bool:0", "straightTitle": "bool:0", "focusFace": "bool:0", "scrollReversed": "bool:0", "round": "bool:0"}
 assert sett == want, sett
 lines = [l for l in lines if not l.startswith("S.")]
 

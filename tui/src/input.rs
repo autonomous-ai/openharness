@@ -268,6 +268,8 @@ pub fn send_to_pane(app: &mut App, focus: u64, bytes: Vec<u8>) {
     let Some(pane) = app.panes.get_mut(&focus) else { return };
     if pane.read_only || matches!(pane.phase, Phase::Watching(_)) || pane.stream.is_none() {
         pane.queued.push(bytes);
+        // hn with no terminal takes only this pane, once its open in flight answers if there is one.
+        if app.headless && pane.opening { pane.takeover_pending = true }
         app.take_control();
         // A popup has no tab, so its own stream still needs to be opened here.
         if app.panes.get(&focus).is_some_and(|p| !p.opening) { app.open_stream(focus, true) }
@@ -1034,7 +1036,8 @@ pub fn launch(app: &mut App, prefix: &str, filter: Filter) {
 fn prepare(app: &mut App, kind: &PickerKind) {
     match kind {
         PickerKind::Machines => app.refresh_machines(),
-        PickerKind::Store => load_dsh(app, app.fleet.local_id.clone()),
+        // A person opened the Store: its read says so (`userAction`), as the desktop's Store does.
+        PickerKind::Store => load_dsh(app, app.fleet.local_id.clone(), true),
         PickerKind::Models => load_models(app),
         _ => {}
     }
@@ -1256,12 +1259,15 @@ fn agent_rpc_on(app: &mut App, machine: String, agent: String, ty: &'static str,
     });
 }
 
-pub(crate) fn load_dsh(app: &mut App, machine: String) {
+/// The Store's catalog from [machine]. [user_action]: a person opened the Store, the one read that
+/// counts toward its reach; a refresh after an install or a form's own read is automatic.
+pub(crate) fn load_dsh(app: &mut App, machine: String, user_action: bool) {
     let Some(link) = app.link(&machine) else { return };
     let id = machine.clone();
     let mark = loading(format!("dsh {machine}"), true);
+    let request = dsh_list_request(user_action);
     app.spawn(async move {
-        let dsh = link.rpc("dsh_list", json!({}), Duration::from_secs(20)).await;
+        let dsh = link.rpc("dsh_list", request, Duration::from_secs(20)).await;
         let home = link.rpc("fs_list_dir", json!({}), Duration::from_secs(20)).await;
         (dsh, home)
     }, move |app, (dsh, home)| {
@@ -1537,10 +1543,14 @@ fn shell_placed(app: &mut App, machine: String, placement: Placement, reply: Res
     let new_window = matches!(&placement, Placement::Fill(_));
     app.open_agent(&machine, id, placement);
     let (session, _, pane) = app.find_pane_anywhere(&machine, id).ok_or("create pane failed: target window or pane disappeared")?;
+    let typing = !typed.is_empty();
     if let Some(p) = app.panes.get_mut(&pane) {
         p.queued.extend(typed);
         p.start_command = reply.pointer("/agent/startCommand").and_then(serde_json::Value::as_str).map(str::to_string);
+        // hn with no terminal opened it to watch (there was nothing to type yet): now there is.
+        if app.headless && typing && p.opening { p.takeover_pending = true }
     }
+    if app.headless && typing && app.panes.get(&pane).is_some_and(|p| !p.opening && p.read_only) { app.open_stream(pane, true) }
     crate::os_welcome::shell_created(app, pane);
     // A new session's first pane may belong to a session not currently in front.
     let (back, before) = (app.session_id, app.swap_back);
@@ -1784,7 +1794,7 @@ fn prompt_mouse(app: &mut App, mouse: MouseEvent) {
     let Some(Modal::Prompt(mut p)) = app.modal.take() else { return };
     if !r.contains(at) { prompt_cancelled(app, &p); return after_prompt(app) }
     match p.row().click(a.row, at) {
-        Some(1) => submit_prompt(app, p),
+        Some(1) => submit_prompt(app, p, true),
         Some(_) => prompt_cancelled(app, &p),
         None => {
             if a.input.is_some_and(|i| i.contains(at)) { p.buttons = false }
@@ -1811,7 +1821,7 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
     if let PromptKind::Command { digits: true, .. } = &p.kind {
         let digit = matches!(key.code, KeyCode::Char(c) if c.is_ascii_digit()) && !ctrl && !alt;
         if !digit {
-            submit_prompt(app, p);
+            submit_prompt(app, p, true);
             app.sync_copy_modal();
             return on_key(app, key);
         }
@@ -1834,7 +1844,7 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
         if p.buttons {
             let mut row = p.row();
             match row.key(key.code, key.modifiers) {
-                crate::buttons::Answer::Chosen(1) => return submit_prompt(app, p),
+                crate::buttons::Answer::Chosen(1) => return submit_prompt(app, p, true),
                 crate::buttons::Answer::Chosen(_) | crate::buttons::Answer::Cancel => return prompt_cancelled(app, &p),
                 crate::buttons::Answer::Moved => p.chosen = row.chosen,
                 crate::buttons::Answer::Ignored => {}
@@ -1876,7 +1886,7 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
             if !p.value.is_empty() && matches!(p.kind, PromptKind::Command { .. } | PromptKind::Tree { .. }) { add_history(app, ptype, &p.value) }
             // An incremental prompt has done its work as it went.
             if incremental { return }
-            submit_prompt(app, p);
+            submit_prompt(app, p, true);
             return;
         }
         // BSpace and C-h: the character before the cursor (none, and the prompt stays, at its
@@ -1955,7 +1965,7 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
     // command-prompt -1: the first character typed is the answer.
     if single && appended {
         if p.value.chars().count() != 1 { return }
-        submit_prompt(app, p);
+        submit_prompt(app, p, true);
         return;
     }
     if changed && incremental { prompt_changed(app, &p, prefix) }
@@ -3244,11 +3254,10 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
             let label = row.get("name").and_then(|v| v.as_str()).unwrap_or(&dsh).to_string();
             create(app, local, What { engine, dsh: Some(dsh), label }, None, None);
         }
-        PickerKind::Route { text, voice } => {
+        PickerKind::Route { text, voice, typed } => {
             let Some((machine, agent)) = id.as_deref().and_then(split_key) else { return keep(app, kind, picker) };
             if let Some(voice) = voice { return crate::dial::send_spoken(app, &voice, &machine, &agent, &text) }
-            if let Some(link) = app.link(&machine) {
-                link.send("message", json!({ "agentId": agent, "content": text }));
+            if send_message(app, &machine, &agent, &text, typed) {
                 let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
                 app.say(format!("Sent to {name}"), theme::ONLINE);
             }
@@ -3278,7 +3287,7 @@ fn store_install(app: &mut App, kind: PickerKind, mut picker: Picker) {
         let (l2, id2) = (local.clone(), id.clone());
         app.spawn(async move { link.rpc("dsh_install", json!({ "id": id2 }), Duration::from_secs(600)).await }, move |app, reply| {
             match reply { Ok(_) => app.say(format!("Installed {id}"), theme::ONLINE), Err(e) => app.say(format!("Install failed: {e}"), theme::DANGER) }
-            load_dsh(app, l2);
+            load_dsh(app, l2, false);
         });
     }
     app.modal = Some(Modal::Picker { kind, picker });
@@ -3289,7 +3298,9 @@ fn prompt_cancelled(app: &mut App, p: &Prompt) {
     if let PromptKind::Api(draft) = &p.kind { crate::models::api_cancelled(app, draft) }
 }
 
-fn submit_prompt(app: &mut App, p: Prompt) {
+/// [typed]: the person submitted it (Enter, a click); false for a prompt a command fills and submits
+/// (`send-task`, `broadcast`), whose text is never marked as the person's.
+fn submit_prompt(app: &mut App, p: Prompt, typed: bool) {
     let value = p.value.trim().to_string();
     match p.kind {
         // Answered by a key press in prompt_key; nothing to submit.
@@ -3322,8 +3333,7 @@ fn submit_prompt(app: &mut App, p: Prompt) {
         }
         PromptKind::Message { machine, agent } => {
             if value.trim().is_empty() { return }
-            if let Some(link) = app.link(&machine) {
-                link.send("message", json!({ "agentId": agent, "content": value }));
+            if send_message(app, &machine, &agent, &value, typed) {
                 let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
                 app.say(format!("Sent to {name}"), theme::ONLINE);
             }
@@ -3366,8 +3376,7 @@ fn submit_prompt(app: &mut App, p: Prompt) {
                     let sure = reply.get("confidence").and_then(serde_json::Value::as_f64).unwrap_or(0.0) >= 0.85;
                     let pick = reply.get("agentId").and_then(serde_json::Value::as_str).zip(reply.get("machineId").and_then(serde_json::Value::as_str)).map(|(a, m)| (m.to_string(), a.to_string()));
                     if let Some((machine, agent)) = pick.filter(|(m, a)| sure && app.fleet.agent(m, a).is_some()) {
-                        if let Some(link) = app.link(&machine) {
-                            link.send("message", json!({ "agentId": agent, "content": value }));
+                        if send_message(app, &machine, &agent, &value, typed) {
                             let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
                             let why = reply.get("reason").and_then(serde_json::Value::as_str).map(|r| format!(" — {r}")).unwrap_or_default();
                             app.toast = None;
@@ -3382,7 +3391,7 @@ fn submit_prompt(app: &mut App, p: Prompt) {
                     picker.hints = vec![("enter", "send")];
         picker.heading = Some(picker.title.clone());
                     app.toast = None;
-                    app.modal = Some(Modal::Picker { kind: PickerKind::Route { text: value, voice: None }, picker });
+                    app.modal = Some(Modal::Picker { kind: PickerKind::Route { text: value, voice: None, typed }, picker });
                 }
                 Err(e) => app.say(format!("Could not route it: {e}"), theme::DANGER),
             });
@@ -3390,10 +3399,32 @@ fn submit_prompt(app: &mut App, p: Prompt) {
         PromptKind::Broadcast => {
             if value.is_empty() { return }
             let targets: Vec<(String, String)> = app.tab().panes().iter().filter_map(|id| app.panes.get(id)).map(|p| (p.machine_id.clone(), p.agent_id.clone())).collect();
-            for (machine, agent) in &targets { if let Some(link) = app.link(machine) { link.send("message", json!({ "agentId": agent, "content": value })); } }
+            for (machine, agent) in &targets { send_message(app, machine, agent, &value, typed); }
             app.say(format!("Sent to {} harness{}", targets.len(), if targets.len() == 1 { "" } else { "es" }), theme::ONLINE);
         }
     }
+}
+
+/// A message from one of hn's own boxes. [typed]: the person typed and submitted it there, so it is
+/// marked as theirs (`usageIntent`), as the desktop's composer marks its own, and the daemon counts
+/// it as interactive work. A command's or a script's text is never marked. False when [machine] is
+/// not connected.
+fn send_message(app: &mut App, machine: &str, agent: &str, text: &str, typed: bool) -> bool {
+    let message = message_request(agent, text, typed);
+    #[cfg(test)]
+    SENT_MESSAGES.with(|sent| sent.borrow_mut().push(message.clone()));
+    app.link(machine).is_some_and(|link| link.send("message", message))
+}
+
+#[cfg(test)]
+thread_local! { static SENT_MESSAGES: std::cell::RefCell<Vec<Value>> = const { std::cell::RefCell::new(Vec::new()) }; }
+
+fn message_request(agent: &str, text: &str, typed: bool) -> Value {
+    if typed { json!({ "agentId": agent, "content": text, "usageIntent": "interactive" }) } else { json!({ "agentId": agent, "content": text }) }
+}
+
+fn dsh_list_request(user_action: bool) -> Value {
+    if user_action { json!({ "userAction": true }) } else { json!({}) }
 }
 
 
@@ -3621,12 +3652,13 @@ pub fn rename_focused(app: &mut App, name: &str) {
     });
 }
 
+/// `send-task text` and `broadcast text`: a command's text, never marked as a person's (send_message).
 pub fn route_task(app: &mut App, text: String) {
-    submit_prompt(app, Prompt::status(PromptKind::Send, "", &text));
+    submit_prompt(app, Prompt::status(PromptKind::Send, "", &text), false);
 }
 
 pub fn broadcast(app: &mut App, text: &str) {
-    submit_prompt(app, Prompt::status(PromptKind::Broadcast, "", text));
+    submit_prompt(app, Prompt::status(PromptKind::Broadcast, "", text), false);
 }
 
 /// The focused pane's harness, when it shows one.
@@ -3722,6 +3754,38 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the person typed into hn's own box is marked as theirs, as the desktop's composer marks
+    /// its own; the same text from a command (`broadcast`, `send-task`) never is. The Store's read says
+    /// a person opened it only when one did.
+    #[tokio::test]
+    async fn only_a_message_the_person_typed_is_marked_and_only_an_opened_store_is_a_persons() {
+        assert_eq!(message_request("a1", "fix it", true), json!({ "agentId": "a1", "content": "fix it", "usageIntent": "interactive" }));
+        assert_eq!(message_request("a1", "fix it", false), json!({ "agentId": "a1", "content": "fix it" }));
+        assert_eq!(dsh_list_request(true), json!({ "userAction": true }));
+        assert_eq!(dsh_list_request(false), json!({}));
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19812, sink, (100, 30));
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "m".into(), name: "m".into(), local: false, status: "online".into(), reach: crate::fleet::Reach::Ready });
+        let mut tab = crate::app::Tab::with_wid("work", 1);
+        tab.root = Some(crate::layout::Node::new(1, 100, 28));
+        tab.focus = Some(1);
+        app.panes.insert(1, crate::pane::Pane::new(1, "m", "a1", 100, 28));
+        app.tabs = vec![tab];
+        app.active = 0;
+        assert!(!send_message(&mut app, "m", "a1", "hi", true), "not connected: nothing is sent");
+        app.connect("m");
+        app.fleet.machine_mut("m").unwrap().reach = crate::fleet::Reach::Ready;
+        let marked = || SENT_MESSAGES.with(|sent| sent.borrow_mut().drain(..).map(|m| m.get("usageIntent").is_some()).collect::<Vec<_>>());
+        marked();
+        broadcast(&mut app, "from a command");
+        assert_eq!(marked(), [false], "`hn broadcast text` is a command's");
+        submit_prompt(&mut app, Prompt::status(PromptKind::Broadcast, "", "typed"), true);
+        submit_prompt(&mut app, Prompt::status(PromptKind::Message { machine: "m".into(), agent: "a1".into() }, "", "typed"), true);
+        assert_eq!(marked(), [true, true], "the person's broadcast and message boxes");
+        submit_prompt(&mut app, Prompt::status(PromptKind::Message { machine: "m".into(), agent: "a1".into() }, "", "scripted"), false);
+        assert_eq!(marked(), [false]);
+    }
 
     /// A new shell on this computer never starts in a folder that is gone (a cleaned /tmp, a
     /// deleted worktree): it starts at home. Another computer's folders are its daemon's to check.

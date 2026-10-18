@@ -42,6 +42,16 @@ int ht_focus_engine_index(const char *engine);
  */
 uint32_t ht_focus_pet_next_ms(const ht_character_face_t *f, const char *recap);
 
+/*
+ * Which working scene a pet with two plays (pets.h ht_pet_t.working_alt): drawn at random, once, each time the working
+ * scene starts showing for `agent` (it did not on the last call, or the face was another agent's), and kept for as long
+ * as it shows — never a change mid-turn or between frames. Sets f->working_alt; call it on every home render before
+ * drawing the face. `rnd` is esp_random on the device, a fixed source in the host tests.
+ */
+typedef struct { char agent[64]; bool shown, alt; } ht_focus_working_pick_t;
+void ht_focus_pick_working(ht_focus_working_pick_t *p, ht_character_face_t *f, const char *recap, const char *agent,
+                           uint32_t (*rnd)(void));
+
 // True when the pet's notice bubble shows (focus.c THE ALERT): the working scene with an unread notice; ui_habitat.c
 // then draws no bell pill. `at` (may be NULL) gets the bubble's box on the glass, empty before it pops in. And how
 // long that bubble takes to pop in (ms): a second notice rings it without popping.

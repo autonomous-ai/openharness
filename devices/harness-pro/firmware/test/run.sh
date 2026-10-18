@@ -18,6 +18,7 @@ if [[ -n "${PRO_FONT:-}" ]]; then
     font_args=(--font "$PRO_FONT")
 fi
 python3 "$fw/scripts/gen_fonts.py" ${font_args[@]+"${font_args[@]}"} --out "$out/pro_fonts.c"
+python3 "$fw/scripts/gen_ph_spark.py" --check   # the voice sparkle baked from the round's glyph
 
 # Stack guard. Pod's model, nav and glue run on the cable_link task (6 KB stack, under display_lock); the render
 # task (24 KB) draws. A frame over the limit overflows the small stack on the device ("Stack protection fault"),
@@ -37,7 +38,7 @@ build_obj() {   # build_obj <limit-bytes> <source>...
 }
 cable_task=("$pod/pod_model.c" "$pod/pod_nav.c")
 [[ -f "$fw/main/app/pod_glue.c" ]] && cable_task+=("$fw/main/app/pod_glue.c")
-render_task=("$pod/pod_draw.c" "$pod/pod_pet.c" "$pod/pod_view.c" "$pod"/classic/*.c "$pod"/console/*.c)
+render_task=("$pod/pod_draw.c" "$pod/pod_pet.c" "$pod/pod_view.c" "$pod/pod_shared.c" "$pod/pod_time.c" "$pod"/home/*.c)
 other=()
 for f in "$pod"/*.c; do
     case " ${cable_task[*]} ${render_task[*]} " in *" $f "*) ;; *) other+=("$f") ;; esac
@@ -53,33 +54,29 @@ for t in "$here"/test_pod_*.c; do
     "$out/$name"
 done
 
-cc "${cflags[@]}" -o "$out/test_ci_chrome" "$here/test_ci_chrome.c" "${objs[@]}"
-"$out/test_ci_chrome"
+cc "${cflags[@]}" -o "$out/test_ph_views" "$here/test_ph_views.c" "${objs[@]}"
+"$out/test_ph_views"
+cc "${cflags[@]}" -o "$out/test_ph_glue" "$here/test_ph_glue.c" "${objs[@]}"
+"$out/test_ph_glue"
+cc "${cflags[@]}" -o "$out/test_ph_talk" "$here/test_ph_talk.c" "${objs[@]}"
+"$out/test_ph_talk"
 
-cc "${cflags[@]}" -o "$out/test_cs_views" "$here/test_cs_views.c" "${objs[@]}"
-"$out/test_cs_views"
-cc "${cflags[@]}" -o "$out/test_cs_glue" "$here/test_cs_glue.c" "${objs[@]}"
-"$out/test_cs_glue"
-
-# Skins: the Console stub paints the whole canvas CS_GROUND (#1B1E24); pod_render --skin console is the entry the golden uses.
+# Pets Home paints the whole canvas PH_HOME_BG (#151413); pod_render is the entry the golden uses.
 cc "${cflags[@]}" -o "$out/pod_render" "$here/pod_render.c" "${objs[@]}"
-"$out/pod_render" --skin console tabs "$out/console.ppm" >/dev/null
-px="$(dd if="$out/console.ppm" bs=1 skip=$(( 15 + (690 * 720 + 10) * 3 )) count=3 2>/dev/null | od -An -tx1 | tr -d ' \n')"
-# #1B1E24 through RGB565 and back to the PPM's 8 bits is 181c20.
-[[ "$px" == "181c20" ]] || { echo "run.sh: console pixel (10,690) is $px, want 181c20 (#1B1E24 in RGB565)" >&2; exit 1; }
-echo "console skin: pixel (10,690) = #1B1E24"
+"$out/pod_render" tabs "$out/pets.ppm" >/dev/null
+px="$(dd if="$out/pets.ppm" bs=1 skip=$(( 15 + (690 * 720 + 10) * 3 )) count=3 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+# #151413 through RGB565 and back to the PPM's 8 bits is 101410.
+[[ "$px" == "101410" ]] || { echo "run.sh: pets pixel (10,690) is $px, want 101410 (#151413 in RGB565)" >&2; exit 1; }
+echo "pets home: pixel (10,690) = #221F1D"
 
-# Console render time: every screen within 85% of its pre-change host time (test_cs_perf.sh; opt-in: runs only with CS_PERF=1, since absolute host microseconds are flaky on CI machines).
-bash "$here/test_cs_perf.sh"
+# Pets render time: every screen within 85% of its pre-change host time (test_ph_perf.sh; opt-in: runs only with PH_PERF=1, since absolute host microseconds are flaky on CI machines).
+bash "$here/test_ph_perf.sh"
 
-# pro_frame: the strip and turn math against a fake 720 x 720 panel, upright and with the 180 degree turn. Same objects
-# as the Pod tests (terminal.c, pro_canvas.c, the fonts); the turn rules are display/pro_turn.h/.c, shared with the panel.
+# pro_frame: the strip math against a fake 720 x 720 panel. Same objects
+# as the Pod tests (terminal.c, pro_canvas.c, the fonts).
 cc "${cflags[@]}" -Wframe-larger-than=2048 -I"$fw/test/host_esp" -c -o "$out/pro_frame.o" "$disp/pro_frame.c"
-for turn in "" "-DPOD_PANEL_TURN=180"; do
-    cc "${cflags[@]}" $turn -c -o "$out/pro_turn.o" "$disp/pro_turn.c"   # the flag's default is the build flag
-    cc "${cflags[@]}" $turn -I"$fw/test/host_esp" -o "$out/test_pro_frame" "$fw/test/test_pro_frame.c" "$out/pro_frame.o" "$out/pro_turn.o" "${objs[@]}"
-    "$out/test_pro_frame"
-done
+cc "${cflags[@]}" -I"$fw/test/host_esp" -o "$out/test_pro_frame" "$fw/test/test_pro_frame.c" "$out/pro_frame.o" "${objs[@]}"
+"$out/test_pro_frame"
 
 # pro_cable: the daemon's JSON in, pro_app_* out. Real cJSON from the ESP-IDF checkout (CI has the sparse one at
 # $IDF_PATH), a recording stub of pro_app_api.h and a stub cable_link (test_pro_cable.c). host_stubs/ is NOT on this
@@ -117,7 +114,7 @@ cc "${cc_flags[@]}" -I"$fw/main/sys" -o "$out/test_fw_update" "$here/test_fw_upd
 "$out/test_fw_update"
 
 # The app layer: pro_app.c, pod_glue.c and pro_touch.c with the cable, the recorder and the clock as host stubs,
-# replayed upright and with POD_PANEL_TURN=180. It builds its own fonts and objects.
+# replayed. It builds its own fonts and objects.
 python3 "$here/test_pro_app.py"
 
 python3 "$here/test_pro_hello.py"

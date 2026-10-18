@@ -841,6 +841,24 @@ print_logo() {
 # One line of it: `harness version` prints the version alone today, and a notice it might add
 # tomorrow must not land inside this sentence.
 installed_version="$("$LAUNCHER" version 2>/dev/null | head -n 1 || true)"
+
+# An agent that installed Harness (Claude Code, Codex, any that sets AI_AGENT) reads what to run next and what only
+# the person can do, in the shape every agent command ends with (docs/design/2026-10-15-agent-experience.md). Its
+# shell says it is one, as the agent commands tell it (agentClient/model.ts `outsideCaller`).
+ran_by_agent() {
+  [ -n "${CODEX_THREAD_ID:-}" ] || [ -n "${AI_AGENT:-}" ] || [ -n "${HARNESS_AGENT_SESSION:-}" ] || [ "${CLAUDECODE:-}" = 1 ]
+}
+print_for_agents() {
+  echo "  For an agent (Claude Code, Codex) that installed this:"
+  echo ""
+  echo "      Next: harness start      (starts Harness here; no account is needed)"
+  echo "      Then: harness whoami     (whether you may start harnesses, and if not, what to ask the person)"
+  echo ""
+  echo "  Only the person can let an agent start harnesses: they sign in (harness login, in a browser)"
+  echo "  and turn on agents starting agents (harness settings agents-start-agents on, in their own"
+  echo "  terminal; an agent is refused). Ask them. How: https://harness.autonomous.ai/agents"
+}
+
 if [ "$INSTALL_MODE" = "desktop" ]; then
   echo ""
   echo "  harness${installed_version:+ $installed_version} installed."
@@ -850,6 +868,8 @@ else
   hn_version="$("$TUI_BIN" --version 2>/dev/null | head -n 1 | cut -d' ' -f1-2 || true)"
   if [ -n "$hn_version" ]; then echo "  ✓ ${hn_version} installed."; fi
   echo ""
+  # An agent reads from the top: what is for it comes first, then the person's guide.
+  if ran_by_agent; then print_for_agents; echo ""; fi
   echo "  Start here — every harness on every machine, in this terminal:"
   echo ""
   # A command that works in THIS terminal: ~/.local/bin is only on new terminals' PATH (step 6).
@@ -873,9 +893,7 @@ else
   echo "      harness machines               # this account's machines and their ids"
   echo "      harness status                 # is the daemon running, and which machine this is"
   echo "      harness --help                 # everything else"
-  echo ""
-  echo "  For agents (Claude Code, Codex): harness new, wait, show and close, or harness mcp."
-  echo "  How: https://harness.autonomous.ai/agents"
+  if ! ran_by_agent; then echo ""; print_for_agents; fi
 fi
 
 # 6. Make `harness` usable by NAME. We already added ~/.local/bin to your rc for NEW terminals (step 4);

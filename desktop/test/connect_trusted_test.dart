@@ -44,6 +44,29 @@ void main() {
     expect(await answer, isTrue);
   });
 
+  test('repeated Connect joins the active dial', () async {
+    final first = app.connectTrusted('mac');
+    final second = app.connectTrusted('mac');
+    expect(second, same(first));
+    socket(ConnectionStatus.connecting, needsLink: true);
+    socket(ConnectionStatus.connected, needsLink: false);
+    expect(await first, isTrue);
+    expect(await second, isTrue);
+
+    final next = app.connectTrusted('mac');
+    expect(next, isNot(same(first)));
+    expect(await next, isTrue);
+  });
+
+  test('a replacement machine cannot complete the old Connect', () async {
+    final answer = app.connectTrusted('mac');
+    socket(ConnectionStatus.connecting, needsLink: true);
+    app.machineStates['mac'] = MachineState(mac.machine)
+      ..connectionStatus = ConnectionStatus.connected;
+    app.notifyListeners();
+    expect(await answer, isFalse);
+  });
+
   test('one that refuses again still wants its password', () async {
     final answer = app.connectTrusted('mac');
     socket(ConnectionStatus.connecting, needsLink: true);

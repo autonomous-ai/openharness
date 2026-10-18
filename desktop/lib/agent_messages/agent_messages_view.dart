@@ -1,13 +1,31 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../settings/settings_screen.dart';
+import '../settings/settings_section.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/skeleton.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/terminal_prompt.dart';
 import 'agent_messages.dart';
+import 'shared_tab_people.dart';
+import 'shared_tab_tasks.dart';
+import 'tab_people.dart';
+import 'update_harness.dart';
+import 'shared_tabs.dart' show SharedTabsState;
+
+/// The parts of a shared tab's Agent Messages panel.
+enum AgentMessagesTab {
+  messages('Messages'),
+  people('People'),
+  tasks('Tasks');
+
+  const AgentMessagesTab(this.label);
+  final String label;
+}
 
 /// Show Agent Messages: [tabId]'s log, newest last. The person reads it here
 /// and types into panes as always; there is nothing to compose, and nothing to
@@ -18,32 +36,50 @@ Future<void> showAgentMessages(
   AppNotifier app, {
   required String tabId,
   required String tabName,
-}) => showTerminalPrompt<void>(
-  context,
-  builder: (context) => AgentMessagesView(
-    controller: app.agentMessages,
-    tabId: tabId,
-    tabName: tabName,
-    load: () => app.readAgentMessages(tabId),
-    onClose: () => Navigator.pop(context),
-    onOpen: (recipient) {
-      Navigator.pop(context);
-      if (!app.revealAgentView(
-        recipient.machineId,
-        recipient.agentId,
-        preferredSwarmId: tabId,
-      )) {
+  AgentMessagesTab initialTab = AgentMessagesTab.messages,
+}) {
+  // A panel opening reads the shares again (1c spec).
+  unawaited(app.sharedTabs.refresh());
+  void reveal(String machineId, String agentId) {
+    if (!app.revealAgentView(machineId, agentId, preferredSwarmId: tabId)) {
+      unawaited(
+        app.openAgentFromDial(machineId, agentId, intent: AttachIntent.person),
+      );
+    }
+  }
+
+  return showTerminalPrompt<void>(
+    context,
+    builder: (dialog) => AgentMessagesView(
+      controller: app.agentMessages,
+      tabId: tabId,
+      tabName: tabName,
+      load: () => app.readAgentMessages(tabId),
+      onClose: () => Navigator.pop(dialog),
+      onOpen: (recipient) {
+        Navigator.pop(dialog);
+        reveal(recipient.machineId, recipient.agentId);
+      },
+      app: app,
+      initialTab: initialTab,
+      onOpenPane: (machineId, agentId) {
+        Navigator.pop(dialog);
+        reveal(machineId, agentId);
+      },
+      onOpenSettings: () {
+        Navigator.pop(dialog);
         unawaited(
-          app.openAgentFromDial(
-            recipient.machineId,
-            recipient.agentId,
-            intent: AttachIntent.person,
+          showSettingsScreen(
+            context,
+            app,
+            initialSection: SettingsSection.experimental,
+            source: 'agent-messages',
           ),
         );
-      }
-    },
-  ),
-);
+      },
+    ),
+  );
+}
 
 class AgentMessagesView extends StatefulWidget {
   const AgentMessagesView({
@@ -54,7 +90,19 @@ class AgentMessagesView extends StatefulWidget {
     required this.load,
     required this.onClose,
     required this.onOpen,
+    this.app,
+    this.initialTab = AgentMessagesTab.messages,
+    this.onOpenPane,
+    this.onOpenSettings,
   });
+
+  /// Set when the panel can show a shared tab's People and Tasks.
+  final AppNotifier? app;
+  final AgentMessagesTab initialTab;
+
+  /// A Tasks assignee: the pane of this roster harness.
+  final void Function(String machineId, String agentId)? onOpenPane;
+  final VoidCallback? onOpenSettings;
 
   final AgentMessagesController controller;
   final String tabId, tabName;
@@ -73,19 +121,68 @@ class _AgentMessagesViewState extends State<AgentMessagesView> {
   bool _loading = false, _again = false;
   late int _traffic = widget.controller.trafficFor(widget.tabId);
   final _newest = FocusNode(debugLabel: 'Newest agent message');
+  late AgentMessagesTab _tab = widget.initialTab;
+  final _pills = {
+    for (final t in AgentMessagesTab.values)
+      t: FocusNode(debugLabel: 'Agent Messages ${t.label}'),
+  };
+  final _tasks = GlobalKey<SharedTabTasksState>();
+  final _people = GlobalKey();
 
   @override
   void initState() {
     super.initState();
     widget.controller.addListener(_changed);
+    widget.app?.sharedTabs.addListener(_sharesChanged);
+    widget.app?.experimentalFeatures.addListener(_sharesChanged);
     unawaited(_read(focusNewest: true));
   }
 
   @override
   void dispose() {
     widget.controller.removeListener(_changed);
+    widget.app?.sharedTabs.removeListener(_sharesChanged);
+    widget.app?.experimentalFeatures.removeListener(_sharesChanged);
     _newest.dispose();
+    for (final node in _pills.values) {
+      node.dispose();
+    }
     super.dispose();
+  }
+
+  void _sharesChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _select(AgentMessagesTab tab) => setState(() => _tab = tab);
+
+  KeyEventResult _pillKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final step = switch (event.logicalKey) {
+      LogicalKeyboardKey.arrowLeft => -1,
+      LogicalKeyboardKey.arrowRight => 1,
+      _ => 0,
+    };
+    if (step == 0) return KeyEventResult.ignored;
+    final next = AgentMessagesTab.values.indexOf(_tab) + step;
+    if (next < 0 || next >= AgentMessagesTab.values.length) {
+      return KeyEventResult.handled;
+    }
+    final tab = AgentMessagesTab.values[next];
+    _select(tab);
+    _pills[tab]!.requestFocus();
+    return KeyEventResult.handled;
+  }
+
+  void _refresh() {
+    switch (_tab) {
+      case AgentMessagesTab.messages:
+        unawaited(_read());
+      case AgentMessagesTab.people:
+        unawaited(widget.app?.sharedTabs.refresh());
+      case AgentMessagesTab.tasks:
+        _tasks.currentState?.reload();
+    }
   }
 
   void _changed() {
@@ -133,12 +230,43 @@ class _AgentMessagesViewState extends State<AgentMessagesView> {
     final controller = widget.controller;
     final log = _log;
     final messages = log?.messages ?? const <AgentMessage>[];
+    final app = widget.app;
+    final shared = app?.sharedTabs.tabForDesk(widget.tabId);
+    final sharedState = app?.sharedTabs.state;
+    // Every tab with Agent Messages on has the panel; a shared tab adds the
+    // roster, an unshared one has its own harnesses and Invite People…, once
+    // the account's switch is on (final review I1). The panel itself is
+    // offered only where the daemon and backend support Agent Messages.
+    final panels =
+        app != null &&
+        (shared != null ||
+            (sharedState == SharedTabsState.ready && app.agentMessagesOn));
+    final tab = panels ? _tab : AgentMessagesTab.messages;
     final hint =
         '${terminalPromptHint(context, 'picker.next', '↓')} move · '
-        '${terminalPromptHint(context, 'picker.accept', '⏎')} open pane · '
+        '${terminalPromptHint(context, 'picker.accept', '⏎')} '
+        '${tab == AgentMessagesTab.tasks ? 'open issue' : 'open pane'} · '
         '${terminalPromptHint(context, 'picker.cancel', 'Esc')} close';
     final Widget body;
-    if (log == null) {
+    if (panels && tab == AgentMessagesTab.people) {
+      body = shared == null
+          ? TabPeople(key: _people, app: app, deskTabId: widget.tabId)
+          : SharedTabPeople(
+              key: _people,
+              app: app,
+              sharedTabId: shared.sharedTabId,
+              deskTabId: widget.tabId,
+            );
+    } else if (panels && tab == AgentMessagesTab.tasks) {
+      body = SharedTabTasks(
+        key: _tasks,
+        app: app,
+        sharedTabId: shared?.sharedTabId,
+        deskTabId: widget.tabId,
+        onOpenPane: (machineId, agentId) =>
+            widget.onOpenPane?.call(machineId, agentId),
+      );
+    } else if (log == null) {
       body = const SkeletonList(rows: 3, semanticsLabel: 'Loading messages');
     } else if (messages.isEmpty) {
       body = Padding(
@@ -174,7 +302,7 @@ class _AgentMessagesViewState extends State<AgentMessagesView> {
     }
     return TerminalPromptKeys(
       cancel: widget.onClose,
-      refresh: () => unawaited(_read()),
+      refresh: _refresh,
       child: DesktopChrome(
         child: Dialog(
           elevation: 0,
@@ -193,10 +321,72 @@ class _AgentMessagesViewState extends State<AgentMessagesView> {
                       title: '${widget.tabName} · Agent Messages',
                       onClose: widget.onClose,
                     ),
+                    if (panels)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+                        child: Focus(
+                          canRequestFocus: false,
+                          onKeyEvent: (node, event) => _pillKey(node, event),
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              for (final t in AgentMessagesTab.values)
+                                DesktopPill(
+                                  key: ValueKey('agent-messages-tab:${t.name}'),
+                                  label: t.label,
+                                  selected: tab == t,
+                                  focusNode: _pills[t],
+                                  onPressed: () => _select(t),
+                                ),
+                            ],
+                          ),
+                        ),
+                      )
+                    else if (sharedState == SharedTabsState.tooOld)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+                        child: widget.app == null
+                            ? Text(
+                                'Update Harness on this computer to share tabs.',
+                                key: const ValueKey('agent-messages-too-old'),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: DesktopChrome.metadata(),
+                              )
+                            : UpdateHarnessLine(widget.app!),
+                      )
+                    else if (sharedState == SharedTabsState.off)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+                        child: Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                'Sharing tabs needs Agent Messages.',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: DesktopChrome.metadata(),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            DesktopPill(
+                              key: const ValueKey('agent-messages-settings'),
+                              label: 'Settings ▸ Experimental',
+                              compact: true,
+                              quiet: true,
+                              onPressed: widget.onOpenSettings,
+                            ),
+                          ],
+                        ),
+                      ),
                     // A machine with a harness here that did not answer
                     // (offline, or gone from the tab) holds its own part of
                     // the log.
-                    if (log != null && log.reached && !log.complete)
+                    if (tab == AgentMessagesTab.messages &&
+                        log != null &&
+                        log.reached &&
+                        !log.complete)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
                         child: Text(

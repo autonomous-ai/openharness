@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'package:harness/agent_messages/shared_tabs.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/app_shell.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -16,6 +17,7 @@ import 'package:harness/auth/cli_login.dart';
 import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/bootstrap/environment_provisioner.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/core/test_run.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/settings/settings_screen.dart';
@@ -25,6 +27,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/widgets/setup_tour.dart';
 import 'package:harness/widgets/sign_in_step.dart';
+import 'package:harness/ws/ws_conn.dart';
 
 import '../test/support/capture.dart';
 import '../test/support/guest_app.dart';
@@ -277,6 +280,96 @@ Future<void> _mount(WidgetTester tester, AppNotifier app) async {
       ),
     ),
   );
+}
+
+/// This computer's daemon answering `agent_messages` `shares` (1c) with one
+/// roster: [tabId] (set once the app exists), owned by this account and shared from this computer, with
+/// [harnesses] harnesses. Everything else answers nothing.
+class _SharesDaemon extends WsConn {
+  _SharesDaemon({required this.harnesses})
+    : super(
+        wsBaseUrl: 'ws://fixture.invalid',
+        autonomousEnv: 'test',
+        machineId: 'm',
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+      );
+
+  String tabId = '';
+  final int harnesses;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (type != 'agent_messages' || payload['action'] != 'shares') {
+      return const {};
+    }
+    const me = {'accountId': 'me', 'email': 'me@example.com', 'machineId': 'm'};
+    return {
+      'api': 2,
+      'me': me,
+      'rosters': [
+        {
+          'sharedTabId': 'st-1',
+          'tabId': tabId,
+          'version': 1,
+          'name': 'app',
+          'owner': {...me, 'machinePublicKey': 'k'},
+          'leader': null,
+          'members': [],
+          'invites': [],
+          'harnesses': [
+            for (var i = 0; i < harnesses; i++)
+              {
+                'accountId': 'me',
+                'machineId': 'm',
+                'agentId': 'h$i',
+                'name': 'h$i',
+                'engine': 'claude',
+              },
+          ],
+        },
+      ],
+      'invites': [],
+      'alerts': [],
+      'pending': [],
+      'notices': [],
+      'untrusted': [],
+      'activity': [],
+    };
+  }
+}
+
+/// A signed-in computer whose daemon ([daemon]) is this one: a workspace
+/// with one tab, "app".
+class _SharedApp extends AppNotifier {
+  _SharedApp(WsConn daemon)
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(storage: MemoryStore()),
+        configStore: null,
+        connectionForTest: (_) => daemon,
+      ) {
+    const machine = Machine(
+      machineId: 'm',
+      authMode: MachineAuthMode.remote,
+      name: 'Fixture',
+    );
+    machines = [machine];
+    machineStates['m'] = MachineState(machine)
+      ..nodeOnline = true
+      ..localOnly = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..agents = [const Agent(id: 'a', name: 'h0', terminalAvailable: true)];
+    rememberOpenedHarness('m', 'a');
+    renameSwarm(activeSwarmId, 'app');
+  }
 }
 
 final _email = find.byKey(const Key('sign-in-step-email'));
@@ -593,6 +686,55 @@ void main() {
       expect(find.text('Sign in to continue.'), findsOneWidget);
       await _shot(tester, '9-after-sign-out');
       expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  testWidgets(
+    'native: a shared tab says so on its select button — "Shared tab, 3 '
+    'harnesses" — and keeps its "Select <name>" label',
+    (tester) async {
+      final daemon = _SharesDaemon(harnesses: 3);
+      final shared = _SharedApp(daemon);
+      addTearDown(shared.dispose);
+      // The roster names the desk tab it shares: this app's active tab.
+      daemon.tabId = shared.activeSwarmId;
+      final projects = SwarmProjectStore();
+      addTearDown(projects.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: SwarmScreen(
+            notifier: shared,
+            nativeTabs: true,
+            projectStore: projects,
+          ),
+        ),
+      );
+      await shared.sharedTabs.refresh();
+      await _until(
+        tester,
+        () => shared.sharedTabs.state == SharedTabsState.ready,
+        reason: 'the daemon\'s shares are read',
+      );
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(tester.takeException(), isNull);
+
+      final reachable = await _rowReachable(tester);
+      await _shot(tester, '10-shared-tab-mark');
+      if (!reachable) {
+        // Nothing outside the app can read AppKit's row: its help line is
+        // `swarm_titlebar_checks.swift`'s then (C1), and this run checks
+        // only that the app came up shared.
+        debugPrint('Native row not reachable: the help line is not read.');
+      } else {
+        final buttons = await _nativeButtons(tester);
+        final select = buttons['Select app'];
+        expect(select, isNotNull, reason: '${buttons.keys}');
+        expect(select!['help'], 'Shared tab, 3 harnesses');
+      }
       await tester.pumpWidget(const SizedBox());
     },
     timeout: const Timeout(Duration(minutes: 3)),

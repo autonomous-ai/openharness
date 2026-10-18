@@ -32,3 +32,8 @@ describe('request bodies', () => {
     expect(JSON.parse(await new Response(unpacked).text())).toEqual(body);
   });
 });
+
+it('says the community is unavailable when a proxy answers with an HTML error page', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>502 Bad Gateway</html>', { status: 502, headers: { 'Content-Type': 'text/html' } })));
+  await expect(communityRequest('harnesses')).rejects.toMatchObject({ status: 502, message: 'The community is temporarily unavailable. Try again.' });
+});

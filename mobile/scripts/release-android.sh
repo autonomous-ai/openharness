@@ -25,6 +25,27 @@ if [[ ! -f "$SIGNING" ]]; then
 fi
 prop() { sed -n "s/^$1=//p" "$SIGNING" | head -1; }
 
+# keytool from a real JDK. macOS's /usr/bin/keytool is a stub that fails without a system Java, and
+# a Mac set up for Flutter often has none: Gradle builds with Android Studio's bundled one instead.
+KEYTOOL="keytool"
+for jdk in "${JAVA_HOME:-}" "/Applications/Android Studio.app/Contents/jbr/Contents/Home"; do
+  if [[ -n "$jdk" && -x "$jdk/bin/keytool" ]]; then
+    KEYTOOL="$jdk/bin/keytool"
+    break
+  fi
+done
+
+# Read the upload key's fingerprint BEFORE the build, so a wrong path or password stops here rather
+# than after five minutes of Gradle.
+fingerprint() { sed -n 's/^.*SHA256: *//p' | head -1; }
+EXPECTED="$("$KEYTOOL" -list -v -keystore "$(prop storeFile)" -alias "$(prop keyAlias)" \
+  -storepass "$(prop storePassword)" | fingerprint || true)"
+if [[ -z "$EXPECTED" ]]; then
+  echo "cannot read the upload key: check storeFile, keyAlias and storePassword in $SIGNING" >&2
+  echo "(keytool: $KEYTOOL)" >&2
+  exit 1
+fi
+
 VERSION="$(sed -n 's/^version: *//p' pubspec.yaml | head -1)"
 echo "==> version ${VERSION%%+*}, versionCode ${VERSION##*+}"
 echo "    Play must not already hold versionCode ${VERSION##*+}."
@@ -36,10 +57,7 @@ AAB="build/app/outputs/bundle/release/app-release.aab"
 [[ -f "$AAB" ]] || { echo "no bundle at $AAB" >&2; exit 1; }
 
 # The fallback to the debug key is silent inside Gradle, so ask the bundle who signed it.
-fingerprint() { sed -n 's/^.*SHA256: *//p' | head -1; }
-SIGNED_BY="$(keytool -printcert -jarfile "$AAB" | fingerprint)"
-EXPECTED="$(keytool -list -v -keystore "$(prop storeFile)" -alias "$(prop keyAlias)" \
-  -storepass "$(prop storePassword)" | fingerprint)"
+SIGNED_BY="$("$KEYTOOL" -printcert -jarfile "$AAB" | fingerprint || true)"
 if [[ -z "$SIGNED_BY" || "$SIGNED_BY" != "$EXPECTED" ]]; then
   echo "!!  $AAB is not signed with the upload key (signer: ${SIGNED_BY:-none})." >&2
   echo "    Play would refuse it. Check $SIGNING." >&2

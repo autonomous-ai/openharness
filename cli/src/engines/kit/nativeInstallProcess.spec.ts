@@ -71,6 +71,27 @@ it('executes the real installation wrapper once without starting the engine or d
   expect(await controller().ensure('opencode', chosen, environment, 'request', () => true)).toEqual({ complete: true })
 }, 15_000)
 
+it('dispatches a claim saved before a reboot renumbered the disk', async () => {
+  const chosen = recipe(installCode())
+  await controller().ensure('opencode', chosen, environment, 'request', () => true)
+  // The core died after saving the claim and before its dispatch; the restart gave the volume another st_dev.
+  const file = join(directory, '00000000.json'), renumber = (saved: string | null) => saved && saved.replace(/^\d+:/, '1:')
+  rmSync(`${directory}.00000000.dispatch`); rmSync(`${file}.dispatch`)
+  const claim = JSON.parse(readFileSync(file, 'utf8'))
+  for (const route of claim.routes) {
+    route.identity = renumber(route.identity)
+    if (route.alias) route.alias.version = renumber(route.alias.version)
+  }
+  writeFileSync(file, JSON.stringify(claim))
+  const authority = JSON.parse(readFileSync(`${directory}.authority`, 'utf8'))
+  writeFileSync(`${directory}.authority`, JSON.stringify({ ...authority, directory: renumber(authority.directory) }))
+  const restarted = controller()
+  expect(await restarted.ensure('opencode', chosen, environment, 'request', () => true)).toMatchObject({ running: true })
+  const [, dispatched, hash] = restarted.dispatch.mock.calls[0]
+  expect(await run(dispatched, hash)).toMatchObject({ code: 0 })
+  expect(await controller().ensure('opencode', chosen, environment, 'request', () => true)).toEqual({ complete: true })
+}, 15_000)
+
 it('waits for a private live Desktop download marker before using its installation', async () => {
   mkdirSync(join(home, '.harness', 'run'), { recursive: true })
   const downloader = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)', 'harness-download-private-fixture'], { stdio: 'ignore' })

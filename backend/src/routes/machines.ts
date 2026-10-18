@@ -15,6 +15,7 @@ import { storedAutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import { env } from '../config/env.js'
 import { probeProvider, ProviderProbeError } from '../lib/providerProbe.js'
 import { normalizeComputerId } from '../lib/deviceAuth.js'
+import { machinesSharedWith } from '../lib/machineAccess.js'
 
 const createBody = z.object({
   // Defaults to the caller; admins may provision for another user.
@@ -295,10 +296,19 @@ export async function machineRoutes(app: FastifyInstance): Promise<void> {
     },
   )
 
-  // List the caller's agent(s).
+  // List the caller's agent(s), and beside them the machines other accounts share with the caller
+  // (lib/machineAccess.ts). Those stay out of `machines`, which every client and daemon reads as the
+  // account's own; a client that knows them reads `sharedMachines`. Left out when they could not be
+  // read, so a client keeps the ones it had rather than dropping them for a moment.
   app.get('/api/machines', async (req, reply) => {
-    const bindings = await machineService.listForUser(req.user!.sub, req.user!.autonomousEnv)
-    return sendSuccess(reply, { machines: bindings })
+    const [bindings, shared] = await Promise.all([
+      machineService.listForUser(req.user!.sub, req.user!.autonomousEnv),
+      machinesSharedWith(req.user!).catch((err: unknown) => {
+        logger.warn('shared machines could not be listed', { userId: req.user!.sub, error: String(err) })
+        return undefined
+      }),
+    ])
+    return sendSuccess(reply, { machines: bindings, ...(shared ? { sharedMachines: shared } : {}) })
   })
 
   // Canonical Remote-machine lookup for an authenticated Harness CLI. The computer id is stable

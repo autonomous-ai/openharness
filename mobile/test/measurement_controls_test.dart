@@ -82,7 +82,9 @@ void main() {
             picture.dispose();
           });
         }
-        await tester.tap(find.byType(Checkbox));
+        // What is shared is said in ⓘ's tooltip, not under the line.
+        expect(find.byTooltip(SetupUsageChoice.detail), findsOneWidget);
+        await tester.tap(find.text(SetupUsageChoice.title));
         await tester.pumpAndSettle();
         expect(usage.signedOutSharing, isTrue);
         await tester.ensureVisible(find.text('Partly completed'));

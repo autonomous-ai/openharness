@@ -30,6 +30,7 @@ class AuthSession {
   static const _env = 'auth_autonomous_env';
   static const _expiresAt = 'auth_access_token_expires_at';
   static const _issuer = 'auth_session_issuer';
+  static const _ssoClientId = 'auth_sso_client_id';
 
   AuthSession({LocalKeyValueStore? storage})
     : _storage = storage ?? HarnessFileStore.shared;
@@ -42,6 +43,7 @@ class AuthSession {
     String autonomousEnv = 'prod',
     int? expiresIn,
     SessionIssuer issuer = SessionIssuer.sso,
+    String? ssoClientId,
   }) async {
     await _storage.write(_access, token);
     await _storage.write(_issuer, issuer.name);
@@ -51,6 +53,12 @@ class AuthSession {
       await _storage.delete(_refresh);
     }
     await _storage.write(_env, autonomousEnv);
+    // Belongs to this sign-in alone: one that names no client must not inherit the last one's.
+    if (ssoClientId != null && ssoClientId.isNotEmpty) {
+      await _storage.write(_ssoClientId, ssoClientId);
+    } else {
+      await _storage.delete(_ssoClientId);
+    }
     await _saveExpiry(expiresIn);
   }
 
@@ -73,6 +81,11 @@ class AuthSession {
   Future<String?> accessToken() => _storage.read(_access);
   Future<String?> refreshToken() => _storage.read(_refresh);
   Future<String> autonomousEnv() async => (await _storage.read(_env)) ?? 'prod';
+
+  /// The auth-service client this session was issued to, which a refresh names again. Null is
+  /// the backend's configured one: every session saved before the clients were split, and any
+  /// session that did not come from the SSO page.
+  Future<String?> ssoClientId() => _storage.read(_ssoClientId);
 
   /// A session saved before this was recorded came from the SSO flow — the only
   /// one there was.
@@ -126,5 +139,6 @@ class AuthSession {
     await _storage.delete(_env);
     await _storage.delete(_expiresAt);
     await _storage.delete(_issuer);
+    await _storage.delete(_ssoClientId);
   }
 }

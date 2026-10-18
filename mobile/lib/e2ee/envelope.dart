@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:typed_data';
 
+import '../core/test_run.dart';
 import 'bytes.dart';
 import 'primitives.dart';
 
@@ -59,6 +61,16 @@ const Set<String> encryptedDownTypes = {
   'cloud_agents',
   // The trust-group roster swap (`viewer/group_sync.dart`): the keys every member trusts.
   'group_sync',
+  // Connected services (`phone/connectors_page.dart`, CLI services/connectors.ts): the sign-in's
+  // redirect, with its code, rides `callback`. A `MACHINE_REQUESTS` type in the CLI: sent in the clear
+  // the machine refused it ("E2EE required"), which read as no computer online.
+  'connectors',
+  // A sign-in this phone caught for a page a harness's program opened (`AppNotifier.browserCallback`): it
+  // carries the code. A `MACHINE_REQUESTS` type in the CLI.
+  'browser_callback',
+  // A Harness OS computer managed from here (`AppNotifier.osDevice`, CLI services/osDevice.ts): its
+  // update, and its Wi-Fi with the password. A `MACHINE_REQUESTS` type in the CLI.
+  'os_device',
   'codex_profiles_list',
   'codex_profile_link',
   // Asks the machine to read its OWN agent accounts' usage (cli/src/lib/accountUsage.ts). Missing
@@ -180,6 +192,37 @@ Map<String, dynamic>? unwrapPayload(
     sealed,
   );
   return clear == null ? null : jsonObjectOf(clear);
+}
+
+/// From this many characters of `ct` an envelope is opened off the UI isolate ([unwrapPayloadOffThread]).
+/// Below it — every event, every small reply — spawning an isolate costs more than the open.
+const int unwrapOffThreadFrom = 48 * 1024;
+
+/// Whether [env]'s ciphertext is large enough to open off the UI isolate.
+bool opensOffThread(Object? env) {
+  if (kUnderTest || env is! Map) return false;
+  final ct = env['ct'];
+  return ct is String && ct.length >= unwrapOffThreadFrom;
+}
+
+/// [unwrapPayload] on a background isolate: base64, ChaCha20-Poly1305 and the JSON of a large
+/// payload — a machine's whole agent list, a transcript, a file — are pure Dart, and done on the UI
+/// isolate they stalled the screen for as long as they took. A pure function of its arguments, so
+/// the isolate answers exactly what this one would; one that will not start is the work done here.
+Future<Map<String, dynamic>?> unwrapPayloadOffThread(
+  List<int> key,
+  Map<String, dynamic> env,
+  String frameType,
+  String? dbSessionId,
+) async {
+  final keyBytes = Uint8List.fromList(key);
+  try {
+    return await Isolate.run(
+      () => unwrapPayload(keyBytes, env, frameType, dbSessionId),
+    );
+  } on Object {
+    return unwrapPayload(key, env, frameType, dbSessionId);
+  }
 }
 
 bool isWrapped(Object? payload) =>

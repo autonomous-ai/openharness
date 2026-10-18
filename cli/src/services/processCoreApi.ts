@@ -14,7 +14,7 @@ import { usageTarget, usageTargetKey, usageSnapshot, validUsage, validUsageTarge
  * each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
  * name, whether its terminal is there and its harness's viewer.
  */
-import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TERMINALS_OFF, WIFI_OFF, type CloudCore, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
+import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type CloudCore, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { turnsLink } from './turnsLink.js'
@@ -70,6 +70,10 @@ function keyAnswer(answer: Payload): string {
 export const UNASKED = {
   machine: { id: () => '', computerId: () => '', name: () => '' },
   activityText: async (): Promise<string | null> => null,
+  /** What only Agent Messages asks: whether harnesses work (its own process asks the core). */
+  activity: async (): Promise<Record<string, 'working' | 'idle' | 'unknown'>> => ({}),
+  /** What only Agent Messages asks: one line on what each harness does. */
+  summaries: async (): Promise<Record<string, string>> => ({}),
   account: { signedIn: () => false, environment: () => '', machines: async () => ({ status: 503, body: {} }) },
   clients: { sendLocal: () => {}, sendToWindow: () => false, hasWindow: () => false, devicesChanged: () => {}, dialWatching: () => {}, turnCard: () => {}, turnSummary: () => {} },
   wifi: WIFI_OFF,
@@ -78,6 +82,8 @@ export const UNASKED = {
 } satisfies {
   machine: CoreApi['machine']
   activityText: CoreApi['agents']['activityText']
+  activity: CoreApi['agents']['activity']
+  summaries: CoreApi['agents']['summaries']
   account: Pick<CoreApi['account'], 'signedIn' | 'environment' | 'machines'>
   clients: Pick<CoreApi['clients'], 'sendLocal' | 'sendToWindow' | 'hasWindow' | 'devicesChanged' | 'dialWatching' | 'turnCard' | 'turnSummary'>
   wifi: CoreApi['wifi']
@@ -121,6 +127,20 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       },
       dsh: (session) => (session as ShownAgent).dshContext ?? null,
       activityText: UNASKED.activityText,
+      // The core's answer, as the core gives it: the working state of each agent asked about (core/messagesLink.ts `activity`).
+      activity: async (agentIds) => {
+        const answer = await ask?.('activity', { agentIds }).catch(() => null)
+        const states = answer?.activity
+        if (!states || typeof states !== 'object') return {}
+        return Object.fromEntries(Object.entries(states).filter((e): e is [string, 'working' | 'idle' | 'unknown'] => e[1] === 'working' || e[1] === 'idle' || e[1] === 'unknown'))
+      },
+      // The same query, asked for the one-line summaries too. A core from before them answers without `summaries`: none.
+      summaries: async (agentIds) => {
+        const answer = await ask?.('activity', { agentIds, summaries: true }).catch(() => null)
+        const lines = answer?.summaries
+        if (!lines || typeof lines !== 'object') return {}
+        return Object.fromEntries(Object.entries(lines).filter((e): e is [string, string] => typeof e[1] === 'string' && e[1] !== ''))
+      },
     },
     turns: {
       send: () => {},
@@ -141,6 +161,9 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
         publicKey: async () => keyAnswer(await ask('observer_key', { op: 'public' })),
         signWelcome: async (machineId, shareId, peer, ephemeral) => keyAnswer(await ask('observer_key', { op: 'sign', machineId, shareId, peer, ephemeral })),
       } : OBSERVER_KEY_OFF,
+      // Shared tabs' keys and relay: Agent Messages asks the core for them (services/messagesProcess.ts); no other holds one.
+      tabKey: TAB_KEY_OFF,
+      tabRelay: TAB_RELAY_OFF,
       // The connectors service asks the core for these itself (core/connectorsQueries.ts); no other seals.
       connectorVault: CONNECTOR_VAULT_OFF,
       privateGridName: async () => null,
@@ -151,6 +174,13 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
         return typeof answer.status === 'number' && answer.body && typeof answer.body === 'object'
           ? { status: answer.status, body: answer.body as Payload }
           : { status: 502, body: { error: typeof answer.error === 'string' ? answer.error : 'BACKEND_UNREACHABLE' } }
+      },
+      // The account signed in here, asked of the core: Share derives its tabs' observers for it (core/experimentQueries.ts
+      // `account`), and Agent Messages asks its own link (services/messagesProcess.ts). A core that cannot say: none.
+      identity: async () => {
+        const answer = await (ask?.('account', {}) ?? Promise.reject(new Error('no core to ask'))).catch(() => null)
+        return typeof answer?.accountId === 'string' && answer.accountId && typeof answer.email === 'string' && answer.email
+          ? { accountId: answer.accountId, email: answer.email } : null
       },
       onNotice: (listener) => view.onNotice?.(listener) ?? (() => {}),
       ...UNASKED.account,

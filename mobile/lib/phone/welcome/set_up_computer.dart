@@ -1,394 +1,315 @@
-import 'dart:async';
-import 'dart:convert';
+import 'dart:math' as math;
 
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:share_plus/share_plus.dart';
-
-import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import '../tty.dart';
 import '../tty_controls.dart';
-import 'how_it_works_video.dart';
+import 'onboarding_copy.dart';
+import 'scan_to_connect.dart' show kAddPhoneWhere;
+import 'your_computer.dart' show GoAddressButton;
 
-/// Where the desktop app is downloaded, for someone typing it on the computer — and every row's
-/// link when the release manifest cannot be read.
-const kDesktopDownloadUrl = 'https://harness.autonomous.ai/desktop';
+/// The steps on a computer, as a timeline ([StepsTimeline]): under "On your computer, go to"'s link
+/// (`your_computer.dart`) — [goToSteps] — and under the camera opened from Computers —
+/// [computerSteps], which bring up Add Phone's QR code.
+///
+/// ⚠️ This file used to be **Connect your computer**, the page a phone with no computer stood on
+/// (signed out, signed in with none, and Computers ▸ Set up another computer). The onboarding
+/// replaced it (`docs/research/2026-10-11-phone-onboarding`): signed out, the welcome signs in
+/// (`phone_welcome.dart`); with no computer, "On your computer, go to" (`your_computer.dart`). Only
+/// the steps are left, for that screen and the camera.
 
-/// The desktop release manifest: the one the website's download menu and the desktop app's own
-/// updater read, so each row below sends the current build of its file.
-const kDesktopManifestUrl =
-    'https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/metadata.json';
+/// One step: what to do, and a quieter line under it when one is needed — its lines split on `\n`.
+typedef ComputerStep = ({String title, String? note});
 
-/// The `harness` command alone, for a computer with no desktop — the website menu's CLI row.
-const kCliInstall =
-    'curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash';
+/// The first step on the computer, for the camera: ②'s headline and, under it, ②'s address — as
+/// words in the step, not ②'s green button ([ComputerSteps] hands it to [StepsTimeline.link]) —
+/// then installing Harness, in the words ② says them in (owner, 2026-10-15). The address is the
+/// download for whatever computer opens it, and a tap sends it there.
+///
+/// ⚠️ **"On your computer" is said once on a screen** (owner, 2026-10-12: three times on one screen
+/// read as noise) — by the title over ②'s steps ("On your computer, go to"), and under the camera
+/// by this first step: the camera has no title of its own, and a step on its own, on a phone
+/// already in Harness, read as being about this phone.
+const ComputerStep _getHarness = (
+  title: OnboardingCopy.goToHeadline,
+  note: OnboardingCopy.installStep,
+);
 
-/// One row of the website's download menu: its manifest key, what it says, and its icon.
-typedef DesktopPlatform = ({
-  String key,
-  String label,
-  String note,
-  IconData icon,
-});
-
-/// The website's download menu (autonomous.ai/harness-app), row for row.
-const kDesktopPlatforms = <DesktopPlatform>[
-  (
-    key: 'desktop-macos-arm64-dmg',
-    label: 'macOS',
-    note: 'Apple Silicon',
-    icon: Icons.apple,
-  ),
-  (key: 'desktop-macos-dmg', label: 'macOS', note: 'Intel', icon: Icons.apple),
-  (
-    key: 'desktop-linux-x64',
-    label: 'Linux',
-    note: 'Intel/AMD · Ubuntu, Omarchy and more',
-    icon: LucideIcons.monitor300,
-  ),
-  (
-    key: 'desktop-linux-arm64',
-    label: 'Linux',
-    note: 'ARM · Raspberry Pi, ARM servers',
-    icon: LucideIcons.monitor300,
-  ),
+/// The steps under "On your computer, go to"'s link: get Harness from it, and sign in — with
+/// [account], the phone's, when there is one to name. Signed in with this account, the computer
+/// joins it and the screen moves on by itself: no Add Phone, no code to scan (owner, 2026-10-12).
+/// The sign-in step is the camera's, word for word.
+List<ComputerStep> goToSteps(String? account) => [
+  (title: OnboardingCopy.installStep, note: null),
+  _signIn(account),
 ];
 
-/// Manifest key → the file's URL. Empty when the manifest cannot be read.
-typedef DesktopDownloadsLoader = Future<Map<String, String>> Function();
-
-Future<Map<String, String>> loadDesktopDownloads({Dio? dio}) async {
-  try {
-    final res =
-        await (dio ??
-                Dio(
-                  BaseOptions(
-                    connectTimeout: const Duration(seconds: 10),
-                    receiveTimeout: const Duration(seconds: 10),
-                  ),
-                ))
-            .get<Object?>(kDesktopManifestUrl);
-    final raw = res.data;
-    final data = raw is String ? jsonDecode(raw) : raw;
-    if (data is! Map) return const {};
-    return {
-      for (final MapEntry(:key, :value) in data.entries)
-        if (key is String && value is Map && value['url'] is String)
-          key: value['url'] as String,
-    };
-  } catch (_) {
-    return const {};
-  }
-}
-
-/// **Not yet — set it up**: getting Harness onto the computer, from the phone — the website's
-/// download menu, where a row SENDS its file (AirDrop to the Mac beside you, or Messages or email
-/// to yourself) because a phone cannot install it.
+/// The steps under the camera that reads Add Phone's code — the welcome's Scan QR from computer,
+/// and Computers' "Or scan the QR code on your computer" — where the page it came from says none
+/// of them ([ScanToConnectPage.steps]): get Harness on the computer, sign in, then Add Phone and
+/// where it is.
 ///
-/// ```
-/// ‹
-/// Get Harness for
-/// your computer
-///
-/// Send it to your computer:
-/// ┌──────────────────────────────────────┐
-/// │  macOS                           ⇪  │
-/// │  Apple Silicon                       │
-/// │  macOS                           ⇪  │
-/// │  Intel                               │
-/// │  Linux                           ⇪  │
-/// │  Intel/AMD · Ubuntu, Omarchy and more│
-/// │  Linux                           ⇪  │
-/// │  ARM · Raspberry Pi, ARM servers     │
-/// │  CLI                             ⧉  │
-/// │  curl -fsSL …/install.sh | bash      │
-/// └──────────────────────────────────────┘
-/// or open harness.autonomous.ai/desktop there.
-///
-/// Then open it, and scan the code it shows.
-/// Scan to connect ›
-/// ```
-class SetUpComputerPage extends StatefulWidget {
-  const SetUpComputerPage({
-    super.key,
-    required this.onScan,
-    this.onBack,
-    this.onTrySample,
-    this.status,
-    this.trailing = const [],
-    this.loadDownloads,
-  });
+/// ⚠️ **One set for the camera (owner, 2026-10-12).** It used to be two: signed out "Click Add
+/// Phone ③ Scan the QR code", signed in "Sign in on your computer ③ Not showing up? Click Add
+/// Phone" — steps that changed under one button, and on the camera "Not showing up?" was asked of
+/// somebody already scanning. Both halves hold either way: Add Phone asks a computer that is not
+/// signed in to sign in before it shows a code, and a computer that turns up by itself is paired
+/// just as well by its code. The scan is the camera itself, so it is not a step of its own.
+/// Three steps (owner, 2026-10-14): somebody who has never had Harness on the computer starts from
+/// the download, and signing in is back between it and Add Phone — ②'s sign-in, word for word,
+/// with [account] when there is one to name.
+List<ComputerStep> computerSteps(String? account) => [
+  _getHarness,
+  _signIn(account),
+  (title: 'Click "Add Phone"', note: kAddPhoneWhere),
+];
 
-  /// Back to the first screen's other answer, once the app is on the computer — or, signed in,
-  /// the scan that pairs this phone with the computer just set up.
-  final VoidCallback onScan;
+/// Signing in on the computer — with [account], the phone's, when there is one to name. Null signed
+/// out, where a scan signs the phone in to whichever account the computer has.
+ComputerStep _signIn(String? account) =>
+    (title: 'Sign in', note: account == null ? null : 'Use $account');
 
-  /// Null draws no back button: the page is a home screen, not a pushed one.
-  final VoidCallback? onBack;
+/// Over the camera's steps: what they are for — how the code comes up on the computer, so they
+/// are not read as more to do on the phone. The camera above them is what says to scan.
+const _howToGetCode = 'How to get the QR code';
 
-  /// Opens the offline sample before the user sets up a computer.
-  final VoidCallback? onTrySample;
+/// The steps on the computer under the camera ([computerSteps]) as a [StepsTimeline], under a
+/// quiet line that says what they are for — with ②'s address, as words, under the first.
+class ComputerSteps extends StatelessWidget {
+  const ComputerSteps({super.key, required this.account});
 
-  /// A line under the title about what is going on — signed in, the watch for the computer.
-  final Widget? status;
-
-  /// Rows after everything else — signed in, the sample to try while waiting.
-  final List<Widget> trailing;
-
-  /// Stands in for the manifest in tests. Null reads [kDesktopManifestUrl].
-  final DesktopDownloadsLoader? loadDownloads;
-
-  @override
-  State<SetUpComputerPage> createState() => _SetUpComputerPageState();
-}
-
-class _SetUpComputerPageState extends State<SetUpComputerPage> {
-  bool _copied = false;
-  Timer? _copiedTimer;
-
-  /// Read as the page opens, so a tap shares at once; a tap before it lands waits for it.
-  late final Future<Map<String, String>> _downloads =
-      (widget.loadDownloads ?? loadDesktopDownloads)();
-
-  @override
-  void dispose() {
-    _copiedTimer?.cancel();
-    super.dispose();
-  }
-
-  /// The share sheet with [platform]'s file: AirDrop straight to the computer beside you, or
-  /// Messages or email to yourself. Anchored to the row for iPad, where the sheet is a popover.
-  Future<void> _send(BuildContext row, DesktopPlatform platform) async {
-    final box = row.findRenderObject() as RenderBox?;
-    final origin = box == null
-        ? null
-        : box.localToGlobal(Offset.zero) & box.size;
-    final url = (await _downloads)[platform.key] ?? kDesktopDownloadUrl;
-    await SharePlus.instance.share(
-      ShareParams(
-        uri: Uri.parse(url),
-        subject: 'Harness for ${platform.label} (${platform.note})',
-        sharePositionOrigin: origin,
-      ),
-    );
-  }
-
-  void _copy() {
-    unawaited(Clipboard.setData(const ClipboardData(text: kCliInstall)));
-    HapticFeedback.selectionClick();
-    _copiedTimer?.cancel();
-    setState(() => _copied = true);
-    _copiedTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _copied = false);
-    });
-  }
+  /// This phone's account, named in the sign-in step.
+  final String? account;
 
   @override
   Widget build(BuildContext context) {
-    AppTheme.watch(context);
     final tty = Tty.of(context);
-    final faint = tty.style(color: tty.faint, size: TtySize.meta);
     return Column(
+      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (widget.onBack case final onBack?)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TtyBackButton(onPressed: onBack),
-          )
-        else
-          const SizedBox(height: 44),
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(Tty.origin, 8, Tty.origin, 24),
-            children: [
-              Text(
-                'Get Harness for\nyour computer',
-                style: tty
-                    .style(size: TtySize.display, weight: FontWeight.w600)
-                    .copyWith(height: 34 / 28, letterSpacing: -0.6),
-              ),
-              if (widget.onTrySample case final onTrySample?) ...[
-                const SizedBox(height: 16),
-                TtyTap(
-                  onTap: onTrySample,
-                  semanticsLabel:
-                      'Try the sample. No account or computer needed.',
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        TtyText('Try the sample ›', size: TtySize.title),
-                        const SizedBox(height: 4),
-                        Text('No account or computer needed.', style: faint),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-              if (widget.status case final status?) ...[
-                const SizedBox(height: 18),
-                status,
-              ],
-              const SizedBox(height: 28),
-              Text('Send it to your computer:', style: faint),
-              const SizedBox(height: 8),
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  color: ttyRaised(tty),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Column(
-                    children: [
-                      for (final platform in kDesktopPlatforms)
-                        Builder(
-                          builder: (row) => _DownloadRow(
-                            icon: platform.icon,
-                            label: platform.label,
-                            note: platform.note,
-                            action: LucideIcons.share300,
-                            actionLabel: 'Send',
-                            onTap: () => unawaited(_send(row, platform)),
-                          ),
-                        ),
-                      _DownloadRow(
-                        icon: LucideIcons.squareTerminal300,
-                        label: 'CLI',
-                        note: _copied
-                            ? 'copied'
-                            : 'curl -fsSL …/install.sh | bash',
-                        noteColor: _copied ? tty.green : null,
-                        action: LucideIcons.copy300,
-                        actionLabel: 'Copy',
-                        onTap: _copy,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text.rich(
-                TextSpan(
-                  children: [
-                    const TextSpan(text: 'or open '),
-                    TextSpan(
-                      text: kDesktopDownloadUrl.replaceFirst('https://', ''),
-                      style: tty.style(size: TtySize.meta),
-                    ),
-                    const TextSpan(text: ' there.'),
-                  ],
-                ),
-                style: faint,
-              ),
-              const SizedBox(height: 28),
-              Text('Then open it, and scan the code it shows.', style: faint),
-              const SizedBox(height: 4),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Transform.translate(
-                  // The button's own inset, so its words sit on the gutter.
-                  offset: const Offset(-12, 0),
-                  child: TtyTextButton(
-                    label: 'Scan to connect ›',
-                    onPressed: widget.onScan,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 32),
-              // Not at the computer: what it is like, in 30 seconds.
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Transform.translate(
-                  offset: const Offset(-12, 0),
-                  child: TtyTextButton(
-                    label: 'See how it works ▶',
-                    color: tty.faint,
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const HowItWorksVideoPage(),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              ...widget.trailing,
-            ],
+        Semantics(
+          header: true,
+          child: Text(
+            _howToGetCode,
+            style: tty.style(color: tty.faint, size: TtySize.meta),
           ),
+        ),
+        const SizedBox(height: 12),
+        StepsTimeline(
+          steps: computerSteps(account),
+          link: const GoAddressButton(inline: true),
         ),
       ],
     );
   }
 }
 
-/// One row of the menu: its icon, what it is and for which computer, and what a tap does.
-class _DownloadRow extends StatelessWidget {
-  const _DownloadRow({
-    required this.icon,
-    required this.label,
-    required this.note,
-    required this.action,
-    required this.actionLabel,
-    required this.onTap,
-    this.noteColor,
+/// Steps as a timeline — each number in a ring, a thread down to the next:
+///
+/// ```
+/// (1)  Install Harness
+///  │
+/// (2)  Sign in
+///      Use ada@gmail.com
+///      Not you? Sign out             [under], at home
+/// ```
+///
+/// ⚠️ **A line each, ending in "…" rather than wrapping** — a title, and each line of a note — so
+/// [heightOf] is exact: "On your computer, go to" holds that much room under its link, and the
+/// picture under the steps stays put.
+class StepsTimeline extends StatelessWidget {
+  const StepsTimeline({super.key, required this.steps, this.under, this.link});
+
+  final List<ComputerStep> steps;
+
+  /// Under the first step's title, over its note, with no room of its own round it — it brings
+  /// its own: under the camera, ②'s address as words ([ComputerSteps]). Not counted by [heightOf] —
+  /// only ②'s own steps, which have none, are measured.
+  final Widget? link;
+
+  /// Under the last step's note, as one more line of it: at home, "Not you? Sign out" under the
+  /// account the sign-in names (`your_computer.dart`'s NotYouSignOut). Set in [noteStyle], and
+  /// counted by [heightOf] as one line of it.
+  final Widget? under;
+
+  /// A note's face: the meta size, faint, its lines a little apart.
+  static TextStyle noteStyle(Tty tty) => tty
+      .style(color: tty.faint, size: TtySize.meta)
+      .copyWith(height: _HowItWorksRow._noteHeight);
+
+  /// How tall [steps] stand at [scaler]'s text size: each title at least a ring tall, each note's
+  /// lines and the room round them, the gap under every step but the last — and with [under], one
+  /// more line under the last note.
+  static double heightOf(
+    List<ComputerStep> steps,
+    TextScaler scaler, {
+    bool under = false,
+  }) {
+    final title = math.max(
+      _HowItWorksRow._ring,
+      scaler.scale(TtySize.row) * 1.2,
+    );
+    final line = scaler.scale(TtySize.meta) * _HowItWorksRow._noteHeight;
+    var height = 0.0;
+    for (final (i, step) in steps.indexed) {
+      height += title;
+      if (step.note case final note?) {
+        height +=
+            '\n'.allMatches(note).length * line +
+            line +
+            _HowItWorksRow.noteInsets.vertical;
+      }
+      if (i < steps.length - 1) height += _HowItWorksRow._gap;
+    }
+    if (under) height += line;
+    return height;
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      for (final (i, step) in steps.indexed)
+        _HowItWorksRow(
+          number: i + 1,
+          title: step.title,
+          note: step.note,
+          link: i == 0 ? link : null,
+          under: i == steps.length - 1 ? under : null,
+          last: i == steps.length - 1,
+        ),
+    ],
+  );
+}
+
+/// One step: its number in a ring, a thread down to the next one's, what to do, and under it a
+/// quieter line when one is needed — between them the first step's [StepsTimeline.link], and
+/// [under] the note, the last step's [StepsTimeline.under].
+class _HowItWorksRow extends StatelessWidget {
+  const _HowItWorksRow({
+    required this.number,
+    required this.title,
+    this.note,
+    this.link,
+    this.under,
+    this.last = false,
   });
 
-  final IconData icon;
-  final String label;
-  final String note;
-  final Color? noteColor;
-  final IconData action;
-  final String actionLabel;
-  final VoidCallback onTap;
+  final int number;
+  final String title;
+  final String? note;
+  final Widget? link;
+  final Widget? under;
+  final bool last;
+
+  static const double _ring = 24;
+
+  /// Under every step but the last: the thread's room down to the next ring.
+  ///
+  /// ⚠️ With [_threadInset] above and below it, a step with no note under it — "Download and
+  /// install Harness" — still leaves a thread long enough to read as one: at 16 and 6 it was four
+  /// points, and the two rings read as two dots, not a timeline.
+  static const double _gap = 20;
+
+  /// The thread's distance from the ring above it and the ring below.
+  static const double _threadInset = 4;
+
+  static const double _noteHeight = 1.45;
+
+  static const EdgeInsets noteInsets = EdgeInsets.only(top: 2, bottom: 6);
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    return Semantics(
-      button: true,
-      label: '$actionLabel $label, $note',
-      excludeSemantics: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 14, 10),
-          child: Row(
-            children: [
-              Icon(icon, size: 22, color: tty.faint),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      label,
-                      style: tty.style(
-                        size: TtySize.row,
-                        weight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      note,
-                      style: tty.style(
-                        color: noteColor ?? tty.faint,
-                        size: TtySize.meta,
-                      ),
-                    ),
-                  ],
+    final line = tty.dim.withValues(alpha: 0.6);
+    // As tall as its words and the space under them, so the thread runs through that space to the
+    // next ring.
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: _ring,
+            child: Column(
+              children: [
+                Container(
+                  width: _ring,
+                  height: _ring,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: line),
+                  ),
+                  child: Text(
+                    '$number',
+                    style: tty.style(color: tty.faint, size: TtySize.meta),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Icon(action, size: 18, color: tty.faint),
-            ],
+                if (!last)
+                  Expanded(
+                    child: Container(
+                      width: 1,
+                      margin: const EdgeInsets.symmetric(
+                        vertical: _threadInset,
+                      ),
+                      color: line,
+                    ),
+                  ),
+              ],
+            ),
           ),
-        ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(bottom: last ? 0 : _gap),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Centred on the ring while it is one line; wraps under itself after.
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: _ring),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.ellipsis,
+                        style: tty.style(
+                          size: TtySize.row,
+                          weight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                  ?link,
+                  // A line each, ending in "…" rather than wrapping: a long account wrapping onto
+                  // another would stand the steps taller than [StepsTimeline.heightOf] says.
+                  if (note case final note?)
+                    Padding(
+                      padding: noteInsets,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          for (final part in note.split('\n'))
+                            Text(
+                              part,
+                              maxLines: 1,
+                              softWrap: false,
+                              overflow: TextOverflow.ellipsis,
+                              style: StepsTimeline.noteStyle(tty),
+                            ),
+                          ?under,
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -1,6 +1,23 @@
 const prefix = 'harness.web.v1.';
 const get = (key: string) => localStorage.getItem(prefix + key);
 const set = (key: string, value: string) => localStorage.setItem(prefix + key, value);
+/** The web session's access token, as Flutter's BrowserAuth keeps it. */
+export const accessTokenKey = `${prefix}auth_access_token`;
+export const sessionEvent = 'harness-session';
+
+/**
+ * Calls `listener` when this browser signs in or out: here (`harness-session`), or in another tab.
+ * The web app shares this origin and writes its own state under the same prefix, and a token is
+ * renewed in place; neither is a sign-in, and reloading a feed for them would drop its pages.
+ */
+export function onSessionChange(listener: () => void): () => void {
+  const storage = (event: StorageEvent) => {
+    if (event.key === null || (event.key === accessTokenKey && (event.oldValue === null) !== (event.newValue === null))) listener();
+  };
+  window.addEventListener('storage', storage);
+  window.addEventListener(sessionEvent, listener);
+  return () => { window.removeEventListener('storage', storage); window.removeEventListener(sessionEvent, listener); };
+}
 
 export function rememberHubReturn() {
   const path = window.location.pathname + window.location.search;
@@ -29,7 +46,7 @@ export async function refreshHubSession(failedToken: string): Promise<boolean> {
     if (response.status === 401 || body.error?.code === 'REFRESH_TOKEN_INVALID') {
       for (const key of ['auth_access_token', 'auth_refresh_token', 'auth_autonomous_env', 'auth_access_token_expires_at', 'auth_sso_client_id']) localStorage.removeItem(prefix + key);
       set('auth_generation', crypto.randomUUID());
-      window.dispatchEvent(new Event('harness-session'));
+      window.dispatchEvent(new Event(sessionEvent));
       return false;
     }
     if (!response.ok || !body.success || !body.data?.token) throw new Error('Could not renew your sign-in. Please try again.');

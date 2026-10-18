@@ -2,7 +2,17 @@ import { gzipType } from '@/lib/community/gzip';
 import { communityApiOrigin } from '@/lib/community/server';
 
 type Context = { params: Promise<{ path: string[] }> };
-const allowed = /^(?:harnesses(?:\/[a-z0-9-]{1,80}(?:\/like|\/social|\/comments(?:\/[a-f0-9-]{36})?)?)?|creators\/[a-z0-9-]{1,80}\/follow|translate)$/;
+/**
+ * The backend's community routes a browser may reach (`backend/src/routes/community*.ts`); anything
+ * else is answered here. A route added there needs its path here too, or the Hub's page for it fails.
+ */
+const allowed = new RegExp(`^(?:${[
+  String.raw`harnesses(?:/[a-z0-9-]{1,80}(?:/like|/social|/comments(?:/[a-f0-9-]{36})?)?)?`,
+  String.raw`creators/[a-z0-9-]{1,80}(?:/follow)?`,
+  String.raw`notifications(?:/unread|/read)?`,
+  String.raw`reports(?:/review)?`,
+  'translate',
+].join('|')})$`);
 /** A translation asks the model several times over (the backend gives it 50 seconds); every other request answers within the usual wait. */
 const waitMs = (path: string) => path === 'translate' ? 58_000 : 12_000;
 const coverPath = /^harnesses\/[a-f0-9-]{36}\/cover$/;

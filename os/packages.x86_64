@@ -25,6 +25,7 @@ sudo
 python
 openssh
 networkmanager
+dnsmasq
 systemd-resolvconf
 zram-generator
 wireless-regdb

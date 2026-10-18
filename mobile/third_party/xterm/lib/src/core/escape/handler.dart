@@ -145,6 +145,9 @@ abstract class EscapeHandler {
 
   void setBracketedPasteMode(bool enabled);
 
+  /// AUTONOMOUS PATCH: DEC private mode 2026, synchronized output.
+  void setSynchronizedOutputMode(bool enabled);
+
   void setUnknownDecMode(int mode, bool enabled);
 
   void resize(int cols, int rows);

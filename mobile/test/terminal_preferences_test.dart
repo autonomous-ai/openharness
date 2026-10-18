@@ -102,6 +102,103 @@ void main() {
     );
   });
 
+  group('the faces each OS ships', () {
+    test('Android offers its own two, and opens on Droid Sans Mono', () async {
+      // Offered the Linux list, every pick drew the same face on Android.
+      expect(TerminalFontChoice.availableOn(TerminalFontHost.android), [
+        TerminalFontChoice.droidSansMono,
+        TerminalFontChoice.cutiveMono,
+      ]);
+      // The names Android's `fonts.xml` declares — its faces' own names
+      // resolve to nothing there.
+      expect(TerminalFontChoice.droidSansMono.fontFamily, 'monospace');
+      expect(TerminalFontChoice.cutiveMono.fontFamily, 'serif-monospace');
+
+      final font = TerminalFontStore(
+        storage: _Store(),
+        host: TerminalFontHost.android,
+      );
+      addTearDown(font.dispose);
+      expect(font.family, TerminalFontChoice.droidSansMono);
+      expect(font.value.fontFamily, 'monospace');
+      expect(font.isDefault, isTrue);
+      await font.load();
+      expect(font.family, TerminalFontChoice.droidSansMono);
+    });
+
+    test(
+      'a Linux face saved on Android comes back as Android\'s default',
+      () async {
+        final storage = _Store()
+          ..values.addAll({
+            'terminal_font_family': TerminalFontChoice.dejaVuSansMono.name,
+            'terminal_font_size': '16',
+          });
+        final font = TerminalFontStore(
+          storage: storage,
+          host: TerminalFontHost.android,
+        );
+        addTearDown(font.dispose);
+        await font.load();
+        expect(font.family, TerminalFontChoice.droidSansMono);
+        expect(font.value.fontFamily, 'monospace');
+        expect(font.size, 16, reason: 'the size was never the problem');
+
+        // An Apple face is no better on Android.
+        storage.values['terminal_font_family'] = TerminalFontChoice.sfMono.name;
+        await font.load();
+        expect(font.family, TerminalFontChoice.droidSansMono);
+
+        // Android's own second face loads as it was saved.
+        await font.setFamily(TerminalFontChoice.cutiveMono);
+        final restored = TerminalFontStore(
+          storage: storage,
+          host: TerminalFontHost.android,
+        );
+        addTearDown(restored.dispose);
+        await restored.load();
+        expect(restored.family, TerminalFontChoice.cutiveMono);
+        expect(restored.isDefault, isFalse);
+        await restored.reset();
+        expect(restored.family, TerminalFontChoice.droidSansMono);
+      },
+    );
+
+    test('Apple and Linux keep their lists, and load any saved face', () async {
+      expect(TerminalFontChoice.availableOn(TerminalFontHost.apple), [
+        TerminalFontChoice.sfMono,
+        TerminalFontChoice.menlo,
+        TerminalFontChoice.monaco,
+        TerminalFontChoice.courierNew,
+      ]);
+      expect(
+        TerminalFontChoice.defaultOn(TerminalFontHost.apple),
+        TerminalFontChoice.sfMono,
+      );
+      expect(
+        TerminalFontChoice.availableOn(TerminalFontHost.other),
+        isNot(contains(TerminalFontChoice.droidSansMono)),
+      );
+      expect(
+        TerminalFontChoice.defaultOn(TerminalFontHost.other),
+        TerminalFontChoice.dejaVuSansMono,
+      );
+
+      // Unchanged on iOS: a face saved from another list still loads.
+      final storage = _Store()
+        ..values['terminal_font_family'] =
+            TerminalFontChoice.dejaVuSansMono.name;
+      final font = TerminalFontStore(
+        storage: storage,
+        host: TerminalFontHost.apple,
+      );
+      addTearDown(font.dispose);
+      expect(font.family, TerminalFontChoice.sfMono);
+      await font.load();
+      expect(font.family, TerminalFontChoice.dejaVuSansMono);
+    });
+  });
+
   test(
     'terminal colors persist and reset without notifying on a no-op',
     () async {

@@ -11,6 +11,7 @@ import 'package:harness_mobile/auth/peer_link_client.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/demo/sample_mode.dart';
+import 'package:harness_mobile/measurement/product_measurement.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/state/app_state.dart';
@@ -134,6 +135,17 @@ class EdgeConn extends WsConn {
   /// Every request's payload, by type, in order.
   final Map<String, List<Map<String, dynamic>>> payloads = {};
 
+  /// Whether the socket counts as handshaken, as one that just answered a request is. Off, a
+  /// `terminal_open` waits out the handshake it never gets — fifteen seconds
+  /// (`AppNotifier._sendTerminalFrame`) — so a harness that is created, or resumed, and then
+  /// attached reaches its page that much later. On for a test that waits for that page.
+  bool handshaken = false;
+
+  @override
+  Future<void> waitUntilReady({required Duration timeout}) => handshaken
+      ? Future<void>.value()
+      : super.waitUntilReady(timeout: timeout);
+
   /// How many times a terminal was asked to open.
   int get opens => frames.where((frame) => frame.$1 == 'terminal_open').length;
 
@@ -218,12 +230,14 @@ AppNotifier edgeApp({
   EdgeConn? conn,
   bool noMachines = false,
   EdgeLinks? links,
+  ProductMeasurement? productMeasurement,
 }) {
   final session = AuthSession();
   final app = AppNotifier(
     config: AppConfig.dev,
     authSession: session,
     configStore: null,
+    productMeasurement: productMeasurement,
     connectionForTest: (_) => conn ?? EdgeConn(),
     peerLinks: links ?? EdgeLinks(),
     viewer: ViewerServices(
@@ -249,6 +263,18 @@ AppNotifier edgeApp({
     ..terminalCapabilityAvailable = true
     ..agents = agents ?? [edgeAgent('a')];
   return app;
+}
+
+/// Which of the phone's side pages opened and how, recorded in place of being counted.
+class RecordedOpenings extends ProductMeasurement {
+  RecordedOpenings()
+    : super(surface: 'phone', automatic: false, sendSetup: (_) async => {});
+
+  final opened = <(PhoneScreen, ScreenOpening)>[];
+
+  @override
+  void screenOpened(PhoneScreen screen, ScreenOpening how) =>
+      opened.add((screen, how));
 }
 
 /// The control plane, answered from the app's own list — never the local CLI's HTTP port, which

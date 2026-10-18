@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/phone/terminal_input_dock.dart';
 import 'package:harness_mobile/phone/terminal_key_bar.dart';
 import 'package:harness_mobile/terminal/key_hints.dart';
+import 'package:harness_mobile/terminal/terminal_input.dart';
+import 'package:harness_mobile/terminal/terminal_session.dart';
 import 'package:xterm/xterm.dart';
 
 void main() {
@@ -162,48 +165,295 @@ void main() {
     expect(dismissals, 1);
   });
 
-  testWidgets(
-    'esc stays in view when the pane already offers keys; new ones are scrolled to',
-    (tester) async {
-      // Claude Code's footer offers a key on every prompt.
-      final cycle = parseKeyHints(['  ⏵⏵ auto mode on (shift+tab to cycle)']);
-      expect(cycle, isNotEmpty);
-      Widget bar(List<KeyHint> hints) => MaterialApp(
-        home: Scaffold(
-          body: Align(
-            alignment: Alignment.bottomCenter,
-            child: SizedBox(
-              width: 360,
-              child: TerminalKeyBar(
-                terminal: terminal,
-                enabled: true,
-                hints: hints,
-                onDismissKeyboard: () => dismissals++,
-                onPromptEdited: () => edits++,
+  group('↵ at an engine\'s prompt', () {
+    late Terminal pane;
+
+    setUp(() {
+      // As `TerminalSession` builds a pane's terminal: the bytes ↵ sends are
+      // the ones its input handler gives a hardware ⌥⏎.
+      pane = Terminal(
+        maxLines: 200,
+        platform: TerminalTargetPlatform.macos,
+        inputHandler: harnessInputHandler,
+        reflowEnabled: false,
+      )..resize(80, 12);
+      pane.onOutput = outbound.add;
+    });
+
+    Future<void> pumpPrompt(
+      WidgetTester tester, {
+      double width = 375,
+      bool enabled = true,
+      bool enginePrompt = true,
+      bool questionOpen = false,
+      bool? ctrl,
+      ValueChanged<bool>? armCtrl,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomCenter,
+              child: SizedBox(
+                width: width,
+                child: TerminalKeyBar(
+                  terminal: pane,
+                  enabled: enabled,
+                  enginePrompt: enginePrompt,
+                  questionOpen: questionOpen,
+                  onDismissKeyboard: () => dismissals++,
+                  onPromptEdited: () => edits++,
+                  // Every optional key the row can hold but `paste`, whose
+                  // clipboard poll would outlive the test.
+                  onClearPrompt: () {},
+                  onPickImage: () {},
+                  ctrlArmed: ctrl,
+                  onArmCtrl: armCtrl,
+                ),
               ),
             ),
           ),
         ),
       );
-      await tester.pumpWidget(bar(cycle));
+    }
+
+    final newline = find.byKey(const ValueKey('terminal-key-Newline'));
+    final enter = find.byKey(const ValueKey('terminal-key-Enter'));
+
+    testWidgets('breaks the line as ⌥⏎ does, and does not submit', (
+      tester,
+    ) async {
+      await pumpPrompt(tester);
+
+      await tester.tap(newline);
+      await tester.pump();
+
+      expect(outbound, ['\x1b\r'], reason: 'ESC + Return, never a bare \\r');
+      expect(edits, 1, reason: 'the keyboard lets go of the line just broken');
+    });
+
+    testWidgets('puts armed modifiers down rather than adding them', (
+      tester,
+    ) async {
+      // The row's own: armed, spent by ↵ unchanged, and gone after it.
+      await pumpPrompt(tester);
+      await tester.tap(find.byKey(const ValueKey('terminal-key-ctrl')));
+      await tester.tap(find.byKey(const ValueKey('terminal-key-shift')));
+      await tester.pump();
+      await tester.tap(newline);
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('terminal-key-Up')));
+      await tester.pump();
+      expect(outbound, ['\x1b\r', '\x1b[A']);
+
+      // The session's ctrl is put down too.
+      final armed = <bool>[];
+      outbound.clear();
+      await pumpPrompt(tester, ctrl: true, armCtrl: armed.add);
+      await tester.tap(newline);
+      await tester.pump();
+      expect(outbound, ['\x1b\r']);
+      expect(armed, [false]);
+    });
+
+    testWidgets(
+      'gives its slot to ⏎ during a question; no ↵ on a plain shell',
+      (tester) async {
+        await pumpPrompt(tester, questionOpen: true);
+        expect(newline, findsNothing);
+        expect(enter, findsOneWidget);
+
+        await pumpPrompt(tester, enginePrompt: false);
+        expect(newline, findsNothing);
+        expect(enter, findsNothing);
+      },
+    );
+
+    testWidgets('dims with the rest of the row while input is not taken', (
+      tester,
+    ) async {
+      await pumpPrompt(tester, enabled: false);
+      await tester.tap(newline);
+      await tester.pump();
+      expect(outbound, isEmpty);
+    });
+
+    testWidgets('the dock offers it to an agent and not to a plain shell', (
+      tester,
+    ) async {
+      for (final (engine, offered) in [('claude', true), ('terminal', false)]) {
+        final session = TerminalSession(
+          machineId: 'm',
+          agentId: 'a',
+          agentName: 'a',
+          engineId: engine,
+          send: (_, _) async => true,
+          sendBinary: (_) async => true,
+        );
+        addTearDown(session.dispose);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: TerminalInputDock(
+                session: session,
+                keyboardUp: true,
+                onDismiss: () {},
+              ),
+            ),
+          ),
+        );
+        expect(
+          newline,
+          offered ? findsOneWidget : findsNothing,
+          reason: engine,
+        );
+      }
+    });
+
+    for (final width in [320.0, 375.0]) {
+      testWidgets('fits a ${width.round()}pt phone at the width a question '
+          'already gives every key', (tester) async {
+        final esc = find.byKey(const ValueKey('terminal-key-esc'));
+        await pumpPrompt(tester, width: width, questionOpen: true);
+        final asked = tester.getSize(esc);
+        await pumpPrompt(tester, width: width);
+        expect(tester.takeException(), isNull);
+        expect(tester.getSize(esc), asked);
+        // Inside the row, before the rule and the two keys past it.
+        final image = find.byKey(const ValueKey('terminal-key-Send image'));
+        expect(
+          tester.getTopRight(newline).dx,
+          lessThan(tester.getTopLeft(image).dx),
+        );
+        expect(newline.hitTestable(), findsOneWidget);
+        expect(
+          find
+              .byKey(const ValueKey('terminal-key-Hide keyboard'))
+              .hitTestable(),
+          findsOneWidget,
+        );
+      });
+    }
+  });
+
+  // Claude Code's footer offers it on every prompt.
+  final cycle = parseKeyHints(['  ⏵⏵ auto mode on (shift+tab to cycle)']);
+  // Codex's queue of async questions, over the composer.
+  final queued = parseKeyHints(['  ? 1 question', '    shift+← to answer']);
+  final esc = find.byKey(const ValueKey('terminal-key-esc'));
+  final right = find.byKey(const ValueKey('terminal-key-Right'));
+
+  /// The strip at a phone's width, offering [hints] as the pane would.
+  Widget hintedBar(List<KeyHint> hints) => MaterialApp(
+    home: Scaffold(
+      body: Align(
+        alignment: Alignment.bottomCenter,
+        child: SizedBox(
+          width: 360,
+          child: TerminalKeyBar(
+            terminal: terminal,
+            enabled: true,
+            hints: hints,
+            onDismissKeyboard: () => dismissals++,
+            onPromptEdited: () => edits++,
+          ),
+        ),
+      ),
+    ),
+  );
+
+  ScrollController rowScroll(WidgetTester tester) => tester
+      .widget<SingleChildScrollView>(find.byType(SingleChildScrollView).first)
+      .controller!;
+
+  testWidgets(
+    'a queued question\'s key leads the strip as it opens — no swipe to find it',
+    (tester) async {
+      expect(queued.single.action, 'answer');
+      await tester.pumpWidget(hintedBar(queued));
       await tester.pumpAndSettle();
-      final scroll = tester.widget<SingleChildScrollView>(
-        find.byType(SingleChildScrollView).first,
-      );
-      // Opened on its own keys: esc is where the thumb expects it.
-      expect(scroll.controller!.offset, 0);
+
+      expect(rowScroll(tester).offset, 0);
+      expect(find.text('answer').hitTestable(), findsOneWidget);
+      // Ahead of the strip's own keys, which it pushes along rather than hides.
       expect(
-        find.byKey(const ValueKey('terminal-key-esc')).hitTestable(),
-        findsOneWidget,
+        tester.getTopRight(find.text('answer')).dx,
+        lessThan(tester.getTopLeft(esc).dx),
+      );
+      expect(esc.hitTestable(), findsOneWidget);
+
+      await tester.tap(find.text('answer'));
+      await tester.pump();
+      expect(outbound, ['\x1b[1;2D']);
+    },
+  );
+
+  testWidgets(
+    'esc stays in view under cycle, which trails the strip; a question\'s keys '
+    'lead it',
+    (tester) async {
+      expect(cycle.single.action, 'cycle');
+      await tester.pumpWidget(hintedBar(cycle));
+      await tester.pumpAndSettle();
+      // Opened on its own keys: esc is where the thumb expects it, and cycle is
+      // past the arrows.
+      expect(rowScroll(tester).offset, 0);
+      expect(esc.hitTestable(), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('cycle')).dx,
+        greaterThan(tester.getTopRight(right).dx),
       );
 
-      // A key the pane starts offering while the strip is up is brought into view.
+      // A question's key the pane starts offering takes the head; cycle keeps
+      // the tail.
       final more = parseKeyHints([
         '  ⏵⏵ auto mode on (shift+tab to cycle) · ctrl+] main prompt',
       ]);
-      await tester.pumpWidget(bar(more));
+      await tester.pumpWidget(hintedBar(more));
       await tester.pumpAndSettle();
-      expect(scroll.controller!.offset, greaterThan(0));
+      expect(rowScroll(tester).offset, 0);
+      expect(find.text('main prompt').hitTestable(), findsOneWidget);
+      expect(
+        tester.getTopRight(find.text('main prompt')).dx,
+        lessThan(tester.getTopLeft(esc).dx),
+      );
+      expect(
+        tester.getTopLeft(find.text('cycle')).dx,
+        greaterThan(tester.getTopRight(right).dx),
+      );
+    },
+  );
+
+  testWidgets(
+    'keys that arrive while the strip is up are scrolled to — a question\'s '
+    'back to the head, cycle on to the end, never away from a question',
+    (tester) async {
+      await tester.pumpWidget(hintedBar(cycle));
+      await tester.pumpAndSettle();
+      final scroll = rowScroll(tester);
+
+      // Swiped along to cycle; then a queued question arrives.
+      scroll.jumpTo(scroll.position.maxScrollExtent);
+      await tester.pump();
+      expect(scroll.offset, greaterThan(0));
+      await tester.pumpWidget(hintedBar(queued));
+      await tester.pumpAndSettle();
+      expect(scroll.offset, 0);
+      expect(find.text('answer').hitTestable(), findsOneWidget);
+
+      // cycle arriving beside it leaves the question's key in view.
+      await tester.pumpWidget(hintedBar([...queued, ...cycle]));
+      await tester.pumpAndSettle();
+      expect(scroll.offset, 0);
+      expect(find.text('answer').hitTestable(), findsOneWidget);
+
+      // With no question on the pane, cycle arriving is brought into view.
+      await tester.pumpWidget(hintedBar(const []));
+      await tester.pumpWidget(hintedBar(cycle));
+      await tester.pumpAndSettle();
+      expect(scroll.offset, greaterThan(0));
+      expect(scroll.offset, scroll.position.maxScrollExtent);
+      expect(find.text('cycle').hitTestable(), findsOneWidget);
     },
   );
 }

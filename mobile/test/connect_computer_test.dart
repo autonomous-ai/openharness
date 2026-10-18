@@ -8,7 +8,6 @@ import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/welcome/connect_code.dart';
 import 'package:harness_mobile/phone/welcome/connect_computer.dart';
 import 'package:harness_mobile/phone/welcome/scan_to_connect.dart';
-import 'package:harness_mobile/phone/welcome/set_up_computer.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'viewer_app_fixture.dart' show FakeApi;
@@ -44,12 +43,14 @@ class _Links implements PeerLinkClient {
   Future<String?> unlink(String machineId) async => null;
 }
 
-/// Setting up a computer from a signed-in phone is the first screen's download menu, plus what only
-/// a signed-in phone can do there: watch for the computer, and pair with it by its code.
+/// Computers ▸ "Or scan the QR code on your computer": the camera, for a desktop from before the
+/// onboarding of 2026-10-12 that still pairs a phone by its Add Phone code — the computer it names
+/// looked up on the account, and paired with by the code ([scanAndPairComputer]).
 void main() {
   late _Links links;
   late AppNotifier app;
-  late List<bool> backs;
+  late List<String?> said;
+  late List<bool> paired;
 
   setUp(() {
     links = _Links();
@@ -62,22 +63,36 @@ void main() {
     // The account's REST API, answered in memory: its machines are asked for again before a
     // scanned computer is looked for, and none is on it unless a test says so.
     app.api = FakeApi();
-    backs = [];
+    said = [];
+    paired = [];
   });
   tearDown(() => app.dispose());
 
+  /// A page with the button that scans, as Computers has it.
   Future<void> pump(WidgetTester tester) async {
     tester.view.devicePixelRatio = 1;
-    tester.view.physicalSize = const Size(430, 1400);
+    tester.view.physicalSize = const Size(430, 932);
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
       MaterialApp(
-        home: ConnectComputerPage(
-          notifier: app,
-          onBack: () => backs.add(true),
-          onTrySample: (_) async => null,
-          scanCamera: const SizedBox(),
-          loadDownloads: () async => const {},
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: TextButton(
+                key: const ValueKey('scan'),
+                onPressed: () async => paired.add(
+                  await scanAndPairComputer(
+                    context,
+                    app,
+                    say: (message, {failed = false}) =>
+                        said.add(failed ? '✗ $message' : message),
+                    camera: const SizedBox(),
+                  ),
+                ),
+                child: const Text('Scan'),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -85,7 +100,7 @@ void main() {
   }
 
   Future<void> scan(WidgetTester tester, String link) async {
-    await tester.tap(find.text('Scan to connect ›'));
+    await tester.tap(find.byKey(const ValueKey('scan')));
     await tester.pumpAndSettle();
     tester
         .widget<ScanToConnectPage>(find.byType(ScanToConnectPage))
@@ -98,21 +113,7 @@ void main() {
     await tester.pump(const Duration(seconds: 6));
   }
 
-  testWidgets('the download menu, watching, and the sample to try meanwhile', (
-    tester,
-  ) async {
-    await pump(tester);
-    expect(find.byType(SetUpComputerPage), findsOneWidget);
-    expect(find.text('Apple Silicon'), findsOneWidget);
-    expect(find.textContaining('Waiting for your computer'), findsOneWidget);
-    expect(find.text('Try the sample ›'), findsOneWidget);
-    // The old page's second way of saying all this is gone.
-    expect(find.text('Email me the setup link'), findsNothing);
-    expect(find.textContaining('remote-password'), findsNothing);
-    await unmount(tester);
-  });
-
-  testWidgets('scanning the new computer\'s code pairs it and goes back', (
+  testWidgets('the computer\'s code pairs it, and says so on the way', (
     tester,
   ) async {
     const studio = Machine(
@@ -130,7 +131,19 @@ void main() {
       ConnectCode.link('a@b.co', machineId: 'studio', pairCode: 'K7QM4XPT'),
     );
     expect(links.codes, [('studio', 'K7QM4XPT')]);
-    expect(backs, [true]);
+    expect(said, ['Pairing…', null]);
+    expect(paired, [true]);
+    await unmount(tester);
+  });
+
+  testWidgets('a code that is not Add Phone\'s is said to be so', (
+    tester,
+  ) async {
+    await pump(tester);
+    await scan(tester, ConnectCode.link('a@b.co'));
+    expect(links.codes, isEmpty);
+    expect(said, ['✗ That’s not the Add Phone code.']);
+    expect(paired, [false]);
     await unmount(tester);
   });
 
@@ -142,12 +155,12 @@ void main() {
       tester,
       ConnectCode.link('a@b.co', machineId: 'elsewhere', pairCode: 'K7QM4XPT'),
     );
-    // The page asks for the list again first, and gives that five seconds.
+    // The account is asked for its list again first, and given five seconds.
     await tester.pump(const Duration(seconds: 6));
     await tester.pump();
     expect(links.codes, isEmpty);
-    expect(backs, isEmpty);
-    expect(find.textContaining("isn't on your account"), findsOneWidget);
+    expect(said.last, contains("isn't on your account"));
+    expect(paired, [false]);
     await unmount(tester);
   });
 
@@ -163,9 +176,8 @@ void main() {
     );
     await tester.pump();
     expect(links.codes, isEmpty);
-    expect(backs, isEmpty);
-    expect(find.text('Pairing…'), findsNothing);
-    expect(find.textContaining("Couldn't reach your account"), findsOneWidget);
+    expect(said.last, contains("Couldn't reach your account"));
+    expect(paired, [false]);
     await unmount(tester);
   });
 }

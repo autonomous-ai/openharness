@@ -53,9 +53,16 @@
 .identity h1{font-size:25px;font-weight:400;line-height:1.2;letter-spacing:-.5px;margin-bottom:9px}
 .byline{display:flex;align-items:center;gap:15px;flex-wrap:wrap;font-size:13px;color:#777}
 .follow{text-decoration:underline;text-underline-offset:3px}
-.actions{display:flex;align-items:center;gap:18px;margin-left:auto;flex-shrink:0}
-.actions button,.actions a{display:inline-flex;align-items:center;gap:8px;white-space:nowrap;font-size:13px}
+/* The reader's actions: one row of quiet 36px buttons that tint on hover and stay tinted while their panel is open, ending in Fork. */
+.actions{display:flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0}
+.actions>button,.actions>a,.actions .actionButton{display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 11px;border-radius:8px;white-space:nowrap;font-size:13px;color:#555;transition:background-color .15s,color .15s}
+.actions>button:hover:not(:disabled),.actions>a:hover,.actions .actionButton:hover{background:#f4f4f2;color:#242424}
+.actions>button[aria-pressed=true],.actions .actionButton[aria-pressed=true]{background:#efefec;color:#242424}
+.actions>button:focus-visible,.actions>a:focus-visible,.actions .actionButton:focus-visible,.actions .primary:focus-visible{outline:2px solid #242424;outline-offset:2px}
 .actions svg{width:16px;height:16px}
+.actions .handoff{margin-left:8px}
+.page .actions .primary{height:36px;padding:0 18px;border-radius:8px;transition:background-color .15s}
+.page .actions .primary:hover{background:#000}
 .page .primary{background:#242424;color:#fff;padding:10px 20px;display:inline-flex;align-items:center;gap:8px;border:0;font-size:13px;line-height:1.5;cursor:pointer;justify-content:center}
 .primary svg{width:16px;height:16px}
 .liked{color:#b7495c!important}
@@ -87,6 +94,10 @@
 .signin{font-size:13px;line-height:1.7;color:#777;margin:15px 0}
 .signin a{text-decoration:underline;text-underline-offset:3px;color:#242424}
 .error{font-size:13px;line-height:1.6;color:#a4483f;margin:15px 0}
+.submitRow{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.danger{font-size:13px;color:#c0362c;text-decoration:underline;text-underline-offset:3px;background:none;border:0;padding:0;cursor:pointer}
+.danger:hover{color:#9b2a21}
+.danger:disabled{opacity:.5;cursor:default}
 .textLink{text-decoration:underline!important;text-underline-offset:3px}
 .fork{max-width:1050px;padding:45px 0 100px}
 .fork h1,.publish h1{font-size:38px;font-weight:400;letter-spacing:-1px;line-height:1.1;margin-bottom:15px}
@@ -114,22 +125,24 @@
 .check{display:flex;gap:11px;align-items:flex-start;color:#777;font-size:13px;line-height:1.7;margin:25px 0}
 .check input{margin-top:5px;accent-color:#242424}
 .loading{padding:70px 0;color:#777}
-.manage{margin-top:38px;font-size:12px;color:#777;display:flex;gap:20px;flex-wrap:wrap}
-.manage button,.manage a{text-decoration:underline;text-underline-offset:3px}
 @media(min-width:1900px){.viewer iframe{height:780px}}
-@media(max-width:1100px){.wrap{width:90%}.nav{gap:20px}.barActions{gap:18px}.chat{padding-left:22px}.actions{gap:13px}.identity h1{font-size:22px}.viewer iframe{height:640px}}
+@media(max-width:1100px){.wrap{width:90%}.nav{gap:20px}.barActions{gap:18px}.chat{padding-left:22px}.identity h1{font-size:22px}.viewer iframe{height:640px}}
 @media(max-width:760px){.wrap{width:92%}.feed{padding-top:22px}.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:44px 14px}.split{grid-template-columns:1fr;gap:28px;min-height:0}.chat{padding:0}.detail{padding-top:16px;padding-bottom:50px}.back{margin-bottom:14px}.detailHead{flex-wrap:wrap;gap:16px;margin-bottom:22px}.actions{margin-left:auto}.viewer iframe{height:590px}.forkColumns,.publishForm{grid-template-columns:1fr;gap:25px}.fork h1,.publish h1{font-size:32px}.page input,.page textarea,.page select{font-size:16px}}
-@media(max-width:480px){.grid{grid-template-columns:1fr;gap:36px}.actions{width:100%;margin-left:0;gap:22px}.actions>:last-child{margin-left:auto}.identity h1{font-size:23px}.viewer iframe{height:510px;height:min(560px,68svh)}.fork{padding-top:20px}.publish{padding-top:24px}.fork h1,.publish h1{font-size:28px}.publishForm{gap:25px}}
+@media(max-width:480px){.grid{grid-template-columns:1fr;gap:36px}.actions{width:100%;margin-left:0}.actions>:last-child{margin-left:auto}.identity h1{font-size:23px}.viewer iframe{height:510px;height:min(560px,68svh)}.fork{padding-top:20px}.publish{padding-top:24px}.fork h1,.publish h1{font-size:28px}.publishForm{gap:25px}}
 .tags{display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center}
 .tags>span{display:inline-block;background:#f3f3f1;color:#747471;font:10px/1.5 Arial,Helvetica,sans-serif;padding:3px 7px;border-radius:3px;white-space:nowrap}
 .cardMeta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}
 .cardMeta small{margin:0}
-.handoff{display:inline-flex;flex-direction:column;align-items:flex-start;gap:9px}
+/* Its help floats under the button, so opening the app never moves the row it sits in. */
+.handoff{position:relative;display:inline-flex}
 .filesReview{margin:30px 0}.filesReview summary{cursor:pointer;font-size:14px}.fileRow{display:flex;align-items:center;gap:12px;margin:10px 0;font-size:12px}.fileRow code{flex:1;overflow-wrap:anywhere}.fileRow button{text-decoration:underline;color:#777}.importActions{margin:24px 0;background:#f7f7f5;padding:22px}.importActions p{color:#777;font-size:13px;margin-top:8px}
 /* Phones: one sticky glass bar. Brand and actions on the first row, the tabs under them, and an open search across its own row. */
 @media(max-width:760px){.topbar{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.82);-webkit-backdrop-filter:saturate(180%) blur(18px);backdrop-filter:saturate(180%) blur(18px);box-shadow:0 1px 0 rgba(36,36,36,.07)}.bar{flex-wrap:wrap;gap:0 16px;min-height:0;padding:4px 0 0}.bar .brand{font-size:21px;margin-right:auto}.barActions{display:contents;font-size:14px}.barActions>a,.barActions>button{order:1}.page .barActions .primary{min-height:34px;padding:6px 14px}.barActions .openApp{display:none}.nav{order:2;width:100%;gap:24px;font-size:14px}.nav a{position:relative;min-height:42px}.nav [aria-current=page]:after{content:'';position:absolute;left:0;right:0;bottom:0;height:2px;background:#242424}.barActions>.searchField{order:3;width:100%;margin:4px 0 10px;animation:none}}
-.handoffHelp{font-size:11px;color:#888;max-width:220px;line-height:1.6}
-.handoffHelp a{text-decoration:underline;text-underline-offset:3px}
+.handoffHelp{position:absolute;top:calc(100% + 8px);left:0;z-index:5;white-space:nowrap;font-size:12px;line-height:1.5;color:#666;padding:8px 12px;border-radius:10px;background:rgba(255,255,255,.78);-webkit-backdrop-filter:saturate(180%) blur(18px);backdrop-filter:saturate(180%) blur(18px);border:1px solid rgba(36,36,36,.08);box-shadow:0 8px 24px rgba(36,36,36,.1);animation:handoffIn .18s ease-out}
+.actions .handoffHelp{left:auto;right:0}
+@keyframes handoffIn{from{opacity:0;transform:translateY(-4px)}}
+@media(prefers-reduced-motion:reduce){.handoffHelp{animation:none}}
+.handoffHelp a{margin-left:4px;color:#242424!important;text-decoration:underline;text-underline-offset:3px}
 .fork details{margin-top:32px;color:#777;font-size:13px}
 .fork summary{cursor:pointer}
 
@@ -192,6 +205,11 @@
 /* Phones: the chips run to the screen's left edge (the gutter is 4vw), and the order shrinks to fit beside them. */
 @media(max-width:760px){.filters{gap:10px;margin:0 0 24px}.chipsWrap{margin-left:-4vw}.chips{padding-left:4vw;scroll-padding-left:4vw}.chipArrowLeft{left:2vw}.sort span{padding:4px 10px;font-size:12px}.forks{margin-top:50px}}
 /* Small phones: Files and Share keep their icon; their names stay for screen readers. */
-@media(max-width:480px){.actions{gap:18px}.actionLabel{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
+@media(max-width:480px){.actions>button,.actions>a,.actions .actionButton{padding:0 9px}.actionLabel{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
 .byline a,.byline button{display:inline-flex;align-items:center}
 @media(max-width:760px){.chat{scroll-margin-top:104px}}
+.authorLink:hover{text-decoration:underline}
+.reportForm{display:flex;flex-direction:column;gap:2px;margin:0 0 30px;padding:18px 20px;background:#f7f7f5;font-size:13px}.reportForm .check{margin:6px 0}.reportForm small{color:#777;margin:8px 0 4px}.reportForm .submitRow{margin:8px 0 0}
+.review{border-bottom:1px solid #efefed;padding:16px 0;font-size:13px;display:flex;flex-direction:column;gap:6px}.review p{color:#777}.review .submitRow{margin:4px 0 0}
+.bell{position:relative;display:inline-flex}.bell svg{width:19px;height:19px}.badge{position:absolute;top:-7px;right:-9px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#a4483f;color:#fff;font-size:10px;line-height:16px;text-align:center}
+.notification{display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-bottom:1px solid #efefed;font-size:14px}.notification small{color:#999;flex-shrink:0}.notification.unread{font-weight:500}

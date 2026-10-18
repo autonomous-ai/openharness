@@ -15,12 +15,17 @@ import 'package:xterm/src/ui/input_map.dart';
 import 'package:xterm/src/ui/keyboard_listener.dart';
 import 'package:xterm/src/ui/keyboard_visibility.dart';
 import 'package:xterm/src/ui/render.dart';
+import 'package:xterm/src/ui/remote_scroll_mirror.dart' show RemoteScrollMemory;
 import 'package:xterm/src/ui/scroll_handler.dart';
 import 'package:xterm/src/ui/shortcut/actions.dart';
 import 'package:xterm/src/ui/shortcut/shortcuts.dart';
 import 'package:xterm/src/ui/terminal_text_style.dart';
 import 'package:xterm/src/ui/terminal_theme.dart';
 import 'package:xterm/src/ui/themes.dart';
+import 'dart:async';
+
+import 'package:xterm/src/utils/input_trace.dart';
+import 'package:xterm/src/utils/unicode_v11.dart';
 
 class TerminalView extends StatefulWidget {
   const TerminalView(
@@ -40,6 +45,7 @@ class TerminalView extends StatefulWidget {
     this.autofocus = false,
     this.onTapDown,
     this.onTapUp,
+    this.onLongPressStart,
     this.onSecondaryTapDown,
     this.onSecondaryTapUp,
     this.mouseCursor = SystemMouseCursors.text,
@@ -56,6 +62,15 @@ class TerminalView extends StatefulWidget {
     this.hardwareKeyboardOnly = false,
     this.simulateScroll = true,
     this.onAltBufferScroll,
+    this.altBufferScrollPhysics,
+    this.altBufferScrollPaced = false,
+    this.altBufferScrollAnimated = false,
+    this.onAltBufferScrollShift,
+    this.altBufferScrollMirror = false,
+    this.altBufferScrollPageKeys = false,
+    this.altBufferScrollMemory,
+    this.keepsInputAcrossTerminals = false,
+    this.predictsEcho = false,
   });
 
   /// The underlying terminal that this widget renders.
@@ -110,6 +125,11 @@ class TerminalView extends StatefulWidget {
 
   /// Callback for a primary click handled locally, including [onTapDown].
   final void Function(TapUpDetails, CellOffset)? onTapUp;
+
+  /// Return true to take a touch long press in the host instead of selecting
+  /// the word under it. The drag that follows the press is then the host's
+  /// too: the terminal neither selects nor extends a selection for it.
+  final bool Function(LongPressStartDetails, CellOffset)? onLongPressStart;
 
   /// Function called when the user taps on the terminal with a secondary
   /// button.
@@ -179,6 +199,72 @@ class TerminalView extends StatefulWidget {
   /// backend-native way to scroll instead of the emulator's own mouse/key simulation.
   final void Function(bool up)? onAltBufferScroll;
 
+  /// AUTONOMOUS PATCH: the physics of the alternate buffer's scroll — the one
+  /// that turns a drag into wheel events for the program — layered over the
+  /// platform's own. Null keeps the platform's.
+  final ScrollPhysics? altBufferScrollPhysics;
+
+  /// AUTONOMOUS PATCH: the alternate buffer's scroll sends its wheel events
+  /// only as fast as the program answers them — at most two batches without a
+  /// write back — and lines scrolled meanwhile go together in the next batch.
+  /// A remote program redraws at the far end of a link, and wheel events sent
+  /// faster than that queue up, moving its screen long after the finger
+  /// stopped. False sends each line as it is scrolled, as upstream.
+  final bool altBufferScrollPaced;
+
+  /// AUTONOMOUS PATCH: a full-screen program's redraw that answers the wheel
+  /// slides into place over a few frames, rather than jumping there a line or
+  /// more at a time — see `RemoteScrollAnimator`. Purely visual: the emulator
+  /// holds the new screen at once. False draws each redraw as it lands, as
+  /// upstream.
+  final bool altBufferScrollAnimated;
+
+  /// AUTONOMOUS PATCH: with [altBufferScrollAnimated], told of each redraw
+  /// that answered the wheel — the rows it slid, or 0 when it could not be read
+  /// as a scroll and jumped. For measuring; nothing depends on it.
+  final void Function(int rows)? onAltBufferScrollShift;
+
+  /// AUTONOMOUS PATCH: a full-screen program's scroll is moved by the finger on
+  /// the phone and only filled in by the program — the scrolling rows drawn from
+  /// rows already seen, the program kept a few rows ahead, and brought back to
+  /// the row on screen when the scroll is over. See `RemoteScrollMirror`. Takes
+  /// the place of [altBufferScrollAnimated]'s slide. False leaves the screen to
+  /// follow the program's redraws.
+  final bool altBufferScrollMirror;
+
+  /// AUTONOMOUS PATCH: with [altBufferScrollMirror], whether the program may be
+  /// scrolled a page at a time with its Page Up and Page Down keys while the
+  /// finger is far ahead of it — for a program known to take them as half a
+  /// screen of its transcript (Claude Code), and only while it shows its
+  /// prompt. See `RemoteScrollMirror._sendPage`.
+  final bool altBufferScrollPageKeys;
+
+  /// AUTONOMOUS PATCH: with [altBufferScrollMirror], what is known of this
+  /// program's rows, kept by the embedder for the program (an agent) across
+  /// the emulators a keyframe replaces and the views opened on it — see
+  /// [RemoteScrollMemory]. Null keeps it in the view only.
+  final RemoteScrollMemory? altBufferScrollMemory;
+
+  /// AUTONOMOUS PATCH: the keyboard's buffer — and what it is composing — is
+  /// kept when [terminal] is replaced, for an embedder that replaces it only
+  /// with the next screen of the SAME stream (a keyframe), and gives another
+  /// stream a view of its own.
+  ///
+  /// ⚠️ Emptied there, it was emptied under somebody typing: every keyframe —
+  /// one ends each keyboard raised — reset the buffer while the keyboard could
+  /// still have an edit on its way, which was then read against the emptied
+  /// buffer and typed what was already typed a second time. False keeps
+  /// upstream's reset, for a view that is handed another stream's terminal.
+  final bool keepsInputAcrossTerminals;
+
+  /// AUTONOMOUS PATCH: what is typed is drawn at the cursor at once, faint,
+  /// until the terminal's own echo of it arrives — a remote program's echo is a
+  /// round trip away, 50–120ms measured on a phone, and the keys look dead until
+  /// then. Drawn over the screen only: nothing is written to the emulator and
+  /// nothing extra is sent. See [TerminalViewState._predictEcho] for when a key
+  /// is predicted at all.
+  final bool predictsEcho;
+
   @override
   State<TerminalView> createState() => TerminalViewState();
 }
@@ -198,12 +284,60 @@ class TerminalViewState extends State<TerminalView> {
 
   int _composingBacktrackCells = 0;
 
+  // ── AUTONOMOUS PATCH: local echo — see [TerminalView.predictsEcho] ──────────
+
+  /// What is drawn ahead of the echo: typed, sent, not yet echoed.
+  String _predicted = '';
+
+  /// Where the cursor was, and its line's [BufferLine.paintVersion], when the
+  /// oldest key not yet echoed went out. Null while nothing is awaited.
+  ({int x, int y, int version})? _echoFrom;
+
+  /// Where the cursor rested after the last echo: the input point. A key typed
+  /// with the cursor anywhere else — a program mid-redraw, output streaming —
+  /// is not predicted, since the echo will not land at the cursor.
+  ({int x, int y})? _inputPoint;
+
+  /// Whether this terminal has been seen to echo what is typed. Off at first,
+  /// and off again after a key whose echo never came (a password prompt): only
+  /// a key seen echoed turns prediction back on.
+  bool _echoes = false;
+
+  Timer? _echoTimeout;
+
+  /// How long a key's echo may take before it is taken not to be coming.
+  static const _echoWait = Duration(milliseconds: 400);
+
   late TerminalController _controller;
 
   late ScrollController _scrollController;
 
   RenderTerminal get renderTerminal =>
       _viewportKey.currentContext!.findRenderObject() as RenderTerminal;
+
+  /// AUTONOMOUS PATCH: [lines] wheel lines just went to a full-screen program —
+  /// see [TerminalView.altBufferScrollAnimated].
+  void _expectAltBufferScroll(int lines) {
+    final render = _viewportKey.currentContext?.findRenderObject();
+    if (render is RenderTerminal) render.expectRemoteScroll(lines);
+  }
+
+  /// AUTONOMOUS PATCH: what [TerminalView.altBufferScrollMirror] asks the
+  /// program to scroll through — the scroll handler's own pacing.
+  final _remoteScrollLink = RemoteScrollLink();
+
+  RenderTerminal? get _renderOrNull {
+    final render = _viewportKey.currentContext?.findRenderObject();
+    return render is RenderTerminal ? render : null;
+  }
+
+  void _mirrorScrollStart(double pixels) =>
+      _renderOrNull?.mirrorScrollStart(pixels);
+
+  bool _mirrorScrollTo(double pixels) =>
+      _renderOrNull?.mirrorScrollTo(pixels) ?? false;
+
+  void _mirrorScrollEnd() => _renderOrNull?.mirrorScrollEnd();
 
   @override
   void initState() {
@@ -220,18 +354,27 @@ class TerminalViewState extends State<TerminalView> {
   @override
   void didUpdateWidget(TerminalView oldWidget) {
     if (!identical(oldWidget.terminal, widget.terminal)) {
+      inputTrace(
+        () => 'view terminal SWAPPED (composing "${_composingText ?? ''}")'
+            '${widget.keepsInputAcrossTerminals ? ' → input kept' : ' → IME reset after frame'}',
+      );
       oldWidget.terminal.removeListener(_onTerminalChanged);
       widget.terminal.addListener(_onTerminalChanged);
-      // A marked string is owned by the old native input session. TerminalView
-      // states are reused while switching agents, so never carry that overlay
-      // or editing buffer into the newly selected terminal.
-      _composingText = null;
-      _composingBacktrackCells = 0;
-      final currentTerminal = widget.terminal;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || !identical(widget.terminal, currentTerminal)) return;
-        _customTextEditKey.currentState?.resetEditingState();
-      });
+      // A new screen: nothing predicted on the old one is where it was drawn.
+      _dropPrediction();
+      _inputPoint = null;
+      if (!widget.keepsInputAcrossTerminals) {
+        // A marked string is owned by the old native input session. TerminalView
+        // states are reused while switching agents, so never carry that overlay
+        // or editing buffer into the newly selected terminal.
+        _composingText = null;
+        _composingBacktrackCells = 0;
+        final currentTerminal = widget.terminal;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !identical(widget.terminal, currentTerminal)) return;
+          _customTextEditKey.currentState?.resetEditingState();
+        });
+      }
     }
     if (oldWidget.focusNode != widget.focusNode) {
       if (oldWidget.focusNode == null) {
@@ -257,6 +400,7 @@ class TerminalViewState extends State<TerminalView> {
 
   @override
   void dispose() {
+    _echoTimeout?.cancel();
     widget.terminal.removeListener(_onTerminalChanged);
     if (widget.focusNode == null) {
       _focusNode.dispose();
@@ -295,6 +439,12 @@ class TerminalViewState extends State<TerminalView> {
           onEditableRect: _onEditableRect,
           composingText: _composingText,
           composingBacktrackCells: _composingBacktrackCells,
+          animateRemoteScroll: widget.altBufferScrollAnimated,
+          onRemoteScrollShift: widget.onAltBufferScrollShift,
+          mirrorRemoteScroll: widget.altBufferScrollMirror,
+          mirrorPageKeys: widget.altBufferScrollPageKeys,
+          remoteScrollMemory: widget.altBufferScrollMemory,
+          remoteScrollLink: _remoteScrollLink,
         );
       },
     );
@@ -303,6 +453,14 @@ class TerminalViewState extends State<TerminalView> {
       terminal: widget.terminal,
       simulateScroll: widget.simulateScroll,
       onAltBufferScroll: widget.onAltBufferScroll,
+      physics: widget.altBufferScrollPhysics,
+      paced: widget.altBufferScrollPaced,
+      onWheelsSent:
+          widget.altBufferScrollAnimated ? _expectAltBufferScroll : null,
+      link: widget.altBufferScrollMirror ? _remoteScrollLink : null,
+      onScrollPosition: widget.altBufferScrollMirror ? _mirrorScrollTo : null,
+      onScrollStart: widget.altBufferScrollMirror ? _mirrorScrollStart : null,
+      onScrollEnd: widget.altBufferScrollMirror ? _mirrorScrollEnd : null,
       getCellOffset: (offset) => renderTerminal.getCellOffset(offset),
       getLineHeight: () => renderTerminal.lineHeight,
       child: child,
@@ -320,6 +478,8 @@ class TerminalViewState extends State<TerminalView> {
         onContentInserted: widget.onContentInserted,
         onInsert: _onInsert,
         onDelete: (count) {
+          inputTrace(() => 'view delete ×$count');
+          _restartPrediction();
           _scrollToBottom();
           for (var index = 0; index < count; index++) {
             widget.terminal.keyInput(TerminalKey.backspace);
@@ -327,6 +487,7 @@ class TerminalViewState extends State<TerminalView> {
         },
         onComposing: _onComposing,
         onAction: (action) {
+          _restartPrediction();
           _scrollToBottom();
           if (action == TextInputAction.done ||
               action == TextInputAction.newline) {
@@ -366,6 +527,8 @@ class TerminalViewState extends State<TerminalView> {
       terminalController: _controller,
       onTapUp: _onTapUp,
       onTapDown: _onTapDown,
+      onLongPressStart:
+          widget.onLongPressStart != null ? _onLongPressStart : null,
       onSecondaryTapDown:
           widget.onSecondaryTapDown != null ? _onSecondaryTapDown : null,
       onSecondaryTapUp:
@@ -436,6 +599,13 @@ class TerminalViewState extends State<TerminalView> {
     return false;
   }
 
+  bool _onLongPressStart(LongPressStartDetails details) {
+    final offset = renderTerminal.getCellOffset(
+      renderTerminal.globalToLocal(details.globalPosition),
+    );
+    return widget.onLongPressStart?.call(details, offset) ?? false;
+  }
+
   void _onSecondaryTapDown(TapDownDetails details) {
     final offset = renderTerminal.getCellOffset(details.localPosition);
     widget.onSecondaryTapDown?.call(details, offset);
@@ -459,15 +629,24 @@ class TerminalViewState extends State<TerminalView> {
     // generate hardware key events. So we need first try to send the key
     // as a hardware key event. If it fails, then we send it as a text input.
     final consumed = key == null ? false : widget.terminal.keyInput(key);
+    inputTrace(
+      () =>
+          'view insert "${traceText(text)}" as ${consumed ? 'key $key' : 'text'}',
+    );
 
     if (!consumed) {
       widget.terminal.textInput(text);
+      _predictEcho(text);
+    } else {
+      _restartPrediction();
     }
 
     _scrollToBottom();
   }
 
   void _onComposing(String? text, int backtrackCells) {
+    // A pre-edit is drawn at the cursor too, and owns it while it lasts.
+    if (text != null) _dropPrediction();
     if (text != null && _terminalAlreadyEchoes(text)) {
       text = null;
       backtrackCells = 0;
@@ -496,12 +675,153 @@ class TerminalViewState extends State<TerminalView> {
   }
 
   void _onTerminalChanged() {
+    if (mounted) _followEcho();
     final text = _composingText;
     if (!mounted || text == null || !_terminalAlreadyEchoes(text)) return;
     setState(() {
       _composingText = null;
       _composingBacktrackCells = 0;
     });
+  }
+
+  /// AUTONOMOUS PATCH: [text] just went to the terminal — drawn at the cursor
+  /// ahead of its echo, when one is expected there. See [TerminalView.predictsEcho].
+  ///
+  /// ⚠️ **Only where the echo will land, and only once one has been seen.**
+  /// Every key is a probe ([_echoFrom]): its echo arriving — the cursor moving
+  /// on along its line — is what turns prediction on ([_echoes]), and a key
+  /// whose echo never comes ([_echoWait]) turns it off, which is what keeps a
+  /// password prompt from showing what is typed into it. And a key is drawn
+  /// only with the cursor resting where the last echo left it ([_inputPoint]):
+  /// a program redrawing or streaming output moves the cursor about, and a
+  /// guess drawn there would be drawn in the wrong place.
+  void _predictEcho(String text) {
+    if (!widget.predictsEcho) return;
+    if (!_echoable(text) || _composingText != null) {
+      _dropPrediction();
+      return;
+    }
+    final now = _cursorMark();
+    _echoFrom ??= now;
+    final at = _inputPoint;
+    if (_echoes &&
+        at != null &&
+        at.x == now.x &&
+        at.y == now.y &&
+        now.x + _cells(_predicted + text) <= widget.terminal.viewWidth) {
+      _setPredicted(_predicted + text);
+      inputTrace(() => 'echo predicted "${traceText(_predicted)}"');
+    } else {
+      inputTrace(
+        () => 'echo not predicted (seen echoing=$_echoes,'
+            ' at input point=${at != null && at.x == now.x && at.y == now.y})',
+      );
+    }
+    _echoTimeout?.cancel();
+    _echoTimeout = Timer(_echoWait, _echoNeverCame);
+  }
+
+  /// The terminal changed: an echo arriving takes the keys it drew off the
+  /// prediction; anything else at the cursor takes the prediction down.
+  void _followEcho() {
+    final from = _echoFrom;
+    if (from == null) return;
+    final now = _cursorMark();
+    // Nothing at the cursor yet — a blink, a redraw elsewhere on the screen.
+    if (now == from) return;
+    if (now.y == from.y && now.x > from.x) {
+      _echoes = true;
+      _inputPoint = (x: now.x, y: now.y);
+      final rest = _afterCells(_predicted, now.x - from.x);
+      _setPredicted(rest);
+      if (rest.isEmpty) {
+        _echoFrom = null;
+        _echoTimeout?.cancel();
+        _echoTimeout = null;
+      } else {
+        _echoFrom = now;
+      }
+      return;
+    }
+    // The cursor went elsewhere, or its line was redrawn without it moving on:
+    // the screen is the truth now.
+    _dropPrediction();
+  }
+
+  /// A key's echo did not come: not a terminal that echoes what is typed into
+  /// it right now — a password prompt, or a program not reading.
+  void _echoNeverCame() {
+    inputTrace(
+        () => 'echo never came within ${_echoWait.inMilliseconds}ms — off');
+    _echoTimeout = null;
+    _echoes = false;
+    _dropPrediction();
+  }
+
+  /// A key that moves the cursor or the line rather than adding to it — a
+  /// delete, Enter, an arrow: what is drawn goes, and so does the input point,
+  /// so the next key waits for its own echo before anything is drawn ahead of
+  /// it. A Telex word arrives as deletes and the word retyped, and drawn at once
+  /// the new word sat after the old one until the deletes were echoed; and
+  /// after Enter the cursor may be at a password prompt.
+  void _restartPrediction() {
+    _dropPrediction();
+    _inputPoint = null;
+  }
+
+  void _dropPrediction() {
+    _echoTimeout?.cancel();
+    _echoTimeout = null;
+    _echoFrom = null;
+    if (_predicted.isNotEmpty) _setPredicted('');
+  }
+
+  void _setPredicted(String text) {
+    _predicted = text;
+    final render = _viewportKey.currentContext?.findRenderObject();
+    if (render is RenderTerminal) render.predictedText = text;
+  }
+
+  ({int x, int y, int version}) _cursorMark() {
+    final buffer = widget.terminal.buffer;
+    final y = buffer.absoluteCursorY;
+    final lines = buffer.lines;
+    final version = y >= 0 && y < lines.length ? lines[y].paintVersion : -1;
+    return (x: buffer.cursorX, y: y, version: version);
+  }
+
+  /// Whether a terminal echoes [text] as it is: printable characters taking a
+  /// cell or two each.
+  static bool _echoable(String text) {
+    if (text.isEmpty) return false;
+    for (final rune in text.runes) {
+      if (rune < 0x20 || rune == 0x7f || unicodeV11.wcwidth(rune) <= 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static int _cells(String text) {
+    var cells = 0;
+    for (final rune in text.runes) {
+      final width = unicodeV11.wcwidth(rune);
+      if (width > 0) cells += width;
+    }
+    return cells;
+  }
+
+  /// [text] without the characters filling its first [cells] cells.
+  static String _afterCells(String text, int cells) {
+    var used = 0;
+    var index = 0;
+    final runes = text.runes.toList();
+    while (index < runes.length && used < cells) {
+      final width = unicodeV11.wcwidth(runes[index]);
+      used += width > 0 ? width : 0;
+      index++;
+    }
+    return String.fromCharCodes(runes.skip(index));
   }
 
   @visibleForTesting
@@ -626,6 +946,7 @@ class TerminalViewState extends State<TerminalView> {
     );
 
     if (handled) {
+      _restartPrediction();
       _scrollToBottom();
       if (key == TerminalKey.enter) {
         _customTextEditKey.currentState?.resetEditingState();
@@ -691,6 +1012,12 @@ class _TerminalView extends LeafRenderObjectWidget {
     this.onEditableRect,
     this.composingText,
     this.composingBacktrackCells = 0,
+    this.animateRemoteScroll = false,
+    this.onRemoteScrollShift,
+    this.mirrorRemoteScroll = false,
+    this.mirrorPageKeys = false,
+    this.remoteScrollMemory,
+    this.remoteScrollLink,
   });
 
   final Terminal terminal;
@@ -725,6 +1052,18 @@ class _TerminalView extends LeafRenderObjectWidget {
 
   final int composingBacktrackCells;
 
+  final bool animateRemoteScroll;
+
+  final void Function(int rows)? onRemoteScrollShift;
+
+  final bool mirrorRemoteScroll;
+
+  final bool mirrorPageKeys;
+
+  final RemoteScrollMemory? remoteScrollMemory;
+
+  final RemoteScrollLink? remoteScrollLink;
+
   @override
   RenderTerminal createRenderObject(BuildContext context) {
     return RenderTerminal(
@@ -745,6 +1084,13 @@ class _TerminalView extends LeafRenderObjectWidget {
       onEditableRect: onEditableRect,
       composingText: composingText,
       composingBacktrackCells: composingBacktrackCells,
+      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0,
+      animateRemoteScroll: animateRemoteScroll,
+      onRemoteScrollShift: onRemoteScrollShift,
+      mirrorRemoteScroll: mirrorRemoteScroll,
+      mirrorPageKeys: mirrorPageKeys,
+      remoteScrollMemory: remoteScrollMemory,
+      remoteScrollLink: remoteScrollLink,
     );
   }
 
@@ -767,6 +1113,13 @@ class _TerminalView extends LeafRenderObjectWidget {
       ..alwaysShowCursor = alwaysShowCursor
       ..onEditableRect = onEditableRect
       ..composingText = composingText
-      ..composingBacktrackCells = composingBacktrackCells;
+      ..composingBacktrackCells = composingBacktrackCells
+      ..devicePixelRatio = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0
+      ..animateRemoteScroll = animateRemoteScroll
+      ..onRemoteScrollShift = onRemoteScrollShift
+      ..mirrorRemoteScroll = mirrorRemoteScroll
+      ..mirrorPageKeys = mirrorPageKeys
+      ..remoteScrollMemory = remoteScrollMemory
+      ..remoteScrollLink = remoteScrollLink;
   }
 }

@@ -30,6 +30,10 @@ const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_workt
   'memory_snapshot', 'memory_about_put', 'memory_deliver',
   // Cloud agents (services/cloud.ts): a cloud harness's conversation, the person's words for it, which are connected.
   'cloud_transcript', 'cloud_send', 'cloud_agents',
+  // A Harness OS computer managed from the phone (services/osDevice.ts): a Wi-Fi join carries the network's password.
+  'os_device',
+  // Sharing a machine across accounts (services/sharedMachines.ts): the addresses it is shared with.
+  'shared_machines',
   // A sign-in a phone caught for a page a harness's program opened (core/terminals/browser.ts): it holds the code.
   'browser_callback', ...ROUTE_COMMAND_TYPES])
 const MACHINE_RESULTS = new Set([...MACHINE_REQUESTS].map(type => `${type}_result`))

@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { readdir, readFile, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path'
-import { step, VIA_MCP_ENV } from '../agentClient/commands.js'
+import { addressOf, atMachineRefusal, EXIT, machineOption, refusalNext, REFUSED_CODES, step, VIA_MCP_ENV } from '../agentClient/commands.js'
+import { AgentClientError } from '../agentClient/daemon.js'
+import { formatNext, type NextStep } from '../agentClient/next.js'
 import { folderTrust } from '../engines/launchPrep.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineName } from '../messages/model.js'
@@ -18,19 +20,19 @@ const ENGINE_NAMES: ReadonlySet<string> = new Set(ENGINES)
  *
  *     harness new                          claude, here
  *     harness new codex                    codex, here
- *     harness new codex @mini ~/code/auth  codex, on mini, in that folder
- *     harness new codex my-game            codex, in a new project ~/harnesses/my-game
- *     harness new --new                    a new project named after the agent and the time
+ *     harness new codex --machine mini ~/code/auth  codex, on mini, in that folder
+ *     harness new codex my-game                     codex, in a new project ~/harnesses/my-game
+ *     harness new --new                             a new project named after the agent and the time
  *
  * A new terminal tab asks nothing and opens where you were; so does this. With no folder named it
  * works in the directory it was run from, which is what `cd repo && harness new` means to anyone who
  * has typed `code .` — and the one thing the app's box cannot know. The order of the words is free:
- * `@` marks the machine, a path looks like a path, the first other word is the agent and the second
- * names a new project.
+ * `--machine` names the machine, a path looks like a path, the first other word is the agent and the
+ * second names a new project.
  */
 export interface NewArgs {
   agent: string
-  /** A machine's label or id as typed after `@`, or null for this one. */
+  /** A machine's label or id as given to `--machine`, or null for this one. */
   machine: string | null
   /** The folder to work in, absolute; null when a new project is asked for instead. */
   cwd: string | null
@@ -50,12 +52,12 @@ export class NewUsageError extends Error {}
 export class NewHelpRequested extends Error {}
 
 export const NEW_USAGE = [
-  'Usage: harness new [agent] [@machine] [folder | project-name] [options]',
+  'Usage: harness new [agent] [--machine <name>] [folder | project-name] [options]',
   '',
   '  agent          claude (default), codex, opencode, …, or a store harness like owner/name',
-  '  @machine       a machine\'s name or id; this one when left out',
+  '  --machine <m>  a machine\'s name or id; this one when left out',
   '  folder         a path (/abs, ~/x, ./x, .): work there. Left out: the current directory.',
-  '                 With @machine, a path under THIS home is read as the same path under its home,',
+  '                 With --machine, a path under THIS home is read as the same path under its home,',
   '                 because the shell has already turned ~/x into /Users/you/x by the time it gets here',
   '  project-name   any other second word: a new project ~/harnesses/<name> on that machine.',
   '                 For scratch or new work give one (harness new codex review -- …), not a folder',
@@ -69,6 +71,8 @@ export const NEW_USAGE = [
   '                   harness new codex -- fix the flaky login test',
   '  --name <n>     the harness\'s name until the agent titles its session',
   '  --json         print the result as one JSON line',
+  '',
+  'An agent refused (its limits, or the person has not let agents start agents) exits 5: do not retry.',
 ].join('\n')
 
 const MODES = new Set(['auto', 'ask', 'plan', 'full'])
@@ -110,18 +114,23 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
     else if (word === '--mode') { mode = value(word, i); modeGiven = true; i++ }
     else if (word === '--prompt' || word === '--task') { prompt = value(word, i); i++ }
     else if (word === '--name') { name = value(word, i); i++ }
+    else if (word === '--machine') {
+      if (machine !== null) throw new NewUsageError('Name one machine.')
+      machine = value(word, i).trim()
+      if (!machine) throw new NewUsageError('--machine needs a value.')
+      i++
+    }
     else if (word === '--new') {
+      // `--new @office`: the old machine word is refused below, never taken for the project's name.
       const next = argv[i + 1]
       if (next !== undefined && !next.startsWith('-') && !next.startsWith('@') && !looksLikePath(next, windows)) { projectName = next; i++ }
       else projectName = ''
     }
     // Any dash: `-x` read as an agent called "-x" turns a typo into a confusing refusal from the machine.
     else if (word.startsWith('-')) throw new NewUsageError(`Unknown option ${word}.`)
-    else if (word.startsWith('@')) {
-      if (word.length === 1) throw new NewUsageError('Name a machine after @.')
-      if (machine !== null) throw new NewUsageError('Name one machine.')
-      machine = word.slice(1)
-    }
+    // `@office` named the machine until every command took `--machine`. Taken as a word now, it would quietly be a new
+    // project called "@office" on this machine: refused, with what to type instead.
+    else if (word.startsWith('@')) throw new NewUsageError(atMachineRefusal(word))
     else if (looksLikePath(word, windows)) {
       if (folder !== null) throw new NewUsageError('Name one folder.')
       folder = word
@@ -201,14 +210,49 @@ export function newAgentPayload(args: NewArgs, cwd: string | null, baseEngine = 
   }
 }
 
-export interface NewMachine { machineId: string; label: string; status: string; current: boolean }
+export interface NewMachine {
+  machineId: string; label: string; status: string; current: boolean
+  /** Another account's machine shared with this one: whose it is. */
+  sharedBy?: string
+  /** Shared with everyone at the account's domain and not added yet: named only to say how to add it. */
+  toAdd?: true
+}
 
-/** The machine `@word` means: an exact id, else a label, case-blind; ambiguity is an error, not a guess. */
-export function resolveNewMachine(word: string, machines: NewMachine[]): NewMachine {
+/** One row of `GET /api/machines`, as far as `--machine` reads it; a shared one carries its `share`. */
+export interface MachineRow {
+  machineId: string
+  name?: string | null
+  hostname?: string | null
+  status?: string | null
+  share?: { ownerName?: string | null; added?: boolean | null } | null
+}
+
+/** The machines `--machine` resolves among: the account's own, then those other accounts share with it that it
+ *  may use — named in the share, or added from one at its domain (`share.added`, as the backend decides). A domain
+ *  share not added yet is listed as `toAdd`: its machine refuses this account until it is added
+ *  (backend lib/machineAccess.ts `sharedMachineAccess`), so it is never chosen, only named. */
+export function machineChoices(data: { machines?: MachineRow[]; sharedMachines?: MachineRow[] }, currentId: string | null): NewMachine[] {
+  const label = (machine: MachineRow): string => machine.name?.trim() || machine.hostname?.trim() || '(unnamed)'
+  const choice = (machine: MachineRow): NewMachine => ({
+    machineId: machine.machineId, label: label(machine), status: machine.status || 'unknown', current: machine.machineId === currentId,
+  })
+  return [
+    ...(data.machines ?? []).map(choice),
+    ...(data.sharedMachines ?? []).map((machine) => ({
+      ...choice(machine), current: false, sharedBy: machine.share?.ownerName?.trim() || 'another account',
+      ...(machine.share?.added === true ? {} : { toAdd: true as const }),
+    })),
+  ]
+}
+
+/** The machine `--machine <word>` means: an exact id, else a label, case-blind; ambiguity is an error, not a guess.
+ *  A machine shared with the account answers its name too, but the account's own wins a name both have. */
+export function resolveNewMachine(word: string, choices: NewMachine[]): NewMachine {
+  const machines = choices.filter((machine) => !machine.toAdd)
   const byId = machines.find((machine) => machine.machineId === word)
   if (byId) return byId
   const wanted = word.toLowerCase()
-  // The whole name, else its start, else a word in it: `@mini` is "Mac mini" to the person typing.
+  // The whole name, else its start, else a word in it: `--machine mini` is "Mac mini" to the person typing.
   const tiers = [
     (label: string) => label === wanted,
     (label: string) => label.startsWith(wanted),
@@ -217,11 +261,21 @@ export function resolveNewMachine(word: string, machines: NewMachine[]): NewMach
   let matches: NewMachine[] = []
   for (const tier of tiers) {
     matches = machines.filter((machine) => tier(machine.label.toLowerCase()))
+    const own = matches.filter((machine) => machine.sharedBy === undefined)
+    if (own.length > 0) matches = own
     if (matches.length > 0) break
   }
   if (matches.length === 1) return matches[0]!
   if (matches.length === 0) {
-    throw new NewUsageError(`No machine called “${word}”. Yours: ${machines.map((machine) => machine.label).join(', ') || 'none'}.`)
+    // Seen 2026-10-16: Mac Auto, shared with everyone at autonomous.ai and not added, read as no machine at all.
+    const team = choices.find((machine) => machine.toAdd && (machine.machineId === word || machine.label.toLowerCase() === word.toLowerCase()))
+    if (team) {
+      throw new NewUsageError(`${team.sharedBy} shared “${team.label}” with everyone at your company. Add it first: Machines › Shared with your team, in the app or hn.`)
+    }
+    const labels = (shared: boolean) => machines.filter((machine) => (machine.sharedBy !== undefined) === shared).map((machine) => machine.label)
+    const shared = labels(true)
+    throw new NewUsageError(`No machine called “${word}”. Yours: ${labels(false).join(', ') || 'none'}.`
+      + (shared.length ? ` Shared with you: ${shared.join(', ')}.` : ''))
   }
   throw new NewUsageError(`“${word}” could be ${matches.map((machine) => machine.label).join(' or ')}. Type more of the name.`)
 }
@@ -276,8 +330,8 @@ export interface NewOrigin {
   existing?(name: string | null, asking: { machineId: string; engine: string }): Promise<ExistingHarness | null>
   /** Records a harness asked for that has not started yet, so the caller follows it by name once this has answered. */
   pending?(machineId: string, creation: { creationId: string; name: string; engine: string }): void
-  /** How to read, wait for and message what was started. */
-  next(agent: Record<string, unknown>): string
+  /** What the start changed, and what to run next: wait for it, then read it. */
+  answer(agent: Record<string, unknown>, at: { local: boolean; machine: string | null }): { effect: string; next: NextStep[] }
   /** The caller's own harness, by agent id, when it is one on this computer: a harness started here records it, and the
    *  windows open it beside the caller's pane. Absent for an agent outside Harness. */
   parentAgentId?: string
@@ -456,6 +510,9 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
       machineLabel = machine.current ? 'this computer' : machine.label
       local = machine.current
     }
+    // A start left pending on another machine is looked for there: `harness ps` alone lists this one, which is how
+    // the lamp lost its harness on office (review of #1333).
+    const psThere = local || args.machine === null ? 'harness ps' : `harness ps ${machineOption(args.machine)}`
     if (!machineId) {
       deps.error('This computer is not signed in to Harness. Run `harness login`.')
       return 1
@@ -509,7 +566,7 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
         // With content it may be just what the work needs, so it starts; the agent is told it will wait for the person.
         if (asks === 'content') {
           trustNote = `${engineName(engine)} will ask the person to trust ${cwd} before it starts, so it waits for them until `
-            + `they answer (${env[VIA_MCP_ENV] === '1' ? 'harness_wait says needs-input' : 'harness wait exits 3'}). `
+            + `they answer (${env[VIA_MCP_ENV] === '1' ? 'harness_wait says it needs the person' : 'harness wait exits 3'}). `
             + `For new work, a project name avoids this: ${instead}`
         }
       }
@@ -557,9 +614,13 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
       // cancelled, the install would be wasted and the agent would only ask again.
       if (origin && result.state === 'pending' && installing(result)) {
         const name = args.name?.trim() ?? ''
-        const note = `Harness is installing ${engineName(String(payload.engine))}; the harness ${name ? `"${name}" ` : ''}starts by itself once it is installed. `
-          + `Check on it with ${name ? `${step(env, 'ps')} or ${step(env, 'wait', name)}` : step(env, 'ps')}; do not start it again.`
-        deps.output(args.json ? JSON.stringify({ ok: true, pending: true, machineId, creationId, name, note }) : note)
+        // Under MCP the tools take no machine: harness_wait finds the caller's own by its record.
+        // One name as the shell takes it: quoted when it has a space (the MCP tool call quotes it once, `step`).
+        const word = /^[\w.:-]+$/.test(name) ? name : `"${name.replace(/(["\\$`])/g, '\\$1')}"`
+        const at = local || args.machine === null || env[VIA_MCP_ENV] === '1' ? word : `${machineOption(args.machine)} ${word}`
+        const next: NextStep[] = name ? [{ run: step(env, 'wait', at), when: 'until it has started and answered' }] : [{ run: step(env, 'ps'), when: 'to follow it' }]
+        const note = `${name || 'The harness'} on ${machineLabel}: installing ${engineName(String(payload.engine))}. It starts by itself once installed; do not start it again.`
+        deps.output(args.json ? JSON.stringify({ ok: true, pending: true, machineId, creationId, name, note, next }) : `${note}\n${formatNext(next)}`)
         return 0
       }
       if (result.state === 'pending') {
@@ -574,7 +635,7 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
         }
         // No answer (a daemon that predates the cancel): the request is still saved, and may start later.
         if (typeof cancelled?.state !== 'string' || cancelled.state === 'pending') {
-          throw new Error(`${why} It is still saved and may start later by itself: check with \`harness ps\` before starting another.`)
+          throw new Error(`${why} It is still saved and may start later by itself: check with \`${psThere}\` before starting another.`)
         }
         // Too late to cancel: what became of it (created, refused, or claimed and starting now) is the answer.
         result = cancelled
@@ -588,26 +649,48 @@ export async function newCommand(deps: NewCommandDeps): Promise<number> {
         throw new Error(result.state === 'failed'
           // A code this has no words for is shown by the daemon's own detail, which names the engine and why.
           ? (ERRORS[code] ? `${ERRORS[code]}${detail ? ` (${detail})` : ''}` : detail || code || 'The harness could not be started.')
-          : `Harness could not confirm the harness started (${String(result.state)}). Check with \`harness ps\` before starting another.`)
+          : `Harness could not confirm the harness started (${String(result.state)}). Check with \`${psThere}\` before starting another.`)
       }
       const agent = (result.agent ?? {}) as Record<string, unknown>
       const warning = await origin?.created(machineId, agent, creationId)
       if (warning) deps.error(warning)
-      if (args.json) deps.output(JSON.stringify({ ok: true, machineId, agent, ...(trustNote ? { note: trustNote } : {}) }))
-      else {
+      // An agent is told it is starting (never that its task is done), what changed, and what to run next.
+      const told = origin?.answer(agent, { local, machine: args.machine })
+      if (args.json) deps.output(JSON.stringify({ ok: true, machineId, agent, ...(trustNote ? { note: trustNote } : {}), ...(told ? { effect: told.effect, next: told.next } : {}) }))
+      else if (origin && told) {
+        const project = (agent.project ?? {}) as Record<string, unknown>
+        const folder = typeof project.cwd === 'string' ? project.cwd : cwd
+        const name = String(agent.name ?? agent.id ?? 'The harness')
+        deps.output(`${name} on ${machineLabel}: starting. ${engineName(String(agent.engine ?? payload.engine ?? ''))}${folder ? `, in ${folder}` : ''}.`)
+        if (told.effect) deps.output(told.effect)
+        if (trustNote) deps.output(trustNote)
+        const next = formatNext(told.next)
+        if (next) deps.output(next)
+      } else {
         const project = (agent.project ?? {}) as Record<string, unknown>
         const where = typeof project.cwd === 'string' ? ` in ${project.cwd}` : cwd ? ` in ${cwd}` : ''
         const name = String(agent.name ?? agent.id ?? 'a harness')
         deps.output(`Created ${name} on ${machineLabel}${where}.`)
         if (trustNote) deps.output(trustNote)
-        deps.output(origin ? origin.next(agent) : 'Open it in Harness with ⌘O.')
+        deps.output('Open it in Harness with ⌘O.')
+        // Started on another machine by a person or a program, it is read and waited for through that machine, named as
+        // it was here. The lamp (lamp-4ace, 2026-10-14 21:36), a program outside Harness, started `lamp-first-task` on
+        // office this way and was told only ⌘O, which it has not got.
+        if (!origin && !local && args.machine !== null) {
+          const at = `${machineOption(args.machine)} ${addressOf({ machineId: '', agentId: String(agent.id ?? ''), name: String(agent.name ?? ''), engine: '' })}`
+          deps.output(`Read it: ${step(env, 'show', at)} · wait for it: ${step(env, 'wait', at)}`)
+        }
       }
       return 0
     } finally { session.close() }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    if (args.json) deps.output(JSON.stringify({ ok: false, error: message }))
-    else deps.error(message)
-    return error instanceof NewUsageError ? 2 : 1
+    // Refused (a limit, the person's setting, a pane whose harness is gone): not a failure to retry.
+    const refused = error instanceof AgentClientError && REFUSED_CODES.has(error.code) ? error : null
+    if (args.json) {
+      deps.output(JSON.stringify({ ok: false, error: message,
+        ...(refused ? { code: refused.code, ...(refused.reason ? { reason: refused.reason } : {}), next: refusalNext(env, refused) } : {}) }))
+    } else deps.error(message)
+    return refused ? EXIT.refused : error instanceof NewUsageError ? 2 : 1
   }
 }

@@ -109,6 +109,10 @@ typedef struct {
     const ht_pet_scene_t *relaxing_scene;        // NULL: today's resting face (the small pet and the resting line); else
                                                  // the resting face is laid out like the working one, this scene in the
                                                  // middle and a quiet line on the lower arc (focus.c THE RELAXING FACE)
+    const ht_pet_scene_t *working_alt;           // NULL: none (Claude: the builder); else the working face plays it or
+                                                 // working_scene, drawn at random as it starts showing (focus.c
+                                                 // ht_focus_pick_working); the alert is the one alert_scene, its
+                                                 // bubble placed from the scene that plays (beside either hat)
 } ht_pet_t;
 // A pet's loop length.
 static inline unsigned ht_pet_steps(const ht_pet_t *pet) { return pet->steps ? pet->steps : HT_PET_STEPS; }

@@ -184,6 +184,9 @@ const envSchema = z.object({
 
   // Comma-separated emails granted role=admin on first creation.
   ADMIN_EMAILS: z.string().default(''),
+  // A Slack incoming webhook told when reports hide a Hub publication or comment (lib/communityReports.ts).
+  // Empty: nothing is sent; reviewers find them at /hub/reports.
+  COMMUNITY_REPORTS_WEBHOOK_URL: z.string().url().or(z.literal('')).default(''),
 
   // Server availability, not user opt-in. Accounts must enable the creature in Experimental settings.
   // Explicit false keeps the module dark; the optional allowlist further limits availability.

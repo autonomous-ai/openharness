@@ -3,7 +3,9 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import '../core/local_key_value_store.dart';
 import 'product_health_contract.dart';
+import 'product_report_failure.dart';
 export 'product_health_contract.dart';
 
 enum ProductFlow {
@@ -25,7 +27,17 @@ enum ProductFlow {
   updateRelaunch('update_relaunch'),
   connectUser('connect_user'),
   connectAuto('connect_auto'),
-  resumeRecovery('resume_recovery');
+  resumeRecovery('resume_recovery'),
+  // The phone's own flows, listed so this enum names every flow the phone's copy does; the desktop
+  // never begins them.
+  signInScan('sign_in_scan'),
+  signInGoogle('sign_in_google'),
+  signInApple('sign_in_apple'),
+  signInEmail('sign_in_email'),
+  computerWait('computer_wait'),
+  sessionOpen('session_open'),
+  firstMessage('first_message'),
+  notifyPermission('notify_permission');
 
   const ProductFlow(this.wire);
   final String wire;
@@ -41,7 +53,8 @@ typedef ProductChoiceRequest = Future<Map<String, dynamic>> Function();
 
 /// Fixed counters only: no event log, identifiers, errors, request/response objects or content.
 /// Counters stay in RAM. The separate runtime observer saves only last-run control flags locally.
-/// Signed-out sharing is an explicit choice for this app session; a close/crash can lose queued counts.
+/// Desktop setup sharing defaults on; only its preference is persisted locally.
+/// Counters remain in RAM, so a close/crash can lose queued counts.
 /// Requests and retries are serialized and never awaited by a product action.
 class ProductMeasurement extends ChangeNotifier {
   ProductMeasurement({
@@ -51,10 +64,14 @@ class ProductMeasurement extends ChangeNotifier {
     String Function()? receipt,
     this.automatic = true,
     this.context,
+    LocalKeyValueStore? setupStorage,
   }) : assert(const ['desktop', 'phone', 'web'].contains(surface)),
+       _setupStorage = setupStorage,
        _now = now ?? DateTime.now,
        _receipt = receipt ?? newProductReceipt {
-    choiceLoaded = true;
+    signedOutSharing = surface == 'desktop' && setupStorage == null;
+    choiceLoaded = setupStorage == null;
+    setupChoiceReady = _loadSetupChoice();
   }
 
   final String surface;
@@ -72,6 +89,18 @@ class ProductMeasurement extends ChangeNotifier {
   final DateTime Function() _now;
   final String Function() _receipt;
   bool signedOutSharing = false, choiceLoaded = false;
+  static const setupPreferenceKey = 'product_setup_sharing';
+  static const pendingSetupOptOut =
+      '{"enabled":false,"accountOptOutPending":true}';
+  final LocalKeyValueStore? _setupStorage;
+  late final Future<void> setupChoiceReady;
+  Future<void>? _setupSave;
+  Future<void> get setupChoiceSaved => _setupSave ?? Future<void>.value();
+  String? _persistedSetupChoice;
+  bool _accountOptOutPending = false;
+  bool get accountOptOutPending =>
+      surface == 'desktop' && _accountOptOutPending;
+  int _setupChoiceGeneration = 0;
   bool _disposed = false;
   Object? _account;
   bool? _enabled;
@@ -86,22 +115,80 @@ class ProductMeasurement extends ChangeNotifier {
   final _pending = <String, Map<String, dynamic>>{};
   final _setup = <ProductFlow, void Function(ProductOutcome)>{};
   final _setupFacts = <ProductFlow, String>{};
+  // Steps whose tool was missing at a check during the span now open; counted once per span.
+  final _setupMissing = <ProductFlow>{};
 
-  bool get sharing => _account != null && _enabled == true;
+  bool get sharing =>
+      _account != null &&
+      _enabled == true &&
+      (surface != 'desktop' || choiceLoaded) &&
+      !accountOptOutPending;
   bool get _setupAllowed =>
       surface != 'web' &&
       (!healthEnabled || context!.production) &&
+      choiceLoaded &&
       signedOutSharing &&
       (_account == null || _enabled == true);
 
-  Future<void> setSignedOutSharing(bool enabled) async {
-    _guestEpoch++;
-    signedOutSharing = enabled;
+  Future<void> _loadSetupChoice() async {
+    final storage = _setupStorage;
+    if (storage == null) return;
+    final generation = _setupChoiceGeneration;
+    String? value;
+    try {
+      value = await storage.read(setupPreferenceKey);
+    } catch (_) {
+      // An unreadable preference must not turn a saved opt-out back on.
+      value = pendingSetupOptOut;
+    }
+    if (_disposed || generation != _setupChoiceGeneration) return;
+    _persistedSetupChoice = value;
+    _accountOptOutPending =
+        value != null && value != 'true' && value != 'false';
+    signedOutSharing = value == null ? surface == 'desktop' : value == 'true';
     choiceLoaded = true;
-    _clear('setup');
-    _setup.clear();
-    if (enabled) _observeSetupFacts();
+    _observeSetupFacts();
     notifyListeners();
+  }
+
+  Future<void> setSignedOutSharing(
+    bool enabled, {
+    bool fromAccount = false,
+  }) async {
+    _setupChoiceGeneration++;
+    _accountOptOutPending = surface == 'desktop' && !enabled && !fromAccount;
+    if (accountOptOutPending) {
+      _accountEpoch++;
+      _clear('ui');
+    }
+    if (signedOutSharing != enabled || !choiceLoaded) {
+      _guestEpoch++;
+      signedOutSharing = enabled;
+      choiceLoaded = true;
+      _clear('setup');
+      _setup.clear();
+      _setupMissing.clear();
+      if (enabled) _observeSetupFacts();
+      notifyListeners();
+    }
+    final storage = _setupStorage;
+    if (storage == null) return;
+    final value = accountOptOutPending
+        ? pendingSetupOptOut
+        : enabled.toString();
+    // Serialize rapid changes so an older write cannot restore sharing after off.
+    final previous = _setupSave;
+    final saving = () async {
+      if (previous != null) {
+        try {
+          await previous;
+        } catch (_) {}
+      }
+      await storage.write(setupPreferenceKey, value);
+      _persistedSetupChoice = value;
+    }();
+    _setupSave = saving;
+    await saving;
   }
 
   /// The scope is RAM-only and never serialized. A sign-out or account change discards its queue.
@@ -114,9 +201,10 @@ class ProductMeasurement extends ChangeNotifier {
     _accountEpoch++;
     if (_account != null) {
       _guestEpoch++;
-      signedOutSharing = false;
+      if (surface != 'desktop') signedOutSharing = false;
       _clear('setup');
       _setup.clear();
+      _setupMissing.clear();
     }
     _account = scope;
     _enabled = null;
@@ -129,9 +217,13 @@ class ProductMeasurement extends ChangeNotifier {
   }
 
   /// A saved switch applies immediately in this app, even while a report is in flight.
-  void savedChoice(Map<String, dynamic> value) {
+  void savedChoice(Map<String, dynamic> value, {bool explicit = false}) {
     final enabled = value['enabled'], revision = value['revision'];
     if (enabled is! bool || revision is! int || revision < 0) {
+      _enabled = null;
+      return;
+    }
+    if (surface == 'desktop' && !choiceLoaded && enabled && !explicit) {
       _enabled = null;
       return;
     }
@@ -141,11 +233,28 @@ class ProductMeasurement extends ChangeNotifier {
     }
     _revision = revision;
     _enabled = enabled;
+    if (surface == 'desktop' &&
+        (!accountOptOutPending || !enabled || explicit) &&
+        (signedOutSharing != enabled ||
+            !choiceLoaded ||
+            accountOptOutPending ||
+            (_setupStorage != null &&
+                _persistedSetupChoice != enabled.toString()))) {
+      // Remember the confirmed account choice for the next signed-out launch.
+      // Persistence failure never restores the in-memory sharing it just stopped.
+      unawaited(
+        setSignedOutSharing(
+          enabled,
+          fromAccount: true,
+        ).catchError((Object _) {}),
+      );
+    }
     if (!enabled) {
       _guestEpoch++;
       signedOutSharing = false;
       _clear('setup');
       _setup.clear();
+      _setupMissing.clear();
     }
     notifyListeners();
   }
@@ -205,16 +314,16 @@ class ProductMeasurement extends ChangeNotifier {
     );
   }
 
-  /// A consented app-session funnel, never a click trail or an account join.
+  /// A sharing-enabled app-session funnel, never a click trail or an account join.
   /// Its clock starts at the first permitted observation, not retrospectively at install.
   void milestone(ProductHealthMeasure measure) {
     if (!healthEnabled || _disposed || !measure.wire.startsWith('funnel_')) {
       return;
     }
-    final channel = _setupAllowed
-        ? 'setup'
-        : sharing
+    final channel = sharing
         ? 'ui'
+        : _setupAllowed
+        ? 'setup'
         : null;
     if (channel == null) return;
     final seen = _funnelSeen.putIfAbsent(channel, () => {});
@@ -328,14 +437,23 @@ class ProductMeasurement extends ChangeNotifier {
     if (!_setupAllowed && !sharing) return;
     for (final entry in _setupFacts.entries) {
       if (!entry.key.beforeSignIn || entry.key == ProductFlow.signIn) continue;
-      if (const ['pending', 'running', 'needsTerminal'].contains(entry.value)) {
+      // `missing`: a check found the step's tool not installed yet, so setup goes on to install it.
+      // The step stays open until the install ends; only a setup that ends failed fails it.
+      if (const [
+        'pending',
+        'running',
+        'needsTerminal',
+        'missing',
+      ].contains(entry.value)) {
         _setup.putIfAbsent(entry.key, () => begin(entry.key));
+        if (entry.value == 'missing') _countSetupMissing(entry.key);
       } else if (const [
         'ready',
         'notApplicable',
         'failed',
         'unavailable',
       ].contains(entry.value)) {
+        _setupMissing.remove(entry.key);
         _setup
             .remove(entry.key)
             ?.call(
@@ -345,6 +463,47 @@ class ProductMeasurement extends ChangeNotifier {
             );
       }
     }
+  }
+
+  /// How many new computers needed a tool installed: a signed-out setup count only, because a
+  /// signed-in report goes through the local CLI, whose copy of the contract may be older.
+  void _countSetupMissing(ProductFlow flow) {
+    if (sharing || !_setupAllowed || surface != 'desktop' || _disposed) return;
+    if (!_setupMissing.add(flow)) return;
+    _count(
+      'setup',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'setup_${surface}_${flow.wire}_missing',
+    );
+  }
+
+  /// An agent download beside setup (AgentPrefetch): started when [ok] is null, then ok or failed
+  /// with how long it took. Anonymous setup counts only, so the setup preference governs them
+  /// whether or not the person has signed in meanwhile; a fixed engine name, nothing else.
+  void setupDownload(String engine, {bool? ok, Duration? took}) {
+    if (!_setupAllowed ||
+        surface != 'desktop' ||
+        _disposed ||
+        !const ['opencode', 'codex', 'claude'].contains(engine)) {
+      return;
+    }
+    final day = _now().toUtc().toIso8601String().substring(0, 10);
+    final prefix = 'setup_desktop_agent_download_${engine}_';
+    if (ok == null) {
+      _count('setup', day, '${prefix}started');
+      return;
+    }
+    _count('setup', day, '$prefix${ok ? 'ok' : 'failed'}');
+    final minutes = (took ?? Duration.zero).inSeconds / 60;
+    _count(
+      'setup',
+      day,
+      '$prefix${minutes < 1
+          ? 'under_1m'
+          : minutes < 5
+          ? '1m_to_5m'
+          : 'over_5m'}',
+    );
   }
 
   void _count(String channel, String day, String metric) {
@@ -390,6 +549,7 @@ class ProductMeasurement extends ChangeNotifier {
   });
 
   Future<void> _flush() async {
+    if (!choiceLoaded) await setupChoiceReady;
     if (_disposed) return;
     _lastAttempt = _now();
     for (final ticket in _expires.keys.toList()) {
@@ -432,7 +592,10 @@ class ProductMeasurement extends ChangeNotifier {
           'id': _receipt(),
           'day': key.split(':')[1],
           'counters': batch,
-          if (channel == 'setup') 'consent': true else 'revision': _revision,
+          if (channel == 'setup')
+            if (surface == 'desktop') 'sharing': 'default' else 'consent': true
+          else
+            'revision': _revision,
           if (channel == 'ui' && healthEnabled) 'context': context!.toJson(),
         };
         _pending[channel] = report;
@@ -472,8 +635,25 @@ class ProductMeasurement extends ChangeNotifier {
           _clear('ui');
           _clear('setup');
         }
-      } catch (_) {
-        if (channel == 'ui') health(ProductHealthMeasure.reportFailed);
+      } catch (error) {
+        // A late failure belongs to the old choice/account, just like a late success.
+        if (_disposed ||
+            (channel == 'setup'
+                ? epoch != _guestEpoch
+                : epoch != _accountEpoch))
+          continue;
+        if (channel == 'ui') {
+          health(ProductHealthMeasure.reportFailed);
+          health(
+            error is ProductReportFailure
+                ? error.measure
+                : ProductHealthMeasure.reportFailureOther,
+          );
+        }
+        // A malformed/oversized immutable packet will never succeed. Drop only that
+        // packet so new counts can proceed; transient failures keep the same receipt.
+        if (error is ProductReportFailure && error.permanent)
+          _pending.remove(channel);
         /* Same receipt on the next timer. No logs, aggressive retry, or product failure. */
       }
     }
@@ -486,6 +666,7 @@ class ProductMeasurement extends ChangeNotifier {
     _days.clear();
     _pending.clear();
     _setup.clear();
+    _setupMissing.clear();
     _active.clear();
     _expires.clear();
     _expire.clear();

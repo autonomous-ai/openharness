@@ -120,6 +120,7 @@ String _short(String label) {
     'dont',
     'cancel',
     'deny',
+    'reject',
     'hold',
     'never',
     'negative',
@@ -131,8 +132,12 @@ String _short(String label) {
     final always = numberWhere((key) => key.label == 'always');
     if (always != null) return (number: always, rest: after(1));
   }
+  // An MCP server's question answers Accept or Decline, not yes or no — the same two answers by
+  // other names.
   if (yesPhrases.contains(two) || yesWords.contains(words.first)) {
-    final yes = numberWhere((key) => key.label.startsWith('yes'));
+    final yes = numberWhere(
+      (key) => key.label.startsWith('yes') || key.label == 'accept',
+    );
     if (yes != null) {
       final used = yesPhrases.contains(two) ? 2 : 1;
       // "go for it" — the phrase's third word goes with it.
@@ -143,7 +148,9 @@ String _short(String label) {
     }
   }
   if (noWords.contains(words.first)) {
-    final no = numberWhere((key) => key.label.startsWith('no'));
+    final no = numberWhere(
+      (key) => key.label.startsWith('no') || key.label == 'decline',
+    );
     if (no != null) return (number: no, rest: after(1));
   }
   // An answer said in its own words: "yes and don't ask again" / "no and tell claude".

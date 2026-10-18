@@ -19,6 +19,7 @@ import { psEnv } from './childLocale.js'
 import { processStartTicks } from './processLiveness.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
 import { patientExec } from './patientExec.js'
+import { probeExecFile } from './offThreadExec.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 
 // Every `ps` call here: a held event loop must not turn a timeout into an empty answer
@@ -372,7 +373,7 @@ function execText(command: string, args: string[], timeout: number): Promise<str
     // timeout, for a deadline shared across calls: `killed` without an error is that timeout throwing
     // away an answer that had arrived (patientExec.ts), so it is no answer, not an empty one.
     let child: { killed?: boolean } | undefined
-    child = execFile(command, args, { timeout }, (err, stdout) => resolve((err && !stdout) || child?.killed ? null : stdout))
+    child = probeExecFile(execFile)(command, args, { timeout }, (err, stdout) => resolve((err && !stdout) || child?.killed ? null : stdout))
   })
 }
 

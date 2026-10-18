@@ -279,7 +279,10 @@ void main() {
     expect(box.projectLabel, '~/harnesses/rocket');
     // The system chooser's answer lands as the folder.
     box.setFolder('/work/picked');
-    expect(box.project, const NewHarnessProject.folder('/work/picked'));
+    expect(
+      box.project,
+      const NewHarnessProject.folder('/work/picked', exact: true),
+    );
   });
 
   test('typing filters the field, Return takes the row and moves along', () {
@@ -404,7 +407,7 @@ void main() {
     box.accept(box.options.firstWhere((option) => option.title == 'api'));
     expect(
       box.project,
-      NewHarnessProject.folder(p.join(root.path, 'auth', 'api')),
+      NewHarnessProject.folder(p.join(root.path, 'auth', 'api'), exact: true),
     );
     expect(box.projectLabel, '~/auth/api');
   });

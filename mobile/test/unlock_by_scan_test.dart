@@ -132,7 +132,11 @@ void main() {
     await scan(tester, ConnectCode.link('a@b.co'));
     expect(links.codes, isEmpty);
     expect(unlocked, isEmpty);
-    expect(find.textContaining("can't unlock a computer"), findsOneWidget);
+    // Says what to scan instead: the computer's own Add Phone code.
+    expect(
+      find.textContaining('That’s not the Add Phone code.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets(

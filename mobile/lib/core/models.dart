@@ -176,6 +176,14 @@ class Agent {
   /// when the daemon has none to report.
   final String? selectedModel;
 
+  /// The domain-specific harness this agent was made from (`autonomous/kicad`), null for a plain
+  /// engine — the desktop's `Agent.dsh`, read the same way ([_safeDsh]).
+  final String? dsh;
+
+  /// What the agent is AS — its harness when it has one, else its engine. The desktop's
+  /// `Agent.identityEngine`, which a tab's name votes with (`phone/desk_groups.dart`).
+  String? get identityEngine => dsh ?? engine;
+
   /// A domain-specific harness's display name ("Model manager"), null for a
   /// plain engine.
   final String? dshName;
@@ -218,6 +226,7 @@ class Agent {
     this.gridModel,
     this.gridWebSearch,
     this.selectedModel,
+    this.dsh,
     this.dshName,
     this.parentAgentId,
     this.project,
@@ -279,6 +288,7 @@ class Agent {
           ? GridWebSearch.fromWire(grid['webSearch'])
           : null,
       selectedModel: _safeLabel(j['selectedModel']),
+      dsh: _safeDsh(j['dsh']),
       dshName: _safeLabel(j['dshName']),
       parentAgentId: _safeLabel(j['parentAgentId'] ?? j['parentId']),
       project: AgentProject.fromJson(j['project']),
@@ -317,6 +327,7 @@ class Agent {
     gridModel: gridModel,
     gridWebSearch: gridWebSearch,
     selectedModel: selectedModel,
+    dsh: dsh,
     dshName: dshName,
     parentAgentId: parentAgentId,
     project: project,
@@ -409,6 +420,15 @@ class Agent {
       return null;
     }
     return raw;
+  }
+
+  /// An `owner/name` harness id, or null — the desktop's `Agent._safeDsh`, character for character.
+  static String? _safeDsh(Object? raw) {
+    if (raw is! String || raw.isEmpty || raw.length > 129) return null;
+    return RegExp(r'^[a-z0-9][a-z0-9-]{0,63}/[a-z0-9][a-z0-9-]{0,63}$')
+            .hasMatch(raw)
+        ? raw
+        : null;
   }
 
   static String? _safeLabel(Object? raw) {

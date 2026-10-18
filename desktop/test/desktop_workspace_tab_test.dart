@@ -150,6 +150,50 @@ Future<void> _capture(
   });
 }
 
+/// One tab, alone in a strip [width] wide.
+Widget _single(DesktopWorkspaceTab tab, {double? width}) => MaterialApp(
+  debugShowCheckedModeBanner: false,
+  theme: grid.buildAppTheme(brightness: Brightness.dark),
+  home: Scaffold(
+    backgroundColor: grid.AppPalette.windowBg,
+    body: Align(
+      alignment: Alignment.topLeft,
+      child: ColoredBox(
+        color: grid.AppPalette.swarmTabBar,
+        child: SizedBox(
+          key: const ValueKey('tab-slot'),
+          width: width ?? grid.AppDesktop.tabMaxWidth,
+          height: 40,
+          child: tab,
+        ),
+      ),
+    ),
+  ),
+);
+
+DesktopWorkspaceTab _sharedTab({
+  String label = 'app',
+  int? sharedCount,
+  VoidCallback? onInvitePeople,
+  VoidCallback? onShowAgentMessages,
+  VoidCallback? onStopSharing,
+  VoidCallback? onMoveHere,
+  VoidCallback? onLeave,
+}) => DesktopWorkspaceTab(
+  id: 'app',
+  label: label,
+  selected: true,
+  showShortcuts: const AlwaysStoppedAnimation(false),
+  onSelect: () {},
+  onClose: () {},
+  sharedCount: sharedCount,
+  onInvitePeople: onInvitePeople,
+  onShowAgentMessages: onShowAgentMessages,
+  onStopSharing: onStopSharing,
+  onMoveHere: onMoveHere,
+  onLeave: onLeave,
+);
+
 Finder _label(String name) => find.byKey(ValueKey('tab-label:$name'));
 Finder _close(String name) => find.byKey(ValueKey('tab-close:$name'));
 Finder _tab(String name) => find.byWidgetPredicate(
@@ -430,5 +474,170 @@ void main() {
     expect(find.text('⌘2'), findsNothing);
     expect(find.byKey(const ValueKey('status:Desktop')), findsNothing);
     expect(find.byKey(const ValueKey('status:Notes')), findsOneWidget);
+  });
+  testWidgets('the Flutter tab shows the people mark and count', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await tester.pumpWidget(_single(_sharedTab(sharedCount: 7)));
+      expect(find.byIcon(AppIcons.users), findsOneWidget);
+      expect(find.text('7'), findsOneWidget);
+      expect(
+        find.bySemanticsLabel('app, shared tab, 7 harnesses'),
+        findsOneWidget,
+      );
+      // After the name, inside the tab.
+      final name = tester.getRect(_label('app'));
+      final mark = tester.getRect(find.byKey(const ValueKey('tab-shared:app')));
+      final slot = tester.getRect(find.byKey(const ValueKey('tab-slot')));
+      expect(mark.left, greaterThanOrEqualTo(name.right));
+      expect(mark.right, lessThanOrEqualTo(slot.right));
+
+      await tester.pumpWidget(_single(_sharedTab(sharedCount: 1)));
+      expect(
+        find.bySemanticsLabel('app, shared tab, 1 harness'),
+        findsOneWidget,
+      );
+
+      // An unshared tab has no mark and says nothing of sharing.
+      await tester.pumpWidget(_single(_sharedTab()));
+      expect(find.byIcon(AppIcons.users), findsNothing);
+      expect(find.byKey(const ValueKey('tab-shared:app')), findsNothing);
+      expect(find.bySemanticsLabel('app'), findsOneWidget);
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('right-click opens the tab menu by role', (tester) async {
+    const invite = 'Invite People…',
+        show = 'Show Agent Messages',
+        stop = 'Stop Sharing Tab',
+        move = 'Move Here',
+        leave = 'Leave Tab';
+    final calls = <String>[];
+    Future<void> openMenu() async {
+      await tester.tap(_label('app'), buttons: kSecondaryButton);
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> check(DesktopWorkspaceTab tab, List<String> rows) async {
+      await tester.pumpWidget(_single(tab));
+      await openMenu();
+      for (final row in [invite, show, stop, move, leave]) {
+        expect(
+          find.text(row),
+          rows.contains(row) ? findsOneWidget : findsNothing,
+          reason: row,
+        );
+      }
+      // In this order.
+      final tops = [for (final row in rows) tester.getRect(find.text(row)).top];
+      expect(tops, [...tops]..sort());
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      for (final row in rows) {
+        calls.clear();
+        await openMenu();
+        await tester.tap(find.text(row));
+        await tester.pumpAndSettle();
+        expect(calls, [row]);
+        expect(find.text(row), findsNothing, reason: 'the menu closed');
+      }
+    }
+
+    // Owner, shared from another of its computers.
+    await check(
+      _sharedTab(
+        sharedCount: 3,
+        onInvitePeople: () => calls.add(invite),
+        onShowAgentMessages: () => calls.add(show),
+        onStopSharing: () => calls.add(stop),
+        onMoveHere: () => calls.add(move),
+      ),
+      [invite, show, stop, move],
+    );
+    // Member.
+    await check(
+      _sharedTab(
+        sharedCount: 3,
+        onShowAgentMessages: () => calls.add(show),
+        onLeave: () => calls.add(leave),
+      ),
+      [show, leave],
+    );
+    // Unshared.
+    await check(
+      _sharedTab(
+        onInvitePeople: () => calls.add(invite),
+        onShowAgentMessages: () => calls.add(show),
+      ),
+      [invite, show],
+    );
+    // Nothing to offer: a right-click opens nothing.
+    await tester.pumpWidget(_single(_sharedTab()));
+    await openMenu();
+    expect(find.text(show), findsNothing);
+    expect(find.text(invite), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('the tab menu is reachable without a mouse', (tester) async {
+    final semantics = tester.ensureSemantics();
+    var invited = 0;
+    try {
+      await tester.pumpWidget(
+        _single(_sharedTab(onInvitePeople: () => invited++)),
+      );
+      final node = tester.getSemantics(find.bySemanticsLabel('app'));
+      final action = CustomSemanticsAction.getIdentifier(
+        const CustomSemanticsAction(label: 'Tab options'),
+      );
+      expect(
+        node.getSemanticsData().customSemanticsActionIds,
+        contains(action),
+      );
+      tester
+          .renderObject(_label('app'))
+          .owner!
+          .semanticsOwner!
+          .performAction(node.id, SemanticsAction.customAction, action);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Invite People…'));
+      await tester.pumpAndSettle();
+      expect(invited, 1);
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('a hostile tab name stays one ellipsized line (Review Focus 5)', (
+    tester,
+  ) async {
+    final hostile = '\u202E${'x' * 300}<b>';
+    await tester.pumpWidget(
+      _single(_sharedTab(label: hostile, sharedCount: 7)),
+    );
+    final slot = tester.getRect(find.byKey(const ValueKey('tab-slot')));
+    expect(slot.width, grid.AppDesktop.tabMaxWidth);
+    final text = tester.widget<Text>(_label('app'));
+    // Shown as given, never read as markup.
+    expect(text.data, hostile);
+    expect(text.maxLines, 1);
+    expect(text.overflow, TextOverflow.ellipsis);
+    final name = tester.getRect(_label('app'));
+    expect(name.height, lessThan(30), reason: 'one line');
+    expect(name.left, greaterThanOrEqualTo(slot.left));
+    expect(name.right, lessThanOrEqualTo(slot.right));
+    // The name gives way; the count never does.
+    final mark = tester.getRect(find.byKey(const ValueKey('tab-shared:app')));
+    expect(mark.left, greaterThanOrEqualTo(name.right));
+    expect(mark.right, lessThanOrEqualTo(slot.right));
+    expect(find.text('7'), findsOneWidget);
+    expect(tester.getRect(find.text('7')).right, lessThanOrEqualTo(slot.right));
+    expect(tester.takeException(), isNull);
   });
 }

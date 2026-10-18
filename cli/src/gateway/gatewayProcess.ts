@@ -17,9 +17,12 @@ import { localWindowsOf, windowSurfaceOf } from '../lib/windowSurfaces.js'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
+import { answerTabKey } from '../lib/tabKeyWire.js'
+import { answerTabRelay } from '../lib/tabRelayWire.js'
 import { accountLink } from '../services/accountLink.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from '../services/process.js'
 import { startGateway, type StartedGateway } from './start.js'
+import { sharedPeers } from './sharedTrust.js'
 
 type Payload = Record<string, unknown>
 
@@ -66,26 +69,27 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     device: (connId, frame, opened) => notice('device', { connId, frame, opened }),
     deviceRevoked: (identity) => notice('deviceRevoked', { identity }),
     toWindows: (frame) => notice('toWindows', { frame }),
+    tabFrame: (event) => notice('tabFrame', { event }),
   }
 
   /** The account's tokens, from the core (`core.account`, services/accountLink.ts): a refusal comes back as
    *  the session's own error. */
   const { accessToken } = accountLink((query, payload) => (core ? core.query(query, payload) : Promise.reject(new Error('not connected to the core'))))
 
-  /** The gateway stopped: its link closed, its windows' sessions let go. Not waited on: what comes after it
-   *  on the link (a new `start`) must not wait for the old link's goodbye. */
+  /** The gateway stopped: its link closed, its windows' sessions let go. Not waited on here: what comes after it
+   *  on the link (a new `start`) must not wait for the old link's goodbye. The process's own stop waits for it. */
   let pendingStart: Payload | null = null
-  const stop = (): void => {
+  const stop = (): Promise<void> => {
     pendingStart = null
     const was = running
     running = null
     for (const session of windows.values()) session.detach()
     windows.clear()
-    void was?.stop().catch((error: unknown) => console.warn(`[gateway] stopping: ${error instanceof Error ? error.message : String(error)}`))
+    return was ? was.stop().catch((error: unknown) => console.warn(`[gateway] stopping: ${error instanceof Error ? error.message : String(error)}`)) : Promise.resolve()
   }
 
   const begin = (payload: Payload): void => {
-    stop()
+    void stop()
     const started = (options.start ?? startGateway)({
       events,
       machineId: text(payload.machineId),
@@ -150,7 +154,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     // dial would ask the core for a token on a link this process does not know is up yet, and wait a second
     // to try again. Started once it knows.
     if (kind === 'start') { if (core) begin(payload); else pendingStart = payload; return }
-    if (kind === 'stop') { stop(); return }
+    if (kind === 'stop') { void stop(); return }
     if (kind === 'windowOpen') { void openWindow(payload); return }
     const gateway = running
     if (!gateway) return
@@ -255,6 +259,20 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
         return { error: error instanceof Error ? error.message : String(error) }
       }
     },
+    // Shared tabs' keys (gateway/tabKey.ts): one of the nine `TabKey` methods, answered `{ result }` or `{ error }`,
+    // and `UNKNOWN_METHOD` for any other name (lib/tabKeyWire.ts). Taken in the order the core sent them, as the lane's.
+    [GATEWAY_CALLS.tabKey]: (p: Payload): Promise<Payload> => answerTabKey(ops().tabKey, p),
+    // Shared tabs' relay (gateway/tabRelay.ts): `open`, `send` or `close`, and `UNKNOWN_METHOD` for any other name
+    // (lib/tabRelayWire.ts).
+    [GATEWAY_CALLS.tabRelay]: (p: Payload): Promise<Payload> => answerTabRelay(ops().tabRelay, p),
+    // Machines shared across accounts (gateway/sharedTrust.ts): the stores made to hold what was asked.
+    [GATEWAY_CALLS.sharedTrust]: async (p: Payload): Promise<Payload> => {
+      try {
+        return { ...await ops().sharedTrust({ ...(p.pins !== undefined ? { pins: sharedPeers(p.pins) } : {}), ...(p.keys !== undefined ? { keys: sharedPeers(p.keys) } : {}) }) }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    },
     // The account's connected services (lib/e2ee/connectorVault.ts): an envelope sealed, or one opened.
     [GATEWAY_CALLS.connectorVault]: async (p: Payload): Promise<Payload> => {
       const vault = ops().connectorVault
@@ -268,7 +286,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     },
   }
 
-  return (options.run ?? runServiceProcess)({
+  const service = (options.run ?? runServiceProcess)({
     name: 'gateway',
     socketPath: options.socketPath,
     machineId: options.machineId,
@@ -284,7 +302,19 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     },
     onDisconnected: () => {
       core = null
-      stop()
+      void stop()
     },
   })
+  return {
+    // The process is going (the master's SIGTERM, the master gone, services/process.ts `leave`): the gateway and its
+    // usage collector stop first, while the link is still up, and the process waits for them. Closing the link alone
+    // left them to its close event, which the exit came before: the collector never wrote its clean exit, and
+    // `harness stop`, updates, sign-in restarts, service installs and OS logouts all counted as unclean restarts
+    // (health_cli_unclean_restart, 69 to 170 on 2026-10-16, production counters).
+    stop: async () => {
+      const stopping = stop()
+      await service.stop()
+      await stopping
+    },
+  }
 }

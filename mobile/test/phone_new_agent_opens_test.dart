@@ -5,6 +5,7 @@ import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/agent_swipe.dart';
 import 'package:harness_mobile/phone/new_agent_page.dart';
+import 'package:harness_mobile/phone/tty_controls.dart' show TtyFormRow;
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
 
@@ -83,6 +84,15 @@ AppNotifier _app(_Conn conn) {
   return app;
 }
 
+/// What the form's [label] row says.
+String _row(WidgetTester tester, String label) => tester
+    .widget<TtyFormRow>(
+      find.byWidgetPredicate(
+        (widget) => widget is TtyFormRow && widget.label == label,
+      ),
+    )
+    .value;
+
 void main() {
   testWidgets(
     'creating an agent opens it, and leaves no form to come back to',
@@ -99,9 +109,11 @@ void main() {
       );
       await tester.pump();
 
-      // The desktop's ⌘N defaults: the project last started here and the engine
-      // the form starts on are already chosen, so the button is the whole flow.
-      expect(find.text('Test host:grid', findRichText: true), findsOneWidget);
+      // The desktop's ⌘N defaults: the computer, the project last started here
+      // and the engine the form starts on are already chosen, so the button is
+      // the whole flow. The computer has a row of its own, above the project's.
+      expect(_row(tester, 'computer'), 'Test host');
+      expect(_row(tester, 'project'), 'grid');
       // Start is the button.
       await tester.tap(find.text('Start'));
       // The create resolves on a microtask, then the route it pushes has to slide in — and only once

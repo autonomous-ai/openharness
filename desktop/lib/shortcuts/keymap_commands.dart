@@ -74,6 +74,17 @@ const _agentMessagesKeywords = [
   'channel',
 ];
 
+/// What a person looking for a shared tab's commands may type.
+const _sharedTabKeywords = [
+  'shared tab',
+  'share',
+  'invite',
+  'people',
+  'member',
+  'collaborate',
+  'account',
+];
+
 /// Whether [id] is a command this window has now.
 bool harnessCommandActive(String id) =>
     harnessCommandById[id]?.daemon != true || daemonCommandsActive.value;
@@ -378,8 +389,12 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.actions,
     keywords: ['remove', 'purge', 'forget', 'conversation'],
   ),
-  const HarnessCommand('app.product_feedback', 'Rate task outcome', ShortcutGroup.actions,
-    keywords: ['feedback', 'completed', 'useful', 'problem']),
+  const HarnessCommand(
+    'app.product_feedback',
+    'Rate task outcome',
+    ShortcutGroup.actions,
+    keywords: ['feedback', 'completed', 'useful', 'problem'],
+  ),
   const HarnessCommand('agent.fork', 'Fork Harness', ShortcutGroup.actions),
   const HarnessCommand(
     'agent.share',
@@ -512,6 +527,69 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.actions,
     nativeAction: 'showAgentMessages',
     keywords: _agentMessagesKeywords,
+  ),
+  // The active tab's Tab Activity sidebar, opened or closed: its native row
+  // is View's, which says Show or Hide as it stands.
+  const HarnessCommand(
+    'agent_messages.activity',
+    'Show Tab Activity',
+    ShortcutGroup.actions,
+    nativeAction: 'toggleTabActivity',
+    extraKeys: ['cmd+shift+y'],
+    keywords: [
+      'tab activity',
+      'sidebar',
+      'hide',
+      'harnesses',
+      'tasks',
+      'leader',
+      'summary',
+    ],
+  ),
+  // The focused harness leads its tab, or stops: its native row is File's
+  // Make Leader / Remove Leader, which swaps its title.
+  const HarnessCommand(
+    'agent_messages.make_leader',
+    'Make Leader',
+    ShortcutGroup.actions,
+    keywords: ['lead', 'leader', 'agent messages', 'tasks'],
+  ),
+  const HarnessCommand(
+    'agent_messages.remove_leader',
+    'Remove Leader',
+    ShortcutGroup.actions,
+    keywords: ['lead', 'leader', 'agent messages', 'tasks'],
+  ),
+  // Shared tabs (1c): the active tab, by role, as its tab menu and File offer
+  // them; each is here so none needs a menu. Move Tab Here only in a native
+  // window, on another of the owner's computers.
+  const HarnessCommand(
+    'shared_tab.invite',
+    'Invite People…',
+    ShortcutGroup.actions,
+    nativeAction: 'invitePeople',
+    keywords: _sharedTabKeywords,
+  ),
+  const HarnessCommand(
+    'shared_tab.stop',
+    'Stop Sharing Tab',
+    ShortcutGroup.actions,
+    nativeAction: 'stopSharingTab',
+    keywords: _sharedTabKeywords,
+  ),
+  const HarnessCommand(
+    'shared_tab.leave',
+    'Leave Tab',
+    ShortcutGroup.actions,
+    nativeAction: 'leaveTab',
+    keywords: _sharedTabKeywords,
+  ),
+  const HarnessCommand(
+    'shared_tab.move_here',
+    'Move Tab Here',
+    ShortcutGroup.actions,
+    nativeAction: 'moveTabHere',
+    keywords: _sharedTabKeywords,
   ),
   const HarnessCommand(
     'app.customize',

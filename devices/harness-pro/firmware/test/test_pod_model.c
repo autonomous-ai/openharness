@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "pod/pod_model.h"
+#include "pod/home/ph.h"   // ph_room_scene, ph_card_scene: the scene a working agent plays
 
 static int checks;
 #define CHECK(c) do { assert(c); checks++; } while (0)
@@ -608,7 +609,7 @@ static void pod_model_test_steps(void) {
     pod_model_turn(&M, "a1", "activity", "x y", 1, 150);
     pod_model_turn(&M, "a1", "activity", "y z", 1, 151);
     pod_model_question(&M, "a1", "Which?");
-    CHECK(a->step_count == 1);                    // the steps survive a question (Console draws them under it)
+    CHECK(a->step_count == 1);                    // the steps survive a question (Pets draws them under it)
     pod_model_question_close(&M, "a1");
     CHECK(a->step_count == 1);
 }
@@ -934,7 +935,7 @@ static void pod_model_test_unread(void) {
     CHECK(M.read_count == POD_READS_MAX && !strcmp(M.reads[0].agent, "q2"));
 }
 
-// Console's data: step times, six steps, a failed turn, the unread kind, and the turn stats.
+// Pets's data: step times, six steps, a failed turn, the unread kind, and the turn stats.
 static void pod_model_test_console_data(void) {
     fresh();
     const pod_agent_t *a = pod_model_find(&M, "a1");
@@ -985,7 +986,7 @@ static void pod_model_test_console_data(void) {
     CHECK(pod_model_unread_find(&M, "a1")->kind == POD_UNREAD_FINISHED);
 }
 
-// M7: the recap's step count is the turn's total, not the list's. M5: Classic's view sees only steps since the question.
+// M7: the recap's step count is the turn's total, not the list's.
 // L14: a turn that starts without turn.started clears the failed flag, and its step total is unknown.
 static void pod_model_test_step_total_and_fresh(void) {
     fresh();
@@ -998,24 +999,24 @@ static void pod_model_test_step_total_and_fresh(void) {
         snprintf(t, sizeof t, "Read %d", i);
         pod_model_turn(&M, "a1", "step", t, 0, 2000 + (uint32_t)i * 100);
     }
-    CHECK(a->step_count == POD_STEPS_MAX && a->step_total == 9 && a->fresh_steps == POD_STEPS_MAX);
+    CHECK(a->step_count == POD_STEPS_MAX && a->step_total == 9);
     pod_model_turn(&M, "a1", "done", NULL, 0, 4000);
     CHECK(a->step_count == 0 && a->step_total == 9);               // done clears the list, not the total
     pod_model_turn(&M, "a1", "started", NULL, 0, 5000);
     CHECK(a->step_total == 0);
-    // A question keeps the steps (Console) but none counts as fresh; steps after the resume do, and only they.
+    // A question keeps the steps; steps after the resume join them.
     pod_model_turn(&M, "a1", "step", "Read a", 0, 5100);
     pod_model_turn(&M, "a1", "step", "Read b", 0, 5200);
     pod_model_question(&M, "a1", "Proceed?");
-    CHECK(a->step_count == 2 && a->fresh_steps == 0);
+    CHECK(a->step_count == 2);
     pod_model_question_close(&M, "a1");
-    CHECK(a->step_count == 2 && a->fresh_steps == 0 && a->step_total == 2);
+    CHECK(a->step_count == 2 && a->step_total == 2);
     pod_model_turn(&M, "a1", "step", "Read c", 0, 5300);
-    CHECK(a->step_count == 3 && a->fresh_steps == 1 && a->step_total == 3);
-    pod_model_turn(&M, "a1", "step", "Read a", 0, 5400);           // a repeat of an older step moves it to the front, as fresh
-    CHECK(a->step_count == 3 && a->fresh_steps == 2 && !strcmp(a->steps[0], "Read a") && !strcmp(a->steps[2], "Read b"));
-    pod_model_turn(&M, "a1", "step", "Read c", 0, 5500);           // a repeat of a fresh one stays fresh
-    CHECK(a->step_count == 3 && a->fresh_steps == 2);
+    CHECK(a->step_count == 3 && a->step_total == 3);
+    pod_model_turn(&M, "a1", "step", "Read a", 0, 5400);           // a repeat of an older step moves it to the front
+    CHECK(a->step_count == 3 && !strcmp(a->steps[0], "Read a") && !strcmp(a->steps[2], "Read b"));
+    pod_model_turn(&M, "a1", "step", "Read c", 0, 5500);
+    CHECK(a->step_count == 3);
 
     // L14: failed, then a new turn that starts through activity (no turn.started), then done: filed FINISHED.
     pod_model_turn(&M, "a2", "started", NULL, 0, 6000);
@@ -1037,7 +1038,45 @@ static void pod_model_test_step_total_and_fresh(void) {
     CHECK(pod_model_find(&M, "a3")->step_total == 1);
 }
 
+// Chef or builder (owner, 2026-10-16): a turn draws once as it starts (pod_model_random) and keeps it to its end, through
+// activity, steps and a question; the room and the Home card play the same scene. No source (host default): always the chef.
+static uint32_t rnd_n;
+static uint32_t rnd_count(void) { return rnd_n++; }
+static void pod_model_test_work_alt(void) {
+    fresh();
+    const pod_agent_t *a = pod_model_find(&M, "a1");
+    pod_model_turn(&M, "a1", "started", "", 0, 1000);
+    CHECK(a->state == POD_WORKING && !a->work_alt && ph_room_scene(&M, a) == POD_SCENE_WORK && ph_card_scene(&M, a) == POD_SCENE_WORK);
+    pod_model_turn(&M, "a1", "done", "", 3, 1500);
+    pod_model_random(rnd_count);
+    rnd_n = 1;
+    pod_model_turn(&M, "a1", "started", "", 0, 2000);
+    CHECK(a->work_alt && rnd_n == 2 && ph_room_scene(&M, a) == POD_SCENE_WORK_ALT && ph_card_scene(&M, a) == POD_SCENE_WORK_ALT);
+    pod_model_turn(&M, "a1", "activity", "Reading files", 2, 2100);
+    pod_model_turn(&M, "a1", "verb", "Infusing", 2, 2200);
+    pod_model_turn(&M, "a1", "step", "Read · a.c", 3, 2300);
+    pod_model_question(&M, "a1", "Delete the build folder?");
+    CHECK(ph_room_scene(&M, a) == POD_SCENE_ASK);
+    pod_model_question_close(&M, "a1");
+    pod_model_turn(&M, "a1", "activity", "Writing", 4, 2400);
+    CHECK(a->work_alt && rnd_n == 2 && ph_room_scene(&M, a) == POD_SCENE_WORK_ALT);   // one draw for the whole turn
+    pod_model_turn(&M, "a1", "done", "", 5, 2500);
+    pod_model_turn(&M, "a1", "started", "", 0, 3000);
+    CHECK(!a->work_alt && rnd_n == 3);   // the next turn draws again: both come up
+    rnd_n = 1;
+    pod_model_turn(&M, "a2", "started", "", 0, 3000);   // Codex has no builder: a drawn builder plays its one WORK
+    const pod_agent_t *b = pod_model_find(&M, "a2");
+    CHECK(b->work_alt && ph_room_scene(&M, b) == POD_SCENE_WORK && ph_card_scene(&M, b) == POD_SCENE_WORK);
+    // The room draws the builder at exactly 2x, as the chef (its 273 px gets the wider square).
+    for (int k = 0; k < 2; k++) {
+        ht_scene_t s; ht_scene_clear(&s, 0);
+        ph_room_pet(&s, &M, a, k ? POD_SCENE_WORK_ALT : POD_SCENE_WORK, 380, 566, 0, 0);
+        CHECK(s.count == 2 && s.runs[0].radius == 16 && s.runs[1].radius == 16);
+    }
+    pod_model_random(NULL);
+}
 int main(void) {
+    pod_model_test_work_alt();
     pod_model_test_states();
     pod_model_test_stale_busy();
     pod_model_test_library_vs_turn_order();

@@ -6,8 +6,10 @@
 #include "terminal.h"
 #include "engine_logos.h"
 
+enum { HT_CELL_COLS_MAX = 480 };   // the widest frame the rasters unpack a row of (the builder's props: 259)
 typedef struct {
-    uint8_t cols, rows, cell;
+    uint16_t cols;
+    uint8_t rows, cell;
     const uint16_t *palette;   // panel byte order
     const uint8_t *cells;
     const uint16_t *row_at;

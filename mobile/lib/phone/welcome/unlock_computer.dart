@@ -19,16 +19,21 @@ import 'scan_to_connect.dart';
 ///
 /// ```
 /// Unlock M2
-/// On M2, open Harness ▸ Add Phone…, then scan the QR code.
+/// In Harness on M2, open Add Phone…, then scan the QR code.
 /// [          Scan its code           ]
 ///
 /// or enter its Harness phone password
+/// For a server, or a computer without the Harness app open.
 /// [ ••••••••                          Show ]
 ///                                   Unlock
 ///
-/// Forgot it, or never set one? On M2, run
+/// Forgot it, or never set one? In Harness on M2, open Machines (⌘M on a Mac), choose M2, then Password.
+/// On a server, run this on M2:
 /// $ harness remote-password set          Copy
 /// ```
+///
+/// ⚠️ Nothing on a [Machine] says whether a desktop app runs there, so the page does not guess which
+/// way comes first: the scan stays the button, and the password says plainly who it is for.
 ///
 /// What the link is doing while it works is said in words ("Checking the password…"), never as the
 /// CLI's stage names.
@@ -117,22 +122,25 @@ class _UnlockComputerState extends State<UnlockComputer> {
     }
   }
 
+  /// The camera is up for [_scan]. ⚠️ [_pairing] is only set once a code is back: a quick second
+  /// tap before that opened a second camera, and paired a second time by the same one-time code.
+  bool _scanning = false;
+
   /// The camera, over this page; a code of this computer's pairs the phone with it, the way the
   /// first one was added — its one-time code, armed by its Add Phone dialog, and no password.
   Future<void> _scan() async {
-    if (_busy || _pairing) return;
+    if (_busy || _pairing || _scanning) return;
+    _scanning = true;
     final code = await scanForCode(
       context,
       fallbackLabel: 'Use its password instead',
       camera: widget.scanCamera,
-    );
+    ).whenComplete(() => _scanning = false);
     if (!mounted || code == null) return;
     final machine = widget.machineState.machine;
     final pairCode = code.pairCode;
     if (code.machineId == null || pairCode == null) {
-      setState(
-        () => _error = "That code can't unlock a computer. Scan the one in Harness ▸ Add Phone….",
-      );
+      setState(() => _error = 'That’s not the Add Phone code.');
       return;
     }
     if (code.machineId != machine.machineId) {
@@ -170,10 +178,17 @@ class _UnlockComputerState extends State<UnlockComputer> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(Tty.origin, 12, Tty.origin, 24),
       children: [
-        TtyText('Unlock $name', size: 24, weight: FontWeight.w600),
+        // A Text, not a one-line TtyText: a long computer name wraps instead of being cut off.
+        Text(
+          'Unlock $name',
+          style: tty.style(size: 24, weight: FontWeight.w600),
+        ),
         const SizedBox(height: 12),
         Text(
-          'On $name, open Harness ▸ Add Phone…, then scan the QR code.',
+          // Where Add Phone is, not only its name: the Harness menu is the Mac's; on Linux it is
+          // the command palette's, which the scan page's own hint says.
+          'In Harness on $name, open Add Phone…, then scan the QR code. On a '
+          'Mac, it’s in the Harness menu.',
           style: tty.style(size: TtySize.row, color: tty.faint),
         ),
         // This phone's copy of the device list is frozen, so it pins no computer from it — or the
@@ -232,6 +247,13 @@ class _UnlockComputerState extends State<UnlockComputer> {
           'or enter its Harness phone password',
           style: tty.style(size: TtySize.meta, color: tty.faint),
         ),
+        const SizedBox(height: 2),
+        // Who the password is for: a server has no Add Phone to scan, and with the scan as the one
+        // filled button, somebody unlocking one had no word telling them this was their way.
+        Text(
+          'For a server, or a computer without the Harness app open.',
+          style: tty.style(size: TtySize.meta, color: tty.faint),
+        ),
         const SizedBox(height: 8),
         _PasswordField(
           controller: _password,
@@ -259,13 +281,16 @@ class _UnlockComputerState extends State<UnlockComputer> {
           ),
         ),
         const SizedBox(height: 32),
+        // ⚠️ Where the desktop app keeps it now: Open Machines (⌘M) lists the computers, and this
+        // one's row has Password. "Machines ▸ … ▸ Set password" named the old Machines panel.
         Text(
-          'Forgot it? In Harness on $name, choose Machines ▸ $name ▸ Set password.',
+          'Forgot it, or never set one? In Harness on $name, open Machines '
+          '(⌘M on a Mac), choose $name, then Password.',
           style: tty.style(size: TtySize.meta, color: tty.faint),
         ),
         const SizedBox(height: 8),
         Text(
-          'Using the CLI? Run this on $name:',
+          'On a server, run this on $name:',
           style: tty.style(size: TtySize.meta, color: tty.faint),
         ),
         const SizedBox(height: 8),

@@ -12,6 +12,7 @@
  */
 
 import { execFile } from 'node:child_process'
+import { probeExecFile } from './offThreadExec.js'
 import { readFile } from 'node:fs/promises'
 import type { ProcessIdentity } from './registry.js'
 
@@ -51,7 +52,7 @@ function read(pid: number): Promise<Record<string, string> | null> {
     return readFile(`/proc/${pid}/environ`, 'utf8').then(parseEnviron).catch(() => null)
   }
   return new Promise((resolve) => {
-    execFile('ps', ['eww', '-p', String(pid), '-o', 'command='], { timeout: 2_000, maxBuffer: 4 << 20 }, (err, stdout) => {
+    probeExecFile(execFile)('ps', ['eww', '-p', String(pid), '-o', 'command='], { timeout: 2_000, maxBuffer: 4 << 20 }, (err, stdout) => {
       if (err && !stdout) { resolve(null); return }
       const env = parsePsEnviron(stdout)
       // NO variables at all is macOS refusing to show them, not a process that has none.

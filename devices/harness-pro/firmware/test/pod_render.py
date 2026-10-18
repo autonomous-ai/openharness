@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render Pod screens of the demo model to PNG under test/out/pod/.
 
-    python3 test/pod_render.py tabs tab:1 recent agent:fw recap:desk talk:fw [--now MS]
+    python3 test/pod_render.py tabs agent:fw recap:desk talk:fw [--now MS]
 
 Builds test/pod_render.c with the flags run-pod.sh uses, runs it once per screen and converts each PPM to PNG
 (zlib only, no imaging library). Generates the Pro fonts into test/out/pod with scripts/gen_fonts.py (PRO_FONT

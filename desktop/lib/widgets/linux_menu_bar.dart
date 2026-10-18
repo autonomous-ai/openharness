@@ -248,12 +248,20 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
         label: 'Appearance…',
         action: 'customize',
       ),
-      _swarmRow(
-        key: 'menu-bar-settings',
-        icon: AppIcons.settings,
-        label: 'Settings…',
-        action: 'settings',
-      ),
+      if (_state.enabled)
+        _swarmRow(
+          key: 'menu-bar-settings',
+          icon: AppIcons.settings,
+          label: 'Settings…',
+          action: 'settings',
+        )
+      else
+        _appRow(
+          key: 'menu-bar-settings',
+          icon: AppIcons.settings,
+          label: 'Settings…',
+          action: 'settings',
+        ),
       const AppMenuDivider(),
       _appRow(
         key: 'menu-bar-shortcuts',
@@ -329,6 +337,18 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
         action: 'shareAgent',
         enabled: _paneAction('shareAgent'),
       ),
+      // Make Leader / Remove Leader for the focused harness, as the Mac's File
+      // menu: shown only where the pane can take it.
+      if (_state.paneActions['toggleLeader'] == true)
+        _swarmRow(
+          key: 'menu-bar-toggle-leader',
+          icon: AppIcons.users,
+          label: _state.leaderAction == 'remove'
+              ? 'Remove Leader'
+              : 'Make Leader',
+          action: 'toggleLeader',
+          enabled: _paneAction('toggleLeader'),
+        ),
       const AppMenuDivider(),
       _swarmRow(
         key: 'menu-bar-new-tab',
@@ -348,6 +368,17 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
         label: 'Close Tab',
         action: 'closeActive',
       ),
+      // Sharing the active tab with other accounts (1c), by role, as the
+      // native File menu offers it: Invite People for an unshared tab or one
+      // this account shares; Stop Sharing Tab and Move Here for its owner;
+      // Leave Tab for a member. File's titles are plain, as on the Mac.
+      if (state.tabShareActions['invitePeople'] == true)
+        _swarmRow(
+          key: 'menu-bar-invite-people',
+          icon: AppIcons.users,
+          label: 'Invite People',
+          action: 'invitePeople',
+        ),
       // The active tab's Agent Messages log. Whether agents may message is the
       // account's (Settings ▸ Experimental), not a tab's, so there is no on/off
       // row here.
@@ -358,6 +389,27 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
         action: 'showAgentMessages',
         enabled: state.enabled && state.canShowAgentMessages,
       ),
+      if (state.tabShareActions['stopSharingTab'] == true)
+        _swarmRow(
+          key: 'menu-bar-stop-sharing-tab',
+          icon: AppIcons.unlink,
+          label: 'Stop Sharing Tab',
+          action: 'stopSharingTab',
+        ),
+      if (state.tabShareActions['moveTabHere'] == true)
+        _swarmRow(
+          key: 'menu-bar-move-tab-here',
+          icon: AppIcons.laptop,
+          label: 'Move Here',
+          action: 'moveTabHere',
+        ),
+      if (state.tabShareActions['leaveTab'] == true)
+        _swarmRow(
+          key: 'menu-bar-leave-tab',
+          icon: AppIcons.logOut,
+          label: 'Leave Tab',
+          action: 'leaveTab',
+        ),
       const AppMenuDivider(),
       _swarmRow(
         key: 'menu-bar-split-right',
@@ -510,6 +562,17 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
         action: 'toggleComposer',
         enabled: _paneAction('toggleComposer'),
       ),
+      // The active tab's Tab Activity sidebar, as the Mac's View menu: shown
+      // only where the workspace's toggle acts, titled by whether it is open.
+      if (_state.canShowTabActivity)
+        _swarmRow(
+          key: 'menu-bar-toggle-tab-activity',
+          icon: AppIcons.panelLeft,
+          label: _state.tabActivityOpen
+              ? 'Hide Tab Activity'
+              : 'Show Tab Activity',
+          action: 'toggleTabActivity',
+        ),
     ];
   }
 

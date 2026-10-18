@@ -74,7 +74,11 @@ class _Notifier extends AppNotifier {
   }
 
   @override
-  Future<void> probeDsh(String machineId, {bool force = false}) async {
+  Future<void> probeDsh(
+    String machineId, {
+    bool force = false,
+    bool userAction = false,
+  }) async {
     probes++;
     probedMachines.add(machineId);
   }

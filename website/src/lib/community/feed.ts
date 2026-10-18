@@ -4,22 +4,30 @@ import type { HarnessSummary } from './types';
 /** The longest feed search the backend accepts (`q` on GET /api/community/harnesses). */
 export const searchMaxChars = 80;
 
-export const feedSorts = ['newest', 'popular'] as const;
+/** As the backend's `feedSorts`; trending ranks this week's likes, popular every like. */
+export const feedSorts = ['newest', 'trending', 'popular'] as const;
 export type FeedSort = typeof feedSorts[number];
 
 /** How a reader narrows a feed: a search, one category and an order. Kept in the page's address. */
 export type FeedView = { query: string; category: string; sort: FeedSort };
 export const defaultFeedView: FeedView = { query: '', category: '', sort: 'newest' };
 
-/** Which publications one feed lists: a tab's, or one harness's forks, narrowed by a view. */
-export type FeedQuery = Partial<FeedView> & { following?: boolean; mine?: boolean; forkedFrom?: string };
+/** A card's counts and the reader's like. `forks` comes from a backend that counts them; an older one leaves it out. */
+export type Stats = { likes: number; comments: number; liked: boolean; forks?: number };
+
+/** One page of a feed. `order` comes with a popular feed from a backend that ranks the starters too; an older one leaves it out. */
+export type FeedPage = { harnesses: HarnessSummary[]; order?: string[]; nextCursor: string | null; following: string[]; stats?: Record<string, Stats>; signedIn?: boolean };
+
+/** Which publications one feed lists: a tab's, one harness's forks or one creator's, narrowed by a view. */
+export type FeedQuery = Partial<FeedView> & { following?: boolean; mine?: boolean; forkedFrom?: string; author?: string };
 
 /** One page's request. Defaults are left out, so a backend without a filter reads the request as before. */
-export function feedPath({ following, mine, forkedFrom, query, category, sort }: FeedQuery, after?: string): string {
+export function feedPath({ following, mine, forkedFrom, author, query, category, sort }: FeedQuery, after?: string): string {
   const params = new URLSearchParams();
   if (following) params.set('following', 'true');
   if (mine) params.set('mine', 'true');
   if (forkedFrom) params.set('forkedFrom', forkedFrom);
+  if (author) params.set('author', author);
   if (query) params.set('q', query);
   if (category) params.set('category', category);
   if (sort && sort !== 'newest') params.set('sort', sort);

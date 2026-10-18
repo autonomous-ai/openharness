@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -11,8 +13,8 @@ import 'tty_controls.dart';
 /// ```
 /// api-fix                               asking
 /// "Run the migration on the test db?"
-/// docs-rewrite                         working
-/// M2:site ⑂ docs-v2 · 2m
+/// docs-rewrite                      working · 2m
+/// M2:site ⑂ docs-v2
 /// ```
 class FindRow extends StatelessWidget {
   const FindRow({
@@ -24,12 +26,16 @@ class FindRow extends StatelessWidget {
     this.tail,
     this.state,
     this.stateColor,
+    this.stateTail,
     this.terms = const [],
     this.selected = false,
     this.enabled = true,
     this.onTap,
     this.strict = false,
     this.said,
+    this.accessory,
+    this.accessoryRoom = 0,
+    this.minHeight = FindRow.height,
   });
 
   final String title;
@@ -51,9 +57,28 @@ class FindRow extends StatelessWidget {
   /// Last on line 2, after a `·`: the age, or `current`.
   final String? tail;
 
-  /// `asking`, `working`, `idle`, `exited` — one word, right-aligned on line 1.
+  /// `asking`, `working`, `exited` — one word, right-aligned on line 1. Null for a harness with
+  /// nothing to say (idle), whose line 1 then ends in [stateTail] alone.
   final String? state;
   final Color? stateColor;
+
+  /// After [state] on line 1, behind a `·`: the age, or `current` — or on its own where there is
+  /// no [state]. On line 1 rather than as [tail], where a long folder and branch cut it off.
+  final String? stateTail;
+
+  /// A control at the end of line 1, beside [state], centred on that line. No row passes one today
+  /// — Find's recap toggle, its one user, was removed (2026-09-30) — but the slot stays for the next.
+  ///
+  /// ⚠️ **Over the row, not inside it.** The row lights the moment a finger rests on it
+  /// ([TtyTap]), and a control nested in it would light the whole row as though it were about to
+  /// open. Drawn above it in a [Stack] instead, the control takes its own taps and the row never
+  /// sees them. It is given a band centred on line 1 and whatever width it takes, flush with the
+  /// row's right edge; [accessoryRoom] keeps the words clear of it.
+  final Widget? accessory;
+
+  /// Room kept at the end of line 1 for [accessory]. Keep it on rows without one too, so a list's
+  /// state words stand in one column.
+  final double accessoryRoom;
 
   /// What was typed, lit green in [title] and [detail].
   final List<String> terms;
@@ -64,6 +89,16 @@ class FindRow extends StatelessWidget {
   final VoidCallback? onTap;
 
   static const double height = 60;
+
+  /// [height], or less for a row of one line where its second has been said once for a group of
+  /// them — Computers' offline ones. Never under a thumb's 44.
+  final double minHeight;
+
+  /// Above line 1 and below line 2.
+  static const double _pad = 9;
+
+  /// Between line 1 and line 2.
+  static const double _gap = 3;
 
   TextStyle _base(Tty tty) =>
       tty.style(color: detailColor ?? tty.faint, size: TtySize.meta);
@@ -84,8 +119,8 @@ class FindRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     final ink = enabled ? tty.text : tty.faint;
-    return TtyTap(
-      minHeight: height,
+    final row = TtyTap(
+      minHeight: minHeight,
       onTap: enabled && onTap != null
           ? () {
               HapticFeedback.selectionClick();
@@ -95,7 +130,12 @@ class FindRow extends StatelessWidget {
       child: ColoredBox(
         color: selected ? ttyRaised(tty) : Colors.transparent,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(Tty.origin, 9, Tty.origin, 9),
+          padding: const EdgeInsets.fromLTRB(
+            Tty.origin,
+            _pad,
+            Tty.origin,
+            _pad,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
@@ -128,18 +168,40 @@ class FindRow extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  if (state case final state?) ...[
+                  if (state != null || (stateTail ?? '').isNotEmpty) ...[
                     const SizedBox(width: 12),
-                    TtyText(
-                      state,
-                      color: stateColor ?? tty.faint,
-                      size: TtySize.meta,
+                    Text.rich(
+                      TextSpan(
+                        children: [
+                          if (state case final state?)
+                            TextSpan(
+                              text: state,
+                              style: tty.style(
+                                color: stateColor ?? tty.faint,
+                                size: TtySize.meta,
+                              ),
+                            ),
+                          if (stateTail case final tail? when tail.isNotEmpty)
+                            TextSpan(
+                              // Alone, without the `·` that joins it to a word — see [state].
+                              text: state == null ? tail : ' · $tail',
+                              style: tty.style(
+                                color: tty.faint,
+                                size: TtySize.meta,
+                              ),
+                            ),
+                        ],
+                      ),
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.clip,
                     ),
                   ],
+                  if (accessoryRoom > 0) SizedBox(width: accessoryRoom),
                 ],
               ),
               if (said case final said?) ...[
-                const SizedBox(height: 3),
+                const SizedBox(height: _gap),
                 Text.rich(
                   TextSpan(
                     children: [
@@ -158,7 +220,7 @@ class FindRow extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
               ] else if (detail case final detail? when detail.isNotEmpty) ...[
-                const SizedBox(height: 3),
+                const SizedBox(height: _gap),
                 Text.rich(
                   TextSpan(
                     children: [
@@ -181,6 +243,44 @@ class FindRow extends StatelessWidget {
         ),
       ),
     );
+    final accessory = this.accessory;
+    if (accessory == null) return row;
+    final center = _lineOneCenter(context, tty);
+    return Stack(
+      // The row sized exactly as it would be alone: a loose width would let it shrink to its words.
+      fit: StackFit.passthrough,
+      children: [
+        row,
+        Positioned(
+          top: 0,
+          right: 0,
+          // Line 1's centre, and as much height around it as the row has above it: the control
+          // centres on the name without reaching past the row's top.
+          height: center * 2,
+          child: accessory,
+        ),
+      ],
+    );
+  }
+
+  /// How far below the row's top the middle of line 1 is.
+  ///
+  /// Arithmetic, not a measurement: [Tty.style] pins every line to its size × its `height`, and
+  /// [TtyTap] centres content shorter than [minHeight] — which a row of two lines at the default
+  /// text size is.
+  double _lineOneCenter(BuildContext context, Tty tty) {
+    final scaler = MediaQuery.textScalerOf(context);
+    double line(double size) {
+      final style = tty.style(size: size);
+      return scaler.scale(size) * (style.height ?? 1);
+    }
+
+    final one = line(TtySize.row);
+    final two = said != null || (detail?.isNotEmpty ?? false)
+        ? _gap + line(TtySize.meta)
+        : 0.0;
+    final content = _pad * 2 + one + two;
+    return math.max(0.0, (minHeight - content) / 2) + _pad + one / 2;
   }
 }
 

@@ -20,6 +20,14 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('How did your latest task go?'), findsOneWidget);
+    await tester.tap(find.text('Useful'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('See what’s shared'));
+    await tester.pumpAndSettle();
+    // Opening the shared fields above the feedback keeps the answer already sent.
+    expect(find.text('Feedback sent. Thank you.'), findsOneWidget);
+    await tester.tap(find.text('Hide shared fields'));
+    await tester.pumpAndSettle();
     await tester.tap(find.byType(Switch));
     await tester.pumpAndSettle();
     expect(changes, [false]);

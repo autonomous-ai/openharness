@@ -8,7 +8,7 @@ import 'viewer_key_store.dart';
 
 /// [RelaySessionCrypto] as a [RelayCodec]: the conversion the harness CLI's `remoteRelay.ts` does
 /// between the relay's HTRM frames and the loopback HTRL ones, done in the app instead.
-class E2eeRelayCodec implements RelayCodec {
+class E2eeRelayCodec implements RelayCodec, OffThreadRelayDecoder {
   E2eeRelayCodec(this._session);
 
   final RelaySessionCrypto _session;
@@ -40,6 +40,11 @@ class E2eeRelayCodec implements RelayCodec {
   @override
   Map<String, dynamic>? decodeFrame(Map<String, dynamic> frame) =>
       _session.unwrapIncoming(frame);
+
+  @override
+  Future<Map<String, dynamic>?> decodeFrameOffThread(
+    Map<String, dynamic> frame,
+  ) => _session.unwrapIncomingOffThread(frame);
 
   @override
   Uint8List? encodeBinary(Uint8List localFrame) {

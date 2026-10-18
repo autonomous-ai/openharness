@@ -90,15 +90,21 @@ void main() {
     });
   });
 
-  testWidgets('a question open, with its keys beside the mic', (tester) async {
+  // No keys beside the mic since the owner's call (2026-09-29): each answer is a band over its own
+  // lines, which a screen reader is given as a button named for it.
+  testWidgets('a question open, its answers banded on their own lines', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
     await expectNoLayoutErrors(tester, (scale, brightness) async {
       final app = edgeApp(agents: [edgeAgent('a', name: longName)]);
       addTearDown(app.dispose);
       final session = await liveTerminal(app, 'a');
       session.terminal.write(permissionDialog);
       await pumpFocus(tester, app, scale, brightness);
-      expect(find.bySemanticsLabel(RegExp('^Answer 1')), findsOneWidget);
+      expect(find.semantics.byLabel(RegExp('^Answer 1 ')), findsOne);
     });
+    semantics.dispose();
   });
 
   testWidgets('the keyboard up, with the pane\'s own keys on the strip', (

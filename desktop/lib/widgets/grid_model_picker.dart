@@ -28,13 +28,14 @@ import 'resting_section.dart';
 /// Named here rather than derived from the daemon's `localModelEngines`, because the two answer
 /// different questions. That list is which engines a Local model *can* be handed to — a launch
 /// contract exists for seven of them. This is the narrower question of which ones a person is
-/// OFFERED the switch on, and it is the three whose switching has been driven end to end: Claude
-/// Code and Codex move by environment, and OpenCode by a config file plus its own `/models` picker.
+/// OFFERED the switch on, and it is the four whose switching has been driven end to end: Claude
+/// Code and Codex move by environment, OpenCode by a config file plus its own `/models` picker, and
+/// Pi by its own home re-pointed at the grid, settings and conversation kept (#1318).
 ///
 /// The rest keep the header they had. A picker on an engine whose move has never been watched work
 /// is a menu that looks like a choice and may not be one, and the cost of finding out is an agent
 /// answering on a model nobody asked for.
-const Set<String> kModelPickerEngines = {'claude', 'codex', 'opencode'};
+const Set<String> kModelPickerEngines = {'claude', 'codex', 'opencode', 'pi'};
 
 /// Whether [engine] gets a picker. Unknown or absent is NO — a header offers nothing it cannot back.
 bool modelPickerSupports(String? engine) =>

@@ -24,7 +24,7 @@ void main() {
         tester.view.physicalSize = const Size(390, 844);
         addTearDown(tester.view.reset);
         final usage = ProductMeasurement(
-          surface: 'phone',
+          surface: 'desktop',
           automatic: false,
           sendSetup: (_) async => {},
         );
@@ -64,7 +64,7 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
-        expect(usage.signedOutSharing, isFalse);
+        expect(usage.signedOutSharing, isTrue);
         expect(sent, isEmpty);
         final output = Platform.environment['HARNESS_MEASUREMENT_CAPTURE_DIR'];
         if (output != null) {
@@ -82,9 +82,9 @@ void main() {
             picture.dispose();
           });
         }
-        await tester.tap(find.byType(Checkbox));
+        await tester.tap(find.byType(Switch));
         await tester.pumpAndSettle();
-        expect(usage.signedOutSharing, isTrue);
+        expect(usage.signedOutSharing, isFalse);
         await tester.ensureVisible(find.text('Partly completed'));
         await tester.tap(find.text('Partly completed'));
         await tester.pumpAndSettle();

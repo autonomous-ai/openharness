@@ -91,6 +91,10 @@ def main():
         vm.stop()
         vm.start(live=False)
         vm.login_installed(config)
+        # hn requires an account before its workspace (#1276): signed in now, the updated machine
+        # reboots to that workspace, which the keyboard check below needs. Since 0.1.4 it reached
+        # the sign-in page instead and the update was never accepted.
+        vm.sign_in('installed')
         receipt['checks'].append('Published ' + image['version'] + ' installs offline and boots from its encrypted internal disk')
         vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
         # Reuse the exact bundle after encrypted reboot; /tmp is intentionally

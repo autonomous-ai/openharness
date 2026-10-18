@@ -28,6 +28,25 @@ const _retryDelay = Duration(seconds: 60);
 const _retryWindow = Duration(hours: 1);
 const _retryHourlyCap = 10;
 
+// ⚠️ **Deliberately not the CLI's rule (owner, 2026-10-14).** A channel that was carrying terminals
+// and went away is dialled again within seconds, then at the minute as before. Its going away is
+// rarely the network being unreachable, which is what the minute is for: on a Galaxy S23 the
+// channel closed within a second of its streams moving onto it (2026-10-14), and everything typed
+// for the next minute crossed the relay, a ~200ms round trip from the machine to the backend, so
+// every keystroke showed about 0.4s late. Each redial still spends the hourly budget.
+const _redialDelays = [
+  Duration(seconds: 1),
+  Duration(seconds: 5),
+  Duration(seconds: 15),
+];
+
+// How long a channel has to stay up before its dropping starts the redials over from the first:
+// one that keeps closing right after it opens is dialled three times quickly, not every second.
+const _redialStableAfter = Duration(minutes: 2);
+
+// How often, at most, typing over the relay brings a waiting retry forward (`_kickForTyping`).
+const _typingKickEvery = Duration(seconds: 10);
+
 // How long a stream may sit mid-migration before the sweep gives up on it and the
 // ordinary demote-on-mismatch rule applies to it again.
 const _migrationTtl = Duration(seconds: 30);
@@ -113,11 +132,57 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
   /// `terminal_ready` decides whether the stream lands in [_p2pStreams].
   final _pendingOpens = <String>{};
 
+  /// Streams that came up on the relay and have not yet had their first keyframe — each moved to
+  /// the channel as that keyframe arrives, if the channel is up by then ([observeWsBinary]).
+  ///
+  /// ⚠️ **The gap this closes.** [_promoteOpenStreams] runs once, as the channel opens, over the
+  /// streams already READY. One whose open went out on the relay but whose `terminal_ready` had not
+  /// come back yet at that moment was never walked, and stayed on the relay for as long as it
+  /// lived. Rare while an open waited for the channel; routine once it stopped waiting
+  /// ([prepareOpen]), because the launch's first open and the channel now come up side by side.
+  ///
+  /// After the first keyframe and not at `terminal_ready`: the migration's first phase is a resync
+  /// whose ANSWERING keyframe is what [observeWsBinary] takes as "drained, flip now" — started
+  /// before the open's own keyframe, that keyframe would be taken for the answer.
+  final _promoteAfterFirstFrame = <String>{};
+
   /// streamId → when its migration to p2p started.
   final _migrating = <String, DateTime>{};
 
+  /// streamId → the sequence number of the first frame it delivered over the channel. A relay
+  /// frame numbered below it was already on its way when the responder moved the stream onto
+  /// the channel — see [_lateOnRelay].
+  final _p2pFloor = <String, int>{};
+
+  /// streamId → when its migration was confirmed by a frame that carries no sequence number, until
+  /// a numbered one pins [_p2pFloor] — see [_lateOnRelay].
+  final _confirmedAt = <String, DateTime>{};
+
+  /// Streams whose late relay frames have been logged once already.
+  final _lateNoted = <String>{};
+
+  /// How long after a migration was confirmed with no numbered frame to go by a relay frame is still
+  /// taken for a late one — the relay's own lag behind the channel, with room to spare.
+  static const _lateRelayGrace = Duration(seconds: 2);
+
   final _retryTimestamps = <DateTime>[];
   Timer? _retryTimer;
+
+  /// Whether the waiting [_retryTimer] is the budget's deferral rather than a retry it paid for —
+  /// typing does not bring that one forward ([_kickForTyping]).
+  bool _retryDeferred = false;
+
+  /// When the live link opened, until it goes away — what a drop is measured against
+  /// ([_redialStableAfter]).
+  DateTime? _linkOpenedAt;
+
+  /// A channel that was up went away, and none has come up since: retries take [_redialDelays].
+  bool _redialing = false;
+
+  /// How many of [_redialDelays] have been used since a channel last stayed up.
+  int _redials = 0;
+
+  DateTime? _lastTypingKickAt;
   late final Timer _sweep;
 
   int _upgradeAttempts = 0;
@@ -157,6 +222,14 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     }
   }
 
+  /// Whether this connection may run P2P — the backend sent a policy and the peer speaks this
+  /// build's version — settled as its session comes up ([onSessionReady]).
+  bool _p2pEligible = false;
+
+  /// Whether the first negotiation has been started — by the first terminal to open
+  /// ([prepareOpen]). Every later one is [_scheduleRetry]'s, budget and all.
+  bool _p2pStarted = false;
+
   @override
   void onSessionReady() {
     if (_disposed) return;
@@ -172,7 +245,14 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         ' v$terminalP2pProtocolVersion — no data channel is possible, ws relay only',
       );
     } else {
-      _startP2p();
+      // ⚠️ **Not started here any more — on the first terminal instead (owner, 2026-10-01).**
+      // Every machine the phone reached used to negotiate the moment its session came up: ICE
+      // gathering, STUN and TURN, and the offer and answer over the relay, for each of seven or
+      // eight machines at once at launch, when one terminal on one of them is all anybody is
+      // waiting for. A data channel only carries terminals, so a machine with none open has no
+      // use for one; the first open on it starts it ([prepareOpen]), rides the relay meanwhile as
+      // every open made before the channel is up does, and moves over once it is.
+      _p2pEligible = true;
     }
   }
 
@@ -195,8 +275,10 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     _upgradeWaitResolve = null;
     _p2pStreams.clear();
     _pendingOpens.clear();
+    _promoteAfterFirstFrame.clear();
     _streams.clear();
     _migrating.clear();
+    _forgetFloors();
     unawaited(shadow?.stop(reason: 'relay_closed', notifyPeer: notifyPeer));
     unawaited(orphan?.stop(reason: 'relay_closed', notifyPeer: notifyPeer));
     unawaited(link?.stop(reason: 'relay_closed', notifyPeer: notifyPeer));
@@ -213,6 +295,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     if (timer != null) {
       timer.cancel();
       _retryTimer = null;
+      _retryDeferred = false;
       _log('retry kicked · app resumed');
       if (_link == null) _startP2p();
       return;
@@ -225,6 +308,33 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
       _log('upgrade kicked · app resumed');
       _attemptUpgrade();
     }
+  }
+
+  /// Somebody is typing into a terminal the relay carries while a retry waits out its delay, after a
+  /// channel that was up went away: the retry runs now, as a resume's does ([kickRetry]). A round
+  /// trip to the backend on every keystroke is felt the moment somebody types, and what is typed
+  /// after a channel came back rides it.
+  ///
+  /// Only after a drop ([_redialing]): where no channel has come up, the network is the likelier
+  /// reason, and typing would spend the hourly budget in minutes on negotiations bound to fail. Not
+  /// more than once per [_typingKickEvery], each a full negotiation; never while one is under way,
+  /// and never for the budget's deferral, which stays the budget's.
+  void _kickForTyping() {
+    if (_disposed ||
+        !_redialing ||
+        _retryTimer == null ||
+        _retryDeferred ||
+        _link != null) {
+      return;
+    }
+    final now = _now();
+    final last = _lastTypingKickAt;
+    if (last != null && now.difference(last) < _typingKickEvery) return;
+    _lastTypingKickAt = now;
+    _retryTimer!.cancel();
+    _retryTimer = null;
+    _log('retry kicked · typing on the relay');
+    _startP2p();
   }
 
   // ── Negotiation ───────────────────────────────────────────────────────────
@@ -245,6 +355,8 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         switch (state) {
           case TerminalP2pLinkState.open:
             wasDirect = true;
+            _linkOpenedAt = _now();
+            _redialing = false;
             final relayed = link.transport == TerminalP2pTransport.relay;
             _log(
               'connected · via=${relayed ? 'turn' : 'direct'}'
@@ -302,7 +414,8 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     final windowStart = now.subtract(_retryWindow);
     _retryTimestamps.removeWhere((at) => !at.isAfter(windowStart));
     var delay = _retryDelay;
-    if (_retryTimestamps.length >= _retryHourlyCap) {
+    _retryDeferred = _retryTimestamps.length >= _retryHourlyCap;
+    if (_retryDeferred) {
       // The CLI stops here and leaves the streams on the relay until the socket
       // itself redials. The window is rolling, though, and nothing else on a phone
       // would ever ask again — so wait for the oldest attempt to age out instead.
@@ -314,14 +427,19 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         ' last hour) — deferred ${delay.inSeconds}s until it frees',
       );
     } else {
+      // A channel that was up went away: its first retries come within seconds ([_redialDelays]).
+      final redial = _redialing && _redials < _redialDelays.length;
+      if (redial) delay = _redialDelays[_redials++];
       _retryTimestamps.add(now);
       _log(
         'retry scheduled · in ${delay.inSeconds}s'
+        '${redial ? ' (redial $_redials/${_redialDelays.length})' : ''}'
         ' (${_retryTimestamps.length}/$_retryHourlyCap this hour)',
       );
     }
     _retryTimer = Timer(delay, () {
       _retryTimer = null;
+      _retryDeferred = false;
       if (!_disposed && _link == null) _startP2p();
     });
   }
@@ -364,6 +482,11 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     final header = peekTerminalLocal(localFrame);
     if (header == null) return;
     final streamId = header.streamId;
+    // Taken off on the stream's first keyframe whichever branch below runs: it is owed one
+    // promotion attempt, at that frame, and never another from here — see [_promoteAfterFirstFrame].
+    final firstKeyframe =
+        header.kind == TerminalBinaryKind.keyframe &&
+        _promoteAfterFirstFrame.remove(streamId);
     if (header.kind == TerminalBinaryKind.keyframe &&
         _migrating.containsKey(streamId) &&
         !_p2pStreams.contains(streamId)) {
@@ -374,7 +497,12 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         !_migrating.containsKey(streamId)) {
       // Suppressed while migrating: during phase 2 the responder may still emit
       // relay-routed output until ITS flip lands, and that is not p2p breaking.
+      // Nor after it, for what the relay was already carrying — see [_lateOnRelay].
+      if (_lateOnRelay(streamId, localFrame)) return;
       await _demote('relay_binary_received');
+    } else if (firstKeyframe && _link?.isReady == true) {
+      // Came up on the relay after the channel was already up — nothing else would move it.
+      _promote(streamId);
     }
   }
 
@@ -418,9 +546,17 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
           return;
       }
       final streamId = header.streamId;
+      // The first numbered frame the channel brings for this stream: the line below which a relay
+      // frame is a late one — see [_lateOnRelay].
+      if (!_p2pFloor.containsKey(streamId)) {
+        if (peekTerminalLocalSeq(local) case final seq?) {
+          _p2pFloor[streamId] = seq;
+          _confirmedAt.remove(streamId);
+        }
+      }
       // Phase 2 of a live migration confirmed: this stream's bytes are genuinely
       // arriving over p2p — re-arm the ordinary demote-on-mismatch rule for it.
-      _migrating.remove(streamId);
+      await _confirmMigration(streamId);
       // Drain-barrier confirmation for an upgrade in flight: the OLD connection's
       // answer to the resync it sent itself, proving everything before is accounted for.
       if (_upgradeDraining.remove(streamId) != null &&
@@ -446,13 +582,22 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         : '';
     // Any p2p-delivered frame for a stream still migrating is itself proof the
     // responder committed its flip.
-    if (wire == _Wire.p2p && streamId.isNotEmpty) _migrating.remove(streamId);
+    if (wire == _Wire.p2p && streamId.isNotEmpty) {
+      await _confirmMigration(streamId);
+    }
     if (type == 'terminal_ready' &&
         requestId.isNotEmpty &&
         streamId.isNotEmpty) {
       _streams.add(streamId);
-      if (_pendingOpens.remove(requestId) && wire == _Wire.p2p) {
+      final openedOnChannel = _pendingOpens.remove(requestId);
+      if (openedOnChannel && wire == _Wire.p2p) {
         _p2pStreams.add(streamId);
+      }
+      // Only a stream that went to the relay because the channel was not up when it opened
+      // ([prepareOpen]). One that asked for the channel and was answered on the relay anyway is
+      // the responder's choice, and left where the responder put it, as before.
+      if (!openedOnChannel && wire == _Wire.relay) {
+        _promoteAfterFirstFrame.add(streamId);
       }
       // Derived from the routing table's own membership, not an echo of `wire`, so
       // a stale terminal_ready can never report a mode that is not actually routing.
@@ -463,6 +608,8 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
       _p2pStreams.remove(streamId);
       _streams.remove(streamId);
       _migrating.remove(streamId);
+      _promoteAfterFirstFrame.remove(streamId);
+      _forgetFloor(streamId);
     }
     // A frame for a stream still marked p2p but physically delivered over the relay:
     // a quieter, single-stream demotion than [_demote] — still worth telling the app.
@@ -470,6 +617,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         streamId.isNotEmpty &&
         !_migrating.containsKey(streamId) &&
         _p2pStreams.remove(streamId)) {
+      _forgetFloor(streamId);
       await _dispatchLinkMode(streamId, 'relay');
     }
   }
@@ -488,19 +636,37 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
 
   // ── Outbound ──────────────────────────────────────────────────────────────
 
+  /// Whether this open rides the channel: yes if it is up right now, and otherwise the relay, AT
+  /// ONCE — the stream then moves to the channel on its own once it opens ([_promoteOpenStreams],
+  /// or [_promoteAfterFirstFrame] for one that comes up after the channel did).
+  ///
+  /// ⚠️ **Deliberately not the CLI's rule, which waits up to the policy's `openWait` for the
+  /// channel (owner, 2026-09-30).** On a phone that wait landed on the one open somebody is staring
+  /// at: the channel only starts negotiating once the socket is up, which is also the moment the
+  /// launch opens its first terminal — so every launch waited for it. Measured on the simulator: a
+  /// launch took 6.1s to its first live screen, 2.0s of it this wait (the backend's `openWait` at
+  /// 2500ms, the channel taking 1.7–2.8s to connect); without the wait, 3.5s.
+  ///
+  /// What it costs instead: the first seconds of a stream ride the relay — a relay round trip per
+  /// keystroke and relay bandwidth — and each such stream is moved over with two resyncs, which
+  /// the terminal takes as two keyframes. Both are cheaper than a blank screen.
+  ///
+  /// Nothing is reported to the backend for it (it used to send `open_wait_elapsed`): no wait ran
+  /// out, and the channel's own outcome is still reported when it lands or gives up.
   @override
   Future<bool> prepareOpen(String requestId) async {
-    final link = _link;
-    final policy = _policy;
-    if (link == null || policy == null || _disposed) return false;
-    final ready = link.isReady || await link.waitUntilReady(policy.openWait);
     if (_disposed) return false;
-    if (ready) {
-      _pendingOpens.add(requestId);
-    } else {
-      _reportP2pResult('relay', reason: 'open_wait_elapsed');
+    // The connection's first terminal is what starts its channel — see [onSessionReady]. Once
+    // only: a channel that failed or was demoted since is [_scheduleRetry]'s to bring back.
+    if (_p2pEligible && !_p2pStarted) {
+      _p2pStarted = true;
+      _log('starting · first terminal on this machine');
+      _startP2p();
     }
-    return ready;
+    final link = _link;
+    if (link == null || _policy == null || !link.isReady) return false;
+    _pendingOpens.add(requestId);
+    return true;
   }
 
   @override
@@ -540,6 +706,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         _p2pStreams.remove(closing);
         _streams.remove(closing);
         _migrating.remove(closing);
+        _forgetFloor(closing);
       }
       return true;
     }
@@ -550,6 +717,8 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     if (closing != null) {
       _streams.remove(closing);
       _migrating.remove(closing);
+      _promoteAfterFirstFrame.remove(closing);
+      _forgetFloor(closing);
     }
     return false;
   }
@@ -558,7 +727,14 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
   Future<bool> sendBinary(Uint8List localFrame, Uint8List sealedFrame) async {
     if (_disposed) return false;
     final header = peekTerminalLocal(localFrame);
-    if (header == null || !_p2pStreams.contains(header.streamId)) return false;
+    if (header == null) return false;
+    if (!_p2pStreams.contains(header.streamId)) {
+      if (header.kind == TerminalBinaryKind.input ||
+          header.kind == TerminalBinaryKind.paste) {
+        _kickForTyping();
+      }
+      return false;
+    }
     final link = _link;
     if (link == null) return false;
     // A burst of large frames (a chunked upload) can push the send buffer over the
@@ -603,6 +779,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     _link = null;
     final streamIds = List.of(_p2pStreams);
     _p2pStreams.clear();
+    _forgetFloors();
     _pendingOpens.clear();
     for (final streamId in streamIds) {
       _migrating.remove(streamId);
@@ -616,6 +793,14 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     }
     if (streamIds.isNotEmpty) _reportP2pResult('dropped', reason: reason);
     unawaited(link?.stop(reason: reason));
+    // A channel that was up is dialled again within seconds ([_redialDelays]), from the first delay
+    // again once it had stayed up a while.
+    final openedAt = _linkOpenedAt;
+    _linkOpenedAt = null;
+    if (openedAt != null) {
+      if (_now().difference(openedAt) >= _redialStableAfter) _redials = 0;
+      _redialing = true;
+    }
     _scheduleRetry();
   }
 
@@ -626,18 +811,100 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
   /// resync over p2p, which is what makes the responder flip its routing too.
   void _promoteOpenStreams() {
     for (final streamId in _streams) {
-      if (_p2pStreams.contains(streamId) || _migrating.containsKey(streamId)) {
-        continue;
-      }
-      _migrating[streamId] = _now();
-      unawaited(
-        host.send({
-          'type': 'terminal_resync',
-          'payload': {'streamId': streamId},
-        }),
-      );
+      _promote(streamId);
     }
   }
+
+  /// Phase 1 of moving one relay stream onto the channel: a resync over the socket, whose answering
+  /// keyframe [observeWsBinary] then commits. A stream already on the channel, or already on its
+  /// way, is left alone.
+  ///
+  /// Either way it no longer waits in [_promoteAfterFirstFrame]: that is a stream's one attempt,
+  /// and a stream walked here has had it — a migration that then goes unanswered is swept
+  /// ([_sweepMigrations]) and not started over by the keyframe that follows.
+  void _promote(String streamId) {
+    _promoteAfterFirstFrame.remove(streamId);
+    if (_p2pStreams.contains(streamId) || _migrating.containsKey(streamId)) {
+      return;
+    }
+    _migrating[streamId] = _now();
+    _log('migrate · start stream=${_short(streamId)}');
+    unawaited(
+      host.send({
+        'type': 'terminal_resync',
+        'payload': {'streamId': streamId},
+      }),
+    );
+  }
+
+  /// A frame for [streamId] arrived over the channel. If the stream was migrating, that is the
+  /// proof the responder flipped: the migration is over, and the app is told the stream's wire.
+  ///
+  /// ⚠️ **The telling is new (owner, 2026-09-30).** A migrated stream used to keep the `relay` badge
+  /// its `terminal_ready` gave it, whatever wire its bytes actually took after — harmless while a
+  /// migration was the rare case, misleading once every stream opened during a launch goes
+  /// through one ([prepareOpen]). The upgrade path already re-tells its streams for the same
+  /// reason (see [_attemptUpgrade]'s cutover).
+  Future<void> _confirmMigration(String streamId) async {
+    final startedAt = _migrating.remove(streamId);
+    if (startedAt == null) return;
+    if (!_p2pFloor.containsKey(streamId)) _confirmedAt[streamId] = _now();
+    _log(
+      'migrate · done stream=${_short(streamId)} via=${linkModeFor(streamId)}'
+      ' took=${_now().difference(startedAt).inMilliseconds}ms',
+    );
+    await _dispatchLinkMode(streamId, linkModeFor(streamId));
+  }
+
+  /// Whether [localFrame], delivered over the relay for [streamId] — a stream on the channel — is a
+  /// late one: sent before the responder moved the stream, and only now arriving.
+  ///
+  /// ⚠️ **One of these used to take the channel down for a minute.** Phase 2 of a migration flips
+  /// the responder's routing, but what it had already put on the relay is still on its way — and
+  /// the relay is the slower wire, so that output routinely lands AFTER the channel's first frame.
+  /// Taken for p2p breaking, it demoted the whole channel and scheduled the retry a minute out; the
+  /// session read the same frame as a sequence gap and asked for a resync. Measured on a phone
+  /// (2026-10-02): migrated in 546 ms, demoted at once, every stream on the relay for 60 s.
+  ///
+  /// Late is told by number: everything the responder sent before its flip is numbered below the
+  /// channel's first frame for the stream ([_p2pFloor]). A relay frame numbered at or above it
+  /// means the responder really is back on the relay, and demotes as before. Until a numbered frame
+  /// has come — a migration confirmed by a frame that carries none — a short grace after the
+  /// confirmation stands in ([_lateRelayGrace]).
+  bool _lateOnRelay(String streamId, Uint8List localFrame) {
+    final floor = _p2pFloor[streamId];
+    final seq = peekTerminalLocalSeq(localFrame);
+    final late = floor != null
+        ? seq != null && seq < floor
+        : switch (_confirmedAt[streamId]) {
+            final confirmedAt? =>
+              _now().difference(confirmedAt) < _lateRelayGrace,
+            null => false,
+          };
+    if (late && _lateNoted.add(streamId)) {
+      _log(
+        'late relay frame · stream=${_short(streamId)} seq=$seq'
+        '${floor == null ? '' : ' < $floor'} · kept on p2p',
+      );
+    }
+    return late;
+  }
+
+  void _forgetFloor(String streamId) {
+    _p2pFloor.remove(streamId);
+    _confirmedAt.remove(streamId);
+    _lateNoted.remove(streamId);
+  }
+
+  void _forgetFloors() {
+    _p2pFloor.clear();
+    _confirmedAt.clear();
+    _lateNoted.clear();
+  }
+
+  /// Enough of a stream id to tell a launch's few streams apart in the log.
+  static String _short(String streamId) =>
+      streamId.length > 8 ? streamId.substring(0, 8) : streamId;
 
   Future<void> _commitMigration(String streamId) async {
     final link = _link;
