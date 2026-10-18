@@ -1,4 +1,4 @@
-import 'host_platform.dart';
+import 'home_dir.dart';
 
 import 'dart:io';
 
@@ -62,17 +62,8 @@ class HarnessCliRunner {
        _startProcess = startProcess ?? Process.start;
 
   static String _defaultHarnessHome() {
-    // HOME, then USERPROFILE: Windows sets only the latter, so a launch from Explorer threw here
-    // before any UI existed to report it.
-    final home = Platform.environment['HOME'];
-    final profile = Platform.environment['USERPROFILE'];
-    final resolved = home != null && home.isNotEmpty
-        ? home
-        : (profile != null && profile.isNotEmpty ? profile : containerHome);
-    if (resolved == null || resolved.isEmpty) {
-      throw StateError('Could not resolve the current user home directory');
-    }
-    return '$resolved${Platform.pathSeparator}.harness';
+    // Explorer supplies USERPROFILE rather than HOME.
+    return '${homeDir()}${Platform.pathSeparator}.harness';
   }
 
   Directory get _runtimeDirectory =>
@@ -177,12 +168,7 @@ class HarnessCliRunner {
     }
   }
 
-  String? _home() {
-    final home = environment['HOME'];
-    if (home != null && home.isNotEmpty) return home;
-    final profile = environment['USERPROFILE'];
-    return profile != null && profile.isNotEmpty ? profile : null;
-  }
+  String? _home() => maybeHomeDir(environment: environment);
 
   Map<String, String> _commandEnvironment() {
     final home = _home();

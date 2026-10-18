@@ -1,4 +1,4 @@
-import '../core/host_platform.dart';
+import '../core/home_dir.dart';
 
 import 'package:flutter/foundation.dart' show kDebugMode;
 
@@ -373,15 +373,9 @@ class EnvironmentProvisioner {
        _isWindows = isWindows ?? Platform.isWindows,
        _platformEnvironment = platformEnvironment ?? Platform.environment;
 
-  /// HOME, then USERPROFILE. Windows sets only the latter, so a launch from Explorer used to throw
-  /// out of this constructor before a single frame could render.
-  static String? userHome() {
-    final home = Platform.environment['HOME'];
-    if (home != null && home.isNotEmpty) return home;
-    final profile = Platform.environment['USERPROFILE'];
-    if (profile != null && profile.isNotEmpty) return profile;
-    return containerHome;
-  }
+  /// The current user's home: USERPROFILE on Windows, HOME elsewhere.
+  /// A launch from Explorer has no HOME at all.
+  static String? userHome() => maybeHomeDir();
 
   static String _defaultHarnessHome() {
     final home = userHome();

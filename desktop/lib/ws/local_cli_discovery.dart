@@ -1,3 +1,5 @@
+import '../core/home_dir.dart';
+
 import 'dart:async';
 import 'dart:io';
 
@@ -694,7 +696,7 @@ Map<String, AgentProject> _localAgentProjects(
 ) {
   if (sessions is! List) return const {};
   final projects = <String, AgentProject>{};
-  final home = environment['HOME'] ?? environment['USERPROFILE'];
+  final home = maybeHomeDir(environment: environment);
   for (final session in sessions) {
     if (session is! Map || session['id'] is! String) continue;
     final id = session['id'] as String;

@@ -1,3 +1,4 @@
+import '../core/home_dir.dart';
 import '../measurement/product_measurement.dart';
 import '../measurement/product_runtime_health.dart';
 import '../measurement/product_connections.dart';
@@ -4019,9 +4020,12 @@ class AppNotifier extends ChangeNotifier {
   bool Function() harnessInstalledBefore = kUnderTest
       ? () => false
       : () {
-          final home = Platform.environment['HOME'];
+          final home = maybeHomeDir();
           return home == null ||
-              FileSystemEntity.typeSync('$home/.harness/cli') !=
+              FileSystemEntity.typeSync(
+                    '$home${Platform.pathSeparator}.harness'
+                    '${Platform.pathSeparator}cli',
+                  ) !=
                   FileSystemEntityType.notFound;
         };
 

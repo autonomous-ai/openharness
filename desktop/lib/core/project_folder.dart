@@ -1,3 +1,6 @@
+import 'home_dir.dart';
+import 'folder_commands.dart';
+
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -202,8 +205,7 @@ class ProjectFolderRequest {
     String label = 'harness',
     DateTime Function()? now,
   }) async {
-    final home =
-        Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+    final home = maybeHomeDir();
     if (projectHome == null && (home == null || !p.isAbsolute(home))) {
       throw const RepositoryCloneException(
         'Could not find your home folder. Browse for a folder.',
@@ -235,7 +237,7 @@ class ProjectFolderRequest {
         var candidate = named;
         while (true) {
           final folder = p.join(root.path, candidate);
-          final result = await Process.run('mkdir', [folder]);
+          final result = await reserveDirectory(folder);
           if (result.exitCode == 0) return folder;
           if (await FileSystemEntity.type(folder, followLinks: false) !=
               FileSystemEntityType.notFound) {
@@ -265,7 +267,7 @@ class ProjectFolderRequest {
         // Directory.create accepts an existing directory. The platform mkdir
         // command reserves it exclusively, so concurrent creates never share
         // a workspace. Paths are arguments, never shell text.
-        final result = await Process.run('mkdir', [folder]);
+        final result = await reserveDirectory(folder);
         if (result.exitCode == 0) return folder;
         if (await FileSystemEntity.type(folder, followLinks: false) ==
             FileSystemEntityType.notFound) {

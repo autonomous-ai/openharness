@@ -10,7 +10,7 @@ import 'package:collection/collection.dart' show compareNatural;
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
-import '../core/runtime_platform.dart';
+import '../core/home_dir.dart';
 import '../core/codex_profiles.dart';
 import '../core/launch_setup.dart';
 import '../core/dsh_catalog.dart';
@@ -442,7 +442,7 @@ class NewHarnessController extends ChangeNotifier {
            draft != null || engine != null || harnessId != null,
        _restoringDraft = draft != null,
        _now = now ?? DateTime.now,
-       _home = home ?? RuntimePlatform.environment['HOME'] {
+       _home = home ?? maybeHomeDir() {
     final explicitSelection =
         draft != null || engine != null || harnessId != null;
     _rememberedAgent = !explicitSelection;
