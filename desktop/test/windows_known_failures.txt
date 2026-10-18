@@ -1,7 +1,7 @@
-# Desktop tests that fail on Windows because they assume POSIX, one `<file>::<test name>` per line.
+# Desktop tests with known Windows failures, one `<file>::<test name>` per line.
 # Written by `python tool/windows_test_baseline.py write` from a Windows desktop workflow run, then
-# reviewed: an entry belongs here only when its test exercises macOS or Linux behaviour. A failure
-# in a Windows branch is fixed, never recorded. Remove an entry once its test passes on Windows.
+# reviewed: POSIX fixtures and the explicitly owned C3.5 clipboard deferral below. Other failures
+# in Windows branches are fixed, never recorded. Remove an entry once its test passes on Windows.
 # One-time initial run: 39111951009 (6e818410107c6ae9128eff14a3bccd095597b722).
 # Reviewed categories below; 26 neutral failures were fixed and excluded.
 
@@ -204,10 +204,9 @@ test/linux_app_image_test.dart::an entry for a copy still on disk is not taken o
 test/linux_app_image_test.dart::an entry whose AppImage is gone follows the one running
 test/linux_app_image_test.dart::an existing launcher for this copy gains the fork protocol
 
-# clipboard-and-POSIX-project-fixture (2)
-# Image-drop fixture expects a native clipboard write; route-card fixture selects /work/analytics. These two still fail after removing forced Windows viewer mode.
+# temporary-Windows-clipboard-C3.5 (1)
+# Image-drop fixture expects a native clipboard write; Windows clipboard support is explicitly deferred to C3.5 by the C1.6 gate table.
 test/pane_file_drop_test.dart::one image drop reaches only the visible pane across tabs
-test/route_card_test.dart::new work closes the card with the setup the models chose
 
 # macOS-explicit-keyboard-clipboard-test (2)
 # These tests explicitly select TargetPlatform.macOS/iOS and require the existing Mac image-paste channel path; actual Windows clipboard support is added in C3.5.
