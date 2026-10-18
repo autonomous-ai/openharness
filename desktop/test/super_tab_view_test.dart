@@ -179,6 +179,59 @@ void main() {
   );
 
   testWidgets(
+    'the narrow sidebar owns keyboard focus and Escape returns to the draft',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(600, 520));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final server = ConversationServer();
+      final controller = server.controller();
+      await controller.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabView(
+              controller: controller,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Test Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final composer = find.byKey(const ValueKey('super-message-composer'));
+      await tester.enterText(composer, 'Keep this draft');
+      await tester.tap(find.byTooltip('Conversations'));
+      await tester.pumpAndSettle();
+      final field = tester.widget<TextField>(composer);
+      expect(field.focusNode!.hasFocus, isFalse);
+      for (var step = 0; step < 8; step++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+        expect(field.focusNode!.hasFocus, isFalse);
+      }
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
+      expect(field.focusNode!.hasFocus, isTrue);
+      expect(field.controller!.text, 'Keep this draft');
+      expect(server.posts, isEmpty);
+      await tester.tap(find.byTooltip('Conversations'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-group-offline')));
+      await tester.pumpAndSettle();
+      expect(controller.selectedId, 'offline');
+      expect(field.focusNode!.hasFocus, isTrue);
+      expect(controller.draft('lead'), 'Keep this draft');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await controller.flush();
+      controller.dispose();
+    },
+  );
+
+  testWidgets(
     'flat sidebar keeps local actions in its footer without repeating the app tab name',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1100, 700));

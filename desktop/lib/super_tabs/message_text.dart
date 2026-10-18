@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../core/open_in_browser.dart';
+import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 
 /// Shared messages are selectable text. Only explicit web links are opened,
@@ -16,6 +17,7 @@ class SuperTabMessageText extends StatefulWidget {
 class _SuperTabMessageTextState extends State<SuperTabMessageText> {
   final _links = <TapGestureRecognizer>[];
   List<InlineSpan> _spans = [];
+  Color? _accent;
   static final _web = RegExp(r'https?://[^\s<>"\x00-\x1f]+');
 
   @override
@@ -31,6 +33,7 @@ class _SuperTabMessageTextState extends State<SuperTabMessageText> {
   }
 
   void _read() {
+    _accent = DesktopChrome.accent;
     for (final link in _links) {
       link.dispose();
     }
@@ -72,8 +75,12 @@ class _SuperTabMessageTextState extends State<SuperTabMessageText> {
   }
 
   @override
-  Widget build(BuildContext context) => SelectableText.rich(
-    TextSpan(children: _spans),
-    style: DesktopChrome.text(),
-  );
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    if (_accent != DesktopChrome.accent) _read();
+    return SelectableText.rich(
+      TextSpan(children: _spans),
+      style: DesktopChrome.text(),
+    );
+  }
 }

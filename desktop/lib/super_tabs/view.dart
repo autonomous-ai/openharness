@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
+import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
@@ -133,6 +134,13 @@ class _SuperTabViewState extends State<SuperTabView> {
     final id = c.selectedId;
     final result = await c.send(replyTo: _replies[id]?.id);
     if (mounted && result != null) setState(() => _replies.remove(id));
+  }
+
+  void _closeSidebar() {
+    setState(() => _sidebarOpen = false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_sidebarOpen) _focus.requestFocus();
+    });
   }
 
   ({int start, int end, String query})? get _mentionAtCursor {
@@ -282,8 +290,7 @@ class _SuperTabViewState extends State<SuperTabView> {
     );
     if (!mounted || widget.controller != c || id == null) return;
     c.select(id);
-    setState(() => _sidebarOpen = false);
-    _focus.requestFocus();
+    _closeSidebar();
   }
 
   Future<void> _earlier() async {
@@ -682,8 +689,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                             : null,
                         onTap: () {
                           c.select(group.id);
-                          setState(() => _sidebarOpen = false);
-                          _focus.requestFocus();
+                          _closeSidebar();
                         },
                       ),
                     ),
@@ -1133,7 +1139,9 @@ class _SuperTabViewState extends State<SuperTabView> {
             child: DecoratedBox(
               decoration: BoxDecoration(
                 color: DesktopChrome.field,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(
+                  DesktopChrome.controlRadius,
+                ),
                 border: Border.all(color: DesktopChrome.rim),
               ),
               child: Padding(
@@ -1204,6 +1212,7 @@ class _SuperTabViewState extends State<SuperTabView> {
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
+      grid.AppTheme.watch(context);
       final terminal = widget.terminal;
       final narrow = constraints.maxWidth < (terminal == null ? 640 : 980);
       if (narrow && terminal != null) {
@@ -1223,33 +1232,49 @@ class _SuperTabViewState extends State<SuperTabView> {
       }
       return Stack(
         children: [
-          Row(
-            children: [
-              if (!narrow) ...[
-                SizedBox(width: 220, child: _sidebar()),
-                VerticalDivider(width: 1, color: DesktopChrome.rim),
+          ExcludeFocus(
+            excluding: narrow && _sidebarOpen,
+            child: Row(
+              children: [
+                if (!narrow) ...[
+                  SizedBox(width: 220, child: _sidebar()),
+                  VerticalDivider(width: 1, color: DesktopChrome.rim),
+                ],
+                Expanded(child: _conversation(narrow)),
+                if (terminal != null) ...[
+                  VerticalDivider(width: 1, color: DesktopChrome.rim),
+                  Expanded(child: terminal),
+                ],
               ],
-              Expanded(child: _conversation(narrow)),
-              if (terminal != null) ...[
-                VerticalDivider(width: 1, color: DesktopChrome.rim),
-                Expanded(child: terminal),
-              ],
-            ],
+            ),
           ),
           if (narrow && _sidebarOpen)
             Positioned.fill(
-              child: GestureDetector(
-                onTap: () => setState(() => _sidebarOpen = false),
-                child: ColoredBox(
-                  color: Colors.black26,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: SizedBox(
-                      width: 240,
-                      child: Material(
-                        color: DesktopChrome.surface,
-                        elevation: 8,
-                        child: _sidebar(),
+              child: BlockSemantics(
+                child: FocusScope(
+                  autofocus: true,
+                  onKeyEvent: (_, event) {
+                    if (event is KeyDownEvent &&
+                        event.logicalKey == LogicalKeyboardKey.escape) {
+                      _closeSidebar();
+                      return KeyEventResult.handled;
+                    }
+                    return KeyEventResult.ignored;
+                  },
+                  child: GestureDetector(
+                    onTap: _closeSidebar,
+                    child: ColoredBox(
+                      color: grid.AppDesktop.veil(Theme.of(context).brightness),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: SizedBox(
+                          width: 240,
+                          child: Material(
+                            color: DesktopChrome.surface,
+                            elevation: 8,
+                            child: _sidebar(),
+                          ),
+                        ),
                       ),
                     ),
                   ),
