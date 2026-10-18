@@ -114,6 +114,24 @@ jobs:
           # Exercise Debug's executable-relative DLL loader, not the unit override.
           Remove-Item Env:HARNESS_DESKTOP_PIPE_IO_DLL -ErrorAction SilentlyContinue
           flutter test --no-pub -d windows integration_test/windows_pipe_test.dart
+      - name: Single-instance native regressions
+        timeout-minutes: 5
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP ("harness-instance-" + [guid]::NewGuid().ToString('N'))
+          $platform = if ('${{ matrix.arch }}' -eq 'arm64') { 'ARM64' } else { 'x64' }
+          try {
+            # Match the Flutter integration runner architecture and Debug instance suffix.
+            cmake -S integration_test/windows_runner_native -B $root -A $platform
+            if ($LASTEXITCODE -ne 0) { throw "Native fixture configure failed ($LASTEXITCODE)" }
+            cmake --build $root --config Debug --parallel 2
+            if ($LASTEXITCODE -ne 0) { throw "Native fixture build failed ($LASTEXITCODE)" }
+            ctest --test-dir $root -C Debug --verbose --timeout 30 --parallel 1
+            if ($LASTEXITCODE -ne 0) { throw "Native instance regression failed ($LASTEXITCODE)" }
+          } finally {
+            if (Test-Path -LiteralPath $root) {
+              Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+            }
+          }
       - name: Runner channels and single instance (integration)
         working-directory: desktop
         env:

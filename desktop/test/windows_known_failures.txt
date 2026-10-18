@@ -1,7 +1,7 @@
-# Desktop tests with known Windows failures, one `<file>::<test name>` per line.
+# Desktop tests that fail on Windows because they assume POSIX, one `<file>::<test name>` per line.
 # Written by `python tool/windows_test_baseline.py write` from a Windows desktop workflow run, then
-# reviewed: POSIX fixtures and the explicitly owned C3.5 clipboard deferral below. Other failures
-# in Windows branches are fixed, never recorded. Remove an entry once its test passes on Windows.
+# reviewed: an entry belongs here only when its test exercises macOS or Linux behaviour. A failure
+# in a Windows branch is fixed, never recorded. Remove an entry once its test passes on Windows.
 # One-time initial run: 39111951009 (6e818410107c6ae9128eff14a3bccd095597b722).
 # Reviewed categories below; 26 neutral failures were fixed and excluded.
 
@@ -202,12 +202,3 @@ test/linux_app_image_test.dart::an AppImage started from Downloads lands in the 
 test/linux_app_image_test.dart::an entry for a copy still on disk is not taken over
 test/linux_app_image_test.dart::an entry whose AppImage is gone follows the one running
 test/linux_app_image_test.dart::an existing launcher for this copy gains the fork protocol
-
-# temporary-Windows-clipboard-C3.5 (1)
-# Image-drop fixture expects a native clipboard write; Windows clipboard support is explicitly deferred to C3.5 by the C1.6 gate table.
-test/pane_file_drop_test.dart::one image drop reaches only the visible pane across tabs
-
-# macOS-explicit-keyboard-clipboard-test (2)
-# These tests explicitly select TargetPlatform.macOS/iOS and require the existing Mac image-paste channel path; actual Windows clipboard support is added in C3.5.
-test/terminal_clipboard_test.dart::Linux clipboard chord preserves remote image upload (variant: TargetPlatform.linux)
-test/terminal_clipboard_test.dart::delayed image reads cannot upload into a replacement agent (variant: TargetPlatform.macOS)
