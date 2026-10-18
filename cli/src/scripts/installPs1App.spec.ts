@@ -222,10 +222,19 @@ describe.runIf(windows)('install.ps1 -App runs the real launcher in an isolated 
     const uninstall = `${w.registry}\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Harness`
     expect(query(uninstall, 'DisplayVersion').stdout).toMatch(/DisplayVersion\s+REG_SZ\s+9\.8\.7/)
     expect(registryValue(uninstall, 'DisplayIcon').stdout).toBe(`${join(w.install, 'Harness.ico')},0`)
-    const shortcut = powershell(`$link = (New-Object -ComObject WScript.Shell).CreateShortcut(${quote(join(w.programs, 'Harness.lnk'))}); $link.TargetPath; $link.IconLocation`)
+    const shortcut = powershell(
+      `$ErrorActionPreference = 'Stop'; $shell = New-Object -ComObject Shell.Application; ` +
+      `$dir = $shell.Namespace(${quote(w.programs)}); if (-not $dir) { throw 'Start Menu folder could not be opened' }; ` +
+      `$item = $dir.ParseName('Harness.lnk'); if (-not $item) { throw 'Harness.lnk could not be opened' }; ` +
+      `$link = $item.GetLink; if (-not $link) { throw 'Harness.lnk is not a readable shortcut' }; ` +
+      `$icon = ''; $index = $link.GetIconLocation([ref]$icon); $target = $link.Path; ` +
+      `if (-not $target -or -not $icon) { throw 'Harness.lnk is missing its target or icon' }; ` +
+      `[pscustomobject]@{ target = $target; icon = $icon; index = $index } | ConvertTo-Json -Compress`,
+    )
     expect(shortcut.status, shortcut.stderr).toBe(0)
-    expect(shortcut.stdout).toContain(join(w.install, 'Harness.exe'))
-    expect(shortcut.stdout).toContain(join(w.install, 'Harness.ico'))
+    expect(JSON.parse(shortcut.stdout)).toEqual({
+      target: join(w.install, 'Harness.exe'), icon: join(w.install, 'Harness.ico'), index: 0,
+    })
     expect(existsSync(join(w.home, '.harness'))).toBe(false)
     expect(pathValue()).toBe(oldPath)
     expect(taskSnapshot()).toEqual(oldTasks)
