@@ -12,5 +12,8 @@ Before=initrd-switch-root.target initrd-cleanup.service
 [Service]
 Type=simple
 ExecStart=/usr/lib/harness-os/unlock/run
+# The disk opened from the phone: the system proper starts at once, and this goes with it. A moment
+# first, for the page's "unlocked" to reach the phone over the air.
+ExecStop=/bin/sh -c 'sleep 2'
 ExecStopPost=/usr/lib/harness-os/unlock/run stop
 KillMode=control-group
