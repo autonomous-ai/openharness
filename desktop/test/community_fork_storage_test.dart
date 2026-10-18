@@ -12,8 +12,8 @@ import 'community_fork_test.dart' show link, snapshot;
 class StorageImporter extends ForkProjectImporter {
   StorageImporter(Directory fixture)
     : super(
-        root: Directory('${fixture.path}/metadata'),
-        projectsRoot: Directory('${fixture.path}/harnesses'),
+        root: Directory(p.join(fixture.path, 'metadata')),
+        projectsRoot: Directory(p.join(fixture.path, 'harnesses')),
       );
 
   int downloads = 0;

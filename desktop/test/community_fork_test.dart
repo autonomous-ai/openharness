@@ -273,8 +273,8 @@ void main() {
       });
       try {
         final importer = ForkProjectImporter(
-          root: Directory('${root.path}/metadata'),
-          projectsRoot: Directory('${root.path}/harnesses'),
+          root: Directory(p.join(root.path, 'metadata')),
+          projectsRoot: Directory(p.join(root.path, 'harnesses')),
           origin: 'http://127.0.0.1:${server.port}',
         );
         final first = await importer.prepare(link);
