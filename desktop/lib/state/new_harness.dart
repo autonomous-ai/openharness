@@ -3264,7 +3264,12 @@ class NewHarnessController extends ChangeNotifier {
 
   /// zsh's path completion: the folders under what has been typed so far.
   List<NewHarnessOption> _pathOptions(String typed) {
-    final full = _expand(typed);
+    final expanded = _expand(typed);
+    // Local Windows paths may use either separator. Keep the completion
+    // parser's slash form while leaving other machines' paths untouched.
+    final full = Platform.isWindows && _machine?.isLocalMachine == true
+        ? expanded.replaceAll('\\', '/')
+        : expanded;
     if (!p.isAbsolute(full)) {
       _visibleFolder = folderRefreshError = null;
       total = 0;
