@@ -209,6 +209,26 @@ describe('removeNow', () => {
     }
   })
 
+  // A folder its owner cannot read (0o000, or 0o300: writable but not listable) must not end the retry for the rest:
+  // each folder is opened up before it is listed, and one that still fails leaves only itself (B5.14 review).
+  it.runIf(process.platform !== 'win32')('removes folders whose owner cannot list them, 0o000 and 0o300', () => {
+    const root = join(home(), '.harness')
+    const runtime = join(root, 'runtime')
+    for (const [name, mode] of [['none', 0o000], ['write-only', 0o300]] as const) {
+      const dir = join(runtime, 'grid', name, 'inner')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'f'), 'x')
+      chmodSync(join(runtime, 'grid', name), mode)
+    }
+    chmodSync(join(runtime, 'grid'), 0o555)
+    try {
+      expect(removeNow(planOf(root))).toEqual([])
+      expect(existsSync(root)).toBe(false)
+    } finally {
+      if (existsSync(root)) for (const dir of [join(runtime, 'grid'), join(runtime, 'grid', 'none'), join(runtime, 'grid', 'write-only')]) { try { chmodSync(dir, 0o755) } catch { /* gone */ } }
+    }
+  })
+
   it('with --keep-data leaves cli/data and the rest of the person\'s data', () => {
     const root = join(home(), '.harness')
     mkdirSync(join(root, 'cli', 'data', 'sessions'), { recursive: true })

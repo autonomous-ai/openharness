@@ -202,12 +202,18 @@ export function checkRemovable(plan: RemovalPlan, o: { platform?: NodeJS.Platfor
   return root
 }
 
-/** Every folder in [dir], itself first, made writable by its owner. A link is never followed: its far side keeps its mode. */
+/**
+ * Every folder in [dir], itself first, opened up for its owner (read, write, search) before it is listed: a 0o000 or
+ * 0o300 folder could not be listed otherwise. A link is never followed: its far side keeps its mode. One folder that
+ * still fails is left as it is (removeNow reports what stayed), and the others go on.
+ */
 function writable(dir: string): void {
-  const stat = lstatSync(dir)
-  if (!stat.isDirectory()) return
-  if (!(stat.mode & 0o200)) chmodSync(dir, (stat.mode & 0o7777) | 0o700)
-  for (const entry of readdirSync(dir, { withFileTypes: true })) if (entry.isDirectory()) writable(posix.join(dir, entry.name))
+  try {
+    const stat = lstatSync(dir)
+    if (!stat.isDirectory()) return
+    if ((stat.mode & 0o700) !== 0o700) chmodSync(dir, (stat.mode & 0o7777) | 0o700)
+    for (const entry of readdirSync(dir, { withFileTypes: true })) if (entry.isDirectory()) writable(posix.join(dir, entry.name))
+  } catch { /* this folder stays; removeNow says so */ }
 }
 
 /** mac and Linux: the plan, carried out now. Returns what is still there. Throws, removing nothing, on a bad plan. */
