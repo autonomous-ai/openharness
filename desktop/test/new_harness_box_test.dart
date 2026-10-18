@@ -752,8 +752,14 @@ void main() {
     final box = NewHarnessController(app, machineId: 'm', home: root.path);
     addTearDown(box.dispose);
     box.focusField(NewHarnessField.project);
+    final listed = Completer<void>();
+    void onListing() {
+      if (!box.listing && !listed.isCompleted) listed.complete();
+    }
+    box.addListener(onListing);
     box.setQuery('~/auth');
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await listed.future.timeout(const Duration(seconds: 3));
+    box.removeListener(onListing);
     expect(box.complete(), '~/auth');
     expect(box.complete(), '~/authn');
     // Down leaves the walk: the line is what was typed again, and the
