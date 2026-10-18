@@ -52,7 +52,8 @@ const fileLinks = process.platform === 'win32' && canLinkFiles()
 
 const leftovers = (pid: number) => readdirSync(tmpdir()).filter((name) => name.startsWith(`harness-uninstall-${pid}-`))
 
-describe.runIf(process.platform === 'win32')('the last step of harness uninstall', () => {
+// A ceiling, not a timing check: each case starts Windows PowerShell (and Add-Type compiles), ~5 s on windows-latest.
+describe.runIf(process.platform === 'win32')('the last step of harness uninstall', { timeout: 60_000 }, () => {
   it('removes the tree once the process has exited, and leaves no script or log', async () => {
     const { root } = throwaway()
     mkdirSync(join(root, 'cli', '0.5.1'), { recursive: true })

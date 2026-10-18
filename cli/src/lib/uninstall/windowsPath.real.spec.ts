@@ -35,7 +35,8 @@ function get(where = key): string {
   return done.stdout
 }
 
-describe.runIf(process.platform === 'win32')('removeUserPathEntry on this account', () => {
+// A ceiling, not a timing check: each case starts Windows PowerShell (and Add-Type compiles), ~5 s on windows-latest.
+describe.runIf(process.platform === 'win32')('removeUserPathEntry on this account', { timeout: 60_000 }, () => {
   const guard = process.env.HARNESS_UNINSTALL_ENV_KEY
   beforeAll(() => { clear(); process.env.HARNESS_UNINSTALL_ENV_KEY = key })
   beforeEach(() => { process.env.HARNESS_UNINSTALL_ENV_KEY = key })
