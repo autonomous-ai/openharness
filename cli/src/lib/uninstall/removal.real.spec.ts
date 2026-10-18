@@ -59,13 +59,16 @@ describe.runIf(process.platform === 'win32')('the last step of harness uninstall
     mkdirSync(join(root, 'cli', '0.5.1'), { recursive: true })
     writeFileSync(join(root, 'cli', '0.5.1', 'cli.js'), '')
     writeFileSync(join(root, 'cli', 'current'), '0.5.1\n')
-    const cli = holder(4000, join(root, 'cli', 'current'))
+    // Ended by the case, not by a timer: scheduling starts Windows PowerShell, which outlasted a 4 s stand-in on
+    // windows-latest (CI 39097994576).
+    const cli = holder(30_000, join(root, 'cli', 'current'))
     const scheduled = scheduleFinalRemoval(plan(root), { ...finalRemovalDeps(), pid: cli.pid! })
     expect(scheduled).toMatchObject({ ok: true })
     // It waits for that process: while it runs, the tree is all there.
     await new Promise((r) => setTimeout(r, 1500))
     expect(cli.exitCode).toBe(null)
     expect(existsSync(join(root, 'cli', 'current'))).toBe(true)
+    cli.kill()
     await until(() => !existsSync(root))
     expect(existsSync(root)).toBe(false)
     await new Promise((r) => setTimeout(r, 1000))
