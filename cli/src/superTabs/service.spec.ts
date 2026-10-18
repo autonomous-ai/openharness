@@ -14,6 +14,17 @@ function setup() {
   const service = superTabService(core, { host: () => ({ machineId: 'machine-1', start, stop }) as unknown as SuperTabHost })
   return { ...service, call, core, agent, agentId, start, stop, ask: service.requests.super_tabs }
 }
+it('keeps a shared machine controller out of the host account while accepting its own paired apps', async () => {
+  const t = setup()
+  for (const accountOwner of [undefined, false]) {
+    expect(await t.ask({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab', accountOwner: true },
+      { local: false, owner: true, accountOwner })).toEqual({ error: 'OWNER_REQUIRED' })
+  }
+  expect(t.call).not.toHaveBeenCalled()
+  expect(await t.ask({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab' },
+    { local: false, owner: true, accountOwner: true })).toMatchObject({ ok: true })
+  expect(t.call).toHaveBeenCalledOnce()
+})
 it('lets a shared host be woken without exposing its account proxy or agent identity', async () => {
   const t = setup()
   expect(await t.ask({ action: 'wake' }, visitor)).toEqual({ ok: true })

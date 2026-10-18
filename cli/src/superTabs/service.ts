@@ -71,7 +71,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'prepareNative' || payload.action === 'renewNative') {
           return await wake().prepareNative(payload.tabId, payload.contextId, payload.action === 'renewNative', closed)
         }
-        if (!asker.owner) return { error: 'OWNER_REQUIRED' }
+        if (!asker.owner || (!asker.local && asker.accountOwner !== true)) return { error: 'OWNER_REQUIRED' }
         if (payload.action === 'backend') {
           const { method, path } = payload
           if (!['GET', 'POST'].includes(String(method)) || typeof path !== 'string'
