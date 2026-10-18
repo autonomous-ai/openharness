@@ -221,7 +221,8 @@ class CdnStageTest(Temp):
 def events(path, tests, start=0):
     """Flutter JSON reporter lines for one file: tests is [(name, result, hidden, skipped)]."""
     lines = [{'type': 'suite', 'suite': {'id': start, 'platform': 'vm', 'path': path}},
-             {'type': 'group', 'group': {'id': start + 1, 'suiteID': start, 'parentID': None, 'testCount': len(tests)}}]
+             {'type': 'group', 'group': {'id': start + 1, 'suiteID': start, 'parentID': None,
+                                       'testCount': sum(not hidden for _, _, hidden, _ in tests)}}]
     for i, (name, result, hidden, skipped) in enumerate(tests):
         tid = start + 10 + i
         lines.append({'type': 'testStart', 'test': {'id': tid, 'name': name, 'suiteID': start, 'groupIDs': []}})
@@ -237,6 +238,38 @@ def write_log(path, *files):
 
 
 class CompareTest(Temp):
+    def test_registered_but_unexecuted_cases_are_not_removed_tests(self):
+        file = '/r/desktop/test/a_test.dart'
+        base = write_log(self.dir/'base.log', events(file, [('case0', 'success', False, False), ('case1', 'success', False, False)]))
+        partial = events(file, [('case0', 'success', False, False)])
+        partial[1]['group']['testCount'] = 2
+        head = write_log(self.dir/'head.log', partial)
+        with self.assertRaisesRegex(ValueError, 'inventory'):
+            t.compare_runs(base, head)
+
+    def test_suite_only_file_cannot_satisfy_a_selected_inventory(self):
+        a, b = '/r/desktop/test/a_test.dart', '/r/desktop/test/b_test.dart'
+        log = write_log(self.dir/'run.log', events(a, [('ok', 'success', False, False)]),
+                        [{'type': 'suite', 'suite': {'id': 100, 'platform': 'vm', 'path': b}}])
+        receipt = self.dir/'receipt.json'
+        receipt.write_text(json.dumps({'desktop_root': '/r/desktop', 'selected_files': [a, b],
+                                     'checks': [{'name': 'desktop-vm', 'log': str(log)}]}))
+        with self.assertRaisesRegex(ValueError, 'suite|inventory'):
+            t.test_results(receipt)
+
+    def test_explicit_zero_case_file_is_complete_after_loading(self):
+        file = '/r/desktop/test/zero_test.dart'
+        log = write_log(self.dir/'zero.log', events(file, [('loading ' + file, 'success', True, False)]))
+        self.assertEqual(t.test_results(log), {})
+        self.assertEqual(t.compare_runs(log, log)[0], 0)
+
+    def test_successful_loading_without_root_inventory_is_incomplete(self):
+        file = '/r/desktop/test/a_test.dart'
+        loading = [e for e in events(file, [('loading ' + file, 'success', True, False)]) if e['type'] != 'group']
+        log = write_log(self.dir/'run.log', loading, events('/r/desktop/test/b_test.dart', [('ok', 'success', False, False)], start=100))
+        with self.assertRaisesRegex(ValueError, 'inventory'):
+            t.test_results(log)
+
     def test_empty_truncated_and_orphan_errors_are_not_comparable_runs(self):
         file = '/r/desktop/test/a_test.dart'
         valid = events(file, [('ok', 'success', False, False)])
@@ -317,7 +350,9 @@ class CompareTest(Temp):
     def test_a_receipt_reads_its_logs_and_the_loader_retry_replaces_the_first_attempt(self):
         root = '/r'
         a = f'{root}/desktop/test/a_test.dart'
-        first = write_log(self.dir / 'desktop-vm.log', events(a, [(f'loading {a}', 'error', False, False)]))
+        loader = [e for e in events(a, [(f'loading {a}', 'error', False, False)]) if e['type'] != 'group']
+        loader.append({'type': 'error', 'testID': 10, 'isFailure': False, 'error': f'Failed to load "{a}": fixture startup failure'})
+        first = write_log(self.dir / 'desktop-vm.log', loader)
         retry = write_log(self.dir / 'desktop-vm-loader-retry.log',
                           events(a, [(f'loading {a}', 'success', True, False), ('ok', 'success', False, False)]))
         receipt = self.dir / 'receipt.json'

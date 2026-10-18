@@ -335,6 +335,7 @@ def test_results(path):
     results, reported_files = {}, set()
     for log in logs:
         suites, tests, seen, ended, errors, done = {}, {}, {}, set(), set(), []
+        counts, test_suites, completions, loaders, loader_errors = {}, {}, {}, set(), set()
         for line in log.read_text(errors='replace').splitlines():
             try:
                 event = json.loads(line)
@@ -350,17 +351,27 @@ def test_results(path):
                         raise ValueError('duplicate suite')
                     suites[suite['id']] = _relative(suite['path'], root)
                     reported_files.add(suites[suite['id']])
+                elif kind == 'group':
+                    group = event['group']
+                    if group['parentID'] is None:
+                        sid = group['suiteID']
+                        if sid in counts or type(group['testCount']) is not int or group['testCount'] < 0:
+                            raise ValueError('invalid or duplicate root group inventory')
+                        counts[sid] = group['testCount']
                 elif kind == 'testStart':
                     test = event['test']
                     if test['id'] in tests or test.get('suiteID') not in suites:
                         raise ValueError('duplicate test or unknown suite')
                     name = test.get('name', '')
+                    if name.startswith('loading ') and _relative(name[len('loading '):], root) == suites[test['suiteID']]:
+                        loaders.add(test['id'])
                     name = '<loading>' if name.startswith('loading ') else name
                     key = (suites[test['suiteID']], name)
                     seen[key] = seen.get(key, 0) + 1
                     if seen[key] > 1:
                         key = (key[0], f'{name} #{seen[key]}')
                     tests[test['id']] = key
+                    test_suites[test['id']] = test['suiteID']
                     results[key] = 'incomplete'
                 elif kind == 'testDone':
                     tid = event['testID']
@@ -368,6 +379,7 @@ def test_results(path):
                             or type(event.get('hidden')) is not bool or type(event.get('skipped')) is not bool):
                         raise ValueError('unknown/duplicate test completion or invalid result')
                     ended.add(tid)
+                    completions[tid] = event
                     key = tests[tid]
                     if event['hidden'] and event['result'] == 'success':
                         results.pop(key, None)
@@ -375,6 +387,8 @@ def test_results(path):
                         results[key] = 'skip' if event['skipped'] else ('pass' if event['result'] == 'success' else 'fail')
                 elif kind == 'error':
                     errors.add(event['testID'])
+                    if event.get('isFailure') is False and str(event.get('error', '')).startswith('Failed to load "'):
+                        loader_errors.add(event['testID'])
                 elif kind == 'done':
                     done.append(event['success'])
             except (KeyError, TypeError, ValueError) as error:
@@ -383,6 +397,23 @@ def test_results(path):
             raise ValueError(f'{log}: empty or incomplete reporter; every attempt must finish exactly once')
         if errors - set(tests):
             raise ValueError(f'{log}: reporter error without a registered test')
+        if set(counts) - set(suites):
+            raise ValueError(f'{log}: root group inventory without a registered suite')
+        for sid, file in suites.items():
+            tids = {tid for tid, suite in test_suites.items() if suite == sid}
+            if not tids:
+                raise ValueError(f'{log}: suite has no attributable completion/inventory: {file}')
+            if sid not in counts:
+                # A failed loader has no registered cases yet. Its completed, explicit error is evidence,
+                # and a later complete retry may replace it; an unregistered passing file is not evidence.
+                loader = next(iter(tids)) if len(tids) == 1 else None
+                if (loader in loaders and loader in loader_errors
+                        and completions[loader]['result'] == 'error' and not completions[loader]['skipped']):
+                    continue
+                raise ValueError(f'{log}: suite has no declared root group inventory: {file}')
+            visible = sum(not completions[tid]['hidden'] for tid in tids)
+            if visible != counts[sid]:
+                raise ValueError(f'{log}: root group inventory mismatch for {file}: {counts[sid]} registered, {visible} completed')
         for tid in errors:
             results[tests[tid]] = 'fail'
         if not done[0] and not any(results.get(key) == 'fail' for key in tests.values()):
@@ -391,8 +422,6 @@ def test_results(path):
         if (not isinstance(selected, list) or not selected
                 or {_relative(file, root) for file in selected} != reported_files):
             raise ValueError(f'{path}: reporter files do not match the declared receipt inventory')
-    if not results:
-        raise ValueError(f'{path}: no comparable tests were reported')
     return results
 
 

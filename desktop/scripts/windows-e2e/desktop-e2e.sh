@@ -14,7 +14,7 @@ work=${E2E_WORK:-$here/.work}
 ev=${EV:-$work/evidence}
 cdn=${FAKE_CDN_DIR:-$work/fake-cdn}
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=15 -o LogLevel=ERROR)
-vm_tools=(invoke.ps1 ownership.ps1 session-run.ps1 screenshot.ps1 input.ps1 uia.ps1 watch-windows.ps1
+vm_tools=(invoke.ps1 ownership.ps1 session-run.ps1 app-processes.ps1 test-app-processes.ps1 screenshot.ps1 input.ps1 uia.ps1 watch-windows.ps1
   start-app.ps1 clipboard.ps1 keep-awake.ps1 stage-zip.ps1 desktop-state.ps1 desktop-logs.ps1
   browser-link.ps1 parse-check.ps1 selftest.ps1 driver.cmd)
 admin_tools=(invoke.ps1 ownership.ps1 session-run.ps1 winlogon.ps1 desktop-procs.ps1 cleanup.ps1 parse-check.ps1)
