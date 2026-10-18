@@ -3,6 +3,7 @@
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "community_links.h"
 #include "single_instance.h"
 
 namespace {
@@ -34,8 +35,12 @@ void FlutterWindow::RequestQuit() {
   }
 }
 
-bool FlutterWindow::AcceptCommandLine(const std::wstring&) {
-  return !quitting_;
+bool FlutterWindow::AcceptCommandLine(const std::wstring& command_line) {
+  if (quitting_) {
+    return false;
+  }
+  HarnessCommunityLinks::Instance().DeliverCommandLine(command_line);
+  return true;
 }
 
 bool FlutterWindow::OnCreate() {
@@ -54,6 +59,9 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  flutter::BinaryMessenger* messenger =
+      flutter_controller_->engine()->messenger();
+  HarnessCommunityLinks::Instance().Attach(messenger);
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -69,6 +77,8 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  // Every feature's channel goes before the engine its messenger belongs to.
+  HarnessCommunityLinks::Instance().Detach();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

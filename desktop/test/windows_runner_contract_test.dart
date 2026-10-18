@@ -82,4 +82,24 @@ void main() {
       expect(main, contains('"--quit"'));
     });
   });
+
+  test('links reach Dart on the channel macOS and Linux use', () {
+    final links = runner('community_links.cpp');
+    expect(links, contains('"harness/community_links"'));
+    expect(links, contains('"ready"'));
+    expect(links, contains('"open"'));
+    expect(links, contains('kMaxLinkLength = 240'));
+    expect(links, contains('kMaxPending = 20'));
+    expect(
+      runner('flutter_window.cpp'),
+      contains('DeliverCommandLine(command_line)'),
+    );
+    final main = runner('main.cpp');
+    final deliver = main.indexOf('DeliverArguments(command_line_arguments)');
+    expect(deliver, isNonNegative, reason: 'a link at launch waits for ready');
+    expect(
+      main.indexOf('std::move(command_line_arguments)'),
+      greaterThan(deliver),
+    );
+  });
 }
