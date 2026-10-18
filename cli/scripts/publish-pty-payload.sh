@@ -3,10 +3,15 @@
 # The payload is harness-pty.exe, harness-launch.exe, harness.exe (the `harness` command) and the ConPTY pair
 # (conpty.dll, OpenConsole.exe). This script
 # publishes:
-#   - one zip per architecture, files at its root, under harness/pty/<version>/. These are immutable, like every
+#   - one zip per architecture, files at its root, under <OBJECT_PREFIX>/pty/<version>/ (OBJECT_PREFIX is harness by
+#     default; harness/staging keeps a staging build off the released paths). These are immutable, like every
 #     versioned artifact here: the CDN keeps the first bytes it saw.
 #   - the `pty` key of a manifest. That is STAGING by default (harness/staging/pty/metadata.json), which the
 #     staging install.ps1 reads.
+# A prerelease version (0.4.18-dev.win1) is published only with OBJECT_PREFIX and METADATA_PATH both under
+# harness/staging/. Its manifest entry names the release core (0.4.18): that is the runtime\pty\<version>\ folder,
+# and install.ps1 ($HarnessPtyVersionPattern) and ptyHost/launch.ts (VERSION_DIR) take only dotted numbers there, as
+# windows-install-manifest.mjs does for a prerelease CLI.
 # The production manifest (harness/pty/metadata.json) is the owner's step, once the staging E2E passes:
 #   METADATA_PATH=harness/pty/metadata.json bash cli/scripts/publish-pty-payload.sh <version> <x64 dir> <arm64 dir>
 # DRY_RUN=1 DRY_RUN_OUT=<dir> builds and checks the zips, writes them and the manifest into <dir>, and touches no bucket.
@@ -15,20 +20,30 @@ set -euo pipefail
 VERSION="${1:-}"
 X64_DIR="${2:-}"
 ARM64_DIR="${3:-}"
-if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || [ -z "$X64_DIR" ] || [ -z "$ARM64_DIR" ]; then
-  echo "usage: $0 <X.Y.Z> <win32-x64 payload dir> <win32-arm64 payload dir>" >&2
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]] || [ -z "$X64_DIR" ] || [ -z "$ARM64_DIR" ]; then
+  echo "usage: $0 <X.Y.Z[-prerelease]> <win32-x64 payload dir> <win32-arm64 payload dir>" >&2
   exit 2
 fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # cli/
 GCS_BUCKET="${GCS_BUCKET:-s3-autonomous-upgrade-3}"
 CDN_ASSET_BASE_URL="${CDN_ASSET_BASE_URL:-https://cdn.autonomous.ai}"
 METADATA_PATH="${METADATA_PATH:-harness/staging/pty/metadata.json}"
+OBJECT_PREFIX="${OBJECT_PREFIX:-harness}"
 DRY_RUN="${DRY_RUN:-0}"
 if [ "$DRY_RUN" != 0 ] && [ "$DRY_RUN" != 1 ]; then
   echo "error: DRY_RUN must be 0 or 1, not '$DRY_RUN'; nothing was published." >&2
   exit 2
 fi
 [[ "$METADATA_PATH" =~ ^harness/[a-z0-9/_.-]+\.json$ ]] || { echo "error: METADATA_PATH '$METADATA_PATH' is not a manifest under harness/" >&2; exit 2; }
+[[ "$OBJECT_PREFIX" =~ ^harness(/[a-z0-9_-]+)*$ ]] || { echo "error: OBJECT_PREFIX '$OBJECT_PREFIX' is not harness or a folder under it" >&2; exit 2; }
+# The version folder install.ps1 lays the payload down in: the release core of a prerelease.
+PTY_VERSION="${VERSION%%-*}"
+if [ "$PTY_VERSION" != "$VERSION" ]; then
+  if [[ ! "$OBJECT_PREFIX/" =~ ^harness/staging/ ]] || [[ ! "$METADATA_PATH" =~ ^harness/staging/ ]]; then
+    echo "error: a prerelease ($VERSION) is published only under harness/staging/: set OBJECT_PREFIX and METADATA_PATH there; nothing was published." >&2
+    exit 2
+  fi
+fi
 # The payload, as install.ps1 ($HarnessPtyFiles) checks it.
 FILES=(harness-pty.exe harness-launch.exe harness.exe conpty.dll OpenConsole.exe)
 
@@ -56,12 +71,12 @@ for pair in "${PAIRS[@]}"; do
   zip="harness-pty-${VERSION}-${key}.zip"
   # Python's zipfile: the files at the zip's root, whatever OS this runs on (GNU tar cannot write zip).
   ( cd "$dir" && python3 -m zipfile -c "$WORK/$zip" "${FILES[@]}" )
-  object="harness/pty/${VERSION}/${zip}"
+  object="${OBJECT_PREFIX}/pty/${VERSION}/${zip}"
   url="${CDN_ASSET_BASE_URL%/}/${object}"
   sha="$(sha256_of "$WORK/$zip")"
   size="$(wc -c < "$WORK/$zip" | tr -d ' ')"
   UPLOADS+=("$zip|$object|$size")
-  node "$ROOT/scripts/lib/runtimeManifest.mjs" entry "$WORK/entries.json" "$key" "$VERSION" "$url" "$sha" "$size"
+  node "$ROOT/scripts/lib/runtimeManifest.mjs" entry "$WORK/entries.json" "$key" "$PTY_VERSION" "$url" "$sha" "$size"
 done
 
 if [ "$DRY_RUN" != 1 ]; then

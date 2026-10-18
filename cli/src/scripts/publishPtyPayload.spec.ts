@@ -43,6 +43,34 @@ describe.skipIf(process.platform === 'win32' || !hasPython)('publish-pty-payload
     }
   })
 
+  it('puts the zips under OBJECT_PREFIX, and the manifest URLs follow it', () => {
+    const root = payloads()
+    const result = run(root, ['1.2.3', join(root, 'x64'), join(root, 'arm64')], { OBJECT_PREFIX: 'harness/staging' })
+    expect(result.status, result.stderr).toBe(0)
+    const doc = JSON.parse(readFileSync(join(root, 'out', 'metadata.json'), 'utf8'))
+    expect(doc.pty['win32-x64'].url).toBe('https://cdn.autonomous.ai/harness/staging/pty/1.2.3/harness-pty-1.2.3-win32-x64.zip')
+    expect(doc.pty['win32-arm64'].url).toBe('https://cdn.autonomous.ai/harness/staging/pty/1.2.3/harness-pty-1.2.3-win32-arm64.zip')
+    expect(run(root, ['1.2.3', join(root, 'x64'), join(root, 'arm64')], { OBJECT_PREFIX: 'harness/../x' }).status).toBe(2)
+    expect(run(root, ['1.2.3', join(root, 'x64'), join(root, 'arm64')], { OBJECT_PREFIX: 'other' }).status).toBe(2)
+  })
+
+  it('publishes a prerelease only under staging, with the release core as its version folder', () => {
+    const root = payloads()
+    const args = ['1.2.3-dev.win1', join(root, 'x64'), join(root, 'arm64')]
+    const staged = run(root, args, { OBJECT_PREFIX: 'harness/staging' })
+    expect(staged.status, staged.stderr).toBe(0)
+    const doc = JSON.parse(readFileSync(join(root, 'out', 'metadata.json'), 'utf8'))
+    const zip = 'harness-pty-1.2.3-dev.win1-win32-x64.zip'
+    expect(doc.pty['win32-x64'].version).toBe('1.2.3')
+    expect(doc.pty['win32-x64'].url).toBe(`https://cdn.autonomous.ai/harness/staging/pty/1.2.3-dev.win1/${zip}`)
+    expect(readFileSync(join(root, 'out', zip)).length).toBe(doc.pty['win32-x64'].size)
+    const released = run(root, args)
+    expect(released.status).toBe(2)
+    expect(released.stderr).toContain('only under harness/staging/')
+    expect(run(root, args, { OBJECT_PREFIX: 'harness/staging', METADATA_PATH: 'harness/pty/metadata.json' }).status).toBe(2)
+    expect(run(root, args, { OBJECT_PREFIX: 'harness/stagingx' }).status).toBe(2)
+  })
+
   it('refuses a payload missing a file, and a version that is not a release', () => {
     const root = payloads('OpenConsole.exe')
     const missing = run(root, ['1.2.3', join(root, 'x64'), join(root, 'arm64')])
