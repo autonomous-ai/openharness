@@ -573,7 +573,7 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
     expect(stopped.calls()).toEqual(['status'])
   })
 
-  it('closes with the setup steps unless this computer is signed in and Harness runs', () => {
+  it('closes without the setup steps when this computer is signed in and Harness runs', () => {
     // With a line on stderr, as a sign-in refresh warning would be: it must not reach the closing text.
     const ready = fakeHarness('running - backend connected', ['if "%1"=="auth" echo refreshing the sign-in 1>&2', 'if "%1"=="auth" echo {"loggedIn":true}'])
     const done = ps(`Write-HarnessDone -Version '1.0.1' -Command '${ready.command}'`)
@@ -582,12 +582,16 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
     expect(done.stdout).not.toContain('refreshing the sign-in')
     const glyph = fakeHarness('\u25cf started \u00b7 backend connected', ['if "%1"=="auth" echo {"loggedIn":true}'])
     expect(ps(`Write-HarnessDone -Version '1.0.1' -Command '${glyph.command}'`).stdout).toContain('nothing more to set up')
+  })
+
+  // Apart from the case above, with room: each PowerShell takes about 20 s on the Arm runner, and seven ran past 120 s.
+  it('closes with the setup steps when this computer is not signed in, or Harness does not run', () => {
     for (const [state, auth] of [['stopped', '{"loggedIn":true}'], ['running - backend connected', '{"loggedIn":false}'], ['running - backend connected', 'not json']]) {
       const other = fakeHarness(state, [`if "%1"=="auth" echo ${auth}`])
       expect(ps(`Write-HarnessDone -Version '1.0.1' -Command '${other.command}'`).stdout, `${state} ${auth}`).toContain('harness login')
     }
     expect(ps(`Write-HarnessDone -Version '1.0.1'`).stdout).toContain('harness login')
-  })
+  }, 240_000)
 
   // Re-review N1: harness service install says it itself (serviceCommand.ts); the installer passes its lines on and adds none.
   it('passes on what `harness service install` said when it registered the task but did not start it now (exit 5), and adds nothing', () => {
