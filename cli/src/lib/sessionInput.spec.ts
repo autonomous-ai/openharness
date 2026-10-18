@@ -34,6 +34,25 @@ const codexComposer = (draft: string, footer = '  ? for shortcuts') => `\n\u001b
 describe('SessionInputController', () => {
   afterEach(() => vi.useRealTimers())
 
+  it('retains each composed message context while waiting for the pane lock and the preceding turn', async () => {
+    vi.useFakeTimers()
+    const inject = vi.fn(async () => true)
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(), validateRuntime: async () => true, inject, sendKey: async () => true,
+      capture: async () => codexComposer(''), onError: vi.fn() })
+    const release = controller.acquireControl('s1')!
+    controller.submit('s1', 'first', undefined, 'first-native-context')
+    controller.submit('s1', 'second', undefined, 'second-native-context')
+    expect(inject).not.toHaveBeenCalled()
+    release()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(inject).toHaveBeenNthCalledWith(1, 'h1', 'first', 'first-native-context')
+    controller.onTurnStarted('s1', 'first'); controller.onTurnEnded('s1')
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(inject).toHaveBeenNthCalledWith(2, 'h1', 'second', 'second-native-context')
+    controller.forget('s1')
+  })
+
   describe('a message not typed because of what its pane shows', () => {
     const held = (reason: string): TerminalActionResult => ({ state: 'failed', dispatch: 'not_started', reason })
 

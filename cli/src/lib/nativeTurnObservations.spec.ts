@@ -88,6 +88,18 @@ it('keeps unknown and malformed input context unknown', () => {
   expect(inputContextIn({ id: context })).toBeNull()
 })
 
+it('attributes a composed native message at its actual write boundary and withholds overlapping provenance', () => {
+  const f = setup(), cursor = f.turns.read('agent')!.cursor
+  f.turns.submitting('agent', context)
+  f.turns.ingest('agent', [start('Composed message'), text(), end()])
+  expect(f.turns.read('agent', cursor)!.observations.every(event => event.inputContext === context)).toBe(true)
+  const before = f.turns.read('agent')!.cursor
+  f.turns.typed('agent', 'another-native-context', true)
+  f.turns.submitting('agent', context)
+  f.turns.ingest('agent', [start(), end(), start(), end()])
+  expect(f.turns.read('agent', before)!.observations.every(event => event.inputContext === null && event.unattributedInput)).toBe(true)
+})
+
 it('marks unfinished turns interrupted and caps long prompt/answer content without collecting tool output', () => {
   const f = setup(), cursor = f.turns.read('agent')!.cursor
   const long = 'x'.repeat(NATIVE_TURN_TEXT_LIMIT + 10)

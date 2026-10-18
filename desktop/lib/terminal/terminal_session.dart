@@ -1086,6 +1086,7 @@ class TerminalSession extends ChangeNotifier {
       'content': content,
       'agentId': agentId,
       'mode': 'auto',
+      if (_inputContext != null) 'inputContext': _inputContext,
       if (!kIsWeb && client?.kind == 'desktop') 'usageIntent': 'interactive',
     });
   }

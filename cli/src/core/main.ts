@@ -1228,8 +1228,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Reassigned further down (the funnel): always the current one.
     emit: (sessionId, events) => emitSessionEvents(sessionId, events),
     // Declared further down: read as a prompt is typed, never now.
-    promptTyped: (session, capture, screen) => {
-      nativeTurns.submitting(session.agentId)
+    promptTyped: (session, capture, screen, inputContext) => {
+      nativeTurns.submitting(session.agentId, inputContext)
       if (session.sessionId) questionWatcher.notePrompt(session.sessionId, capture, screen.question)
     },
     // The person sent a harness text from a window or the phone (services/agentCleanup.ts).

@@ -25,6 +25,7 @@ import type { ScreenReading } from '../engines/facets/screen.js'
 import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type TerminalActionResult } from '../lib/terminalTypes.js'
 import type { TerminalControl } from './terminals/control.js'
 import { launchBound } from './engines/sessionBinding.js'
+import { inputContextIn } from '../lib/nativeTurnObservations.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
 
@@ -52,7 +53,7 @@ export interface InputDeps {
   emit: (sessionId: string, events: LiveEvent[]) => void
   /** A prompt is about to be typed, and `capture` is the pane as read right before: what is on it belongs
    *  to the turns before the one it starts (the question watcher's, lib/askQuestion.ts `notePrompt`). */
-  promptTyped?: (session: RegisteredSession, capture: string | null, screen: ScreenReading) => void
+  promptTyped?: (session: RegisteredSession, capture: string | null, screen: ScreenReading, inputContext?: string) => void
   /** The person sent text to an agent from a window or the phone (a `message` frame, by agent or session id): one
    *  another agent started is theirs from then on (services/agentCleanup.ts). */
   typed?: (id: string) => void
@@ -72,7 +73,7 @@ export interface InputDeps {
  * it so.
  */
 export function messageWriter({ readScreen, resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction }, promptTyped }: Pick<InputDeps, 'resolve' | 'terminal' | 'promptTyped' | 'readScreen'>) {
-  return async (id: string, text: string, hold?: (session: RegisteredSession, screen: ScreenReading | null) => string | null): Promise<TerminalActionResult> => {
+  return async (id: string, text: string, hold?: (session: RegisteredSession, screen: ScreenReading | null) => string | null, inputContext?: string): Promise<TerminalActionResult> => {
     const session = resolve(id)
     if (!session) return terminalActionNotStarted('terminal agent is unavailable')
     // The engine first, then its screen. A check of the engine can wait, seconds, for an answer: a probe
@@ -86,7 +87,8 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
     if (!screen) return terminalActionNotStarted(hold?.(session, null) ?? 'screen_unreadable')
     const reason = hold?.(session, screen) ?? screen.messageHold
     if (reason) return terminalActionNotStarted(reason)
-    promptTyped?.(session, capture, screen)
+    if (inputContext) promptTyped?.(session, capture, screen, inputContext)
+    else promptTyped?.(session, capture, screen)
     return submitTerminalAction(id, text, {
       beforeEnter: async () => {
         // A read that came back empty, or a composer caught between frames, is asked again for a moment
@@ -134,7 +136,7 @@ export function sessionInputDeps(
     },
     validateRuntime: validateTerminal,
     // Typed into the pane as it stands, a draft or a running turn included, under the pane's write lock.
-    inject: (id, text) => deviceInput().legacyWrite(id, () => writeMessage(id, text)),
+    inject: (id, text, inputContext) => deviceInput().legacyWrite(id, () => writeMessage(id, text, undefined, inputContext)),
     // An Agent Messages turn waits for a ready composer, and for its mailbox to still want it written.
     injectTeam: (id, text, deliveryId) => deviceInput().legacyWrite(id, async () => {
       if (!resolve(id)) return terminalActionNotStarted('team_waiting_unavailable')
@@ -213,7 +215,7 @@ export function createInput(deps: InputDeps) {
       releaseInput()
     }
   }
-  const submitAgent = (id: string, content: string, deliveryId?: string): void => {
+  const submitAgent = (id: string, content: string, deliveryId?: string, inputContext?: string): void => {
     const record = resolve(id)
     const sessionId = record?.sessionId ?? id
     const engine = record?.engine ?? 'claude'
@@ -226,9 +228,11 @@ export function createInput(deps: InputDeps) {
       console.log(`[msg] ${sid(sessionId)} slash-command adapted for engine=${engine}`)
     }
     console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
-    input.submit(record?.agentId ?? sessionId, adapted, deliveryId)
+    const target = record?.agentId ?? sessionId
+    if (inputContext) input.submit(target, adapted, deliveryId, inputContext)
+    else input.submit(target, adapted, deliveryId)
   }
-  const messageRequest = createMessageRequest(submitAgent, deps.typed)
+  const messageRequest = createMessageRequest((id, content, context) => submitAgent(id, content, undefined, context), deps.typed)
   return { input, deviceInput, acquireTerminalControl, submitAgent, messageRequest }
 }
 
@@ -239,7 +243,7 @@ export function createInput(deps: InputDeps) {
  *
  * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
  */
-export function createMessageRequest(submit: (id: string, content: string) => void, typed?: (id: string) => void) {
+export function createMessageRequest(submit: (id: string, content: string, inputContext?: string) => void, typed?: (id: string) => void) {
   return (payload: Record<string, unknown>): void => {
     const content = payload.content as string | undefined
     const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
@@ -249,7 +253,9 @@ export function createMessageRequest(submit: (id: string, content: string) => vo
     typed?.(target)
     // From the relay this is only reached sealed: text typed into an agent is never taken from the relay
     // in the clear.
-    submit(target, content)
+    const context = inputContextIn(payload.inputContext)
+    if (context) submit(target, content, context)
+    else submit(target, content)
   }
 }
 

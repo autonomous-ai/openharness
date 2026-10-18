@@ -129,6 +129,13 @@ void main() {
     );
     expect(session.acceptsInput, isTrue);
     final latestTerminal = session.terminal;
+    expect(await session.sendComposerText('Scoped composed input'), isTrue);
+    expect(
+      sent
+          .lastWhere((frame) => frame.type == 'message')
+          .payload['inputContext'],
+      'context_alpha_123456',
+    );
     session.stageInputContext(null);
     expect(session.acceptsInput, isFalse);
     await session.setInputContext(null);

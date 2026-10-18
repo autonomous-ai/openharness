@@ -149,12 +149,13 @@ export function createNativeTurnObservations(deps: {
       }
     },
     /** A programmatic paste supersedes any unsent native-input provenance. */
-    submitting(agentId: string): void {
+    submitting(agentId: string, inputContext?: string): void {
       const row = current(agentId)
       if (row) {
+        const context = inputContextIn(inputContext), ambiguous = row.pendingContexts.length > 0
         row.draftContext = undefined
         for (const pending of row.pendingContexts) pending.context = null
-        if (row.pendingContexts.length < 32) row.pendingContexts.push({ context: null, native: false })
+        if (row.pendingContexts.length < 32) row.pendingContexts.push({ context: ambiguous ? null : context, native: context !== null })
       }
     },
     ingest(agentId: string, events: readonly LiveEvent[], replay = false): void {
