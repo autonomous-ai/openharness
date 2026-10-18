@@ -43,6 +43,11 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], expected)
 
+    def test_the_pipe_auth_vectors_also_select_the_desktop_suite(self):
+        # desktop/test/windows_pipe_auth_test.dart reads them from cli/: a new vector runs both halves.
+        self.assertEqual(planner.select(["cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json"])[0], {"cli", "desktop"})
+        self.assertEqual(planner.select(["cli/src/lib/windows/pipeAuth.ts"])[0], {"cli"})
+
     def test_the_shared_terminal_crate_selects_both_the_pty_host_and_the_tui(self):
         # term/ is a dependency of the PTY host and of the shipped TUI (`hn`): both suites run.
         for path in ("term/src/capture.rs", "term/Cargo.toml"):

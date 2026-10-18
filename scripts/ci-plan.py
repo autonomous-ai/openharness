@@ -31,8 +31,10 @@ COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", 
 # Paths inside another component that also select a suite: the PTY host's suite runs the CLI's
 # ptyhost terminal contract against the host it builds, and the host builds on the vendored terminal.
 # The shipped TUI (`hn`) builds on term/ as the host does, so a term/ change runs its tests too.
+# The Windows pipe's shared proof vectors are read by the desktop app's test as well as the CLI's spec.
 ALSO = {"cli/src/lib/ptyHost/": "pty", "cli/src/lib/ptyHostBackend": "pty",
-        "cli/src/lib/terminalBackend.contract.ts": "pty", "tui/vendor/": "pty", "term/": "tui"}
+        "cli/src/lib/terminalBackend.contract.ts": "pty", "tui/vendor/": "pty", "term/": "tui",
+        "cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json": "desktop"}
 
 
 def git(root, *args):

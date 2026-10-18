@@ -1,4 +1,6 @@
 import { createHmac } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   checkPipeAuth, isPipePath, newPipeNonce, newPipePath, NonceWindow, PIPE_AUTH_HEADER, PIPE_PROOF_HEADER, pipeAuthValue, pipeIdOf,
@@ -126,5 +128,31 @@ describe('pipe auth', () => {
     expect(isPipePath(`/tmp/x/harness-${id}`, 'darwin')).toBe(true)
     expect(isPipePath(`/tmp/x/evilharness-${id}`, 'linux')).toBe(false)
     expect(isPipePath('/tmp/daemon.sock', 'linux')).toBe(false)
+  })
+})
+
+interface PipeAuthVector { token: string; pipe: string; pipeId: string; nonceTail: string; nonce: string; auth: string; proof: string }
+
+// The fixture the desktop app's half is held to as well (desktop/test/windows_pipe_auth_test.dart reads this file).
+// Regenerate it with `npx tsx scripts/gen-pipe-auth-vectors.ts` after a deliberate change to the credential.
+describe('the shared pipe auth vectors', () => {
+  const { vectors } = JSON.parse(readFileSync(join(__dirname, '__fixtures__', 'pipe-auth-vectors.json'), 'utf8')) as { vectors: PipeAuthVector[] }
+
+  it('has vectors to check', () => {
+    expect(vectors.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it.each(vectors)('$pipeId: the auth and the proof are this code\'s, and the daemon admits the auth once', (vector) => {
+    const token = Buffer.from(vector.token, 'hex')
+    expect(token.length).toBe(32)
+    expect(isPipePath(vector.pipe, 'win32')).toBe(true)
+    expect(pipeIdOf(vector.pipe)).toBe(vector.pipeId)
+    expect(vector.nonce).toBe(vector.pipeId + vector.nonceTail)
+    expect(pipeAuthValue(token, vector.nonce)).toBe(vector.auth)
+    expect(pipeProofValue(token, vector.nonce)).toBe(vector.proof)
+    expect(pipeProven({ [PIPE_PROOF_HEADER]: vector.proof }, token, vector.nonce)).toBe(true)
+    const seen = new NonceWindow()
+    expect(checkPipeAuth(token, vector.auth, seen, vector.pipeId)).toEqual({ nonce: vector.nonce })
+    expect(checkPipeAuth(token, vector.auth, seen, vector.pipeId)).toBeNull()
   })
 })
