@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -56,6 +56,24 @@ describe('the runtime manifests the publish scripts write', () => {
     const bad = run('entry', entries, 'win32-x64', '1.2.3', 'http://plain', sha, '10')
     expect(bad.status).toBe(1)
     expect(bad.stderr).toContain('https')
+  })
+
+  // Carried B1.13 / final review R3-3: run through a symlinked folder (a checkout under a linked home), the main guard
+  // compared the real path with the linked one, and the helper exited 0 having written nothing. In the publish scripts the
+  // zips are uploaded before the manifest is made, so that left immutable objects with no manifest.
+  it.skipIf(process.platform === 'win32')('runs its command when started through a symlinked path, as each helper does', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-runtime-manifest-'))
+    dirs.push(dir)
+    const linked = join(dir, 'scripts')
+    symlinkSync(join(process.cwd(), 'scripts'), linked)
+    const entries = join(dir, 'entries.json')
+    const result = spawnSync(process.execPath, [join(linked, 'lib', 'runtimeManifest.mjs'), 'entry', entries, 'win32-x64', '1.2.3', 'https://cdn.example/a.zip', sha, '10'], { encoding: 'utf8' })
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(entries)).toBe(true)
+    const manifest = spawnSync(process.execPath, [join(linked, 'windows-install-manifest.mjs')], { encoding: 'utf8' })
+    // Its main ran: it says what it needs, where before it printed nothing and exited 0.
+    expect(manifest.status).not.toBe(0)
+    expect(manifest.stderr).toMatch(/error:/)
   })
 
   it('reads a missing or empty manifest as empty, and refuses a malformed one', () => {

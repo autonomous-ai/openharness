@@ -5,7 +5,7 @@
  * so a publish replaces only the platforms it ships, and every other platform and key stays: the Windows Node
  * publish must not touch the Mac's keys.
  */
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -66,6 +66,11 @@ function main([command, ...rest]) {
   throw new Error('usage: runtimeManifest.mjs entry <file> <platform> <version> <url> <sha256> <size> [archiveRoot] | platforms <src> <dst> <name> <entries.json> | key <src> <dst> <key> <value.json>')
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+/** Whether this file is the script node was started with: argv[1] through its links, as import.meta.url is the real path. */
+function isMain() {
+  try { return import.meta.url === pathToFileURL(realpathSync(process.argv[1] ?? '')).href } catch { return false }
+}
+
+if (isMain()) {
   try { main(process.argv.slice(2)) } catch (error) { console.error(`error: ${error.message}`); process.exit(1) }
 }

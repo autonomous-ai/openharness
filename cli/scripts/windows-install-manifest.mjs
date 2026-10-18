@@ -13,7 +13,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { basename, join, win32 } from 'node:path'
 import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
@@ -82,6 +82,11 @@ function main() {
   console.log(join(out, 'install-manifest.json'))
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+/** Whether this file is the script node was started with: argv[1] through its links, as import.meta.url is the real path. */
+function isMain() {
+  try { return import.meta.url === pathToFileURL(realpathSync(process.argv[1] ?? '')).href } catch { return false }
+}
+
+if (isMain()) {
   try { main() } catch (error) { console.error(`error: ${error.message}`); process.exit(1) }
 }
