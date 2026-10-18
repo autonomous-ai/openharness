@@ -54,7 +54,13 @@ signing and the desktop's release.
 2. **Per-user, no administrator rights, no UAC prompt**, for install, run, update and uninstall.
 3. **Windows-only layout changes.** Version folders with pointer files, the `.cmd` launcher and Task
    Scheduler are used on Windows only; mac/Linux layouts and behavior do not change, except for the new
-   `harness uninstall`.
+   `harness uninstall` and these small changes on every OS:
+   - the last line of `harness status` and `harness start` under `○ stopped` reads `start with: harness
+     start` (it said `running in background`), and nothing is printed under `◌ out of reach`;
+   - the OpenCode, Kilo and Pi plugin texts read `HARNESS_PANE` when `TMUX_PANE` is unset (no change
+     under tmux; the plugin is rewritten every release anyway);
+   - on Linux a zombie daemon counts as gone, so `harness uninstall` in a container with no init goes on;
+   - the updater's start line says `self-update off` for a development build, which never updates.
 4. **No symlinks on Windows** (creating one needs Developer Mode or a privilege). Pointers are files.
 5. **`hn` is not ported** (it does not compile for Windows: about 200 errors across 10 Unix-only
    modules). On Windows the installer does not install it, and `harness tui` says it is not available.
@@ -312,6 +318,65 @@ separately); WSL.
 - **On Windows the services run in the core's process** (no separate service processes yet): a service
   process reaches the core over a Unix socket, which Windows does not have here, so the master runs them
   with `HARNESSD_SERVICES=none` and says so at start. Only the updater, the master's own, has a process.
+- **Agent commands use loopback TCP on Windows.** `harness new`, `send` and the other agent commands,
+  and the daemon's agent list and stop, go over the loopback port without the pipe's credential, so
+  another local account on the same PC can reach them. Moving them onto the authenticated pipe is a
+  follow-up.
+- **The full CLI unit suite is not run on Windows.** CI runs a curated list of specs there; some specs
+  still assume POSIX fixtures, or write into the real `%USERPROFILE%\.harness`.
+- **Uninstall right after creating a harness** that has not bound its conversation yet: stopping it is
+  refused (`IDENTITY_UNAVAILABLE`), the summary says it may still be running and the command exits 1.
+  On Windows the terminal host's end closes it; on macOS and Linux nothing does.
+- **Over SSH, uninstall reports engine harnesses as possibly still running** (G2): Windows refuses WMI
+  to the SSH session, so the stop is refused, though the terminal host's end then closes them.
+- **Terminal rows read `offline` after a daemon restart** (update, reinstall) while their shell keeps
+  answering (G3). Engine rows come back active.
+- **`harness service install` under another `HOME` on macOS** starts a daemon on the real home (G7):
+  the plist does not carry `HOME`. Never run that test step on a developer's Mac.
+- **`harness-launch --exec` does not exist yet:** the final removal of an uninstall over SSH, as a
+  standard user, can stay inside the SSH session's job; the command then says what to run by hand.
+- **Copilot and Command Code hooks on Windows have not run end to end** (neither CLI was on the VM).
+  Command Code reads `%HOME%\.commandcode` when `HOME` is set, and ignores `COMMANDCODE_HOME`;
+  Harness writes and removes in the profile.
+- **A `HOME` on a network share refuses every engine launch on Windows**, though most engines read the
+  profile there, not `HOME`.
+- **Agent Messages' inbox block and Harness's command allowances** (Claude Code's `permissions.allow`,
+  Codex's `rules/harness.rules`) are not installed on Windows, so Claude Code in ask mode asks about
+  `harness` commands again.
+- **State files are checked, then opened by path** (`secureState.ts`): a file swapped in between is
+  read. Only the user, SYSTEM and administrators can write there under the profile's ACL.
+- **Settings folders set through an engine variable** (`CODEX_HOME` and the like) have no owner check
+  on Windows: one pointed into another account's writable folder could be swapped under Harness.
+- **A daemon token outside the profile**: a data folder set with `ADAPTER_DATA_DIR` outside the
+  profile (for example under `C:\`) can inherit access for every local account, and the token with it.
+- **A start inside a job that forbids breakaway** (a Harness pane, on an install without the task)
+  starts the daemon inside that job; closing the pane ends it, and only `launch.log` says so.
+- **Ending `harness.exe`** (a caller's timeout) leaves the `node` it started running.
+- **Ending a verified process** looks its pid up again: a pid reissued in that moment would be ended
+  in its place (the same user's processes only).
+- **A stop during a handover that runs past the 45 s lock wait** can be undone by a slow replacement.
+- **Build retirement can remove a build `install.ps1` has just unpacked** if the updater starts
+  between the folder and the pointer; the next install puts it back.
+- **A staging pty host keeps its folder** (`runtime\pty\<release core>`) when the release of that
+  version installs; staging testers run `harness uninstall --keep-data` before installing the release.
+- **install.ps1 removes version folders with `Remove-Item -Recurse`**, which in Windows PowerShell 5.1
+  may follow a directory link the user placed inside one.
+- **Smaller follow-ups from the final review**, none of which a person meets in ordinary use:
+  - the pipe's listen side checks names with the looser `pipeIdOf` rule (its names always come from
+    `newPipePath`);
+  - `/api/status` `localSocket` carries a pipe name on Windows, which a client must not read as a path;
+  - a crashed start can leave `.daemon-token.*` temp files in the data folder;
+  - `start --if-down`'s judge skips an identified orphan core of a stale master, reads an elevated
+    master's `EPERM` as dead, and serves a stop queued while the core was paused once it resumes;
+  - the task's start waits up to 45 s for the spawn lock without a line, and its "already running" exit
+    under the lock skips the wrong-account check;
+  - republishing the live version with other bytes leaves no build to roll back to (releases never
+    reuse a version);
+  - the production manifest path of the Node workflow is gated only by who may dispatch it (a GitHub
+    environment is the owner's call), and "no checksum for an archive" has no test of its own;
+  - release.yml's checks of the staging install.ps1 on the CDN and of Windows Node only warn;
+  - the pty version folder takes only dotted numbers, so a prerelease host is laid down under its
+    release core (`ptyHost/launch.ts` `VERSION_DIR`, install.ps1).
 
 ## Risks
 
