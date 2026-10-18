@@ -65,6 +65,12 @@ fix and the regression in `test/terminal_session_test.dart` passes against it.
   Shift and emits lowercase otherwise. Desktop creates Linux-target terminals
   on Linux. Regressions: `test/terminal_clipboard_test.dart`, with existing IME
   coverage in `test/terminal_view_interaction_test.dart`.
+- **Windows native text input attaches to its Flutter view**
+  (`lib/src/ui/custom_text_edit.dart`). Pass `View.of(context).viewId` in the
+  text-input configuration. The Windows embedder rejects a null view ID, leaving
+  focused terminals able to receive key events but unable to commit typed text.
+  Regression: `test/terminal_view_interaction_test.dart`; physically typed text
+  was also verified in a native Windows probe using this widget.
 
 - **Remote grids survive viewport resizing** (`lib/src/terminal_view.dart`,
   `lib/src/ui/render.dart`). `TerminalView.resizeBuffer` defaults to true;

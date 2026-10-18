@@ -156,16 +156,26 @@ Future<void> loadPreviewFonts() async {
     await load(family, ['/System/Library/Fonts/Menlo.ttc']);
   }
   await load('MaterialIcons', ['$materialFonts/MaterialIcons-Regular.otf']);
-  final home = Platform.environment['HOME'] ?? '';
-  final lucideRoot = Directory('$home/.pub-cache/hosted/pub.dev')
-      .listSync()
-      .whereType<Directory>()
-      .where((dir) => dir.path.contains('/lucide_icons_flutter-'))
-      .map((dir) => dir.path)
-      .fold<String?>(
-        null,
-        (best, path) => best == null || path.compareTo(best) > 0 ? path : best,
-      );
+  // The pub cache lives under HOME on POSIX and USERPROFILE on Windows (or
+  // wherever PUB_CACHE points). The Lucide fonts are a best-effort preview
+  // nicety: a machine without them skips quietly instead of failing every
+  // render test's setUpAll on the missing directory.
+  final pubCache =
+      Platform.environment['PUB_CACHE'] ??
+      '${Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? ''}/.pub-cache';
+  final pubDev = Directory('$pubCache/hosted/pub.dev');
+  final lucideRoot = !pubDev.existsSync()
+      ? null
+      : pubDev
+            .listSync()
+            .whereType<Directory>()
+            .where((dir) => dir.path.contains('lucide_icons_flutter-'))
+            .map((dir) => dir.path)
+            .fold<String?>(
+              null,
+              (best, path) =>
+                  best == null || path.compareTo(best) > 0 ? path : best,
+            );
   if (lucideRoot != null) {
     await load('packages/lucide_icons_flutter/Lucide', [
       '$lucideRoot/assets/lucide.ttf',

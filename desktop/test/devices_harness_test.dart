@@ -5,7 +5,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/devices/devices_harness_controller.dart';
-import 'package:harness/settings/experimental_features.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/ws/ws_conn.dart';

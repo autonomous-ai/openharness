@@ -18,6 +18,9 @@
   <a href="#harness-device">Device</a>
 </p>
 
+> **Windows 11 preview:** a native Windows desktop can host the CLI and agent
+> terminals in WSL2. See [setup, build instructions, and limitations](desktop/WINDOWS_QUICKSTART.md).
+
 ### Every agent, side by side
 
 Claude Code, Codex, Cursor, OpenCode, Devin, Amp, Copilot and seven more.

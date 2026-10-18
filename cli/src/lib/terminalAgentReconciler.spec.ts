@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { AgentEngine } from '../engines/types.js'
 import type { RegisteredSession } from './registry.js'
 import type { DiscoveredTerminalAgent, TerminalAgentProbe } from './terminalAgentDiscovery.js'
 import type { TerminalBackend } from './terminalBackend.js'

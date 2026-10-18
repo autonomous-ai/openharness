@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/core/models.dart';
 import 'package:harness/settings/experimental_features.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/state/swarm.dart';
 
-import 'support/experimental_settings.dart';
 import 'swarm_screen_test.dart' show mount;
 import 'swarm_state_test.dart' show MemoryStore, createApp;
 

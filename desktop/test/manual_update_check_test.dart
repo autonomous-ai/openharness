@@ -35,6 +35,7 @@ class _Manifest {
         dio: dio,
         releaseMode: releaseMode,
         isLinux: false,
+        isWindows: false,
         architecture: 'x64',
         metadataUrl: 'https://updates.example.test/metadata.json',
       );

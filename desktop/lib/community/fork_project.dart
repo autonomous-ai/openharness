@@ -325,6 +325,10 @@ class ForkProjectImporter {
           );
         }
         // rename refuses a nonempty destination; the reservation is exclusive.
+        // Windows refuses a directory rename onto ANY existing destination —
+        // even the empty reservation just verified above — so remove the
+        // reservation first there; POSIX rename replaces an empty directory.
+        if (Platform.isWindows) await target.delete();
         await Directory(oldFolder).rename(folder);
       } else if (oldType != FileSystemEntityType.notFound &&
           oldType != FileSystemEntityType.link) {

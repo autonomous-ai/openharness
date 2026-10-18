@@ -6,7 +6,9 @@ import type { DiscoveryContract } from '../facets/discovery.js'
  */
 export const discovery: DiscoveryContract = {
   process: {
-    basenames: [/^claude$/],
+    // The native Windows build is `claude.exe`; without the suffix a relayed Windows process
+    // scored 0 while opencode.exe scored (PR #114 review cycle 6).
+    basenames: [/^claude(?:\.exe)?$/],
     entrypoints: [/@anthropic-ai[\/\\]claude-code[\/\\]cli\.js$/],
     // The native installer exposes `~/.local/bin/claude` as a symlink to a binary named only by its version
     // (`~/.local/share/claude/versions/2.1.246`). During early startup both `comm` and argv[0] can still

@@ -240,21 +240,23 @@ void main() {
   );
 
   test('Windows verification also returns a recoverable timeout', () async {
-    final child = _ProbeProcess();
-    children.add(child);
+    // The WSL2 implementation probes through the injected `run` seam of
+    // WslRuntime, not through the provisioner's `start` seam the earlier
+    // Windows stub used, so there is no spawned child to sigkill here. What
+    // carries over unchanged is the contract: a probe that never answers
+    // ends as a bounded, recoverable failure of the harness step instead of
+    // a check that waits forever.
     final setup = EnvironmentProvisioner(
       harnessHome: scratch,
       isMacOS: false,
       isLinux: false,
       isWindows: true,
       probeTimeout: const Duration(milliseconds: 20),
-      start: (_, _, {environment}) async => child,
       run: (_, _, {environment}) => Completer<ProcessResult>().future,
     );
     final result = await check(setup);
     expect(result?.phase, EnvironmentSetupPhase.failed);
     expect(result?.failure?.step, EnvironmentStep.harness);
-    expect(child.signals, [ProcessSignal.sigkill]);
   });
 
   test('a timed-out native subprocess exits before another check', () async {

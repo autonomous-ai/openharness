@@ -6,7 +6,9 @@ import type { DiscoveryContract } from '../facets/discovery.js'
  */
 export const discovery: DiscoveryContract = {
   process: {
-    basenames: [/^codex$/, /^codex-(?:aarch64|x86_64)-(?:apple-darwin|unknown-linux-(?:gnu|musl))$/],
+    // The native Windows build is `codex.exe`; without the suffix a relayed Windows process
+    // scored 0 while opencode.exe scored (PR #114 review cycle 6).
+    basenames: [/^codex(?:\.exe)?$/, /^codex-(?:aarch64|x86_64)-(?:apple-darwin|unknown-linux-(?:gnu|musl))(?:\.exe)?$/],
     entrypoints: [/@openai[\/\\]codex[\/\\]bin[\/\\]codex(?:\.js)?$/],
   },
   // `codex fork <id>` never matched `resume`: a fork's id is its parent's.

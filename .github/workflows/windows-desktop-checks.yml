@@ -1,0 +1,112 @@
+name: Windows desktop checks
+
+# Experimental Windows 11 / WSL2 hosting (see desktop/WINDOWS_QUICKSTART.md).
+# Only manual and reusable invocations for now, matching the house pattern in
+# authoring-browser-checks.yml: automatic selection can be wired into ci.yml by
+# maintainers once the Windows build is qualified on a real machine.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-desktop:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      # Same toolchain resolution as ci.yml: the Flutter pin lives in
+      # release-desktop.yml and is bumped deliberately.
+      - id: toolchain
+        run: |
+          $version = (Select-String -Path .github/workflows/release-desktop.yml -Pattern "FLUTTER_VERSION: '([^']+)'").Matches[0].Groups[1].Value
+          if (-not $version) { throw 'FLUTTER_VERSION not found in release-desktop.yml' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      # The repo's desktop-flutter action verifies its install by piping
+      # `flutter --version --machine` into jq. On a cold SDK the flutter
+      # tool's first-run build banner reaches the pipe before the JSON,
+      # jq exits, and pub upgrade crash-loops on the closed pipe (runs #1
+      # and #2 both burned their full job timeout this way). Install the
+      # same pinned Flutter directly; every check below is unchanged.
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.toolchain.outputs.version }}
+          channel: stable
+          cache: true
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Resolve desktop packages
+        working-directory: desktop
+        run: flutter pub get
+
+      - name: Analyze desktop
+        working-directory: desktop
+        # Errors and warnings stay fatal. Infos do not: the branch carries
+        # 44 pre-existing info-level style lints (a third of them inside the
+        # vendored third_party/xterm package, most of the rest upstream's
+        # own style), and restyling those inside this PR is out of scope.
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test desktop
+        working-directory: desktop
+        run: flutter test --concurrency 4
+
+  # The release build and the CLI typecheck verify on their own runner, in
+  # parallel with the checks above: a desktop test failure must not leave
+  # "does it build" and "does the CLI typecheck" unanswered, which is what
+  # happened on every run while they shared one job's step ladder.
+  windows-build-typecheck:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      # Same toolchain resolution as the checks job (and ci.yml).
+      - id: toolchain
+        run: |
+          $version = (Select-String -Path .github/workflows/release-desktop.yml -Pattern "FLUTTER_VERSION: '([^']+)'").Matches[0].Groups[1].Value
+          if (-not $version) { throw 'FLUTTER_VERSION not found in release-desktop.yml' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.toolchain.outputs.version }}
+          channel: stable
+          cache: true
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Resolve desktop packages
+        working-directory: desktop
+        run: flutter pub get
+
+      - name: Build Windows release
+        working-directory: desktop
+        run: flutter build windows --release
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22.23.2'
+
+      - name: Typecheck the CLI the Windows host runs in WSL2
+        working-directory: cli
+        run: |
+          npm ci --ignore-scripts
+          npm run typecheck
