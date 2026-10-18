@@ -1,6 +1,6 @@
 /** The notify.mjs command and JSON merge primitives shared by shell-hook engines. */
 import { existsSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join, win32 } from 'node:path'
+import { basename, dirname, isAbsolute, join, posix, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { env } from '../../config/env.js'
 import { engineName } from '../../lib/agentNames.js'
@@ -234,7 +234,9 @@ function windowsWords(value: string): string[] | null {
 const LEGACY_SCRIPT = /\/\.harness\/cli\/(?:hook\/)?notify\.mjs$/
 const NODE = /^(?:node|nodejs)(?:\.exe)?$/
 const WINDOWS_NODE = /^(?:node|nodejs)(?:\.exe)?$/i
-const NATIVE_PATH = { basename, isAbsolute }
+// POSIX path rules for a POSIX-quoted line on every host: on Windows, `C:\…` inside sh quotes is no line Harness writes,
+// and the win32 rules took a person's look-alike for Harness's (carried B4.2, final review R2-1).
+const POSIX_LINE_PATH = { basename: posix.basename, isAbsolute: posix.isAbsolute }
 
 /** Harness's protocol: a literal Node, an absolute notify.mjs, and only Harness's flags, each once. */
 function managedArgs(args: string[], path: Pick<typeof win32, 'basename' | 'isAbsolute'>, node: RegExp, legacy: boolean): boolean {
@@ -259,7 +261,7 @@ function managedArgs(args: string[], path: Pick<typeof win32, 'basename' | 'isAb
 export function isManagedHookCommand(value: unknown, platform: NodeJS.Platform = process.platform): boolean {
   if (typeof value !== 'string' || value.length > 64 * 1024) return false
   const words = posixWords(value)
-  if (words && managedArgs(words, NATIVE_PATH, NODE, true)) return true
+  if (words && managedArgs(words, POSIX_LINE_PATH, NODE, true)) return true
   if (platform !== 'win32') return false
   const windows = windowsWords(value)
   return !!windows && managedArgs(windows, win32, WINDOWS_NODE, false)

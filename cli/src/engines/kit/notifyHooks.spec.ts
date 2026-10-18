@@ -148,12 +148,20 @@ describe('the hooks Harness writes on Windows', () => {
     expect(isManagedHook({ type: 'command', command: line }, 'win32')).toBe(false)
   })
 
-  it('reads a single-quoted line as the POSIX line it is, with the host\'s own path rules', () => {
-    // This is what Harness's bash runner writes on Windows (Claude Code via Git Bash). On a Windows host the POSIX
-    // branch uses the win32 path module, so `C:\\…` is absolute there and the line is ours; elsewhere it is not.
-    const line = "'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir 'C:\\d'"
-    expect(isManagedHookCommand(line, 'win32')).toBe(process.platform === 'win32')
-    expect(isManagedHook({ type: 'command', command: line }, 'win32')).toBe(process.platform === 'win32')
+  // Carried B4.2 / final review R2-1: on a Windows host the POSIX branch used the win32 path module, so a person's
+  // POSIX-quoted line with drive paths counted as Harness's, and could be replaced or removed, though cmd would run what
+  // follows its `&`. Harness never writes such a line: no engine runs its hooks through bash on Windows (Claude Code
+  // takes exec form). POSIX lines are judged by POSIX path rules on every host; a line synced from a Mac still counts.
+  it('reads a single-quoted line as the POSIX line it is, by POSIX path rules on every host', () => {
+    for (const line of [
+      "'C:\\node.exe' 'C:\\notify.mjs' --port 1 --data-dir 'C:\\d'",
+      "node 'C:\\notify.mjs' --port 1 --data-dir 'C:\\d & calc'",
+    ]) {
+      expect(isManagedHookCommand(line, 'win32')).toBe(false)
+      expect(isManagedHook({ type: 'command', command: line }, 'win32')).toBe(false)
+    }
+    const synced = "'/Users/a/.harness/runtime/node' '/Users/a/.harness/cli/notify.mjs' --port 1 --data-dir '/Users/a/.harness/cli/data'"
+    expect(isManagedHookCommand(synced, 'win32')).toBe(true)
   })
 
   it('does not claim a look-alike exec form', () => {
