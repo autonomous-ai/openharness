@@ -169,6 +169,25 @@ export class SuperTabStore {
       }
       if (command.type !== 'invite.accept') author(original, actor)
       const context: CommandContext = { operationId, now: this.now() }
+      if (command.type === 'delivery.resolve') {
+        author(original, actor, true)
+        if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person must inspect an uncertain delivery before resolving it.', 403)
+        const delivery = await tx.superTabDelivery.findFirst({ where: { id: command.deliveryId, tabId } })
+        if (!delivery || delivery.status !== 'uncertain') fail('DELIVERY_RESOLVED', 'This delivery no longer needs checking.')
+        const message = await tx.superTabMessage.findUnique({ where: { id: delivery.messageId } })
+        if (!message) fail('NOT_FOUND', 'The original instruction is unavailable.', 404)
+        if (command.resolution === 'resend') {
+          if (!this.deliveryAllowed(original, delivery) || !await this.senderAllowed(tx, original, delivery)) {
+            fail('DELIVERY_REVOKED', 'This instruction is no longer authorized.', 403)
+          }
+          await this.agentGrant(tx, original, agent(original, delivery.agentId))
+        }
+        context.delivery = { ...delivery, text: message.text }
+        await tx.superTabDelivery.update({ where: { id: delivery.id }, data: {
+          status: command.resolution === 'received' ? 'confirmed' : command.resolution === 'resend' ? 'superseded' : 'cancelled',
+          // The native receipt remains intact; the operation records the person's resolution.
+        } })
+      }
       if (command.type === 'agent.add') context.contribution = await this.contribution(tx, original, actor, command)
       if (command.type === 'agent.start') context.contribution = await this.contribution(tx, original, actor, command.request)
       if (command.type === 'agent.started' || command.type === 'agent.startDispatch') {
@@ -213,6 +232,7 @@ export class SuperTabStore {
           const group = conversation(effects.state, message.conversationId)
           await tx.superTabDelivery.create({ data: { id: stableId(message.id, recipient), tabId,
             conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
+            machineOwnerId: target.machineOwnerId,
             assignmentId: activeWork(group) && group.assignment?.agentId === recipient ? group.assignment.id : null,
             membershipGeneration: target.membershipGeneration, authorKind: message.author.kind,
             authorId: message.author.id, authorGeneration: message.author.membershipGeneration } })
@@ -252,7 +272,7 @@ export class SuperTabStore {
       const next = rows.length > 100 ? page.at(-1)!.sequence : null
       if (!forward) page.reverse()
       const deliveries = page.length ? await tx.superTabDelivery.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
-        select: { messageId: true, agentId: true, status: true } }) : []
+        select: { id: true, messageId: true, agentId: true, status: true, receipt: true } }) : []
       return { messages: page.map(m => ({ ...m, deliveries: deliveries.filter(d => d.messageId === m.id) })), next, revision: row.revision }
     })
   }
@@ -338,6 +358,23 @@ export class SuperTabStore {
     })
   }
 
+  /** A withdrawn host can retire its own journal without regaining shared
+   * conversation access. Machine ownership is captured when input is created. */
+  async deliveryReceipt(user: AuthUser, tabId: string, agentId: string, deliveryId: string) {
+    return transaction(this.db, async tx => {
+      const state = stateOf(await this.row(tx, user, tabId))
+      const row = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId } })
+      if (!row) fail('NOT_FOUND', 'This delivery is unavailable.', 404)
+      const previous = state.agents.find(a => a.id === agentId && a.membershipGeneration === row.membershipGeneration)
+      const owner = row.machineOwnerId ?? previous?.machineOwnerId
+      if (owner !== user.sub) fail('FORBIDDEN', 'Only the recorded execution host can read this receipt.', 403)
+      const machine = await tx.machine.findFirst({ where: { machineId: row.machineId, userId: owner,
+        autonomousEnv: user.autonomousEnv, ...machineAlive } })
+      if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
+      return { id: row.id, status: row.status }
+    })
+  }
+
   /** No timeout reclaims an instruction: the same durable claim resumes, or the host reconciles it. */
   async delivery(user: AuthUser, tabId: string, agentId: string, deliveryId: string,
     action: { type: 'claim'; claimId: string } | { type: 'ack'; claimId: string; receipt: string; uncertain: boolean }) {
@@ -348,6 +385,9 @@ export class SuperTabStore {
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId } })
       if (!delivery || !this.deliveryAllowed(state, delivery) || delivery.status === 'cancelled' ||
           !await this.senderAllowed(tx, state, delivery)) fail('DELIVERY_REVOKED', 'This instruction is no longer authorized.', 403)
+      if (delivery.status === 'confirmed' || delivery.status === 'superseded') {
+        fail('DELIVERY_RESOLVED', 'A person has already resolved this delivery.')
+      }
       if (delivery.claimId && delivery.claimId !== action.claimId) fail('CLAIM_CONFLICT', 'Reconcile the existing delivery before claiming it again.')
       if (action.type === 'ack' && !delivery.claimId) fail('NOT_CLAIMED', 'Claim this instruction before acknowledging it.')
       const status = action.type === 'claim' ? delivery.status === 'queued' ? 'claimed' : delivery.status : action.uncertain ? 'uncertain' : 'delivered'

@@ -66,6 +66,9 @@ export class SuperTabHost {
   private running: Promise<void> | null = null
   private stopsRunning: Promise<void> | null = null
   private nextStopsAt = 0
+  private receiptsRunning: Promise<void> | null = null
+  private nextReceiptsAt = 0
+  private receiptCursor = 0
   private timer: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
@@ -103,10 +106,11 @@ export class SuperTabHost {
   private persist(): void { this.write(this.file, this.journal) }
   start(): void {
     if (this.stopped || this.timer) return
-    this.timer = setInterval(() => { void this.tick(); void this.reconcileStops() }, 1_000)
+    this.timer = setInterval(() => { void this.tick(); void this.reconcileStops(); void this.reconcileReceipts() }, 1_000)
     this.timer.unref?.()
     void this.tick()
     void this.reconcileStops()
+    void this.reconcileReceipts()
   }
   stop(): void {
     this.stopped = true
@@ -146,6 +150,30 @@ export class SuperTabHost {
         assignmentId: work.assignmentId,
         receipt: `native-stopped:${this.machineId}:${work.harnessId}:${work.assignmentId}`,
       })
+    }
+  }
+
+  /** Retire local intent only after an authoritative terminal delivery state.
+   * This runs independently so a slow receipt lookup cannot stall live leases. */
+  reconcileReceipts(): Promise<void> {
+    if (this.stopped || this.now() < this.nextReceiptsAt) return Promise.resolve()
+    return this.receiptsRunning ??= this.checkReceipts().catch(error => {
+      this.log(error instanceof Error ? error.message : String(error))
+    }).finally(() => { this.receiptsRunning = null; this.nextReceiptsAt = this.now() + 5_000 })
+  }
+  private async checkReceipts(): Promise<void> {
+    const pending = Object.values(this.journal.entries).filter(e => e.stage === 'uncertain' || e.stage === 'delivered')
+    for (let i = 0; i < Math.min(pending.length, 20); i++) {
+      if (this.stopped) return
+      const entry = pending[(this.receiptCursor++) % pending.length]
+      try {
+        const result = object(await backend(this.core, 'GET', `/api/super-tabs/${entry.tabId}/agents/${entry.agentId}/deliveries/${entry.deliveryId}`))
+        if (this.stopped) return
+        if (result.id !== entry.deliveryId || !['delivered', 'confirmed', 'superseded', 'cancelled'].includes(String(result.status))) continue
+        if (this.journal.entries[entry.deliveryId] !== entry || this.active.has(typedId(entry))) continue
+        delete this.journal.entries[entry.deliveryId]
+        this.persist()
+      } catch { /* Missing authority or a network failure is not a receipt. */ }
     }
   }
 

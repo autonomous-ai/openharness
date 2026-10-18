@@ -1033,6 +1033,7 @@ model SuperTabDelivery {
   assignmentId          String?
   agentId               String
   machineId             String
+  machineOwnerId        String?
   membershipGeneration  String
   authorKind            String
   authorId              String

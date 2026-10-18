@@ -43,6 +43,20 @@ function setup() {
 }
 
 describe('Super Tab native delivery handoff', () => {
+  it('retires a human-resolved journal entry without resubmitting its native input', async () => {
+    const t = setup(), host = t.open()
+    await host.tick(); t.event('unknown', 'lost acknowledgement'); await host.tick()
+    const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+      if (method === 'GET' && path.endsWith('/deliveries/delivery')) {
+        return { status: 200, body: { success: true, data: { id: 'delivery', status: 'confirmed' } } }
+      }
+      return original(method, path, body)
+    })
+    await host.reconcileReceipts()
+    expect(t.saved().entries).toEqual({})
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+  })
   it('persists before typing, keeps one native delivery during polls, and acknowledges the exact receipt', async () => {
     const t = setup(), host = t.open()
     vi.mocked(t.core.turns.deliver).mockImplementation(() => expect(t.saved().entries.delivery.stage).toBe('submitting'))

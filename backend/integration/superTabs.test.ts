@@ -69,6 +69,82 @@ afterAll(async () => {
 })
 
 describe('Super Tabs on a real Mongo replica set', () => {
+  it('a withdrawn host can retire its receipt without regaining conversation access', async () => {
+    const { tab, lead } = await fixture()
+    await run(tab, message('Keep the execution receipt after removal.'))
+    const first = (await store.deliveries(host, tab, lead))[0]!
+    await store.delivery(host, tab, lead, first.id, { type: 'claim', claimId: 'claim' })
+    await store.delivery(host, tab, lead, first.id, { type: 'ack', claimId: 'claim', receipt: 'unclear', uncertain: true })
+    await run(tab, { type: 'agent.remove', agentId: lead })
+    expect(await store.deliveryReceipt(host, tab, lead, first.id)).toEqual({ id: first.id, status: 'cancelled' })
+    await expect(store.deliveries(host, tab, lead)).rejects.toMatchObject({ code: 'AGENT_UNAVAILABLE' })
+    await expect(store.deliveryReceipt(peer, tab, lead, first.id)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    // Reassigning the machine does not transfer the former owner's receipts.
+    await db.machine.update({ where: { machineId: 'test-host' }, data: { userId: peer.sub } })
+    try {
+      await expect(store.deliveryReceipt(peer, tab, lead, first.id)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+      await expect(store.deliveryReceipt(host, tab, lead, first.id)).rejects.toMatchObject({ code: 'HOST_UNAVAILABLE' })
+    } finally {
+      await db.machine.update({ where: { machineId: 'test-host' }, data: { userId: host.sub } })
+    }
+  })
+
+  it('resolves uncertain input once, preserves native evidence, and fences late host acknowledgements', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    await run(tab, message('Check the exact revision.'))
+    const first = (await store.deliveries(host, tab, lead))[0]!
+    const claimId = randomUUID()
+    await store.delivery(host, tab, lead, first.id, { type: 'claim', claimId })
+    await store.delivery(host, tab, lead, first.id, { type: 'ack', claimId, receipt: 'lost-native-ack', uncertain: true })
+    const resend: Command = { type: 'delivery.resolve', deliveryId: first.id, resolution: 'resend' }
+    await expect(run(tab, resend, host, lead)).rejects.toMatchObject({ code: 'HUMAN_REQUIRED' })
+    const operationId = randomUUID()
+    const repeated = await Promise.all(Array.from({ length: 3 }, () => run(tab, resend, peer, undefined, operationId)))
+    expect(new Set(repeated.map(r => r.result.messageId)).size).toBe(1)
+    const pending = await store.deliveries(host, tab, lead)
+    expect(pending).toHaveLength(1)
+    expect(pending[0]!.id).not.toBe(first.id)
+    expect(await store.deliveryReceipt(host, tab, lead, first.id)).toEqual({ id: first.id, status: 'superseded' })
+    expect((await db.superTabDelivery.findUnique({ where: { id: first.id } }))!.receipt).toBe('lost-native-ack')
+    await expect(run(tab, resend, peer)).rejects.toMatchObject({ code: 'DELIVERY_RESOLVED' })
+    await expect(store.delivery(host, tab, lead, first.id, { type: 'ack', claimId, receipt: 'late', uncertain: false }))
+      .rejects.toMatchObject({ code: 'DELIVERY_RESOLVED' })
+    const rows = (await store.messages(owner, tab, 'lead', {})).messages
+    expect(rows).toHaveLength(2)
+    expect(rows[1]!.text).toBe(rows[0]!.text)
+    expect(rows[1]!.replyTo).toBe(rows[0]!.id)
+    expect(rows[1]!.author).toMatchObject({ id: peer.sub, kind: 'person' })
+    const second = pending[0]!
+    await store.delivery(host, tab, lead, second.id, { type: 'claim', claimId: 'second-claim' })
+    await store.delivery(host, tab, lead, second.id, { type: 'ack', claimId: 'second-claim', receipt: 'unclear', uncertain: true })
+    await run(tab, { type: 'delivery.resolve', deliveryId: second.id, resolution: 'received' })
+    expect(await store.deliveries(host, tab, lead)).toEqual([])
+    expect(await store.deliveryReceipt(host, tab, lead, second.id)).toEqual({ id: second.id, status: 'confirmed' })
+    await expect(store.deliveryReceipt(peer, tab, lead, second.id)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect((await store.messages(owner, tab, 'lead', {})).messages.at(-1)!.text).toContain('confirmed')
+  })
+
+  it('a viewer cannot resolve input and a changed machine grant cannot be used to resend it', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab, 'viewer')
+    await run(tab, message('Do not replay after revocation.'))
+    const delivery = (await store.deliveries(host, tab, lead))[0]!
+    await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' })
+    await store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'unclear', uncertain: true })
+    const command: Command = { type: 'delivery.resolve', deliveryId: delivery.id, resolution: 'resend' }
+    await expect(run(tab, command, peer)).rejects.toMatchObject({ code: 'READ_ONLY' })
+    const share = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
+    await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [] } })
+    try {
+      await expect(run(tab, command)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
+      await run(tab, { ...command, resolution: 'cancel' })
+      expect((await db.superTabDelivery.findUnique({ where: { id: delivery.id } }))!.status).toBe('cancelled')
+    } finally {
+      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: share.emails } })
+    }
+  })
+
   it('commits exactly one tab and message under concurrent retries and rejects reused operation IDs', async () => {
     const operationId = randomUUID()
     const created = await Promise.all(Array.from({ length: 5 }, () => store.create(owner, operationId, 'Concurrent')))

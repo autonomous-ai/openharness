@@ -42,6 +42,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('invite.accept'), inviteId: id }).strict(),
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
   z.object({ type: z.literal('message.send'), conversationId: id, text, replyTo: id.nullable(), recipientIds: z.array(id).max(16) }).strict(),
+  z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text, checks: z.array(check).min(1).max(40) }).strict(),
   z.object({ type: z.literal('work.assign'), conversationId: id, agentId: id }).strict(),
   z.object({ type: z.literal('work.status'), conversationId: id, assignmentId: id,
@@ -60,6 +61,8 @@ export interface CommandContext {
   reply?: { id: string; conversationId: string; author: Author }
   /** A host's receipt, not an elapsed lease, proves that an assignment stopped. */
   confirmedStopped?: boolean
+  /** An uncertain receipt and its original message, read transactionally. */
+  delivery?: { id: string; conversationId: string; agentId: string; messageId: string; text: string }
 }
 
 function controls(state: SuperTabState, actor: Actor, conversationId = 'lead'): void {
@@ -314,6 +317,25 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
       message(group.id, command.text, recipients, command.replyTo)
+      break
+    }
+    case 'delivery.resolve': {
+      if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person must inspect an uncertain delivery before resolving it.', 403)
+      const delivery = context.delivery
+      if (!delivery || delivery.id !== command.deliveryId) fail('DELIVERY_RESOLVED', 'This delivery no longer needs checking.')
+      const group = conversation(state, delivery.conversationId)
+      const target = agent(state, delivery.agentId)
+      if (command.resolution === 'resend') {
+        open(state, group.id)
+        if (!group.agentIds.includes(target.id)) fail('INVALID_RECIPIENT', 'This agent is no longer in the conversation.', 400)
+        message(group.id, delivery.text, [target.id], delivery.messageId)
+      } else {
+        message(group.id, command.resolution === 'received'
+          ? `Checked ${target.name}’s terminal and confirmed the earlier instruction was received.`
+          : `Dismissed the delivery warning for ${target.name}. This does not stop work already received.`, [], delivery.messageId)
+      }
+      result.deliveryId = delivery.id
+      result.resolution = command.resolution
       break
     }
     case 'work.define': {
