@@ -56,6 +56,7 @@ import '../auth/cli_login.dart';
 import '../bootstrap/agent_prefetch.dart';
 import '../bootstrap/environment_provisioner.dart';
 import '../bootstrap/setup_progress.dart';
+import '../bootstrap/windows_self_install.dart';
 import '../core/viewer_mode.dart';
 import '../core/config.dart';
 import '../core/sleep_aware.dart';
@@ -70,6 +71,7 @@ import '../core/browser_label.dart';
 import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
 import '../core/test_run.dart';
+import '../core/runtime_platform.dart';
 import '../core/agent_activity.dart';
 import '../core/models.dart';
 import '../core/harness_resources.dart';
@@ -913,6 +915,10 @@ class AppNotifier extends ChangeNotifier {
   /// unless a test passes one, so nothing there runs `curl`.
   final AgentPrefetch? agentPrefetch;
   final DesktopUpdater? desktopUpdater;
+
+  /// Windows release builds hand a zip copy to its launcher before setup.
+  final WindowsSelfInstall? windowsSelfInstall;
+  final void Function(int code) _exitApp;
   @visibleForTesting
   final WsConn Function(String machineId)? connectionForTest;
   final Map<String, Timer> _turnActivityWatchdogs = {};
@@ -1082,6 +1088,8 @@ class AppNotifier extends ChangeNotifier {
   // Update checks do not depend on the daemon or SSO. A signed-out user should
   // still be able to replace a broken desktop build from the login screen.
   Timer? _updateCheckTimer;
+  // A zip copy whose installer did not start can run, but cannot update itself.
+  bool _selfInstallUnavailable = false;
 
   /// Ends the window in which a restored tile may still claim its terminal —
   /// see [TerminalPane.claimOnFirstAttach]. Without it a machine that only
@@ -1091,7 +1099,8 @@ class AppNotifier extends ChangeNotifier {
   late final DesktopUpdater _updater = desktopUpdater ?? DesktopUpdater();
   Future<ManualUpdateCheck>? _manualUpdateCheckInFlight;
   DesktopUpdateCheck? lastUpdateCheck;
-  bool get updateChecksEnabled => viewer == null && _updater.canCheck;
+  bool get updateChecksEnabled =>
+      viewer == null && !_selfInstallUnavailable && _updater.canCheck;
   String? _skippedDesktopUpdateVersion;
   UpdateInfo? availableUpdate;
   bool isCheckingForUpdate = false;
@@ -3710,6 +3719,8 @@ class AppNotifier extends ChangeNotifier {
     this.environmentProvisioner,
     AgentPrefetch? agentPrefetch,
     this.desktopUpdater,
+    WindowsSelfInstall? windowsSelfInstall,
+    void Function(int code)? exitApp,
     this.connectionForTest,
     ProductMeasurement? productMeasurement,
     SignInClient? cliLogin,
@@ -3729,6 +3740,12 @@ class AppNotifier extends ChangeNotifier {
            (kUnderTest
                ? null
                : AgentPrefetch(log: (line) => appLog.info('setup', line))),
+       windowsSelfInstall =
+           windowsSelfInstall ??
+           (RuntimePlatform.isWindows && kReleaseMode && !kUnderTest && !kViewerMode
+               ? WindowsSelfInstall()
+               : null),
+       _exitApp = exitApp ?? exit,
        alerts = alerts ?? AlertSounds(store: alertSoundStore),
        agentAlerts = agentAlerts ?? AgentAlerts(),
        systemNotifications =
@@ -5223,7 +5240,10 @@ class AppNotifier extends ChangeNotifier {
       // serve a computer that runs the harness CLI. The updater is not merely useless there — it
       // throws on an architecture it has no channel for (`ios_arm64`), from inside bootstrap.
       if (viewer == null) {
-        _startUpdateChecking();
+        if (await _selfInstallTookOver()) return;
+        if (!_selfInstallUnavailable) {
+          _startUpdateChecking();
+        }
         final environmentReady = await _prepareEnvironment();
         if (!environmentReady) return;
       }
@@ -5236,6 +5256,25 @@ class AppNotifier extends ChangeNotifier {
         _lastError = 'Could not complete sign-in. Please sign in again.';
       }
       notifyListeners();
+    }
+  }
+
+  /// A zip copy yields to Harness.exe; installed copies schedule cleanup.
+  Future<bool> _selfInstallTookOver() async {
+    final selfInstall = windowsSelfInstall;
+    if (selfInstall == null) return false;
+    switch (await selfInstall.ensureInstalled()) {
+      case Relaunching():
+        appLog.info('setup', 'handing over to Harness.exe --install');
+        flushAppLog(durable: true);
+        _exitApp(0);
+        return true;
+      case SelfInstallFailed(:final message):
+        _selfInstallUnavailable = true;
+        appLog.warn('setup', message);
+        return false;
+      case AlreadyInstalled():
+        return false;
     }
   }
 
@@ -6563,7 +6602,7 @@ class AppNotifier extends ChangeNotifier {
   Future<ManualUpdateCheck> checkForUpdates() {
     // Viewer builds are updated by their app store. Do not even construct a
     // desktop updater there: those platforms have no desktop artifact channel.
-    if (viewer != null) {
+    if (viewer != null || _selfInstallUnavailable) {
       return Future.value(
         const ManualUpdateCheck(check: DesktopUpdateCheck.disabled()),
       );
@@ -6681,6 +6720,7 @@ class AppNotifier extends ChangeNotifier {
     final chosen = update ?? availableUpdate;
     if (_disposed ||
         viewer != null ||
+        _selfInstallUnavailable ||
         chosen == null ||
         isInstallingUpdate ||
         windowsUpdatePartiallyPublished) {
