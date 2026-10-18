@@ -56,19 +56,30 @@ foreach ($item in @($owner.tasks)) {
   Unregister-ScheduledTask -InputObject $task -Confirm:$false
   Write-Output "removed owned task $($item.name)"
 }
+$sidHive = 'Registry::HKEY_USERS\' + $owner.sid
+$classesHive = $sidHive + '_Classes'
+$profile = Get-CimInstance Win32_UserProfile -Filter "SID='$($owner.sid)'"
+if ($profile) {
+  if ($profile.SID -ne $owner.sid) { throw 'profile SID changed; left untouched' }
+  if (-not [string]::Equals($profile.LocalPath, $owner.profile, [StringComparison]::OrdinalIgnoreCase)) { throw 'profile path changed; left untouched' }
+  if ($profile.Special -isnot [bool] -or $profile.Special) { throw 'owned profile is special or its status is unknown; account and receipts retained' }
+  # Zero visible processes does not prove native profile readiness. Null RefCount is unknown,
+  # not zero; require the actual Loaded flag and exact hive absence instead of a blind wait.
+  if ($profile.Loaded -isnot [bool] -or $profile.Loaded) { throw 'owned profile is not explicitly unloaded; account and receipts retained; inspect the exact owned profile before retrying' }
+}
+if ((Test-Path -LiteralPath $sidHive) -or (Test-Path -LiteralPath $classesHive)) { throw 'owned profile hive is still present; account and receipts retained; inspect the exact owned SID before retrying' }
+# Keep the account available if the provider still fails after the readiness check.
+if ($profile) { $profile | Remove-CimInstance }
+if (Test-Path -LiteralPath $owner.profile) { throw 'owned profile directory remains; inspect before retrying cleanup' }
+if (Get-CimInstance Win32_UserProfile -Filter "SID='$($owner.sid)'") { throw 'owned profile registration remains' }
+if ((Test-Path -LiteralPath $sidHive) -or (Test-Path -LiteralPath $classesHive)) { throw 'owned profile hive remains after deletion; account and receipts retained' }
 $account = Get-LocalUser -Name $User -ErrorAction SilentlyContinue
 if ($account) {
   if ($account.SID.Value -ne $owner.sid) { throw 'account was replaced; leave it alone' }
   Remove-LocalUser -Name $User
   Write-Output "user $User deleted"
 }
-$profile = Get-CimInstance Win32_UserProfile -Filter "SID='$($owner.sid)'"
-if ($profile) {
-  if (-not [string]::Equals($profile.LocalPath, $owner.profile, [StringComparison]::OrdinalIgnoreCase)) { throw 'profile path changed; left untouched' }
-  $profile | Remove-CimInstance
-}
-if (Test-Path -LiteralPath $owner.profile) { throw 'owned profile directory remains; inspect before retrying cleanup' }
-if (Get-CimInstance Win32_UserProfile -Filter "SID='$($owner.sid)'") { throw 'owned profile registration remains' }
+if (Get-LocalUser -Name $User -ErrorAction SilentlyContinue) { throw 'account remains or was recreated; receipts retained for inspection' }
 $owner | Add-Member -NotePropertyName cleaned -NotePropertyValue $true -Force
 Save-Owner $owner
 Write-Output 'owned profile removed; Winlogon, shared listeners, DNS/CA, services and unrelated accounts preserved'
