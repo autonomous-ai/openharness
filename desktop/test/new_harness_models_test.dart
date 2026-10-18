@@ -386,6 +386,49 @@ void main() {
     expect(connections['m']!.creates.single.keys, isNot(contains('gridName')));
   });
   testWidgets(
+    'the desktop Model chooser heads each list, a line above every list after the first',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1100, 800);
+      addTearDown(tester.view.reset);
+      final box = controller();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: NewHarnessForm(
+              controller: box,
+              onClose: () {},
+              onCreated: () {},
+              desktop: true,
+              embedded: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('new-harness-field-model')));
+      await tester.pumpAndSettle();
+      expect(box.field, NewHarnessField.model);
+      Border? lineAbove(String heading) =>
+          (tester
+                          .widget<Container>(
+                            find
+                                .ancestor(
+                                  of: find.text(heading),
+                                  matching: find.byType(Container),
+                                )
+                                .first,
+                          )
+                          .decoration
+                      as BoxDecoration?)
+                  ?.border
+              as Border?;
+      expect(lineAbove('Subscription'), isNull);
+      expect(lineAbove('Your models')?.top.width, greaterThan(0));
+      expect(lineAbove('Shared with you')?.top.width, greaterThan(0));
+    },
+  );
+  testWidgets(
     'switching from a model to Terminal clears routing and still opens a shell',
     (tester) async {
       final box = controller();
