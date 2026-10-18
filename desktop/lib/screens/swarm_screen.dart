@@ -59,7 +59,7 @@ import '../state/account_phones.dart';
 import '../state/app_state.dart';
 import '../state/notification_inbox.dart';
 import '../state/status_menu.dart';
-import '../widgets/linux_menu_bar.dart'
+import '../widgets/in_window_menu_bar.dart'
     show LinuxTitleBar, linuxTitleBarActions;
 import '../widgets/account_menu.dart';
 import '../widgets/notification_inbox.dart';
@@ -256,15 +256,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
       widget.statusTray ??
       (RuntimePlatform.isWindows && !kUnderTest ? windowsStatusTray : null);
 
-  /// A menu bar is listening: AppKit's on macOS, the in-window bar on Linux,
-  /// the Windows tray. Not the same as [_native], which is whether AppKit also
-  /// draws the tab strip and the title-bar buttons. On Linux Flutter still
-  /// draws those, so the strip stays and only the menu state and actions
-  /// cross the bus.
+  /// A menu bar is listening: AppKit's on macOS, the in-window bar on Linux
+  /// and Windows, the Windows tray. Not the same as [_native], which is
+  /// whether AppKit also draws the tab strip and the title-bar buttons. On
+  /// Linux and Windows Flutter still draws those, so the strip stays and only
+  /// the menu state and actions cross the bus.
   late final bool _menuHost =
       _native ||
       _statusTray != null ||
-      (RuntimePlatform.isLinux && !kUnderTest);
+      ((RuntimePlatform.isLinux || RuntimePlatform.isWindows) && !kUnderTest);
 
   /// On Linux the in-window menu bar is the title bar, and search,
   /// notifications and Store sit at its right end instead of the tab strip's

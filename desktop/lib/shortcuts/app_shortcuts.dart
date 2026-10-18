@@ -382,6 +382,205 @@ bool get altWorkspacePrefix =>
 
 String get workspaceCommandModifier => altWorkspacePrefix ? 'alt' : 'cmd';
 
+/// The native Windows app takes Ctrl where the Mac takes ⌘. But a plain
+/// Ctrl+letter always belongs to some terminal program: readline's ^A ^E ^K
+/// ^U ^W, PowerShell's ^C ^V ^Z ^Y ^L ^R, Claude Code's ^T ^O ^B ^G, Codex's
+/// ^T ^J. So a letter takes Ctrl+Shift, as Windows Terminal's own commands
+/// do. A legacy terminal cannot tell Ctrl+Shift+X from Ctrl+X, so taking it
+/// costs the program nothing. Only keys no terminal program answers with Ctrl
+/// take plain Ctrl: the tab digits and Settings' comma. Copy, Paste and Select
+/// all (Ctrl+Shift+C, V and A) stay the terminal's, as on Linux.
+bool get ctrlWorkspacePrefix =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+
+/// The keys Windows binds with plain Ctrl, as activators and as keymap names.
+final _windowsPlainCtrlKeys = <LogicalKeyboardKey>{
+  LogicalKeyboardKey.digit1,
+  LogicalKeyboardKey.digit2,
+  LogicalKeyboardKey.digit3,
+  LogicalKeyboardKey.digit4,
+  LogicalKeyboardKey.digit5,
+  LogicalKeyboardKey.digit6,
+  LogicalKeyboardKey.digit7,
+  LogicalKeyboardKey.digit8,
+  LogicalKeyboardKey.digit9,
+  LogicalKeyboardKey.comma,
+};
+const _windowsPlainCtrlKeyNames = {
+  '1',
+  '2',
+  '3',
+  '4',
+  '5',
+  '6',
+  '7',
+  '8',
+  '9',
+  'comma',
+};
+
+/// Where Windows' rule would put two commands on one chord, or a command on a
+/// key a Windows terminal program answers, the command moves. The table is
+/// keyed by the Mac chord's action and key, because one action can have two
+/// chords.
+/// - A shifted twin of a ⌘ letter takes Alt+Shift, Linux's own second rung.
+/// - The ⌘-arrows focus and move panes with Alt and Alt+Shift, Windows
+///   Terminal's pane keys, because Ctrl-arrows are PowerShell's word motions.
+/// - The ⌥⌘-arrows (tabs) take Ctrl+Page Down/Up, as in every Windows browser.
+/// - ⌘⏎ (zoom) takes Ctrl+Shift+Z, tmux's `prefix z` as on Linux, because
+///   Ctrl+Enter is PowerShell's "insert line above".
+final _windowsShortcuts =
+    <(ShortcutAction, LogicalKeyboardKey), SingleActivator>{
+      (
+        ShortcutAction.findPrevious,
+        LogicalKeyboardKey.keyG,
+      ): const SingleActivator(
+        LogicalKeyboardKey.keyG,
+        alt: true,
+        shift: true,
+      ),
+      (ShortcutAction.focusPaneLeft, LogicalKeyboardKey.arrowLeft):
+          const SingleActivator(LogicalKeyboardKey.arrowLeft, alt: true),
+      (ShortcutAction.focusPaneRight, LogicalKeyboardKey.arrowRight):
+          const SingleActivator(LogicalKeyboardKey.arrowRight, alt: true),
+      (ShortcutAction.focusPaneAbove, LogicalKeyboardKey.arrowUp):
+          const SingleActivator(LogicalKeyboardKey.arrowUp, alt: true),
+      (ShortcutAction.focusPaneBelow, LogicalKeyboardKey.arrowDown):
+          const SingleActivator(LogicalKeyboardKey.arrowDown, alt: true),
+      (
+        ShortcutAction.movePaneLeft,
+        LogicalKeyboardKey.arrowLeft,
+      ): const SingleActivator(
+        LogicalKeyboardKey.arrowLeft,
+        alt: true,
+        shift: true,
+      ),
+      (
+        ShortcutAction.movePaneRight,
+        LogicalKeyboardKey.arrowRight,
+      ): const SingleActivator(
+        LogicalKeyboardKey.arrowRight,
+        alt: true,
+        shift: true,
+      ),
+      (
+        ShortcutAction.movePaneUp,
+        LogicalKeyboardKey.arrowUp,
+      ): const SingleActivator(
+        LogicalKeyboardKey.arrowUp,
+        alt: true,
+        shift: true,
+      ),
+      (
+        ShortcutAction.movePaneDown,
+        LogicalKeyboardKey.arrowDown,
+      ): const SingleActivator(
+        LogicalKeyboardKey.arrowDown,
+        alt: true,
+        shift: true,
+      ),
+      (
+        ShortcutAction.movePaneToTab,
+        LogicalKeyboardKey.keyM,
+      ): const SingleActivator(
+        LogicalKeyboardKey.keyM,
+        alt: true,
+        shift: true,
+      ),
+      (
+        ShortcutAction.zoomPane,
+        LogicalKeyboardKey.enter,
+      ): const SingleActivator(
+        LogicalKeyboardKey.keyZ,
+        control: true,
+        shift: true,
+      ),
+      (
+        ShortcutAction.showLayout,
+        LogicalKeyboardKey.keyL,
+      ): const SingleActivator(
+        LogicalKeyboardKey.keyL,
+        alt: true,
+        shift: true,
+      ),
+      (
+        ShortcutAction.shareAgent,
+        LogicalKeyboardKey.keyS,
+      ): const SingleActivator(
+        LogicalKeyboardKey.keyS,
+        alt: true,
+        shift: true,
+        includeRepeats: false,
+      ),
+      (
+        ShortcutAction.newTerminal,
+        LogicalKeyboardKey.keyT,
+      ): const SingleActivator(
+        LogicalKeyboardKey.keyT,
+        alt: true,
+        shift: true,
+      ),
+      (
+        ShortcutAction.cloneAgent,
+        LogicalKeyboardKey.keyN,
+      ): const SingleActivator(
+        LogicalKeyboardKey.keyN,
+        alt: true,
+        shift: true,
+      ),
+      (
+        ShortcutAction.renameSwarm,
+        LogicalKeyboardKey.keyR,
+      ): const SingleActivator(
+        LogicalKeyboardKey.keyR,
+        alt: true,
+        shift: true,
+      ),
+      (ShortcutAction.nextSwarm, LogicalKeyboardKey.arrowRight):
+          const SingleActivator(LogicalKeyboardKey.pageDown, control: true),
+      (ShortcutAction.previousSwarm, LogicalKeyboardKey.arrowLeft):
+          const SingleActivator(LogicalKeyboardKey.pageUp, control: true),
+      (
+        ShortcutAction.showAttention,
+        LogicalKeyboardKey.keyI,
+      ): const SingleActivator(
+        LogicalKeyboardKey.keyI,
+        alt: true,
+        shift: true,
+      ),
+      (
+        ShortcutAction.closePane,
+        LogicalKeyboardKey.keyW,
+      ): const SingleActivator(
+        LogicalKeyboardKey.keyW,
+        alt: true,
+        shift: true,
+      ),
+      (
+        ShortcutAction.showDebug,
+        LogicalKeyboardKey.keyD,
+      ): const SingleActivator(
+        LogicalKeyboardKey.keyD,
+        alt: true,
+        shift: true,
+      ),
+    };
+
+/// The keymap's string-bound commands, moved for the same reasons on Windows.
+const windowsCommandKeys = <String, List<String>>{
+  // VS Code and Windows Terminal open their palettes on Ctrl+Shift+P.
+  'harnesses.list': ['alt+shift+p'],
+  // Ctrl+Shift+F is terminal Find.
+  'pane.toggle_shading': ['alt+shift+f'],
+  // ⌘⌥ would be Ctrl+Alt, which is AltGr on many keyboards: Linux's key.
+  'app.daemon_talk': ['alt+shift+a'],
+  'app.onboarding_review': ['alt+shift+o'],
+  // Ctrl+Shift+R renames the selected machine in the picker.
+  'picker.refresh': ['ctrl+r'],
+  // Ctrl+Shift+Backspace removes the selected resource in the picker.
+  'picker.delete': ['alt+shift+backspace'],
+};
+
 /// Where "⌘ becomes Alt" would take a key a Linux terminal program already
 /// answers — Alt+Enter is the engine prompt's newline, Alt+T Claude Code's
 /// thinking toggle, Alt+F/B/D the shell's word motions — the command moves to
@@ -428,15 +627,34 @@ const linuxAltCommandKeys = <String, List<String>>{
 };
 
 String platformWorkspaceBinding(String keys) {
-  if (!altWorkspacePrefix || !keys.split('+').contains('cmd')) return keys;
   final parts = keys.split('+');
+  if (!parts.contains('cmd')) return keys;
+  if (ctrlWorkspacePrefix) {
+    final plain = _windowsPlainCtrlKeyNames.contains(parts.last);
+    return {
+      for (final part in parts)
+        if (part == 'cmd') ...['ctrl', if (!plain) 'shift'] else part,
+    }.join('+');
+  }
+  if (!altWorkspacePrefix) return keys;
   return {
     for (final part in parts) part == 'cmd' ? workspaceCommandModifier : part,
   }.join('+');
 }
 
-SingleActivator _platformActivator(SingleActivator keys) {
-  if (!altWorkspacePrefix || !keys.meta) return keys;
+/// [keys], a Mac chord, as this platform binds it.
+SingleActivator platformActivator(SingleActivator keys) {
+  if (!keys.meta) return keys;
+  if (ctrlWorkspacePrefix) {
+    return SingleActivator(
+      keys.trigger,
+      control: true,
+      alt: keys.alt,
+      shift: keys.shift || !_windowsPlainCtrlKeys.contains(keys.trigger),
+      includeRepeats: keys.includeRepeats,
+    );
+  }
+  if (!altWorkspacePrefix) return keys;
   final modifier = workspaceCommandModifier;
   return SingleActivator(
     keys.trigger,
@@ -464,19 +682,33 @@ const _altPrefixTabShortcuts = <ShortcutAction, SingleActivator>{
   ),
 };
 
-AppShortcut _platformShortcut(AppShortcut shortcut) => !altWorkspacePrefix
-    ? shortcut
-    : AppShortcut(
-        action: shortcut.action,
-        activator:
-            (shortcut.activator.meta
-                ? _altPrefixTabShortcuts[shortcut.action]
-                : null) ??
-            (kIsWeb ? null : _linuxAltShortcuts[shortcut.action]) ??
-            _platformActivator(shortcut.activator),
-        label: shortcut.label,
-        group: shortcut.group,
-      );
+AppShortcut _platformShortcut(AppShortcut shortcut) {
+  if (ctrlWorkspacePrefix) {
+    return AppShortcut(
+      action: shortcut.action,
+      activator:
+          (shortcut.activator.meta
+              ? _windowsShortcuts[(shortcut.action, shortcut.activator.trigger)]
+              : null) ??
+          platformActivator(shortcut.activator),
+      label: shortcut.label,
+      group: shortcut.group,
+    );
+  }
+  return !altWorkspacePrefix
+      ? shortcut
+      : AppShortcut(
+          action: shortcut.action,
+          activator:
+              (shortcut.activator.meta
+                  ? _altPrefixTabShortcuts[shortcut.action]
+                  : null) ??
+              (kIsWeb ? null : _linuxAltShortcuts[shortcut.action]) ??
+              platformActivator(shortcut.activator),
+          label: shortcut.label,
+          group: shortcut.group,
+        );
+}
 
 /// Swarm bindings replace the old workspace navigation in the retained legacy
 /// screen. Live Swarm bindings, tooltips, and help all use this same catalog.
@@ -635,7 +867,7 @@ List<SingleActivator> tabDigitActivators() => (const [
   SingleActivator(LogicalKeyboardKey.digit7, meta: true),
   SingleActivator(LogicalKeyboardKey.digit8, meta: true),
   SingleActivator(LogicalKeyboardKey.digit9, meta: true),
-]).map(_platformActivator).toList(growable: false);
+]).map(platformActivator).toList(growable: false);
 
 /// One line in the shortcuts UI: what it does, and every chord that does it.
 ///
@@ -719,7 +951,7 @@ class TerminalKey {
 /// "why is there no shortcut for X" is answered by seeing that X already
 /// belongs to something.
 List<TerminalKey> get kTerminalOwnedKeys => [
-  if (defaultTargetPlatform == TargetPlatform.linux) ...[
+  if (_pcTerminalKeys) ...[
     TerminalKey([controlKeyLabel, shiftKeyLabel, 'C'], 'Copy'),
     TerminalKey([controlKeyLabel, shiftKeyLabel, 'V'], 'Paste'),
     TerminalKey([controlKeyLabel, shiftKeyLabel, 'A'], 'Select all'),
@@ -733,11 +965,17 @@ List<TerminalKey> get kTerminalOwnedKeys => [
   // Kept as short as the rows around them: the deck's narrowest card is 280px, where a label much
   // past thirty characters takes a second line to itself.
   TerminalKey([altKeyLabel, '⌫'], 'Delete the previous word'),
-  // ⌘⌫ is taken in the pane on Apple only — elsewhere ⌘ is Super and stays the app's.
-  if (defaultTargetPlatform != TargetPlatform.linux)
+  // ⌘⌫ is taken in the pane on Apple only — elsewhere ⌘ is Super (or Win) and stays the app's.
+  if (!_pcTerminalKeys)
     const TerminalKey(['⌘', '⌫'], "Delete to the line's start"),
   TerminalKey([controlKeyLabel, 'C'], 'Cancel / interrupt in the agent'),
 ];
+
+/// Linux, and the native Windows app: the terminal's clipboard keys are
+/// Ctrl+Shift chords, as in GNOME Terminal and Windows Terminal. A browser on
+/// Windows keeps the Mac's list, as it did.
+bool get _pcTerminalKeys =>
+    defaultTargetPlatform == TargetPlatform.linux || windowsKeyLabels;
 
 /// Turns the declared shortcuts into the map [CallbackShortcuts] wants.
 ///
@@ -772,7 +1010,11 @@ typedef KeyChord = List<String>;
 
 /// The browser and Linux spell modifiers out, joined by `+`, the way their own
 /// apps print a chord; only a Mac draws Apple's glyphs.
-bool get spellsModifierKeys => kIsWeb || linuxKeyLabels;
+bool get spellsModifierKeys => kIsWeb || linuxKeyLabels || windowsKeyLabels;
+
+/// The native Windows app, whose command key is the Windows key.
+bool get windowsKeyLabels =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
 
 /// The native Linux app, whose command key is Super.
 bool get linuxKeyLabels =>
@@ -780,7 +1022,11 @@ bool get linuxKeyLabels =>
 
 /// The workspace prefix as a keycap: ⌘ on a Mac, Alt where
 /// [altWorkspacePrefix] moved it.
-String get workspaceKeyLabel => altWorkspacePrefix ? 'Alt' : '⌘';
+String get workspaceKeyLabel => altWorkspacePrefix
+    ? 'Alt'
+    : ctrlWorkspacePrefix
+    ? 'Ctrl'
+    : '⌘';
 
 String get controlKeyLabel => spellsModifierKeys ? 'Ctrl' : '⌃';
 String get altKeyLabel => spellsModifierKeys ? 'Alt' : '⌥';
@@ -792,6 +1038,8 @@ String get commandKeyLabel => kIsWeb
     ? 'Cmd'
     : linuxKeyLabels
     ? 'Super'
+    : windowsKeyLabels
+    ? 'Win'
     : '⌘';
 
 String get chordKeySeparator => spellsModifierKeys ? '+' : '';

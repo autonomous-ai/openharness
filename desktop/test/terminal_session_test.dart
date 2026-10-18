@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:harness/logging/app_log.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/foundation.dart';
+import 'package:xterm/xterm.dart' show TerminalTargetPlatform;
 
 void main() {
   const streamId = '00112233-4455-6677-8899-aabbccddeeff';
@@ -2006,6 +2007,27 @@ void main() {
       },
     );
   });
+  test('xterm learns the desktop it runs on', () {
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    for (final (platform, expected) in [
+      (TargetPlatform.macOS, TerminalTargetPlatform.macos),
+      (TargetPlatform.linux, TerminalTargetPlatform.linux),
+      (TargetPlatform.windows, TerminalTargetPlatform.windows),
+    ]) {
+      debugDefaultTargetPlatformOverride = platform;
+      final local = TerminalSession(
+        machineId: 'm',
+        agentId: 'a',
+        agentName: 'a',
+        engineId: 'codex',
+        send: (type, payload) async => true,
+        sendBinary: (frame) async => true,
+      );
+      expect(local.terminal.platform, expected, reason: '$platform');
+      local.dispose();
+    }
+  });
+
 }
 
 class _RecordingLog implements AppLog {

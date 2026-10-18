@@ -102,7 +102,7 @@ void main() {
         .setMockMethodCallHandler(SystemChannels.platform, null);
   });
 
-  for (final platform in [TargetPlatform.macOS, TargetPlatform.linux]) {
+  for (final platform in [TargetPlatform.macOS, TargetPlatform.linux, TargetPlatform.windows]) {
     onPlatform(
       platform,
       '$platform preserves shell control keys and pastes only on the clipboard chord',
@@ -136,8 +136,8 @@ void main() {
           tester,
           LogicalKeyboardKey.keyV,
           cmd: platform == TargetPlatform.macOS,
-          ctrl: platform == TargetPlatform.linux,
-          shift: platform == TargetPlatform.linux,
+          ctrl: platform != TargetPlatform.macOS,
+          shift: platform != TargetPlatform.macOS,
         );
         await tester.pump(const Duration(milliseconds: 20));
         expect(reads, 1);
@@ -231,7 +231,7 @@ void main() {
     );
   }
 
-  for (final platform in [TargetPlatform.macOS, TargetPlatform.linux]) {
+  for (final platform in [TargetPlatform.macOS, TargetPlatform.linux, TargetPlatform.windows]) {
     onPlatform(
       platform,
       '$platform copies selected output even in a read-only pane',

@@ -1834,7 +1834,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// xterm binds paste itself, but only ever to its text-only action. `onKeyEvent`
   /// is the one hook that runs BEFORE its shortcut map (terminal_view.dart), so
   /// this is where the binding has to be replaced rather than added. The chord taken is the
-  /// platform's exact one: Linux reserves Ctrl-V for the terminal program and pastes with
+  /// platform's exact one: Linux and Windows reserve Ctrl-V for the terminal program and paste with
   /// Ctrl-Shift-V.
   KeyEventResult _onTerminalKey(FocusNode node, KeyEvent event) {
     if (_passageId != null && event.logicalKey == LogicalKeyboardKey.escape) {
@@ -1881,7 +1881,9 @@ class _TerminalPanelState extends State<TerminalPanel>
         : keyboard.isControlPressed &&
               !keyboard.isMetaPressed &&
               keyboard.isShiftPressed ==
-                  (defaultTargetPlatform == TargetPlatform.linux);
+                  (defaultTargetPlatform == TargetPlatform.linux ||
+                      (!kIsWeb &&
+                          defaultTargetPlatform == TargetPlatform.windows));
     if (!pasting) return KeyEventResult.ignored;
     unawaited(_paste());
     return KeyEventResult.handled;

@@ -790,6 +790,11 @@ add a kind there, not at the call site.
   `_linuxAltShortcuts`/`linuxAltCommandKeys` move the few that would land on a key a terminal
   program answers (Alt+Enter, Alt+T, Alt+F/B/D). The runner rewrites Super to Meta
   (`super_as_meta_cb`), so a Super chord a user binds still reads as `cmd`.
+  Windows takes Ctrl where the Mac takes ⌘ (`ctrlWorkspacePrefix`): Ctrl+Shift for every letter, as Windows
+  Terminal does, because a plain Ctrl+letter is always some terminal program's; plain Ctrl only for the tab digits
+  and Settings' comma. `_windowsShortcuts`/`windowsCommandKeys` move a shifted twin to Alt+Shift, pane focus and
+  moves to Alt(+Shift)+arrows, tabs to Ctrl+Page Down/Up and zoom to Ctrl+Shift+Z. The terminal keeps every plain
+  Ctrl chord and Ctrl+Shift+C/V/A.
   Other workspace shortcuts are ⌘-based — Ctrl otherwise belongs to the shell/tmux, ⌥ is a
   Meta prefix for the pty (⌥⏎ and ⌥⌫ only — `AltAsMetaInputHandler` in
   `lib/terminal/terminal_input.dart` turns them into `ESC` + Return and `ESC` + `\x7f`, so the

@@ -36,6 +36,10 @@ class HarnessCommand {
       final linux = linuxAltCommandKeys[id];
       if (linux != null) return linux;
     }
+    if (ctrlWorkspacePrefix) {
+      final windows = windowsCommandKeys[id];
+      if (windows != null) return windows;
+    }
     return action == null
         ? extraKeys.map(platformWorkspaceBinding).toList(growable: false)
         : _workspaceKeys[action] ?? const [];

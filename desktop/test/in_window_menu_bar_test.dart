@@ -4,12 +4,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness/screens/swarm_menu_bus.dart';
 import 'package:harness/shared/theme/app_theme.dart';
-import 'package:harness/widgets/linux_menu_bar.dart';
+import 'package:harness/shared/widgets/app_menu.dart' show AppMenuItem;
+import 'package:harness/widgets/in_window_menu_bar.dart';
 
-/// The Linux menu bar's wiring.
+/// The in-window menu bar's wiring (Linux and Windows).
 ///
 /// The bar is a mouse-shaped door onto the same surfaces the native menus
-/// drive: the app-menu rows report through [LinuxMenuBar.onAction] and the
+/// drive: the app-menu rows report through [InWindowMenuBar.onAction] and the
 /// swarm rows dispatch through the bus with the SAME action strings the macOS
 /// channel delivers. Those strings are the shared contract with
 /// `_RootShellState.runAppMenuAction` and `SwarmScreen._onNative` — a typo in
@@ -52,7 +53,7 @@ void main() {
         home: Scaffold(
           body: Column(
             children: [
-              LinuxMenuBar(
+              InWindowMenuBar(
                 onAction: (action) async => appActions.add(action),
                 visible: true,
               ),
@@ -104,7 +105,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: LinuxMenuBar(onAction: (_) async {}, visible: false),
+          body: InWindowMenuBar(onAction: (_) async {}, visible: false),
         ),
       ),
     );
@@ -499,5 +500,124 @@ void main() {
     await tap(tester, 'menu-bar-history');
     expect(find.byKey(const Key('menu-bar-history-back')), findsNothing);
     expect(find.text('Back'), findsOneWidget);
+  });
+  testWidgets('pins what the Linux bar draws, menu by menu', (tester) async {
+    await pumpBar(tester);
+    expect(tester.getSize(find.byType(InWindowMenuBar)).height, 30);
+    expect(
+      [
+        for (final button in tester.widgetList<TextButton>(
+          find.byType(TextButton),
+        ))
+          (button.key! as ValueKey<String>).value,
+      ],
+      [
+        'menu-bar-harness',
+        'menu-bar-file',
+        'menu-bar-edit',
+        'menu-bar-view',
+        'menu-bar-history',
+        'menu-bar-window',
+        'menu-bar-help',
+      ],
+    );
+    Future<List<String>> rows(String menu) async {
+      await tap(tester, menu);
+      final shown = [
+        for (final item in tester.widgetList<AppMenuItem>(
+          find.byType(AppMenuItem),
+        ))
+          '${(item.key! as ValueKey<String>).value} ${item.label}',
+      ];
+      await tap(tester, menu);
+      expect(find.byType(AppMenuItem), findsNothing);
+      return shown;
+    }
+
+    expect(await rows('menu-bar-harness'), [
+      'menu-bar-about About Harness',
+      'menu-bar-customize Appearance…',
+      'menu-bar-settings Settings…',
+      'menu-bar-shortcuts Keyboard Shortcuts…',
+      'menu-bar-check-for-updates Check for Updates…',
+      'menu-bar-flash-firmware Flash Firmware…',
+      'menu-bar-quit Quit Harness',
+    ]);
+    expect(await rows('menu-bar-file'), [
+      'menu-bar-new-harness New Harness',
+      'menu-bar-open-harness Open Harness',
+      'menu-bar-open-project Open Project',
+      'menu-bar-clone-agent Clone Harness',
+      'menu-bar-new-tab New Tab',
+      'menu-bar-rename-tab Rename Tab',
+      'menu-bar-close-tab Close Tab',
+      'menu-bar-split-right Split Right',
+      'menu-bar-split-down Split Down',
+      'menu-bar-zoom-pane Zoom Pane',
+      'menu-bar-move-pane Move Pane to Tab',
+      'menu-bar-close-pane Close Pane',
+    ]);
+    expect(await rows('menu-bar-edit'), [
+      'menu-bar-find-terminal Find in Terminal…',
+      'menu-bar-find-next Find Next',
+      'menu-bar-find-previous Find Previous',
+      'menu-bar-commands Search Commands…',
+    ]);
+    expect(await rows('menu-bar-view'), [
+      'menu-bar-layout Layout…',
+      'menu-bar-reset-font-size Default Font Size',
+      'menu-bar-bigger-font Bigger',
+      'menu-bar-smaller-font Smaller',
+      'menu-bar-full-screen Enter Full Screen',
+      'menu-bar-notifications Harnesses Needing Input…',
+      'menu-bar-machines Machines',
+      'menu-bar-models Models',
+      'menu-bar-machine-monitor Machine Monitor',
+    ]);
+    expect(await rows('menu-bar-history'), [
+      'menu-bar-history-back Back',
+      'menu-bar-history-forward Forward',
+      'menu-bar-reopen-last Reopen Closed Tab or Pane',
+      'menu-bar-show-history Show Full History',
+    ]);
+    expect(await rows('menu-bar-window'), [
+      'menu-bar-minimize Minimize',
+      'menu-bar-zoom Zoom',
+    ]);
+    expect(await rows('menu-bar-help'), [
+      'menu-bar-welcome-tour Welcome Tour',
+      'menu-bar-quick-start Quick Start',
+      'menu-bar-keyboard-practice Keyboard Practice',
+      'menu-bar-export-logs Export Logs…',
+    ]);
+  });
+  testWidgets('Quit Harness quits through the platform\'s own path', (
+    tester,
+  ) async {
+    var quits = 0;
+    tester.view.physicalSize = const Size(900 * 2, 700 * 2);
+    tester.view.devicePixelRatio = 2;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(brightness: Brightness.dark),
+        home: Scaffold(
+          body: Column(
+            children: [
+              InWindowMenuBar(
+                onAction: (action) async => appActions.add(action),
+                onQuit: () async => quits++,
+                visible: true,
+              ),
+              const Expanded(child: SizedBox.shrink()),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tap(tester, 'menu-bar-harness');
+    await tap(tester, 'menu-bar-quit');
+    expect(quits, 1);
+    expect(appActions, isEmpty);
   });
 }

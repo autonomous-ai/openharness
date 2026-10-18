@@ -6,6 +6,7 @@ import 'package:window_manager/window_manager.dart';
 import '../core/runtime_platform.dart';
 import '../shared/theme/app_pane_icon.dart';
 import '../core/test_run.dart';
+import '../core/windows_status_tray.dart' show quitHarness;
 import '../screens/swarm_menu_bus.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
@@ -21,24 +22,25 @@ typedef AppMenuActionHandler = Future<void> Function(String action);
 /// On macOS the commands live in the native menu bar: the application menu's
 /// own rows and View's font rows are installed in MainFlutterWindow.swift,
 /// and File, Edit's Find rows, View's workspace rows and History are built by
-/// SwarmTitlebar.swift from the `harness/swarm_tabs` payloads. Linux has no native menu bar to hand any of
+/// SwarmTitlebar.swift from the `harness/swarm_tabs` payloads. Linux and Windows have no native menu bar to hand any of
 /// that to, so this draws the same menus in the window instead: the state
 /// comes off [SwarmMenuBus] (what Swift would have received), the rows
 /// dispatch back through the same handler the macOS channel delivers to, and
 /// the application-menu commands fire the same action strings through
 /// [onAction].
 ///
-/// The tab strip and the title-bar buttons are not here: on Linux Flutter
+/// The tab strip and the title-bar buttons are not here: on Linux and Windows Flutter
 /// draws those itself, as it does anywhere AppKit is not drawing them. Two
 /// standard menus are deliberately not mirrored row for row: Edit lacks
 /// AppKit's Cut/Copy/Paste roles (the terminal owns those keys; only the rows
 /// that reach Dart are drawn), and Window carries the two rows this app can
 /// act on itself. Each row shows the shortcut the keymap gives its action,
-/// which is where macOS takes its key equivalents from too. Off Linux this renders nothing; [visible] exists so a widget
+/// which is where macOS takes its key equivalents from too. On macOS and in a browser this renders nothing; [visible] exists so a widget
 /// test can force the bar on without caring which OS the host is. Widget
 /// tests at large keep the bar off by default: it is window chrome — on macOS
 /// it costs the layout nothing at all — and pane-geometry assertions should
-/// not depend on whether the Linux build is drawing it.
+/// not depend on whether a Linux or Windows build is drawing it. Windows keeps
+/// its native caption (spec §2.9), so there the bar is a strip under it.
 /// Who draws the Linux window's title bar — decided by the runner
 /// (`my_application.cc`) and handed over as `HARNESS_LINUX_TITLE_BAR`.
 enum LinuxTitleBar {
@@ -87,15 +89,20 @@ class LinuxTitleBarActions extends ChangeNotifier {
 
 final linuxTitleBarActions = LinuxTitleBarActions();
 
-class LinuxMenuBar extends StatefulWidget {
-  const LinuxMenuBar({
+class InWindowMenuBar extends StatefulWidget {
+  const InWindowMenuBar({
     super.key,
     required this.onAction,
     this.state,
     this.visible,
+    this.onQuit,
   });
 
   final AppMenuActionHandler onAction;
+
+  /// How Quit Harness quits: the platform's own path unless a test passes
+  /// its own.
+  final Future<void> Function()? onQuit;
 
   /// The swarm-menu state to draw; defaults to the shared bus's. A test seams
   /// its own in rather than touching the singleton.
@@ -105,10 +112,10 @@ class LinuxMenuBar extends StatefulWidget {
   final bool? visible;
 
   @override
-  State<LinuxMenuBar> createState() => _LinuxMenuBarState();
+  State<InWindowMenuBar> createState() => _InWindowMenuBarState();
 }
 
-class _LinuxMenuBarState extends State<LinuxMenuBar> {
+class _InWindowMenuBarState extends State<InWindowMenuBar> {
   final _controllers = <String, MenuController>{};
 
   MenuController? _openMenu;
@@ -144,7 +151,9 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
   @override
   Widget build(BuildContext context) {
     // RuntimePlatform: false in a browser, where `dart:io` Platform throws.
-    final visible = widget.visible ?? (RuntimePlatform.isLinux && !kUnderTest);
+    final visible =
+        widget.visible ??
+        ((RuntimePlatform.isLinux || RuntimePlatform.isWindows) && !kUnderTest);
     if (!visible) return const SizedBox.shrink();
     grid.AppTheme.watch(context);
     // The full set of menus outgrows a narrow window; a menubar that scrolls
@@ -282,13 +291,16 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
         action: 'flashFirmware',
       ),
       const AppMenuDivider(),
-      // The Quit row the Mac's application menu carries. It goes through
-      // window_manager so the app's exit lifecycle — the pane-arrangement
-      // flush in didRequestAppExit — runs on the way out.
+      // The Quit row the Mac's application menu carries. The app's exit
+      // lifecycle (the pane-arrangement flush in didRequestAppExit) runs on
+      // the way out: through window_manager on Linux, and through the runner
+      // on Windows, where closing the window only hides it to the tray.
       _plainRow(
         key: 'menu-bar-quit',
         label: 'Quit Harness',
-        onTap: () => windowManager.close(),
+        onTap:
+            widget.onQuit ??
+            (RuntimePlatform.isWindows ? quitHarness : windowManager.close),
       ),
     ];
   }
@@ -714,7 +726,7 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
 
   /// A row that dispatches into the swarm bus — the same contract a native
   /// menu on macOS delivers with. [swarm] false sends an app-menu action to
-  /// [LinuxMenuBar.onAction] instead (View's layout row lives on the other
+  /// [InWindowMenuBar.onAction] instead (View's layout row lives on the other
   /// channel, as it does on the Mac).
   Widget _swarmRow({
     required String key,
