@@ -14,10 +14,10 @@ import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { PLATFORM_LABEL, type PlatformState, type ServiceDefinition } from '../harnessd/platform.js'
-import { describeSpawnLockOwner, withSpawnLock, type SpawnLockPurpose } from './daemonSpawnLock.js'
+import { describeSpawnLockOwner, readSpawnLockOwner, withSpawnLock, type SpawnLockPurpose } from './daemonSpawnLock.js'
 import { stopDaemonProcess } from './daemonStop.js'
 import {
-  CARRIED_ENV, PLATFORM_START_WAIT_MS, PLATFORM_STOP_WAIT_MS, describeState, platformDaemonDeps, serviceDefinition, waitForMaster, waitGone,
+  CARRIED_ENV, PLATFORM_START_WAIT_MS, PLATFORM_STOP_WAIT_MS, TASK_RUN_WAIT_MS, describeState, platformDaemonDeps, serviceDefinition, waitForMaster, waitGone,
   type PlatformDaemonDeps,
 } from './platformDaemon.js'
 
@@ -42,6 +42,8 @@ export interface ServiceCommandDeps extends PlatformDaemonDeps {
   /** Windows: [name] as set for the Windows user (`HKCU\Environment`, what `setx` writes), null when it is not or
    *  could not be read (`readUserEnvironment`). */
   userEnvironment?(name: string): Promise<string | null>
+  /** Windows: someone holds the daemon spawn lock, as the task's own `harness start --if-down` does once it runs. */
+  lockHeld?(): boolean
 }
 
 /**
@@ -326,9 +328,19 @@ async function installTask(deps: ServiceCommandDeps): Promise<number> {
       deps.err(`  ${started.detail}`)
       return SERVICE_REGISTERED_NOT_RUNNING
     }
-    up = await waitForMaster(deps, deps.startWaitMs ?? PLATFORM_START_WAIT_MS)
+    // As `harness start` waits on the task (platformDaemon.ts startThroughTask): a short while, and longer only once the
+    // task's own start holds the spawn lock. Over SSH Task Scheduler runs nothing, and this waited the whole minute,
+    // then printed a ✗ for what is not a failure (G4, final review R1b-3).
+    const wait = deps.startWaitMs ?? PLATFORM_START_WAIT_MS
+    up = await waitForMaster(deps, Math.min(TASK_RUN_WAIT_MS, wait))
+    if (up === null && !deps.lockHeld?.()) {
+      deps.out(`Task Scheduler starts the Harness daemon when you sign in to Windows (${service.target}). It did not start it now: it runs the task only in a signed-in Windows session.`)
+      deps.out('  start it now: harness start')
+      return SERVICE_REGISTERED_NOT_RUNNING
+    }
+    if (up === null) up = await waitForMaster(deps, wait)
     if (up === null) {
-      deps.err('✗ Task Scheduler has harnessd, but it did not come up. It runs the task only in a signed-in Windows session: `harness start` starts it now.')
+      deps.err('✗ Task Scheduler started harnessd, but it did not come up: `harness start` starts it now.')
       deps.err(`  logs ${deps.tildify(deps.logFile)}   ·   harness service status`)
       return SERVICE_REGISTERED_NOT_RUNNING
     }
@@ -378,5 +390,6 @@ export function serviceCommandDeps(options: { relaunch: () => Promise<void>; til
     err: (line) => console.error(line),
     tildify: options.tildify,
     userEnvironment: (name) => readUserEnvironment(name),
+    lockHeld: () => readSpawnLockOwner() !== null,
   }
 }

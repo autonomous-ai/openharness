@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OS_SYSTEMD_UNIT, OS_UNIT_FILE, PlatformService, SYSTEMD_UNIT, defaultPlatformDeps, taskName, type CommandResult, type PlatformName } from '../harnessd/platform.js'
 import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
-import { serviceDefinition } from './platformDaemon.js'
+import { TASK_RUN_WAIT_MS, serviceDefinition } from './platformDaemon.js'
 import {
   SERVICE_REGISTERED_NOT_RUNNING, SERVICE_USAGE, USER_ENVIRONMENT_TIMEOUT_MS, WINDOWS_SERVICE_USAGE, readUserEnvironment, serviceCommand, serviceCommandDeps, type RegRun, type ServiceCommandDeps,
 } from './serviceCommand.js'
@@ -324,7 +324,7 @@ describe.each(['launchd', 'systemd'] as const)('harness service under %s', (plat
 describe('harness service with Task Scheduler', () => {
   /** What schtasks and whoami answer, by the start of the call; the rest succeed. */
   type Answers = Record<string, CommandResult>
-  function windows(over: { registered?: boolean; pid?: number | null; carried?: Record<string, string>; answers?: Answers; userEnvironment?: ServiceCommandDeps['userEnvironment'] } = {}) {
+  function windows(over: { registered?: boolean; pid?: number | null; carried?: Record<string, string>; answers?: Answers; userEnvironment?: ServiceCommandDeps['userEnvironment']; lockHeld?: () => boolean; startWaitMs?: number } = {}) {
     const dir = mkdtempSync(join(tmpdir(), 'service-task-'))
     const data = join(dir, 'data')
     const launcher = join(dir, 'bin', 'harness-launch.exe')
@@ -360,10 +360,11 @@ describe('harness service with Task Scheduler', () => {
       bundleExists: (path) => existsSync(path), ensureDir: () => {},
       stopDaemon: async () => { throw new Error('the task never stops the daemon') },
       withLock: async (purpose, fn) => { locks.push(purpose); const result = await fn(); locks.push(`${purpose} released`); return result },
-      relaunch: async () => {}, out: (line) => out.push(line), err: (line) => err.push(line), tildify: (path) => path, startWaitMs: 1_000,
+      relaunch: async () => {}, out: (line) => out.push(line), err: (line) => err.push(line), tildify: (path) => path, startWaitMs: over.startWaitMs ?? 1_000,
+      lockHeld: over.lockHeld ?? (() => false),
       ...(over.userEnvironment ? { userEnvironment: over.userEnvironment } : {}),
     }
-    return { dir, data, calls, out, err, locks, deps, setPid: (next: number | null) => { pid = next } }
+    return { dir, data, calls, out, err, locks, deps, clock, setPid: (next: number | null) => { pid = next } }
   }
   /** What the command did to Task Scheduler: its calls but the queries. */
   const schtasks = (calls: string[]) => calls.filter((call) => !call.startsWith('schtasks /Query'))
@@ -511,14 +512,30 @@ describe('harness service with Task Scheduler', () => {
     } finally { for (const w of [gone, refused, idle]) rmSync(w.dir, { recursive: true, force: true }) }
   })
 
-  it('says when the task ran but started nothing, as in a session no one signed in to', async () => {
-    const w = windows({ answers: { 'schtasks /Run': { status: 0, stdout: 'SUCCESS', stderr: '' } } })
+  // G4 / final review R1b-3: over SSH it waited the whole minute, then printed a ✗ for what is not a failure. It waits as
+  // `harness start` does (TASK_RUN_WAIT_MS), and longer only while the task's own start holds the spawn lock.
+  it('says plainly, without a ✗ and after a short wait, when the task ran but started nothing, as in a session no one signed in to', async () => {
+    const w = windows({ answers: { 'schtasks /Run': { status: 0, stdout: 'SUCCESS', stderr: '' } }, startWaitMs: 60_000 })
     try {
       // Not a failure: the task is registered and starts harnessd at the next sign-in (SERVICE_REGISTERED_NOT_RUNNING).
       await expect(serviceCommand(['install'], w.deps)).resolves.toBe(SERVICE_REGISTERED_NOT_RUNNING)
       expect(SERVICE_REGISTERED_NOT_RUNNING).toBe(5)
+      expect(w.clock.now).toBeLessThanOrEqual(TASK_RUN_WAIT_MS + 1_000)
+      expect(w.err).toEqual([])
+      expect(w.out.slice(0, 2)).toEqual([
+        `Task Scheduler starts the Harness daemon when you sign in to Windows (${taskName('demo')}). It did not start it now: it runs the task only in a signed-in Windows session.`,
+        '  start it now: harness start',
+      ])
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  it('waits the full time while the task\'s own start holds the spawn lock, and says when it still did not come up', async () => {
+    const w = windows({ answers: { 'schtasks /Run': { status: 0, stdout: 'SUCCESS', stderr: '' } }, startWaitMs: 60_000, lockHeld: () => true })
+    try {
+      await expect(serviceCommand(['install'], w.deps)).resolves.toBe(SERVICE_REGISTERED_NOT_RUNNING)
+      expect(w.clock.now).toBeGreaterThanOrEqual(60_000)
       expect(w.err).toEqual([
-        '✗ Task Scheduler has harnessd, but it did not come up. It runs the task only in a signed-in Windows session: `harness start` starts it now.',
+        '✗ Task Scheduler started harnessd, but it did not come up: `harness start` starts it now.',
         '  logs C:\\d\\harness.log   ·   harness service status',
       ])
     } finally { rmSync(w.dir, { recursive: true, force: true }) }
