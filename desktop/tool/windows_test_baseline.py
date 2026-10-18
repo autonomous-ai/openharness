@@ -76,17 +76,19 @@ def events_of(path):
 
 
 def outcomes(paths):
-    """[(file::name, result, skipped, hidden)] and whether every log reached its `done` event."""
+    """Outcomes and whether every log ended normally with all started tests finished."""
     found, complete = [], True
     for path in paths:
-        suites, tests, done = {}, {}, False
+        suites, tests, pending, done, interrupted = {}, {}, set(), False, False
         for event in events_of(path):
             kind = event.get("type")
             if kind == "suite":
                 suites[event["suite"]["id"]] = suite_file(event["suite"].get("path") or "")
             elif kind == "testStart":
                 tests[event["test"]["id"]] = event["test"]
+                pending.add(event["test"]["id"])
             elif kind == "testDone":
+                pending.discard(event.get("testID"))
                 test = tests.get(event.get("testID"))
                 if test is None:
                     continue
@@ -96,8 +98,13 @@ def outcomes(paths):
                 key = f"{suites.get(test.get('suiteID'), '?')}::{name}"
                 found.append((key, event.get("result"), bool(event.get("skipped")), bool(event.get("hidden"))))
             elif kind == "done":
-                done = True
-        complete = complete and done
+                # test_core emits success:null when its engine closes early.
+                # A normal completed failure is success:false and stays valid.
+                if isinstance(event.get("success"), bool):
+                    done = True
+                else:
+                    interrupted = True
+        complete = complete and done and not interrupted and not pending
     return found, complete
 
 
@@ -134,7 +141,7 @@ def check(results, baseline_file, out=print):
     recorded = read_baseline(baseline_file)
     problems = []
     if not complete:
-        problems.append("a run did not finish (no 'done' event): it crashed or was cut short")
+        problems.append("a run did not finish (missing/invalid 'done' status or tests without outcomes): it crashed or was cut short")
     required = must_pass(failed)
     problems += [f"must pass on Windows: {e}" for e in required]
     problems += [f"new failure: {e}" for e in sorted(failed - recorded) if e not in required]

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Tests for windows_test_baseline.py. Run: python3 desktop/tool/test_windows_test_baseline.py"""
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -73,6 +75,44 @@ class BaselineTest(unittest.TestCase):
         code, out = self.check(log)
         self.assertEqual(code, 1)
         self.assertIn("did not finish", out)
+
+    def test_premature_reporter_done_status_fails_check_and_write(self):
+        for done in [{"type": "done", "success": None}, {"type": "done"}]:
+            with self.subTest(done=done):
+                log = run_log(self.dir.name, [("test/posix_test.dart", "uses /bin/sh", "failure")])
+                lines = Path(log).read_text(encoding="utf-8").splitlines()
+                lines[-1] = json.dumps(done)
+                Path(log).write_text("\n".join(lines) + "\n", encoding="utf-8")
+                code, out = self.check(log)
+                self.assertEqual(code, 1)
+                self.assertIn("did not finish", out)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(baseline.write([log], out=lambda _: None), 1)
+
+    def test_started_tests_without_outcomes_fail_even_with_successful_done(self):
+        for file in ["test/home_dir_test.dart", "test/shared_test.dart"]:
+            with self.subTest(file=file):
+                log = run_log(self.dir.name, [(file, "unfinished", "success")])
+                lines = [line for line in Path(log).read_text(encoding="utf-8").splitlines()
+                         if '"type": "testDone"' not in line]
+                lines[-1] = json.dumps({"type": "done", "success": True})
+                Path(log).write_text("\n".join(lines) + "\n", encoding="utf-8")
+                code, out = self.check(log)
+                self.assertEqual(code, 1)
+                self.assertIn("did not finish", out)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(baseline.write([log], out=lambda _: None), 1)
+
+    def test_completed_successful_and_recorded_failed_runs_remain_complete(self):
+        failed = run_log(self.dir.name, [("test/posix_test.dart", "uses /bin/sh", "failure")])
+        self.assertEqual(self.check(failed)[0], 0)
+        self.assertEqual(baseline.write([failed], out=lambda _: None), 0)
+        passed = run_log(self.dir.name, [("test/shared_test.dart", "finished", "success")])
+        lines = Path(passed).read_text(encoding="utf-8").splitlines()
+        lines[-1] = json.dumps({"type": "done", "success": True})
+        Path(passed).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self.assertEqual(self.check(passed)[0], 0)
+        self.assertEqual(baseline.write([passed], out=lambda _: None), 0)
 
     def test_skips_are_not_failures_and_a_fixed_test_is_named(self):
         log = run_log(self.dir.name, [("test/posix_test.dart", "uses /bin/sh", "success"), ("test/w_test.dart", "on Windows", "skipped")])
