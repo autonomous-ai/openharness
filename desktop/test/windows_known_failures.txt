@@ -1,0 +1,4 @@
+# Desktop tests that fail on Windows because they assume POSIX, one `<file>::<test name>` per line.
+# Written by `python tool/windows_test_baseline.py write` from a Windows desktop workflow run, then
+# reviewed: an entry belongs here only when its test exercises macOS or Linux behaviour. A failure
+# in a Windows branch is fixed, never recorded. Remove an entry once its test passes on Windows.

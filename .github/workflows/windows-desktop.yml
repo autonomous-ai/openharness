@@ -1,0 +1,89 @@
+name: Windows desktop
+
+# On demand (Actions -> Windows desktop -> Run workflow): build the Harness desktop app for Windows and run the
+# desktop suite on each architecture's own runner (docs/superpowers/specs/2026-10-18-windows-desktop-design.md,
+# section 4.1). Heavy and manual, like the other OS workflows; PR CI is unchanged.
+# The suite runs whole. A test that assumes POSIX fails on Windows and is recorded in
+# desktop/test/windows_known_failures.txt; desktop/tool/windows_test_baseline.py fails the job on any other failure,
+# and on any failure in the files that test the Windows branches themselves.
+on:
+  workflow_dispatch:
+  # TEMPORARY: remove before merging (workflow_dispatch needs the file on main)
+  push:
+    branches: [feat/windows-desktop]
+
+concurrency:
+  group: windows-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # release-desktop.yml's FLUTTER_VERSION, the one toolchain pin for desktop artifacts. Bump both together.
+  FLUTTER_VERSION: '3.47.2'
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      # A real node.exe for the tests that run one (harness_cli_runner_windows_test.dart,
+      # environment_provisioner_windows_test.dart). Same runtime pin as windows.yml.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Name node.exe for the tests
+        id: node
+        run: |
+          "path=$((Get-Command node).Source)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+      # A clone of the pinned tag rather than subosito/flutter-action: Flutter's own bootstrap then fetches the
+      # Dart SDK for the runner's architecture, arm64 included.
+      - name: Install Flutter ${{ env.FLUTTER_VERSION }}
+        working-directory: ${{ runner.temp }}
+        run: |
+          git clone --depth 1 --branch "$env:FLUTTER_VERSION" https://github.com/flutter/flutter.git flutter
+          "$env:RUNNER_TEMP\flutter\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Check the Flutter pin, and get packages
+        run: |
+          flutter config --no-analytics
+          flutter --version
+          $version = flutter --version --machine | ConvertFrom-Json
+          if ($version.frameworkVersion -ne $env:FLUTTER_VERSION) { throw "Flutter is $($version.frameworkVersion), not $env:FLUTTER_VERSION" }
+          flutter pub get
+      - name: Build
+        run: flutter build windows --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-desktop-windows-${{ matrix.arch }}
+          path: desktop/build/windows/${{ matrix.arch }}/runner/Release/
+          if-no-files-found: error
+      - name: Test (the whole suite, against test/windows_known_failures.txt)
+        env:
+          HARNESS_TEST_NODE: ${{ steps.node.outputs.path }}
+        run: |
+          $results = Join-Path $env:RUNNER_TEMP 'flutter-test.json'
+          flutter test --no-pub --file-reporter "json:$results"
+          python tool/windows_test_baseline.py check --results $results --baseline test/windows_known_failures.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-desktop-tests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/flutter-test.json
+          if-no-files-found: warn
