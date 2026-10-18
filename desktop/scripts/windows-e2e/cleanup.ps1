@@ -73,13 +73,15 @@ if ($profile) { $profile | Remove-CimInstance }
 if (Test-Path -LiteralPath $owner.profile) { throw 'owned profile directory remains; inspect before retrying cleanup' }
 if (Get-CimInstance Win32_UserProfile -Filter "SID='$($owner.sid)'") { throw 'owned profile registration remains' }
 if ((Test-Path -LiteralPath $sidHive) -or (Test-Path -LiteralPath $classesHive)) { throw 'owned profile hive remains after deletion; account and receipts retained' }
-$account = Get-LocalUser -Name $User -ErrorAction SilentlyContinue
+$accounts = @(Get-LocalUser -ErrorAction Stop)
+$account = $accounts | Where-Object { [string]::Equals($_.Name, $User, [StringComparison]::OrdinalIgnoreCase) }
 if ($account) {
   if ($account.SID.Value -ne $owner.sid) { throw 'account was replaced; leave it alone' }
   Remove-LocalUser -Name $User
   Write-Output "user $User deleted"
 }
-if (Get-LocalUser -Name $User -ErrorAction SilentlyContinue) { throw 'account remains or was recreated; receipts retained for inspection' }
+$accounts = @(Get-LocalUser -ErrorAction Stop)
+if ($accounts | Where-Object { [string]::Equals($_.Name, $User, [StringComparison]::OrdinalIgnoreCase) }) { throw 'account remains or was recreated; receipts retained for inspection' }
 $owner | Add-Member -NotePropertyName cleaned -NotePropertyValue $true -Force
 Save-Owner $owner
 Write-Output 'owned profile removed; Winlogon, shared listeners, DNS/CA, services and unrelated accounts preserved'
