@@ -133,8 +133,8 @@ Machine:
                                (normally done once by the installer; use this if a start fails because
                                the launcher points at a Node that no longer runs)
   harness start --if-down      start the daemon only if it is not running and \`harness stop\` has not stopped it
-                               since the computer started (what Windows's scheduled task runs; quiet otherwise);
-                               with --at-logon, what the task runs at sign-in, it forgets a \`harness stop\` first
+                               since the computer started (what Windows's scheduled task runs; quiet otherwise).
+                               --at-logon (the sign-in task's start) first forgets a \`harness stop\`
   harness logout               stop the adapter and clear this computer's SSO session
   harness stop                 stop the background adapter (keeps the SSO session)
   harness reset                stop the adapter and clear local CLI state
