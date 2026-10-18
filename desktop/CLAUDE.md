@@ -9,7 +9,16 @@ agents running on them. **macOS and Linux (Ubuntu) are both real, released targe
 provisioning (`lib/bootstrap/environment_provisioner.dart`), self-update
 (`lib/update/desktop_updater.dart`), and packaging (`scripts/upload-desktop.sh` /
 `scripts/upload-desktop-linux.sh`, see RELEASE.md) all branch per-OS internally rather than being
-separate code paths. The Windows runner exists but is unexercised. Package name is `harness`
+separate code paths.
+
+Windows is a local desktop too, not a viewer (`lib/core/viewer_mode.dart`): `homeDir()`
+(`lib/core/home_dir.dart`) reads `USERPROFILE` there even when Git Bash set `HOME`, console
+children start through `lib/core/hidden_process.dart` so no window flashes, and the executable is
+`harness-desktop.exe` (the CLI owns `harness.exe`). `.github/workflows/windows-desktop.yml` builds
+and runs the whole suite on x64 and arm64 against `test/windows_known_failures.txt`. Self-update is
+off on Windows until its branch lands (`DesktopUpdater.canCheck`).
+
+Package name is `harness`
 (`import 'package:harness/...'`). It lives under `desktop/` in the `autonomous-harness` repo, beside
 the CLI (`../cli`) and the backend (`../backend`); a few comments still point at `autonomous-code`,
 the older backend checkout, which is a sibling of this repo rather than part of it.
@@ -49,6 +58,7 @@ flutter run -d macos                              # or: flutter run -d linux
 bash scripts/build-macos-debug.sh                  # pins the host's release renderer
 flutter build macos --release
 flutter build linux --release                     # Ubuntu build host only — no cross-compiling
+flutter build windows --release                   # Windows host only
 ```
 
 Native integration fixtures need a device and the test-mode environment:
@@ -271,8 +281,14 @@ The native desktop target uses the CLI for cloud access and SSO tokens:
 
 `lib/core/harness_cli_runner.dart` is how the app finds the CLI without a shell: prefer
 `~/.harness/runtime/current-node` + `~/.harness/cli/cli.js`, then `~/.local/bin/harness`, then PATH.
+On Windows it reads B's layout instead (`lib/core/windows_layout.dart`, the rules of B's own
+readers): `runtime\current-node` + `cli\current` → `cli\<ver>\cli.js`, then `bin\harness.exe`, then a
+`harness.exe` in a PATH folder.
 `lib/bootstrap/environment_provisioner.dart` installs the CLI and tmux (plus, on Linux, the clipboard
-helper) on first run (the `preparingEnvironment` status).
+helper) on first run (the `preparingEnvironment` status). On Windows the steps are the CLI and B's
+terminal host (`EnvironmentStep.tmux` stands for it, `runtime\pty\<ver>\harness-pty.exe`), both from
+one hidden `install.ps1 -Desktop` run (`windowsInstallCommand`), which fails in install.ps1's own
+sentence.
 
 Node is deliberately not the user's: it is a private, sha256-verified runtime under
 `~/.harness/runtime`, never Homebrew, nvm or PATH. **The app does not install it — `install.sh` does**,

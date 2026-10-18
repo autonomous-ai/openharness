@@ -188,6 +188,7 @@ class DesktopUpdater {
   final bool _releaseMode;
   final bool _enabled;
   final bool _isLinux;
+  final bool _isWindows;
   final String _architecture;
   final _checksInFlight = <String?, Future<DesktopUpdateCheck>>{};
 
@@ -202,7 +203,9 @@ class DesktopUpdater {
   /// own self-updater polls on the same order (`cli/src/lib/selfUpdate.ts`).
   static const checkInterval = Duration(minutes: 5);
 
-  bool get canCheck => !kIsWeb && _enabled && _releaseMode;
+  /// Off on Windows until its update branch exists (spec §3.4, C4.5): without one, [_otaKeys]
+  /// falls through to the macOS keys and would offer a Mac build.
+  bool get canCheck => !kIsWeb && !_isWindows && _enabled && _releaseMode;
 
   DesktopUpdater({
     this._enabled = true,
@@ -219,6 +222,10 @@ class DesktopUpdater {
     // (a single downloaded file, no unpacking) from any host, since that branch needs no extra
     // tooling beyond the standard library, unlike ditto/plutil on macOS.
     bool? isLinux,
+    // Defaults to the real host. A caller that names the host through [isLinux] is describing
+    // macOS or Linux, so it is not Windows unless it says so — which keeps every existing test of
+    // the macOS and Linux branches meaningful on a Windows runner.
+    bool? isWindows,
     // Defaults to the running CPU (`arm64`/`x64`): which Linux artifact to fetch, and whether the
     // Apple Silicon macOS build is on offer. Tests override it to exercise every key from any host.
     String? architecture,
@@ -234,6 +241,7 @@ class DesktopUpdater {
        _metadataUrlForInstance = metadataUrl ?? _metadataUrl,
        _releaseMode = releaseMode ?? (kReleaseMode || _forceUpdateChecks),
        _isLinux = isLinux ?? RuntimePlatform.isLinux,
+       _isWindows = isWindows ?? (isLinux == null && RuntimePlatform.isWindows),
        _architecture = architecture ?? _currentArchitecture();
 
   /// The manifest entries this build may install, most preferred first — [_newestEntry] takes the

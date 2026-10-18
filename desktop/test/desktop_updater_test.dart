@@ -274,6 +274,29 @@ void main() {
     );
   });
 
+  test('Windows offers no update until its own branch exists, even in release mode', () async {
+    // Its keys would fall through to the macOS build otherwise (C4.5 adds the Windows branch).
+    final updater = DesktopUpdater(
+      enabled: true,
+      dio: Dio(),
+      metadataUrl: 'http://127.0.0.1:1/metadata.json',
+      releaseMode: true,
+      isWindows: true,
+    );
+    expect(updater.canCheck, isFalse);
+    expect(
+      (await updater.check(currentVersion: '1.0.0')).status,
+      DesktopUpdateCheckStatus.disabled,
+    );
+  });
+
+  test('a caller that names the host with isLinux describes macOS or Linux, not Windows', () {
+    expect(
+      DesktopUpdater(enabled: true, releaseMode: true, isLinux: false).canCheck,
+      isTrue,
+    );
+  });
+
   test('checkOnce returns null when the running version is already current or newer', () async {
     final url = await serveMetadataAndZip(manifestVersion: '1.0.0');
     final updater = DesktopUpdater(

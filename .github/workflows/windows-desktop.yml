@@ -69,6 +69,15 @@ jobs:
           flutter pub get
       - name: Build
         run: flutter build windows --release
+      - name: Check the executable's name and version resource
+        run: |
+          $exe = "build\windows\${{ matrix.arch }}\runner\Release\harness-desktop.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "$exe is missing: BINARY_NAME (windows/CMakeLists.txt) must be harness-desktop" }
+          $info = (Get-Item -LiteralPath $exe).VersionInfo
+          if ($info.FileDescription -ne 'Harness' -or $info.ProductName -ne 'Harness') {
+            throw "FileDescription '$($info.FileDescription)' and ProductName '$($info.ProductName)' must both be Harness"
+          }
+          "OK $exe : $($info.FileDescription), $($info.ProductName) $($info.ProductVersion)"
       - uses: actions/upload-artifact@v4
         with:
           name: harness-desktop-windows-${{ matrix.arch }}
