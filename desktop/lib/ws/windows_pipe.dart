@@ -144,7 +144,9 @@ int openPipeHandle(
   final deadline = now() + busyWaitMs;
   for (;;) {
     final opened = io.create(path);
-    if (opened.error == 0) return opened.handle;
+    if (opened.error == 0 && opened.handle != invalidPipeHandle) {
+      return opened.handle;
+    }
     switch (opened.error) {
       case errorFileNotFound:
         throw PipeAbsent(path);

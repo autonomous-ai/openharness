@@ -68,7 +68,7 @@ class _ObservedIo implements PipeIo {
 PipeIo Function() _observedFactory(SendPort events) =>
     () => _ObservedIo(events);
 
-// Only pipe creation/acceptance is test-specific FFI. Transfers and cancellation
+// Only pipe creation is test-specific FFI. Transfers and cancellation
 // reuse the real production kernel32 adapter on workers, never the UI isolate.
 class _ControlledPipe {
   _ControlledPipe(this.path) {
@@ -110,55 +110,6 @@ class _ControlledPipe {
   late final int handle;
   final operations = <Future<Object?>>[];
   final native = kernel32PipeIo();
-
-  // CreateFileW has already connected the client. This documented ordering
-  // returns ERROR_PIPE_CONNECTED; unexpected pending acceptance is cancelled.
-  Future<void> accepted() {
-    final serverHandle = handle;
-    final operation = Isolate.run(() => _acceptConnected(serverHandle));
-    operations.add(operation);
-    return operation;
-  }
-
-  static void _acceptConnected(int handle) {
-    final kernel = DynamicLibrary.open('kernel32.dll');
-    final connect = kernel
-        .lookupFunction<
-          Int32 Function(IntPtr, Pointer<Void>),
-          int Function(int, Pointer<Void>)
-        >('ConnectNamedPipe', isLeaf: true);
-    final error = kernel.lookupFunction<Uint32 Function(), int Function()>(
-      'GetLastError',
-      isLeaf: true,
-    );
-    final result = kernel
-        .lookupFunction<
-          Int32 Function(IntPtr, Pointer<Void>, Pointer<Uint32>, Int32),
-          int Function(int, Pointer<Void>, Pointer<Uint32>, int)
-        >('GetOverlappedResult');
-    error(); // Warm the binding before the error-producing call, as production does.
-    // An OVERLAPPED pipe needs valid storage even when connection preceded acceptance.
-    final overlapped = calloc<Uint64>(4);
-    try {
-      final ok = connect(handle, overlapped.cast());
-      final code = ok == 0 ? error() : 0;
-      if (code == errorIoPending) {
-        // Unexpected here, but cancellation must complete before storage is freed.
-        final count = calloc<Uint32>();
-        try {
-          kernel32PipeIo().cancel(handle);
-          result(handle, overlapped.cast(), count, 1);
-        } finally {
-          calloc.free(count);
-        }
-      }
-      if (code != 535) {
-        throw StateError('ConnectNamedPipe: $code, expected already connected');
-      }
-    } finally {
-      calloc.free(overlapped);
-    }
-  }
 
   Future<Uint8List> read(int count) {
     final serverHandle = handle;
@@ -210,6 +161,124 @@ class _ControlledPipe {
           native.dispose();
         });
     await finished.timeout(const Duration(seconds: 10));
+  }
+}
+
+// Inspect the private native ABI only here: both operations remain pending while
+// Dart and another OS call run. The regular cases below exercise production PipeIo.
+Future<(int, int)> _pendingErrorsSurviveClobber(String path) async {
+  final dll = DynamicLibrary.open(
+    p.join(p.dirname(Platform.resolvedExecutable), 'harness_pipe_io.dll'),
+  );
+  final open = dll
+      .lookupFunction<
+        IntPtr Function(Pointer<Utf16>, Pointer<Uint32>),
+        int Function(Pointer<Utf16>, Pointer<Uint32>)
+      >('harness_pipe_open_v1');
+  final read = dll
+      .lookupFunction<
+        Int32 Function(
+          IntPtr,
+          Pointer<Uint8>,
+          Uint32,
+          Pointer<Void>,
+          Pointer<Uint32>,
+        ),
+        int Function(int, Pointer<Uint8>, int, Pointer<Void>, Pointer<Uint32>)
+      >('harness_pipe_read_v1');
+  final write = dll
+      .lookupFunction<
+        Int32 Function(
+          IntPtr,
+          Pointer<Uint8>,
+          Uint32,
+          Pointer<Void>,
+          Pointer<Uint32>,
+        ),
+        int Function(int, Pointer<Uint8>, int, Pointer<Void>, Pointer<Uint32>)
+      >('harness_pipe_write_v1');
+  final event = dll
+      .lookupFunction<
+        IntPtr Function(Pointer<Uint32>),
+        int Function(Pointer<Uint32>)
+      >('harness_pipe_create_event_v1');
+  final kernel = DynamicLibrary.open('kernel32.dll');
+  final setError = kernel
+      .lookupFunction<Void Function(Uint32), void Function(int)>(
+        'SetLastError',
+      );
+  final cancel = kernel
+      .lookupFunction<
+        Int32 Function(IntPtr, Pointer<Void>),
+        int Function(int, Pointer<Void>)
+      >('CancelIoEx');
+  final wait = kernel
+      .lookupFunction<Uint32 Function(IntPtr, Uint32), int Function(int, int)>(
+        'WaitForSingleObject',
+      );
+  final close = kernel
+      .lookupFunction<Int32 Function(IntPtr), int Function(int)>('CloseHandle');
+  final error = calloc<Uint32>(2);
+  final name = path.toNativeUtf16(allocator: calloc);
+  final readBuffer = calloc<Uint8>();
+  final writeBuffer = calloc<Uint8>(pipeChunkBytes);
+  final reading = calloc<Uint64>(4);
+  final writing = calloc<Uint64>(4);
+  var handle = invalidPipeHandle;
+  var readEvent = 0;
+  var writeEvent = 0;
+  var readMayBePending = false;
+  var writeMayBePending = false;
+  try {
+    handle = open(name, error);
+    if (handle == invalidPipeHandle) {
+      throw StateError('raw open: ${error.value}');
+    }
+    readEvent = event(error);
+    if (readEvent == 0) throw StateError('raw read event: ${error.value}');
+    writeEvent = event(error);
+    if (writeEvent == 0) throw StateError('raw write event: ${error.value}');
+    reading[3] = readEvent;
+    writing[3] = writeEvent;
+    // No server bytes and no server reads: both first transfers must pend.
+    readMayBePending = read(handle, readBuffer, 1, reading.cast(), error) == 0;
+    writeMayBePending =
+        write(handle, writeBuffer, pipeChunkBytes, writing.cast(), error + 1) ==
+        0;
+    if (!readMayBePending || !writeMayBePending) {
+      throw StateError('first controlled read/write did not pend');
+    }
+    setError(12345);
+    final work = List.generate(100, (i) => i.toString());
+    await Future<void>.delayed(Duration.zero);
+    if (work.last != '99') throw StateError('Dart work failed');
+    return (error[0], error[1]);
+  } finally {
+    if (handle != invalidPipeHandle) cancel(handle, nullptr);
+    // BOOL zero is conservatively treated as potentially pending, even if a
+    // broken bridge returned a wrong error. Never free on an unproved wait.
+    final readSafe = !readMayBePending || wait(readEvent, 10000) == 0;
+    final writeSafe = !writeMayBePending || wait(writeEvent, 10000) == 0;
+    if (readSafe) {
+      if (readEvent != 0) close(readEvent);
+      calloc.free(reading);
+      calloc.free(readBuffer);
+    }
+    if (writeSafe) {
+      if (writeEvent != 0) close(writeEvent);
+      calloc.free(writing);
+      calloc.free(writeBuffer);
+    }
+    if (readSafe && writeSafe) {
+      if (handle != invalidPipeHandle) close(handle);
+    }
+    calloc.free(name);
+    calloc.free(error); // The kernel never owns the error-out slots.
+    if (!readSafe || !writeSafe) {
+      throw StateError(
+        'raw pending completion unproved; native storage retained',
+      );
+    }
   }
 }
 
@@ -462,6 +531,24 @@ void main() {
         );
       });
 
+      test('pending native errors survive OS clobber and Dart work', () async {
+        final random = Random.secure();
+        final id = List.generate(
+          16,
+          (_) => random.nextInt(256),
+        ).map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+        final peer = _ControlledPipe('\\\\.\\pipe\\harness-$id');
+        final path = peer.path;
+        try {
+          final errors = await Isolate.run(
+            () => _pendingErrorsSurviveClobber(path),
+          ).timeout(const Duration(seconds: 30));
+          expect(errors, (997, 997));
+        } finally {
+          await peer.close();
+        }
+      });
+
       for (final cancel in [false, true]) {
         test(
           'first native reads and writes ${cancel ? 'cancel safely while blocked' : 'complete after controlled backpressure'}',
@@ -502,7 +589,6 @@ void main() {
                   firstBytes.complete();
                 }
               });
-              await peer.accepted().timeout(const Duration(seconds: 10));
               await seen('read-enter');
               // No server bytes exist: the client's very first ReadFile is blocked.
               await Future<void>.delayed(const Duration(milliseconds: 100));

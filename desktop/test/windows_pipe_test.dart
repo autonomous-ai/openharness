@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:ffi/ffi.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:harness/ws/windows_pipe.dart';
 
 /// kernel32 as a script: each call takes the next answer for its kind and
@@ -98,6 +101,93 @@ void main() {
     },
     skip: Platform.isWindows ? false : 'kernel32 needs native Windows',
   );
+
+  test('native bridge errors survive subsequent OS and Dart work', () async {
+    final dll = DynamicLibrary.open(
+      Platform.environment['HARNESS_DESKTOP_PIPE_IO_DLL'] ??
+          p.join(p.dirname(Platform.resolvedExecutable), 'harness_pipe_io.dll'),
+    );
+    final open = dll
+        .lookupFunction<
+          IntPtr Function(Pointer<Utf16>, Pointer<Uint32>),
+          int Function(Pointer<Utf16>, Pointer<Uint32>)
+        >('harness_pipe_open_v1');
+    final read = dll
+        .lookupFunction<
+          Int32 Function(
+            IntPtr,
+            Pointer<Uint8>,
+            Uint32,
+            Pointer<Void>,
+            Pointer<Uint32>,
+          ),
+          int Function(int, Pointer<Uint8>, int, Pointer<Void>, Pointer<Uint32>)
+        >('harness_pipe_read_v1');
+    final write = dll
+        .lookupFunction<
+          Int32 Function(
+            IntPtr,
+            Pointer<Uint8>,
+            Uint32,
+            Pointer<Void>,
+            Pointer<Uint32>,
+          ),
+          int Function(int, Pointer<Uint8>, int, Pointer<Void>, Pointer<Uint32>)
+        >('harness_pipe_write_v1');
+    final event = dll
+        .lookupFunction<
+          IntPtr Function(Pointer<Uint32>),
+          int Function(Pointer<Uint32>)
+        >('harness_pipe_create_event_v1');
+    final kernel = DynamicLibrary.open('kernel32.dll');
+    final setError = kernel
+        .lookupFunction<Void Function(Uint32), void Function(int)>(
+          'SetLastError',
+        );
+    final close = kernel
+        .lookupFunction<Int32 Function(IntPtr), int Function(int)>(
+          'CloseHandle',
+        );
+    final error = calloc<Uint32>();
+    final buffer = calloc<Uint8>();
+    final overlapped = calloc<Uint64>(4);
+    final random = Random.secure();
+    final name =
+        (r'\\.\pipe\harness-' +
+                List.generate(
+                  16,
+                  (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+                ).join())
+            .toNativeUtf16(allocator: calloc);
+    Future<void> retained(int expected) async {
+      setError(12345);
+      final work = List.generate(100, (i) => i.toString());
+      await Future<void>.delayed(Duration.zero);
+      expect(work.last, '99');
+      expect(error.value, expected);
+    }
+
+    try {
+      expect(open(name, error), invalidPipeHandle);
+      await retained(errorFileNotFound);
+      expect(read(invalidPipeHandle, buffer, 1, overlapped.cast(), error), 0);
+      await retained(6); // ERROR_INVALID_HANDLE
+      expect(write(invalidPipeHandle, buffer, 1, overlapped.cast(), error), 0);
+      await retained(6);
+      final handle = event(error);
+      expect(handle, isNot(0));
+      try {
+        await retained(0); // Success must clear the output slot explicitly.
+      } finally {
+        if (handle != 0) close(handle);
+      }
+    } finally {
+      calloc.free(name);
+      calloc.free(overlapped);
+      calloc.free(buffer);
+      calloc.free(error);
+    }
+  }, skip: Platform.isWindows ? false : 'native bridge needs Windows');
 
   group('WindowsPipeConnection', () {
     late Directory dir;
@@ -316,6 +406,16 @@ void main() {
       final io = _ScriptedIo(creates: [(handle: 7, error: 0)]);
       expect(openPipeHandle(io, _path, busyWaitMs: 2000), 7);
       expect(io.calls, ['create $_path']);
+    });
+
+    test('rejects an invalid handle even when its error is zero', () {
+      final io = _ScriptedIo(creates: [(handle: invalidPipeHandle, error: 0)]);
+      expect(
+        () => openPipeHandle(io, _path, busyWaitMs: 2000),
+        throwsA(
+          isA<PipeOpenFailed>().having((failure) => failure.code, 'code', 0),
+        ),
+      );
     });
 
     test('waits for a busy pipe, then opens it', () {

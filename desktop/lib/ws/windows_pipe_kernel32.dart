@@ -1,8 +1,10 @@
 import 'dart:ffi';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
+import 'package:path/path.dart' as p;
 
 import 'windows_pipe.dart';
 
@@ -10,15 +12,6 @@ import 'windows_pipe.dart';
 /// has it; elsewhere nothing calls this, and kernel32 is never loaded.
 PipeIo kernel32PipeIo() => _Kernel32PipeIo();
 
-const _genericRead = 0x80000000;
-const _genericWrite = 0x40000000;
-const _openExisting = 3;
-const _fileFlagOverlapped = 0x40000000;
-
-/// The daemon's end may only identify this process, never act as it: a
-/// squatter on a dead daemon's name gets nothing to impersonate.
-const _securitySqosPresent = 0x00100000;
-const _securityIdentification = 0x00010000;
 const _infinite = 0xFFFFFFFF;
 const _waitObject0 = 0;
 
@@ -47,68 +40,89 @@ final class _Overlapped extends Struct {
 
 final _kernel32 = DynamicLibrary.open('kernel32.dll');
 
-// The calls that return at once are leaf calls, and so is GetLastError, made
-// straight after: nothing the VM does can come between them and change the
-// thread's last error. The waits block, so they are not leaf calls, and what a
-// read or a write did is read from the OVERLAPPED the kernel filled in, never
-// from GetLastError after a wait.
-final _createFile = _kernel32
-    .lookupFunction<
-      IntPtr Function(
-        Pointer<Utf16>,
-        Uint32,
-        Uint32,
-        Pointer<Void>,
-        Uint32,
-        Uint32,
-        IntPtr,
-      ),
-      int Function(Pointer<Utf16>, int, int, Pointer<Void>, int, int, int)
-    >('CreateFileW', isLeaf: true);
-final _readFile = _kernel32
-    .lookupFunction<
-      Int32 Function(
-        IntPtr,
-        Pointer<Uint8>,
-        Uint32,
-        Pointer<Uint32>,
-        Pointer<_Overlapped>,
-      ),
-      int Function(
-        int,
-        Pointer<Uint8>,
-        int,
-        Pointer<Uint32>,
-        Pointer<_Overlapped>,
-      )
-    >('ReadFile', isLeaf: true);
-final _writeFile = _kernel32
-    .lookupFunction<
-      Int32 Function(
-        IntPtr,
-        Pointer<Uint8>,
-        Uint32,
-        Pointer<Uint32>,
-        Pointer<_Overlapped>,
-      ),
-      int Function(
-        int,
-        Pointer<Uint8>,
-        int,
-        Pointer<Uint32>,
-        Pointer<_Overlapped>,
-      )
-    >('WriteFile', isLeaf: true);
-final _getLastError = _kernel32
-    .lookupFunction<Uint32 Function(), int Function()>(
-      'GetLastError',
-      isLeaf: true,
-    );
-final _createEvent = _kernel32
-    .lookupFunction<
-      IntPtr Function(Pointer<Void>, Int32, Int32, Pointer<Utf16>),
-      int Function(Pointer<Void>, int, int, Pointer<Utf16>)
-    >('CreateEventW', isLeaf: true);
+// Each operation and its error capture happen inside one native call. Nonleaf
+// transitions may run VM work after return; the caller-owned error slot survives.
+final _bridge = _PipeBridge(_loadBridge());
+
+DynamicLibrary _loadBridge() {
+  final override = Platform.environment['HARNESS_DESKTOP_PIPE_IO_DLL'];
+  if (override != null &&
+      (override.isEmpty || !p.isAbsolute(override) || p.isRootRelative(override))) {
+    throw ArgumentError('HARNESS_DESKTOP_PIPE_IO_DLL must be an absolute path');
+  }
+  return DynamicLibrary.open(
+    override ??
+        p.join(p.dirname(Platform.resolvedExecutable), 'harness_pipe_io.dll'),
+  );
+}
+
+final class _PipeBridge {
+  _PipeBridge(DynamicLibrary dll)
+    : open = dll
+          .lookupFunction<
+            IntPtr Function(Pointer<Utf16>, Pointer<Uint32>),
+            int Function(Pointer<Utf16>, Pointer<Uint32>)
+          >('harness_pipe_open_v1'),
+      read = dll
+          .lookupFunction<
+            Int32 Function(
+              IntPtr,
+              Pointer<Uint8>,
+              Uint32,
+              Pointer<_Overlapped>,
+              Pointer<Uint32>,
+            ),
+            int Function(
+              int,
+              Pointer<Uint8>,
+              int,
+              Pointer<_Overlapped>,
+              Pointer<Uint32>,
+            )
+          >('harness_pipe_read_v1'),
+      write = dll
+          .lookupFunction<
+            Int32 Function(
+              IntPtr,
+              Pointer<Uint8>,
+              Uint32,
+              Pointer<_Overlapped>,
+              Pointer<Uint32>,
+            ),
+            int Function(
+              int,
+              Pointer<Uint8>,
+              int,
+              Pointer<_Overlapped>,
+              Pointer<Uint32>,
+            )
+          >('harness_pipe_write_v1'),
+      event = dll
+          .lookupFunction<
+            IntPtr Function(Pointer<Uint32>),
+            int Function(Pointer<Uint32>)
+          >('harness_pipe_create_event_v1');
+
+  final int Function(Pointer<Utf16>, Pointer<Uint32>) open;
+  final int Function(
+    int,
+    Pointer<Uint8>,
+    int,
+    Pointer<_Overlapped>,
+    Pointer<Uint32>,
+  )
+  read;
+  final int Function(
+    int,
+    Pointer<Uint8>,
+    int,
+    Pointer<_Overlapped>,
+    Pointer<Uint32>,
+  )
+  write;
+  final int Function(Pointer<Uint32>) event;
+}
+
 final _cancelIoEx = _kernel32
     .lookupFunction<
       Int32 Function(IntPtr, Pointer<_Overlapped>),
@@ -132,13 +146,16 @@ final _waitForSingleObject = _kernel32
 final _nothing = Uint8List(0);
 
 final class _Kernel32PipeIo implements PipeIo {
-  _Kernel32PipeIo() {
-    // Top-level bindings are lazy, separately in each isolate. Resolve and
-    // invoke this accessor before any I/O: its first lookup/call setup must
-    // never run between a failing native call and its last-error capture.
-    _getLastError();
+  factory _Kernel32PipeIo() {
+    // Resolve every export before allocating resources or issuing any I/O.
+    final native = _bridge;
+    return _Kernel32PipeIo._(native, calloc<Uint32>());
   }
 
+  _Kernel32PipeIo._(this._native, this._error);
+
+  final _PipeBridge _native;
+  Pointer<Uint32> _error;
   _Operation? _reading;
   _Operation? _writing;
 
@@ -146,19 +163,8 @@ final class _Kernel32PipeIo implements PipeIo {
   ({int handle, int error}) create(String path) {
     final name = path.toNativeUtf16(allocator: calloc);
     try {
-      final handle = _createFile(
-        name,
-        _genericRead | _genericWrite,
-        0, // no sharing
-        nullptr,
-        _openExisting,
-        _fileFlagOverlapped | _securitySqosPresent | _securityIdentification,
-        0,
-      );
-      if (handle == invalidPipeHandle) {
-        return (handle: invalidPipeHandle, error: _getLastError());
-      }
-      return (handle: handle, error: 0);
+      final handle = _native.open(name, _error);
+      return (handle: handle, error: _error.value);
     } finally {
       calloc.free(name);
     }
@@ -176,16 +182,16 @@ final class _Kernel32PipeIo implements PipeIo {
 
   @override
   ({Uint8List bytes, int error}) read(int handle, int max) {
-    final op = _reading ??= _Operation();
+    final op = _reading ??= _Operation(_native, _error);
     op.arm();
-    final ok = _readFile(
+    _native.read(
       handle,
       op.buffer,
       math.min(max, pipeChunkBytes),
-      nullptr,
       op.overlapped,
+      _error,
     );
-    final error = ok == 0 ? _getLastError() : 0;
+    final error = _error.value;
     if (error != 0 && error != errorIoPending && error != errorMoreData) {
       return (bytes: _nothing, error: error);
     }
@@ -203,12 +209,12 @@ final class _Kernel32PipeIo implements PipeIo {
 
   @override
   ({int count, int error}) write(int handle, Uint8List bytes, int offset) {
-    final op = _writing ??= _Operation();
+    final op = _writing ??= _Operation(_native, _error);
     final length = math.min(bytes.length - offset, pipeChunkBytes);
     op.buffer.asTypedList(length).setRange(0, length, bytes, offset);
     op.arm();
-    final ok = _writeFile(handle, op.buffer, length, nullptr, op.overlapped);
-    final error = ok == 0 ? _getLastError() : 0;
+    _native.write(handle, op.buffer, length, op.overlapped, _error);
+    final error = _error.value;
     if (error != 0 && error != errorIoPending) {
       return (count: 0, error: error);
     }
@@ -230,6 +236,10 @@ final class _Kernel32PipeIo implements PipeIo {
     _writing?.free();
     _reading = null;
     _writing = null;
+    if (_error != nullptr) {
+      calloc.free(_error);
+      _error = nullptr;
+    }
   }
 }
 
@@ -246,9 +256,9 @@ int _errorOf(int status) => switch (status) {
 /// One overlapped read or write at a time: its buffer, its OVERLAPPED and the
 /// event the kernel signals when it is done.
 final class _Operation {
-  factory _Operation() {
-    final event = _createEvent(nullptr, 1, 0, nullptr);
-    if (event == 0) throw PipeIoFailed(_getLastError());
+  factory _Operation(_PipeBridge native, Pointer<Uint32> error) {
+    final event = native.event(error);
+    if (event == 0) throw PipeIoFailed(error.value);
     Pointer<Uint8> buffer = nullptr;
     try {
       buffer = calloc<Uint8>(pipeChunkBytes);

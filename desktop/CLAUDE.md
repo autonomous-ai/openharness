@@ -61,6 +61,13 @@ flutter build linux --release                     # Ubuntu build host only — n
 flutter build windows --release                   # Windows host only
 ```
 
+Windows pipe unit tests need the native bridge built first (`flutter build windows --release`).
+In PowerShell, set `$env:HARNESS_DESKTOP_PIPE_IO_DLL = (Resolve-Path
+'build/windows/<arch>/runner/Release/harness_pipe_io.dll').Path` before `flutter test --no-pub`
+(`<arch>` is `x64` or `arm64`). Unit tests run in the SDK's flutter_tester, outside the app bundle.
+For `flutter run` and native integration, remove that override: each app build loads the DLL beside
+its executable, including Debug. The Windows workflow checks both paths.
+
 Native integration fixtures need a device and the test-mode environment:
 
 ```bash

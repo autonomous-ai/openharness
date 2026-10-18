@@ -73,6 +73,8 @@ jobs:
         run: |
           $exe = "build\windows\${{ matrix.arch }}\runner\Release\harness-desktop.exe"
           if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "$exe is missing: BINARY_NAME (windows/CMakeLists.txt) must be harness-desktop" }
+          $dll = "build\windows\${{ matrix.arch }}\runner\Release\harness_pipe_io.dll"
+          if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) { throw "$dll is missing" }
           $info = (Get-Item -LiteralPath $exe).VersionInfo
           if ($info.FileDescription -ne 'Harness' -or $info.ProductName -ne 'Harness') {
             throw "FileDescription '$($info.FileDescription)' and ProductName '$($info.ProductName)' must both be Harness"
@@ -87,6 +89,8 @@ jobs:
         env:
           HARNESS_TEST_NODE: ${{ steps.node.outputs.path }}
         run: |
+          # flutter_tester.exe lives in the SDK, outside the app bundle.
+          $env:HARNESS_DESKTOP_PIPE_IO_DLL = (Resolve-Path -LiteralPath "build\windows\${{ matrix.arch }}\runner\Release\harness_pipe_io.dll" -ErrorAction Stop).Path
           $results = Join-Path $env:RUNNER_TEMP 'flutter-test.json'
           flutter test --no-pub --file-reporter "json:$results"
           python tool/windows_test_baseline.py check --results $results --baseline test/windows_known_failures.txt
@@ -106,4 +110,7 @@ jobs:
         env:
           # kUnderTest: no pollers, no persistence, no real ~/.harness.
           FLUTTER_TEST: '1'
-        run: flutter test --no-pub -d windows integration_test/windows_pipe_test.dart
+        run: |
+          # Exercise Debug's executable-relative DLL loader, not the unit override.
+          Remove-Item Env:HARNESS_DESKTOP_PIPE_IO_DLL -ErrorAction SilentlyContinue
+          flutter test --no-pub -d windows integration_test/windows_pipe_test.dart
