@@ -555,3 +555,40 @@ Same shape as macOS (see above), with the platform-specific pieces:
 
 Same conventions as macOS — publish to a scratch `METADATA_PATH` first, and roll back only by
 publishing a newer version containing the older code (see above).
+
+## Windows (staging)
+
+`scripts/package-windows.ps1` packages the complete Flutter Release bundle in the per-user install shape:
+`Harness.exe` (the `harness-desktop-launcher` binary), `Harness.ico`, `current`, and
+`app\<version>\` with `harness-desktop.exe`, `harness_pipe_io.dll`, the other runtime DLLs and `data\`.
+The app's first-frame `.started` marker is excluded. `Harness.exe --install` installs from this
+zip, and the Windows updater consumes the same layout. The version comes from the app EXE's
+`ProductVersion` resource, stamped by `flutter build windows --build-name <version>`; Windows
+does not use a `version.txt` file.
+
+The Windows desktop workflow has a release mode that builds both x64 and arm64 staging zips on
+their own runners. It passes `--dart-define=HARNESS_STAGING=true`, so the installed app reads the
+staging desktop manifest and installs the staging CLI. `dry_run` defaults to true. Its artifact
+contains **proposed Windows manifest entries**, computed without reading or writing the bucket;
+it does not describe the live manifest's unrelated keys. A live staging publication requires the
+owner's explicit approval, then merges the two keys into the observed staging manifest generation:
+
+```bash
+# After the workflow is available on main, and only after approval for this staging publish:
+gh workflow run windows-desktop.yml -f release=true -f version=<version> -f dry_run=false
+```
+
+Until then, the temporary branch push trigger recognizes a head-commit subject of
+`ci(windows): desktop staging release <version>` for an approved staging publish, or
+`ci(windows): desktop staging dry run <version>` for a no-upload run.
+
+```
+gs://s3-autonomous-upgrade-3/harness/staging/desktop/metadata.json
+gs://s3-autonomous-upgrade-3/harness/staging/desktop/<version>/harness-desktop-<version>-windows-x64.zip
+gs://s3-autonomous-upgrade-3/harness/staging/desktop/<version>/harness-desktop-<version>-windows-arm64.zip
+```
+
+The publisher validates both complete zips before upload, creates each versioned object only
+when absent, reads the uploaded bytes back, and conditionally writes the manifest so another
+publisher's change cannot be lost. If a publish stops after uploading an object, that version is
+spent: inspect staging and use a new version. Production publication and signing are separate.

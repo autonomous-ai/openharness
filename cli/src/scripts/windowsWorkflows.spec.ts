@@ -41,4 +41,29 @@ describe('the Windows release workflows', () => {
     // Carried B1.11: a 404 failed as "served bytes differ"; it now says what the fetch answered.
     expect(node).toMatch(/if \(!response\.ok\) throw new Error\(`\$\{key\}: GET \$\{entry\.url\} -> \$\{response\.status\}`\)/)
   })
+
+  it('keeps the Windows desktop test matrix and adds a staging-only release mode with native package proof', () => {
+    const desktop = read('windows-desktop.yml')
+    expect(desktop).toMatch(/workflow_dispatch:\n\s+inputs:\n[\s\S]*?\s+release:\n/)
+    expect(desktop).toMatch(/\n  mode:\n/)
+    expect(desktop).toMatch(/\n  build-test:\n    needs: mode\n    if: \$\{\{ needs\.mode\.outputs\.release != 'true' \}\}\n/)
+    expect(desktop).toMatch(/\n  release-build:\n    needs: mode\n    if: \$\{\{ needs\.mode\.outputs\.release == 'true' \}\}\n/)
+    expect(desktop).toMatch(/\n  release-staging:\n    needs: \[mode, release-build\]\n/)
+    expect(desktop).toContain('cancel-in-progress: "${{ !(inputs.release || startsWith(')
+    expect(desktop).toContain('C4.7 package smoke')
+    expect(desktop).toContain('pwsh desktop/scripts/package-windows.ps1')
+    expect(desktop).toContain('tar.exe')
+    expect(desktop).toContain('harness_pipe_io.dll')
+    expect(desktop).toContain('--build-name ${{ env.VERSION }}')
+    expect(desktop).toContain('--dart-define=HARNESS_STAGING=true')
+    expect(desktop).not.toContain('HARNESS_INSTALL_PS1_URL')
+    expect(desktop).not.toContain('DESKTOP_UPDATE_METADATA_URL=')
+    expect(desktop).toContain('bash desktop/scripts/publish-desktop-windows-staging.sh')
+    expect(desktop).toContain('DRY_RUN=1 DRY_RUN_OUT=.dry-run bash desktop/scripts/publish-desktop-windows-staging.sh')
+    expect(desktop).toContain('STAGING_PREFIX: harness/staging')
+    expect(desktop).not.toMatch(/harness\/desktop\/metadata\.json/)
+    for (const existing of ['cargo test --locked --lib desktop', 'desktop_install', 'flutter test --no-pub', 'windows_test_baseline.py', 'windows_pipe_test.dart', 'windows_runner_test.dart']) {
+      expect(desktop).toContain(existing)
+    }
+  })
 })
