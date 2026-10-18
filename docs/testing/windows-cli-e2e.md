@@ -39,7 +39,7 @@ No merge or publication.
 | 3 | Update to N+1 with a terminal and Claude Code running: both survive | **Pass** (Claude Code not signed in, carries) | update 23 s after the offer; 08:40–08:45 |
 | 4 | Canary-failing N+2 never used; N+3 failing on probation rolled back | **Pass** | rollback 32 s after the offer; 08:45–08:50 |
 | 5 | Claude Code, Codex, OpenCode and Kilo hooks report to the Mac desktop (remote) | **Partial**: Kilo bound and seen from the Mac; Claude Code and Codex not verified (not signed in); OpenCode refused on Arm; desktop tiles not driven | 08:50–08:53 |
-| 6 | Another local user: no file readable, no trusted call accepted | **Pass** for files, pipes and the trusted loopback call (after fix `6617af96c` to the check); see S1 | 08:53–08:57 |
+| 6 | Another local user: no file readable, no trusted call accepted | Files and named pipes: **Pass** (after fix `6617af96c` to the check). Loopback TCP: see the note under Scenario 6, out of scope for this run | 08:53–08:57 |
 | 7 | Uninstall: no task, no PATH entry, no files, no process, no hook; --keep-data keeps the data; a half install repaired, then uninstalled | **Pass**, with G2 (engine harnesses refused to stop over SSH) | 08:59–09:13 |
 | RF4 | Reinstall over a live install: one restart onto the new build, agents keep running; the same version restarts nothing | **Pass** | run 1 24 s; 08:57–08:59 |
 | — | Uninstall on macOS (launchd, or no service when a Harness job is loaded) and Linux | **Pass** after fix `dbeca9ff8` (macOS: no service; Linux: container with an init). The launchd half ran once and is unsafe in a throwaway home (G7) | 09:13–09:25 |
@@ -67,6 +67,11 @@ No merge or publication.
 8. Sign-in for scenario 5: `approve-qr.mts hxe2e@192.168.65.3` (prod), machine `7e92c45a…`, deleted at the end.
 9. Warm reboots hang this VM in UTM's firmware ("Start boot option"); every reboot after the first was
    `shutdown /s` and `utmctl start Windows`.
+10. macOS uninstall. **Do not** run the launchd/service half (`harness service install`) on a developer's real Mac
+    account, even with `HOME` pointed at a throwaway folder: launchd gives the job the account's real `HOME`, and that
+    daemon works on the person's real `~/.harness` and engine settings (G7, what run 1 did). Safe recipe: in the
+    throwaway `HOME`, run `harness start` (no service), as run 2 did. To test launchd itself, use a separate macOS user
+    or a macOS VM, or load a hand-made plist whose `EnvironmentVariables` set `HOME` to the throwaway home.
 
 ## Scenario results
 
@@ -191,7 +196,6 @@ Trust ([`s6-other-user.log`](../../cli/scripts/windows-cli-e2e/evidence/s6-other
 - pipes hxe2e2 could list: `harness-41b22efa…` (hxe2e's daemon), `harness-pty-bddfac6e…`, `harness-claim-6ae5b773…`:
   each `error EPERM` (cannot open), with and without a forged proof; hxe2e2's own pipes answered `401
   PIPE_AUTH_REQUIRED` or reset;
-- loopback `POST /api/auth/handoff`: `403 {"error":"FORBIDDEN"}`;
 - hxe2e's own `harness status` through its pipe: `● running · backend connected`.
 
 hxe2e2's uninstall over SSH: every step, then `✗ Harness is only partly uninstalled: · Windows did not start the step
@@ -201,8 +205,7 @@ Terminal hosts by pid and start: before `5028 18:40:04.889 hxe2e`, `7076 18:54:3
 `5028 18:40:04.889 hxe2e`. Run again from a batch logon: `Harness is uninstalled.`, exit 0 in 2.1 s;
 `check-uninstall`: `clean`. hxe2e's daemon (pid 6100) still ran and its task was still registered.
 
-S1 (security note, out of scope; B5.8's finding, unchanged): asked whether another local user can use hxe2e's daemon
-over loopback TCP: yes, when it knows the machine id. Reported to the owner; details are kept out of this repository.
+Note: a security observation from S6 was reported to the maintainers; details are not kept here.
 
 ### Reinstall over a live install
 
@@ -270,7 +273,8 @@ Fixed in `dbeca9ff8`. Run 2 ([`mac-run-2.log`](../../cli/scripts/windows-cli-e2e
 service (`harness start` inside the throwaway home) and the fix: `✓ stopped 1 harness`, `✓ stopped the Harness daemon
 (pid 75875)`, every hook file, `~/.local/bin/harness` and `hn`, the `~/.zshrc` line, `✓ removed ~/.harness`,
 `Harness is uninstalled.`, exit 0 in 1 s. No `~/.harness`, `~/.local/bin` empty, no installer line, no LaunchAgents,
-no process. The real daemon was not stopped or restarted by either run.
+no process. The real daemon was not stopped or restarted by either run. **Do not** repeat run 1 on a developer's
+Mac: use the no-service recipe (Setup recipe, step 10), a separate macOS user or a VM.
 
 **Linux** (Ubuntu 24.04 container, user `hx`). `install.sh` needs tmux and the user has no sudo, so tmux was installed
 as root first ([`linux-install.log`](../../cli/scripts/windows-cli-e2e/evidence/linux-install.log)). Run 1, a container
@@ -325,7 +329,8 @@ Each is its own commit with a test that fails without it.
   help text names containers as a supported place to run.
 - **G7. `harness service install` under another HOME starts a daemon on the real home (macOS).** The plist carries
   `CARRIED_ENV` but not `HOME`, and launchd gives the job the account's home. A person's HOME is the account's, so this
-  matters for tests (the brief's Step 10 launchd half), not for users. That half must not run on a developer's Mac.
+  matters for tests (the brief's Step 10 launchd half), not for users. That half must not run on a developer's Mac;
+  Setup recipe step 10 gives the safe way.
 - **G8. Minor copy.** The installer's closing guide says `harness login # 1. sign in` on a machine already signed in;
   `net user … /add` with a password over 14 characters fails over SSH with `No valid response was provided`.
 
