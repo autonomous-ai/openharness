@@ -372,12 +372,12 @@ describe('scheduleFinalRemoval', () => {
     expect(scheduleFinalRemoval(plan, deps({ powershell: refused }).base)).toEqual({
       ok: false,
       reason: 'Windows did not start the step that removes Harness\'s files once this command has ended.',
-      manual: 'Windows does not let a standard user signed in over SSH start it; run harness uninstall at the desktop, or delete C:\\U\\.harness yourself.',
+      manual: 'Windows refused to start it, as it does for a standard user signed in over SSH; run harness uninstall at the desktop, or delete C:\\U\\.harness yourself.',
       detail: 'Access denied',
     })
     const keep = { root: 'C:\\U\\.harness', removeRoot: false, kept: ['auth'], remove: [{ path: 'C:\\U\\.harness\\bin', dir: true }] }
     expect(scheduleFinalRemoval(keep, deps({ powershell: refused }).base)).toMatchObject({
-      manual: 'Windows does not let a standard user signed in over SSH start it; run harness uninstall at the desktop, or delete these yourself:\n  C:\\U\\.harness\\bin',
+      manual: 'Windows refused to start it, as it does for a standard user signed in over SSH; run harness uninstall at the desktop, or delete these yourself:\n  C:\\U\\.harness\\bin',
     })
   })
 

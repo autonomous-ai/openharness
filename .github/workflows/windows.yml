@@ -227,7 +227,7 @@ jobs:
           # install.ps1 does not start the daemon itself: a task Task Scheduler would not run leaves it down, and the
           # installer says to run `harness start` (B1.8). That starts it directly through harness-launch.exe (B3.15).
           $harness = "$env:USERPROFILE\.harness\bin\harness.exe"
-          # The status row (check-install.ps1 says why): the block's last line says "running in background" even when stopped.
+          # The status row is what states the daemon's state (check-install.ps1 says why; before d127faded the footer misled).
           if (((& $harness status) -join "`n") -notmatch '(?m)^\s*status\s+\S+\s+running') {
             Write-Host '::notice::the scheduled task did not start harnessd here; starting it with harness start'
             & $harness start

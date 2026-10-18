@@ -24,9 +24,9 @@ $onPath = @($raw -split ';' | Where-Object { [Environment]::ExpandEnvironmentVar
 if ($onPath.Count -ne 1) { Fail "the user PATH names $bin $($onPath.Count) times: $raw" }
 Write-Host "ok   PATH has $bin"
 
-# The status row, not the word anywhere: the block ends with "running in background - stop with: harness stop" even when
-# the daemon is stopped (seen on the VM), and Windows PowerShell reads the row's dot in its console code page, as three
-# other characters. (This file stays ASCII: Windows PowerShell reads a .ps1 without a BOM in the ANSI code page.)
+# The status row, not the word anywhere: it is what states the daemon's state (the footer said "running in background"
+# even when stopped until d127faded, seen on the VM), and Windows PowerShell reads the row's dot in its console code page,
+# as three other characters. (This file stays ASCII: Windows PowerShell reads a .ps1 without a BOM in the ANSI code page.)
 $running = '(?m)^\s*status\s+\S+\s+running'
 $deadline = (Get-Date).AddSeconds(90)
 do { $status = (& $harness status) -join "`n"; if ($status -match $running) { break }; Start-Sleep 2 } while ((Get-Date) -lt $deadline)
@@ -37,12 +37,17 @@ New-Item -ItemType Directory -Force $Project | Out-Null
 $created = (& $harness new terminal $Project --json) -join "`n" | ConvertFrom-Json
 if (-not $created.ok -or -not $created.agent.id) { Fail "harness new terminal answered: $($created | ConvertTo-Json -Compress)" }
 $deadline = (Get-Date).AddSeconds(30)
-do { $hosts = @(Get-CimInstance Win32_Process -Filter "Name='harness-pty.exe'"); if ($hosts.Count) { break }; Start-Sleep 1 } while ((Get-Date) -lt $deadline)
+# WMI gives the parent pids the shell check needs; a standard user signed in over SSH is refused it, which is a FAIL here.
+function Processes([string]$filter) {
+  try { if ($filter) { @(Get-CimInstance Win32_Process -Filter $filter) } else { @(Get-CimInstance Win32_Process) } }
+  catch { Fail "could not list processes through WMI ($($_.Exception.Message)); run this at the desktop or as a batch logon" }
+}
+do { $hosts = Processes "Name='harness-pty.exe'"; if ($hosts.Count) { break }; Start-Sleep 1 } while ((Get-Date) -lt $deadline)
 if (-not $hosts.Count) { Fail 'no harness-pty.exe runs after creating a terminal' }
 # The PowerShell the terminal runs, a child of the host: what the install promises, so none is a failure.
 $deadline = (Get-Date).AddSeconds(30)
 do {
-  $shells = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(powershell|pwsh)\.exe$' -and $_.ParentProcessId -in $hosts.ProcessId })
+  $shells = @(Processes '' | Where-Object { $_.Name -match '^(powershell|pwsh)\.exe$' -and $_.ParentProcessId -in $hosts.ProcessId })
   if ($shells.Count) { break }; Start-Sleep 1
 } while ((Get-Date) -lt $deadline)
 if (-not $shells.Count) { Fail "no PowerShell runs under harness-pty.exe (pid $($hosts.ProcessId -join ', ')) 30 s after creating terminal $($created.agent.id)" }

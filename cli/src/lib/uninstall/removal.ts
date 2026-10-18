@@ -367,7 +367,7 @@ const wmiRefused = (detail: string): boolean => /access (is )?denied|0x80041003/
 
 /** The manual line when WMI refused: why, the way that works, and what to delete otherwise. */
 function overSsh(plan: RemovalPlan): string {
-  const why = 'Windows does not let a standard user signed in over SSH start it; run harness uninstall at the desktop, or'
+  const why = 'Windows refused to start it, as it does for a standard user signed in over SSH; run harness uninstall at the desktop, or'
   return plan.removeRoot ? `${why} delete ${plan.root} yourself.` : `${why} delete these yourself:${plan.remove.map((t) => `\n  ${t.path}`).join('')}`
 }
 
