@@ -10,26 +10,39 @@ const destination = process.argv[2]
 if (!destination) { console.error('usage: approve-qr.mts <user@host>'); process.exit(2) }
 const child = spawn('ssh', ['-o', 'BatchMode=yes', destination, 'harness login --qr --json'], { stdio: ['pipe', 'pipe', 'inherit'] })
 let result: Record<string, unknown> | null = null
-for await (const text of createInterface({ input: child.stdout! })) {
-  console.log(text)
-  let event: Record<string, unknown>
-  try { event = JSON.parse(text) } catch { continue }
-  if (event.type === 'qr' && typeof event.url === 'string') {
-    const code = decodeURIComponent(new URL(event.url).hash.replace(/^#k=/, ''))
-    const { headers } = await controlPlaneAuth()
-    console.log(`approved: ${JSON.stringify(await postJson('/api/auth/qr/approve', { code }, headers))}`)
+try {
+  for await (const text of createInterface({ input: child.stdout! })) {
+    console.log(text)
+    let event: Record<string, unknown>
+    try { event = JSON.parse(text) } catch { continue }
+    if (event.type === 'qr' && typeof event.url === 'string') {
+      const code = decodeURIComponent(new URL(event.url).hash.replace(/^#k=/, ''))
+      const { headers } = await controlPlaneAuth()
+      console.log(`approved: ${JSON.stringify(await postJson('/api/auth/qr/approve', { code }, headers))}`)
+    }
+    if (event.type === 'confirm') child.stdin!.write('yes\n')
+    if (event.type === 'result') { result = event; break }
   }
-  if (event.type === 'confirm') child.stdin!.write('yes\n')
-  if (event.type === 'result') { result = event; break }
+} finally {
+  child.stdin!.end()
+  // In a finally, so a failed approval or a dropped connection still says what to clean up: an approved code can have
+  // registered a machine on the account even when the sign-in did not finish.
+  const ok = result?.status === 'ok' || result?.status === 'success'
+  const id = machineIdOn(destination)
+  if (ok && id) console.log(`machine registered: ${id}; remove it after the run: harness machines delete ${id} --yes`)
+  else console.log(`the sign-in ${ok ? 'finished' : `did not finish (${String(result?.status ?? 'no result')})`}${id ? `; ${destination} names machine ${id}` : ''}: check \`harness machines\` for a machine this run registered, and remove it with harness machines delete <id> --yes`)
+  process.exitCode = ok ? 0 : 1
 }
-child.stdin!.end()
-const ok = result?.status === 'ok' || result?.status === 'success'
-if (ok) {
+
+/** The machine id in the Windows user's session.json, or '' when it cannot be read. Best effort: it never throws. */
+function machineIdOn(where: string): string {
   // Only the machine id leaves session.json, never its tokens. PowerShell by -EncodedCommand keeps the VM's cmd shell
   // out of the quoting.
   const ps = "(Get-Content -Raw (Join-Path $env:USERPROFILE '.harness\\auth\\session.json') | ConvertFrom-Json).machineId"
   const encoded = Buffer.from(ps, 'utf16le').toString('base64')
-  const id = execFileSync('ssh', ['-o', 'BatchMode=yes', destination, `powershell -NoProfile -EncodedCommand ${encoded}`], { encoding: 'utf8' }).trim()
-  console.log(`machine registered: ${id || '(unknown: read it from harness machines)'}; remove it after the run: harness machines delete ${id || '<id>'} --yes`)
+  try {
+    return execFileSync('ssh', ['-o', 'BatchMode=yes', where, `powershell -NoProfile -EncodedCommand ${encoded}`], { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    return ''
+  }
 }
-process.exitCode = ok ? 0 : 1
