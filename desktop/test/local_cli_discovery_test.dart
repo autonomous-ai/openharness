@@ -625,17 +625,21 @@ void main() {
 
   test('startSupervising holds a spawn outside the slot and takes it on the first tick inside', () async {
     const computerId = '0123456789abcdef0123456789abcdef';
-    final identityFile = File('${scratch.path}/computer-id')
-      ..writeAsStringSync(computerId);
-    final port = await freePort();
+    var running = false;
     var spawnCount = 0;
     var slotOpen = false;
-    final discovery = discoveryFor(
-      port,
-      identityFile,
+    final discovery = _SupervisionProbe(
+      readProbe: () async => running
+          ? LocalCliProbe.ready(LocalCliEndpoint(
+              computerId: computerId,
+              wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
+              protocolVersion: localWsProtocolVersion,
+              terminalProtocolVersion: localTerminalProtocolVersion,
+            ))
+          : const LocalCliProbe.down('fixture daemon is down'),
       spawnCommand: () async {
         spawnCount++;
-        server = await serveStatus(port, () => readyStatus(computerId));
+        running = true;
       },
     );
 
@@ -656,25 +660,26 @@ void main() {
     slotOpen = true;
     await Future.delayed(const Duration(milliseconds: 60));
     expect(spawnCount, 1);
-    expect(server, isNotNull);
+    expect(running, isTrue);
   });
 
   test('startSupervising spawns harness start while down, and stops once discovery succeeds', () async {
     const computerId = '0123456789abcdef0123456789abcdef';
-    final identityFile = File('${scratch.path}/computer-id')
-      ..writeAsStringSync(computerId);
-    final port = await freePort();
+    var running = false;
     var spawnCount = 0;
     final readies = <LocalCliEndpoint>[];
-    final discovery = discoveryFor(
-      port,
-      identityFile,
+    final discovery = _SupervisionProbe(
+      readProbe: () async => running
+          ? LocalCliProbe.ready(LocalCliEndpoint(
+              computerId: computerId,
+              wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
+              protocolVersion: localWsProtocolVersion,
+              terminalProtocolVersion: localTerminalProtocolVersion,
+            ))
+          : const LocalCliProbe.down('fixture daemon is down'),
       spawnCommand: () async {
         spawnCount++;
-        server = await serveStatus(
-          port,
-          () => readyStatus(computerId),
-        ); // simulate `harness start` succeeding
+        running = true; // simulate `harness start` succeeding
       },
     );
 
@@ -690,7 +695,7 @@ void main() {
 
     await Future.delayed(const Duration(milliseconds: 120));
     expect(spawnCount, 1);
-    expect(server, isNotNull);
+    expect(running, isTrue);
 
     // Discovery now succeeds on every tick — no further spawn should ever happen, and the
     // transition into ready was reported exactly once.
@@ -729,18 +734,9 @@ void main() {
   test(
     'startSupervising never spawns over a daemon that answers but is not ready',
     () async {
-      const computerId = '0123456789abcdef0123456789abcdef';
-      final identityFile = File('${scratch.path}/computer-id')
-        ..writeAsStringSync(computerId);
-      // The state a daemon sits in for the length of its startup scan.
-      server = await serveStatus(
-        0,
-        () => readyStatus(computerId, extra: {'discoveryReady': false}),
-      );
       var spawnCount = 0;
-      final discovery = discoveryFor(
-        server!.port,
-        identityFile,
+      final discovery = _SupervisionProbe(
+        readProbe: () async => const LocalCliProbe.notReady('startup scan'),
         spawnCommand: () async {
           spawnCount++;
         },
@@ -834,22 +830,9 @@ void main() {
   });
 
   test('startSupervising backs off between failed spawn attempts instead of spawning every tick', () async {
-    const computerId = '0123456789abcdef0123456789abcdef';
-    final identityFile = File('${scratch.path}/computer-id')
-      ..writeAsStringSync(computerId);
-    // A port nothing listens on — every discover() fails fast (connection refused), so the daemon
-    // never comes up no matter how many times spawnCommand "runs" it.
-    final probe = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final closedPort = probe.port;
-    await probe.close(force: true);
-
     var spawnCount = 0;
-    final discovery = LocalCliDiscovery(
-      config: AppConfig(
-        apiBaseUrl: 'https://harness-api.autonomous.ai',
-        localCliBaseUrl: 'http://127.0.0.1:$closedPort',
-      ),
-      identity: LocalMachineIdentity(computerIdFile: identityFile),
+    final discovery = _SupervisionProbe(
+      readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
       spawnCommand: () async {
         spawnCount++;
       },
@@ -876,21 +859,10 @@ void main() {
   test(
     'startSupervising keeps the guest daemon alive after sign-out',
     () async {
-      const computerId = '0123456789abcdef0123456789abcdef';
-      final identityFile = File('${scratch.path}/computer-id')
-        ..writeAsStringSync(computerId);
-      final probe = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      final closedPort = probe.port;
-      await probe.close(force: true);
-
       var spawnCount = 0;
       var signedOutCalls = 0;
-      final discovery = LocalCliDiscovery(
-        config: AppConfig(
-          apiBaseUrl: 'https://harness-api.autonomous.ai',
-          localCliBaseUrl: 'http://127.0.0.1:$closedPort',
-        ),
-        identity: LocalMachineIdentity(computerIdFile: identityFile),
+      final discovery = _SupervisionProbe(
+        readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async {
           spawnCount++;
         },
@@ -927,21 +899,10 @@ void main() {
   test(
     'startSupervising keeps respawning while the CLI is still signed in',
     () async {
-      const computerId = '0123456789abcdef0123456789abcdef';
-      final identityFile = File('${scratch.path}/computer-id')
-        ..writeAsStringSync(computerId);
-      final probe = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      final closedPort = probe.port;
-      await probe.close(force: true);
-
       var spawnCount = 0;
       var signedOutCalls = 0;
-      final discovery = LocalCliDiscovery(
-        config: AppConfig(
-          apiBaseUrl: 'https://harness-api.autonomous.ai',
-          localCliBaseUrl: 'http://127.0.0.1:$closedPort',
-        ),
-        identity: LocalMachineIdentity(computerIdFile: identityFile),
+      final discovery = _SupervisionProbe(
+        readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async {
           spawnCount++;
         },
@@ -981,21 +942,10 @@ void main() {
     ('never answers', () => Completer<bool>().future),
   ]) {
     test('startSupervising still respawns when the auth check $name', () async {
-      const computerId = '0123456789abcdef0123456789abcdef';
-      final identityFile = File('${scratch.path}/computer-id')
-        ..writeAsStringSync(computerId);
-      final probe = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      final closedPort = probe.port;
-      await probe.close(force: true);
-
       var spawnCount = 0;
       var signedOutCalls = 0;
-      final discovery = LocalCliDiscovery(
-        config: AppConfig(
-          apiBaseUrl: 'https://harness-api.autonomous.ai',
-          localCliBaseUrl: 'http://127.0.0.1:$closedPort',
-        ),
-        identity: LocalMachineIdentity(computerIdFile: identityFile),
+      final discovery = _SupervisionProbe(
+        readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async {
           spawnCount++;
         },
@@ -1024,22 +974,11 @@ void main() {
   }
 
   test('startSupervising spawns without waiting for a slow auth check, and still reports its sign-out', () async {
-    const computerId = '0123456789abcdef0123456789abcdef';
-    final identityFile = File('${scratch.path}/computer-id')
-      ..writeAsStringSync(computerId);
-    final probe = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final closedPort = probe.port;
-    await probe.close(force: true);
-
     var spawnCount = 0;
     var signedOutCalls = 0;
     final answer = Completer<bool>();
-    final discovery = LocalCliDiscovery(
-      config: AppConfig(
-        apiBaseUrl: 'https://harness-api.autonomous.ai',
-        localCliBaseUrl: 'http://127.0.0.1:$closedPort',
-      ),
-      identity: LocalMachineIdentity(computerIdFile: identityFile),
+    final discovery = _SupervisionProbe(
+      readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
       spawnCommand: () async {
         spawnCount++;
       },

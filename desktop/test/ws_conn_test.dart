@@ -508,12 +508,15 @@ void main() {
   test(
     'a fixed reconnect delay retries at that pace instead of backing off',
     () async {
-      // Nobody on the port: each attempt is refused at once. With the backoff the second attempt is
-      // 2s out and the third 4s; with a flat delay they come every tick — the policy the socket to
-      // this computer's own daemon uses, so a restarted daemon is found within a second.
-      final free = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-      final port = free.port;
-      await free.close();
+      // Reject the handshake immediately: a closed TCP port's refusal latency
+      // varies by OS. Backoff puts the second attempt 2s out, whereas the flat
+      // delay retries each tick after a failed connection.
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      hub = FakeHub._(server, false, null);
+      server.listen((request) async {
+        request.response.statusCode = HttpStatus.serviceUnavailable;
+        await request.response.close();
+      });
       var reconnecting = 0;
       conn = WsConn(
         wsBaseUrl: 'wss://unused.example',
@@ -526,7 +529,7 @@ void main() {
           if (status == ConnectionStatus.reconnecting) reconnecting++;
         },
         transportKind: WsTransportKind.localPlaintext,
-        localWsUri: Uri.parse('ws://127.0.0.1:$port/api/local-ws'),
+        localWsUri: Uri.parse('ws://127.0.0.1:${server.port}/api/local-ws'),
         fixedReconnectDelay: const Duration(milliseconds: 100),
       );
       await conn!.connect();
