@@ -96,3 +96,14 @@ jobs:
           name: windows-desktop-tests-${{ matrix.arch }}
           path: ${{ runner.temp }}/flutter-test.json
           if-no-files-found: warn
+      # C2.4: the app's kernel32 pipe client against the daemon's own pipe code
+      # (cli/scripts/windows-pipe-test-server.ts), under a throwaway data folder and port.
+      - name: CLI install, for the pipe test's stand-in daemon
+        working-directory: cli
+        run: npm ci
+      - name: Trusted pipe against a real daemon pipe
+        working-directory: desktop
+        env:
+          # kUnderTest: no pollers, no persistence, no real ~/.harness.
+          FLUTTER_TEST: '1'
+        run: flutter test --no-pub -d windows integration_test/windows_pipe_test.dart

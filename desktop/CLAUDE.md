@@ -275,6 +275,19 @@ The native desktop target uses the CLI for cloud access and SSO tokens:
   socket file exists, so a daemon restart does not strand the app on TCP. Windows and paths over 96
   bytes have no socket. The CLI, engine hooks and the dashboard stay on TCP. Under `flutter test`
   `LocalDaemonTransport.detect` finds no socket, so tests never reach a real daemon.
+- **On Windows the trusted routes go over the daemon's pipe** (`ws/trusted_pipe.dart`, B's §2):
+  `POST /api/auth/handoff`, and this computer's window connection (`WsConn.trustedLocal`), where
+  the daemon takes its `daemon_*` frames. Everything else stays on loopback TCP, relayed machines'
+  connections included. Reaching a Windows pipe is no trust: the app reads the pipe's name from
+  `daemon-<port>.json` and the token from `daemon-token` for every request (`ws/daemon_pipe_record.dart`),
+  each request carries `x-harness-auth`, and an answer counts only when its `x-harness-proof` proves the
+  token (`ws/windows_pipe_auth.dart`, held to the CLI's `__fixtures__/pipe-auth-vectors.json`). An
+  unproven pipe is no pipe: Add Phone shows its QR without the sign-in code, and the daemon's keys
+  and talk say harnessd's private connection is missing. The pipe client is kernel32 over FFI on two
+  background isolates (`ws/windows_pipe.dart`); its real-pipe test is
+  `integration_test/windows_pipe_test.dart`, on Windows CI. With no socket, the loopback port on
+  Windows is the one the daemon recorded in `daemon-<port>.json` (`LocalDaemonTransport.refreshTcpBase`):
+  another user's daemon may hold the configured one.
 - Besides viewer builds, a direct-to-backend test path is `LocalManualFixture` (`lib/main_local_manual.dart`), a
   compile-time-gated dev entrypoint fed by `scripts/start-terminal-local-manual.sh`. It fails closed
   unless every `--dart-define` is present.
