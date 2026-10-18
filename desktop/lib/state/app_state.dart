@@ -16604,7 +16604,9 @@ class AppNotifier extends ChangeNotifier {
     _stopOfflineRetry(machineId);
     notifyListeners();
     if (target == activeSwarm || pane.session != null) {
-      await pane.session?.setInputContext(inputContext, watchOnly: watchOnly);
+      if (pane.session case final session?) {
+        await session.setInputContext(inputContext, watchOnly: watchOnly);
+      }
       await _attachSession(pane, intent: intent);
     }
   }
