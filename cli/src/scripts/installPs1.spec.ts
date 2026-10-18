@@ -50,6 +50,18 @@ describe('install.ps1, as written', () => {
     expect(source).toContain('if ($exit -eq 5 -and -not $why) {')
   })
 
+  // G8 / final review R3-6: a reinstall over a signed-in, running install still said `harness login # 1. sign in`.
+  it('skips the setup steps in its closing guide when this computer is signed in and Harness runs', () => {
+    expect(source).toContain('Write-HarnessDone -Version $version -Desktop:$Desktop -NoService:$NoService -Command $command')
+    const ready = source.match(/^function Test-HarnessReady[\s\S]*?^}\r?$/m)?.[0] ?? ''
+    expect(ready).toContain('auth status --json')
+    expect(ready).toContain('$auth.loggedIn -ne $true')
+    expect(ready).toMatch(/status\\s\+\\S\+\\s\+running/)
+    const done = source.match(/^function Write-HarnessDone[\s\S]*?^}\r?$/m)?.[0] ?? ''
+    expect(done.indexOf('Test-HarnessReady -Command $Command')).toBeLessThan(done.indexOf('harness login'))
+    expect(done).toContain('This computer is signed in and Harness is running: nothing more to set up.')
+  })
+
   it('never installs hn or tmux on Windows', () => {
     expect(source).not.toMatch(/harness-tui|tmux/i)
   })
@@ -554,6 +566,18 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
     const stopped = fakeHarness('stopped')
     expect(ps(`Restart-HarnessDaemon -Command '${stopped.command}' -Before '1.0.0' -After '1.0.1'`).stdout).toBe('False')
     expect(stopped.calls()).toEqual(['status'])
+  })
+
+  it('closes with the setup steps unless this computer is signed in and Harness runs', () => {
+    const ready = fakeHarness('running - backend connected', ['if "%1"=="auth" echo {"loggedIn":true}'])
+    const done = ps(`Write-HarnessDone -Version '1.0.1' -Command '${ready.command}'`)
+    expect(done.stdout, done.stderr).toContain('This computer is signed in and Harness is running: nothing more to set up.')
+    expect(done.stdout).not.toContain('harness login')
+    for (const [state, auth] of [['stopped', '{"loggedIn":true}'], ['running - backend connected', '{"loggedIn":false}'], ['running - backend connected', 'not json']]) {
+      const other = fakeHarness(state, [`if "%1"=="auth" echo ${auth}`])
+      expect(ps(`Write-HarnessDone -Version '1.0.1' -Command '${other.command}'`).stdout, `${state} ${auth}`).toContain('harness login')
+    }
+    expect(ps(`Write-HarnessDone -Version '1.0.1'`).stdout).toContain('harness login')
   })
 
   it('says the task starts Harness at sign-in when `harness service install` registered it but it is not running now (exit 5)', () => {

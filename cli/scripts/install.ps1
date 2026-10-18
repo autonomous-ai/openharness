@@ -459,12 +459,36 @@ function Register-HarnessService {
   try { & $Command status | ForEach-Object { Write-Host "  $_" } } catch { }
 }
 
+function Test-HarnessReady {
+  # Signed in, and the daemon running: then the closing guide has no setup steps to give (G8, a reinstall over a live
+  # install said "1. sign in"). Anything it cannot read counts as not ready, and the steps are given.
+  param([string]$Command)
+  if (-not $Command) { return $false }
+  try {
+    $auth = (@(& $Command auth status --json) -join "`n") | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or $auth.loggedIn -ne $true) { return $false }
+    $line = @(& $Command status) | Where-Object { $_ -match '^\s*status\s' } | Select-Object -First 1
+    return [bool]($LASTEXITCODE -eq 0 -and $line -match '^\s*status\s+\S+\s+running')
+  } catch { return $false }
+}
+
 function Write-HarnessDone {
-  param([string]$Version, [switch]$Desktop, [switch]$NoService)
+  param([string]$Version, [switch]$Desktop, [switch]$NoService, [string]$Command)
   Write-Host ''
   if ($Desktop) { Write-Host "  harness $Version installed."; return }
   Write-Host "  OK harness $Version installed."
   Write-Host ''
+  if (Test-HarnessReady -Command $Command) {
+    Write-Host '  This computer is signed in and Harness is running: nothing more to set up.'
+    Write-Host ''
+    Write-Host '  Useful:'
+    Write-Host '      harness status                 # is the daemon running, and which machine this is'
+    Write-Host '      harness remote-password set    # let your OTHER machines reach this one, if you have not yet'
+    Write-Host '      harness --help                 # everything else'
+    Write-Host ''
+    Write-Host '  harness works in this window now. Terminals that were already open see it once they are reopened.'
+    return
+  }
   Write-Host '  Set this computer up with three commands, in this order:'
   Write-Host ''
   Write-Host '      harness login                  # 1. sign in with your Autonomous account (opens a browser)'
@@ -560,7 +584,7 @@ function Install-Harness {
     Write-Host "  Nothing outside $root and your PATH was changed. Run the installer again, or send this message to Harness support."
     return 1
   }
-  Write-HarnessDone -Version $version -Desktop:$Desktop -NoService:$NoService
+  Write-HarnessDone -Version $version -Desktop:$Desktop -NoService:$NoService -Command $command
   return 0
 }
 
