@@ -110,10 +110,16 @@ class SetupHotspot {
           receiveTimeout: const Duration(seconds: 50),
         ),
       );
-    } on DioException {
-      throw const SetupException(
-        'Lost the device\'s Wi-Fi. Stay close to it and try again.',
-      );
+    } on DioException catch (e) {
+      // The page could not even be reached: the phone is off its hotspot.
+      if (e.type == DioExceptionType.connectionTimeout) {
+        throw const SetupException(
+          'Lost the device\'s Wi-Fi. Stay close to it and try again.',
+        );
+      }
+      // Sent, and the hotspot went before the answer: most likely it opened, and the device is
+      // starting (its startup stops the hotspot at once). Still locked, it asks again on rejoining.
+      return null;
     }
     if (res.statusCode == 200) return null;
     final body = res.data is Map ? res.data as Map : const {};
