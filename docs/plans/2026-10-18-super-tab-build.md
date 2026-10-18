@@ -28,12 +28,14 @@ This is a new tab type. Existing tabs and running sessions are not converted.
 - Explicit recovery for uncertain input: inspect the terminal, confirm receipt, dismiss the warning, or deliberately resend with a new delivery identity.
 - Host receipt reconciliation preserves native evidence and can retire cancelled input after its agent is withdrawn, without restoring conversation access.
 - Shared desktop typography, colors, selectors, modal backdrop and focus behavior; readable large-text controls and searchable archived conversations.
+- Recent-harness navigation consumes an empty Super Tab draft only after opening work; ordinary search opens native work outside completed Super Tabs and preserves their conversations and terminal selection.
+- Definitive native-start refusals are reconciled through durable cancellation receipts. Lost cancellation or backend replies resume the same identity, and unknown/storage/conflict failures never become permission to launch again.
 - Experimental settings cleanup and retired PR branding, preserving compatibility fields and usage controls.
 
 The desktop surface is connected, but the complete workflow is not ready. Scoped autonomous
 agent starts and capacity checks are connected through the existing native creation protocol.
 Terminal access, native stop reconciliation and explicit uncertain-delivery recovery are connected.
-Shared recording of native interventions and several creation/recovery edges remain. The PR stays a draft until these are implemented and
+Shared recording of native interventions and delivery recovery after host-journal loss remain. The PR stays a draft until these are implemented and
 the complete workflow is tested and reviewed.
 
 ## Validation plan
@@ -101,6 +103,14 @@ Focused checks completed during implementation (18 October):
 - Restored the ordinary macOS debug app with `scripts/build-macos-debug.sh --no-pub --target lib/main.dart`
   and the pinned Flutter toolchain. Build, renderer configuration and local signature verification passed.
   This is a local artifact, not an official release or a complete end-to-end acceptance result.
+- Navigation and creation regression: 99 Flutter tests passed across Super Tab navigation/launch, search,
+  normal tab state/navigation and the welcome composer. Includes the actual hidden shortcut and recent row in
+  a widget fixture, retained terminal identity, failed selection, existing-view focus and group/multiple-agent
+  navigation with all placements. Focused Dart analysis passed. This evidence uses injected Flutter keys,
+  not physical macOS shortcut acceptance; the local debug artifact predates these navigation changes.
+- Native-start refusal recovery: CLI typecheck and 20 focused start/command/capacity tests passed. The real-daemon
+  fixture passed in 15.63 seconds, including both fake engines, a refused permission mode, its durable cancellation,
+  a delayed create that cannot revive it, and a resume that retains the failed result. No production sessions were used.
 
 These establish individual boundaries, not the complete customer workflow. Full component suites,
 two-machine/two-account integration, real-engine/native desktop validation, full-app visual inspection,
@@ -116,8 +126,7 @@ Local commits and validation are preserved. The original research worktree's mer
 
 - Reflect native terminal interventions and answers in the appropriate shared conversation with reliable attribution.
   The current agent instructions explicitly require posting questions/results through the shared conversation CLI.
-- Finish creation/recovery edges: selecting a recent harness from an unfinished Super Tab, definitive native-start
-  refusals after dispatch, and a claimed delivery whose host journal is lost. Uncertain native execution must never auto-replay.
+- Reconcile a claimed delivery whose host journal is lost. Uncertain native execution must never auto-replay.
 - Check simultaneous starts against shared machine capacity and update recorded configuration when a running agent changes it.
 - Run the complete component suites, required coverage gates and isolated multi-account/machine journey, then review the final head.
 - Once the Mac is unlocked, finish native terminal, physical shortcut/IME and full-app visual acceptance on an official review build.

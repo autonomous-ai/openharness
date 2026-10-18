@@ -104,7 +104,7 @@ class Swarm {
   }
 
   bool get isEmptyStarter =>
-      name == defaultName && panes.isEmpty && presets.isEmpty;
+      !isSuperTab && name == defaultName && panes.isEmpty && presets.isEmpty;
 
   PaneArrangement? get manualLayout => paneSizes['${panes.length}:manual'];
 

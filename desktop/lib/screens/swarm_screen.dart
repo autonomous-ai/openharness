@@ -5999,7 +5999,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       placement:
           placement ??
           (adding && split == null
-              ? (app.activeSwarm.isUtility || app.activeSwarm.isOrchestrator
+              ? (app.activeSwarm.isUtility ||
+                        app.activeSwarm.isOrchestrator ||
+                        (superTabTarget == null &&
+                            app.activeSwarm.isSuperTab &&
+                            app.activeSwarm.superTabId != null)
                     ? HarnessPlacement.newTab
                     : HarnessPlacement.currentTab)
               : null),
@@ -6630,7 +6634,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         !_newTab()) {
       return;
     }
-    if (_search?.changePlacement(HarnessPlacement.currentTab) == true) {
+    if (!app.activeSwarm.isSuperTab &&
+        _search?.changePlacement(HarnessPlacement.currentTab) == true) {
       _focusSearch();
       return;
     }

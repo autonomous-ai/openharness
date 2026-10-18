@@ -197,6 +197,39 @@ void main() {
     },
   );
 
+  testWidgets('Super Tab recents open an ordinary harness through the shared welcome page', (tester) async {
+    await setup(tester, storage: MemoryStore());
+    app.currentUser = const CurrentUserProfile(
+      id: 'owner',
+      email: 'owner@example.com',
+    );
+    app.machineStates['m']!.agents = [
+      Agent(
+        id: 'recent-existing',
+        name: 'Continue existing work',
+        engine: 'codex',
+        terminalAvailable: true,
+        lastOpenedAt: DateTime.now(),
+        lastActivityAt: DateTime.now(),
+      ),
+    ];
+    final pane = app.adoptSessionForTest(terminal('recent-existing', []));
+    await tester.pumpAndSettle();
+    await key(tester, LogicalKeyboardKey.keyT, cmd: true, alt: true, shift: true);
+    await tester.pumpAndSettle();
+    final target = app.activeSwarm;
+    expect(target.isSuperTab, isTrue);
+    expect(form, findsOneWidget);
+    await tester.tap(find.text('Continue existing work'));
+    await tester.pumpAndSettle();
+    expect(target.isSuperTab, isFalse);
+    expect(target.panes.single.agentId, 'recent-existing');
+    expect(target.panes.single, same(pane));
+    expect(connection.starts, isEmpty);
+    expect(form, findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Cmd-P round trip opens a fresh form with successful defaults', (
     tester,
   ) async {

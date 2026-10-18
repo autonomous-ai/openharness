@@ -1733,6 +1733,21 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Opening a recent harness uses the welcome page as an ordinary workspace.
+  /// Consume only a successful open; a missing result leaves creation available.
+  void finishSuperTabDraftNavigation(String swarmId) {
+    final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
+    if (swarm == null ||
+        !swarm.isSuperTab ||
+        swarm.superTabId != null ||
+        swarm.panes.isEmpty) {
+      return;
+    }
+    swarm.kind = 'harness';
+    _persistLayout();
+    notifyListeners();
+  }
+
   Future<Agent> recoverSuperTabCreation(
     String machineId,
     String creationId,
