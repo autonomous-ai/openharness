@@ -83,6 +83,21 @@ void main() {
     await installer.lastCleanUp;
   });
 
+  test('installed copy with a missing launcher reports failure', () async {
+    final exe = layout(install, '1.2.3');
+    File(p.join(install, 'Harness.exe')).deleteSync();
+
+    final result = await subject(exe).ensureInstalled();
+
+    expect(result, isA<SelfInstallFailed>());
+    expect(
+      (result as SelfInstallFailed).message,
+      contains('has no Harness.exe'),
+    );
+    expect(started, isEmpty);
+    expect(cleaned, isEmpty);
+  });
+
   test('cleanup failure is contained after installed startup', () async {
     final installer = subject(
       layout(install, '1.2.3'),

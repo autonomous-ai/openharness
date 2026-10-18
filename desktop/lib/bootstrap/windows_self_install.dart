@@ -120,6 +120,12 @@ class WindowsSelfInstall {
           'Harness could not find where Windows keeps your programs, so it is running from this folder.',
         );
       }
+      final launcher = p.join(here, WindowsUpdateSwap.launcherExe);
+      if (!File(launcher).existsSync()) {
+        return SelfInstallOutcome.failed(
+          'This copy of Harness has no ${WindowsUpdateSwap.launcherExe} beside its app folder, so it cannot install itself. Download Harness again.',
+        );
+      }
       if (sameFolder(here, install)) {
         try {
           lastCleanUp = _cleanUp(install).catchError((Object error) {
@@ -129,12 +135,6 @@ class WindowsSelfInstall {
           debugPrint('WindowsSelfInstall: cleanup failed: $error');
         }
         return SelfInstallOutcome.alreadyInstalled;
-      }
-      final launcher = p.join(here, WindowsUpdateSwap.launcherExe);
-      if (!File(launcher).existsSync()) {
-        return SelfInstallOutcome.failed(
-          'This copy of Harness has no ${WindowsUpdateSwap.launcherExe} beside its app folder, so it cannot install itself. Download Harness again.',
-        );
       }
       try {
         await _start(launcher, ['--install', '--wait-pid', '${_pid ?? pid}']);

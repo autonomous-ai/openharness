@@ -199,6 +199,53 @@ void main() {
     expect(updater.checkCalls, 0);
   });
 
+  test(
+    'installed copy without launcher provisions but cannot update',
+    () async {
+      final install = p.join(dir.path, 'Programs', 'Harness');
+      final folder = Directory(p.join(install, 'app', '1.2.3'))
+        ..createSync(recursive: true);
+      final installedExe = p.join(folder.path, 'harness-desktop.exe');
+      File(installedExe).writeAsStringSync('');
+      File(p.join(install, 'current')).writeAsStringSync('1.2.3\r\n');
+      final provisioner = _NeedsSetup();
+      final updater = _UpdateProbe();
+      final exits = <int>[];
+      final cleaned = <String>[];
+      final notifier = app(
+        provisioner: provisioner,
+        updater: updater,
+        exits: exits,
+        executablePath: installedExe,
+        cleanUp: (root) async => cleaned.add(root),
+      );
+      addTearDown(notifier.dispose);
+
+      await notifier.bootstrap();
+
+      expect(provisioner.asked, isTrue);
+      expect(exits, isEmpty);
+      expect(cleaned, isEmpty);
+      expect(updater.asked, isFalse);
+      expect(notifier.updateChecksEnabled, isFalse);
+      expect(
+        (await notifier.checkForUpdates()).check.status,
+        DesktopUpdateCheckStatus.disabled,
+      );
+      const staleOffer = UpdateInfo(
+        version: '2.0.0',
+        url: 'https://example.invalid/update.zip',
+        sha256: '',
+        size: 1,
+      );
+      expect(
+        await notifier.installAvailableUpdate(update: staleOffer),
+        isFalse,
+      );
+      expect(updater.checkCalls, 0);
+    },
+  );
+
   test('missing pointer also falls through to normal boot', () async {
     File(p.join(zip, 'current')).deleteSync();
     final provisioner = _NeedsSetup();
