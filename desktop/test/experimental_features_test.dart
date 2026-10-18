@@ -260,6 +260,49 @@ void main() {
     expect(server.reads, reads);
   });
 
+  testWidgets('the 30 s poll notifies only when what it shows changes', (
+    tester,
+  ) async {
+    // Every read used to notify, rebuilding each pane header and the
+    // workspace twice a minute while nothing had changed.
+    final server = AccountSettings('a');
+    final store = ExperimentalFeaturesStore();
+    store.bind('a', transport: server);
+    await tester.pump();
+    var notified = 0;
+    store.addListener(() => notified++);
+    for (var i = 0; i < 3; i++) {
+      await tester.pump(const Duration(seconds: 30));
+    }
+    // A newer revision that changes no choice is nothing new either.
+    server.revision++;
+    await tester.pump(const Duration(seconds: 30));
+    expect(server.reads, 5);
+    expect(notified, 0);
+    server.features[share.id] = true;
+    server.revision++;
+    await tester.pump(const Duration(seconds: 30));
+    expect((notified, store.enabled(share)), (1, true));
+    // An older backend that no longer names one: unavailable is news.
+    server.features.remove(ExperimentalFeature.agentMessages.id);
+    await tester.pump(const Duration(seconds: 30));
+    expect(notified, 2);
+    expect(store.isAvailable(ExperimentalFeature.agentMessages), isFalse);
+    server.readOverride = () => Future.error(StateError('offline'));
+    await tester.pump(const Duration(seconds: 30));
+    expect(notified, 3);
+    expect(store.error, isNotNull);
+    // The same failure again shows nothing new.
+    await tester.pump(const Duration(seconds: 30));
+    expect(notified, 3);
+    server.readOverride = null;
+    await tester.pump(const Duration(seconds: 30));
+    expect(notified, 4);
+    expect(store.error, isNull);
+    // The poll's timer must not outlive the test (fake async checks it).
+    store.dispose();
+  });
+
   testWidgets(
     'settings show pending saves, uncertain writes and read failures with recovery',
     (tester) async {
