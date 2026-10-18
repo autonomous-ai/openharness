@@ -34,7 +34,7 @@ export const STAGING_PREFIX = 'harness/staging'
  * reaches outside the root, and none slips past the staging rule as harness/staging/../x.
  */
 export function objectFor(host, url) {
-  const name = String(host ?? '').toLowerCase().replace(/:\d+$/, '')
+  const name = hostName(host)
   let path
   try { path = decodeURIComponent(String(url).split('?')[0].split('#')[0]) } catch { return { bad: true } }
   if (path.includes('\0') || path.includes('\\')) return { bad: true }
@@ -106,6 +106,9 @@ export function stagePtyManifest(dryRun, prefix, platforms = ['win32-x64', 'win3
   return mergePlatforms({}, 'pty', entries)
 }
 
+const READS = new Set(['GET', 'HEAD'])
+const hostName = (host) => String(host ?? '').toLowerCase().replace(/:\d+$/, '')
+
 const TYPES = { '.json': 'application/json', '.ps1': 'text/plain; charset=utf-8', '.zip': 'application/zip', '.js': 'text/javascript', '.mjs': 'text/javascript' }
 
 /**
@@ -121,12 +124,16 @@ export function createHandler({ root, scheme = 'https', forward = forwardTo, log
   }
   return (req, res) => {
     const host = req.headers.host ?? ''
-    const decision = route(host, req.url, has)
     const say = (what) => log(`${new Date().toISOString().slice(11, 23)} ${req.method} ${scheme}://${host}${req.url} -> ${what}`)
+    // Reads only, before anything else: a forwarded PUT, POST or DELETE could write to the real bucket.
+    if (!READS.has(req.method)) { say('405'); res.writeHead(405, { allow: 'GET, HEAD' }).end(); return }
+    // Only the two names the VM's hosts lines send here. Any other Host (the bind address, localhost, a name the
+    // client typed) gets 421: forwarding it would make the fake an open proxy.
+    if (!HOSTS.includes(hostName(host))) { say('421'); res.writeHead(421, { 'content-type': 'text/plain' }).end(`this server answers only for ${HOSTS.join(' and ')}\n`); return }
+    const decision = route(host, req.url, has)
     if (decision.action === 'bad') { say('400'); res.writeHead(400).end('bad path\n'); return }
     if (decision.action === 'missing') { say('404 (staging, not staged)'); res.writeHead(404, { 'content-type': 'text/plain' }).end(`not staged: ${decision.object}\n`); return }
     if (decision.action === 'local') {
-      if (req.method !== 'GET' && req.method !== 'HEAD') { say('405'); res.writeHead(405).end(); return }
       const file = fileOf(decision.object)
       const size = statSync(file).size
       say(`local 200 (${size} bytes)`)
@@ -135,12 +142,14 @@ export function createHandler({ root, scheme = 'https', forward = forwardTo, log
       createReadStream(file).pipe(res)
       return
     }
-    forward(req, res, { scheme, host: host.replace(/:\d+$/, ''), say })
+    forward(req, res, { scheme, host: hostName(host), say })
   }
 }
 
 /** Forwards to the real host, resolved by this Mac's own DNS (the VM's hosts lines do not reach it). */
 export function forwardTo(req, res, { scheme, host, say }) {
+  // The handler checks both already; this keeps a future caller from forwarding a write or another host.
+  if (!READS.has(req.method) || !HOSTS.includes(host)) throw new Error(`refusing to forward ${req.method} ${host}`)
   const client = scheme === 'https' ? https : http
   const upstream = client.request({ host, servername: host, port: scheme === 'https' ? 443 : 80, method: req.method, path: req.url, headers: { ...req.headers, host } }, (answer) => {
     say(`forwarded ${answer.statusCode}`)

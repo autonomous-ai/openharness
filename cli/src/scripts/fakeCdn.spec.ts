@@ -16,6 +16,7 @@ const cdn = await import('../../scripts/windows-cli-e2e/fake-cdn.mjs') as {
   stagePtyManifest: (dryRun: object, prefix: string, platforms?: string[]) => Record<string, any>
   createHandler: (args: { root: string; scheme?: string; forward?: (req: http.IncomingMessage, res: http.ServerResponse, to: { host: string }) => void; log?: (line: string) => void }) => Handler
   onlyTo: (server: http.Server, bind: string) => http.Server
+  forwardTo: (req: { method: string }, res: object, to: { scheme: string; host: string; say: (line: string) => void }) => void
 }
 
 const dirs: string[] = []
@@ -144,6 +145,38 @@ describe('the fake CDN server', () => {
     expect((await get(port, CDN, '/harness/staging/../../etc/passwd')).status).toBe(400)
     expect(await get(port, STORAGE, '/s3-autonomous-upgrade-3/harness/cli/metadata.json')).toEqual({ status: 299, body: 'real' })
     expect(forwarded).toEqual([`${STORAGE}/s3-autonomous-upgrade-3/harness/cli/metadata.json`])
+  })
+
+  function forwardingTo(forwarded: string[]) {
+    return (req: http.IncomingMessage, res: http.ServerResponse, to: { host: string }) => { forwarded.push(`${req.method} ${to.host}${req.url}`); res.writeHead(299).end('real') }
+  }
+
+  it('refuses every method but GET and HEAD with 405 before routing, so nothing can write to the real bucket', async () => {
+    const root = rootWith({ 'harness/staging/cli/install.ps1': 'x' })
+    const forwarded: string[] = []
+    const port = await start(cdn.createHandler({ root, log: () => {}, forward: forwardingTo(forwarded) }))
+    for (const method of ['PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS']) {
+      expect((await get(port, STORAGE, '/s3-autonomous-upgrade-3/harness/cli/metadata.json', method)).status).toBe(405)
+      expect((await get(port, STORAGE, '/upload/storage/v1/b/s3-autonomous-upgrade-3/o?name=harness/cli/metadata.json', method)).status).toBe(405)
+      expect((await get(port, CDN, '/harness/staging/cli/install.ps1', method)).status).toBe(405)
+    }
+    expect(forwarded).toEqual([])
+    expect(() => cdn.forwardTo({ method: 'PUT' }, {}, { scheme: 'https', host: STORAGE, say: () => {} })).toThrow(/refusing to forward PUT/)
+  })
+
+  it('answers 421 for any Host but the two it stands in for, and forwards none of them', async () => {
+    const root = rootWith({ 'harness/staging/cli/install.ps1': 'x' })
+    const forwarded: string[] = []
+    const port = await start(cdn.createHandler({ root, log: () => {}, forward: forwardingTo(forwarded) }))
+    for (const host of ['192.168.65.1', '192.168.65.1:443', 'localhost', '127.0.0.1', 'example.com', 'cdn.autonomous.ai.example.com', '']) {
+      expect((await get(port, host, '/harness/staging/cli/install.ps1')).status).toBe(421)
+      expect((await get(port, host, '/s3-autonomous-upgrade-3/harness/cli/metadata.json')).status).toBe(421)
+    }
+    expect(forwarded).toEqual([])
+    expect((await get(port, 'CDN.Autonomous.AI:443', '/harness/staging/cli/install.ps1')).status).toBe(200)
+    expect(await get(port, `${STORAGE}:443`, '/s3-autonomous-upgrade-3/harness/cli/metadata.json')).toEqual({ status: 299, body: 'real' })
+    expect(forwarded).toEqual([`GET ${STORAGE}/s3-autonomous-upgrade-3/harness/cli/metadata.json`])
+    expect(() => cdn.forwardTo({ method: 'GET' }, {}, { scheme: 'https', host: 'example.com', say: () => {} })).toThrow(/refusing to forward GET example.com/)
   })
 
   it('drops a connection made to any address but the one it serves', async () => {
