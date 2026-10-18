@@ -240,6 +240,11 @@ void main() {
   );
 
   test('Windows verification also returns a recoverable timeout', () async {
+    // B's layout beside the macOS one setUp wrote: cli\current names a version folder.
+    await File('${scratch.path}/cli/current').writeAsString('0.4.20\r\n');
+    final cli = File('${scratch.path}/cli/0.4.20/cli.js');
+    await cli.parent.create(recursive: true);
+    await cli.writeAsString('test fixture');
     final child = _ProbeProcess();
     children.add(child);
     final setup = EnvironmentProvisioner(
