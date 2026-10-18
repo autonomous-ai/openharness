@@ -98,14 +98,30 @@ Focused checks completed during implementation (18 October):
   frame after two minutes. Flutter reported that it could not foreground the test app. A read of console flags confirmed
   `CGSSessionScreenIsLocked: true`. Native interaction, physical shortcut/IME and full terminal acceptance remain unverified;
   repeat them once the console is unlocked. The fixture uses in-memory accounts and terminal traffic, never real harnesses.
+- Restored the ordinary macOS debug app with `scripts/build-macos-debug.sh --no-pub --target lib/main.dart`
+  and the pinned Flutter toolchain. Build, renderer configuration and local signature verification passed.
+  This is a local artifact, not an official release or a complete end-to-end acceptance result.
 
 These establish individual boundaries, not the complete customer workflow. Full component suites,
 two-machine/two-account integration, real-engine/native desktop validation, full-app visual inspection,
 independent review, merge, official build and release remain.
 No production deployment has occurred.
 
-Implementation remains on `feat/super-tab`, draft PR #1405. Recent pushes have failed with connection resets;
-local commits and validation are preserved. The original research worktree's merge remains untouched.
+Implementation remains on `feat/super-tab`, draft PR #1405. Recovery is committed as `3568a03e1f` and UI/navigation
+as `0e27173ea6`. Earlier pushes failed with connection resets. The latest attempt stalled and was interrupted;
+a remote-head lookup also timed out after 25 seconds, so upload of these commits is unconfirmed.
+Local commits and validation are preserved. The original research worktree's merge remains untouched.
+
+## Remaining implementation and acceptance
+
+- Reflect native terminal interventions and answers in the appropriate shared conversation with reliable attribution.
+  The current agent instructions explicitly require posting questions/results through the shared conversation CLI.
+- Finish creation/recovery edges: selecting a recent harness from an unfinished Super Tab, definitive native-start
+  refusals after dispatch, and a claimed delivery whose host journal is lost. Uncertain native execution must never auto-replay.
+- Check simultaneous starts against shared machine capacity and update recorded configuration when a running agent changes it.
+- Run the complete component suites, required coverage gates and isolated multi-account/machine journey, then review the final head.
+- Once the Mac is unlocked, finish native terminal, physical shortcut/IME and full-app visual acceptance on an official review build.
+  Publish only after the remaining implementation and validation pass, following the normal release schedule.
 
 ## Follow-through
 
