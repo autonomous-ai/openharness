@@ -303,6 +303,21 @@ describe('stopDaemonProcess on Windows', () => {
     expect(existsSync(PID_FILE)).toBe(true)
   })
 
+  // Final review R1b-7: the task's stop marker is written before the daemon is stopped. A stop that then failed left it,
+  // and a daemon that died later was not started again by either task until the next boot.
+  it('forgets the stop it wrote down when the daemon was left running, and only then', async () => {
+    const { stopDaemonProcess } = await load()
+    const forgot: string[] = []
+    const state = { pid: 500, alive: new Set([500, 600]), killed: [] as string[], locked: 0, released: 0 }
+    const { w } = windows(state, { ask: async () => false, terminate: async () => 'mismatch', forgetStop: () => forgot.push('left running') })
+    await expect(stopDaemonProcess(fakeDeps(state, { windows: w }))).resolves.toEqual({ pid: 500, stopped: false })
+    expect(forgot).toEqual(['left running'])
+    const stopped = { pid: 500, alive: new Set([500, 600]), killed: [] as string[], locked: 0, released: 0 }
+    const done = windows(stopped, { ask: async () => { stopped.alive.clear(); return true }, forgetStop: () => forgot.push('stopped') })
+    await expect(stopDaemonProcess(fakeDeps(stopped, { windows: done.w }))).resolves.toEqual({ pid: 500, stopped: true })
+    expect(forgot).toEqual(['left running'])
+  })
+
   it('keeps the pid file of a master that was ended but is still there', async () => {
     const { stopDaemonProcess } = await load()
     const { PID_FILE } = await import('./daemonState.js')

@@ -14,7 +14,7 @@ import type { ProcessRow } from './processTable.js'
 import { HARNESSD_REEXEC_FILE, HARNESSD_STATUS_FILE, PID_FILE, isAlive, readPid } from './daemonState.js'
 import { readMarker, removeMarker } from '../harnessd/reexec.js'
 import { acquireSpawnLock, describeSpawnLockFailure, describeSpawnLockOwner, SPAWN_LOCK_WAIT_MS } from './daemonSpawnLock.js'
-import { PLATFORM_STOP_WAIT_MS, stopUnderPlatform, waitGone, type PlatformStop } from './platformDaemon.js'
+import { PLATFORM_STOP_WAIT_MS, clearTaskStopped, stopUnderPlatform, waitGone, type PlatformStop } from './platformDaemon.js'
 import { identifyDaemonProcess, judgePidFileOwner, type DaemonProcessVerdict } from './windows/daemonProcesses.js'
 import { askDaemonToStop, processStopCallDeps } from './windows/daemonStopCall.js'
 import { windowsProcessRows } from './windows/processTable.js'
@@ -47,6 +47,8 @@ export interface WindowsStopDeps {
   pidFileWrittenMs(): number | null
   /** The core the master's status file names. */
   corePid(masterPid: number): number | null
+  /** Forget the task's stop marker (harnessd/platform.ts TASK_STOPPED_FILE), which `stop()` writes before the stop. */
+  forgetStop?(): void
 }
 
 /** How long the master has to stop its core (2.5 s, then it ends it) and its services beside it, and exit. */
@@ -63,6 +65,7 @@ export function defaultWindowsStopDeps(): WindowsStopDeps {
     terminate: (pid, startMarker) => terminateVerified(pid, startMarker),
     pidFileWrittenMs: () => { try { return statSync(PID_FILE).mtimeMs } catch { return null } },
     corePid: (masterPid) => readStatusFile(HARNESSD_STATUS_FILE, masterPid)?.corePid ?? null,
+    forgetStop: () => clearTaskStopped(),
   }
 }
 
@@ -151,7 +154,13 @@ export async function stopDaemonProcess(deps: StopDeps = defaultStopDeps()): Pro
       try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
       return { pid: null, stopped: false }
     }
-    if (deps.windows) return await stopOnWindows(deps, deps.windows, pid)
+    if (deps.windows) {
+      const result = await stopOnWindows(deps, deps.windows, pid)
+      // The task's stop marker was written before this stop (harnessd/platform.ts `stop`). Harness still runs, so it is
+      // forgotten: kept, a daemon that died later would not be started again by either task until the next boot.
+      if (leftRunning(result)) deps.windows.forgetStop?.()
+      return result
+    }
     try { deps.kill(pid, 'SIGTERM') } catch { /* already gone */ }
     const deadline = deps.now() + STOP_GRACE_MS
     while (deps.now() < deadline && deps.isAlive(pid)) await deps.sleep(150)
