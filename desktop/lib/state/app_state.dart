@@ -16345,6 +16345,8 @@ class AppNotifier extends ChangeNotifier {
     PaneSplitRequest? split,
     bool autoTile = false,
     bool focus = true,
+    String? inputContext,
+    bool watchOnly = false,
 
     /// A rail click, a drag, a picker — a person. The device's own doors pass
     /// [AttachIntent.automatic]: they put an agent on screen without anybody
@@ -16391,6 +16393,12 @@ class AppNotifier extends ChangeNotifier {
         .where((p) => p.machineId == machineId && p.agentId == agentId)
         .firstOrNull;
     if (paneId == null && existing != null) {
+      existing.inputContext = inputContext;
+      existing.watchOnly = watchOnly;
+      await existing.session?.setInputContext(
+        inputContext,
+        watchOnly: watchOnly,
+      );
       if (focus && target == activeSwarm) focusPane(existing.id);
       // A pane a refused share_add left unshared: a person's retry shares it.
       if (intent == AttachIntent.person) {
@@ -16412,6 +16420,9 @@ class AppNotifier extends ChangeNotifier {
     }
     final replaced = targetPanes.where((p) => p.id == paneId).firstOrNull;
     if (replaced == shared && shared != null) {
+      shared.inputContext = inputContext;
+      shared.watchOnly = watchOnly;
+      await shared.session?.setInputContext(inputContext, watchOnly: watchOnly);
       if (focus && target == activeSwarm) focusPane(shared.id);
       return;
     }
@@ -16464,6 +16475,9 @@ class AppNotifier extends ChangeNotifier {
     final pane =
         shared ??
         TerminalPane(id: _nextPaneId++, machineId: machineId, agentId: agentId);
+    pane.inputContext = inputContext;
+    pane.watchOnly = watchOnly;
+    pane.session?.stageInputContext(inputContext, watchOnly: watchOnly);
     final firstAgent = targetPanes.every((pane) => pane.agentId == null);
     if (machine.machine.isShared) {
       pane.sharedHarness = machine.machine.sharedHarnesses
@@ -16588,6 +16602,7 @@ class AppNotifier extends ChangeNotifier {
     _stopOfflineRetry(machineId);
     notifyListeners();
     if (target == activeSwarm || pane.session != null) {
+      await pane.session?.setInputContext(inputContext, watchOnly: watchOnly);
       await _attachSession(pane, intent: intent);
     }
   }
@@ -16652,6 +16667,8 @@ class AppNotifier extends ChangeNotifier {
       agentName: agent.displayName,
       engineId: agent.engine,
       client: localClientDescriptor(),
+      inputContext: pane.inputContext,
+      watchOnly: pane.watchOnly,
       // Only a person at this window may take the terminal from whoever holds
       // it; everything else opens as a watcher. See [AttachIntent].
       takeover: intent == AttachIntent.person,
@@ -17269,7 +17286,8 @@ class AppNotifier extends ChangeNotifier {
     if (tab.superTabId case final superTabId?) {
       final controller = superTabs.peek(superTabId);
       final selected = controller?.terminalAgent(controller.selectedId);
-      if (selected != null && selected.machineId == pane.machineId &&
+      if (selected != null &&
+          selected.machineId == pane.machineId &&
           selected.harnessId == pane.agentId) {
         controller!.selectTerminal(controller.selectedId, null);
       }

@@ -823,6 +823,7 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// notice must still allow it: setup prompts need a controlling client.
   bool get _inputBlocked =>
       !widget.readOnly &&
+      !widget.session.readOnly &&
       // A watcher is the same situation seen from the other side: this window
       // has the output but another client has the terminal, and the band's
       // button is how a person here asks for it.
@@ -2408,7 +2409,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                 child: TerminalComposer(
                   session: session,
                   focusNode: _composerFocus,
-                  inputEnabled: !widget.readOnly,
+                  inputEnabled: !widget.readOnly && !session.readOnly,
                 ),
               ),
           ],
@@ -2472,7 +2473,7 @@ class _TerminalPanelState extends State<TerminalPanel>
       name: session.agentName,
       status: session.status,
       notice: widget.notice,
-      readOnly: widget.readOnly,
+      readOnly: widget.readOnly || session.readOnly,
       error: session.errorMessage ?? session.errorCode,
       link: session.linkMode,
       machine: machine?.machine,
@@ -2512,7 +2513,7 @@ class _TerminalPanelState extends State<TerminalPanel>
         notifier: widget.notifier,
         session: session,
         notice: widget.notice,
-        readOnly: widget.readOnly,
+        readOnly: widget.readOnly || session.readOnly,
         compact: widget.compactHeader,
         zoomed: widget.zoomed,
         onToggleZoom: widget.onToggleZoom == null
