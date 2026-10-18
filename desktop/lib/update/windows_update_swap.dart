@@ -19,15 +19,19 @@ class WindowsUpdateSwap {
     ExtractStep? extract,
     Future<void> Function(String executable, List<String> arguments)? start,
     void Function(String from, String to)? renameFile,
+    Future<void> Function(String path)? deleteClaimed,
   }) : _extract = extract ?? _extractOffUiIsolate,
        _start = start ?? _startDetached,
        _renameFile = renameFile ?? _nativeRenameFile,
+       // ignore: prefer_initializing_formals
+       _deleteClaimed = deleteClaimed,
        _cleanupCandidates = _snapshotCleanup(installRoot);
 
   final String installRoot;
   final ExtractStep _extract;
   final Future<void> Function(String executable, List<String> arguments) _start;
   final void Function(String from, String to) _renameFile;
+  final Future<void> Function(String path)? _deleteClaimed;
   final List<_CleanupCandidate> _cleanupCandidates;
 
   static const appExe = 'harness-desktop.exe';
@@ -141,6 +145,9 @@ class WindowsUpdateSwap {
     if (attempt == null || expected == null || _stagedVersion != version) {
       return 'nothing is staged for $version';
     }
+    if (!_ordinaryDirectory(installRoot) || !_ordinaryDirectory(_app)) {
+      return 'the install root or app folder is not an ordinary directory';
+    }
     RandomAccessFile? lock;
     var held = false;
     try {
@@ -150,6 +157,10 @@ class WindowsUpdateSwap {
           .openSync(mode: FileMode.append);
       lock.lockSync(FileLock.exclusive);
       held = true;
+
+      if (!_ordinaryDirectory(installRoot) || !_ordinaryDirectory(_app)) {
+        return 'the install root or app folder is not an ordinary directory';
+      }
 
       final current = readPointer(p.join(installRoot, 'current'));
       if (current != expected) return 'current changed since staging';
@@ -282,10 +293,24 @@ class WindowsUpdateSwap {
 
   /// Startup's shallow snapshot is captured by the constructor, before update
   /// polling can create a new attempt; recursive work stays off the UI isolate.
-  Future<void> cleanUp() {
+  Future<void> cleanUp() async {
     final root = installRoot;
     final candidates = _cleanupCandidates;
-    return Isolate.run(() => _cleanUpCandidates(root, candidates));
+    for (final candidate in candidates) {
+      final claimed = await Isolate.run(
+        () => _claimCleanupCandidate(root, candidate),
+      );
+      if (claimed == null) continue;
+      try {
+        if (_deleteClaimed case final delete?) {
+          await delete(claimed);
+        } else {
+          await Isolate.run(() => _deleteClaimedTree(root, claimed));
+        }
+      } on FileSystemException {
+        // A scanner may retain the detached bytes until the next start.
+      }
+    }
   }
 }
 
@@ -543,82 +568,120 @@ List<_CleanupCandidate> _snapshotCleanup(String root) {
   return candidates;
 }
 
-void _cleanUpCandidates(String root, List<_CleanupCandidate> candidates) {
-  final current = readPointer(p.join(root, 'current'));
+String? _claimCleanupCandidate(String root, _CleanupCandidate candidate) {
   final app = p.join(root, 'app');
+  if (!_ordinaryDirectory(root) || !_ordinaryDirectory(app)) return null;
+  final current = readPointer(p.join(root, 'current'));
   if (current == null ||
-      !_ordinaryDirectory(root) ||
-      !_ordinaryDirectory(app) ||
       !_ordinaryDirectory(p.join(app, current)) ||
       !_ordinaryFile(p.join(app, current, WindowsUpdateSwap.appExe))) {
-    return;
+    return null;
   }
   RandomAccessFile? lock;
+  var held = false;
   try {
     lock = File(p.join(root, 'launch-state.lock'))
         .openSync(mode: FileMode.append);
     lock.lockSync(FileLock.exclusive);
+    held = true;
   } on FileSystemException {
     lock?.closeSync();
-    return;
+    return null;
   }
   try {
+    if (!_ordinaryDirectory(root) || !_ordinaryDirectory(app)) return null;
     final finalCurrent = readPointer(p.join(root, 'current'));
     if (finalCurrent == null ||
-        !_ordinaryDirectory(app) ||
         !_ordinaryDirectory(p.join(app, finalCurrent)) ||
         !_ordinaryFile(p.join(app, finalCurrent, WindowsUpdateSwap.appExe))) {
-      return;
+      return null;
     }
     final previous = readPointer(p.join(root, 'previous'));
     final keep = {finalCurrent.toLowerCase(), ?previous?.toLowerCase()};
-    for (final candidate in candidates) {
-      final path = candidate.path;
-      final parent = p.dirname(path);
-      final appEntry = parent == app;
-      final rootEntry = parent == root;
-      if (!appEntry && !rootEntry) continue;
-      if (appEntry && keep.contains(p.basename(path).toLowerCase())) continue;
-      if (rootEntry &&
-          (!p.basename(path).startsWith('Harness.exe.') &&
-              !p.basename(path).startsWith('Harness.ico.'))) {
-        continue;
-      }
-      if (rootEntry &&
-          p.basename(path).endsWith('.old') &&
-          !_ordinaryFile(p.join(root, p.basename(path).split('.old').first))) {
-        continue;
-      }
-      _CleanupCandidate? observed;
-      try {
-        observed = _cleanupCandidate(path);
-      } on FileSystemException {
-        continue;
-      }
-      if (observed == null ||
-          observed.type != candidate.type ||
-          observed.changed != candidate.changed ||
-          observed.linkTarget != candidate.linkTarget) {
-        continue;
-      }
-      try {
-        _deleteTreeNoFollow(path);
-      } on FileSystemException {
-        // A running old version or scanner may retain it until next start.
-      }
+    final path = candidate.path;
+    final parent = p.dirname(path);
+    final appEntry = parent == app;
+    final rootEntry = parent == root;
+    if (!appEntry && !rootEntry) return null;
+    if (appEntry && keep.contains(p.basename(path).toLowerCase())) return null;
+    if (rootEntry &&
+        ![
+          'Harness.exe.new',
+          'Harness.exe.old',
+          'Harness.ico.new',
+          'Harness.ico.old',
+        ].contains(p.basename(path))) {
+      return null;
     }
-  } finally {
+    if (rootEntry &&
+        p.basename(path).endsWith('.old') &&
+        !_ordinaryFile(p.join(root, p.basename(path).split('.old').first))) {
+      return null;
+    }
+    _CleanupCandidate? observed;
     try {
-      lock.unlockSync();
+      observed = _cleanupCandidate(path);
     } on FileSystemException {
-      // Closing also releases the lock.
+      return null;
+    }
+    if (observed == null ||
+        observed.type != candidate.type ||
+        observed.changed != candidate.changed ||
+        observed.linkTarget != candidate.linkTarget) {
+      return null;
+    }
+    // The candidate stops being publishable while the guard is held. The
+    // exclusive temporary directory is on the install volume, so rename is
+    // atomic; recursive destruction happens only after the guard is released.
+    final quarantine = Directory(root).createTempSync('.update-cleanup-').path;
+    final detached = p.join(quarantine, 'entry');
+    try {
+      if (candidate.type == FileSystemEntityType.directory) {
+        Directory(path).renameSync(detached);
+      } else if (candidate.type == FileSystemEntityType.file) {
+        File(path).renameSync(detached);
+      } else if (candidate.type == FileSystemEntityType.link) {
+        Link(path).renameSync(detached);
+      }
+    } on FileSystemException {
+      // The empty owned location is removed after releasing the guard.
+    }
+    return quarantine;
+  } on FileSystemException {
+    return null;
+  } finally {
+    if (held) {
+      try {
+        lock.unlockSync();
+      } on FileSystemException {
+        // Closing also releases the lock.
+      }
     }
     lock.closeSync();
   }
 }
 
-void cleanUpInstall(String installRoot) =>
-    _cleanUpCandidates(installRoot, _snapshotCleanup(installRoot));
+void _deleteClaimedTree(String root, String claimed) {
+  if (p.dirname(claimed) != root ||
+      !p.basename(claimed).startsWith('.update-cleanup-') ||
+      !_ordinaryDirectory(root) ||
+      !_ordinaryDirectory(claimed)) {
+    return;
+  }
+  _deleteTreeNoFollow(claimed);
+}
+
+void cleanUpInstall(String installRoot) {
+  for (final candidate in _snapshotCleanup(installRoot)) {
+    final claimed = _claimCleanupCandidate(installRoot, candidate);
+    if (claimed == null) continue;
+    try {
+      _deleteClaimedTree(installRoot, claimed);
+    } on FileSystemException {
+      // A scanner may retain the detached bytes until the next start.
+    }
+  }
+}
 
 bool validVersionFolder(String value) {
   if (value.isEmpty || value == '.' || value.contains('..')) return false;

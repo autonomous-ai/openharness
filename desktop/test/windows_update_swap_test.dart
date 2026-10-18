@@ -165,6 +165,56 @@ void main() {
     oldInstallIntact();
   });
 
+  test(
+    'commit refuses an app ancestor replaced by a link after staging',
+    () async {
+      final swap = WindowsUpdateSwap(installRoot: root);
+      expect(await stage(swap, updateZip('1.3.0')), isNull);
+      final outside = Directory(p.join(dir.path, 'external-app'));
+      Directory(p.join(root, 'app')).renameSync(outside.path);
+      File(p.join(outside.path, 'sentinel')).writeAsStringSync('keep');
+      Link(p.join(root, 'app')).createSync(outside.path);
+      expect(swap.commit(version: '1.3.0'), contains('ordinary'));
+      expect(swap.publicationStarted, isFalse);
+      expect(File(p.join(outside.path, 'sentinel')).readAsStringSync(), 'keep');
+      expect(
+        File(p.join(outside.path, '1.2.0', 'harness-desktop.exe'))
+            .readAsStringSync(),
+        'app 1.2.0',
+      );
+      expect(Directory(p.join(outside.path, '1.3.0')).existsSync(), isFalse);
+      expect(read('current'), '1.2.0\r\n');
+    },
+    skip: Platform.isWindows
+        ? 'Windows junction gate covers reparse points'
+        : null,
+  );
+
+  test(
+    'commit refuses an install root replaced by a link after staging',
+    () async {
+      final swap = WindowsUpdateSwap(installRoot: root);
+      expect(await stage(swap, updateZip('1.3.0')), isNull);
+      final outside = p.join(dir.path, 'external-root');
+      Directory(root).renameSync(outside);
+      File(p.join(outside, 'sentinel')).writeAsStringSync('keep');
+      Link(root).createSync(outside);
+      expect(swap.commit(version: '1.3.0'), contains('ordinary'));
+      expect(swap.publicationStarted, isFalse);
+      expect(File(p.join(outside, 'sentinel')).readAsStringSync(), 'keep');
+      expect(
+        File(p.join(outside, 'app', '1.2.0', 'harness-desktop.exe'))
+            .readAsStringSync(),
+        'app 1.2.0',
+      );
+      expect(Directory(p.join(outside, 'app', '1.3.0')).existsSync(), isFalse);
+      expect(read('current'), '1.2.0\r\n');
+    },
+    skip: Platform.isWindows
+        ? 'Windows junction gate covers reparse points'
+        : null,
+  );
+
   test('stage rejects an existing target and preserves its bytes', () async {
     Directory(p.join(root, 'app', '1.3.0')).createSync();
     File(p.join(root, 'app', '1.3.0', 'external')).writeAsStringSync('keep');
@@ -384,6 +434,54 @@ void main() {
     },
   );
 
+  test('slow detached cleanup leaves the publication lock available', () async {
+    Directory(p.join(root, 'app', '1.0.0')).createSync();
+    File(p.join(root, 'app', '1.0.0', 'old')).writeAsStringSync('stale');
+    Directory(p.join(root, 'app', '0.9.0')).createSync();
+    File(p.join(root, 'previous')).writeAsStringSync('0.9.0\r\n');
+    File(p.join(root, 'app', '0.9.0', '.started')).writeAsStringSync('history');
+    final outside = Directory(p.join(dir.path, 'external'))..createSync();
+    File(p.join(outside.path, 'sentinel')).writeAsStringSync('keep');
+    final deleting = Completer<String>();
+    final release = Completer<void>();
+    final cleanup = WindowsUpdateSwap(
+      installRoot: root,
+      deleteClaimed: (path) async {
+        if (!deleting.isCompleted) {
+          deleting.complete(path);
+          await release.future;
+        }
+        Directory(path).deleteSync(recursive: true);
+      },
+    );
+    final pending = cleanup.cleanUp();
+    final quarantine = await deleting.future.timeout(
+      const Duration(seconds: 10),
+    );
+    expect(exists('app/1.0.0'), isFalse);
+    expect(Directory(quarantine).existsSync(), isTrue);
+    final swap = WindowsUpdateSwap(installRoot: root);
+    expect(await stage(swap, updateZip('1.3.0')), isNull);
+    expect(swap.commit(version: '1.3.0'), isNull);
+    expect(read('current'), '1.3.0\r\n');
+    expect(read('previous'), '1.2.0\r\n');
+    expect(read('app/0.9.0/.started'), 'history');
+    expect(attempts(), hasLength(1));
+    release.complete();
+    await pending.timeout(const Duration(seconds: 10));
+    expect(File(p.join(outside.path, 'sentinel')).readAsStringSync(), 'keep');
+    expect(read('app/1.3.0/harness-desktop.exe'), 'app 1.3.0');
+  });
+
+  test('cleanup retains the only launcher backup', () async {
+    File(p.join(root, 'Harness.exe.old')).writeAsStringSync('recovery');
+    final cleanup = WindowsUpdateSwap(installRoot: root);
+    File(p.join(root, 'Harness.exe')).deleteSync();
+    await cleanup.cleanUp();
+    expect(read('Harness.exe.old'), 'recovery');
+    expect(read('current'), '1.2.0\r\n');
+  });
+
   test(
     'cleanup with unreadable current leaves current and previous bytes alone',
     () {
@@ -555,6 +653,51 @@ void main() {
     },
     skip: !Platform.isWindows ? 'Windows junction only' : null,
   );
+
+  test('Windows native post-stage app junction refuses publication', () async {
+    final swap = WindowsUpdateSwap(installRoot: root);
+    expect(await stage(swap, updateZip('1.3.0')), isNull);
+    final outside = p.join(dir.path, 'external-app');
+    Directory(p.join(root, 'app')).renameSync(outside);
+    File(p.join(outside, 'sentinel')).writeAsStringSync('keep');
+    final made = Process.runSync('cmd.exe', [
+      '/c',
+      'mklink /J "${p.join(root, 'app')}" "$outside"',
+    ]);
+    expect(made.exitCode, 0, reason: '${made.stdout}\n${made.stderr}');
+    expect(swap.commit(version: '1.3.0'), contains('ordinary'));
+    expect(swap.publicationStarted, isFalse);
+    expect(File(p.join(outside, 'sentinel')).readAsStringSync(), 'keep');
+    expect(
+      File(p.join(outside, '1.2.0', 'harness-desktop.exe')).readAsStringSync(),
+      'app 1.2.0',
+    );
+    expect(Directory(p.join(outside, '1.3.0')).existsSync(), isFalse);
+    expect(read('current'), '1.2.0\r\n');
+  }, skip: !Platform.isWindows ? 'Windows junction only' : null);
+
+  test('Windows native post-stage root junction refuses publication', () async {
+    final swap = WindowsUpdateSwap(installRoot: root);
+    expect(await stage(swap, updateZip('1.3.0')), isNull);
+    final outside = p.join(dir.path, 'external-root');
+    Directory(root).renameSync(outside);
+    File(p.join(outside, 'sentinel')).writeAsStringSync('keep');
+    final made = Process.runSync('cmd.exe', [
+      '/c',
+      'mklink /J "$root" "$outside"',
+    ]);
+    expect(made.exitCode, 0, reason: '${made.stdout}\n${made.stderr}');
+    expect(swap.commit(version: '1.3.0'), contains('ordinary'));
+    expect(swap.publicationStarted, isFalse);
+    expect(File(p.join(outside, 'sentinel')).readAsStringSync(), 'keep');
+    expect(
+      File(p.join(outside, 'app', '1.2.0', 'harness-desktop.exe'))
+          .readAsStringSync(),
+      'app 1.2.0',
+    );
+    expect(Directory(p.join(outside, 'app', '1.3.0')).existsSync(), isFalse);
+    expect(read('current'), '1.2.0\r\n');
+  }, skip: !Platform.isWindows ? 'Windows junction only' : null);
 
   test('Windows native archive case alias is refused before writing', () async {
     final swap = WindowsUpdateSwap(installRoot: root);

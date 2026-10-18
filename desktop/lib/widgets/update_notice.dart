@@ -45,6 +45,7 @@ class UpdateNotice extends StatelessWidget {
     final percent = installing ? notifier.updateDownloadPercent : null;
     final error = notifier.updateError;
     final failed = error != null && !installing;
+    final partialRecovery = failed && notifier.windowsUpdatePartiallyPublished;
 
     // Amber for a failure, the accent wash otherwise. Deliberately NOT green:
     // green is "machine online" everywhere else in this window, and a second
@@ -120,17 +121,19 @@ class UpdateNotice extends StatelessWidget {
                     // between them, which leaves the actions stranded
                     // mid-band instead of anchored to the right edge.
                     //
-                    // Inside it the sentence yields before the size does: a
-                    // truncated sentence still leaves both readable, whereas
-                    // wrapping one would push the buttons out of the band.
+                    // Ordinary notices stay a single line. Partial Windows
+                    // publication carries recovery instructions that must
+                    // remain readable even in a narrow window.
                     Expanded(
                       child: Row(
                         children: [
                           Flexible(
                             child: Text(
                               message,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                              maxLines: partialRecovery ? null : 1,
+                              overflow: partialRecovery
+                                  ? TextOverflow.visible
+                                  : TextOverflow.ellipsis,
                               style: grid.AppType.body(
                                 color: grid.AppPalette.textPrimary,
                               ),

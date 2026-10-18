@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -570,6 +571,8 @@ void main() {
     expect(app.updateError, contains('Harness.exe.old'));
     expect(app.updateError, contains('Close'));
     expect(app.updateError, isNot(contains('retry')));
+    await tester.binding.setSurfaceSize(const Size(360, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(body: UpdateNotice(notifier: app)),
@@ -577,6 +580,19 @@ void main() {
     );
     expect(find.byKey(const Key('retry-update-button')), findsNothing);
     expect(find.text('Dismiss'), findsOneWidget);
+    final guidance = find.text(app.updateError!);
+    expect(guidance, findsOneWidget);
+    final text = tester.widget<Text>(guidance);
+    expect(text.maxLines, isNull);
+    expect(
+      tester.renderObject<RenderParagraph>(guidance).didExceedMaxLines,
+      isFalse,
+    );
+    expect(tester.getSize(guidance).height, greaterThan(40));
+    expect(
+      tester.getBottomRight(guidance).dy,
+      lessThanOrEqualTo(tester.getBottomRight(find.byType(UpdateNotice)).dy),
+    );
     await tester.tap(find.text('Dismiss'));
     await tester.pump();
     expect(app.availableUpdate, isNull);
