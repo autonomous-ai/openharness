@@ -122,6 +122,36 @@ void main() {
     expect(cmake, contains('set_source_files_properties("notifications.cpp"'));
   });
 
+  test('only the WinRT toast source requires C++20', () {
+    final cmake = runner('CMakeLists.txt');
+    expect(
+      cmake,
+      contains('add_library(harness_notifications OBJECT "notifications.cpp")'),
+    );
+    expect(cmake, contains('apply_standard_settings(harness_notifications)'));
+    expect(
+      cmake,
+      contains(
+        'target_compile_features(harness_notifications PRIVATE cxx_std_20)',
+      ),
+    );
+    expect(
+      cmake,
+      contains(
+        'target_link_libraries(\${BINARY_NAME} PRIVATE harness_notifications '
+        '"windowsapp.lib")',
+      ),
+    );
+    final executableSources = RegExp(r'add_executable\([\s\S]*?\n\)')
+        .firstMatch(cmake)!
+        .group(0)!;
+    expect(executableSources, isNot(contains('"notifications.cpp"')));
+    expect(
+      File('windows/CMakeLists.txt').readAsStringSync(),
+      contains('target_compile_features(\${TARGET} PUBLIC cxx_std_17)'),
+    );
+  });
+
   test('the tray mirrors the macOS status menu, and the close button hides '
       'to it', () {
     final tray = runner('tray.cpp');

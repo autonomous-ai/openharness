@@ -12,7 +12,6 @@ add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "fonts.cpp"
   "main.cpp"
-  "notifications.cpp"
   "single_instance.cpp"
   "tray.cpp"
   "utils.cpp"
@@ -47,7 +46,15 @@ target_link_libraries(${BINARY_NAME} PRIVATE "advapi32.lib" "shell32.lib")
 # Toasts (notifications.cpp) through C++/WinRT. Its headers ship with the
 # Windows SDK (Include\<version>\cppwinrt, on every Visual Studio include
 # path). windowsapp.lib is the WinRT umbrella library for x64 and arm64.
-target_link_libraries(${BINARY_NAME} PRIVATE "windowsapp.lib")
+# MSVC 14.51 rejects WinRT's experimental coroutine fallback in C++17.
+# Keep C++20 private to this source so WinRT selects standard coroutines;
+# the runner and Flutter plugins retain their existing C++17 settings.
+add_library(harness_notifications OBJECT "notifications.cpp")
+apply_standard_settings(harness_notifications)
+target_compile_features(harness_notifications PRIVATE cxx_std_20)
+target_compile_definitions(harness_notifications PRIVATE "NOMINMAX")
+target_link_libraries(harness_notifications PRIVATE flutter flutter_wrapper_app)
+target_link_libraries(${BINARY_NAME} PRIVATE harness_notifications "windowsapp.lib")
 # WIC encodes/decodes clipboard PNGs and keeps them in a COM stream.
 target_link_libraries(${BINARY_NAME} PRIVATE "windowscodecs.lib" "ole32.lib")
 set_source_files_properties("notifications.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj;/permissive-")
