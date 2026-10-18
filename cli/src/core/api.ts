@@ -586,9 +586,13 @@ export function resolveAgent(agents: readonly RegisteredSession[], id: string): 
 export interface Asker {
   /** A process on this machine (the desktop app, `hn`, a script), over the local socket. */
   local: boolean
-  /** Whether it may act as this machine's owner: a local process, or the owner's paired app over the
-   *  relay. A device or an observer may not. */
+  /** Whether it may control this machine: a local process, a paired app, or a verified machine share.
+   * A device or an observer may not. Account-backed services also check accountOwner. */
   owner: boolean
+  /** Authority to use the host account, separately from control of a shared machine.
+   * Established by the gateway's pairing record, never by the request payload.
+   * Absent in older transports; a local owner remains authoritative. */
+  accountOwner?: boolean
   /** The connection it came over (a window's, a remote client's), as the core names it, and the id it
    *  asked under: what a service keys work by that belongs to one connection (the Model Manager's grid
    *  commands, which a cancel on the same connection stops; a limit on how many at once per connection).
@@ -1325,6 +1329,7 @@ export type RemoteRole = 'web' | 'device'
  *  the relay. Nothing here is a secret. */
 export interface RemoteClient {
   role: RemoteRole
+  accountOwner?: boolean
   label: string | null
   identity: string
   direct: boolean

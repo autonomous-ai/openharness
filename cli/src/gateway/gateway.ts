@@ -147,6 +147,7 @@ export class RelayGateway implements GatewayPort {
       onIdentityRevoked: identity => { this.deviceUnpaired(identity); this.onDirectDeviceRevoked?.(fingerprint(b64d(identity))) },
       onSessionOpened: (connId, role, identity) => this.core.client(connId, {
         role, label: this.e2ee.sessionLabel(connId), identity, direct: this.directDeviceSinks.has(connId),
+        accountOwner: role === 'web' && this.e2ee.pairedPeers().some(peer => peer.identityPub === identity && !peer.shared),
       }),
       onSessionDropped: (connId) => this.core.client(connId, null),
       onPeerLinked: (peer) => {
