@@ -22,13 +22,7 @@ pub const ODD_NAME: &str = "Nguyễn Văn A' & 100% !x";
 
 /// The test runner, or the stand-in when [STANDIN_OUT] is set. A failing test panics, which ends the run non-zero.
 pub fn main(tests: &[(&str, fn())]) {
-    // An inherited output variable must never turn the whole suite into a stand-in.
-    let is_app = std::env::current_exe().unwrap().file_name().unwrap() == "harness-desktop.exe";
-    let is_owned_child = std::env::args_os()
-        .nth(1)
-        .is_some_and(|arg| arg == "--harness-desktop-stand-in");
-    if let Some(out) = std::env::var_os(STANDIN_OUT).filter(|_| is_app || is_owned_child) {
-        stand_in(Path::new(&out));
+    if stand_in_entry() {
         return;
     }
     let filter = std::env::args().skip(1).find(|arg| !arg.starts_with('-'));
@@ -43,6 +37,20 @@ pub fn main(tests: &[(&str, fn())]) {
     }
     assert!(count > 0, "no desktop tests matched {filter:?}");
     println!("{count} desktop tests passed");
+}
+
+/// Dispatch a copied app or explicit stand-in child before selecting any test cases.
+pub fn stand_in_entry() -> bool {
+    // An inherited output variable must never turn the whole suite into a stand-in.
+    let is_app = std::env::current_exe().unwrap().file_name().unwrap() == "harness-desktop.exe";
+    let is_owned_child = std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--harness-desktop-stand-in");
+    if let Some(out) = std::env::var_os(STANDIN_OUT).filter(|_| is_app || is_owned_child) {
+        stand_in(Path::new(&out));
+        return true;
+    }
+    false
 }
 
 fn stand_in(out: &Path) {

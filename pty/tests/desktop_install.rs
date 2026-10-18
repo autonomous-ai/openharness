@@ -45,7 +45,10 @@ mod windows {
     ];
 
     pub fn main() {
-        desktop_common::main(&[
+        if desktop_common::stand_in_entry() {
+            return;
+        }
+        run_cases(&[
             (
                 "junction_source_is_rejected_before_destination_effects",
                 junction_source_is_rejected_before_destination_effects,
@@ -88,6 +91,35 @@ mod windows {
                 bootstrap_reconstructs_environment_without_caller_overrides,
             ),
         ]);
+    }
+
+    /// Each case owns its World; let cleanup finish unwinding before trying the next case.
+    fn run_cases(tests: &[(&str, fn())]) {
+        let filter = std::env::args().skip(1).find(|arg| !arg.starts_with('-'));
+        let mut passed = 0;
+        let mut failed = Vec::new();
+        for &(name, test) in tests {
+            if filter.as_deref().is_none_or(|filter| name.contains(filter)) {
+                println!("test {name} ...");
+                if std::panic::catch_unwind(test).is_ok() {
+                    println!("test {name} ... ok");
+                    passed += 1;
+                } else {
+                    println!("test {name} ... FAILED");
+                    failed.push(name);
+                }
+            }
+        }
+        assert!(
+            passed + failed.len() > 0,
+            "no desktop tests matched {filter:?}"
+        );
+        println!("{passed} desktop tests passed; {} failed", failed.len());
+        assert!(
+            failed.is_empty(),
+            "failed desktop tests: {}",
+            failed.join(", ")
+        );
     }
 
     struct World {
@@ -334,10 +366,13 @@ mod windows {
             (number(&world, "NoModify"), number(&world, "NoRepair")),
             (1, 1)
         );
-        assert_eq!(
-            shortcut::read(&world.programs.join("Harness.lnk")).unwrap(),
-            (launcher, "Autonomous.Harness".into())
+        let (target, aumid) = shortcut::read(&world.programs.join("Harness.lnk")).unwrap();
+        // COM may expand an 8.3 alias; it must still target this exact installed file.
+        assert!(
+            same(&target, &launcher),
+            "shortcut target {target:?} != {launcher:?}"
         );
+        assert_eq!(aumid, "Autonomous.Harness");
     }
 
     fn same_version_repairs_registration_without_recopying() {
