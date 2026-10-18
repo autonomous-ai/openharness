@@ -789,10 +789,29 @@ class AppNotifier extends ChangeNotifier {
       if (!machine.usesLocalTransport) continue;
       final connection = _pool?[machine.machine.machineId];
       if (connection == null || !connection.isReady) return false;
+      // Windows: harnessd takes these only over its pipe, and this socket rides the loopback port.
+      // There they would only be refused, so none is sent; the pipe is asked again instead, and the
+      // caller says why ([daemonTrustedConnectionMissing]).
+      if (connection.trustedPipeMissing) {
+        unawaited(connection.moveToTrustedPipe());
+        return false;
+      }
       unawaited(
         connection.sendTerminalFrame(type, payload).catchError((_) => false),
       );
       return true;
+    }
+    return false;
+  }
+
+  /// Whether the socket to this computer's harnessd is up but is not its private one, so the
+  /// `daemon_*` frames cannot go: on Windows, its pipe was missing or did not prove itself when the
+  /// socket connected ([WsConn.trustedPipeMissing]). Never true on macOS or Linux.
+  bool get daemonTrustedConnectionMissing {
+    for (final machine in machineStates.values) {
+      if (!machine.usesLocalTransport) continue;
+      final connection = _pool?[machine.machine.machineId];
+      return connection != null && connection.isReady && connection.trustedPipeMissing;
     }
     return false;
   }

@@ -866,4 +866,34 @@ void main() {
     await brain.presence(active: true);
     expect(sent.last.$2.containsKey('consent'), isFalse, reason: 'signed in');
   });
+
+  test('a key or a talk that cannot go says why when harnessd\'s private '
+      'connection is what is missing', () {
+    var missing = false;
+    final private = DaemonBrain(
+      send: (type, payload) {
+        if (!reachable) return false;
+        sent.add((type, payload));
+        return true;
+      },
+      trustedConnectionMissing: () => missing,
+      now: () => now,
+    );
+    addTearDown(private.dispose);
+    final errors = <String>[];
+    private.errors.listen(errors.add);
+    private.shown('s1');
+    now = now.add(DaemonBrain.armAfter);
+    reachable = false;
+
+    expect(private.act('s1', 'y'), isFalse);
+    expect(errors.last, DaemonBrain.unreachableWords);
+    missing = true;
+    expect(private.act('s1', 'y'), isFalse);
+    expect(errors.last, DaemonBrain.privateConnectionWords);
+    private.talkTo('anything?');
+    expect(private.talkError, DaemonBrain.privateConnectionWords);
+    // A sentence for a person: no transport words.
+    expect(DaemonBrain.privateConnectionWords, isNot(contains('pipe')));
+  });
 }

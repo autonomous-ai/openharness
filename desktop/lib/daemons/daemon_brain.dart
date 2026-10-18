@@ -763,6 +763,7 @@ typedef DaemonTalkEntry = ({bool you, String text});
 class DaemonBrain extends ChangeNotifier {
   DaemonBrain({
     required this.send,
+    this.trustedConnectionMissing,
     this.storage,
     Random? random,
     DateTime Function()? now,
@@ -772,6 +773,23 @@ class DaemonBrain extends ChangeNotifier {
   /// Sends one frame on the socket bound to this computer's harnessd; false
   /// when there is none (then nothing is sent anywhere else).
   final bool Function(String type, Map<String, dynamic> payload) send;
+
+  /// Whether that socket is up but not harnessd's private one, so it takes no
+  /// keys or talk: on Windows, its pipe is missing or did not prove itself
+  /// (`AppNotifier.daemonTrustedConnectionMissing`). Null: never.
+  final bool Function()? trustedConnectionMissing;
+
+  /// What a key or a talk that could not be sent says.
+  static const unreachableWords = 'harnessd is not reachable.';
+
+  /// What it says when the private connection is what is missing.
+  static const privateConnectionWords =
+      'keys and talk need harnessd\'s private connection, which is not open '
+      'on this PC yet. the next one asks again.';
+
+  String get _unreachable => trustedConnectionMissing?.call() == true
+      ? privateConnectionWords
+      : unreachableWords;
   final LocalKeyValueStore? storage;
   final Random _random;
   final DateTime Function() _now;
@@ -1235,7 +1253,7 @@ class DaemonBrain extends ChangeNotifier {
     if (sent) {
       _pendingActs[requestId] = sayId;
     } else {
-      _errors.add('harnessd is not reachable.');
+      _errors.add(_unreachable);
     }
     return sent;
   }
@@ -1256,7 +1274,7 @@ class DaemonBrain extends ChangeNotifier {
     if (sent) {
       _pendingConfirms[requestId] = id;
     } else {
-      _errors.add('harnessd is not reachable.');
+      _errors.add(_unreachable);
     }
     return sent;
   }
@@ -1347,7 +1365,7 @@ class DaemonBrain extends ChangeNotifier {
     } else {
       _talkRequest = null;
       _talkPhase = DaemonTalkPhase.failed;
-      _talkError = 'harnessd is not reachable.';
+      _talkError = _unreachable;
     }
     notifyListeners();
     return sent;

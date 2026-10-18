@@ -329,6 +329,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _experimentalFeatures.enabled(ExperimentalFeature.focusBarCreature);
   late final _brain = DaemonBrain(
     send: _sendDaemonFrame,
+    trustedConnectionMissing: () => app.daemonTrustedConnectionMissing,
     storage: kUnderTest ? null : HarnessFileStore.shared,
     now: widget.daemonClock,
   );
