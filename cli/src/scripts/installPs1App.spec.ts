@@ -37,6 +37,7 @@ function folder(prefix: string): string {
   return dir
 }
 
+// Slow ARM PowerShell startup left this cleanup hook running for 68 seconds before its timeout.
 afterAll(() => {
   // Each path is in a unique test-owned install. Retain a Process handle, check its full image path,
   // and wait for confirmed exit before deleting any directory that held it.
@@ -60,9 +61,10 @@ afterAll(() => {
   }
   if (failures.length) throw new Error(`Owned registry cleanup failed; scratch retained: ${failures.join('; ')}`)
   for (const dir of scratch) rmSync(dir, { recursive: true, force: true })
-})
+}, 180_000)
 
-describe.runIf(windows)('install.ps1 -App selects the desktop zip', { timeout: 120_000 }, () => {
+// The six-call malformed-entry case took 137 seconds with slow ARM PowerShell startup.
+describe.runIf(windows)('install.ps1 -App selects the desktop zip', { timeout: 240_000 }, () => {
   const entry = (arch: string, version: string) => ({ version, url: `https://cdn.example/${arch}.zip`, sha256: '0'.repeat(64), size: 1 })
   function pick(document: object, platform: string): string {
     const script = `$ErrorActionPreference = 'Stop'; . ${quote(installer)}; try { $e = Select-HarnessAppEntry -Document (${quote(JSON.stringify(document))} | ConvertFrom-Json) -Platform ${quote(platform)}; "$($e.version) $($e.url)" } catch { $_.Exception.Message }`
