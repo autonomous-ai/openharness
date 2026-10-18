@@ -1,3 +1,4 @@
+import { publishObservers } from './observers.js'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -8,8 +9,8 @@ type Json = Record<string, unknown>
 export class SuperTabHostError extends Error {
   constructor(readonly code: string, message: string, readonly status = 503) { super(message) }
 }
-export const object = (v: unknown): Json => v && typeof v === 'object' && !Array.isArray(v) ? v as Json : {}
-export const identifier = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(v)
+export { identifier, object } from './wire.js'
+import { identifier, object } from './wire.js'
 
 /** The core signs each request. Neither the service nor its journal holds an account credential. */
 export async function backend(core: CoreApi, method: string, path: string, body?: unknown): Promise<unknown> {
@@ -37,6 +38,7 @@ export interface SuperTabHostOptions {
   now?: () => number
   write?: (file: string, journal: Journal) => void
   log?: (message: string) => void
+  observers?: typeof publishObservers
 }
 
 export const hostJournalFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `host-${machineId}.json`)
@@ -56,6 +58,7 @@ export class SuperTabHost {
   private readonly now: () => number
   private readonly write: (file: string, journal: Journal) => void
   private readonly log: (message: string) => void
+  private readonly observers: typeof publishObservers
   private readonly active = new Set<string>()
   private readonly authorized = new Map<string, number>()
   private readonly stopHearing: () => void
@@ -66,6 +69,7 @@ export class SuperTabHost {
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
     this.file = hostJournalFile(core.dataDir, machineId)
+    this.observers = options.observers ?? publishObservers
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
@@ -107,6 +111,7 @@ export class SuperTabHost {
     this.timer = null
     this.stopHearing()
     this.authorized.clear()
+    try { this.observers(this.core.dataDir, this.machineId, [], 0) } catch { /* The old snapshot expires. */ }
     void this.core.turns.leaseDeliveries('superTabs', {})
     for (const id of this.active) this.core.turns.cancelDelivery(id)
     this.active.clear()
@@ -122,9 +127,11 @@ export class SuperTabHost {
     return this.core.turns.leaseDeliveries('superTabs', Object.fromEntries(this.authorized))
   }
   private async poll(): Promise<void> {
+    const requestedAt = this.now()
     const data = await backend(this.core, 'GET', `/api/super-tabs/hosts/${this.machineId}`)
     if (this.stopped) return
     if (!Array.isArray(data)) throw new Error('Invalid Super Tab host roster.')
+    this.observers(this.core.dataDir, this.machineId, data, requestedAt + 2500)
     const seen = new Set<string>()
     for (const item of data) {
       const row = object(item), agent = object(row.agent)

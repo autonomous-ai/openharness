@@ -154,7 +154,7 @@ class SuperTabLaunch {
     );
     // Waking the exact host starts only its authorized contributions. It is
     // safe to retry, and never grants machine access to the tab's members.
-    await app.superTabMachineRequest(machine, {'action': 'wake'});
+    await app.wakeSuperTabHost(machine);
     if (saved['lead'] == true) {
       final name = Swarm.titleFor(native);
       final title = name == Swarm.defaultName ? 'Super Tab' : name;

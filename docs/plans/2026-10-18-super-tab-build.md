@@ -19,10 +19,13 @@ This is a new tab type. Existing tabs and running sessions are not converted.
 - Daemon service and agent CLI for conversation commands and durable native message delivery.
 - Revocable input leases and durable host journals prevent replay after uncertain execution.
 - Mentions retain agent identity across restarts; work details show acceptance checks and exact result links.
+- Session-only terminal views reuse the existing encrypted observer protocol, with backend membership checks and expiring host authority.
+- Scoped agent start/resume with native creation receipts and single-dispatch claims; machine and quota admission.
 - Experimental settings cleanup and retired PR branding, preserving compatibility fields and usage controls.
 
 The desktop surface is connected, but the complete workflow is not ready. Scoped autonomous
-agent creation, capacity admission, session-only terminal grants, delivery reconciliation and
+agent starts and capacity checks are connected through the existing native creation protocol.
+Terminal access is connected. Delivery reconciliation and
 several creation/recovery edges remain. The PR stays a draft until these are implemented and
 the complete workflow is tested and reviewed.
 
@@ -49,11 +52,11 @@ or product readiness. Preserve valid evidence for unchanged scopes instead of re
 Focused checks completed during implementation (18 October):
 
 - Backend and CLI typechecks passed.
-- Backend commands: 10 tests passed; machine policy/access/sharing checks also passed.
-- `npm run test:super-tabs`: 10 integration tests passed in a disposable, loopback-only
+- Backend commands and session-share access: 24 tests passed; machine policy/access/sharing checks also passed.
+- `npm run test:super-tabs`: 12 integration tests passed in a disposable, loopback-only
   MongoDB 7.0.24 replica set. Includes transactional retry, cross-tab assignment ownership,
-  host-confirmed stop and machine-share removal/restoration fencing for queued instructions.
-- CLI host/service/command: 14 tests passed. PR attribution and launch overrides: 47 passed.
+  host-confirmed stop, concurrent native start claims and machine-share removal/restoration fencing for queued instructions.
+- CLI Super Tab, terminal sharing and architecture checks: 63 tests passed. PR attribution and launch overrides: 47 passed.
 - CLI launch argv goldens: 2 tests passed without recording. Launch-shape recording showed no
   fixture changes; a normal comparison run remains to do.
 - Focused core/process coverage: 77 tests, 100% statements, branches, functions and lines for
@@ -61,7 +64,7 @@ Focused checks completed during implementation (18 October):
 - Flutter creation, attachment, shortcut, keymap and state regression checks: 98 passed.
 - Flutter conversation surface/state and entry rules: 40 passed, including hidden shortcut,
   persistent mention identity and lost acknowledgements.
-- Flutter Super Tab launch/account recovery: 5 passed for both lead engines, lost native/join
+- Flutter Super Tab launch/account recovery and conversation state: 15 passed for both lead engines, lost native/join
   replies and account changes. Experimental settings: 15 passed earlier.
 
 These are focused checks, not end-to-end evidence. Full component suites, real-engine/native

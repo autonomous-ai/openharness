@@ -165,3 +165,24 @@ describe('Super Tab collaboration policy', () => {
     expect(() => f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'extra', name: 'Extra', configuration: config, lead: false })).toThrow('explicitly shared')
   })
 })
+
+it('starts only in the chosen conversation, captures authority, and never assigns on join', () => {
+  const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+  const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+  const request = { conversationId: group, machineId: 'target', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+    requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+  const startId = f.run({ type: 'agent.start', request }, actor, { contribution }).result.startId as string
+  expect(f.state.starts![0]).toMatchObject({ request, hostGrant: 'grant-1', dispatched: false })
+  expect(f.state.agents).toHaveLength(1)
+  expect(f.state.conversations).toHaveLength(2)
+  expect(() => f.run({ type: 'agent.startDispatch', startId }, actor, { contribution: { ...contribution, hostGrant: 'new-grant' } })).toThrow('revoked')
+  f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })
+  expect(() => f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })).toThrow('already requested')
+  const worker = f.run({ type: 'agent.started', startId, harnessId: 'native-worker', configuration: { ...config, engine: 'claude' } }, actor, { contribution }).result.agentId
+  expect(f.state.agents).toHaveLength(2)
+  expect(f.state.conversations[1]).toMatchObject({ agentIds: [lead, worker], assignment: null })
+  expect(f.state.conversations[0]!.agentIds).toEqual([lead])
+  f.run({ type: 'tab.pause', paused: true })
+  expect(() => f.run({ type: 'agent.start', request }, actor, { contribution })).toThrow('paused')
+})

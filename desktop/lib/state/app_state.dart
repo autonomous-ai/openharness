@@ -1693,6 +1693,13 @@ class AppNotifier extends ChangeNotifier {
     return result;
   }
 
+  Future<void> wakeSuperTabHost(String machineId) async {
+    await superTabMachineRequest(machineId, {'action': 'wake'});
+    // Share derives only the session views authorized by the tab. Its existing
+    // observer protocol never exposes this machine's general command surface.
+    await _conn(machineId).request('harness_share_rosters');
+  }
+
   void bindSuperTab(String swarmId, String tabId, String name) {
     final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
     if (swarm == null) return;

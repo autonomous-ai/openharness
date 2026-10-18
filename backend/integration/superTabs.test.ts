@@ -230,6 +230,47 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await store.deliveries(host, tab, worker)).toEqual([])
   })
 
+  it('derives session-only observer access from accepted membership and removes it with that membership', async () => {
+    const { tab, lead } = await fixture()
+    const state = (await store.read(owner, tab)).state
+    const native = state.agents.find(a => a.id === lead)!.harnessId
+    expect(await store.mayObserve(peer, tab, 'test-host', native, host.sub)).toBe(false)
+    await invite(tab, 'viewer')
+    expect(await store.mayObserve(peer, tab, 'test-host', native, host.sub)).toBe(true)
+    expect(await store.mayObserve(peer, tab, 'test-host', 'another-session', host.sub)).toBe(false)
+    const grants = (await store.hostTabs(host, 'test-host')).find(t => t.tabId === tab)
+    expect(grants?.observers).toContainEqual({ email: peer.email, userId: peer.sub })
+    await run(tab, { type: 'member.remove', userId: peer.sub })
+    expect(await store.mayObserve(peer, tab, 'test-host', native, host.sub)).toBe(false)
+    expect((await store.hostTabs(host, 'test-host')).find(t => t.tabId === tab)?.observers).not.toContainEqual({ email: peer.email, userId: peer.sub })
+  })
+
+  it('serializes native start claims and fences a restored target-machine grant', async () => {
+    const { tab } = await fixture()
+    const request = { conversationId: 'lead', machineId: 'test-host', engine: 'claude', name: 'Builder', cwd: '/fixture/repo', worktree: true,
+      requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+    const intent = randomUUID()
+    const starts = await Promise.all(Array.from({ length: 3 }, () => run(tab, { type: 'agent.start', request }, owner, undefined, intent)))
+    const startId = starts[0]!.result.startId as string
+    expect(new Set(starts.map(s => s.result.startId)).size).toBe(1)
+    expect((await store.read(owner, tab)).state.starts).toHaveLength(1)
+    const claims = await Promise.allSettled(Array.from({ length: 2 }, () => run(tab, { type: 'agent.startDispatch', startId })))
+    expect(claims.filter(c => c.status === 'fulfilled')).toHaveLength(1)
+    expect((await store.start(owner, tab, startId)).dispatched).toBe(true)
+    const original = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
+    try {
+      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [peer.email],
+        grantVersions: nextMachineShareGrants(original, [peer.email], null) } })
+      await expect(store.start(owner, tab, startId)).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
+    } finally {
+      const current = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
+      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [owner.email, peer.email],
+        grantVersions: nextMachineShareGrants(current, [owner.email, peer.email], null) } })
+    }
+    await expect(store.start(owner, tab, startId)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
+    await expect(run(tab, { type: 'agent.started', startId, harnessId: 'must-not-join', configuration: config })).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
+  })
+
   it('does not authorize a host through a contributor’s obsolete email address', async () => {
     const { tab, lead } = await fixture()
     await run(tab, message('Requires the current machine grant.'))

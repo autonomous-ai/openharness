@@ -17,6 +17,7 @@
  *   wants are derived from (sharing/rosterGrants.ts): the messages process is that file's only writer.
  * The observers' frames reach it through its port, as the relay hands them over.
  */
+import { observerSource } from '../superTabs/observers.js'
 import { join } from 'node:path'
 import type { CoreApi, CorePorts, ServiceRequests, TerminalWatch } from '../core/api.js'
 import { SHARE_REQUESTS } from '../core/api.js'
@@ -58,7 +59,10 @@ export const viewerPage = (core: Pick<CoreApi, 'agents'>) => (agentId: string): 
 
 export function startSharing(core: CoreApi, ports: CorePorts, options: SharingOptions = {}): ServiceRequests {
   const viewers = options.viewers ?? new SharedViewerPool(viewerPage(core))
+  const superTabs = observerSource(core.dataDir, () => core.daemon.machineId())
   const owner = new HarnessShareOwner({
+    derivedGrants: superTabs.current,
+    allowsGrant: superTabs.allows,
     machineId: () => core.daemon.machineId(),
     key: {
       publicKey: async () => b64d(await core.account.observerKey.publicKey()),

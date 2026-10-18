@@ -1,8 +1,10 @@
+import { inspectCapacity, startAgent } from './start.js'
+import { object } from './host.js'
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
 import { callerOf, type Frame } from '../agentClient/model.js'
 import { identifier } from './host.js'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | post GROUP TEXT OPERATION_ID | command OPERATION_ID JSON | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | post GROUP TEXT OPERATION_ID | command OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | help'
 export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   const positional: string[] = []
   let tabId = '', agentId = ''
@@ -25,6 +27,11 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
       command: { type: 'message.send', conversationId: first, text: second, replyTo: null, recipientIds: [] } })
   } else if (action === 'command' && identifier(first) && second && positional.length === 3) {
     Object.assign(payload, { operationId: first, command: JSON.parse(second) })
+  } else if (action === 'start' && identifier(first) && second && positional.length === 3) {
+    Object.assign(payload, { operationId: first, request: JSON.parse(second) })
+  } else if (action === 'resume' && identifier(first) && positional.length === 2) payload.startId = first
+  else if (action === 'capacity' && identifier(first) && second && positional.length === 3) {
+    Object.assign(payload, { targetMachineId: first, request: JSON.parse(second) })
   } else if (!['status', 'help'].includes(action) || positional.length !== 1) throw new Error(USAGE)
   return { where: target, payload }
 }
@@ -46,7 +53,24 @@ export async function superTabCommand(argv: readonly string[], deps: {
       if (!caller) throw new Error('Run this command inside the participating harness, or supply its --agent ID.')
       request.payload.harnessId = caller.agentId
     }
-    const result = await daemon.request('super_tabs', request.payload, 30_000)
+    const source = daemon
+    const scoped = (payload: Record<string, unknown>) => source.request('super_tabs', {
+      tabId: request.payload.tabId, agentId: request.payload.agentId, harnessId: request.payload.harnessId, ...payload,
+    }, 30_000)
+    let result: Record<string, unknown>
+    if (['start', 'resume'].includes(String(request.payload.action))) {
+      result = await startAgent(request.payload, scoped, request.where, deps.open)
+    } else if (request.payload.action === 'capacity') {
+      // Establish current Super Tab participation before inspecting a machine;
+      // the native relay independently enforces that account's machine access.
+      const known = await scoped({ action: 'status' })
+      if (known.error) result = known
+      else {
+        const target = await (deps.open ?? openDaemon)(request.where, String(request.payload.targetMachineId))
+        try { result = { ok: true, ...await inspectCapacity(target, object(request.payload.request)) } }
+        finally { target.close() }
+      }
+    } else result = await daemon.request('super_tabs', request.payload, 30_000)
     print(JSON.stringify({ ...result, ...(operationId ? { operationId } : {}) }))
     return result.error ? 1 : 0
   } catch (error) {

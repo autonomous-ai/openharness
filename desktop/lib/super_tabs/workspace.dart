@@ -34,11 +34,16 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     try {
       final tab = app.swarms.where((s) => s.id == swarmId).firstOrNull;
       if (tab == null) return;
-      final machine = app.stateOf(agent.machineId);
+      var machine = app.stateOf(agent.machineId);
+      if (machine?.agents.any((a) => a.id == agent.harnessId) != true) {
+        await app.refreshMachines();
+        if (!mounted || !app.swarms.any((s) => s.id == swarmId)) return;
+        machine = app.stateOf(agent.machineId);
+      }
       if (machine?.agents.any((a) => a.id == agent.harnessId) != true) {
         throw const SuperTabFailure(
           'TERMINAL_UNAVAILABLE',
-          'The agent’s machine is not connected. Reconnect it to open its terminal.',
+          'The shared terminal is not available yet. Its execution machine must be online.',
         );
       }
       await app.assignAgentToPane(

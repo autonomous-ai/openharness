@@ -20,6 +20,33 @@ export interface Agent {
   name: string
   configuration: AgentConfiguration
 }
+export interface AgentStartRequest {
+  conversationId: string
+  machineId: string
+  engine: string
+  name: string
+  cwd: string
+  worktree: boolean
+  branchRef?: string
+  permissionMode?: string
+  codexHome?: string
+  gridModel?: string
+  gridName?: string
+  requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
+}
+export interface AgentStart {
+  id: string
+  creationId: string
+  actorKey: string
+  contributorId: string
+  membershipGeneration: string
+  machineOwnerId: string
+  hostGrant: string | null
+  request: AgentStartRequest
+  harnessId: string | null
+  dispatched: boolean
+  error: string | null
+}
 export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'review' | 'done' | 'stopped' | 'reconciling'
 export interface Check {
   id: string
@@ -65,6 +92,7 @@ export interface SuperTabState {
   agents: Agent[]
   conversations: Conversation[]
   invitations: Invitation[]
+  starts?: AgentStart[]
 }
 export type Actor =
   | { kind: 'person'; userId: string; email: string }

@@ -780,7 +780,7 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
   orchestrator: { requests: ORCHESTRATOR_REQUESTS, state: ['orchestrator/*.json'] },
   // Its invitations and links: a harness was shared from here. Or a shared tab held here (Agent Messages' file): the
   // observers its members are granted are derived and renewed by Share, and taken back once one leaves.
-  sharing: { requests: SHARE_REQUESTS, state: ['harness-shares.json', 'harness-collaboration.json', 'agent-messages/shared-tabs.json'] },
+  sharing: { requests: SHARE_REQUESTS, state: ['harness-shares.json', 'harness-collaboration.json', 'agent-messages/shared-tabs.json', 'super-tabs/host-*.json'] },
   // Request-only, on from its first request until the daemon stops: another machine's Memories pane asks, and
   // the package's own files are its state.
   memory: { requests: MEMORY_REQUESTS, state: [] },

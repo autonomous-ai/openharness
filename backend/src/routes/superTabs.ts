@@ -13,6 +13,7 @@ const agentQuery = z.object({ asAgentId: id.optional() }).strict()
 const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160) }).strict()
 const operation = operationSchema.extend({ asAgentId: id.optional() })
 const listQuery = z.object({ after: id.optional() }).strict()
+const startParams = tabParams.extend({ startId: id })
 const messageParams = tabParams.extend({ conversationId: id })
 const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegative().safe().optional(),
   before: z.coerce.number().int().nonnegative().safe().optional() }).refine(q => q.after === undefined || q.before === undefined, 'Choose one message cursor.')
@@ -49,6 +50,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     { preHandler: [validateParams(tabParams), validateBody(operation)] },
     (req, reply) => respond(reply, () => store.execute(req.user!, req.params.tabId,
       { operationId: req.body.operationId, command: req.body.command }, req.body.asAgentId)))
+  app.get<{ Params: z.infer<typeof startParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/starts/:startId',
+    { preHandler: [validateParams(startParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => store.start(req.user!, req.params.tabId, req.params.startId, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof messageQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/messages',
     { preHandler: [validateParams(messageParams), validateQuery(messageQuery)] },
     (req, reply) => respond(reply, () => store.messages(req.user!, req.params.tabId, req.params.conversationId, req.query, req.query.asAgentId)))

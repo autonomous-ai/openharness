@@ -1,3 +1,4 @@
+import { readCapabilities } from './capacity.js'
 import { existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
@@ -7,6 +8,10 @@ const HELP = {
   status: 'Read the shared tab roster and work.',
   messages: 'messages GROUP: read recent messages in a conversation.',
   post: 'post GROUP TEXT OPERATION_ID: reply in that conversation. Use a unique ID per message and reuse it after an interrupted request.',
+  start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine you can access. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work.',
+  resume: 'resume START_ID: finish a pending start without creating another agent.',
+  capacity: 'capacity MACHINE_ID JSON: inspect machine, engine and quota headroom. JSON uses the start request fields below. Unknown allowances are not reported as free tokens.',
+  startRequest: { conversationId: 'GROUP', machineId: 'MACHINE', engine: 'codex', name: 'Builder', cwd: '/absolute/repo/on/that/machine', worktree: true, requirements: { memoryBytes: 2147483648, diskBytes: 10737418240, maxCpuPercent: 85, tools: ['git'], devices: [], quotaRequired: false } },
   command: 'command OPERATION_ID JSON: send one of the commands below. Reuse exactly the same ID and JSON after an interrupted request.',
   commands: [
     { type: 'message.send', conversationId: 'GROUP', text: 'A message addressed to an agent', replyTo: null, recipientIds: ['AGENT'] },
@@ -20,7 +25,7 @@ const HELP = {
   ],
 }
 
-export interface SuperTabServiceOptions { host?: (core: CoreApi, machineId: string) => SuperTabHost }
+export interface SuperTabServiceOptions { capacity?: typeof readCapabilities; host?: (core: CoreApi, machineId: string) => SuperTabHost }
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
   let host: SuperTabHost | null = null
   const wake = () => {
@@ -43,6 +48,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // Existing machine access routes the frame. Waking reads this host's own
         // registered contributions only, and grants the caller no account access.
         if (payload.action === 'wake') { wake(); return { ok: true } }
+        if (payload.action === 'capacity') return (options.capacity ?? readCapabilities)(payload)
         if (!asker.owner) return { error: 'OWNER_REQUIRED' }
         if (payload.action === 'backend') {
           const { method, path } = payload
@@ -66,6 +72,9 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return { error: 'AGENT_UNAVAILABLE', detail: 'This agent is not a running contribution on this machine.' }
         }
         wake()
+        if (payload.action === 'startStatus' && identifier(payload.startId)) {
+          return { ok: true, value: await backend(core, 'GET', `${path}/starts/${payload.startId}?${identity}`) }
+        }
         if (payload.action === 'status') return { ok: true, value: answer }
         if (payload.action === 'messages' && identifier(payload.conversationId)) {
           return { ok: true, value: await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}`) }

@@ -12,6 +12,16 @@ const configuration = z.object({
   effort: z.string().max(80).nullable(), contextWindow: z.number().int().positive().safe().nullable(),
   engineVersion: z.string().max(160).nullable(),
 }).strict()
+const path = z.string().min(1).max(4096).regex(/^\//).refine(value => !/[\x00-\x1f\x7f]/.test(value))
+export const startRequestSchema = z.object({
+  conversationId: id, machineId: id, engine: z.string().min(1).max(80), name: title, cwd: path,
+  worktree: z.boolean(), branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(),
+  permissionMode: z.string().min(1).max(80).optional(), codexHome: path.optional(),
+  gridModel: z.string().min(1).max(2048).optional(), gridName: z.string().min(1).max(2048).optional(),
+  requirements: z.object({ memoryBytes: z.number().int().nonnegative().safe(), diskBytes: z.number().int().nonnegative().safe(),
+    maxCpuPercent: z.number().min(0).max(100), tools: z.array(z.string().regex(/^[A-Za-z0-9_.+-]{1,80}$/)).max(20),
+    devices: z.array(path).max(20), quotaRequired: z.boolean() }).strict(),
+}).strict()
 const check = z.object({ description: z.string().trim().min(1).max(1000), independent: z.boolean() }).strict()
 
 export const commandSchema = z.discriminatedUnion('type', [
@@ -21,6 +31,10 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), initialMessage: text.optional() }).strict(),
+  z.object({ type: z.literal('agent.start'), request: startRequestSchema }).strict(),
+  z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
+  z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration }).strict(),
+  z.object({ type: z.literal('agent.startFailed'), startId: id, error: text }).strict(),
   z.object({ type: z.literal('agent.remove'), agentId: id }).strict(),
   z.object({ type: z.literal('conversation.agent'), conversationId: id, agentId: id, present: z.boolean(), lead: z.boolean() }).strict(),
   z.object({ type: z.literal('invite.create'), email: z.email().max(320), role: z.enum(['collaborator', 'viewer']), conversationId: id }).strict(),
@@ -171,6 +185,64 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (actor.kind !== 'person') fail('FORBIDDEN', 'Only a person can record their initial launch request.', 403)
         message(group.id, command.initialMessage)
       }
+      break
+    }
+    case 'agent.start': {
+      controls(state, actor, command.request.conversationId)
+      open(state, command.request.conversationId)
+      if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+      const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose a machine shared with the contributor.', 403)
+      const contributor = person(state, grant.contributorId)
+      if (contributor.role === 'viewer') fail('READ_ONLY', 'A viewer cannot start agents.', 403)
+      state.starts ??= []
+      if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) {
+        fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
+      }
+      state.starts.push({ id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
+        contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: grant.machineOwnerId,
+        hostGrant: grant.hostGrant ?? null, request: command.request, harnessId: null, dispatched: false, error: null })
+      result.startId = operationId
+      break
+    }
+    case 'agent.startDispatch':
+    case 'agent.started':
+    case 'agent.startFailed': {
+      const start = state.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
+      if (start.actorKey !== actorKey(actor)) fail('FORBIDDEN', 'Only the initiating lead can complete this start.', 403)
+      if (person(state, start.contributorId).generation !== start.membershipGeneration) fail('FORBIDDEN', 'This contribution was withdrawn.', 403)
+      controls(state, actor, start.request.conversationId)
+      if (command.type === 'agent.startDispatch') {
+        if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+        open(state, start.request.conversationId)
+        const grant = context.contribution ?? fail('HOST_REQUIRED', 'The original machine grant is unavailable.', 403)
+        if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
+          fail('CONTRIBUTION_REVOKED', 'The original machine grant was revoked.', 403)
+        }
+        if (start.dispatched || start.error || start.harnessId) fail('START_CLAIMED', 'This native start was already requested. Read its creation status; do not start another.')
+        start.dispatched = true
+        break
+      }
+      if (command.type === 'agent.startFailed') {
+        if (start.harnessId) fail('ALREADY_STARTED', 'This agent already started.')
+        start.error = command.error
+        message(start.request.conversationId, `Could not start ${start.request.name}: ${command.error}`)
+        break
+      }
+      if (start.error) fail('START_FAILED', 'This start failed. Use a new start request.')
+      if (start.harnessId && start.harnessId !== command.harnessId) fail('ALREADY_STARTED', 'This start already has a native harness.')
+      const grant = context.contribution ?? fail('HOST_REQUIRED', 'The original machine grant is unavailable.', 403)
+      if (grant.machineOwnerId !== start.machineOwnerId || grant.contributorId !== start.contributorId ||
+        (grant.hostGrant ?? null) !== start.hostGrant) fail('CONTRIBUTION_REVOKED', 'The original machine grant was revoked.', 403)
+      const group = open(state, start.request.conversationId)
+      const agentId = stableId(start.request.machineId, command.harnessId)
+      if (state.agents.some(a => a.id === agentId)) fail('ALREADY_SHARED', 'This native harness is already in the tab.')
+      state.agents.push({ id: agentId, machineId: start.request.machineId, harnessId: command.harnessId,
+        machineOwnerId: start.machineOwnerId, contributorId: start.contributorId, membershipGeneration: start.membershipGeneration,
+        hostGrant: start.hostGrant, name: start.request.name, configuration: command.configuration })
+      group.agentIds.push(agentId)
+      start.harnessId = command.harnessId
+      result.agentId = agentId
+      message(group.id, `${start.request.name} joined. Ready for an assignment.`)
       break
     }
     case 'agent.remove': {

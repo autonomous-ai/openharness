@@ -66,7 +66,7 @@ export class SuperTabStore {
     }
   }
 
-  private async contribution(tx: Transaction, state: SuperTabState, actor: Actor, command: Extract<Command, { type: 'agent.add' }>) {
+  private async contribution(tx: Transaction, state: SuperTabState, actor: Actor, command: { machineId: string }) {
     const contributorId = actor.kind === 'person' ? actor.userId : agent(state, actor.agentId).contributorId
     person(state, contributorId)
     const machine = await tx.machine.findFirst({ where: { machineId: command.machineId, autonomousEnv: state.environment, ...machineAlive } })
@@ -129,6 +129,27 @@ export class SuperTabStore {
     })
   }
 
+  async start(user: AuthUser, tabId: string, startId: string, asAgentId?: string) {
+    return transaction(this.db, async tx => {
+      const state = stateOf(await this.row(tx, user, tabId))
+      const actor = await this.actor(tx, user, state, asAgentId)
+      author(state, actor, true)
+      const start = state.starts?.find(s => s.id === startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
+      if (start.actorKey !== actorKey(actor) || person(state, start.contributorId).generation !== start.membershipGeneration) {
+        fail('FORBIDDEN', 'Only the original initiating lead can resume this start.', 403)
+      }
+      const group = conversation(state, start.request.conversationId)
+      if (actor.kind === 'agent' && group.leadId !== actor.agentId) fail('LEAD_REQUIRED', 'The coordinating lead changed.', 403)
+      if (group.archived) fail('ARCHIVED', 'This conversation is archived.')
+      if (state.paused && !start.harnessId) fail('PAUSED', 'New work is paused in this Super Tab.')
+      const grant = await this.contribution(tx, state, actor, start.request)
+      if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
+        fail('CONTRIBUTION_REVOKED', 'This start belongs to a machine grant that was revoked.', 403)
+      }
+      return start
+    })
+  }
+
   async execute(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string) {
     const { operationId, command } = operationSchema.parse(input)
     return transaction(this.db, async tx => {
@@ -148,6 +169,11 @@ export class SuperTabStore {
       if (command.type !== 'invite.accept') author(original, actor)
       const context: CommandContext = { operationId, now: this.now() }
       if (command.type === 'agent.add') context.contribution = await this.contribution(tx, original, actor, command)
+      if (command.type === 'agent.start') context.contribution = await this.contribution(tx, original, actor, command.request)
+      if (command.type === 'agent.started' || command.type === 'agent.startDispatch') {
+        const start = original.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
+        context.contribution = await this.contribution(tx, original, actor, start.request)
+      }
       if (command.type === 'message.send' && command.replyTo) {
         const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author }
@@ -232,11 +258,37 @@ export class SuperTabStore {
 
   /** Host polling discovers only registered sessions on its own machine, never unrelated tab transcripts. */
   async hostTabs(user: AuthUser, machineId: string) {
-    const owned = await this.db.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
-    if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
-    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, take: 100 })
-    return rows.flatMap(row => stateOf(row).agents.filter(a => a.machineId === machineId && a.machineOwnerId === user.sub)
-      .map(a => ({ tabId: row.id, revision: row.revision, paused: stateOf(row).paused, agent: a })))
+    return transaction(this.db, async tx => {
+      const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+      if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
+      const rows = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, take: 100 })
+      const result = []
+      for (const row of rows) {
+        const state = stateOf(row)
+        const people = await tx.user.findMany({ where: { id: { in: state.people.map(p => p.id) }, autonomousEnv: state.environment }, select: { id: true, email: true } })
+        for (const target of state.agents.filter(a => a.machineId === machineId && a.machineOwnerId === user.sub)) {
+          try { agent(state, target.id); await this.agentGrant(tx, state, target) }
+          catch (error) { if (error instanceof SuperTabError) continue; throw error }
+          result.push({ tabId: row.id, revision: row.revision, paused: state.paused, agent: target,
+            observers: people.filter(p => p.id !== user.sub).map(p => ({ email: p.email, userId: p.id })) })
+        }
+      }
+      return result
+    })
+  }
+
+  async mayObserve(user: AuthUser, tabId: string, machineId: string, harnessId: string, machineOwnerId: string): Promise<boolean> {
+    try {
+      return await transaction(this.db, async tx => {
+        const state = stateOf(await this.row(tx, user, tabId))
+        person(state, user.sub)
+        const target = state.agents.find(a => a.machineId === machineId && a.harnessId === harnessId && a.machineOwnerId === machineOwnerId)
+        if (!target) return false
+        agent(state, target.id)
+        await this.agentGrant(tx, state, target)
+        return true
+      })
+    } catch (error) { if (error instanceof SuperTabError) return false; throw error }
   }
 
   private deliveryAllowed(state: SuperTabState, delivery: SuperTabDelivery): boolean {

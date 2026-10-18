@@ -817,6 +817,8 @@ model HarnessReview {
 /// Discovery metadata for one account-bound, view-only invitation. Content remains on the owner
 /// daemon, which independently authorizes every observer against its durable local grant list.
 model HarnessShare {
+  /// A session view derived from this Super Tab; membership is rechecked at admission.
+  superTabId     String?
   id             String    @id @map("_id")
   ownerId        String
   machineId      String

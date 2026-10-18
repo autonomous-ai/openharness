@@ -58,6 +58,6 @@ Future<void> addSuperTabAgent(
     );
   }
   if (existing == null) {
-    await app.superTabMachineRequest(machineId, {'action': 'wake'});
+    await app.wakeSuperTabHost(machineId);
   }
 }
