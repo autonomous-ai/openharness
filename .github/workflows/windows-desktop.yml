@@ -337,6 +337,21 @@ jobs:
             $env:TMP = $originalTmp
             Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
           }
+      - name: Install by one command (install.ps1 -App)
+        working-directory: cli
+        timeout-minutes: 20
+        env:
+          HARNESS_DESKTOP_LAUNCHER_BIN: ${{ github.workspace }}\pty\target\debug\harness-desktop-launcher.exe
+          HARNESS_EXE_BIN: ${{ github.workspace }}\pty\target\debug\harness.exe
+        run: |
+          # C4.7's package smoke built the desktop launcher; B's original installer specs also run the CLI command.
+          if (-not (Test-Path -LiteralPath $env:HARNESS_DESKTOP_LAUNCHER_BIN -PathType Leaf)) { throw 'Desktop launcher is missing' }
+          if (-not (Test-Path -LiteralPath $env:HARNESS_EXE_BIN -PathType Leaf)) {
+            cargo build --locked --manifest-path ../pty/Cargo.toml --bin harness
+            if ($LASTEXITCODE -ne 0) { throw "CLI harness.exe build failed ($LASTEXITCODE)" }
+          }
+          npx vitest run src/scripts/installPs1.spec.ts src/scripts/installPs1App.spec.ts --maxWorkers=1 --reporter=verbose
+          if ($LASTEXITCODE -ne 0) { throw "PowerShell installer specs failed ($LASTEXITCODE)" }
 
   # Release mode builds both staging zips. It is not the build-test suite.
   release-build:

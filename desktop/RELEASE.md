@@ -592,3 +592,11 @@ The publisher validates both complete zips before upload, creates each versioned
 when absent, reads the uploaded bytes back, and conditionally writes the manifest so another
 publisher's change cannot be lost. If a publish stops after uploading an object, that version is
 spent: inspect staging and use a new version. Production publication and signing are separate.
+
+**Install by one command.** After an approved staging publish, `bash cli/scripts/upload-install-ps1.sh --app`
+publishes `harness/staging/desktop/install.ps1`, a copy of B's installer with its app-default line on. A person runs
+`irm https://cdn.autonomous.ai/harness/staging/desktop/install.ps1 | iex`. It chooses this PC's zip from the staging
+desktop manifest, verifies its size and SHA-256, and runs the zip's `Harness.exe --install`. PowerShell's download
+does not add the browser's mark of the web, so SmartScreen does not show its first-run prompt. Smart App Control can
+still block an unsigned build. `--app --production` is the owner's later publication step, after production has the
+Windows manifest keys.

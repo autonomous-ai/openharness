@@ -75,6 +75,17 @@ describe('install.ps1, as written', () => {
     expect(source).toContain('$before = Read-HarnessCurrentCli -Root $root')
     expect(source).toContain('$null = Restart-HarnessDaemon -Command $command -Before $before -After $version')
   })
+
+  it('keeps exactly one app-default line off in the CLI source', () => {
+    expect(source.split(/\r?\n/).filter((line) => line.startsWith('$HarnessInstallApp ='))).toEqual(['$HarnessInstallApp = $false'])
+    expect(source).toContain('if ($App -or $HarnessInstallApp) {')
+  })
+
+  it('waits for the extracted launcher only, not the installed app it starts', () => {
+    const start = source.match(/^function Start-HarnessAppInstall[\s\S]*?^}\r?$/m)?.[0] ?? ''
+    expect(start).toContain('$process.WaitForExit()')
+    expect(start).not.toMatch(/Start-Process/)
+  })
 })
 
 const windows = process.platform === 'win32'

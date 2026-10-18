@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest'
 const script = join(process.cwd(), 'scripts', 'upload-install-ps1.sh')
 const source = readFileSync(join(process.cwd(), 'scripts', 'install.ps1'), 'utf8')
 const PRODUCTION = "$HarnessManifestBase = 'https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/'"
+const APP_OFF = '$HarnessInstallApp = $false'
+const APP_ON = '$HarnessInstallApp = $true'
 
 function run(args: string[], env: Record<string, string> = {}) {
   const base = { ...process.env }
@@ -27,12 +29,14 @@ describe.skipIf(process.platform === 'win32')('upload-install-ps1.sh', () => {
     const result = run(['--print'])
     expect(result.status, result.stderr).toBe(0)
     expect(changed(result.stdout)).toEqual([[PRODUCTION, "$HarnessManifestBase = 'https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/staging/'"]])
+    expect(result.stderr).toContain('gs://s3-autonomous-upgrade-3/harness/staging/cli/install.ps1')
   })
 
   it('publishes the file exactly as it is for production', () => {
     const result = run(['--production', '--print'])
     expect(result.status, result.stderr).toBe(0)
     expect(result.stdout).toBe(source)
+    expect(result.stderr).toContain('gs://s3-autonomous-upgrade-3/harness/cli/install.ps1')
   })
 
   it('honours another staging prefix under harness/, and refuses anything else', () => {
@@ -40,5 +44,22 @@ describe.skipIf(process.platform === 'win32')('upload-install-ps1.sh', () => {
       .toEqual([[PRODUCTION, "$HarnessManifestBase = 'https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/staging-dry-run/'"]])
     expect(run(['--print'], { STAGING_PREFIX: '../elsewhere' }).status).toBe(2)
     expect(run(['--bogus']).status).toBe(2)
+  })
+
+  it('previews the staging app copy with only the manifest base and app default changed', () => {
+    const result = run(['--app', '--print'])
+    expect(result.status, result.stderr).toBe(0)
+    expect(changed(result.stdout)).toEqual([
+      [PRODUCTION, "$HarnessManifestBase = 'https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/staging/'"],
+      [APP_OFF, APP_ON],
+    ])
+    expect(result.stderr).toContain('gs://s3-autonomous-upgrade-3/harness/staging/desktop/install.ps1')
+  })
+
+  it('previews the production app copy with only the app default changed', () => {
+    const result = run(['--app', '--production', '--print'])
+    expect(result.status, result.stderr).toBe(0)
+    expect(changed(result.stdout)).toEqual([[APP_OFF, APP_ON]])
+    expect(result.stderr).toContain('gs://s3-autonomous-upgrade-3/harness/desktop/install.ps1')
   })
 })

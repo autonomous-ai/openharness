@@ -5,6 +5,7 @@
 #
 #   irm https://cdn.autonomous.ai/harness/cli/install.ps1 | iex
 #   iex "& { $(irm https://cdn.autonomous.ai/harness/cli/install.ps1) } -Desktop"
+#   irm https://cdn.autonomous.ai/harness/desktop/install.ps1 | iex      (the desktop app: this file, app line on)
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Manifest C:\build\install-manifest.json -NoService
 #
 # It installs per user, with no administrator rights. Everything goes under %USERPROFILE%\.harness, and PATH is the
@@ -12,6 +13,7 @@
 # reads a script file without a BOM in the ANSI code page, so one non-ASCII character would garble it.
 param(
   [switch]$Desktop,
+  [switch]$App,
   [string]$Manifest = $env:HARNESS_INSTALL_MANIFEST,
   [switch]$NoService
 )
@@ -19,6 +21,9 @@ param(
 # The base under which the three published manifests live: cli/metadata.json, runtime/metadata.json and
 # pty/metadata.json. upload-install-ps1.sh rewrites this one line for the staging copy.
 $HarnessManifestBase = 'https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/'
+# What a run with no switch installs: the CLI here, and the app in the copy published as desktop/install.ps1.
+# upload-install-ps1.sh --app rewrites this one line.
+$HarnessInstallApp = $false
 # Set when this runs as a file (-File, or a saved copy). It is empty under `irm | iex`.
 $HarnessScriptPath = $MyInvocation.MyCommand.Path
 
@@ -590,10 +595,108 @@ function Install-Harness {
   return 0
 }
 
+function ConvertTo-HarnessVersionKey([string]$Version) {
+  # C4.7 publishes X.Y.Z or X.Y.Z-prerelease. Only the three numeric parts order, as in DesktopUpdater.
+  if (-not ($Version -cmatch '^([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$')) { return $null }
+  try { return [version]::new([int]$Matches[1], [int]$Matches[2], [int]$Matches[3]) }
+  catch { return $null } # A published-looking component outside [version]'s range cannot order.
+}
+
+function Select-HarnessAppEntry {
+  # Native x64 uses x64. Native arm64 takes the newer arm64 or x64 entry, with arm64 winning a tie.
+  param($Document, [string]$Platform)
+  $keys = if ($Platform -eq 'win32-arm64') { @('desktop-windows-arm64', 'desktop-windows-x64') } else { @('desktop-windows-x64') }
+  $best = $null
+  foreach ($key in $keys) {
+    $entry = Get-HarnessProperty $Document $key
+    $value = Get-HarnessProperty $entry 'version'
+    $url = Get-HarnessProperty $entry 'url'
+    $sha256 = Get-HarnessProperty $entry 'sha256'
+    $size = Get-HarnessProperty $entry 'size'
+    if ($value -isnot [string] -or $url -isnot [string] -or $sha256 -isnot [string] -or
+        ($size -isnot [int] -and $size -isnot [long])) { continue }
+    $version = ConvertTo-HarnessVersionKey $value
+    if ($version -and (-not $best -or $version -gt $best.version)) { $best = @{ entry = $entry; version = $version } }
+  }
+  if (-not $best) { throw "The desktop manifest has no Harness desktop app for this computer ($Platform) yet." }
+  return $best.entry
+}
+
+function Start-HarnessAppInstall {
+  # Wait for the extracted Harness.exe --install alone. The installed app it opens keeps running.
+  param([string]$Launcher)
+  $info = [Diagnostics.ProcessStartInfo]::new($Launcher, '--install')
+  $info.UseShellExecute = $false
+  $info.WorkingDirectory = Split-Path -Parent $Launcher
+  $process = [Diagnostics.Process]::Start($info)
+  try {
+    $process.WaitForExit()
+    return $process.ExitCode
+  } finally { $process.Dispose() }
+}
+
+function Install-HarnessApp {
+  # Download the complete desktop zip, verify it, and let its own launcher install and open it.
+  param([string]$Manifest)
+  $ErrorActionPreference = 'Stop'
+  $ProgressPreference = 'SilentlyContinue'
+  $step = 'Checking this computer'
+  $staging = $null
+  try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $tar = Test-HarnessHost
+    $platform = Get-HarnessPlatform
+
+    $step = 'Reading the release manifest'
+    $source = "${HarnessManifestBase}desktop/metadata.json"
+    if ($Manifest) {
+      $source = $Manifest
+      if (-not (Test-HarnessUrl $source) -and -not (Test-HarnessScheme $source)) {
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "The manifest $source does not exist." }
+        $source = (Resolve-Path -LiteralPath $source).ProviderPath
+      }
+    }
+    $entry = Select-HarnessAppEntry -Document (Get-HarnessJson $source) -Platform $platform
+    $version = [string]$entry.version
+    Write-Host "Installing the Harness desktop app $version for $platform"
+
+    $step = 'Downloading Harness'
+    $staging = New-HarnessStaging -Parent ([IO.Path]::GetTempPath()) -Name 'harness-desktop'
+    $zip = Join-Path $staging 'harness-desktop.zip'
+    Save-HarnessVerified -Source (Resolve-HarnessRef -Ref ([string]$entry.url) -ManifestSource $source) -Destination $zip -Sha256 ([string]$entry.sha256) -Size $entry.size
+
+    $step = 'Unpacking Harness'
+    $folder = Join-Path $staging 'zip'
+    Expand-HarnessZip -Tar $tar -Archive $zip -Destination $folder
+    $launcher = Join-Path $folder 'Harness.exe'
+    if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) { throw 'The download has no Harness.exe, so it is not a Harness desktop app.' }
+
+    $step = 'Installing Harness'
+    $code = Start-HarnessAppInstall -Launcher $launcher
+    if ($code -ne 0) { throw "Harness's installer stopped (exit code $code). Its log is launch.log, in Programs\Harness under $env:LOCALAPPDATA." }
+  } catch {
+    Write-Host ''
+    Write-Host "Harness could not be installed. The step that failed: $step." -ForegroundColor Red
+    Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host '  Run the installer again, or send this message to Harness support.'
+    return 1
+  } finally {
+    if ($staging) { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+  Write-Host ''
+  Write-Host "Harness $version is installed, and it is opening now."
+  Write-Host 'Next time, open it from the Start menu. On its first start it sets up the Harness command line.'
+  return 0
+}
+
 # --- Run ---
 if ($env:HARNESS_INSTALL_LIBRARY -ne '1') {
   if (-not $Manifest) { $Manifest = $env:HARNESS_INSTALL_MANIFEST }
-  $harnessExit = @(Install-Harness -Desktop:([bool]$Desktop) -Manifest $Manifest -NoService:([bool]$NoService))[-1]
+  if ($App -or $HarnessInstallApp) {
+    $harnessExit = @(Install-HarnessApp -Manifest $Manifest)[-1]
+  } else {
+    $harnessExit = @(Install-Harness -Desktop:([bool]$Desktop) -Manifest $Manifest -NoService:([bool]$NoService))[-1]
+  }
   # Run as a file, the exit code is the result. Run by `irm | iex`, it never calls `exit`: that would close the
   # person's PowerShell window with the message still in it.
   if ($HarnessScriptPath) { exit $harnessExit }
