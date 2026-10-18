@@ -6,32 +6,70 @@ import 'package:harness/super_tabs/controller.dart';
 import 'support/super_tab_fixture.dart';
 
 void main() {
-  test('mentions keep stable agent identities through rename, reopen and deletion', () async {
+  test('terminal selections survive reopening and cannot cross accounts or group membership', () async {
     final server = ConversationServer();
-    (server.state['conversations'] as List)[0]['agentIds'] = ['worker-1'];
+    server.state['agents'] = [
+      {
+        'id': 'worker',
+        'name': 'Worker',
+        'machineId': 'm',
+        'harnessId': 'native',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'claude'},
+      },
+    ];
+    (server.state['conversations'] as List)[1]['agentIds'] = ['worker'];
     final first = server.controller();
     await first.refresh();
-    first.setDraft('lead', '@Worker 1 review this.');
-    first.mention('lead', 'worker-1', '@Worker 1');
+    first.selectTerminal('offline', 'worker');
+    first.selectTerminal('lead', 'worker');
+    expect(first.terminalAgent('lead'), isNull);
     await first.flush();
     first.dispose();
-    final reopened = server.controller(initial: server.saved);
-    await reopened.refresh();
-    await reopened.send();
-    expect((server.posts.single['command'] as Map)['recipientIds'], ['worker-1']);
-    reopened.setDraft('lead', '@Worker 1 again');
-    reopened.mention('lead', 'worker-1', '@Worker 1');
-    reopened.setDraft('lead', '@Worker 10 again');
-    expect(reopened.mentions('lead'), isEmpty);
-    reopened.setDraft('lead', '@Worker 1 check');
-    reopened.mention('lead', 'worker-1', '@Worker 1');
-    (server.state['conversations'] as List)[0]['agentIds'] = <String>[];
-    await reopened.refresh();
-    expect(await reopened.send(), isNull);
-    expect(server.posts, hasLength(1));
-    expect(reopened.operationError, contains('no longer'));
-    await reopened.flush(); reopened.dispose();
+    final restored = server.controller(initial: server.saved);
+    await restored.refresh();
+    expect(restored.terminalAgent('offline')?.id, 'worker');
+    final other = server.controller(initial: server.saved, account: 'other');
+    await other.refresh();
+    expect(other.terminalAgent('offline'), isNull);
+    other.dispose();
+    (server.state['conversations'] as List)[1]['agentIds'] = <String>[];
+    await restored.refresh();
+    expect(restored.terminalAgent('offline'), isNull);
+    restored.dispose();
   });
+  test(
+    'mentions keep stable agent identities through rename, reopen and deletion',
+    () async {
+      final server = ConversationServer();
+      (server.state['conversations'] as List)[0]['agentIds'] = ['worker-1'];
+      final first = server.controller();
+      await first.refresh();
+      first.setDraft('lead', '@Worker 1 review this.');
+      first.mention('lead', 'worker-1', '@Worker 1');
+      await first.flush();
+      first.dispose();
+      final reopened = server.controller(initial: server.saved);
+      await reopened.refresh();
+      await reopened.send();
+      expect((server.posts.single['command'] as Map)['recipientIds'], [
+        'worker-1',
+      ]);
+      reopened.setDraft('lead', '@Worker 1 again');
+      reopened.mention('lead', 'worker-1', '@Worker 1');
+      reopened.setDraft('lead', '@Worker 10 again');
+      expect(reopened.mentions('lead'), isEmpty);
+      reopened.setDraft('lead', '@Worker 1 check');
+      reopened.mention('lead', 'worker-1', '@Worker 1');
+      (server.state['conversations'] as List)[0]['agentIds'] = <String>[];
+      await reopened.refresh();
+      expect(await reopened.send(), isNull);
+      expect(server.posts, hasLength(1));
+      expect(reopened.operationError, contains('no longer'));
+      await reopened.flush();
+      reopened.dispose();
+    },
+  );
   Future<SuperTabController> open(ConversationServer server) async {
     final controller = server.controller();
     addTearDown(() async {

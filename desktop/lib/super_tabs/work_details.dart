@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
 
+import '../shared/widgets/app_dialog.dart';
+import '../widgets/desktop_chrome.dart';
+
 import 'controller.dart';
+import 'dialog_scope.dart';
 import 'message_text.dart';
 
 Future<void> showSuperTabWork(
   BuildContext context,
   SuperTabController c,
   String groupId,
-) => showDialog<void>(
+) => showAppDialog<void>(
   context: context,
   builder: (context) => ListenableBuilder(
     listenable: c,
@@ -39,7 +43,7 @@ Future<void> showSuperTabWork(
                   const SizedBox(height: 16),
                   Text(
                     check['description'] as String,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+                    style: DesktopChrome.control(medium: true),
                   ),
                   if (check['independent'] == true)
                     const Text('Requires an independent check.'),
@@ -62,10 +66,7 @@ Future<void> showSuperTabWork(
                 ],
                 if (assignment?['result'] is String) ...[
                   const SizedBox(height: 20),
-                  const Text(
-                    'Result',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
+                  Text('Result', style: DesktopChrome.control(medium: true)),
                   SuperTabMessageText(assignment!['result'] as String),
                 ],
                 if (c.operationError != null) Text(c.operationError!),
@@ -97,64 +98,67 @@ Future<void> _record(
   String check,
 ) async {
   var evidence = '', passed = true, busy = false;
-  await showDialog<void>(
+  await showAppDialog<void>(
     context: context,
-    builder: (context) => StatefulBuilder(
-      builder: (context, update) => AlertDialog(
-        title: const Text('Record check'),
-        content: SizedBox(
-          width: 460,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                autofocus: true,
-                minLines: 3,
-                maxLines: 8,
-                decoration: const InputDecoration(
-                  hintText: 'What did you verify? Include the revision, method and result.',
+    builder: (context) => SuperTabDialogScope(
+      controller: c,
+      child: StatefulBuilder(
+        builder: (context, update) => AlertDialog(
+          title: const Text('Record check'),
+          content: SizedBox(
+            width: 460,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  autofocus: true,
+                  minLines: 3,
+                  maxLines: 8,
+                  decoration: const InputDecoration(
+                    hintText: 'What did you verify? Include the revision, method and result.',
+                  ),
+                  onChanged: (value) => update(() => evidence = value),
                 ),
-                onChanged: (value) => update(() => evidence = value),
-              ),
-              SwitchListTile(
-                title: const Text('Passed'),
-                value: passed,
-                onChanged: busy
-                    ? null
-                    : (value) => update(() => passed = value),
-              ),
-              if (c.operationError != null) Text(c.operationError!),
-            ],
+                SwitchListTile(
+                  title: const Text('Passed'),
+                  value: passed,
+                  onChanged: busy
+                      ? null
+                      : (value) => update(() => passed = value),
+                ),
+                if (c.operationError != null) Text(c.operationError!),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: busy ? null : () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: busy || evidence.trim().isEmpty
+                  ? null
+                  : () async {
+                      update(() => busy = true);
+                      final result = await c.command({
+                        'type': 'work.check',
+                        'conversationId': group,
+                        'assignmentId': attempt,
+                        'checkId': check,
+                        'passed': passed,
+                        'evidence': evidence.trim(),
+                      });
+                      if (!context.mounted) return;
+                      if (result != null) {
+                        Navigator.pop(context);
+                      } else {
+                        update(() => busy = false);
+                      }
+                    },
+              child: const Text('Save'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: busy ? null : () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: busy || evidence.trim().isEmpty
-                ? null
-                : () async {
-                    update(() => busy = true);
-                    final result = await c.command({
-                      'type': 'work.check',
-                      'conversationId': group,
-                      'assignmentId': attempt,
-                      'checkId': check,
-                      'passed': passed,
-                      'evidence': evidence.trim(),
-                    });
-                    if (!context.mounted) return;
-                    if (result != null) {
-                      Navigator.pop(context);
-                    } else {
-                      update(() => busy = false);
-                    }
-                  },
-            child: const Text('Save'),
-          ),
-        ],
       ),
     ),
   );

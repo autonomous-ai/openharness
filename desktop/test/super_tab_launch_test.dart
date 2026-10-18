@@ -17,8 +17,8 @@ import 'swarm_state_test.dart' show createApp, MemoryStore;
 
 const tabId = '0123456789abcdef01234567';
 
-class _Connection extends WsConn {
-  _Connection(this.store)
+class SuperTabFixtureConnection extends WsConn {
+  SuperTabFixtureConnection(this.store)
     : super(
         wsBaseUrl: 'ws://fixture.invalid',
         autonomousEnv: 'test',
@@ -198,9 +198,9 @@ class _Connection extends WsConn {
   }
 }
 
-class _Fixture {
-  _Fixture() {
-    connection = _Connection(store);
+class SuperTabLaunchFixture {
+  SuperTabLaunchFixture() {
+    connection = SuperTabFixtureConnection(store);
     app = createApp(
       store: store,
       connectionForTest: (_) => connection,
@@ -225,7 +225,7 @@ class _Fixture {
   }
   final store = MemoryStore();
   late final AppNotifier app;
-  late final _Connection connection;
+  late final SuperTabFixtureConnection connection;
 
   Future<NewHarnessController> box({
     String engine = 'codex',
@@ -250,7 +250,7 @@ class _Fixture {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   test('switching accounts while files are being sent closes the background writer', () async {
-    final f = _Fixture()..connection.changeAccountOnUpload = true;
+    final f = SuperTabLaunchFixture()..connection.changeAccountOnUpload = true;
     final files = HarnessAttachments()
       ..add([
         HarnessAttachment('design.png', Uint8List.fromList([1])),
@@ -267,7 +267,7 @@ void main() {
   });
 
   test('a confirmed failed creation makes a reopened form editable', () async {
-    final f = _Fixture()..connection.loseCreate = true;
+    final f = SuperTabLaunchFixture()..connection.loseCreate = true;
     expect(await (await f.box()).create(), NewHarnessOutcome.failed);
     f.connection.failCreation = true;
     final recovered = await f.box();
@@ -305,7 +305,7 @@ void main() {
     test(
       '$engine files reach the background harness before its first request without creating a pane',
       () async {
-        final f = _Fixture();
+        final f = SuperTabLaunchFixture();
         final files = HarnessAttachments()
           ..add([
             HarnessAttachment('design.png', Uint8List.fromList([1, 2, 3])),
@@ -342,7 +342,7 @@ void main() {
   }
 
   test('a reopened launch retains its staged files and never launches another harness', () async {
-    final f = _Fixture()..connection.loseCreate = true;
+    final f = SuperTabLaunchFixture()..connection.loseCreate = true;
     final files = HarnessAttachments()
       ..add([
         HarnessAttachment('design.png', Uint8List.fromList([9, 8])),
@@ -365,7 +365,7 @@ void main() {
   });
 
   test('uncertain files are kept for recovery and never pasted again automatically', () async {
-    final f = _Fixture()..connection.failFiles = true;
+    final f = SuperTabLaunchFixture()..connection.failFiles = true;
     final files = HarnessAttachments()
       ..add([
         HarnessAttachment('design.png', Uint8List.fromList([1])),
@@ -403,7 +403,7 @@ void main() {
     test(
       '$engine lead uses the native form and joins without opening a terminal or another tab',
       () async {
-        final f = _Fixture(), initialTab = f.app.activeSwarmId;
+        final f = SuperTabLaunchFixture(), initialTab = f.app.activeSwarmId;
         final box = await f.box(engine: engine);
         expect(box.actionLabel, 'New Super Tab');
         expect(
@@ -435,7 +435,7 @@ void main() {
   }
 
   test('lost join acknowledgement retries the same contribution without a second native launch', () async {
-    final f = _Fixture()..connection.loseJoin = true;
+    final f = SuperTabLaunchFixture()..connection.loseJoin = true;
     final box = await f.box();
     expect(await box.create(), NewHarnessOutcome.failed);
     expect(box.checking, isTrue);
@@ -452,7 +452,7 @@ void main() {
   test(
     'reopening after a lost native launch reply only checks its saved receipt',
     () async {
-      final f = _Fixture()..connection.loseCreate = true;
+      final f = SuperTabLaunchFixture()..connection.loseCreate = true;
       final first = await f.box();
       expect(await first.create(), NewHarnessOutcome.failed);
       final reopened = await f.box(engine: 'claude');

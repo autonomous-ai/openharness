@@ -17251,6 +17251,14 @@ class AppNotifier extends ChangeNotifier {
     if (tab == null) return;
     final pane = tab.panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return;
+    if (tab.superTabId case final superTabId?) {
+      final controller = superTabs.peek(superTabId);
+      final selected = controller?.terminalAgent(controller.selectedId);
+      if (selected != null && selected.machineId == pane.machineId &&
+          selected.harnessId == pane.agentId) {
+        controller!.selectTerminal(controller.selectedId, null);
+      }
+    }
     if (tab.isCompanions || tab.isDevices) {
       await closeSwarm(tab.id, persist: persist);
       return;

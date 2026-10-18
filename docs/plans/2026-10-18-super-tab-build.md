@@ -24,12 +24,16 @@ This is a new tab type. Existing tabs and running sessions are not converted.
 - Background attachment delivery through the native terminal protocol, retained launch files,
   explicit recovery after an uncertain transfer, and account-change cancellation.
 - Native stopped-session evidence releases backend assignments, including a removed contributor's work.
+- Per-conversation native terminal selection survives navigation and restart; closing its pane clears the selection without stopping the harness.
+- Explicit recovery for uncertain input: inspect the terminal, confirm receipt, dismiss the warning, or deliberately resend with a new delivery identity.
+- Host receipt reconciliation preserves native evidence and can retire cancelled input after its agent is withdrawn, without restoring conversation access.
+- Shared desktop typography, colors, selectors, modal backdrop and focus behavior; readable large-text controls and searchable archived conversations.
 - Experimental settings cleanup and retired PR branding, preserving compatibility fields and usage controls.
 
 The desktop surface is connected, but the complete workflow is not ready. Scoped autonomous
 agent starts and capacity checks are connected through the existing native creation protocol.
-Terminal access and native stop reconciliation are connected. Shared recording of native interventions,
-delivery reconciliation and several creation/recovery edges remain. The PR stays a draft until these are implemented and
+Terminal access, native stop reconciliation and explicit uncertain-delivery recovery are connected.
+Shared recording of native interventions and several creation/recovery edges remain. The PR stays a draft until these are implemented and
 the complete workflow is tested and reviewed.
 
 ## Validation plan
@@ -79,11 +83,29 @@ Focused checks completed during implementation (18 October):
 - Latest backend replica-set integration: 12 passed, including automatic stopped-assignment release.
   CLI focused native lifecycle/service checks: 87 passed. Focused coverage for `core/api.ts`,
   `core/experimentQueries.ts` and `services/processCoreApi.ts`: 70 tests, 100% in all four measures.
+- Delivery recovery integration: 15 tests passed in a fresh replica set, including concurrent human resolution,
+  late host acknowledgements, machine-grant changes, withdrawn hosts and reassigned machine ownership.
+  Backend typecheck passed after adding recorded execution ownership to delivery receipts.
+- CLI host reconciliation: 10 tests passed, including retiring a confirmed receipt without typing it again.
+- Desktop UI, navigation, conversation state and launch regression batch: 35 passed. The 11 affected UI checks
+  passed again after the final focus and large-text corrections; the unchanged state/launch evidence is retained.
+  Focused Dart analysis and the shared icon audit passed.
+- Flutter VM renders with the actual macOS system font were inspected in light and dark appearance at 1280×800,
+  and at 200% text with Increase Contrast in an 800×480 window. Reviewed conversation, participants, Invite and
+  uncertain-delivery surfaces. Fixed a clipped footer label, inaccessible recovery action, generic dropdown,
+  double dialog frame and missing initial search/email focus. These are synthetic fixtures, not native window evidence.
+- Native macOS fixture compiled successfully, loaded its synthetic conversation, then timed out at the first rendered
+  frame after two minutes. Flutter reported that it could not foreground the test app. A read of console flags confirmed
+  `CGSSessionScreenIsLocked: true`. Native interaction, physical shortcut/IME and full terminal acceptance remain unverified;
+  repeat them once the console is unlocked. The fixture uses in-memory accounts and terminal traffic, never real harnesses.
 
 These establish individual boundaries, not the complete customer workflow. Full component suites,
-two-machine/two-account integration, real-engine/native desktop validation, visual inspection,
+two-machine/two-account integration, real-engine/native desktop validation, full-app visual inspection,
 independent review, merge, official build and release remain.
 No production deployment has occurred.
+
+Implementation remains on `feat/super-tab`, draft PR #1405. Recent pushes have failed with connection resets;
+local commits and validation are preserved. The original research worktree's merge remains untouched.
 
 ## Follow-through
 

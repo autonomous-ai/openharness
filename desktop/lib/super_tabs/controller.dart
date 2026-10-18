@@ -49,6 +49,14 @@ class SuperTabController extends ChangeNotifier {
         }
       }
       final read = initial['readAt'];
+      final terminals = initial['terminals'];
+      if (terminals is Map) {
+        for (final entry in terminals.entries) {
+          if (entry.key is String && entry.value is String) {
+            _terminals[entry.key as String] = entry.value as String;
+          }
+        }
+      }
       final mentions = initial['mentions'];
       if (mentions is Map) {
         for (final group in mentions.entries) {
@@ -93,6 +101,7 @@ class SuperTabController extends ChangeNotifier {
   Future<void> _persisting = Future.value();
   Map<String, dynamic>? _pending;
   final _drafts = <String, String>{};
+  final _terminals = <String, String>{};
   final _mentions = <String, Map<String, String>>{};
   final _readAt = <String, int>{};
   final _messages = <String, List<SuperTabMessage>>{};
@@ -111,6 +120,31 @@ class SuperTabController extends ChangeNotifier {
   Map<String, dynamic>? get pendingCommand =>
       _pending == null ? null : superTabMap(_pending!['command']);
   String draft(String id) => _drafts[id] ?? '';
+  SuperTabAgent? terminalAgent(String conversationId) {
+    if (accessRevoked) return null;
+    final id = _terminals[conversationId];
+    final group = snapshot?.conversation(conversationId);
+    if (id == null || group?.agentIds.contains(id) != true) return null;
+    return snapshot?.agents.where((a) => a.id == id).firstOrNull;
+  }
+
+  void selectTerminal(String conversationId, String? agentId) {
+    if (_disposed || accessRevoked) return;
+    if (agentId != null &&
+        snapshot?.conversation(conversationId)?.agentIds.contains(agentId) !=
+            true) {
+      return;
+    }
+    if (_terminals[conversationId] == agentId) return;
+    if (agentId == null) {
+      _terminals.remove(conversationId);
+    } else {
+      _terminals[conversationId] = agentId;
+    }
+    _saveSoon();
+    _changed();
+  }
+
   List<SuperTabMessage> messages(String id) =>
       List.unmodifiable(_messages[id] ?? const []);
   bool hasOlder(String id) => _before[id] != null;
@@ -147,6 +181,7 @@ class SuperTabController extends ChangeNotifier {
     'accountId': accountId,
     'selectedId': selectedId,
     'drafts': Map<String, String>.of(_drafts),
+    'terminals': Map<String, String>.of(_terminals),
     'mentions': {
       for (final entry in _mentions.entries)
         entry.key: Map<String, String>.of(entry.value),

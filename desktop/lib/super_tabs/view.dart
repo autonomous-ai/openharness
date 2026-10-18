@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
+import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import 'controller.dart';
+import 'dialog_scope.dart';
 import 'model.dart';
 import 'message_text.dart';
 import 'work_details.dart';
@@ -184,95 +186,101 @@ class _SuperTabViewState extends State<SuperTabView> {
   }
 
   Future<void> _newGroup() async {
+    final c = this.c;
     var name = '';
     String? error;
     bool busy = false;
-    final id = await showDialog<String>(
+    final id = await showAppDialog<String>(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, update) {
-          Future<void> create() async {
-            if (busy || name.trim().isEmpty) return;
-            update(() {
-              busy = true;
-              error = null;
-            });
-            final answer = c.hasPendingAction
-                ? await c.retry()
-                : await c.command({
-                    'type': 'conversation.create',
-                    'title': name.trim(),
-                    'brief': '',
-                    'checks': <dynamic>[],
-                  });
-            if (!context.mounted) return;
-            if (answer?['conversationId'] case final String id) {
-              Navigator.of(context).pop(id);
-            } else {
+      builder: (context) => SuperTabDialogScope(
+        controller: c,
+        child: StatefulBuilder(
+          builder: (context, update) {
+            Future<void> create() async {
+              if (busy || name.trim().isEmpty) return;
               update(() {
-                busy = false;
-                error = c.operationError ?? 'Could not create the group.';
+                busy = true;
+                error = null;
               });
+              final answer = c.hasPendingAction
+                  ? await c.retry()
+                  : await c.command({
+                      'type': 'conversation.create',
+                      'title': name.trim(),
+                      'brief': '',
+                      'checks': <dynamic>[],
+                    });
+              if (!context.mounted) return;
+              if (answer?['conversationId'] case final String id) {
+                Navigator.of(context).pop(id);
+              } else {
+                update(() {
+                  busy = false;
+                  error = c.operationError ?? 'Could not create the group.';
+                });
+              }
             }
-          }
 
-          return PopScope(
-            canPop: !busy,
-            child: AlertDialog(
-              title: const Text('New group'),
-              content: SizedBox(
-                width: 340,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    TextField(
-                      onChanged: (value) => name = value,
-                      autofocus: true,
-                      enabled: !busy && !c.hasPendingAction,
-                      maxLength: 160,
-                      decoration: const InputDecoration(
-                        labelText: 'Name',
-                        hintText: 'Offline editing',
-                        counterText: '',
+            return PopScope(
+              canPop: !busy,
+              child: AlertDialog(
+                title: const Text('New group'),
+                content: SizedBox(
+                  width: 340,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      TextField(
+                        onChanged: (value) => update(() => name = value),
+                        autofocus: true,
+                        enabled: !busy && !c.hasPendingAction,
+                        maxLength: 160,
+                        decoration: const InputDecoration(
+                          labelText: 'Name',
+                          hintText: 'Offline editing',
+                          counterText: '',
+                        ),
+                        onSubmitted: (_) => unawaited(create()),
                       ),
-                      onSubmitted: (_) => unawaited(create()),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'A shared conversation with your lead.',
-                      style: DesktopChrome.metadata(),
-                    ),
-                    if (error != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: Text(error!, style: DesktopChrome.control()),
+                      const SizedBox(height: 12),
+                      Text(
+                        'A shared conversation with your lead.',
+                        style: DesktopChrome.metadata(),
                       ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: busy ? null : () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  onPressed: busy ? null : () => unawaited(create()),
-                  child: Text(
-                    busy
-                        ? 'Creating…'
-                        : c.hasPendingAction
-                        ? 'Retry'
-                        : 'Create',
+                      if (error != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Text(error!, style: DesktopChrome.control()),
+                        ),
+                    ],
                   ),
                 ),
-              ],
-            ),
-          );
-        },
+                actions: [
+                  TextButton(
+                    onPressed: busy ? null : () => Navigator.of(context).pop(),
+                    child: const Text('Cancel'),
+                  ),
+                  FilledButton(
+                    onPressed: busy || name.trim().isEmpty
+                        ? null
+                        : () => unawaited(create()),
+                    child: Text(
+                      busy
+                          ? 'Creating…'
+                          : c.hasPendingAction
+                          ? 'Retry'
+                          : 'Create',
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
-    if (!mounted || id == null) return;
+    if (!mounted || widget.controller != c || id == null) return;
     c.select(id);
     setState(() => _sidebarOpen = false);
     _focus.requestFocus();
@@ -299,6 +307,11 @@ class _SuperTabViewState extends State<SuperTabView> {
   }
 
   Future<void> _groupAction(String action, SuperTabConversation group) async {
+    final c = this.c;
+    if (action == 'archived') {
+      await _archived();
+      return;
+    }
     if (action == 'work') {
       await showSuperTabWork(context, c, group.id);
       return;
@@ -312,184 +325,298 @@ class _SuperTabViewState extends State<SuperTabView> {
       return;
     }
     var title = group.title, busy = false;
-    await showDialog<void>(
+    await showAppDialog<void>(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, update) => AlertDialog(
-          title: const Text('Rename conversation'),
-          content: TextFormField(
-            initialValue: title,
-            autofocus: true,
-            maxLength: 160,
-            onChanged: (value) => update(() => title = value),
+      builder: (context) => SuperTabDialogScope(
+        controller: c,
+        child: StatefulBuilder(
+          builder: (context, update) => AlertDialog(
+            title: const Text('Rename conversation'),
+            content: TextFormField(
+              initialValue: title,
+              autofocus: true,
+              maxLength: 160,
+              onChanged: (value) => update(() => title = value),
+            ),
+            actions: [
+              TextButton(
+                onPressed: busy ? null : () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: busy || title.trim().isEmpty
+                    ? null
+                    : () async {
+                        update(() => busy = true);
+                        final result = await c.command({
+                          'type': 'conversation.rename',
+                          'conversationId': group.id,
+                          'title': title.trim(),
+                        });
+                        if (!context.mounted) return;
+                        if (result != null) {
+                          Navigator.pop(context);
+                        } else {
+                          update(() => busy = false);
+                        }
+                      },
+                child: const Text('Save'),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: busy ? null : () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: busy || title.trim().isEmpty
-                  ? null
-                  : () async {
-                      update(() => busy = true);
-                      final result = await c.command({
-                        'type': 'conversation.rename',
-                        'conversationId': group.id,
-                        'title': title.trim(),
-                      });
-                      if (!context.mounted) return;
-                      if (result != null) {
-                        Navigator.pop(context);
-                      } else {
-                        update(() => busy = false);
-                      }
-                    },
-              child: const Text('Save'),
-            ),
-          ],
         ),
       ),
     );
   }
 
   Future<void> _participants(SuperTabConversation group) async {
+    final c = this.c;
     var query = '';
     var handedOff = false;
-    await showDialog<void>(
+    await showAppDialog<void>(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, update) => ListenableBuilder(
-          listenable: c,
-          builder: (context, _) {
-            final state = c.snapshot;
-            if (state == null) {
-              return AlertDialog(
-                content: const Text('This conversation is unavailable.'),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Close'),
-                  ),
-                ],
-              );
-            }
-            final currentGroup = state.conversation(group.id) ?? group;
-            final agents = state.agents
-                .where(
-                  (a) =>
-                      currentGroup.agentIds.contains(a.id) &&
-                      '${a.name} ${a.engine} ${widget.machineName(a.machineId)}'
-                          .toLowerCase()
-                          .contains(query),
-                )
-                .toList();
-            final people = state.people
-                .where((p) => p.email.toLowerCase().contains(query))
-                .toList();
-            return Dialog(
-              child: SizedBox(
-                width: 400,
-                height: 460,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
+      builder: (context) => SuperTabDialogScope(
+        controller: c,
+        requireWrite: false,
+        child: StatefulBuilder(
+          builder: (context, update) => ListenableBuilder(
+            listenable: c,
+            builder: (context, _) {
+              final state = c.snapshot;
+              if (state == null) {
+                return AlertDialog(
+                  content: const Text('This conversation is unavailable.'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Close'),
+                    ),
+                  ],
+                );
+              }
+              final currentGroup = state.conversation(group.id) ?? group;
+              final agents = state.agents
+                  .where(
+                    (a) =>
+                        currentGroup.agentIds.contains(a.id) &&
+                        '${a.name} ${a.engine} ${widget.machineName(a.machineId)}'
+                            .toLowerCase()
+                            .contains(query),
+                  )
+                  .toList();
+              final people = state.people
+                  .where((p) => p.email.toLowerCase().contains(query))
+                  .toList();
+              return Dialog(
+                backgroundColor: Colors.transparent,
+                elevation: 0,
+                shape: const RoundedRectangleBorder(),
+                child: DesktopDialogSurface(
+                  child: SizedBox(
+                    width: 400,
+                    height: 460,
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Expanded(
-                            child: Text(
-                              'Participants',
-                              style: DesktopChrome.heading(),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Participants',
+                                  style: DesktopChrome.heading(),
+                                ),
+                              ),
+                              AppIconButton(
+                                icon: AppIcons.close,
+                                tooltip: 'Close participants',
+                                onPressed: () => Navigator.of(context).pop(),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            autofocus: true,
+                            decoration: const InputDecoration(
+                              hintText: 'Find a person or agent',
+                            ),
+                            onChanged: (value) => update(
+                              () => query = value.trim().toLowerCase(),
                             ),
                           ),
-                          AppIconButton(
-                            icon: AppIcons.close,
-                            tooltip: 'Close participants',
-                            onPressed: () => Navigator.of(context).pop(),
+                          const SizedBox(height: 12),
+                          Expanded(
+                            child: ListView(
+                              children: [
+                                for (final agent in agents)
+                                  _participantAgent(agent, () {
+                                    Navigator.of(context).pop();
+                                    handedOff = true;
+                                    widget.onOpenTerminal(agent);
+                                  }),
+                                for (final person in people)
+                                  ListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    title: Text(
+                                      person.email,
+                                      style: DesktopChrome.control(),
+                                    ),
+                                    subtitle: Text(
+                                      person.role == 'owner'
+                                          ? 'Owner'
+                                          : person.role == 'viewer'
+                                          ? 'Viewer'
+                                          : 'Collaborator',
+                                      style: DesktopChrome.metadata(),
+                                    ),
+                                  ),
+                                if (agents.isEmpty && people.isEmpty)
+                                  const Padding(
+                                    padding: EdgeInsets.symmetric(vertical: 24),
+                                    child: Text('No matches.'),
+                                  ),
+                              ],
+                            ),
                           ),
+                          if (c.canWrite)
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed: () {
+                                  Navigator.of(context).pop();
+                                  handedOff = true;
+                                  widget.onAddAgent(currentGroup);
+                                },
+                                child: const Text('Add agent'),
+                              ),
+                            ),
                         ],
                       ),
-                      const SizedBox(height: 12),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    if (mounted && !handedOff) _focus.requestFocus();
+  }
+
+  Widget _participantAgent(SuperTabAgent agent, VoidCallback open) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 8),
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final identity = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(agent.name, style: DesktopChrome.control(medium: true)),
+            const SizedBox(height: 4),
+            Text(
+              '${engineIdentity(agent.engine).label} · ${widget.machineName(agent.machineId)}',
+              style: DesktopChrome.metadata(),
+            ),
+          ],
+        );
+        final action = TextButton(
+          onPressed: open,
+          child: const Text('Open terminal'),
+        );
+        if (MediaQuery.textScalerOf(context).scale(13) > 18 ||
+            constraints.maxWidth < 320) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [identity, const SizedBox(height: 8), action],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: identity),
+            const SizedBox(width: 12),
+            action,
+          ],
+        );
+      },
+    ),
+  );
+
+  Future<void> _archived() async {
+    final c = this.c;
+    var query = '';
+    final selected = await showAppDialog<String>(
+      context: context,
+      builder: (context) => SuperTabDialogScope(
+        controller: c,
+        requireWrite: false,
+        child: StatefulBuilder(
+          builder: (context, update) => ListenableBuilder(
+            listenable: c,
+            builder: (context, _) {
+              final groups =
+                  c.snapshot?.conversations
+                      .where(
+                        (group) =>
+                            group.archived &&
+                            group.title.toLowerCase().contains(query),
+                      )
+                      .toList() ??
+                  <SuperTabConversation>[];
+              return AlertDialog(
+                title: const Text('Archived conversations'),
+                content: SizedBox(
+                  width: 400,
+                  height: 320,
+                  child: Column(
+                    children: [
                       TextField(
                         autofocus: true,
                         decoration: const InputDecoration(
-                          hintText: 'Find a person or agent',
+                          hintText: 'Find a conversation',
                         ),
                         onChanged: (value) =>
                             update(() => query = value.trim().toLowerCase()),
                       ),
                       const SizedBox(height: 12),
                       Expanded(
-                        child: ListView(
-                          children: [
-                            for (final agent in agents)
-                              ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                title: Text(
-                                  agent.name,
-                                  style: DesktopChrome.control(medium: true),
-                                ),
-                                subtitle: Text(
-                                  '${engineIdentity(agent.engine).label} · ${widget.machineName(agent.machineId)}',
-                                  style: DesktopChrome.metadata(),
-                                ),
-                                trailing: TextButton(
-                                  onPressed: () {
-                                    Navigator.of(context).pop();
-                                    handedOff = true;
-                                    widget.onOpenTerminal(agent);
-                                  },
-                                  child: const Text('Open terminal'),
-                                ),
+                        child: groups.isEmpty
+                            ? const Center(
+                                child: Text('No archived conversations.'),
+                              )
+                            : ListView(
+                                children: [
+                                  for (final group in groups)
+                                    ListTile(
+                                      title: Text(
+                                        group.title,
+                                        style: DesktopChrome.control(),
+                                      ),
+                                      onTap: () =>
+                                          Navigator.pop(context, group.id),
+                                    ),
+                                ],
                               ),
-                            for (final person in people)
-                              ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                title: Text(
-                                  person.email,
-                                  style: DesktopChrome.control(),
-                                ),
-                                subtitle: Text(
-                                  person.role == 'owner'
-                                      ? 'Owner'
-                                      : person.role == 'viewer'
-                                      ? 'Viewer'
-                                      : 'Collaborator',
-                                  style: DesktopChrome.metadata(),
-                                ),
-                              ),
-                            if (agents.isEmpty && people.isEmpty)
-                              const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 24),
-                                child: Text('No matches.'),
-                              ),
-                          ],
-                        ),
                       ),
-                      if (c.canWrite)
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: TextButton(
-                            onPressed: () {
-                              Navigator.of(context).pop();
-                              handedOff = true;
-                              widget.onAddAgent(currentGroup);
-                            },
-                            child: const Text('Add agent'),
-                          ),
-                        ),
                     ],
                   ),
                 ),
-              ),
-            );
-          },
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Close'),
+                  ),
+                ],
+              );
+            },
+          ),
         ),
       ),
     );
-    if (mounted && !handedOff) _focus.requestFocus();
+    if (!mounted || widget.controller != c || selected == null) return;
+    c.select(selected);
   }
 
   Widget _sidebar() => Material(
@@ -511,15 +638,22 @@ class _SuperTabViewState extends State<SuperTabView> {
                         key: ValueKey('super-group-${group.id}'),
                         dense: true,
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(
+                            DesktopChrome.rowRadius,
+                          ),
                         ),
                         selected: c.selectedId == group.id,
-                        selectedTileColor: DesktopChrome.selection,
+                        selectedTileColor: DesktopChrome.activeSelection,
                         title: Text(
                           group.title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.control(medium: c.unread(group)),
+                          style: DesktopChrome.control(
+                            medium: c.unread(group),
+                            color: c.selectedId == group.id
+                                ? DesktopChrome.onSelection
+                                : null,
+                          ),
                         ),
                         trailing: c.unread(group)
                             ? Semantics(
@@ -529,7 +663,9 @@ class _SuperTabViewState extends State<SuperTabView> {
                                   height: 6,
                                   decoration: BoxDecoration(
                                     shape: BoxShape.circle,
-                                    color: DesktopChrome.accent,
+                                    color: c.selectedId == group.id
+                                        ? DesktopChrome.onSelection
+                                        : DesktopChrome.accent,
                                   ),
                                 ),
                               )
@@ -547,32 +683,22 @@ class _SuperTabViewState extends State<SuperTabView> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
-          child: Row(
+          child: Wrap(
+            spacing: DesktopChrome.controlGap,
+            runSpacing: DesktopChrome.controlGap,
             children: [
-              Expanded(
-                child: TextButton(
-                  onPressed:
-                      c.canWrite &&
-                          !c.hasPendingAction &&
-                          c.snapshot?.paused != true
-                      ? () => unawaited(_newGroup())
-                      : null,
-                  child: Text(
-                    'New group',
-                    style: DesktopChrome.control(),
-                    maxLines: 1,
-                  ),
-                ),
+              TextButton(
+                onPressed:
+                    c.canWrite &&
+                        !c.hasPendingAction &&
+                        c.snapshot?.paused != true
+                    ? () => unawaited(_newGroup())
+                    : null,
+                child: const Text('New group'),
               ),
-              Expanded(
-                child: TextButton(
-                  onPressed: c.snapshot != null ? widget.onInvite : null,
-                  child: Text(
-                    c.isOwner ? 'Invite' : 'People',
-                    style: DesktopChrome.control(),
-                    maxLines: 1,
-                  ),
-                ),
+              TextButton(
+                onPressed: c.snapshot != null ? widget.onInvite : null,
+                child: Text(c.isOwner ? 'Invite' : 'People'),
               ),
             ],
           ),
@@ -582,8 +708,8 @@ class _SuperTabViewState extends State<SuperTabView> {
   );
 
   Widget _header(SuperTabConversation? group, bool narrow) => Container(
-    height: 52,
-    padding: const EdgeInsets.symmetric(horizontal: 16),
+    constraints: const BoxConstraints(minHeight: 52),
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
     decoration: BoxDecoration(
       border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
     ),
@@ -618,6 +744,12 @@ class _SuperTabViewState extends State<SuperTabView> {
             onSelected: (action) => unawaited(_groupAction(action, group)),
             itemBuilder: (_) => [
               const PopupMenuItem(value: 'work', child: Text('Work details')),
+              if (c.snapshot?.conversations.any((group) => group.archived) ==
+                  true)
+                const PopupMenuItem(
+                  value: 'archived',
+                  child: Text('Archived conversations'),
+                ),
               if (c.canWrite && !c.hasPendingAction && !c.saving) ...[
                 const PopupMenuItem(value: 'rename', child: Text('Rename')),
                 if (group.id != 'lead')
@@ -639,6 +771,101 @@ class _SuperTabViewState extends State<SuperTabView> {
       ],
     ),
   );
+
+  Future<void> _reviewDelivery(
+    SuperTabMessage message,
+    Map<String, dynamic> delivery,
+  ) async {
+    final c = this.c;
+    final agent = c.snapshot?.agent(delivery['agentId'] as String);
+    final resolution = await showAppDialog<String>(
+      context: context,
+      builder: (context) => ListenableBuilder(
+        listenable: c,
+        builder: (context, _) => !c.canWrite
+            ? AlertDialog(
+                content: const Text(
+                  'This delivery is no longer available to change.',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Close'),
+                  ),
+                ],
+              )
+            : AlertDialog(
+                title: DesktopDialogHeader(
+                  title: 'Check delivery to ${agent?.name ?? 'agent'}',
+                  padding: EdgeInsets.zero,
+                  onClose: () => Navigator.pop(context),
+                ),
+                content: SizedBox(
+                  width: 440,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (agent != null) ...[
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, 'open'),
+                            child: const Text('Open terminal'),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+                        const Text(
+                          'This instruction may already have reached the terminal. Inspect it before sending again.',
+                        ),
+                        const SizedBox(height: 16),
+                        SelectableText(message.text),
+                      ],
+                    ),
+                  ),
+                ),
+                actions: [
+                  Wrap(
+                    spacing: DesktopChrome.controlGap,
+                    runSpacing: DesktopChrome.controlGap,
+                    alignment: WrapAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, 'cancel'),
+                        child: const Text('Dismiss warning'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, 'received'),
+                        child: const Text('Already received'),
+                      ),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(context, 'resend'),
+                        child: const Text('Send again'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+      ),
+    );
+    if (!mounted ||
+        widget.controller != c ||
+        resolution == null ||
+        !c.canWrite) {
+      return;
+    }
+    if (resolution == 'open') {
+      if (agent != null) {
+        c.select(message.conversationId);
+        widget.onOpenTerminal(agent);
+      }
+      return;
+    }
+    await c.command({
+      'type': 'delivery.resolve',
+      'deliveryId': delivery['id'],
+      'resolution': resolution,
+    });
+  }
 
   Widget _message(SuperTabMessage message) => Padding(
     key: ValueKey('super-message-${message.id}'),
@@ -671,12 +898,20 @@ class _SuperTabViewState extends State<SuperTabView> {
         ),
         const SizedBox(height: 4),
         SuperTabMessageText(message.text),
-        if (message.queued || message.uncertain)
+        if (message.queued)
           Padding(
             padding: const EdgeInsets.only(top: 6),
+            child: Text('Queued', style: DesktopChrome.metadata()),
+          ),
+        for (final delivery in message.deliveries.where(
+          (d) => d['status'] == 'uncertain',
+        ))
+          TextButton(
+            onPressed: c.canWrite && delivery['id'] is String
+                ? () => _reviewDelivery(message, delivery)
+                : null,
             child: Text(
-              message.uncertain ? 'Delivery needs to be checked.' : 'Queued',
-              style: DesktopChrome.metadata(),
+              'Check delivery to ${c.snapshot?.agent(delivery['agentId'] as String)?.name ?? 'agent'}',
             ),
           ),
       ],
@@ -883,6 +1118,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                         key: const ValueKey('super-message-composer'),
                         controller: _composer,
                         focusNode: _focus,
+                        autofocus: widget.terminal == null,
                         enabled: c.canWrite && group != null && !group.archived,
                         minLines: 1,
                         maxLines: 8,
@@ -896,6 +1132,10 @@ class _SuperTabViewState extends State<SuperTabView> {
                               ? 'Message ${group.title}'
                               : 'Read-only conversation',
                           border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
+                          filled: false,
                           counterText: '',
                         ),
                         onChanged: (text) {
@@ -936,8 +1176,8 @@ class _SuperTabViewState extends State<SuperTabView> {
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
-      final narrow = constraints.maxWidth < 640;
       final terminal = widget.terminal;
+      final narrow = constraints.maxWidth < (terminal == null ? 640 : 980);
       if (narrow && terminal != null) {
         return Column(
           children: [

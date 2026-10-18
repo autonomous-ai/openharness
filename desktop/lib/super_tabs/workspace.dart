@@ -2,10 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../shared/theme/app_icons.dart';
+import '../shared/widgets/app_dialog.dart';
+import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
+import 'dialog_scope.dart';
 import 'model.dart';
 import 'view.dart';
 
@@ -29,15 +31,56 @@ class SuperTabWorkspace extends StatefulWidget {
 class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
   final _canvasKey = GlobalKey();
   AppNotifier get app => widget.app;
+  (String, String, String?, String)? _terminalRequest;
+  Future<void> _terminalChange = Future.value();
 
-  Future<void> _open(SuperTabAgent agent, String swarmId) async {
+  void _syncTerminal(SuperTabController controller, String swarmId) {
+    final agent = controller.terminalAgent(controller.selectedId);
+    final request = (
+      swarmId,
+      controller.selectedId,
+      agent?.id,
+      controller.accountId,
+    );
+    if (_terminalRequest == request) return;
+    _terminalRequest = request;
+    bool current() =>
+        mounted &&
+        _terminalRequest == request &&
+        app.activeSwarmId == swarmId &&
+        app.currentUser?.id == controller.accountId;
+    // Native attachment may wait for machine discovery. Serialize replacements
+    // and discard any request superseded by another group or account.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _terminalChange = _terminalChange.catchError((Object _) {}).then((
+        _,
+      ) async {
+        if (!current()) return;
+        if (agent != null) {
+          await _open(agent, swarmId, current);
+        } else {
+          final tab = app.swarms.where((s) => s.id == swarmId).firstOrNull;
+          for (final pane in tab?.panes.toList() ?? const []) {
+            if (!current()) return;
+            await app.closePane(pane.id, swarmId: swarmId);
+          }
+        }
+      });
+    });
+  }
+
+  Future<void> _open(
+    SuperTabAgent agent,
+    String swarmId,
+    bool Function() current,
+  ) async {
     try {
       final tab = app.swarms.where((s) => s.id == swarmId).firstOrNull;
       if (tab == null) return;
       var machine = app.stateOf(agent.machineId);
       if (machine?.agents.any((a) => a.id == agent.harnessId) != true) {
         await app.refreshMachines();
-        if (!mounted || !app.swarms.any((s) => s.id == swarmId)) return;
+        if (!current() || !app.swarms.any((s) => s.id == swarmId)) return;
         machine = app.stateOf(agent.machineId);
       }
       if (machine?.agents.any((a) => a.id == agent.harnessId) != true) {
@@ -46,6 +89,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
           'The shared terminal is not available yet. Its execution machine must be online.',
         );
       }
+      if (!current()) return;
       await app.assignAgentToPane(
         tab.panes.firstOrNull?.id,
         agent.machineId,
@@ -56,7 +100,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
         pane.composerVisible = false;
       }
     } catch (failure) {
-      if (mounted) {
+      if (mounted && current()) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(failure.toString())));
       }
@@ -68,12 +112,17 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     final canvas = KeyedSubtree(key: _canvasKey, child: widget.canvas);
     final tab = app.activeSwarm;
     final id = tab.superTabId;
-    if (!tab.isSuperTab || id == null) return canvas;
+    if (!tab.isSuperTab || id == null) {
+      _terminalRequest = null;
+      return canvas;
+    }
     return FutureBuilder<SuperTabController>(
       future: app.superTabs.open(id),
       builder: (context, state) {
         final controller = state.data;
-        if (controller == null) {
+        if (controller == null ||
+            controller.tabId != id ||
+            controller.accountId != app.currentUser?.id) {
           return Stack(
             children: [
               Offstage(child: canvas),
@@ -88,8 +137,17 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
         return ListenableBuilder(
           listenable: controller,
           builder: (context, _) {
+            _syncTerminal(controller, tab.id);
+            final selectedTerminal = controller.terminalAgent(
+              controller.selectedId,
+            );
             final showTerminal =
-                tab.panes.isNotEmpty && !controller.accessRevoked;
+                selectedTerminal != null &&
+                tab.panes.any(
+                  (pane) =>
+                      pane.machineId == selectedTerminal.machineId &&
+                      pane.agentId == selectedTerminal.harnessId,
+                );
             return Stack(
               fit: StackFit.expand,
               children: [
@@ -100,15 +158,17 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   onInvite: () =>
                       unawaited(showSuperTabPeople(context, controller)),
                   onAddAgent: widget.onAddAgent,
-                  onOpenTerminal: (agent) => unawaited(_open(agent, tab.id)),
+                  onOpenTerminal: (agent) {
+                    _terminalRequest = null;
+                    controller.selectTerminal(controller.selectedId, agent.id);
+                    setState(() {});
+                  },
                   machineName: (machine) =>
                       app.stateOf(machine)?.machine.displayName ??
                       'Offline machine',
                   terminal: showTerminal ? canvas : null,
                   onCloseTerminal: () {
-                    for (final pane in tab.panes.toList()) {
-                      unawaited(app.closePane(pane.id, swarmId: tab.id));
-                    }
+                    controller.selectTerminal(controller.selectedId, null);
                   },
                 ),
               ],
@@ -123,9 +183,13 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
 Future<void> showSuperTabPeople(
   BuildContext context,
   SuperTabController controller,
-) => showDialog<void>(
+) => showAppDialog<void>(
   context: context,
-  builder: (_) => _People(controller: controller),
+  builder: (_) => SuperTabDialogScope(
+    controller: controller,
+    requireWrite: false,
+    child: _People(controller: controller),
+  ),
 );
 
 class _People extends StatefulWidget {
@@ -141,13 +205,27 @@ class _PeopleState extends State<_People> {
   String _role = 'collaborator';
   SuperTabController get c => widget.controller;
   @override
+  void initState() {
+    super.initState();
+    _email.addListener(_emailChanged);
+  }
+
+  void _emailChanged() => setState(() {});
+  @override
   void dispose() {
+    _email.removeListener(_emailChanged);
     _email.dispose();
     _search.dispose();
     super.dispose();
   }
 
   Future<void> _invite() async {
+    if (!c.isOwner ||
+        c.saving ||
+        c.hasPendingAction ||
+        _email.text.trim().isEmpty) {
+      return;
+    }
     final result = await c.command({
       'type': 'invite.create',
       'email': _email.text.trim(),
@@ -158,27 +236,31 @@ class _PeopleState extends State<_People> {
   }
 
   Future<void> _remove(SuperTabPerson person) async {
-    final yes = await showDialog<bool>(
+    final yes = await showAppDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          person.id == c.accountId
-              ? 'Leave Super Tab?'
-              : 'Remove ${person.email}?',
-        ),
-        content: const Text(
-          'Their access and agent contributions will be withdrawn. Running harnesses stay on their machines.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+      builder: (context) => SuperTabDialogScope(
+        controller: c,
+        requireWrite: false,
+        child: AlertDialog(
+          title: Text(
+            person.id == c.accountId
+                ? 'Leave Super Tab?'
+                : 'Remove ${person.email}?',
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(person.id == c.accountId ? 'Leave' : 'Remove'),
+          content: const Text(
+            'Their access and agent contributions will be withdrawn. Running harnesses stay on their machines.',
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(person.id == c.accountId ? 'Leave' : 'Remove'),
+            ),
+          ],
+        ),
       ),
     );
     if (yes != true) return;
@@ -213,32 +295,22 @@ class _PeopleState extends State<_People> {
               .toList() ??
           [];
       return Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        shape: const RoundedRectangleBorder(),
         child: DesktopDialogSurface(
           child: SizedBox(
             width: 460,
             height: 520,
             child: Padding(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(24),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          'People',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Close',
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(AppIcons.close, size: 18),
-                      ),
-                    ],
+                  DesktopDialogHeader(
+                    title: 'People',
+                    padding: EdgeInsets.zero,
+                    onClose: () => Navigator.pop(context),
                   ),
                   if (c.isOwner) ...[
                     const SizedBox(height: 12),
@@ -253,34 +325,53 @@ class _PeopleState extends State<_People> {
                     Row(
                       children: [
                         Expanded(
-                          child: DropdownButton<String>(
-                            value: _role,
-                            isExpanded: true,
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'collaborator',
-                                child: Text('Can collaborate'),
+                          child: ExcludeFocus(
+                            excluding: c.saving || c.hasPendingAction,
+                            child: ExcludeSemantics(
+                              excluding: c.saving || c.hasPendingAction,
+                              child: IgnorePointer(
+                                ignoring: c.saving || c.hasPendingAction,
+                                child: AppSelectField<String>(
+                                  value: _role,
+                                  semanticLabel: 'Invitation access',
+                                  textStyle: DesktopChrome.control(),
+                                  options: const [
+                                    SelectOption(
+                                      value: 'collaborator',
+                                      label: 'Can collaborate',
+                                      detail: 'Read every conversation and send messages to the shared agents.',
+                                    ),
+                                    SelectOption(
+                                      value: 'viewer',
+                                      label: 'Can view',
+                                      detail: 'Read every conversation without sending messages or changing work.',
+                                    ),
+                                  ],
+                                  onChanged: (role) {
+                                    if (!c.saving && !c.hasPendingAction) {
+                                      setState(() => _role = role);
+                                    }
+                                  },
+                                ),
                               ),
-                              DropdownMenuItem(
-                                value: 'viewer',
-                                child: Text('Can view'),
-                              ),
-                            ],
-                            onChanged: c.saving
-                                ? null
-                                : (role) => setState(() => _role = role!),
+                            ),
                           ),
                         ),
                         const SizedBox(width: 12),
                         FilledButton(
-                          onPressed: c.saving ? null : _invite,
+                          onPressed:
+                              c.saving ||
+                                  c.hasPendingAction ||
+                                  _email.text.trim().isEmpty
+                              ? null
+                              : _invite,
                           child: const Text('Invite'),
                         ),
                       ],
                     ),
-                    const Text(
+                    Text(
                       'They’ll find the invitation in Harness Settings → Tab invites.',
-                      style: TextStyle(fontSize: 12),
+                      style: DesktopChrome.metadata(),
                     ),
                   ],
                   if (c.operationError != null)
@@ -309,7 +400,14 @@ class _PeopleState extends State<_People> {
                           ListTile(
                             contentPadding: EdgeInsets.zero,
                             title: Text(person.email),
-                            subtitle: Text(person.role),
+                            subtitle: Text(
+                              person.role == 'owner'
+                                  ? 'Owner'
+                                  : person.role == 'viewer'
+                                  ? 'Viewer'
+                                  : 'Collaborator',
+                              style: DesktopChrome.metadata(),
+                            ),
                             trailing:
                                 person.role != 'owner' &&
                                     (c.isOwner || person.id == c.accountId)

@@ -53,6 +53,7 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **A harness** in the workspace | A running agent session with its own conversation and working context. | Start three Codex harnesses. |
 | **A harness** in the Store | A reusable setup containing agent instructions, tools, and an optional viewer. | Install the Blender harness. |
 | **Tab** | A workspace group of harnesses. | Frontend and Backend tabs. |
+| **Super Tab** | A collaborative tab with a lead, member agents and shared conversations. | Discuss the plan with the lead, then follow work in its group conversations. |
 | **Pane** | A visible view of a harness, terminal, or viewer. | Split right; close pane. |
 | **Terminal** | A shell for entering commands. | New terminal. |
 | **Project** | The files and working context for the work, on a particular computer. | Choose the website project. |
@@ -78,10 +79,12 @@ no CLI keeps its maker's name (Fo).
 
 A pane is a view, so closing a pane or tab closes views. **Stop Harness** ends the
 running harness. Adding harnesses to a tab groups them without a separate team
-setup. **Agent Messages** lets the harnesses in a tab message each other
-(`harness send`); it is an experiment of the account, in Settings ▸ Experimental, off
-by default, and **Show Agent Messages** opens a tab's log. The word *tab* can also name the keyboard key or a
-browser tab; context distinguishes them.
+setup. **Super Tab** adds shared conversations and coordination across explicitly contributed agents;
+people and agents participate in the same flat conversation list. Its creation flow is experimental
+and hidden during initial validation. Existing tabs keep their behavior. The older **Agent Messages**
+protocol (`harness send`) and stored account settings remain compatible, while Super Tab owns its
+coordination controls. The word *tab* can also name the keyboard key or a browser tab; context
+distinguishes them.
 
 A project belongs to a computer; identical paths on different computers do not
 identify the same project. Use the actual project or computer name when that

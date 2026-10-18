@@ -7715,7 +7715,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                             !_creatureEnabled) ||
                                         app.activeSwarm.isOrchestrator,
                                     child: Padding(
-                                      padding: app.panes.isEmpty
+                                      padding: app.panes.isEmpty || app.activeSwarm.isSuperTab
                                           ? EdgeInsets.zero
                                           : const EdgeInsets.fromLTRB(
                                               kWorkspaceInset,
