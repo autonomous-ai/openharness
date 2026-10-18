@@ -20,6 +20,14 @@ import { usageTarget } from '../lib/agentUsageWire.js'
 const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/work/${agentId}`, ...over }) as RegisteredSession
 
 describe('the core API a light service runs on in its own process', () => {
+  it('retains the observed runtime profile and treats absent or malformed older projections as unknown', () => {
+    const api = processCoreApi('/data', 'worker')
+    const selectedModel = 'runtime-v1:a1:claude:opus@high'
+    expect(api.agents.runtimeProfile({ ...agent('a1'), selectedModel } as ShownAgent)).toBe(selectedModel)
+    for (const value of [undefined, null, 42, {}]) {
+      expect(api.agents.runtimeProfile({ ...agent('a1'), selectedModel: value } as ShownAgent)).toBeNull()
+    }
+  })
   it('reads only an exact validated usage snapshot, without reading a transcript', async () => {
     const target = usageTarget(agent('a', { transcriptPath: '/fixture/session', registeredAt: 1 }))
     expect(await processCoreApi('/data', 'projects').usage!(target)).toBeNull()

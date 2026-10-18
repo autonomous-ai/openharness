@@ -22,7 +22,7 @@ import type { turnsLink } from './turnsLink.js'
 type Payload = Record<string, unknown>
 
 /** An agent as the core shows it to an experiment (core/experimentQueries.ts `shown`). */
-export type ShownAgent = RegisteredSession & { displayName?: string; terminalAvailable?: boolean; dshContext?: AgentDshContext | null }
+export type ShownAgent = RegisteredSession & { displayName?: string; terminalAvailable?: boolean; selectedModel?: string | null; dshContext?: AgentDshContext | null }
 
 /** The agents a process was last told of, and how it asks the core to act. Those it is never told of read
  *  as none, and with no way to ask, it acts on nothing. */
@@ -117,7 +117,10 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       terminalAvailable: (agentId) => live().find((session) => session.agentId === agentId)?.terminalAvailable === true,
       sync: () => {},
       runtimeModels: async () => [],
-      runtimeProfile: () => null,
+      runtimeProfile: session => {
+        const profile = (session as ShownAgent).selectedModel
+        return typeof profile === 'string' ? profile : null
+      },
       setRuntime: () => {},
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
       create: async (request) => {

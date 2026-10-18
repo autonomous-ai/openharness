@@ -41,6 +41,7 @@ export function shownAgents(core: Pick<CoreApi, 'agents'>): Payload {
       ...session,
       displayName: core.agents.displayName(session),
       terminalAvailable: core.agents.terminalAvailable(session.agentId),
+      selectedModel: core.agents.runtimeProfile(session),
       dshContext: core.agents.dsh(session),
     })),
   }

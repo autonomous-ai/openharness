@@ -41,13 +41,14 @@ describe('what an experiment in its own process may ask of the core', () => {
         live: () => [agent('a1'), agent('a2')],
         displayName: (session) => `name of ${session.agentId}`,
         terminalAvailable: (agentId) => agentId === 'a1',
+        runtimeProfile: session => session.agentId === 'a1' ? 'runtime-v1:a1:claude:opus@high' : null,
         dsh: (session) => (session.agentId === 'a1' ? { viewerUrl: 'http://127.0.0.1:1/' } as never : null),
       },
     })
     expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'shown', {})).toEqual({
       agents: [
-        { ...agent('a1'), displayName: 'name of a1', terminalAvailable: true, dshContext: { viewerUrl: 'http://127.0.0.1:1/' } },
-        { ...agent('a2'), displayName: 'name of a2', terminalAvailable: false, dshContext: null },
+        { ...agent('a1'), displayName: 'name of a1', terminalAvailable: true, selectedModel: 'runtime-v1:a1:claude:opus@high', dshContext: { viewerUrl: 'http://127.0.0.1:1/' } },
+        { ...agent('a2'), displayName: 'name of a2', terminalAvailable: false, selectedModel: null, dshContext: null },
       ],
     })
   })
