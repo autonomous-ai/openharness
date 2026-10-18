@@ -50,6 +50,14 @@ mod windows {
         }
         run_cases(&[
             (
+                "uninstall_quits_the_app_and_leaves_the_cli",
+                uninstall_quits_the_app_and_leaves_the_cli,
+            ),
+            (
+                "uninstall_ends_only_owned_noncooperating_app_after_ten_seconds",
+                uninstall_ends_only_owned_noncooperating_app_after_ten_seconds,
+            ),
+            (
                 "junction_source_is_rejected_before_destination_effects",
                 junction_source_is_rejected_before_destination_effects,
             ),
@@ -869,5 +877,170 @@ mod windows {
         );
         assert_eq!(app["env"], bootstrap["env"]);
         assert_app(&world, &app, "1.2.3", &[&link]);
+    }
+
+    /// Real tools copied into this World's allowlisted tree permit bounded cleanup
+    /// of the detached cmd as well as the apps. No global SystemRoot is changed.
+    fn uninstall_tools(world: &World) -> PathBuf {
+        use sha2::{Digest, Sha256};
+        let source = std::env::var_os("SystemRoot").expect("Windows SystemRoot");
+        let root = world.dir.path().join("OwnedWindows");
+        let bin = root.join("System32");
+        fs::create_dir_all(&bin).unwrap();
+        let mut identities = Vec::new();
+        for name in [
+            "cmd.exe",
+            "chcp.com",
+            "tasklist.exe",
+            "find.exe",
+            "PING.EXE",
+        ] {
+            let original = PathBuf::from(&source).join("System32").join(name);
+            let copied = bin.join(name);
+            let bytes = fs::read(&original).unwrap();
+            fs::copy(&original, &copied).unwrap();
+            let hash = format!("{:x}", Sha256::digest(&bytes));
+            assert_eq!(
+                format!("{:x}", Sha256::digest(fs::read(&copied).unwrap())),
+                hash
+            );
+            world.owned.allow(&copied).unwrap();
+            identities
+                .push(serde_json::json!({"source": original, "copy": copied, "sha256": hash}));
+        }
+        fs::write(
+            world.dir.path().join("tool-identities.json"),
+            serde_json::to_vec(&identities).unwrap(),
+        )
+        .unwrap();
+        root
+    }
+
+    fn window_app(world: &World, mode: &str) -> std::process::Child {
+        let exe = world
+            .install
+            .join("app")
+            .join("1.2.3")
+            .join("harness-desktop.exe");
+        world.owned.allow(&exe).unwrap();
+        let out = world.dir.path().join("window-ready.json");
+        let mut env = environment(world, &out);
+        env.insert(STANDIN_WINDOW.into(), mode.into());
+        env.insert("HARNESS_DESKTOP_INSTANCE".into(), world.id.clone());
+        let child = isolated_command(&exe)
+            .envs(&env)
+            .current_dir(exe.parent().unwrap())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let ready = report(&out);
+        assert_eq!(ready["pid"].as_u64(), Some(u64::from(child.id())));
+        assert_eq!(ready["window_ready"], true);
+        assert!(ready["hwnd"].as_u64().is_some_and(|h| h > 0));
+        assert!(same(Path::new(ready["exe"].as_str().unwrap()), &exe));
+        assert_eq!(ready["env"], serde_json::to_value(&env).unwrap());
+        assert!(win::app_processes(&world.install).contains(&child.id()));
+        child
+    }
+
+    fn await_child(child: &mut std::process::Child) -> std::process::ExitStatus {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                return status;
+            }
+            assert!(Instant::now() < deadline, "owned app did not exit");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn uninstall_window_case(forced: bool) {
+        let world = installed();
+        let sibling = installed();
+        let mut unrelated = window_app(&sibling, "quit");
+        let mut app = window_app(&world, if forced { "ignore" } else { "quit" });
+        let tools = uninstall_tools(&world);
+        let harness = world.profile.join(".harness");
+        let sentinels = [
+            harness.join("cli").join("state.json"),
+            harness.join("runtime").join("node"),
+            harness.join("daemon-token"),
+            world.profile.join(".codex").join("keep"),
+        ];
+        for file in &sentinels {
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, b"preserved bytes").unwrap();
+        }
+        for folder in ["desktop-app", "desktop-app-v2"] {
+            fs::write(harness.join(folder).join("state.json"), b"desktop").unwrap();
+        }
+        let launcher = world.install.join("Harness.exe");
+        world.owned.allow(&launcher).unwrap();
+        let started = Instant::now();
+        let output = bounded_output(
+            isolated_command(&launcher)
+                .arg("--uninstall")
+                .envs(environment(&world, &world.dir.path().join("unused.json")))
+                .env("SystemRoot", &tools),
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .ends_with("To remove them, run \u{60}harness uninstall\u{60}.\n")
+        );
+        let status = await_child(&mut app);
+        if forced {
+            assert!(!status.success());
+            assert!(started.elapsed() >= Duration::from_secs(10));
+        } else {
+            assert!(status.success(), "{status}");
+        }
+        assert!(started.elapsed() < Duration::from_secs(25));
+        assert!(
+            unrelated.try_wait().unwrap().is_none(),
+            "sibling install was stopped"
+        );
+        assert!(!world.programs.join("Harness.lnk").exists());
+        assert_eq!(
+            value(&world, r"Classes\harness\shell\open\command", ""),
+            None
+        );
+        assert_eq!(value(&world, registry::UNINSTALL_KEY, "DisplayName"), None);
+        assert!(!harness.join("desktop-app").exists() && !harness.join("desktop-app-v2").exists());
+        for file in &sentinels {
+            assert_eq!(fs::read(file).unwrap(), b"preserved bytes");
+        }
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let files: Vec<_> = fs::read_dir(&world.temp)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .collect();
+            if !world.install.exists() && files.is_empty() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "install/scripts stayed: {files:?}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            win::quit_app(&sibling.install, Duration::from_secs(2)).unwrap(),
+            1
+        );
+        assert!(await_child(&mut unrelated).success());
+    }
+    fn uninstall_quits_the_app_and_leaves_the_cli() {
+        uninstall_window_case(false);
+    }
+    fn uninstall_ends_only_owned_noncooperating_app_after_ten_seconds() {
+        uninstall_window_case(true);
     }
 }

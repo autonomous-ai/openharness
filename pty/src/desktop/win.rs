@@ -1,5 +1,5 @@
 //! The Windows calls behind system.rs's [Real](super::system::Real): starting the app, waiting for a process and
-//! the message box.
+//! quitting it, the registry, the message box and the cmd.exe step of an uninstall.
 
 use std::ffi::{OsStr, OsString, c_void};
 use std::io;
@@ -562,6 +562,75 @@ pub fn delete_key(registry: &str, key: &str) -> io::Result<()> {
         0 | ERROR_FILE_NOT_FOUND => Ok(()),
         code => win32(code),
     }
+}
+
+/// Only the generated ASCII basename is passed to cmd, from its separately supplied cwd.
+/// The full temporary path could contain a percent expansion in cmd /c.
+pub fn start_script(script: &Path) -> io::Result<()> {
+    start_script_with_warning(script, |warning| eprintln!("{warning}"))
+}
+
+pub(crate) fn start_script_with_warning(
+    script: &Path,
+    warning: impl FnMut(String),
+) -> io::Result<()> {
+    let dir = script.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    let name = script
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or(io::ErrorKind::InvalidInput)?;
+    if !name.starts_with("harness-desktop-uninstall-")
+        || !name.ends_with(".cmd")
+        || !name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'.'))
+    {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let cmd = super::uninstall::system_root()
+        .join("System32")
+        .join("cmd.exe");
+    let args = [
+        OsString::from("/d"),
+        OsString::from("/v:off"),
+        OsString::from("/c"),
+        OsString::from(format!(r".\{name}")),
+    ];
+    let application = wide(cmd.as_os_str());
+    let directory = wide(dir.as_os_str());
+    crate::launcher::start(
+        |flags| {
+            let mut line = command_line(&cmd, &args);
+            line.push(0);
+            let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+            startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+            let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+            if unsafe {
+                CreateProcessW(
+                    application.as_ptr(),
+                    line.as_mut_ptr(),
+                    null(),
+                    null(),
+                    0,
+                    flags,
+                    null(),
+                    directory.as_ptr(),
+                    &startup,
+                    &mut info,
+                )
+            } == 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            unsafe {
+                CloseHandle(info.hThread);
+                CloseHandle(info.hProcess);
+            }
+            Ok(info.dwProcessId)
+        },
+        warning,
+    )
+    .map(|_| ())
 }
 
 #[cfg(test)]

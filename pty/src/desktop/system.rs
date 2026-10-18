@@ -21,6 +21,16 @@ pub trait System {
     /// A text value under `HKCU\<registry>\<key>`; `name` "" is the key's default value.
     fn read_value(&mut self, registry: &str, key: &str, name: &str) -> Option<OsString>;
     fn write_keys(&mut self, registry: &str, keys: &[Key]) -> io::Result<()>;
+    /// Remove only this subtree under the selected HKCU root; missing is already removed.
+    fn delete_key(&mut self, registry: &str, key: &str) -> io::Result<()>;
+    /// Start an owned temporary batch file hidden, outside this job when permitted.
+    fn start_script(&mut self, script: &Path) -> io::Result<()>;
+    /// The caller has already validated and retained this physical install path.
+    fn start_script_logged(&mut self, script: &Path, install: &Path) -> io::Result<()> {
+        let _ = install;
+        self.start_script(script)
+    }
+    fn pid(&mut self) -> u32;
     /// The Start Menu shortcut: `link` to `target`, started in `dir`, showing `icon`, with the AUMID.
     fn create_shortcut(
         &mut self,
@@ -46,6 +56,44 @@ pub fn say(text: &str) {
 }
 
 impl System for Real {
+    fn start_script_logged(&mut self, script: &Path, install: &Path) -> io::Result<()> {
+        #[cfg(windows)]
+        {
+            super::win::start_script_with_warning(script, |warning| {
+                super::uninstall::script_warning(install, &warning)
+            })
+        }
+        #[cfg(unix)]
+        {
+            let _ = install;
+            self.start_script(script)
+        }
+    }
+    fn delete_key(&mut self, registry: &str, key: &str) -> io::Result<()> {
+        #[cfg(windows)]
+        {
+            super::win::delete_key(registry, key)
+        }
+        #[cfg(unix)]
+        {
+            let _ = (registry, key);
+            Err(unsupported())
+        }
+    }
+    fn start_script(&mut self, script: &Path) -> io::Result<()> {
+        #[cfg(windows)]
+        {
+            super::win::start_script(script)
+        }
+        #[cfg(unix)]
+        {
+            let _ = script;
+            Err(unsupported())
+        }
+    }
+    fn pid(&mut self) -> u32 {
+        std::process::id()
+    }
     fn start_app(&mut self, exe: &Path, dir: &Path, args: &[OsString]) -> io::Result<(u32, u64)> {
         #[cfg(windows)]
         {
@@ -186,6 +234,11 @@ fn unsupported() -> io::Error {
 #[cfg(test)]
 #[derive(Default)]
 pub struct Fake {
+    pub script_roots: Vec<std::path::PathBuf>,
+    pub deleted: Vec<(String, String)>,
+    pub fail_delete: bool,
+    pub scripts: Vec<(std::path::PathBuf, String)>,
+    pub fail_script: bool,
     /// (exe, dir, args) of each start.
     pub started: Vec<(std::path::PathBuf, std::path::PathBuf, Vec<OsString>)>,
     pub fail_start: bool,
@@ -215,6 +268,33 @@ pub struct Fake {
 
 #[cfg(test)]
 impl System for Fake {
+    fn start_script_logged(&mut self, script: &Path, install: &Path) -> io::Result<()> {
+        self.script_roots.push(install.to_owned());
+        self.start_script(script)
+    }
+    fn delete_key(&mut self, registry: &str, key: &str) -> io::Result<()> {
+        if self.fail_delete {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        self.deleted.push((registry.to_owned(), key.to_owned()));
+        let under = |k: &(String, String, String)| {
+            k.0 == registry && (k.1 == key || k.1.starts_with(&format!("{key}\\")))
+        };
+        self.values.retain(|k, _| !under(k));
+        self.numbers.retain(|k, _| !under(k));
+        Ok(())
+    }
+    fn start_script(&mut self, script: &Path) -> io::Result<()> {
+        if self.fail_script {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        self.scripts
+            .push((script.to_owned(), std::fs::read_to_string(script)?));
+        Ok(())
+    }
+    fn pid(&mut self) -> u32 {
+        4242
+    }
     fn start_app(&mut self, exe: &Path, dir: &Path, args: &[OsString]) -> io::Result<(u32, u64)> {
         if self.fail_start {
             return Err(io::Error::from(io::ErrorKind::PermissionDenied));

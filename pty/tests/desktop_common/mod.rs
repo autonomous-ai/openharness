@@ -16,6 +16,8 @@ pub const LAUNCHER: &str = env!("CARGO_BIN_EXE_harness-desktop-launcher");
 pub const STANDIN_OUT: &str = "HARNESS_STANDIN_OUT";
 /// The stand-in waits this many ms after writing, so a test can watch a running app.
 pub const STANDIN_SLEEP_MS: &str = "HARNESS_STANDIN_SLEEP_MS";
+/// A hidden Flutter-class window; "ignore" exercises owned forced termination.
+pub const STANDIN_WINDOW: &str = "HARNESS_STANDIN_WINDOW";
 
 /// Review Focus 1: a profile with a space, an apostrophe, `&`, `%`, `!` and letters outside ASCII.
 pub const ODD_NAME: &str = "Nguyễn Văn A' & 100% !x";
@@ -66,6 +68,8 @@ fn stand_in(out: &Path) {
         "HARNESS_DESKTOP_REGISTRY_ROOT",
         "HARNESS_DESKTOP_NO_DIALOG",
         STANDIN_OUT,
+        STANDIN_WINDOW,
+        "HARNESS_DESKTOP_INSTANCE",
     ]
     .into_iter()
     .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)))
@@ -77,15 +81,24 @@ fn stand_in(out: &Path) {
         "exe": std::env::current_exe().unwrap(),
         "env": environment,
     });
-    let tmp = out.with_extension("tmp");
-    fs::write(&tmp, report.to_string()).unwrap();
-    fs::rename(&tmp, out).unwrap();
+    #[cfg(windows)]
+    if std::env::var_os(STANDIN_WINDOW).is_some() {
+        window::run(out, report);
+        return;
+    }
+    publish(out, &report);
     if let Some(ms) = std::env::var(STANDIN_SLEEP_MS)
         .ok()
         .and_then(|ms| ms.parse().ok())
     {
         std::thread::sleep(Duration::from_millis(ms));
     }
+}
+
+fn publish(out: &Path, report: &serde_json::Value) {
+    let tmp = out.with_extension("tmp");
+    fs::write(&tmp, report.to_string()).unwrap();
+    fs::rename(&tmp, out).unwrap();
 }
 
 /// [this test's own executable] as `<root>\app\<version>\harness-desktop.exe`.
@@ -126,6 +139,8 @@ pub fn isolated_command(exe: impl AsRef<std::ffi::OsStr>) -> Command {
     for key in [
         STANDIN_OUT,
         STANDIN_SLEEP_MS,
+        STANDIN_WINDOW,
+        "HARNESS_DESKTOP_INSTANCE",
         "HARNESS_DESKTOP_INSTALL_ROOT",
         "HARNESS_DESKTOP_PROGRAMS_DIR",
         "HARNESS_DESKTOP_REGISTRY_ROOT",
@@ -156,4 +171,133 @@ pub fn finish_app(report: &serde_json::Value) {
 
 pub fn same(a: &Path, b: &Path) -> bool {
     fs::canonicalize(a).unwrap() == fs::canonicalize(b).unwrap()
+}
+
+/// Only fixture processes register this hidden, top-level window. Readiness
+/// follows successful registration, creation and finite-lifetime timer setup.
+#[cfg(windows)]
+mod window {
+    use super::*;
+    use std::ffi::OsStr;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, KillTimer,
+        MSG, PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SetTimer, UnregisterClassW,
+        WM_TIMER, WNDCLASSW,
+    };
+    static QUIT: AtomicU32 = AtomicU32::new(0);
+    static IGNORE: AtomicBool = AtomicBool::new(false);
+    const TIMER: usize = 0x4751;
+    unsafe extern "system" fn procedure(
+        window: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        let quit = QUIT.load(Ordering::Relaxed);
+        if quit != 0 && message == quit {
+            if !IGNORE.load(Ordering::Relaxed) {
+                unsafe { PostQuitMessage(0) };
+            }
+            return 0;
+        }
+        if message == WM_TIMER && wparam == TIMER {
+            unsafe { PostQuitMessage(86) };
+            return 0;
+        }
+        unsafe { DefWindowProcW(window, message, wparam, lparam) }
+    }
+    struct Window {
+        handle: HWND,
+        instance: HINSTANCE,
+        class: Vec<u16>,
+    }
+    impl Drop for Window {
+        fn drop(&mut self) {
+            unsafe {
+                KillTimer(self.handle, TIMER);
+                DestroyWindow(self.handle);
+                UnregisterClassW(self.class.as_ptr(), self.instance);
+            }
+        }
+    }
+    pub fn run(out: &Path, mut report: serde_json::Value) {
+        use harness_pty::desktop::win::wide;
+        let quit = unsafe {
+            RegisterWindowMessageW(
+                wide(OsStr::new(harness_pty::desktop::win::QUIT_MESSAGE)).as_ptr(),
+            )
+        };
+        assert_ne!(
+            quit,
+            0,
+            "RegisterWindowMessageW: {}",
+            std::io::Error::last_os_error()
+        );
+        QUIT.store(quit, Ordering::Relaxed);
+        IGNORE.store(
+            std::env::var(STANDIN_WINDOW).is_ok_and(|s| s == "ignore"),
+            Ordering::Relaxed,
+        );
+        let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+        assert!(!instance.is_null());
+        let class = wide(OsStr::new("FLUTTER_RUNNER_WIN32_WINDOW"));
+        let mut definition: WNDCLASSW = unsafe { std::mem::zeroed() };
+        definition.lpfnWndProc = Some(procedure);
+        definition.hInstance = instance;
+        definition.lpszClassName = class.as_ptr();
+        assert_ne!(
+            unsafe { RegisterClassW(&definition) },
+            0,
+            "RegisterClassW: {}",
+            std::io::Error::last_os_error()
+        );
+        // A deliberately different title proves selection never depends on "Harness".
+        let title = wide(OsStr::new("Owned hidden fixture"));
+        let handle = unsafe {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                title.as_ptr(),
+                0,
+                0,
+                0,
+                100,
+                100,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                instance,
+                std::ptr::null(),
+            )
+        };
+        if handle.is_null() {
+            let error = std::io::Error::last_os_error();
+            unsafe { UnregisterClassW(class.as_ptr(), instance) };
+            panic!("CreateWindowExW: {error}");
+        }
+        let _window = Window {
+            handle,
+            instance,
+            class,
+        };
+        assert_ne!(unsafe { SetTimer(handle, TIMER, 60_000, None) }, 0);
+        report["hwnd"] = serde_json::json!(handle as usize as u64);
+        report["window_ready"] = serde_json::json!(true);
+        publish(out, &report);
+        let mut message: MSG = unsafe { std::mem::zeroed() };
+        loop {
+            match unsafe { GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) } {
+                -1 => panic!("GetMessageW: {}", std::io::Error::last_os_error()),
+                0 => {
+                    assert_eq!(message.wParam, 0, "fixture window exceeded its lifetime");
+                    break;
+                }
+                _ => {
+                    unsafe { DispatchMessageW(&message) };
+                }
+            }
+        }
+    }
 }

@@ -27,6 +27,7 @@ pub mod pointer;
 pub mod registry;
 pub mod shortcut;
 pub mod system;
+pub mod uninstall;
 #[cfg(windows)]
 pub mod win;
 
@@ -324,11 +325,13 @@ pub fn run(args: Vec<OsString>) -> i32 {
                 EXIT_FAILED
             }
         },
-        // C4.3 owns uninstallation.
-        Command::Uninstall => {
-            system::say("This Harness.exe does not uninstall yet.");
-            EXIT_USAGE
-        }
+        Command::Uninstall => match Paths::current() {
+            Ok(paths) => uninstall::main(&paths, &mut system::Real::default()),
+            Err(err) => {
+                system::say(&format!("Harness could not uninstall itself: {err}."));
+                EXIT_FAILED
+            }
+        },
     }
 }
 
