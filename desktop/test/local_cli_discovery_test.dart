@@ -707,27 +707,45 @@ void main() {
 
   test(
     'startSupervising reports the backend link on every change, not every tick',
-    () async {
-      const computerId = '0123456789abcdef0123456789abcdef';
-      final identityFile = File('${scratch.path}/computer-id')
-        ..writeAsStringSync(computerId);
-      var connected = false;
-      server = await serveStatus(
-        0,
-        () => readyStatus(computerId, extra: {'connected': connected}),
-      );
-      final seen = <bool>[];
-      final timer = discoveryFor(server!.port, identityFile).startSupervising(
-        checkInterval: const Duration(milliseconds: 20),
-        onBackendOnline: seen.add,
-      );
-      addTearDown(timer.cancel);
+    () {
+      fakeAsync((clock) {
+        var connected = false;
+        final discovery = _SupervisionProbe(
+          readProbe: () async => LocalCliProbe.ready(
+            LocalCliEndpoint(
+              computerId: '0123456789abcdef0123456789abcdef',
+              wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
+              protocolVersion: localWsProtocolVersion,
+              terminalProtocolVersion: localTerminalProtocolVersion,
+              backendOnline: connected,
+            ),
+          ),
+          spawnCommand: () async {},
+        );
+        final seen = <bool>[];
+        const interval = Duration(milliseconds: 20);
+        final timer = discovery.startSupervising(
+          checkInterval: interval,
+          onBackendOnline: seen.add,
+        );
+        void ticks() {
+          for (var i = 0; i < 6; i++) {
+            clock.elapse(interval);
+            clock.flushMicrotasks();
+          }
+        }
 
-      await Future.delayed(const Duration(milliseconds: 120));
-      expect(seen, [false], reason: 'offline at first sight, said once');
-      connected = true;
-      await Future.delayed(const Duration(milliseconds: 120));
-      expect(seen, [false, true], reason: 'the reconnect, said once');
+        try {
+          ticks();
+          expect(seen, [false], reason: 'offline at first sight, said once');
+          connected = true;
+          ticks();
+          expect(seen, [false, true], reason: 'the reconnect, said once');
+        } finally {
+          timer.cancel();
+          clock.flushMicrotasks();
+        }
+      });
     },
   );
 
