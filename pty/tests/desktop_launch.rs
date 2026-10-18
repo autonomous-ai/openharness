@@ -28,8 +28,8 @@ fn main() {
             starts_from_its_own_folder_without_an_override,
         ),
         (
-            "a_relative_override_is_resolved_from_the_callers_folder",
-            a_relative_override_is_resolved_from_the_callers_folder,
+            "a_relative_override_is_rejected_before_launch",
+            a_relative_override_is_rejected_before_launch,
         ),
         (
             "an_already_exited_app_does_not_block_launch",
@@ -43,7 +43,29 @@ fn main() {
             "an_invalid_wait_fails_without_starting_the_app",
             an_invalid_wait_fails_without_starting_the_app,
         ),
+        (
+            "invalid_explicit_overrides_never_launch",
+            invalid_explicit_overrides_never_launch,
+        ),
+        (
+            "empty_overrides_keep_portable_launch",
+            empty_overrides_keep_portable_launch,
+        ),
     ]);
+}
+
+fn launcher_at(root: &std::path::Path) -> std::process::Command {
+    let mut command = launcher();
+    command
+        .env("HARNESS_DESKTOP_INSTALL_ROOT", root)
+        .env("HARNESS_DESKTOP_PROGRAMS_DIR", root.join("test-programs"))
+        .env(
+            "HARNESS_DESKTOP_REGISTRY_ROOT",
+            format!(r"Software\HarnessTest\{}", uuid::Uuid::new_v4().simple()),
+        )
+        .env("USERPROFILE", root.join("test-profile"))
+        .env("HOME", root.join("test-profile"));
+    command
 }
 
 fn starts_the_current_version_with_the_link_from_its_folder() {
@@ -60,7 +82,7 @@ fn starts_the_current_version_with_the_link_from_its_folder() {
         r"C:\a b\",
         "Nguyễn 日",
     ];
-    let status = launcher()
+    let status = launcher_at(&root)
         .args(args)
         .env("HARNESS_DESKTOP_INSTALL_ROOT", &root)
         .env(STANDIN_OUT, &out)
@@ -103,7 +125,7 @@ fn waits_for_the_app_being_replaced() {
     let reaper = std::thread::spawn(move || old.wait().unwrap());
     let started = Instant::now();
     let out = dir.path().join("new.json");
-    let status = launcher()
+    let status = launcher_at(&root)
         .args(["--wait-pid", &pid.to_string()])
         .env("HARNESS_DESKTOP_INSTALL_ROOT", &root)
         .env(STANDIN_OUT, &out)
@@ -123,7 +145,7 @@ fn waits_for_the_app_being_replaced() {
 
 fn a_broken_install_exits_3_and_says_why_in_the_log() {
     let dir = tempfile::tempdir().unwrap();
-    let output = launcher()
+    let output = launcher_at(dir.path())
         .env("HARNESS_DESKTOP_INSTALL_ROOT", dir.path())
         .output()
         .unwrap();
@@ -165,25 +187,21 @@ fn starts_from_its_own_folder_without_an_override() {
     ));
 }
 
-fn a_relative_override_is_resolved_from_the_callers_folder() {
+fn a_relative_override_is_rejected_before_launch() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("relative-root");
     put_app(&root, "1.2.3");
     point(&root, "current", "1.2.3");
     let out = dir.path().join("report.json");
-    let status = launcher()
+    let output = launcher_at(&root)
         .current_dir(dir.path())
         .env("HARNESS_DESKTOP_INSTALL_ROOT", "relative-root")
         .env(STANDIN_OUT, &out)
-        .status()
+        .output()
         .unwrap();
-    assert!(status.success());
-    let value = report(&out);
-    finish_app(&value);
-    assert!(same(
-        value["cwd"].as_str().unwrap().as_ref(),
-        &root.join("app/1.2.3")
-    ));
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not a full path"));
+    assert!(!out.exists());
 }
 
 fn an_already_exited_app_does_not_block_launch() {
@@ -200,7 +218,7 @@ fn an_already_exited_app_does_not_block_launch() {
     drop(old);
     let out = dir.path().join("new.json");
     let started = Instant::now();
-    let status = launcher()
+    let status = launcher_at(&root)
         .args(["--wait-pid", &pid.to_string()])
         .env("HARNESS_DESKTOP_INSTALL_ROOT", &root)
         .env(STANDIN_OUT, &out)
@@ -217,7 +235,7 @@ fn a_resolved_app_that_cannot_spawn_exits_4() {
     fs::create_dir_all(&app).unwrap();
     fs::write(app.join("harness-desktop.exe"), b"not an executable").unwrap();
     point(dir.path(), "current", "1.2.3");
-    let output = launcher()
+    let output = launcher_at(dir.path())
         .env("HARNESS_DESKTOP_INSTALL_ROOT", dir.path())
         .output()
         .unwrap();
@@ -237,7 +255,7 @@ fn an_invalid_wait_fails_without_starting_the_app() {
     point(dir.path(), "current", "1.2.3");
     let out = dir.path().join("new.json");
     let invalid = if cfg!(unix) { u32::MAX } else { 0 };
-    let output = launcher()
+    let output = launcher_at(dir.path())
         .args(["--wait-pid", &invalid.to_string()])
         .env("HARNESS_DESKTOP_INSTALL_ROOT", dir.path())
         .env(STANDIN_OUT, &out)
@@ -253,4 +271,83 @@ fn an_invalid_wait_fails_without_starting_the_app() {
                 .contains("could not wait")
         );
     }
+}
+
+fn invalid_explicit_overrides_never_launch() {
+    for case in [
+        "install_only",
+        "invalid_registry",
+        "relative_programs",
+        "relative_install",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Harness");
+        put_app(&root, "1.2.3");
+        point(&root, "current", "1.2.3");
+        let out = dir.path().join("report.json");
+        let mut command = launcher();
+        command
+            .current_dir(dir.path())
+            .env("USERPROFILE", dir.path())
+            .env("HOME", dir.path())
+            .env("HARNESS_DESKTOP_INSTALL_ROOT", &root)
+            .env("HARNESS_DESKTOP_PROGRAMS_DIR", dir.path().join("programs"))
+            .env(
+                "HARNESS_DESKTOP_REGISTRY_ROOT",
+                r"Software\HarnessTest\invalid-launch",
+            )
+            .env(STANDIN_OUT, &out);
+        match case {
+            "install_only" => {
+                command
+                    .env_remove("HARNESS_DESKTOP_PROGRAMS_DIR")
+                    .env_remove("HARNESS_DESKTOP_REGISTRY_ROOT");
+            }
+            "invalid_registry" => {
+                command.env("HARNESS_DESKTOP_REGISTRY_ROOT", r"\Software");
+            }
+            "relative_programs" => {
+                command.env("HARNESS_DESKTOP_PROGRAMS_DIR", "relative");
+            }
+            "relative_install" => {
+                command.env("HARNESS_DESKTOP_INSTALL_ROOT", "Harness");
+            }
+            _ => unreachable!(),
+        }
+        let output = command.output().unwrap();
+        // RED must not leave the incorrectly started fixture process mapped.
+        if output.status.success() {
+            finish_app(&report(&out));
+        }
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{case}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!out.exists(), "{case}");
+        assert!(
+            !root.join("launch.log").exists(),
+            "invalid overrides did not reach wait/healing"
+        );
+    }
+}
+
+fn empty_overrides_keep_portable_launch() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("Harness");
+    put_app(&root, "1.2.3");
+    point(&root, "current", "1.2.3");
+    let exe = root.join("Harness.exe");
+    fs::copy(LAUNCHER, &exe).unwrap();
+    let out = dir.path().join("report.json");
+    let output = isolated_command(exe)
+        .env("HARNESS_DESKTOP_INSTALL_ROOT", "")
+        .env("HARNESS_DESKTOP_PROGRAMS_DIR", "")
+        .env("HARNESS_DESKTOP_REGISTRY_ROOT", "")
+        .env(STANDIN_OUT, &out)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    finish_app(&report(&out));
 }

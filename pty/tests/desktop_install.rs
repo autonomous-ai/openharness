@@ -16,6 +16,7 @@ fn main() {
 
 #[cfg(windows)]
 mod windows {
+    use super::desktop_common::owned_windows::OwnedProcesses;
     use super::desktop_common::{self, *};
     use harness_pty::desktop::{registry, shortcut, win};
     use serde::{Deserialize, Serialize};
@@ -44,6 +45,18 @@ mod windows {
 
     pub fn main() {
         desktop_common::main(&[
+            (
+                "junction_source_is_rejected_before_destination_effects",
+                junction_source_is_rejected_before_destination_effects,
+            ),
+            (
+                "missing_shell_handle_cleanup_reaps_an_unreported_bootstrap",
+                missing_shell_handle_cleanup_reaps_an_unreported_bootstrap,
+            ),
+            (
+                "unwind_cleanup_reaps_a_bootstrap_after_its_report",
+                unwind_cleanup_reaps_a_bootstrap_after_its_report,
+            ),
             ("installs_registers_and_opens", installs_registers_and_opens),
             (
                 "same_version_repairs_registration_without_recopying",
@@ -77,6 +90,7 @@ mod windows {
     }
 
     struct World {
+        owned: OwnedProcesses,
         dir: tempfile::TempDir,
         profile: PathBuf,
         zip: PathBuf,
@@ -89,6 +103,17 @@ mod windows {
 
     impl Drop for World {
         fn drop(&mut self) {
+            if let Err(error) = self.owned.cleanup(Duration::from_secs(5)) {
+                self.dir.disable_cleanup(true);
+                eprintln!(
+                    "owned process cleanup failed; retained {}: {error}",
+                    self.dir.path().display()
+                );
+                if !std::thread::panicking() {
+                    panic!("owned fixture processes did not stop: {error}");
+                }
+                return;
+            }
             // Never remove the shared parent, another test's keys, or a real Harness key.
             win::delete_key(r"Software\HarnessTest", &self.id).unwrap();
         }
@@ -99,6 +124,7 @@ mod windows {
         let profile = dir.path().join(ODD_NAME);
         let id = uuid::Uuid::new_v4().simple().to_string();
         let world = World {
+            owned: OwnedProcesses::new(dir.path()),
             zip: profile.join("Downloads/zip"),
             install: profile.join("AppData/Local/Programs/Harness"),
             programs: profile.join("Start Menu/Programs"),
@@ -173,6 +199,25 @@ mod windows {
     }
 
     fn run(world: &World, exe: &Path, args: &[&str], name: &str) -> (Output, serde_json::Value) {
+        world.owned.allow(exe).unwrap();
+        world
+            .owned
+            .allow(&world.install.join("Harness.exe"))
+            .unwrap();
+        for root in [exe.parent().unwrap(), world.install.as_path()] {
+            if let Ok(version) = harness_pty::desktop::pointer::read(&root.join("current")) {
+                world
+                    .owned
+                    .allow(
+                        &world
+                            .install
+                            .join("app")
+                            .join(version)
+                            .join("harness-desktop.exe"),
+                    )
+                    .unwrap();
+            }
+        }
         let out = world.dir.path().join(format!("{name}.json"));
         let env = environment(world, &out);
         let output = bounded_output(isolated_command(exe).args(args).envs(&env));
@@ -401,6 +446,10 @@ mod windows {
         launcher: PathBuf,
         identity: PathBuf,
         env: BTreeMap<String, String>,
+        #[serde(default)]
+        hang_before_report: bool,
+        #[serde(default)]
+        hang_after_report: bool,
     }
 
     pub fn bootstrap_entry() -> bool {
@@ -476,8 +525,14 @@ mod windows {
             if args.len() != 1 {
                 return Err("bootstrap expects exactly one URI".into());
             }
+            if config.hang_before_report {
+                std::thread::sleep(Duration::from_secs(60));
+            }
             let identity = serde_json::json!({"exe":exe,"cwd":std::env::current_dir().unwrap(),"pid":std::process::id(),"args":args,"env":actual_environment()});
             fs::write(&config.identity, identity.to_string()).map_err(|e| e.to_string())?;
+            if config.hang_after_report {
+                std::thread::sleep(Duration::from_secs(60));
+            }
             let output = bounded_output(
                 isolated_command(&config.launcher)
                     .args(&args)
@@ -508,6 +563,7 @@ mod windows {
         // Keep all config paths under the bootstrap's own canonical directory.
         let exe = world.dir.path().join(BOOTSTRAP);
         fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+        world.owned.allow(&exe).unwrap();
         let out = world.dir.path().join("shell-app.json");
         let identity = world.dir.path().join("bootstrap-identity.json");
         let config = BootstrapConfig {
@@ -516,6 +572,8 @@ mod windows {
             launcher: world.install.join("Harness.exe"),
             identity: identity.clone(),
             env: environment(world, &out),
+            hang_before_report: false,
+            hang_after_report: false,
         };
         fs::write(
             world.dir.path().join(CONFIG),
@@ -581,12 +639,109 @@ mod windows {
         assert_app(&world, &app, "1.2.3", &["harness-test://lost-environment"]);
     }
 
+    fn junction_source_is_rejected_before_destination_effects() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("outside")).unwrap();
+        fs::write(dir.path().join("outside/sentinel"), b"external bytes").unwrap();
+        fs::create_dir(dir.path().join("installed")).unwrap();
+        fs::write(dir.path().join("installed/current"), b"1.2.3\r\n").unwrap();
+        // Relative ASCII arguments avoid cmd reparsing the owned profile's special characters.
+        // Directory junctions do not require symlink privileges or Developer Mode.
+        let cmd = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe");
+        let output = bounded_output(
+            Command::new(cmd)
+                .current_dir(dir.path())
+                .args(["/d", "/v:off", "/c", "mklink", "/J", "junction", "outside"]),
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            harness_pty::desktop::install::copy_tree(
+                &dir.path().join("junction"),
+                &dir.path().join("installed/1.3.0")
+            )
+            .is_err()
+        );
+        assert!(!dir.path().join("installed/1.3.0").exists());
+        assert_eq!(
+            fs::read(dir.path().join("installed/current")).unwrap(),
+            b"1.2.3\r\n"
+        );
+        assert_eq!(
+            fs::read(dir.path().join("outside/sentinel")).unwrap(),
+            b"external bytes"
+        );
+        fs::remove_dir(dir.path().join("junction")).unwrap();
+    }
+
+    fn configure_hang(world: &World, before_report: bool) {
+        let path = world.dir.path().join(CONFIG);
+        let mut config: BootstrapConfig =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        config.hang_before_report = before_report;
+        config.hang_after_report = !before_report;
+        fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+    }
+
+    fn missing_shell_handle_cleanup_reaps_an_unreported_bootstrap() {
+        let world = installed();
+        let (exe, identity, _) = bootstrap(&world);
+        configure_hang(&world, true);
+        let mut child = isolated_command(&exe)
+            .arg("harness-test://hang")
+            .spawn()
+            .unwrap();
+        // Exercise exactly the optional-Shell-handle fallback, before any report exists.
+        world
+            .owned
+            .watch_shell(&exe, &identity, std::ptr::null_mut())
+            .unwrap();
+        world
+            .owned
+            .await_observed(&exe, Duration::from_secs(3))
+            .unwrap();
+        assert!(!identity.exists());
+        let started = Instant::now();
+        world.owned.cleanup(Duration::from_secs(3)).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert!(!child.wait().unwrap().success());
+        assert_eq!(world.owned.live_count().unwrap(), 0);
+    }
+
+    fn unwind_cleanup_reaps_a_bootstrap_after_its_report() {
+        let mut fixture = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let world = installed();
+            fixture = Some(world.dir.path().to_owned());
+            let (exe, identity, _) = bootstrap(&world);
+            configure_hang(&world, false);
+            let child = isolated_command(&exe)
+                .arg("harness-test://hang")
+                .spawn()
+                .unwrap();
+            // Close this optional spawning handle: only the fixture guard owns cleanup now.
+            drop(child);
+            world
+                .owned
+                .watch_shell(&exe, &identity, std::ptr::null_mut())
+                .unwrap();
+            report(&identity);
+            std::panic::resume_unwind(Box::new("intentional fixture unwind"));
+        }));
+        assert!(result.is_err());
+        assert!(
+            !fixture.unwrap().exists(),
+            "the process was reaped before TempDir deletion"
+        );
+    }
+
     fn shell_delivers_uri_to_bootstrap_then_real_installed_launcher() {
-        use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
         use windows_sys::Win32::System::Com::{
             COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize,
         };
-        use windows_sys::Win32::System::Threading::WaitForSingleObject;
         use windows_sys::Win32::UI::Shell::{
             SEE_MASK_FLAG_NO_UI, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
         };
@@ -594,14 +749,6 @@ mod windows {
         impl Drop for Scheme {
             fn drop(&mut self) {
                 win::delete_key("Software", &registry::protocol_key(&self.0)).unwrap();
-            }
-        }
-        struct Handle(HANDLE);
-        impl Drop for Handle {
-            fn drop(&mut self) {
-                if !self.0.is_null() {
-                    unsafe { CloseHandle(self.0) };
-                }
             }
         }
         struct Apartment;
@@ -632,7 +779,10 @@ mod windows {
             "{}",
             std::io::Error::last_os_error()
         );
-        let process = Handle(info.hProcess);
+        world
+            .owned
+            .watch_shell(&exe, &identity, info.hProcess)
+            .unwrap();
         let bootstrap = report(&identity);
         // Positive identity works even if the shell returns no process handle.
         assert!(same(Path::new(bootstrap["exe"].as_str().unwrap()), &exe));
@@ -640,12 +790,7 @@ mod windows {
             Path::new(bootstrap["cwd"].as_str().unwrap()),
             world.dir.path()
         ));
-        if !process.0.is_null() {
-            assert_eq!(
-                unsafe { WaitForSingleObject(process.0, 30_000) },
-                WAIT_OBJECT_0
-            );
-        }
+        // Cleanup owns the fallback if this bounded normal wait fails/unwinds.
         finish_app(&bootstrap);
         let app = report(&out);
         finish_app(&app);

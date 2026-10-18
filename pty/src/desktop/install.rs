@@ -51,13 +51,48 @@ pub fn newer(a: &str, b: &str) -> bool {
     matches!((core(a), core(b)), (Some(a), Some(b)) if a > b)
 }
 
+/// Non-following metadata at every source boundary, including Windows junctions.
+fn linked(meta: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        meta.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+    }
+    #[cfg(not(windows))]
+    {
+        meta.is_symlink()
+    }
+}
+
+fn source_metadata(path: &Path, directory: bool) -> io::Result<fs::Metadata> {
+    let meta = fs::symlink_metadata(path)?;
+    if linked(&meta) || (directory && !meta.is_dir()) || (!directory && !meta.is_file()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{} is not an ordinary {}",
+                path.display(),
+                if directory {
+                    "source folder"
+                } else {
+                    "source file"
+                }
+            ),
+        ));
+    }
+    Ok(meta)
+}
+
 /// The same tree under [to], which must not exist, without links and without `.started`.
 pub fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
+    source_metadata(from, true)?;
     fs::create_dir(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;
-        let kind = entry.file_type()?;
-        if kind.is_symlink() || entry.file_name() == STARTED_MARKER {
+        let kind = fs::symlink_metadata(entry.path())?;
+        if linked(&kind) || entry.file_name() == STARTED_MARKER {
             continue;
         }
         let target = to.join(entry.file_name());
@@ -83,6 +118,7 @@ fn remove_folder(path: &Path) -> io::Result<()> {
 /// [from] in place of [to], through `<to>.new`; the old file is renamed to `<to>.old` first, since a running
 /// program can be renamed but not overwritten. An old `.old` that is still held stays for the next cleanup.
 pub fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
+    source_metadata(from, false)?;
     let with = |suffix: &str| {
         let mut name = to.as_os_str().to_owned();
         name.push(suffix);
@@ -175,12 +211,25 @@ pub fn run(
     system: &mut impl System,
 ) -> Result<Outcome, String> {
     let version = pointer::read(&paths.own.join(CURRENT))?;
-    for needed in [
-        paths.own.join(APP_DIR).join(&version).join(APP_EXE),
-        paths.own.join(LAUNCHER_EXE),
+    for (needed, directory) in [
+        (paths.own.join(APP_DIR), true),
+        (paths.own.join(APP_DIR).join(&version), true),
+        (paths.own.join(APP_DIR).join(&version).join(APP_EXE), false),
+        (paths.own.join(LAUNCHER_EXE), false),
     ] {
-        if !needed.is_file() {
-            return Err(format!("this copy of Harness has no {}", needed.display()));
+        source_metadata(&needed, directory).map_err(|error| {
+            format!(
+                "this copy of Harness has no ordinary source {}: {error}",
+                needed.display()
+            )
+        })?;
+    }
+    match fs::symlink_metadata(paths.own.join(ICON)) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("could not inspect {ICON}: {error}")),
+        Ok(_) => {
+            source_metadata(&paths.own.join(ICON), false)
+                .map_err(|error| format!("could not use {ICON}: {error}"))?;
         }
     }
     launch::wait_for_replaced(wait_pid, system)?;
@@ -610,5 +659,90 @@ mod tests {
         assert!(system.shortcuts.is_empty() && system.started.is_empty());
         assert_eq!(system.writes, 0);
         assert!(system.said[0].contains("quit Harness"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn linked_source_boundaries_leave_install_and_external_bytes_unchanged() {
+        for boundary in ["version", "app", "launcher", "icon", "app_exe"] {
+            let World { _dir, paths } = world("1.2.3");
+            run(&paths, None, &mut Fake::default()).unwrap();
+            zip(&paths.own, "1.3.0");
+            let external = tempfile::tempdir().unwrap();
+            let external_version = external.path().join("1.3.0");
+            fs::create_dir(&external_version).unwrap();
+            fs::write(external_version.join(APP_EXE), b"external app").unwrap();
+            fs::write(external.path().join("sentinel"), b"external sentinel").unwrap();
+            let (from, to, directory) = match boundary {
+                "version" => (
+                    external_version.clone(),
+                    paths.own.join(APP_DIR).join("1.3.0"),
+                    true,
+                ),
+                "app" => (external.path().to_owned(), paths.own.join(APP_DIR), true),
+                "launcher" => (
+                    external.path().join("sentinel"),
+                    paths.own.join(LAUNCHER_EXE),
+                    false,
+                ),
+                "icon" => (
+                    external.path().join("sentinel"),
+                    paths.own.join(ICON),
+                    false,
+                ),
+                "app_exe" => (
+                    external.path().join("sentinel"),
+                    paths.own.join(APP_DIR).join("1.3.0").join(APP_EXE),
+                    false,
+                ),
+                _ => unreachable!(),
+            };
+            if directory {
+                fs::remove_dir_all(&to).unwrap();
+            } else {
+                fs::remove_file(&to).unwrap();
+            }
+            std::os::unix::fs::symlink(&from, &to).unwrap();
+            let mut system = Fake::default();
+            assert!(
+                run(&paths, Some(7), &mut system).is_err(),
+                "followed {boundary}"
+            );
+            assert!(
+                system.waited.is_empty() && system.quit.is_empty() && system.started.is_empty()
+            );
+            assert_eq!(system.writes, 0);
+            assert!(system.shortcuts.is_empty());
+            assert_eq!(text(&paths.install.join(CURRENT)), "1.2.3\r\n");
+            assert_eq!(text(&paths.launcher()), "launcher 1.2.3");
+            assert!(!paths.install.join(APP_DIR).join("1.3.0").exists());
+            assert_eq!(
+                fs::read(external.path().join("sentinel")).unwrap(),
+                b"external sentinel"
+            );
+            assert_eq!(
+                fs::read(external_version.join(APP_EXE)).unwrap(),
+                b"external app"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_copy_and_replace_refuse_linked_roots_before_destination_effects() {
+        let dir = tempfile::tempdir().unwrap();
+        let external = dir.path().join("external");
+        fs::create_dir(&external).unwrap();
+        fs::write(external.join("sentinel"), b"external").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&external, &link).unwrap();
+        let destination = dir.path().join("destination");
+        assert!(copy_tree(&link, &destination).is_err());
+        assert!(!destination.exists());
+        let file = dir.path().join("linked-file");
+        std::os::unix::fs::symlink(external.join("sentinel"), &file).unwrap();
+        fs::write(&destination, b"installed").unwrap();
+        assert!(replace_file(&file, &destination).is_err());
+        assert_eq!(fs::read(destination).unwrap(), b"installed");
+        assert_eq!(fs::read(external.join("sentinel")).unwrap(), b"external");
     }
 }

@@ -3,6 +3,9 @@
 //! `app\<ver>\harness-desktop.exe`, and started with [STANDIN_OUT] set, it writes what it was given and exits.
 #![allow(dead_code)]
 
+#[cfg(windows)]
+pub mod owned_windows;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

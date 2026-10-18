@@ -296,7 +296,19 @@ pub fn run(args: Vec<OsString>) -> i32 {
                 system::say("Harness.exe does not know its own folder.");
                 return EXIT_BROKEN;
             };
-            let paths = Paths::current().ok();
+            // Path discovery is optional for a portable/off-Windows launch, but an
+            // explicit invalid override must never silently become a launch target.
+            let explicit = [INSTALL_ROOT_ENV, PROGRAMS_DIR_ENV, REGISTRY_ROOT_ENV]
+                .iter()
+                .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()));
+            let paths = match Paths::current() {
+                Ok(paths) => Some(paths),
+                Err(error) if explicit => {
+                    system::say(&format!("Harness could not start: {error}."));
+                    return EXIT_FAILED;
+                }
+                Err(_) => None,
+            };
             launch_from(
                 &root,
                 paths.as_ref(),
