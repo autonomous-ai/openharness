@@ -195,7 +195,8 @@ async function uninstallService(deps: ServiceCommandDeps): Promise<number> {
   const task = service.platform === 'taskscheduler'
   const before = service.inspect()
   // Task Scheduler that could not be asked has not said there is no task: unregister says so (harnessd/platform.ts).
-  if (!before.installed && !before.registered && !(task && before.unreachable)) {
+  // `registered` means both tasks there, so one task left on its own, its files gone, is found by its log (re-review N9).
+  if (!before.installed && !before.registered && !(task && (before.unreachable || service.registeredFor(deps.logFile)))) {
     deps.out(`harnessd is not installed with ${name}; nothing to remove.`)
     return 0
   }
@@ -311,7 +312,8 @@ async function installTask(deps: ServiceCommandDeps): Promise<number> {
     const outcome = service.register()
     if (!outcome.ok) service.discard()
     // Gone now though it was there: the five-minute task replaced (/F), then removed again with its refused logon task.
-    return { ...outcome, unwritten: false, lost: !outcome.ok && before.registered && !service.inspect().registered }
+    // `registered` means both tasks, so a five-minute task whose logon task was deleted by hand counts by its files (N8).
+    return { ...outcome, unwritten: false, lost: !outcome.ok && (before.registered || before.installed) && !service.inspect().registered }
   })
   if (registered !== 'already' && !registered.ok) {
     deps.err(registered.unwritten
@@ -339,7 +341,7 @@ async function installTask(deps: ServiceCommandDeps): Promise<number> {
     const wait = deps.startWaitMs ?? PLATFORM_START_WAIT_MS
     up = await waitForMaster(deps, Math.min(TASK_RUN_WAIT_MS, wait))
     if (up === null && !deps.lockHeld?.()) {
-      deps.out('Task Scheduler will start the Harness daemon when you sign in to Windows. It did not start it now: it runs the task only in a session at the Windows desktop (not SSH).')
+      deps.out('Task Scheduler will start Harness when you sign in to Windows. It did not start it now: it runs the task only in a session at the Windows desktop, not over SSH.')
       deps.out('  start it now: harness start')
       return SERVICE_REGISTERED_NOT_RUNNING
     }

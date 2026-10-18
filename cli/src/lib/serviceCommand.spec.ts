@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { OS_SYSTEMD_UNIT, OS_UNIT_FILE, PlatformService, SYSTEMD_UNIT, defaultPlatformDeps, taskName, type CommandResult, type PlatformName } from '../harnessd/platform.js'
+import { OS_SYSTEMD_UNIT, OS_UNIT_FILE, PlatformService, SYSTEMD_UNIT, defaultPlatformDeps, logonTaskName, taskName, type CommandResult, type PlatformName } from '../harnessd/platform.js'
 import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
 import { TASK_RUN_WAIT_MS, serviceDefinition } from './platformDaemon.js'
 import {
@@ -534,7 +534,7 @@ describe('harness service with Task Scheduler', () => {
       expect(w.clock.now).toBeLessThanOrEqual(TASK_RUN_WAIT_MS + 1_000)
       expect(w.err).toEqual([])
       expect(w.out.slice(0, 2)).toEqual([
-        'Task Scheduler will start the Harness daemon when you sign in to Windows. It did not start it now: it runs the task only in a session at the Windows desktop (not SSH).',
+        'Task Scheduler will start Harness when you sign in to Windows. It did not start it now: it runs the task only in a session at the Windows desktop, not over SSH.',
         '  start it now: harness start',
       ])
     } finally { rmSync(w.dir, { recursive: true, force: true }) }
@@ -579,6 +579,33 @@ describe('harness service with Task Scheduler', () => {
         '✗ Harness could not remove the task that starts harnessd: Task Scheduler may still start it when you sign in.',
         `  schtasks /Delete /TN ${taskName('demo')} /F failed (exit 1): ERROR: Access is denied.`,
       ])
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  // Re-review N9: `registered` means both tasks, so a five-minute task left on its own, its files gone, was "nothing to
+  // remove". It is this data folder's by the log its description names, as `harness uninstall` finds it.
+  it('removes a five-minute task left without its logon task and its files', async () => {
+    const mine = { status: 0, stdout: '<Description>Its log: C:\\d\\harness.log</Description><Settings><Enabled>true</Enabled></Settings>', stderr: '' }
+    const absent = { status: 1, stdout: '', stderr: 'ERROR: The system cannot find the file specified.' }
+    const w = windows({ answers: { [`schtasks /Query /TN ${logonTaskName('demo')}`]: absent, [`schtasks /Query /TN ${taskName('demo')}`]: mine } })
+    try {
+      await expect(serviceCommand(['uninstall'], w.deps)).resolves.toBe(0)
+      expect(w.out).not.toContain('harnessd is not installed with Task Scheduler; nothing to remove.')
+      expect(w.calls).toContain(`schtasks /Delete /TN ${taskName('demo')} /F`)
+      expect(w.calls).not.toContain(`schtasks /Delete /TN ${logonTaskName('demo')} /F`)
+    } finally { rmSync(w.dir, { recursive: true, force: true }) }
+  })
+
+  // Re-review N8: over a five-minute task whose logon task was deleted by hand, a refused logon task removes the
+  // five-minute task the install had just replaced; that is not "nothing was changed".
+  it('says the old task is gone when it stood without its logon task and the new logon task is refused', async () => {
+    const absent = { status: 1, stdout: '', stderr: 'ERROR: The system cannot find the file specified.' }
+    const refused = { status: 1, stdout: '', stderr: 'ERROR: Access is denied.' }
+    const w = windows({ registered: true, answers: { [`schtasks /Query /TN ${logonTaskName('demo')}`]: absent, [`schtasks /Create /TN ${logonTaskName('demo')}`]: refused } })
+    try {
+      w.deps.service!.write(w.deps.definition())
+      await expect(serviceCommand(['install'], w.deps)).resolves.toBe(1)
+      expect(w.err[0]).toBe('✗ Task Scheduler did not accept the new task that starts harnessd, and no longer has the old one: `harness start` still starts harnessd, and `harness service install` tries again.')
     } finally { rmSync(w.dir, { recursive: true, force: true }) }
   })
 
