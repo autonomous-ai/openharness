@@ -63,7 +63,9 @@ jobs:
               for (const key of ["win32-x64", "win32-arm64"]) {
                 const entry = node[key]
                 if (!entry || entry.version !== `v${process.env.NODE_VERSION}`) throw new Error(`${key}: ${JSON.stringify(entry)}`)
-                const bytes = Buffer.from(await (await fetch(entry.url, { cache: "no-store" })).arrayBuffer())
+                const response = await fetch(entry.url, { cache: "no-store" })
+                if (!response.ok) throw new Error(`${key}: GET ${entry.url} -> ${response.status}`)
+                const bytes = Buffer.from(await response.arrayBuffer())
                 if (crypto.createHash("sha256").update(bytes).digest("hex") !== entry.sha256 || bytes.length !== entry.size) throw new Error(`${key}: served bytes differ`)
                 console.log(`  ${key}: ${entry.url} ok`)
               }

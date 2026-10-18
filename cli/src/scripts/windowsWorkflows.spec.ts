@@ -34,9 +34,11 @@ describe('the Windows release workflows', () => {
     expect(release).not.toContain('upload-install-ps1.sh --production')
   })
 
-  it('lets the Node runtime workflow write only a runtime manifest', () => {
+  it('lets the Node runtime workflow write only a runtime manifest, and fail plainly when the read-back is not served', () => {
     const node = read('release-node-runtime-windows.yml')
     // Final review R3-4: never the fleet's harness/cli/metadata.json, whatever is typed into the dispatch.
     expect(node).toContain('[[ "$METADATA_PATH" =~ ^harness/(staging[a-z0-9-]*/)?runtime/metadata\\.json$ ]]')
+    // Carried B1.11: a 404 failed as "served bytes differ"; it now says what the fetch answered.
+    expect(node).toMatch(/if \(!response\.ok\) throw new Error\(`\$\{key\}: GET \$\{entry\.url\} -> \$\{response\.status\}`\)/)
   })
 })
