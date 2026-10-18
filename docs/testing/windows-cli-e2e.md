@@ -307,6 +307,10 @@ Each is its own commit with a test that fails without it.
 
 ## Findings not fixed
 
+After the final review, G4, G5, G6 and the closing-guide half of G8 are fixed; G1, G2, G3 and G7 are in the
+spec's Known limits. That review also split the task in two (the five-minute task, and a logon task that forgets
+a `harness stop`) and set the tasks to normal priority. This run predates those changes and did not exercise them.
+
 - **G1. With nobody signed in, the daemon does not come back after a reboot.** The task's logon type is
   InteractiveToken (`Logon Mode: Interactive only`, `harnessd/platform.ts` task XML), so Task Scheduler runs it only in
   a signed-in session; the spec wants a remote machine back after a reboot with nobody signed in. (Running without a
