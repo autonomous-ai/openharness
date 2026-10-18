@@ -1,14 +1,18 @@
 import { expect, it, vi } from 'vitest'
 import { startAgent } from './start.js'
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
-function fixture() {
-  const start = { creationId: 'super-native-receipt', request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?: boolean } = {}) {
+  const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
   let nativeState = 'missing', lostJoin = false
   const scoped = vi.fn(async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     if (payload.action === 'startStatus') return { ok: true, value: structuredClone(start) }
     const cmd = payload.command as Record<string, unknown>
     if (cmd.type === 'agent.startDispatch') start.dispatched = true
+    if (cmd.type === 'agent.startFailed') {
+      if (options.loseFailure) { options.loseFailure = false; throw new Error('Failure receipt interrupted') }
+      start.error = String(cmd.error)
+    }
     if (cmd.type === 'agent.started' && lostJoin) { lostJoin = false; throw new Error('Join interrupted') }
     return { ok: true, value: { result: cmd.type === 'agent.start' ? { startId: 'start' } : { agentId: 'worker' } } }
   })
@@ -17,7 +21,15 @@ function fixture() {
     if (type === 'engines_probe') return { engines: [{ engine: 'claude', installed: true }] }
     if (type === 'usage_read') return { providers: [] }
     if (type === 'super_tabs') return { ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 100, projectDiskFreeBytes: 1000 }, tools: { git: true }, devices: {} }
-    if (type === 'agent_create') { nativeState = 'created'; return { creationId: start.creationId, state: 'created', agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high' } } }
+    if (type === 'agent_create') {
+      if (options.refuse) return { error: options.refuse, detail: 'This agent does not support that permission mode.' }
+      nativeState = 'created'; return { creationId: start.creationId, state: 'created', agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high' } }
+    }
+    if (type === 'agent_create_cancel') {
+      nativeState = 'cancelled'
+      if (options.loseCancel) { options.loseCancel = false; throw new Error('Cancellation reply interrupted') }
+      return { creationId: start.creationId, state: nativeState }
+    }
     throw new Error(type)
   })
   const close = vi.fn(), open = vi.fn(async () => ({ machineId: 'target', request, close }))
@@ -49,4 +61,67 @@ it('withholds native creation when capacity or authority cannot be verified', as
   f.scoped.mockResolvedValueOnce({ error: 'FORBIDDEN', detail: 'Machine sharing was withdrawn.' })
   await expect(startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).rejects.toThrow('withdrawn')
   expect(f.open).toHaveBeenCalledOnce()
+})
+
+it('closes a refused start only after the machine durably fences its creation receipt', async () => {
+  const f = fixture({ refuse: 'INVALID_PERMISSION_MODE' })
+  const input = { action: 'resume', tabId: 'tab', startId: 'start' }
+  expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED', detail: 'This agent does not support that permission mode.' })
+  expect(f.request.mock.calls.map(c => c[0]).filter(type => type.startsWith('agent_create'))).toEqual(['agent_create_status', 'agent_create', 'agent_create_cancel'])
+  expect(f.start.error).toContain('before starting an agent')
+  expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED' })
+  expect(f.open).toHaveBeenCalledOnce()
+  expect(f.scoped.mock.calls.some(c => (c[0].command as any)?.type === 'agent.started')).toBe(false)
+})
+
+it('recovers a lost cancellation reply without dispatching another start', async () => {
+  const f = fixture({ refuse: 'INVALID_PERMISSION_MODE', loseCancel: true })
+  const input = { action: 'resume', tabId: 'tab', startId: 'start' }
+  expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ error: 'START_UNCERTAIN' })
+  expect(f.start.error).toBeNull()
+  expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED' })
+  expect(f.request.mock.calls.filter(c => c[0] === 'agent_create')).toHaveLength(1)
+  expect(f.close).toHaveBeenCalledTimes(2)
+})
+
+it('retries the exact shared failure command after a lost acknowledgement', async () => {
+  const f = fixture({ refuse: 'INVALID_PERMISSION_MODE', loseFailure: true })
+  const input = { action: 'resume', tabId: 'tab', startId: 'start' }
+  await expect(startAgent(input, f.scoped, where, f.open)).rejects.toThrow('Failure receipt interrupted')
+  expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED' })
+  const failures = f.scoped.mock.calls.map(c => c[0]).filter(p => (p.command as any)?.type === 'agent.startFailed')
+  expect(failures).toHaveLength(2)
+  expect(failures[0]).toEqual(failures[1])
+  expect(f.request.mock.calls.filter(c => c[0] === 'agent_create')).toHaveLength(1)
+})
+
+it.each(['CREATION_CONFLICT', 'CREATION_STORAGE_FAILED', 'INTERNAL', 'NEW_UNKNOWN_ERROR'])('keeps %s uncertain without cancelling a potentially dispatched intent', async (error) => {
+  const f = fixture({ refuse: error })
+  const input = { action: 'resume', tabId: 'tab', startId: 'start' }
+  expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ error: 'START_REFUSED' })
+  expect(f.start.error).toBeNull()
+  expect(f.request.mock.calls.some(c => c[0] === 'agent_create_cancel')).toBe(false)
+  expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ error: 'START_UNCERTAIN' })
+  expect(f.request.mock.calls.filter(c => c[0] === 'agent_create')).toHaveLength(1)
+})
+
+it.each([
+  { creationId: 'different', state: 'cancelled' },
+  { error: 'UNSUPPORTED' },
+])('requires the exact cancellation receipt: %j', async (answer) => {
+  const f = fixture({ refuse: 'INVALID_PERMISSION_MODE' }), request = f.request.getMockImplementation()!
+  f.request.mockImplementation(async type => type === 'agent_create_cancel' ? answer : request(type))
+  expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_UNCERTAIN' })
+  expect(f.start.error).toBeNull()
+})
+
+it.each(['pending', 'unconfirmed', 'created'])('preserves native %s evidence when cancellation does not win', async (state) => {
+  const f = fixture({ refuse: 'INVALID_PERMISSION_MODE' }), request = f.request.getMockImplementation()!
+  f.request.mockImplementation(async type => type === 'agent_create_cancel'
+    ? { creationId: f.start.creationId, state, agent: { id: 'native', engine: 'claude' } }
+    : request(type))
+  const result = await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)
+  expect(result).toMatchObject(state === 'created' ? { ok: true, harnessId: 'native' } : { error: 'START_PENDING', state })
+  expect(f.start.error).toBeNull()
+  expect(f.request.mock.calls.filter(c => c[0] === 'agent_create')).toHaveLength(1)
 })

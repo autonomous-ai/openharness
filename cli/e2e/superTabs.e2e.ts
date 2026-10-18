@@ -122,6 +122,19 @@ it('starts either engine once, posts to its captured group and delivers shared i
     const submitted = readFileSync(join(d.root, 'submitted-prompts'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as string)
     expect(submitted.filter(prompt => prompt.includes(`verify-super-tab-${engine}`))).toHaveLength(1)
   }
+  const refused = await run(['start', 'refused-mode', JSON.stringify({
+    conversationId: 'feature', machineId: ME.machineId, engine: 'claude', name: 'Refused builder',
+    cwd, worktree: false, permissionMode: 'not-a-mode', requirements: { memoryBytes: 0, diskBytes: 1,
+      maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false },
+  })])
+  expect(refused.code, JSON.stringify(refused.answer)).toBe(1)
+  expect(refused.answer).toMatchObject({ error: 'START_FAILED', detail: expect.stringContaining('permission mode') })
+  expect(starts.get('start-refused-mode')!.error).toContain('before starting an agent')
+  const creationId = starts.get('start-refused-mode')!.creationId
+  expect(await client.request('agent_create_status', { creationId })).toMatchObject({ creationId, state: 'cancelled' })
+  // Even a delayed valid create cannot revive the cancelled request.
+  expect(await client.request('agent_create', { engine: 'claude', cwd, creationId }, 30_000)).toMatchObject({ creationId, state: 'cancelled' })
+  expect((await run(['resume', 'start-refused-mode'])).answer).toMatchObject({ error: 'START_FAILED' })
   const listed = await client.request('agents_list')
   expect(listed.agents).toHaveLength(3)
   const worker = listed.agents.find((a: Record<string, any>) => a.id === starts.get('start-claude')!.harnessId)

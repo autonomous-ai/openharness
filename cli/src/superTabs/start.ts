@@ -8,6 +8,15 @@ type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
 const text = (v: unknown) => typeof v === 'string' ? v : null
 const number = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
+// These native validations run before dispatch. Storage errors, conflicts and
+// unknown failures deliberately stay uncertain: they cannot prove no launch.
+const PRE_DISPATCH_REFUSALS = new Set([
+  'INVALID_ENGINE', 'INVALID_CWD', 'INVALID_PROJECT_SOURCE', 'INVALID_REPOSITORY',
+  'INVALID_GRID', 'INVALID_CODEX_HOME', 'INVALID_DSH', 'INVALID_PROMPT',
+  'PROMPT_TOO_LONG', 'PROMPT_UNSUPPORTED', 'INVALID_AGENT', 'AGENT_UNSUPPORTED',
+  'INVALID_PERMISSION_MODE', 'INVALID_SESSION', 'INVALID_STARTED_BY', 'UNSUPPORTED_ON_REMOTE',
+])
+const CANCELLED_START = 'The machine cancelled this request before starting an agent. Review its settings and create a new start request.'
 function requireSuccess(reply: Json): Json {
   if (reply.error || reply.ok !== true) throw new Error(String(reply.detail ?? reply.error ?? 'This Super Tab request did not succeed.'))
   return object(reply.value)
@@ -50,6 +59,7 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
   if (start.harnessId) return { ok: true, startId, machineId: request.machineId, harnessId: start.harnessId }
   const target = await open(where, request.machineId)
   try {
+    let refusal: string | null = null
     let native = await target.request('agent_create_status', { creationId }, 10_000)
     if (native.creationId !== creationId) return { error: 'START_UNCERTAIN', startId, creationId,
       detail: 'The machine did not confirm the requested creation receipt. Nothing was dispatched.' }
@@ -68,16 +78,28 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       }
       for (const key of ['permissionMode', 'codexHome', 'gridModel', 'gridName']) if (request[key] !== undefined) payload[key] = request[key]
       native = await target.request('agent_create', payload, 25_000)
+      if (PRE_DISPATCH_REFUSALS.has(String(native.error))) {
+        refusal = String(native.detail ?? native.error)
+        // A durable cancellation also fences a delayed copy of this create.
+        // If dispatch won, keep its receipt and reconcile it normally instead.
+        native = await target.request('agent_create_cancel', { creationId }, 10_000).catch(() => ({}))
+        if (native.error || native.creationId !== creationId) {
+          return { error: 'START_UNCERTAIN', startId, creationId,
+            detail: `${refusal} The machine did not confirm cancellation. Keep this start ID and resume it before starting another agent.` }
+        }
+      }
     }
     if (native.error) return { error: 'START_REFUSED', startId, creationId,
       detail: String(native.detail ?? native.error) }
     if (native.creationId !== creationId) return { error: 'START_UNCERTAIN', startId, creationId,
       detail: 'The machine answered for a different creation receipt. Nothing further was dispatched.' }
-    if (native.state === 'failed') {
+    if (native.state === 'failed' || native.state === 'cancelled') {
       const failure = object(native.failure)
-      const detail = String(failure.detail ?? failure.code ?? 'Native creation failed.')
+      // The shared command stays byte-identical if its reply is lost and the
+      // next invocation sees only the durable cancellation tombstone.
+      const detail = native.state === 'cancelled' ? CANCELLED_START : String(failure.detail ?? failure.code ?? 'Native creation failed.')
       requireSuccess(await scoped({ action: 'command', operationId: `failed-${startId}`, command: { type: 'agent.startFailed', startId, error: detail } }))
-      return { error: 'START_FAILED', startId, detail }
+      return { error: 'START_FAILED', startId, detail: refusal ?? detail }
     }
     const frame = object(native.agent)
     if (native.state !== 'created' || !identifier(frame.id)) {
