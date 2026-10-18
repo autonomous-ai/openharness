@@ -1,9 +1,12 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const checkInstall = readFileSync(join(process.cwd(), 'scripts', 'windows-ci', 'check-install.ps1'), 'utf8')
+const windowsYml = readFileSync(join(process.cwd(), '..', '.github', 'workflows', 'windows.yml'), 'utf8')
+const diagnosis = checkInstall.match(/^function Show-Diagnosis[\s\S]*?^}\n/m)?.[0] ?? ''
 
 describe('check-install.ps1', () => {
   // The VM end to end (task B5.14) found it: with ONE harness-pty.exe on the machine, `$hosts = Processes …` held a
@@ -23,5 +26,72 @@ describe('check-install.ps1', () => {
     const script = `function Fail([string]$m) { Write-Output "FAIL $m"; exit 1 }\n${fn}\n$one = @(Processes "ProcessId=${process.pid}")\nWrite-Output $one.Count`
     const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8' }).trim()
     expect(out).toBe('1')
+  })
+
+  it('stays ASCII, which Windows PowerShell reads a .ps1 without a BOM in', () => {
+    expect(checkInstall).toMatch(/^[\x00-\x7f]*$/)
+  })
+
+  // Run 39083518767 failed with "no harness-pty.exe runs" and nothing else: its log artifact was empty, so it could not
+  // say whether the host never started or ran uncounted. Every FAIL now prints the evidence first.
+  describe('on a FAIL', () => {
+    it('prints the diagnosis before it exits', () => {
+      expect(checkInstall).toMatch(/^function Fail\(\[string\]\$message\) \{ Write-Host "FAIL \$message"; Show-Diagnosis; exit 1 \}$/m)
+      expect(checkInstall.indexOf('function Show-Diagnosis')).toBeLessThan(checkInstall.indexOf('function Fail'))
+    })
+
+    it('never fails from inside the diagnosis: no Fail, no Processes (whose WMI failure calls Fail), no exit', () => {
+      expect(diagnosis).toBeTruthy()
+      expect(diagnosis).not.toMatch(/\bFail\b|\bProcesses\b|\bexit\b/)
+      expect(diagnosis).toContain("$ErrorActionPreference = 'Continue'")
+    })
+
+    it('shows the status, the local API, the processes, the host and every log tail', () => {
+      expect(diagnosis).toContain('& $harness status')
+      expect(diagnosis).toContain('/api/status')
+      expect(diagnosis).toContain('discoveryError')
+      expect(diagnosis).toContain("Get-Process -Name 'harness*'")
+      expect(diagnosis).toContain('current-pty')
+      for (const tree of ["'cli\\data'", "'pty\\logs'", "'logs'"]) expect(diagnosis).toContain(tree)
+      expect(diagnosis).toContain('-Tail 80')
+    })
+
+    it('never prints the host\'s token from its discovery file', () => {
+      const read = diagnosis.split('\n').filter((line) => line.includes('pty-host-') || line.includes('ConvertFrom-Json'))
+      expect(read.join('\n')).toContain('ConvertFrom-Json | Select-Object protocol, pid, version, endpoint |')
+      expect(diagnosis).not.toMatch(/\.token\b|Select-Object[^|]*\btoken\b/)
+    })
+
+    it('asks only the local API that status names', () => {
+      expect(diagnosis).not.toContain('18473')
+    })
+
+    it.runIf(process.platform === 'win32')('runs to its end with nothing installed, under Windows PowerShell', () => {
+      const home = mkdtempSync(join(tmpdir(), 'check-install-'))
+      try {
+        const script = `$root = '${home}'\n$harness = '${join(home, 'bin', 'harness.exe')}'\n${diagnosis}\nShow-Diagnosis\nWrite-Output 'diagnosis done'`
+        const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8' })
+        expect(out).toContain('diagnosis done')
+        expect(out).toContain('harness status names no local api')
+      } finally {
+        rmSync(home, { recursive: true, force: true })
+      }
+    }, 30_000)
+  })
+})
+
+describe('the install job', () => {
+  // Every tree it keeps is under a dot folder (.harness, .local), which upload-artifact v4 takes for hidden and leaves
+  // out by default: run 39083518767 copied the logs and uploaded "No files were found".
+  it('uploads the logs it kept, dot folders and all', () => {
+    const keep = windowsYml.match(/- name: Keep the logs[\s\S]*?\n {6}- /)?.[0] ?? ''
+    expect(keep).toContain("'.harness\\cli\\data'")
+    // \r?: a Windows checkout may have the workflow in CRLF (core.autocrlf; .gitattributes pins only .ps1 and .cmd).
+    const upload = windowsYml.match(/- uses: actions\/upload-artifact@v4\r?\n(?: {8}[^\n]*\n)+/g)?.find((step) => step.includes('install-logs-')) ?? ''
+    expect(upload).toContain('include-hidden-files: true')
+  })
+
+  it('runs these checks on Windows, where the PowerShell ones run at all', () => {
+    expect(windowsYml).toContain("'src/scripts/windowsCiChecks.spec.ts'")
   })
 })

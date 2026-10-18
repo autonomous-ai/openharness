@@ -134,7 +134,7 @@ jobs:
           # installPs1.spec.ts runs the real harness.exe; a --target build is not where it looks by default.
           HARNESS_EXE_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness.exe
         run: |
-          $paths = @('src/lib/ptyHostBackend.contract.spec.ts', 'src/lib/ptyHost', 'src/lib/windows', 'src/scripts/installPs1.spec.ts', 'src/lib/uninstall', 'src/engines/kit/hookRemoval.spec.ts', 'src/engines/kit/windowsHooks.spec.ts', 'src/engines/kit/windowsFiles.spec.ts', 'src/engines/kit/nativePaths.windows.spec.ts', 'src/engines/kit/launchExecutable.windows.spec.ts', 'src/engines/removeHooks.spec.ts', 'src/engines/windowsHomes.spec.ts')
+          $paths = @('src/lib/ptyHostBackend.contract.spec.ts', 'src/lib/ptyHost', 'src/lib/windows', 'src/scripts/installPs1.spec.ts', 'src/scripts/windowsCiChecks.spec.ts', 'src/lib/uninstall', 'src/engines/kit/hookRemoval.spec.ts', 'src/engines/kit/windowsHooks.spec.ts', 'src/engines/kit/windowsFiles.spec.ts', 'src/engines/kit/nativePaths.windows.spec.ts', 'src/engines/kit/launchExecutable.windows.spec.ts', 'src/engines/removeHooks.spec.ts', 'src/engines/windowsHomes.spec.ts')
           npx vitest run @paths --maxWorkers=1
       - name: Collect the payload
         shell: pwsh
@@ -269,16 +269,23 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          # Each tree under its own path below logs\ (the same file name is in more than one), as it is under the profile.
+          # Each tree under its own path below logs\ (the same file name is in more than one), as it is under the profile:
+          # the master's and the core's cli\data\harness.log, harness-launch.exe's cli\data\logs\launch.log, the terminal
+          # host's pty\logs\pty-host.log, the dial's logs\dial-*.log. Every path starts with a dot, which upload-artifact
+          # takes for hidden and leaves out unless include-hidden-files says otherwise: run 39083518767 uploaded nothing.
+          # Each file copied is named here, so the job's own output says what the artifact holds.
           $logs = "$env:RUNNER_TEMP\logs"
           New-Item -ItemType Directory -Force $logs | Out-Null
           foreach ($tree in @('.harness\cli\data', '.harness\pty\logs', '.harness\logs', '.local\share\opencode\log')) {
             $from = Join-Path $env:USERPROFILE $tree
-            if (-not (Test-Path $from)) { continue }
-            Get-ChildItem $from -Filter '*.log' -Recurse -File | ForEach-Object {
+            if (-not (Test-Path $from)) { Write-Host "absent  $from"; continue }
+            $files = @(Get-ChildItem $from -Filter '*.log' -Recurse -File -Force)
+            if (-not $files.Count) { Write-Host "no logs $from" }
+            $files | ForEach-Object {
               $to = Join-Path (Join-Path $logs $tree) $_.FullName.Substring($from.Length).TrimStart('\')
               New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
               Copy-Item $_.FullName $to
+              Write-Host "kept    $($_.FullName) ($($_.Length) bytes)"
             }
           }
       - name: Uninstall, and check nothing is left
@@ -300,3 +307,4 @@ jobs:
         with:
           name: install-logs-${{ matrix.arch }}
           path: ${{ runner.temp }}/logs
+          include-hidden-files: true

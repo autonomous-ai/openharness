@@ -5,7 +5,57 @@ param([Parameter(Mandatory)][string]$Version, [string]$Project = (Join-Path $env
 $ErrorActionPreference = 'Stop'
 $root = Join-Path $env:USERPROFILE '.harness'
 $harness = Join-Path $root 'bin\harness.exe'
-function Fail([string]$message) { Write-Host "FAIL $message"; exit 1 }
+# On a FAIL, what says why, in the job's own output: the daemon's status, what its local API says of the terminal backend
+# and the sessions, the Harness processes, the terminal host's discovery file, and each log's tail. Run 39083518767 failed
+# with none of it: its log artifact came out empty, and the FAIL line alone could not tell a host that never started from
+# one the check did not count. Nothing here may end the script or call Processes/Fail (whose WMI failure calls Fail).
+function Show-Diagnosis {
+  $ErrorActionPreference = 'Continue'
+  Write-Host '--- diagnosis: harness status'
+  $text = ''
+  try { $text = (& $harness status 2>&1 | Out-String); Write-Host $text } catch { Write-Host "harness status: $($_.Exception.Message)" }
+  Write-Host '--- diagnosis: the local API /api/status (terminal backend, sessions)'
+  # The address status names, never a guessed port: a daemon there may be another one's.
+  $api = if ($text -match '(?m)^\s*local api\s+(http://\S+)') { $Matches[1] } else { $null }
+  if (-not $api) { Write-Host 'harness status names no local api' }
+  else { try {
+    $s = Invoke-RestMethod -UseBasicParsing -TimeoutSec 5 "$api/api/status"
+    $s | Select-Object version, pid, discoveryReady, discoveryError, harnessd, @{ n = 'terminalTargets'; e = { $_.config.terminalTargets } } |
+      ConvertTo-Json -Depth 6 | Write-Host
+    $sessions = @($s.sessions)
+    Write-Host "$($sessions.Count) session(s)"
+    foreach ($one in $sessions) { $one | Select-Object id, engine, cwd, terminal | ConvertTo-Json -Depth 6 -Compress | Write-Host }
+    if ($script:created) { Write-Host "the terminal created here, $($script:created.agent.id): $(if ($sessions.id -contains $script:created.agent.id) { 'listed' } else { 'NOT listed' })" }
+  } catch { Write-Host "$api/api/status: $($_.Exception.Message)" } }
+  Write-Host '--- diagnosis: processes'
+  Get-Process -Name 'harness*', 'node', 'OpenConsole', 'conhost', 'powershell', 'pwsh' -ErrorAction SilentlyContinue |
+    Format-Table Id, ProcessName, SessionId, StartTime, Path -AutoSize | Out-String -Width 300 | Write-Host
+  try {
+    # The master and the core run as node.exe on Windows (harnessd/processName.ts): their command lines say which.
+    Get-CimInstance Win32_Process -Filter "Name LIKE 'harness%' OR Name = 'node.exe'" -ErrorAction Stop |
+      Format-List ProcessId, ParentProcessId, Name, CommandLine | Out-String -Width 300 | Write-Host
+  } catch { Write-Host "WMI: $($_.Exception.Message)" }
+  Write-Host '--- diagnosis: the terminal host (current-pty, its version folders, its discovery file without the token)'
+  $runtimePty = Join-Path $root 'runtime\pty'
+  try { Write-Host "current-pty: $((Get-Content (Join-Path $runtimePty 'current-pty') -ErrorAction Stop) -join ' ')" } catch { Write-Host "current-pty: $($_.Exception.Message)" }
+  Get-ChildItem $runtimePty -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
+  foreach ($found in @(Get-ChildItem (Join-Path $root 'pty\run') -Filter 'pty-host-*.json' -ErrorAction SilentlyContinue)) {
+    try { Write-Host "$($found.Name): $(Get-Content $found.FullName -Raw | ConvertFrom-Json | Select-Object protocol, pid, version, endpoint | ConvertTo-Json -Compress)" }
+    catch { Write-Host "$($found.Name): $($_.Exception.Message)" }
+  }
+  # The master and the core write cli\data\harness.log, harness-launch.exe cli\data\logs\launch.log, the host
+  # pty\logs\pty-host.log (pty/src/logfile.rs), the dial logs\dial-*.log.
+  foreach ($tree in @('cli\data', 'pty\logs', 'logs')) {
+    $dir = Join-Path $root $tree
+    $files = @(Get-ChildItem $dir -Filter '*.log' -Recurse -File -Force -ErrorAction SilentlyContinue)
+    if (-not $files.Count) { Write-Host "--- diagnosis: no *.log under $dir$(if (-not (Test-Path $dir)) { ' (it does not exist)' })"; continue }
+    foreach ($file in $files) {
+      Write-Host "--- diagnosis: $($file.FullName) ($($file.Length) bytes, written $($file.LastWriteTime.ToString('o'))), its last 80 lines"
+      try { Get-Content $file.FullName -Tail 80 -ErrorAction Stop | Write-Host } catch { Write-Host "  $($_.Exception.Message)" }
+    }
+  }
+}
+function Fail([string]$message) { Write-Host "FAIL $message"; Show-Diagnosis; exit 1 }
 
 $v = ((& $harness version) | Select-Object -First 1).Trim()
 if ($v -ne $Version) { Fail "harness version says '$v', expected '$Version'" }
