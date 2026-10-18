@@ -462,13 +462,17 @@ function Register-HarnessService {
 function Test-HarnessReady {
   # Signed in, and the daemon running: then the closing guide has no setup steps to give (G8, a reinstall over a live
   # install said "1. sign in"). Anything it cannot read counts as not ready, and the steps are given.
+  # The CLI's stderr (a sign-in refresh warning, say) is dropped, never part of the closing text. Continue here: with
+  # Stop, Windows PowerShell 5.1 turns a native command's redirected stderr line into a terminating error.
+  # The status row's glyph is optional: Windows PowerShell may read it in the console code page as other characters.
   param([string]$Command)
   if (-not $Command) { return $false }
+  $ErrorActionPreference = 'Continue'
   try {
-    $auth = (@(& $Command auth status --json) -join "`n") | ConvertFrom-Json
+    $auth = (@(& $Command auth status --json 2>$null) -join "`n") | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or $auth.loggedIn -ne $true) { return $false }
-    $line = @(& $Command status) | Where-Object { $_ -match '^\s*status\s' } | Select-Object -First 1
-    return [bool]($LASTEXITCODE -eq 0 -and $line -match '^\s*status\s+\S+\s+running')
+    $line = @(& $Command status 2>$null) | Where-Object { $_ -match '^\s*status\s' } | Select-Object -First 1
+    return [bool]($LASTEXITCODE -eq 0 -and $line -match '^\s*status\s+(\S+\s+)?(running|started)\b')
   } catch { return $false }
 }
 

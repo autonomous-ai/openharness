@@ -56,7 +56,12 @@ describe('install.ps1, as written', () => {
     const ready = source.match(/^function Test-HarnessReady[\s\S]*?^}\r?$/m)?.[0] ?? ''
     expect(ready).toContain('auth status --json')
     expect(ready).toContain('$auth.loggedIn -ne $true')
-    expect(ready).toMatch(/status\\s\+\\S\+\\s\+running/)
+    // The row as the CLI prints it (`status     ● running · …`), its glyph optional (Windows PowerShell may read it in
+    // the console code page), and `● started` too. The CLI's stderr never reaches the closing text (re-review P3).
+    expect(ready).toContain("'^\\s*status\\s+(\\S+\\s+)?(running|started)\\b'")
+    expect(ready).toContain('auth status --json 2>$null')
+    expect(ready).toContain('& $Command status 2>$null')
+    expect(ready).toContain("$ErrorActionPreference = 'Continue'")
     const done = source.match(/^function Write-HarnessDone[\s\S]*?^}\r?$/m)?.[0] ?? ''
     expect(done.indexOf('Test-HarnessReady -Command $Command')).toBeLessThan(done.indexOf('harness login'))
     expect(done).toContain('This computer is signed in and Harness is running: nothing more to set up.')
@@ -569,10 +574,14 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
   })
 
   it('closes with the setup steps unless this computer is signed in and Harness runs', () => {
-    const ready = fakeHarness('running - backend connected', ['if "%1"=="auth" echo {"loggedIn":true}'])
+    // With a line on stderr, as a sign-in refresh warning would be: it must not reach the closing text.
+    const ready = fakeHarness('running - backend connected', ['if "%1"=="auth" echo refreshing the sign-in 1>&2', 'if "%1"=="auth" echo {"loggedIn":true}'])
     const done = ps(`Write-HarnessDone -Version '1.0.1' -Command '${ready.command}'`)
     expect(done.stdout, done.stderr).toContain('This computer is signed in and Harness is running: nothing more to set up.')
     expect(done.stdout).not.toContain('harness login')
+    expect(done.stdout).not.toContain('refreshing the sign-in')
+    const glyph = fakeHarness('\u25cf started \u00b7 backend connected', ['if "%1"=="auth" echo {"loggedIn":true}'])
+    expect(ps(`Write-HarnessDone -Version '1.0.1' -Command '${glyph.command}'`).stdout).toContain('nothing more to set up')
     for (const [state, auth] of [['stopped', '{"loggedIn":true}'], ['running - backend connected', '{"loggedIn":false}'], ['running - backend connected', 'not json']]) {
       const other = fakeHarness(state, [`if "%1"=="auth" echo ${auth}`])
       expect(ps(`Write-HarnessDone -Version '1.0.1' -Command '${other.command}'`).stdout, `${state} ${auth}`).toContain('harness login')
