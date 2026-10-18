@@ -8,6 +8,8 @@ const checkInstall = readFileSync(join(process.cwd(), 'scripts', 'windows-ci', '
 const windowsYml = readFileSync(join(process.cwd(), '..', '.github', 'workflows', 'windows.yml'), 'utf8')
 const diagnosis = checkInstall.match(/^function Show-Diagnosis[\s\S]*?^}\n/m)?.[0] ?? ''
 
+// Most cases here read the scripts as text: Linux CI has no PowerShell to run them. The `win32` cases run the real
+// PowerShell, on the Windows jobs (windows.yml) and on the VM; the VM end to end (B5.14) ran the whole scripts.
 describe('check-install.ps1', () => {
   // The VM end to end (task B5.14) found it: with ONE harness-pty.exe on the machine, `$hosts = Processes …` held a
   // single CimInstance, because PowerShell unrolls a function's array output. Windows PowerShell 5.1 gives a
