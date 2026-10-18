@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { env } from '../config/env.js'
 import {
-  OS_SYSTEMD_UNIT, OS_UNIT_FILE, PlatformService, SYSTEMD_UNIT, TASK_STOPPED_FILE, bootTimeMs, defaultPlatformDeps, platformFor, taskName,
+  OS_SYSTEMD_UNIT, OS_UNIT_FILE, PlatformService, SYSTEMD_UNIT, TASK_STOPPED_FILE, bootTimeMs, defaultPlatformDeps, logonTaskName, platformFor, taskName,
   type CommandResult, type PlatformName, type PlatformState, type ServiceDefinition,
 } from '../harnessd/platform.js'
 import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
@@ -288,7 +288,11 @@ describe('Windows', () => {
   it('starts through the task and waits for the master it starts', async () => {
     const { deps, calls } = taskDeps({ pids: [null, null, 700] })
     await expect(startThroughTask(definition(), deps)).resolves.toEqual({ ok: true, pid: 700 })
-    expect(calls).toEqual([`schtasks /Create /TN ${taskName('D\\u')} /XML /h/data/harnessd-task.xml /F`, `schtasks /Run /TN ${taskName('D\\u')}`])
+    expect(calls).toEqual([
+      `schtasks /Create /TN ${taskName('D\\u')} /XML /h/data/harnessd-task.xml /F`,
+      `schtasks /Create /TN ${logonTaskName('D\\u')} /XML /h/data/harnessd-logon-task.xml /F`,
+      `schtasks /Run /TN ${taskName('D\\u')}`,
+    ])
   })
 
   it('says to start it directly when the task did not run (no signed-in session) or could not be run', async () => {

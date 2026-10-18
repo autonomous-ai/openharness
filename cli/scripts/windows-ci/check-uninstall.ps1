@@ -20,6 +20,12 @@ schtasks.exe /Query /TN $task 2>$null | Out-Null
 $found = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'
 if ($found -eq 0) { $left += "task: $task is still registered" }
+$logonTask = "Harness harnessd at sign-in ($env:USERNAME)"   # harnessd/platform.ts logonTaskName
+$ErrorActionPreference = 'Continue'
+schtasks.exe /Query /TN $logonTask 2>$null | Out-Null
+$found = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+if ($found -eq 0) { $left += "task: $logonTask is still registered" }
 $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
 $raw = if ($k) { $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames') } else { '' }
 $bin = (Join-Path $root 'bin').ToLower()
@@ -58,6 +64,6 @@ if (Test-Path $codexConfig) {
 $hookFileList = @($HookFiles -split ',' | Where-Object { $_ })
 foreach ($file in $hookFileList) { if (Test-Path $file) { $left += "hooks: $file is still there" } }
 if ($left.Count) { $left | ForEach-Object { Write-Host "LEFT $_" }; exit 1 }
-Write-Host ("clean: nothing of Harness is left. Checked: $root, the task '$task', the user PATH, the processes running " +
+Write-Host ("clean: nothing of Harness is left. Checked: $root, the tasks '$task' and '$logonTask', the user PATH, the processes running " +
   "from $root\, the uninstall's temp files, notify.mjs in $($settingsFiles.Count) settings files, the [hooks.state] records " +
   "in $codexConfig, and $($hookFileList.Count) hook file(s) named by -HookFiles")

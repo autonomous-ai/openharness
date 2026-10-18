@@ -219,6 +219,8 @@ export function launchMaster(
   return launch(harnessLaunchPath(root), root, ['__harnessd'], withoutHarnessdEnv(given))
 }
 
+export { AT_LOGON_FLAG } from '../harnessd/platform.js'
+
 /** Whether `harness stop` stopped the daemon since this computer started, which the task's starts honour. */
 export function taskStoppedThisBoot(dataDir: string = env.ADAPTER_DATA_DIR): boolean {
   let text: string | null = null

@@ -182,13 +182,21 @@ protocol only grows, platform supervision is how the CLI starts and stops a supe
 ### Start and keep running
 
 - `platformFor('win32')` returns a new `TaskScheduler` platform (`PlatformName` gains `taskscheduler`).
-  `harness service install` registers the per-user task `Harness harnessd (<user name>)` (Task Scheduler names are machine-wide, so
-  the name carries the user; it sits in the root folder, which every user may write) with two triggers: **at
-  logon**, and **every 5 minutes**. Both run `harness-launch.exe start --if-down`, which does nothing
-  when a live master holds the spawn lock (the replacement for launchd's KeepAlive and systemd's
-  `Restart=`). The task has no execution time limit and does not start a second instance.
-- `install.ps1` registers the task by default (a remote Windows machine must come back after a reboot
-  with nobody signed in to a terminal); `-Desktop` and `-NoService` skip it.
+  `harness service install` registers two per-user tasks (Task Scheduler names are machine-wide, so
+  the name carries the user; they sit in the root folder, which every user may write):
+  `Harness harnessd (<user name>)` **every 5 minutes**, and `Harness harnessd at sign-in (<user name>)` **at
+  logon**. Both run `harness-launch.exe start --if-down`, which does nothing when a live master holds the
+  spawn lock (the replacement for launchd's KeepAlive and systemd's `Restart=`). The logon task adds
+  `--at-logon`, which first forgets a `harness stop`, as launchd loads an agent booted out at the next
+  login; the 5-minute task honours the stop. Two tasks, because a task's action runs whatever trigger
+  fired, and the boot time alone does not tell a new start: with Fast Startup a Shut down keeps the
+  uptime. The tasks have no execution time limit, do not start a second instance, and run at normal
+  priority (Priority 4: Task Scheduler's default, 7, is below normal, and the daemon and every agent
+  would inherit it). An install from before writes and registers both at its next `harness start` or
+  `harness service install`.
+- `install.ps1` registers the tasks by default (a remote Windows machine must come back after a reboot
+  once its user signs in; see Known limits for a reboot with nobody signed in); `-Desktop` and
+  `-NoService` skip it.
 - The master runs outside any job object (the launcher's breakaway), so ending the task, closing a
   terminal or signing out of an SSH session never ends it.
 - `harness start` with the task registered runs the task (`schtasks /Run`); without it, it starts the

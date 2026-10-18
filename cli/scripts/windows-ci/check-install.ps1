@@ -69,6 +69,12 @@ if ($LASTEXITCODE -ne 0) { Fail "the task '$task' is not registered" }
 $registered = (schtasks.exe /Query /TN $task /XML | Out-String)
 if ($registered -notmatch '<Priority>4</Priority>') { Fail "the task '$task' does not run at normal priority (Priority 4):`n$registered" }
 Write-Host "ok   task $task"
+# The logon task beside it (harnessd/platform.ts logonTaskName): the start at sign-in, which forgets a harness stop.
+$logonTask = "Harness harnessd at sign-in ($env:USERNAME)"
+$logon = (schtasks.exe /Query /TN $logonTask /XML | Out-String)
+if ($LASTEXITCODE -ne 0) { Fail "the task '$logonTask' is not registered" }
+if ($logon -notmatch '--at-logon</Arguments>' -or $logon -notmatch '<Priority>4</Priority>') { Fail "the task '$logonTask' does not run harness start --if-down --at-logon at normal priority:`n$logon" }
+Write-Host "ok   task $logonTask"
 
 $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
 $raw = $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')

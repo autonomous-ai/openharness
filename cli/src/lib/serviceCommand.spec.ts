@@ -385,7 +385,7 @@ describe('harness service with Task Scheduler', () => {
     try {
       await expect(serviceCommand(['install'], w.deps)).resolves.toBe(0)
       const name = taskName('demo')
-      expect(schtasks(w.calls)).toEqual([expect.stringMatching(/harnessd-task\.xml \/F$/), `schtasks /Run /TN ${name}`])
+      expect(schtasks(w.calls)).toEqual([expect.stringMatching(/harnessd-task\.xml \/F$/), expect.stringMatching(/harnessd-logon-task\.xml \/F$/), `schtasks /Run /TN ${name}`])
       expect(w.calls.find((call) => call.startsWith('schtasks /Create'))!.startsWith(`schtasks /Create /TN ${name} /XML `)).toBe(true)
       expect(w.locks).toEqual(['start', 'start released'])
       expect(w.out[0]).toBe('✓ Task Scheduler starts the Harness daemon when you sign in to Windows, and again within 5 minutes if it stops (pid 4343 runs now).')
@@ -443,7 +443,7 @@ describe('harness service with Task Scheduler', () => {
       w.out.length = 0
       await expect(serviceCommand(['install'], w.deps)).resolves.toBe(0)
       // The same file, registered again: its <Enabled>true</Enabled> is what turns the task back on (harnessd/platform.ts).
-      expect(schtasks(w.calls)).toEqual([expect.stringMatching(/harnessd-task\.xml \/F$/)])
+      expect(schtasks(w.calls)).toEqual([expect.stringMatching(/harnessd-task\.xml \/F$/), expect.stringMatching(/harnessd-logon-task\.xml \/F$/)])
       expect(w.out[0]).toBe('✓ Task Scheduler starts the Harness daemon when you sign in to Windows, and again within 5 minutes if it stops (pid 4040 runs now).')
     } finally { rmSync(w.dir, { recursive: true, force: true }) }
   })

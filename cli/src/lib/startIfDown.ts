@@ -3,14 +3,16 @@
  * (harnessd/platform.ts `taskSchedulerXml`), in place of launchd's KeepAlive and systemd's Restart=. It starts the
  * daemon when none runs, and otherwise does nothing, silently: a master runs; someone holds the spawn lock (a start,
  * a stop, an update is under way, and waiting on it every five minutes would only pile up); or `harness stop`
- * stopped it since this computer started, which a person meant to last.
+ * stopped it since this computer started, which a person meant to last. The logon task's start (`--at-logon`) forgets
+ * such a stop first, as launchd loads an agent booted out at the next login: with Fast Startup a Shut down keeps the
+ * uptime the boot time is read from, and a stop outlived the next power-on (final review R1b-2).
  */
 import { rmSync, statSync } from 'node:fs'
 import { PID_FILE, isAlive, readPid } from './daemonState.js'
 import {
   describeSpawnLockOwner, readSpawnLockOwner, releaseAbandonedSpawnLock, spawnLockOwnerReused, type SpawnLockOwner,
 } from './daemonSpawnLock.js'
-import { taskStoppedThisBoot } from './platformDaemon.js'
+import { clearTaskStopped, taskStoppedThisBoot } from './platformDaemon.js'
 import { lockOwnerAlive, lockStartMarker } from './processLiveness.js'
 import type { ProcessRow } from './processTable.js'
 import { judgePidFileOwner } from './windows/daemonProcesses.js'
@@ -26,10 +28,13 @@ export interface IfDownDeps {
   lockOwner(): SpawnLockOwner | null
   ownerRuns(owner: SpawnLockOwner): Promise<boolean>
   stoppedThisBoot(): boolean
+  /** Forget a `harness stop`: the logon task's start does. */
+  forgetStop(): void
 }
 
-export async function startIfDown(deps: IfDownDeps): Promise<IfDown> {
-  if (deps.stoppedThisBoot()) return { start: false, why: '`harness stop` stopped it since this computer started; `harness start` starts it again' }
+export async function startIfDown(deps: IfDownDeps, options: { atLogon?: boolean } = {}): Promise<IfDown> {
+  if (options.atLogon) deps.forgetStop()
+  else if (deps.stoppedThisBoot()) return { start: false, why: '`harness stop` stopped it since this computer started; `harness start` starts it again' }
   const pid = deps.readPid()
   if (pid !== null && await deps.masterRuns(pid)) return { start: false, why: `it runs (pid ${pid})` }
   let owner: SpawnLockOwner | null
@@ -81,6 +86,7 @@ export interface IfDownIo {
   /** Remove the lock [owner] held, only while it is still that lock and still judged abandoned against [row]. */
   releaseAbandoned(owner: SpawnLockOwner, row: { pid: number; startMarker: string }): boolean
   stoppedThisBoot(): boolean
+  forgetStop(): void
 }
 
 function defaultIfDownIo(): IfDownIo {
@@ -94,6 +100,7 @@ function defaultIfDownIo(): IfDownIo {
     lockOwnerAlive: (owner) => lockOwnerAlive(owner.pid, lockStartMarker(owner)),
     releaseAbandoned: (owner, row) => releaseAbandonedSpawnLock(owner, row),
     stoppedThisBoot: () => taskStoppedThisBoot(),
+    forgetStop: () => clearTaskStopped(),
   }
 }
 
@@ -135,5 +142,6 @@ export function processIfDownDeps(
       return !io.releaseAbandoned(owner, row)
     },
     stoppedThisBoot: () => windows && io.stoppedThisBoot(),
+    forgetStop: () => { if (windows) io.forgetStop() },
   }
 }

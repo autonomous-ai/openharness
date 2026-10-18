@@ -5,7 +5,7 @@ import { processIfDownDeps, releaseAbandonedLock, runningDaemon, startIfDown, ty
 
 const owner: SpawnLockOwner = { pid: 77, startMarker: '', token: 't', purpose: 'update', since: Date.now() - 4_000 }
 const deps = (over: Partial<IfDownDeps> = {}): IfDownDeps => ({
-  readPid: () => null, masterRuns: async () => false, lockOwner: () => null, ownerRuns: async () => true, stoppedThisBoot: () => false, ...over,
+  readPid: () => null, masterRuns: async () => false, lockOwner: () => null, ownerRuns: async () => true, stoppedThisBoot: () => false, forgetStop: () => {}, ...over,
 })
 
 describe('harness start --if-down', () => {
@@ -23,6 +23,31 @@ describe('harness start --if-down', () => {
   })
 })
 
+// Final review R1b-2: with Fast Startup a Shut down keeps the uptime, so a stop read against the boot time outlived
+// the next power-on. The logon task's start (`--at-logon`) forgets it; the five-minute task's honours it.
+describe('harness start --if-down --at-logon', () => {
+  it('forgets a `harness stop` and starts the daemon, where the five-minute start leaves it stopped', async () => {
+    let stopped = true
+    const forgetStop = vi.fn(() => { stopped = false })
+    const stoppedThisBoot = () => stopped
+    await expect(startIfDown(deps({ stoppedThisBoot, forgetStop }))).resolves.toMatchObject({ start: false })
+    expect(forgetStop).not.toHaveBeenCalled()
+    await expect(startIfDown(deps({ stoppedThisBoot, forgetStop }), { atLogon: true })).resolves.toEqual({ start: true })
+    expect(forgetStop).toHaveBeenCalledOnce()
+    // Nothing else changes: a master that runs is still left alone.
+    await expect(startIfDown(deps({ readPid: () => 500, masterRuns: async () => true, forgetStop }), { atLogon: true })).resolves.toEqual({ start: false, why: 'it runs (pid 500)' })
+  })
+
+  it('forgets the stop on Windows only, where the task runs', () => {
+    const forgetStop = vi.fn()
+    const base: Partial<IfDownIo> = { stoppedThisBoot: () => true, forgetStop }
+    processIfDownDeps('darwin', base).forgetStop()
+    expect(forgetStop).not.toHaveBeenCalled()
+    processIfDownDeps('win32', base).forgetStop()
+    expect(forgetStop).toHaveBeenCalledOnce()
+  })
+})
+
 describe("--if-down's view of this computer", () => {
   const CLAIMED = Date.parse('2026-10-16T08:00:00Z')
   /** A FILETIME start marker for [ms]. */
@@ -33,7 +58,7 @@ describe("--if-down's view of this computer", () => {
   const master = (pid: number, startedMs = CLAIMED - 5_000) => row(pid, startedMs, ['C:\\node.exe', 'C:\\cli.js', '__harnessd'])
   const io = (over: Partial<IfDownIo> = {}): IfDownIo => ({
     readPid: () => 500, isAlive: () => true, pidFileWrittenMs: () => CLAIMED, forgetPid: vi.fn(), rows: async () => [master(500)],
-    readLockOwner: () => null, lockOwnerAlive: () => true, releaseAbandoned: vi.fn(() => true), stoppedThisBoot: () => true, ...over,
+    readLockOwner: () => null, lockOwnerAlive: () => true, releaseAbandoned: vi.fn(() => true), stoppedThisBoot: () => true, forgetStop: vi.fn(), ...over,
   })
 
   it('on Windows, counts the pid file as a running master only when the table does not prove otherwise', async () => {

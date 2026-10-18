@@ -40,7 +40,7 @@ import { registry } from './lib/registry.js'
 import { readSafeModeMarker } from './lib/daemonSafeMode.js'
 import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, readSpawnLockOwner, withSpawnLock } from './lib/daemonSpawnLock.js'
 import { didNotStopSentence, leftRunning, stopDaemonOrExit, stopDaemonProcess } from './lib/daemonStop.js'
-import { clearTaskStopped, installedPlatform, launchMaster, osDaemonUnit, platformDaemonDeps, serviceDefinition, startThroughTask, startUnderPlatform, taskStoppedThisBoot, waitForMaster } from './lib/platformDaemon.js'
+import { AT_LOGON_FLAG, clearTaskStopped, installedPlatform, launchMaster, osDaemonUnit, platformDaemonDeps, serviceDefinition, startThroughTask, startUnderPlatform, taskStoppedThisBoot, waitForMaster } from './lib/platformDaemon.js'
 import { processIfDownDeps, releaseAbandonedLock, runningDaemon, startIfDown } from './lib/startIfDown.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
 import { askRuntimePort, readCgroup, takeRuntimeBack } from './lib/osUnitTakeover.js'
@@ -133,7 +133,8 @@ Machine:
                                (normally done once by the installer; use this if a start fails because
                                the launcher points at a Node that no longer runs)
   harness start --if-down      start the daemon only if it is not running and \`harness stop\` has not stopped it
-                               since the computer started (what Windows's scheduled task runs; quiet otherwise)
+                               since the computer started (what Windows's scheduled task runs; quiet otherwise);
+                               with --at-logon, what the task runs at sign-in, it forgets a \`harness stop\` first
   harness logout               stop the adapter and clear this computer's SSO session
   harness stop                 stop the background adapter (keeps the SSO session)
   harness reset                stop the adapter and clear local CLI state
@@ -1035,10 +1036,11 @@ async function runningDaemonPid(underLock: boolean = false): Promise<number | nu
  * the very value the backend binds a machine to at login) — so a later sign-in ADOPTS this machine
  * rather than replacing it.
  */
-async function startCommand(foreground: boolean, repair: boolean = false, ifDown: boolean = false): Promise<void> {
-  // The scheduled task's start (Windows, lib/startIfDown.ts): nothing to do is the usual answer, and it is quiet.
+async function startCommand(foreground: boolean, repair: boolean = false, ifDown: boolean = false, atLogon: boolean = false): Promise<void> {
+  // The scheduled task's start (Windows, lib/startIfDown.ts): nothing to do is the usual answer, and it is quiet. The
+  // logon task's (`--at-logon`) forgets a `harness stop` first; the five-minute task's honours it.
   if (ifDown) {
-    const decision = await startIfDown(processIfDownDeps())
+    const decision = await startIfDown(processIfDownDeps(), { atLogon })
     if (!decision.start) { console.log(`harness start --if-down: ${decision.why} — nothing to do`); process.exit(0) }
     startedByTheTask = true
   } else if (process.platform === 'win32') {
@@ -2668,7 +2670,7 @@ switch (cmd) {
     // the environment) records every frame to/from a paired Autonomous device — see lib/autonomous-device/dump.ts.
     const dump = flags.find((f) => f === '--device-dump' || f.startsWith('--device-dump='))
     if (dump) process.env.HARNESS_DEVICE_DUMP = dump === '--device-dump' ? '1' : resolve(dump.slice('--device-dump='.length))
-    startCommand(foreground, repair, flags.includes('--if-down')).catch(onError)
+    startCommand(foreground, repair, flags.includes('--if-down'), flags.includes(AT_LOGON_FLAG)).catch(onError)
     break
   }
   case 'join':
