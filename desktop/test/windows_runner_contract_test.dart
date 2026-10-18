@@ -102,4 +102,23 @@ void main() {
       greaterThan(deliver),
     );
   });
+
+  test('toasts post under the AUMID and open their link when clicked', () {
+    final main = runner('main.cpp');
+    final aumid = main.indexOf(
+      'SetCurrentProcessExplicitAppUserModelID(L"Autonomous.Harness")',
+    );
+    expect(aumid, isNonNegative);
+    expect(aumid, lessThan(main.indexOf('single_instance.Acquire()')));
+    final toast = runner('notifications.cpp');
+    expect(toast, contains('L"Autonomous.Harness"'));
+    expect(toast, contains(r'activationType=\"protocol\"'));
+    expect(toast, contains('"harness/notifications"'));
+    for (final method in ['"authorize"', '"show"', '"withdraw"']) {
+      expect(toast, contains(method));
+    }
+    final cmake = runner('CMakeLists.txt');
+    expect(cmake, contains('"windowsapp.lib"'));
+    expect(cmake, contains('set_source_files_properties("notifications.cpp"'));
+  });
 }

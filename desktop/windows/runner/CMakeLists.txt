@@ -10,6 +10,7 @@ add_executable(${BINARY_NAME} WIN32
   "community_links.cpp"
   "flutter_window.cpp"
   "main.cpp"
+  "notifications.cpp"
   "single_instance.cpp"
   "utils.cpp"
   "win32_window.cpp"
@@ -40,6 +41,11 @@ target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 # AUMID, the tray and CF_HDROP (shell32). Both are in MSVC's default set and
 # are named so the runner says what it uses.
 target_link_libraries(${BINARY_NAME} PRIVATE "advapi32.lib" "shell32.lib")
+# Toasts (notifications.cpp) through C++/WinRT. Its headers ship with the
+# Windows SDK (Include\<version>\cppwinrt, on every Visual Studio include
+# path). windowsapp.lib is the WinRT umbrella library for x64 and arm64.
+target_link_libraries(${BINARY_NAME} PRIVATE "windowsapp.lib")
+set_source_files_properties("notifications.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj;/permissive-")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

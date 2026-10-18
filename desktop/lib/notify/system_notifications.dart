@@ -145,7 +145,7 @@ abstract class SystemNotifier {
   set onTap(void Function(String machineId, String agentId)? handler);
 }
 
-/// No system notifications — Windows, tests, and anything else.
+/// No system notifications — tests, and anything else.
 class NoSystemNotifier implements SystemNotifier {
   const NoSystemNotifier();
 
@@ -247,17 +247,105 @@ class MacSystemNotifier implements SystemNotifier {
     );
   }
 
-  Future<NotificationPermission> _ask(String method, Object? args) async {
-    try {
-      return NotificationPermission.parse(
-        await _channel.invokeMethod<String>(method, args),
-      );
-    } on MissingPluginException {
-      return NotificationPermission.unavailable;
-    } catch (_) {
-      return NotificationPermission.unknown;
-    }
+  Future<NotificationPermission> _ask(String method, Object? args) =>
+      _askNotifications(_channel, method, args);
+}
+
+/// One call on `harness/notifications`, answered as the macOS and Windows
+/// runners answer: a missing runner is [NotificationPermission.unavailable],
+/// any other failure [NotificationPermission.unknown].
+Future<NotificationPermission> _askNotifications(
+  MethodChannel channel,
+  String method,
+  Object? args,
+) async {
+  try {
+    return NotificationPermission.parse(
+      await channel.invokeMethod<String>(method, args),
+    );
+  } on MissingPluginException {
+    return NotificationPermission.unavailable;
+  } catch (_) {
+    return NotificationPermission.unknown;
   }
+}
+
+/// The toast's tag for notification [id]: `harness-` and the FNV-1a 32-bit
+/// hash of its UTF-8, in hex. A toast posted under a tag replaces the one
+/// already there, as the Mac's identifier does, and Windows caps a tag at 64
+/// characters, which an agent's id can pass.
+String windowsToastTag(String id) {
+  var hash = 0x811c9dc5;
+  for (final byte in utf8.encode(id)) {
+    hash ^= byte;
+    hash = (hash * 0x01000193) & 0xffffffff;
+  }
+  return 'harness-${hash.toRadixString(16).padLeft(8, '0')}';
+}
+
+/// Windows: toasts through WinRT's `ToastNotificationManager`, in
+/// `windows/runner/notifications.cpp`.
+///
+/// They post under the AUMID `Autonomous.Harness`, which only the installed
+/// app's Start Menu shortcut carries. A copy run straight from the zip
+/// answers [NotificationPermission.unavailable], and the banner keeps doing
+/// the job. Windows has no permission prompt: [authorize] reports the switch
+/// in Settings ▸ System ▸ Notifications.
+///
+/// A click is not a channel call. The toast launches its
+/// `harness://notification/…` link ([NotificationLink]), which reaches the
+/// running app through the single instance and `harness/community_links`, and
+/// [SystemNotifications.openLink] sends it where a macOS click goes.
+class WindowsSystemNotifier implements SystemNotifier {
+  WindowsSystemNotifier({MethodChannel? channel})
+    : _channel = channel ?? const MethodChannel('harness/notifications');
+
+  final MethodChannel _channel;
+
+  @override
+  bool get supported => true;
+
+  @override
+  bool get clickOpensAgent => true;
+
+  @override
+  String get deniedAdvice =>
+      'Allow it in Windows Settings ▸ System ▸ Notifications ▸ Harness.';
+
+  @override
+  Future<NotificationPermission> authorize() =>
+      _askNotifications(_channel, 'authorize', null);
+
+  @override
+  Future<NotificationPermission> show({
+    required String id,
+    required String title,
+    required String body,
+    required String machineId,
+    required String agentId,
+  }) => _askNotifications(_channel, 'show', {
+    'id': id,
+    'title': title,
+    'body': body,
+    'machineId': machineId,
+    'agentId': agentId,
+    'tag': windowsToastTag(id),
+    'launch': NotificationLink.build(machineId, agentId),
+  });
+
+  @override
+  Future<void> withdraw(String id) async {
+    try {
+      await _channel.invokeMethod<void>('withdraw', {
+        'id': id,
+        'tag': windowsToastTag(id),
+      });
+    } catch (_) {}
+  }
+
+  /// Clicks come back as links ([SystemNotifications.openLink]), not here.
+  @override
+  set onTap(void Function(String machineId, String agentId)? handler) {}
 }
 
 /// Runs a command and hands back its result. Injected so a test can see what
@@ -357,12 +445,16 @@ class LinuxSystemNotifier implements SystemNotifier {
   set onTap(void Function(String machineId, String agentId)? handler) {}
 }
 
-/// The notifier for the platform this build runs on.
-SystemNotifier platformSystemNotifier() {
+/// The notifier for the platform this build runs on ([operatingSystem] is
+/// `Platform.operatingSystem` unless a test names one).
+SystemNotifier platformSystemNotifier({String? operatingSystem}) {
   if (kIsWeb) return browserSystemNotifier();
-  if (Platform.isMacOS) return MacSystemNotifier();
-  if (Platform.isLinux) return LinuxSystemNotifier();
-  return const NoSystemNotifier();
+  return switch (operatingSystem ?? Platform.operatingSystem) {
+    'macos' => MacSystemNotifier(),
+    'linux' => LinuxSystemNotifier(),
+    'windows' => WindowsSystemNotifier(),
+    _ => const NoSystemNotifier(),
+  };
 }
 
 /// The third channel beside the banner and the sound: news the operating system
