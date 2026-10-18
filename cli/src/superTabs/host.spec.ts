@@ -113,12 +113,52 @@ describe('Super Tab native delivery handoff', () => {
     t.remove(); await host.tick()
   })
 
-  it('never steals another process claim or substitutes a different native harness', async () => {
+  it('exposes a claim without a local receipt for human recovery without taking over execution', async () => {
     const t = setup(), host = t.open()
     t.foreignClaim(); await host.tick()
     expect(t.core.turns.deliver).not.toHaveBeenCalled()
+    expect(t.receipts).toEqual([expect.objectContaining({
+      claimId: 'another-process', uncertain: true, receipt: expect.stringContaining('no local receipt'),
+    })])
+    expect(t.saved().entries.delivery).toMatchObject({ claimId: 'another-process', stage: 'uncertain' })
+    expect(t.core.turns.cancelDelivery).toHaveBeenCalledWith('team:service:superTabs:delivery')
+    expect(t.core.turns.leaseDeliveries).toHaveBeenLastCalledWith('superTabs', {})
+    expect(vi.mocked(t.call).mock.calls.some(([, , body]) => (body as any)?.type === 'claim')).toBe(false)
     vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined)
     await host.tick()
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+  })
+
+  it('retains a recovered claim across another lost acknowledgement and restart', async () => {
+    const t = setup(), first = t.open()
+    t.foreignClaim()
+    const original = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (...args) => {
+      const result = await original(...args)
+      if ((args[2] as any)?.type === 'ack') throw new Error('Lost reply')
+      return result
+    })
+    await first.tick()
+    const receipt = t.saved().entries.delivery.receipt
+    first.stop()
+    vi.mocked(t.call).mockImplementation(original)
+    await t.open().tick()
+    expect(t.receipts).toEqual([
+      { type: 'ack', claimId: 'another-process', uncertain: true, receipt },
+      { type: 'ack', claimId: 'another-process', uncertain: true, receipt },
+    ])
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+  })
+
+  it('preserves an existing uncertain native receipt when its journal is missing', async () => {
+    const t = setup(), host = t.open()
+    const original = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (...args) => args[0] === 'GET' && args[1].endsWith('/deliveries')
+      ? { status: 200, body: { data: [{ id: 'delivery', status: 'uncertain', claimId: 'old-claim', receipt: 'Native paste was ambiguous.' }] } }
+      : original(...args))
+    await host.tick()
+    expect(t.saved().entries.delivery).toMatchObject({ claimId: 'old-claim', stage: 'uncertain', receipt: 'Native paste was ambiguous.' })
+    expect(t.receipts).toEqual([])
     expect(t.core.turns.deliver).not.toHaveBeenCalled()
   })
 

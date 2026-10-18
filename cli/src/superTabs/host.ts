@@ -229,13 +229,20 @@ export class SuperTabHost {
     const deliveryId = delivery.id as string
     let entry = this.journal.entries[deliveryId]
     if (!entry) {
-      // Another host process already claimed it. Never steal a claim on a timer.
-      if (delivery.claimId) return
       if (Object.keys(this.journal.entries).length >= 1_000) throw new Error('Reconcile pending Super Tab deliveries before accepting more.')
+      if (delivery.claimId && !identifier(delivery.claimId)) throw new Error('Invalid Super Tab delivery claim.')
+      // Losing the host journal cannot turn a backend claim into fresh input.
+      // Retain its identity and expose the uncertainty for a human to resolve;
+      // this neither takes over its execution nor says whether it was written.
       entry = { tabId: target.tabId, agentId: target.agent.id, harnessId: target.agent.harnessId,
-        deliveryId, claimId: randomUUID(), stage: 'prepared' }
+        deliveryId, claimId: delivery.claimId as string || randomUUID(),
+        stage: delivery.claimId ? 'uncertain' : 'prepared',
+        ...(delivery.claimId ? { receipt: delivery.status === 'uncertain' && typeof delivery.receipt === 'string' && delivery.receipt
+          ? delivery.receipt
+          : 'The host has no local receipt for this claimed instruction. Inspect the native session before confirming or resending it.' } : {}) }
       this.journal.entries[deliveryId] = entry
       this.persist()
+      if (delivery.claimId) this.core.turns.cancelDelivery(typedId(entry))
     }
     const id = typedId(entry)
     if (entry.stage === 'submitting' && !this.active.has(id)) {

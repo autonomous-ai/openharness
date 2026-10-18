@@ -38,7 +38,7 @@ it('starts either engine once, posts to its captured group and delivers shared i
   const pending = new Map<string, Record<string, any>>()
   const assignments: Array<Record<string, string>> = []
   const stopReceipts: Array<Record<string, any>> = []
-  let revision = 0, allowed = true
+  let revision = 0, allowed = true, deliveryReads = 0
   const idFor = (harnessId: string) => createHash('sha256').update(JSON.stringify([ME.machineId, harnessId])).digest('hex').slice(0, 24)
   relay.superTabs = async (method, raw, body) => {
     const url = new URL(raw, relay.httpUrl), path = url.pathname
@@ -73,8 +73,12 @@ it('starts either engine once, posts to its captured group and delivers shared i
     const delivery = /\/agents\/([^/]+)\/deliveries(?:\/([^/]+))?$/.exec(path)
     if (delivery) {
       const value = pending.get(delivery[1])
-      if (method === 'GET') return { data: value && value.status !== 'delivered' ? [value] : [] }
+      if (method === 'GET') {
+        deliveryReads++
+        return { data: delivery[2] ? value : value && value.status !== 'delivered' ? [value] : [] }
+      }
       if (!value || value.id !== delivery[2]) throw new Error('Unknown delivery')
+      if (value.claimId && value.claimId !== body.claimId) throw new Error('Claim changed')
       if (body.type === 'claim') {
         value.claimId = body.claimId
         return { data: { message: value.message } }
@@ -116,12 +120,23 @@ it('starts either engine once, posts to its captured group and delivers shared i
     const posted = await run(['post', 'feature', `${engine} ready`, `hello-${engine}`], target)
     expect(posted.code, JSON.stringify(posted.answer)).toBe(0)
     expect(posts.at(-1)).toMatchObject({ conversationId: 'feature', text: `${engine} ready` })
-    pending.set(target, { id: `delivery-${engine}`, status: 'pending', claimId: null,
+    pending.set(target, { id: `delivery-${engine}`, status: 'queued', claimId: null,
       message: { id: `message-${engine}`, conversationId: 'feature', author: { name: 'Fixture human' }, text: `verify-super-tab-${engine}` } })
     await until('native input acknowledgement', () => pending.get(target)?.status === 'delivered' || null, 60_000, 250)
     const submitted = readFileSync(join(d.root, 'submitted-prompts'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as string)
     expect(submitted.filter(prompt => prompt.includes(`verify-super-tab-${engine}`))).toHaveLength(1)
   }
+  // The backend survived, but this host has no local intent/receipt. It must
+  // surface the missing evidence without creating a new claim or typing again.
+  const orphan = { id: 'delivery-without-journal', status: 'claimed', claimId: 'original-claim', receipt: '',
+    message: { id: 'message-without-journal', conversationId: 'lead', author: { name: 'Fixture human' }, text: 'do-not-replay-without-journal' } }
+  pending.set(leadId, orphan)
+  await until('missing journal to become visible for recovery', () => orphan.status === 'uncertain' || null, 15_000, 250)
+  expect(orphan.claimId).toBe('original-claim')
+  expect(orphan.receipt).toContain('no local receipt')
+  const reads = deliveryReads
+  await until('further host polls without replay', () => deliveryReads > reads + 3 || null, 10_000, 250)
+  expect(readFileSync(join(d.root, 'submitted-prompts'), 'utf8')).not.toContain('do-not-replay-without-journal')
   const refused = await run(['start', 'refused-mode', JSON.stringify({
     conversationId: 'feature', machineId: ME.machineId, engine: 'claude', name: 'Refused builder',
     cwd, worktree: false, permissionMode: 'not-a-mode', requirements: { memoryBytes: 0, diskBytes: 1,

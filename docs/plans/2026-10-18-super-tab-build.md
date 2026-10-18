@@ -27,6 +27,7 @@ This is a new tab type. Existing tabs and running sessions are not converted.
 - Per-conversation native terminal selection survives navigation and restart; closing its pane clears the selection without stopping the harness.
 - Explicit recovery for uncertain input: inspect the terminal, confirm receipt, dismiss the warning, or deliberately resend with a new delivery identity.
 - Host receipt reconciliation preserves native evidence and can retire cancelled input after its agent is withdrawn, without restoring conversation access.
+- A backend delivery claim whose local host journal was lost becomes an explicit uncertain delivery. It retains the original claim, withholds native input, preserves any existing receipt, and uses the conversation's human recovery controls.
 - Shared desktop typography, colors, selectors, modal backdrop and focus behavior; readable large-text controls and searchable archived conversations.
 - Recent-harness navigation consumes an empty Super Tab draft only after opening work; ordinary search opens native work outside completed Super Tabs and preserves their conversations and terminal selection.
 - Definitive native-start refusals are reconciled through durable cancellation receipts. Lost cancellation or backend replies resume the same identity, and unknown/storage/conflict failures never become permission to launch again.
@@ -36,7 +37,7 @@ This is a new tab type. Existing tabs and running sessions are not converted.
 The desktop surface is connected, but the complete workflow is not ready. Scoped autonomous
 agent starts and capacity checks are connected through the existing native creation protocol.
 Terminal access, native stop reconciliation and explicit uncertain-delivery recovery are connected.
-Shared recording of native interventions and delivery recovery after host-journal loss remain. The PR stays a draft until these are implemented and
+Shared recording of native interventions and the capacity/configuration gaps remain. The PR stays a draft until these are implemented and
 the complete workflow is tested and reviewed.
 
 ## Validation plan
@@ -119,6 +120,11 @@ Focused checks completed during implementation (18 October):
   fixture renders; the contribution picker has no unrelated preview/actions and its selected row remains visible.
   Focused Dart analysis had no errors or warnings; it reported two existing brace-style informational diagnostics
   in `swarm_screen.dart`. These checks do not replace native or official-build acceptance.
+- Missing-host-journal recovery: CLI typecheck and 15 focused host/service tests passed. The real-daemon fixture
+  passed in 14.93 seconds with the original native delivery identity retained, an uncertain receipt exposed for
+  human review, and later host polls verified not to type the instruction. Unit checks also cover another lost
+  backend acknowledgement/restart and preservation of an existing uncertain native receipt. No claim is stolen
+  or automatically replayed. The backend's existing transactional acknowledgement/resolution path is unchanged.
 
 These establish individual boundaries, not the complete customer workflow. Full component suites,
 two-machine/two-account integration, real-engine/native desktop validation, full-app visual inspection,
@@ -135,7 +141,6 @@ Local commits and validation are preserved. The original research worktree's mer
 
 - Reflect native terminal interventions and answers in the appropriate shared conversation with reliable attribution.
   The current agent instructions explicitly require posting questions/results through the shared conversation CLI.
-- Reconcile a claimed delivery whose host journal is lost. Uncertain native execution must never auto-replay.
 - Check simultaneous starts against shared machine capacity and update recorded configuration when a running agent changes it.
 - Run the complete component suites, required coverage gates and isolated multi-account/machine journey, then review the final head.
 - Once the Mac is unlocked, finish native terminal, physical shortcut/IME and full-app visual acceptance on an official review build.
