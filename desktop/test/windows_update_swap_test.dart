@@ -706,7 +706,7 @@ void main() {
       'app 1.2.0',
     );
     expect(Directory(p.join(outside, 'app', '1.3.0')).existsSync(), isFalse);
-    expect(read('current'), '1.2.0\r\n');
+    expect(File(p.join(outside, 'current')).readAsStringSync(), '1.2.0\r\n');
   }, skip: !Platform.isWindows ? 'Windows junction only' : null);
 
   test('Windows native archive case alias is refused before writing', () async {
