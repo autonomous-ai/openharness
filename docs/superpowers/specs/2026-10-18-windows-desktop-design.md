@@ -97,6 +97,7 @@ Signing and the production release belong to D.
    no pipe code. It speaks B's protocol unchanged.
 4. **Zip, per-user self-install, self-update by version folders.** There is no MSIX, because it needs signing and
    its sandbox virtualises AppData and limits spawning. There is no installer `.exe` in C; D adds a signed one.
+   A one-line PowerShell install (§3.7) downloads the same zip.
 5. **The app installs the CLI with `install.ps1 -Desktop` from the CDN**, the counterpart of `install.sh --desktop`.
    The app never bundles the CLI.
 6. **Builds for x64 and arm64.** Flutter 3.47 builds Windows arm64. If a plugin cannot build for arm64, that is
@@ -421,6 +422,28 @@ Until the workflow is on `main` it cannot be dispatched, so while the branch has
 commit whose subject is `ci(windows): desktop staging release <ver>` runs the release mode; both go before merge.
 Production publishing, signing and the installer `.exe` are D's.
 
+### 3.7 Install by one command
+
+Besides the zip, a person can install the app with one line in PowerShell:
+
+```
+irm https://cdn.autonomous.ai/harness/desktop/install.ps1 | iex
+```
+
+- It is B's `install.ps1` in its `-App` mode. It is published a second time as `desktop/install.ps1`, with the one
+  line that turns that mode on changed.
+- It reads the desktop manifest and takes this PC's zip as the updater does (§3.4):
+  - an x64 PC takes `desktop-windows-x64`;
+  - an arm64 PC takes the newer of the two keys, and arm64 wins a tie.
+- It downloads the zip into a temp folder and checks its sha256 and size. It unpacks the zip with Windows' `tar.exe`
+  and runs the zip's `Harness.exe --install`, which does §3.3's steps and opens the app. The temp folder is then
+  removed.
+- PowerShell does not mark the files it downloads as coming from the internet (no `Zone.Identifier`), so Windows shows
+  no SmartScreen prompt. A browser's download of the zip does get that prompt until D signs the build.
+- It installs the app only. The app installs the CLI on its first start (§1.4).
+- C publishes it to staging only (`harness/staging/desktop/install.ps1`). The production copy goes up with the
+  production manifest, after the merge.
+
 ## 4. Build, CI and testing
 
 ### 4.1 Workflow
@@ -491,6 +514,8 @@ The run uses a dedicated test user and never touches `C:\work\e2e`. Results go i
 4. **Update.** N to N+1 through the staging manifest (or the B5.13 fake CDN). A broken N+1 rolls back to N.
 5. **Uninstall** from Settings ▸ Apps: the CLI and agents are untouched, and so is the daemon.
 6. **x64 build on arm64**, under emulation, to check the fallback in Decision 6.
+7. **Install by one command** (§3.7), from the staging copy. The app installs and opens with no SmartScreen prompt,
+   no installed file is marked as downloaded, and no temp folder is left.
 
 The desktop half on the owner's Mac (the Windows PC seen from the Mac) is checked by a person.
 
@@ -517,8 +542,11 @@ The desktop half on the owner's Mac (the Windows PC seen from the Mac) is checke
 
 ## Known limits
 
-- Unsigned zip and executables: SmartScreen and Defender may warn on first run until D signs them. The E2E doc
-  records the "More info ▸ Run anyway" step.
+- Unsigned zip and executables: SmartScreen and Defender may warn on the first run of a zip downloaded in a browser,
+  until D signs them. The E2E doc records the "More info ▸ Run anyway" step. The one-command install (§3.7) shows no
+  such prompt.
+- Smart App Control, where it is on (some fresh Windows 11 installs), blocks unsigned programs however they were
+  installed, and offers no way to run them. Only D's signing lifts that.
 - A toast needs the Start Menu shortcut's AUMID. A copy run straight from the zip, before the self-install, shows
   no toasts.
 - A profile path with `%` followed by a digit, `*` or `~` breaks the `harness://` command: the shell substitutes those

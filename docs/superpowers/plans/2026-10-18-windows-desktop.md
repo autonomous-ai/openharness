@@ -111,6 +111,10 @@ C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInterac
 - Readiness steps are the Harness CLI and `%USERPROFILE%\.harness\runtime\pty\<ver>\harness-pty.exe`. There is no tmux.
 - On Windows the minimum CLI is `kMinimumWindowsHarnessCliVersion` (`0.4.20`).
 
+**App install by one command (C4.8)**
+- `irm https://cdn.autonomous.ai/harness/desktop/install.ps1 | iex` is `cli/scripts/install.ps1` with `$HarnessInstallApp = $true`, the one line `upload-install-ps1.sh --app` changes. `install.ps1 -App` does the same.
+- It takes this PC's zip as the updater does, checks its sha256 and size, and runs the zip's `Harness.exe --install`. It installs the app only. C publishes it to staging only.
+
 **CLI resolution on Windows**
 1. `%USERPROFILE%\.harness\runtime\current-node` + `cli\current` → `cli\<ver>\cli.js`.
 2. `%USERPROFILE%\.harness\bin\harness.exe`.
@@ -166,7 +170,7 @@ No console window may flash for any child process (`startHidden`/`runHidden`, C1
    - the `install.ps1` command line;
    - CLI resolution.
 
-   Each must keep working with no re-parsing. Tests pin such a profile in C1.1 (`reserveDirectory`), C1.2, C1.3, C4.2 and C4.3, and C5.2 runs one on the VM. A `%` followed by a digit, `*` or `~` is a known limit of `shell\open\command` (C4.2).
+   Each must keep working with no re-parsing. Tests pin such a profile in C1.1 (`reserveDirectory`), C1.2, C1.3, C4.2, C4.3 and C4.8, and C5.2 runs one on the VM. A `%` followed by a digit, `*` or `~` is a known limit of `shell\open\command` (C4.2).
 2. The daemon restarts while the app runs. The pipe name changes, and an old name may be squatted. The app must find the new pipe on its next trusted request, and never trust the old name. Pinned in C2.3, and on a real pipe in C2.4.
 3. A partial or corrupt update: a truncated zip, a full disk mid-extract, a missing executable, or an app that crashes on start. `current` never names a broken folder for more than two starts, and the person always gets a working app. Pinned in C4.4 and C4.5, and run on the VM in C5.2.
 4. A second launch while the first is still starting, or a `harness://` link clicked while the app is closed. There must be exactly one window, and the link must be delivered once. Built in C3.1, and its race is run on Windows CI in C3.7.
@@ -179,8 +183,8 @@ No console window may flash for any child process (`startHidden`/`runHidden`, C1
 | C1 | Foundations: `homeDir()`, viewer mode off, CLI resolution, hidden child processes, provisioner on Windows, the staging flag, names and version resource, the Windows desktop workflow and its test baseline | — |
 | C2 | Trusted pipe: shared proof vectors, Dart proof, FFI pipe connection, transport integration (REST, this computer's WS, the recorded loopback port), fallback copy | C1 |
 | C3 | Native runner: single instance and the quit contract, deep links, notifications, tray and hide-to-tray, clipboard, fonts, shared in-window menu, keys | C1. At run time toasts need C4.2's shortcut, and links C4.2's registry key |
-| C4 | Install and update: the `Harness.exe` launcher (launch, install, uninstall, pointer, rollback), the `.started` marker, the updater's Windows branch, app-side self-install, packaging and the staging release mode | C1, C3.1 (the quit contract and single instance) |
-| C5 | Validation: E2E tooling and the six scenarios on the VM, macOS and Linux unchanged, removal of the TEMPORARY trigger and release path | C1–C4 |
+| C4 | Install and update: the `Harness.exe` launcher (launch, install, uninstall, pointer, rollback), the `.started` marker, the updater's Windows branch, app-side self-install, packaging and the staging release mode, the one-command install (`install.ps1 -App`) | C1, C3.1 (the quit contract and single instance) |
+| C5 | Validation: E2E tooling and the seven scenarios on the VM, macOS and Linux unchanged, removal of the TEMPORARY trigger and release path | C1–C4 |
 
 ## File map (who owns what)
 
@@ -240,6 +244,7 @@ No console window may flash for any child process (`startHidden`/`runHidden`, C1
 - `desktop/scripts/package-windows.ps1` (new), `desktop/scripts/publish-desktop-windows-staging.sh` (new), `cli/src/scripts/publishDesktopWindowsStaging.spec.ts` (new), `cli/src/scripts/windowsWorkflows.spec.ts`
 - the release mode of `.github/workflows/windows-desktop.yml` (`mode`, `release-build`, `release-staging`) and its Rust steps in `build-test`
 - `desktop/RELEASE.md` (Windows section), `desktop/CLAUDE.md` (the self-update sentence)
+- C4.8: `cli/scripts/install.ps1` (`-App`), `cli/scripts/upload-install-ps1.sh` (`--app`), `cli/src/scripts/installPs1.spec.ts`, `cli/src/scripts/uploadInstallPs1.spec.ts`, `cli/src/scripts/installPs1App.spec.ts` (new), and the last `build-test` step
 
 **C5**
 - `desktop/scripts/windows-e2e/` (new; VM scripts, Mac driver, `e2e_tools.py` and its tests, evidence)
@@ -251,7 +256,7 @@ No console window may flash for any child process (`startHidden`/`runHidden`, C1
 - `desktop/lib/screens/swarm_screen.dart`: C2.4 (`_brain`), C3.4 (the tray), C3.6 (`_menuHost`, which replaces C3.4's version).
 - `desktop/lib/update/desktop_updater.dart`: C1.6 (`isWindows`, the guard), C4.5 (the Windows branch; C1.6's parameter and default stay, the guard goes).
 - `desktop/CLAUDE.md`: C1.6 (Windows lines), C2.4 (transport bullet), C3.6 (the key rule), C4.5 (the self-update sentence).
-- `.github/workflows/windows-desktop.yml`, job `build-test`, final step order: checkout; C4.1's Rust toolchain and "Harness.exe tests"; C1.4's setup-node, setup-python, "Name node.exe for the tests", Flutter install, pin check, Build; C1.6's "Check the executable's name and version resource"; C1.4's artifact upload, Test, test-log upload; C2.4's "CLI install, for the pipe test's stand-in daemon" and "Trusted pipe against a real daemon pipe"; C3.7's "Runner channels and single instance (integration)". C4.7 adds the `mode` job, `needs: mode` and `if:` on `build-test`, the release jobs and the new `concurrency` block; C5.3 removes what is marked TEMPORARY.
+- `.github/workflows/windows-desktop.yml`, job `build-test`, final step order: checkout; C4.1's Rust toolchain and "Harness.exe tests"; C1.4's setup-node, setup-python, "Name node.exe for the tests", Flutter install, pin check, Build; C1.6's "Check the executable's name and version resource"; C1.4's artifact upload, Test, test-log upload; C2.4's "CLI install, for the pipe test's stand-in daemon" and "Trusted pipe against a real daemon pipe"; C3.7's "Runner channels and single instance (integration)"; C4.8's "Install by one command (install.ps1 -App)". C4.7 adds the `mode` job, `needs: mode` and `if:` on `build-test`, the release jobs and the new `concurrency` block; C5.3 removes what is marked TEMPORARY.
 - `cli/src/scripts/windowsWorkflows.spec.ts`: B's three cases, then C4.7's, then C5.3's.
 
 ## Interfaces between phases
@@ -291,6 +296,7 @@ No console window may flash for any child process (`startHidden`/`runHidden`, C1
 - Rust: `desktop::run(args) -> i32`, `desktop::parse(&[OsString]) -> Result<Command, String>`; `desktop::pointer::{read, write, remove, valid}`; `desktop::Paths`; `desktop::install::run(&Paths, wait_pid, &mut impl System) -> Result<Outcome, String>`; `desktop::uninstall::run(&Paths, &ScriptPlace, &mut impl System) -> Result<Vec<String>, String>`; `desktop::rollback::decide(&LaunchHistory) -> Choice`; `desktop::launch::heal_protocol_key`; `desktop::win::{QUIT_MESSAGE, quit_app}`.
 - Dart: `markStartedAfterFirstFrame(…)` (`started_marker.dart`); `WindowsUpdateSwap` (`stage`, `commit`, `relaunch`, `cleanUp`); `DesktopUpdater({…, String? windowsInstallRoot, startDetached})` with the keys `desktop-windows-x64` and `desktop-windows-arm64`; `desktopUpdateMetadataUrl({override, staging})`; `WindowsSelfInstall.ensureInstalled()` → `SelfInstallOutcome` (`alreadyInstalled | relaunching | failed(message)`).
 - Workflow: inputs `release`, `version`, `dry_run`; jobs `mode`, `release-build` (artifacts `harness-desktop-zip-windows-<arch>`) and `release-staging`; `package-windows.ps1` and `publish-desktop-windows-staging.sh`.
+- One-command install (C4.8): `install.ps1 -App [-Manifest <m>]`, `Select-HarnessAppEntry`, and `upload-install-ps1.sh --app` publishing `<prefix>/desktop/install.ps1`.
 
 ---
 
@@ -14880,7 +14886,7 @@ every step that touches Windows (the version folders and pointers, the Start Men
 `harness://` key, the Settings ▸ Apps entry, rollback and removal), tested by `cargo test` on every OS and, for the
 Windows-only steps, on Windows CI. On the Dart side it adds the `.started` marker, the updater's Windows branch (a new
 version folder beside the running one, then renames), the app's self-install hand-over from a zip folder, and the
-workflow's staging release of both zips.
+workflow's staging release of both zips. C4.8 adds the one-command install, `irm …/desktop/install.ps1 | iex`.
 
 Phase-wide notes:
 - Every Rust file below was compiled for `x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc` from a Mac
@@ -22241,6 +22247,542 @@ gh run download "$id" -n harness-desktop-windows-dry-run -D "$out" && cat "$out/
   merge, the release mode runs by dispatch only:
   `gh workflow run windows-desktop.yml --ref main -f release=true -f version=<v> -f dry_run=false`.
 
+### Task C4.8: Install by one command (`install.ps1 -App`)
+
+A browser marks the zip it downloads as coming from the internet (a `Zone.Identifier` stream), and until D signs the
+build, SmartScreen then stops the first run at "Windows protected your PC". A file PowerShell downloads carries no
+such mark. So a person can install the app with one line, and see no prompt (spec §3.7):
+
+```
+irm https://cdn.autonomous.ai/harness/desktop/install.ps1 | iex
+```
+
+The line runs B's `install.ps1`, with a new `-App` mode, published a second time as `desktop/install.ps1` with that
+mode on by default. Reusing it keeps one tested copy of what the download needs: the native architecture, TLS 1.2,
+retries, the sha256 and size check, and `tar.exe` run inside a folder whose path has letters outside the code page.
+`-App` downloads the zip the desktop manifest names for this PC and runs the zip's own `Harness.exe --install` (C4.2),
+which does every install step and opens the app. The app installs the CLI on its first start (C1.3), as it does after
+a zip install, so `-App` installs the app only.
+
+**Files:**
+- Modify: `cli/scripts/install.ps1`: the `-App` switch, the `$HarnessInstallApp` line, `ConvertTo-HarnessVersionKey`,
+  `Select-HarnessAppEntry`, `Start-HarnessAppInstall`, `Install-HarnessApp`, and the run block.
+- Modify: `cli/scripts/upload-install-ps1.sh`: `--app`, and the object path in `--print` mode.
+- Modify: `cli/src/scripts/installPs1.spec.ts`: two as-written cases.
+- Modify: `cli/src/scripts/uploadInstallPs1.spec.ts`: two cases, plus the path in the existing ones.
+- Create: `cli/src/scripts/installPs1App.spec.ts` (Windows only).
+- Modify: `.github/workflows/windows-desktop.yml`, job `build-test`: one step at the end.
+- Modify: `desktop/RELEASE.md`: one paragraph in "Windows (staging)".
+
+**Interfaces:**
+- Consumes:
+  - `Harness.exe --install` (C4.2): exit 0 once the installed Harness is started. On failure it exits non-zero, and
+    shows a message box unless `HARNESS_DESKTOP_NO_DIALOG` is set. It honours the overrides
+    `HARNESS_DESKTOP_INSTALL_ROOT`, `HARNESS_DESKTOP_PROGRAMS_DIR` and `HARNESS_DESKTOP_REGISTRY_ROOT`.
+  - The zip's shape and the manifest keys (C4.7): `Harness.exe`, `current`, `app\<ver>\harness-desktop.exe`; and
+    `desktop-windows-x64` / `desktop-windows-arm64` as `{ version, url, sha256, size }` in
+    `<base>desktop/metadata.json`.
+  - The bin `harness-desktop-launcher`, which `build-test`'s `cargo test` steps build (C4.1, C4.2) into
+    `pty\target\debug\`.
+  - B's helpers in `install.ps1`: `Test-HarnessHost`, `Get-HarnessPlatform`, `Get-HarnessJson`, `Resolve-HarnessRef`,
+    `Get-HarnessProperty`, `Save-HarnessVerified`, `Expand-HarnessZip`, `New-HarnessStaging`, `Test-HarnessUrl`,
+    `Test-HarnessScheme`.
+- Produces:
+  - `install.ps1 -App [-Manifest <desktop manifest>]`. A copy whose `$HarnessInstallApp` line is `$true` does the
+    same with no switch. The exit code (or `$LASTEXITCODE` under `iex`) is 0 when installed, and 1 on failure.
+  - `Select-HarnessAppEntry -Document <manifest> -Platform win32-x64|win32-arm64` returns the entry.
+    `ConvertTo-HarnessVersionKey <version>` returns `[version]` or `$null`.
+  - `bash cli/scripts/upload-install-ps1.sh --app [--production] [--print]` publishes
+    `harness/staging/desktop/install.ps1`, or `harness/desktop/install.ps1` with `--production`.
+  - The user's command on staging: `irm https://cdn.autonomous.ai/harness/staging/desktop/install.ps1 | iex`. C5.2
+    Step 8b runs it on the VM.
+- The choice of zip is the updater's (C4.5):
+  - an x64 PC takes `desktop-windows-x64`;
+  - an arm64 PC takes the newer of the two keys, and arm64 wins a tie;
+  - versions compare as `X.Y.Z` only, as `newer` does in C4.2.
+- **Ruling: one script, published twice.** `desktop/install.ps1` is `cli/scripts/install.ps1` with one line changed,
+  just as staging changes the manifest-base line. A second script would duplicate about a hundred lines of B's
+  checked download code.
+
+- [ ] **Step 1: Write the failing tests.**
+
+  In `cli/src/scripts/installPs1.spec.ts`, at the end of `describe('install.ps1, as written', …)`, add:
+
+````ts
+  it('has exactly one app line, off, for upload-install-ps1.sh --app to turn on in the published desktop copy', () => {
+    expect(source.split(/\r?\n/).filter((line) => line.startsWith('$HarnessInstallApp ='))).toEqual(['$HarnessInstallApp = $false'])
+    expect(source).toContain('if ($App -or $HarnessInstallApp) {')
+  })
+
+  it('waits for the zip\'s Harness.exe only: Start-Process -Wait would wait for the app it opens too', () => {
+    const start = source.match(/^function Start-HarnessAppInstall[\s\S]*?^}\r?$/m)?.[0] ?? ''
+    expect(start).toContain('$process.WaitForExit()')
+    expect(start).not.toMatch(/Start-Process/)
+  })
+````
+
+  In `cli/src/scripts/uploadInstallPs1.spec.ts`:
+  - after `const PRODUCTION = …`, add:
+
+````ts
+const APP_OFF = '$HarnessInstallApp = $false'
+const APP_ON = '$HarnessInstallApp = $true'
+````
+
+  - in the first case, after its `expect(changed(…))`, add
+    `expect(result.stderr).toContain('gs://s3-autonomous-upgrade-3/harness/staging/cli/install.ps1')`;
+  - in the second case, add `expect(result.stderr).toContain('gs://s3-autonomous-upgrade-3/harness/cli/install.ps1')`;
+  - add at the end of the `describe`:
+
+````ts
+  it('stages the desktop app installer: the manifest base and the app line change, nothing else', () => {
+    const result = run(['--app', '--print'])
+    expect(result.status, result.stderr).toBe(0)
+    expect(changed(result.stdout)).toEqual([
+      [PRODUCTION, "$HarnessManifestBase = 'https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/staging/'"],
+      [APP_OFF, APP_ON],
+    ])
+    expect(result.stderr).toContain('gs://s3-autonomous-upgrade-3/harness/staging/desktop/install.ps1')
+  })
+
+  it('publishes the production desktop app installer with the app line on and the production base', () => {
+    const result = run(['--app', '--production', '--print'])
+    expect(result.status, result.stderr).toBe(0)
+    expect(changed(result.stdout)).toEqual([[APP_OFF, APP_ON]])
+    expect(result.stderr).toContain('gs://s3-autonomous-upgrade-3/harness/desktop/install.ps1')
+  })
+````
+
+  Create `cli/src/scripts/installPs1App.spec.ts`:
+
+````ts
+import { spawnSync } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, describe, expect, it } from 'vitest'
+
+// cli/scripts/install.ps1 -App, the desktop app's one-command install (desktop spec 3.7), on Windows only. Its
+// as-written checks are in installPs1.spec.ts, and the published copy's one-line change in uploadInstallPs1.spec.ts.
+// The launcher is the real Harness.exe (pty/src/desktop); the app it opens is a stand-in that runs two minutes.
+const installer = join(process.cwd(), 'scripts', 'install.ps1')
+const windows = process.platform === 'win32'
+const scratch: string[] = []
+const subkeys: string[] = []
+const apps: string[] = []
+
+/** A PowerShell single-quoted string of [text]. */
+const quote = (text: string) => `'${text.replace(/'/g, "''")}'`
+
+/**
+ * This process's environment for Windows PowerShell 5.1, with [extra]. PSModulePath is left out: a PowerShell 7 step
+ * (CI) hands on 7's modules first, and 5.1's autoload would load them (installPs1.spec.ts, `powershell7`).
+ */
+function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env }
+  for (const name of Object.keys(env)) if (['psmodulepath', 'harness_install_manifest'].includes(name.toLowerCase())) delete env[name]
+  return { ...env, ...extra }
+}
+
+/** [script] in Windows PowerShell 5.1, passed as -EncodedCommand so no quoting reaches it. */
+function powershell(script: string, env: NodeJS.ProcessEnv = {}) {
+  const run = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+    encoding: 'utf8', env: cleanEnv(env), timeout: 240_000,
+  })
+  return { status: run.status, stdout: (run.stdout ?? '').trim(), stderr: run.stderr ?? '' }
+}
+
+/** A new folder under the temp folder, by its long name: a runner's TEMP is 8.3 (RUNNER~1), a process's path is not. */
+function folder(prefix: string): string {
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)))
+  scratch.push(dir)
+  return dir
+}
+
+// The stand-in apps first: a folder a running program holds cannot be removed.
+afterAll(() => {
+  for (const app of apps) powershell(`Get-Process -Name 'harness-desktop' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq ${quote(app)} } | Stop-Process -Force`)
+  for (const key of subkeys) spawnSync('reg.exe', ['delete', `HKCU\\${key}`, '/f'], { encoding: 'utf8' })
+  for (const dir of scratch) {
+    try { rmSync(dir, { recursive: true, force: true }) } catch { /* left in the temp folder */ }
+  }
+})
+
+describe.runIf(windows)('install.ps1 -App: the zip this PC takes', { timeout: 120_000 }, () => {
+  const entry = (key: string, version: string) => ({ version, url: `https://cdn.example/${key}.zip`, sha256: '0'.repeat(64), size: 1 })
+
+  /** `<version> <url>` of the entry Select-HarnessAppEntry takes from [document] on [platform], or what it throws. */
+  function pick(document: object, platform: string): string {
+    const text = `$ErrorActionPreference = 'Stop'; . ${quote(installer)}; try { $e = Select-HarnessAppEntry -Document (${quote(JSON.stringify(document))} | ConvertFrom-Json) -Platform '${platform}'; "$($e.version) $($e.url)" } catch { $_.Exception.Message }`
+    return powershell(text, { HARNESS_INSTALL_LIBRARY: '1' }).stdout
+  }
+
+  it('takes the x64 zip on an x64 PC, and never the arm64 one', () => {
+    const both = { 'desktop-windows-x64': entry('x64', '1.2.0'), 'desktop-windows-arm64': entry('arm64', '1.3.0') }
+    expect(pick(both, 'win32-x64')).toBe('1.2.0 https://cdn.example/x64.zip')
+    expect(pick({ 'desktop-windows-arm64': entry('arm64', '1.3.0') }, 'win32-x64'))
+      .toBe('The desktop manifest has no Harness desktop app for this computer (win32-x64) yet.')
+  })
+
+  it('takes the newer of the two on an arm64 PC, arm64 winning a tie, comparing numbers and not text', () => {
+    const doc = (x64: string, arm64: string) => ({ 'desktop-windows-x64': entry('x64', x64), 'desktop-windows-arm64': entry('arm64', arm64) })
+    expect(pick(doc('1.2.0', '1.3.0'), 'win32-arm64')).toBe('1.3.0 https://cdn.example/arm64.zip')
+    expect(pick(doc('1.10.0', '1.9.0'), 'win32-arm64')).toBe('1.10.0 https://cdn.example/x64.zip')
+    expect(pick(doc('1.3.0', '1.3.0'), 'win32-arm64')).toBe('1.3.0 https://cdn.example/arm64.zip')
+    expect(pick({ 'desktop-windows-x64': entry('x64', '1.2.0') }, 'win32-arm64')).toBe('1.2.0 https://cdn.example/x64.zip')
+    expect(pick({}, 'win32-arm64')).toBe('The desktop manifest has no Harness desktop app for this computer (win32-arm64) yet.')
+  })
+})
+
+describe.runIf(windows)('install.ps1 -App, installing for real with the real Harness.exe', { timeout: 300_000 }, () => {
+  /** The real launcher (pty/src/bin/desktop-launcher.rs): $HARNESS_DESKTOP_LAUNCHER_BIN, or this tree's cargo build. */
+  function launcher(): string {
+    const candidates = [process.env.HARNESS_DESKTOP_LAUNCHER_BIN, ...['debug', 'release'].map((profile) => join(process.cwd(), '..', 'pty', 'target', profile, 'harness-desktop-launcher.exe'))]
+    const found = candidates.find((file): file is string => !!file && existsSync(file))
+    if (!found) throw new Error('No harness-desktop-launcher.exe: build it with `cd pty && cargo build --bin harness-desktop-launcher`, or set HARNESS_DESKTOP_LAUNCHER_BIN.')
+    return found
+  }
+
+  let standIn: string | undefined
+  /** A GUI program that shows nothing and runs two minutes: the app Harness.exe opens. Compiled once, by 5.1's csc. */
+  function standInApp(): string {
+    if (standIn) return standIn
+    const out = join(folder('harness-app-standin-'), 'stand-in.exe')
+    const made = powershell(`Add-Type -OutputType WindowsApplication -OutputAssembly ${quote(out)} -TypeDefinition 'public static class StandIn { public static void Main() { System.Threading.Thread.Sleep(120000); } }'`)
+    if (!existsSync(out)) throw new Error(`could not compile the stand-in app: ${made.stdout} ${made.stderr}`)
+    return (standIn = out)
+  }
+
+  /** A zip of [version] in package-windows.ps1's shape, and a desktop manifest naming it under both keys. */
+  function build(version: string, over: { sha256?: string } = {}): string {
+    const dir = folder('harness-app-build-')
+    const src = join(dir, 'src')
+    mkdirSync(join(src, 'app', version), { recursive: true })
+    copyFileSync(launcher(), join(src, 'Harness.exe'))
+    copyFileSync(standInApp(), join(src, 'app', version, 'harness-desktop.exe'))
+    writeFileSync(join(src, 'current'), `${version}\r\n`)
+    const name = `harness-desktop-${version}-windows-x64.zip`
+    const tar = join(process.env.SystemRoot!, 'System32', 'tar.exe')
+    const made = spawnSync(tar, ['-a', '-cf', join(dir, name), '-C', src, 'Harness.exe', 'current', 'app'], { encoding: 'utf8' })
+    expect(made.status, made.stderr).toBe(0)
+    const bytes = readFileSync(join(dir, name))
+    const ref = { version, url: name, sha256: over.sha256 ?? createHash('sha256').update(bytes).digest('hex'), size: bytes.length }
+    writeFileSync(join(dir, 'metadata.json'), JSON.stringify({ 'desktop-windows-x64': ref, 'desktop-windows-arm64': ref }, null, 2))
+    return join(dir, 'metadata.json')
+  }
+
+  /**
+   * A profile named as Review Focus 1 asks, with its TEMP inside it, so the download is unpacked under that name too.
+   * The launcher's overrides keep the real Start Menu, harness:// key and uninstall entry out of reach.
+   */
+  function world() {
+    const home = join(folder('harness-app-home-'), "Nguyễn Văn A' & 100% !x")
+    const temp = join(home, 'AppData', 'Local', 'Temp')
+    const install = join(home, 'AppData', 'Local', 'Programs', 'Harness')
+    const programs = join(home, 'Start Menu', 'Programs')
+    mkdirSync(temp, { recursive: true })
+    mkdirSync(programs, { recursive: true })
+    const registry = `Software\\HarnessTest\\${randomUUID()}`
+    subkeys.push(registry)
+    const env = {
+      USERPROFILE: home, TEMP: temp, TMP: temp,
+      HARNESS_DESKTOP_INSTALL_ROOT: install, HARNESS_DESKTOP_PROGRAMS_DIR: programs, HARNESS_DESKTOP_REGISTRY_ROOT: registry,
+      HARNESS_DESKTOP_NO_DIALOG: '1',
+    }
+    return { temp, install, programs, registry, env }
+  }
+
+  const stagingLeft = (temp: string) => readdirSync(temp).filter((name) => name.startsWith('.harness-desktop-staging-'))
+
+  /** How many harness-desktop.exe run as [exe], polled up to 10 s: the installed launcher opens the app a moment after. */
+  function running(exe: string): number {
+    const script = `$deadline = (Get-Date).AddSeconds(10); do { $n = @(Get-Process -Name 'harness-desktop' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq ${quote(exe)} }).Count; if ($n) { break }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $deadline); $n`
+    return Number(powershell(script).stdout)
+  }
+
+  function installApp(manifest: string, env: NodeJS.ProcessEnv) {
+    return spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', installer, '-App', '-Manifest', manifest], {
+      encoding: 'utf8', env: cleanEnv(env), timeout: 240_000,
+    })
+  }
+
+  it('checks and installs the zip, opens the installed app, waits for none of it, and leaves no temp folder', () => {
+    const w = world()
+    const manifest = build('9.8.7')
+    const app = join(w.install, 'app', '9.8.7', 'harness-desktop.exe')
+    apps.push(app)
+    const t0 = Date.now()
+    const run = installApp(manifest, w.env)
+    const seconds = (Date.now() - t0) / 1000
+    expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0)
+    expect(run.stdout).toContain('Harness 9.8.7 is installed, and it is opening now.')
+    // The stand-in runs 120 s: the installer waited for the zip's Harness.exe only.
+    expect(seconds).toBeLessThan(90)
+    expect(readFileSync(join(w.install, 'current'), 'utf8').trim()).toBe('9.8.7')
+    expect(existsSync(join(w.install, 'Harness.exe'))).toBe(true)
+    expect(existsSync(app)).toBe(true)
+    expect(existsSync(join(w.programs, 'Harness.lnk'))).toBe(true)
+    const entry = spawnSync('reg.exe', ['query', `HKCU\\${w.registry}\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Harness`, '/v', 'DisplayVersion'], { encoding: 'utf8' })
+    expect(entry.stdout).toMatch(/DisplayVersion\s+REG_SZ\s+9\.8\.7/)
+    expect(stagingLeft(w.temp)).toEqual([])
+    expect(running(app)).toBeGreaterThan(0)
+  })
+
+  it('installs nothing from a download that fails its checksum, says which step failed, and leaves no temp folder', () => {
+    const w = world()
+    const run = installApp(build('9.8.8', { sha256: 'f'.repeat(64) }), w.env)
+    expect(run.status).toBe(1)
+    expect(run.stdout).toContain('Harness could not be installed. The step that failed: Downloading Harness.')
+    expect(run.stdout).toContain('failed its checksum')
+    expect(existsSync(w.install)).toBe(false)
+    expect(stagingLeft(w.temp)).toEqual([])
+  })
+
+  it('installs with no switch as the published desktop/install.ps1 under iex, and leaves that PowerShell running', () => {
+    const w = world()
+    const manifest = build('9.8.9')
+    const app = join(w.install, 'app', '9.8.9', 'harness-desktop.exe')
+    apps.push(app)
+    const source = readFileSync(installer, 'utf8')
+    const published = join(folder('harness-app-published-'), 'install.ps1')
+    writeFileSync(published, source.replace('$HarnessInstallApp = $false', '$HarnessInstallApp = $true'))
+    // As `irm <url> | iex`: the script's text, not a file, so nothing may exit the session.
+    const run = powershell(`iex (Get-Content -Raw -LiteralPath ${quote(published)}); "exit code $LASTEXITCODE"; 'still here'`, { ...w.env, HARNESS_INSTALL_MANIFEST: manifest })
+    expect(run.stdout).toContain('Harness 9.8.9 is installed, and it is opening now.')
+    expect(run.stdout).toContain('exit code 0')
+    expect(run.stdout.endsWith('still here')).toBe(true)
+    expect(running(app)).toBeGreaterThan(0)
+  })
+})
+````
+
+- [ ] **Step 2: Run them and see them fail.**
+
+```bash
+cd cli && npx vitest run src/scripts/installPs1.spec.ts src/scripts/uploadInstallPs1.spec.ts src/scripts/installPs1App.spec.ts
+```
+
+  Expected on the Mac: the two new as-written cases fail (no `$HarnessInstallApp` line, no
+  `Start-HarnessAppInstall`). The two new upload cases fail on the unknown `--app` (exit 2), and the two path asserts
+  fail on an empty stderr. `installPs1App.spec.ts` is skipped off Windows.
+
+- [ ] **Step 3: Implement.**
+
+  In `cli/scripts/install.ps1`:
+  - in the header comment, after the `iex "& { … } -Desktop"` line, add:
+
+````powershell
+#   irm https://cdn.autonomous.ai/harness/desktop/install.ps1 | iex      (the desktop app: this file, app line on)
+````
+
+  - in `param(…)`, after `[switch]$Desktop,` add `[switch]$App,`;
+  - after the `$HarnessManifestBase = …` line, add:
+
+````powershell
+# What a run with no switch installs: the Harness CLI here, and the Harness desktop app in the copy published as
+# desktop/install.ps1. upload-install-ps1.sh --app rewrites this one line to $true.
+$HarnessInstallApp = $false
+````
+
+  - before `# --- Run ---`, add:
+
+````powershell
+function ConvertTo-HarnessVersionKey([string]$Version) {
+  # X.Y.Z as a [version], as the launcher's `newer` and the app's updater compare it; a pre-release tag does not order.
+  if ($Version -notmatch '^(\d{1,9})\.(\d{1,9})\.(\d{1,9})') { return $null }
+  return [version]::new([int]$Matches[1], [int]$Matches[2], [int]$Matches[3])
+}
+
+function Select-HarnessAppEntry {
+  # The zip this PC takes, as the app's updater chooses it (desktop_updater.dart). An x64 PC takes
+  # desktop-windows-x64. An arm64 PC takes the newer of the two, arm64 winning a tie, because the x64 build runs
+  # there under emulation until an arm64 one is published.
+  param($Document, [string]$Platform)
+  $keys = if ($Platform -eq 'win32-arm64') { @('desktop-windows-arm64', 'desktop-windows-x64') } else { @('desktop-windows-x64') }
+  $best = $null
+  foreach ($key in $keys) {
+    $entry = Get-HarnessProperty $Document $key
+    $version = ConvertTo-HarnessVersionKey ([string](Get-HarnessProperty $entry 'version'))
+    if ($version -and (-not $best -or $version -gt $best.version)) { $best = @{ entry = $entry; version = $version } }
+  }
+  if (-not $best) { throw "The desktop manifest has no Harness desktop app for this computer ($Platform) yet." }
+  return $best.entry
+}
+
+function Start-HarnessAppInstall {
+  # The zip's own Harness.exe --install (pty/src/desktop/install.rs) does every install step, as when a person runs
+  # the zip: the version folder, the Start Menu shortcut, harness:// and the uninstall entry, then it opens the
+  # installed Harness. Only Harness.exe is waited for. Start-Process -Wait would wait for the app it opens too,
+  # which runs until the person quits it.
+  param([string]$Launcher)
+  $info = [Diagnostics.ProcessStartInfo]::new($Launcher, '--install')
+  $info.UseShellExecute = $false
+  $info.WorkingDirectory = Split-Path -Parent $Launcher
+  $process = [Diagnostics.Process]::Start($info)
+  try {
+    $process.WaitForExit()
+    return $process.ExitCode
+  } finally { $process.Dispose() }
+}
+
+function Install-HarnessApp {
+  # The Harness desktop app by one command (desktop spec 3.7). Invoke-WebRequest marks no file as downloaded from
+  # the internet, so Windows asks no "Run anyway?" for the app, which it does for a browser's download of the zip.
+  # The app sets up the CLI on its first start, so only the app is installed here.
+  param([string]$Manifest)
+  $ErrorActionPreference = 'Stop'
+  $ProgressPreference = 'SilentlyContinue'
+  $step = 'Checking this computer'
+  $staging = $null
+  try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $tar = Test-HarnessHost
+    $platform = Get-HarnessPlatform
+
+    $step = 'Reading the release manifest'
+    $source = "${HarnessManifestBase}desktop/metadata.json"
+    if ($Manifest) {
+      $source = $Manifest
+      if (-not (Test-HarnessUrl $source) -and -not (Test-HarnessScheme $source)) {
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "The manifest $source does not exist." }
+        $source = (Resolve-Path -LiteralPath $source).ProviderPath
+      }
+    }
+    $entry = Select-HarnessAppEntry -Document (Get-HarnessJson $source) -Platform $platform
+    $version = [string]$entry.version
+    Write-Host "Installing the Harness desktop app $version for $platform"
+
+    $step = 'Downloading Harness'
+    $staging = New-HarnessStaging -Parent ([IO.Path]::GetTempPath()) -Name 'harness-desktop'
+    $zip = Join-Path $staging 'harness-desktop.zip'
+    Save-HarnessVerified -Source (Resolve-HarnessRef -Ref ([string]$entry.url) -ManifestSource $source) -Destination $zip -Sha256 ([string]$entry.sha256) -Size $entry.size
+
+    $step = 'Unpacking Harness'
+    $folder = Join-Path $staging 'zip'
+    Expand-HarnessZip -Tar $tar -Archive $zip -Destination $folder
+    $launcher = Join-Path $folder 'Harness.exe'
+    if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) { throw 'The download has no Harness.exe, so it is not a Harness desktop app.' }
+
+    $step = 'Installing Harness'
+    $code = Start-HarnessAppInstall -Launcher $launcher
+    if ($code -ne 0) { throw "Harness's installer stopped (exit code $code). Its log is launch.log, in Programs\Harness under $env:LOCALAPPDATA." }
+  } catch {
+    Write-Host ''
+    Write-Host "Harness could not be installed. The step that failed: $step." -ForegroundColor Red
+    Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host '  Run the installer again, or send this message to Harness support.'
+    return 1
+  } finally {
+    if ($staging) { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+  Write-Host ''
+  Write-Host "Harness $version is installed, and it is opening now."
+  Write-Host 'Next time, open it from the Start menu. On its first start it sets up the Harness command line.'
+  return 0
+}
+
+````
+
+  - in the run block, replace the `$harnessExit = @(Install-Harness …)[-1]` line with:
+
+````powershell
+  if ($App -or $HarnessInstallApp) {
+    $harnessExit = @(Install-HarnessApp -Manifest $Manifest)[-1]
+  } else {
+    $harnessExit = @(Install-Harness -Desktop:([bool]$Desktop) -Manifest $Manifest -NoService:([bool]$NoService))[-1]
+  }
+````
+
+  In `cli/scripts/upload-install-ps1.sh`:
+  - in the header comment, after the `--production` sentence, add:
+
+````bash
+# --app publishes the copy that installs the desktop app (its $HarnessInstallApp line set to $true) as
+# <prefix>/desktop/install.ps1, or harness/desktop/install.ps1 with --production:
+#   irm https://cdn.autonomous.ai/harness/staging/desktop/install.ps1 | iex
+````
+
+  - after `PRINT=0`, add `APP=0`; in the `case`, add `--app) APP=1 ;;` and make the error read
+    `(use --production, --app and/or --print)`;
+  - after the `LINE_START` count check, add:
+
+````bash
+APP_LINE='$HarnessInstallApp = $false'
+app_count="$(awk -v line="$APP_LINE" '$0 == line { n++ } END { print n + 0 }' "$SCRIPT")"
+[ "$app_count" = 1 ] || { echo "error: install.ps1 must have exactly one line '$APP_LINE' (found $app_count)" >&2; exit 1; }
+````
+
+  - replace `if [ "$PRINT" = 1 ]; then cat "$OUT"; exit 0; fi` with:
+
+````bash
+if [ "$APP" = 1 ]; then
+  awk -v line="$APP_LINE" '$0 == line { print "$HarnessInstallApp = $true"; next } { print }' "$OUT" > "$OUT.app"
+  mv "$OUT.app" "$OUT"
+  GCS_PATH="${GCS_PATH%/cli/install.ps1}/desktop/install.ps1"
+fi
+if [ "$PRINT" = 1 ]; then
+  echo ">> would upload to gs://${GCS_BUCKET}/${GCS_PATH}" >&2
+  cat "$OUT"
+  exit 0
+fi
+````
+
+  - change the closing verify hint to grep both lines:
+    `… | grep -E 'HarnessManifestBase|HarnessInstallApp'`.
+
+  In `.github/workflows/windows-desktop.yml`, job `build-test`, after C3.7's "Runner channels and single instance
+  (integration)" step (the last), add:
+
+````yaml
+      # C4.8: the one-command install (install.ps1 -App) with the real Harness.exe the cargo test steps built, in a
+      # throwaway profile with the launcher's overrides. CLI dependencies come from C2.4's npm ci.
+      - name: Install by one command (install.ps1 -App)
+        working-directory: cli
+        env:
+          HARNESS_DESKTOP_LAUNCHER_BIN: ${{ github.workspace }}\pty\target\debug\harness-desktop-launcher.exe
+        run: npx vitest run src/scripts/installPs1App.spec.ts
+````
+
+  In `desktop/RELEASE.md`, at the end of "Windows (staging)", add:
+
+````markdown
+**Install by one command.** `bash cli/scripts/upload-install-ps1.sh --app` publishes
+`harness/staging/desktop/install.ps1`, which is `cli/scripts/install.ps1` with its app line on. A person runs
+`irm https://cdn.autonomous.ai/harness/staging/desktop/install.ps1 | iex`. It downloads the zip the staging manifest
+names for this PC, checks its sha256 and size, and runs the zip's `Harness.exe --install`. PowerShell does not mark
+what it downloads as coming from the internet, so SmartScreen shows no prompt. Smart App Control, where it is on,
+still blocks an unsigned build. `--app --production` (`harness/desktop/install.ps1`) is the owner's step after the
+merge, once the production manifest has the Windows keys.
+````
+
+- [ ] **Step 4: Run them and see them pass.**
+
+```bash
+cd cli && npx vitest run src/scripts/installPs1.spec.ts src/scripts/uploadInstallPs1.spec.ts src/scripts/installPs1App.spec.ts
+bash scripts/upload-install-ps1.sh --app --print 2>&1 >/dev/null | grep 'would upload'
+actionlint ../.github/workflows/windows-desktop.yml
+```
+
+  Expected on the Mac:
+  - every as-written and upload case passes;
+  - the grep prints `>> would upload to gs://s3-autonomous-upgrade-3/harness/staging/desktop/install.ps1`;
+  - actionlint is clean.
+
+  Then push the commit (phase notes). On both legs of `build-test`, "Install by one command (install.ps1 -App)" runs
+  the five Windows cases, and they pass. A failure in B's own cases in `installPs1.spec.ts` (on B's `windows.yml`)
+  is compared against B's last green run, 39099428447, before it is called new.
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add cli/scripts/install.ps1 cli/scripts/upload-install-ps1.sh cli/src/scripts/installPs1.spec.ts cli/src/scripts/uploadInstallPs1.spec.ts cli/src/scripts/installPs1App.spec.ts .github/workflows/windows-desktop.yml desktop/RELEASE.md
+git commit -m "feat(windows): install the desktop app by one command, irm .../desktop/install.ps1 | iex, with no SmartScreen prompt" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+  The staging upload (`upload-install-ps1.sh --app` with no `--print`) is a staging publish. It needs the owner's OK,
+  and C5.2 Step 8b does it.
+
 ### Phase C4 rulings
 
 - **The bin** is `harness-desktop-launcher`, renamed to `Harness.exe` by `package-windows.ps1`. A bin named `Harness` and B's `harness` are one file in `target\` on a case-insensitive file system.
@@ -22259,6 +22801,7 @@ gh run download "$id" -n harness-desktop-windows-dry-run -D "$out" && cat "$out/
 - **The staging release needs both zips.** If C1 recorded that arm64 cannot build, publish the x64 key only (drop the arm64 argument and make the script's third argument optional); arm64 PCs then take x64.
 - **`dry_run` defaults to true**, so an on-demand run never publishes by accident.
 - **The release mode before merge (reconciliation).** `workflow_dispatch` needs the file on `main`, so while the TEMPORARY push trigger exists, a push whose head commit's subject is `ci(windows): desktop staging release <version>` (or `… staging dry run <version>`) runs the release mode. The `mode` job decides, and every job `needs` it. Push such an empty commit while the PR is a draft. A release run has its own concurrency group: it never cancels and is never cancelled. C5.3 removes the path.
+- **One-command install (C4.8, added after stitching at the owner's request).** `install.ps1 -App`, published again as `desktop/install.ps1` with its app line on, downloads this PC's zip and runs the zip's `Harness.exe --install`. PowerShell's download carries no mark of the web, so there is no SmartScreen prompt until D signs. It reuses B's download code rather than a second script. The app still installs the CLI itself.
 - **The workflow (reconciliation).** `build-test` gets the Rust toolchain once, in C4.1, right after checkout. The release jobs install Flutter as C1.4 does. The release artifacts are named `harness-desktop-zip-windows-<arch>`, apart from build-test's `harness-desktop-windows-<arch>` Release folders.
 
 ---
@@ -22268,7 +22811,7 @@ gh run download "$id" -n harness-desktop-windows-dry-run -D "$out" && cat "$out/
 This phase proves C on a real Windows desktop and proves macOS and Linux unchanged. C5.1 builds the end-to-end
 tooling in `desktop/scripts/windows-e2e/`, on B's model (`cli/scripts/windows-cli-e2e/`). It runs a GUI app in a test
 user's real desktop session on the UTM VM, sees the screen and drives it through UI Automation, reads the app's logs,
-serves broken updates from B's fake HTTPS CDN, and cleans up after itself. C5.2 runs the six scenarios of spec §4.4
+serves broken updates from B's fake HTTPS CDN, and cleans up after itself. C5.2 runs the seven scenarios of spec §4.4
 with it, and writes `docs/testing/windows-desktop-e2e.md` in the shape of `docs/testing/windows-cli-e2e.md`. C5.3
 compares the full desktop suite on macOS test by test against the base, checks that no file under `desktop/macos` or
 `desktop/linux` changed, reads the Linux PR CI, removes the TEMPORARY push trigger, and records all of it in the PR.
@@ -24574,7 +25117,7 @@ git commit -m "test(windows): desktop end-to-end tools: a real desktop session o
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-### Task C5.2: The six scenarios on the VM, and `docs/testing/windows-desktop-e2e.md`
+### Task C5.2: The seven scenarios on the VM, and `docs/testing/windows-desktop-e2e.md`
 
 **Files:**
 - Create: `docs/testing/windows-desktop-e2e.md`
@@ -25153,6 +25696,48 @@ Pass, scenario 6:
 
 If the x64 build fails, its failure is a finding against Decision 6's fallback, with the error.
 
+- [ ] **Step 8b: Scenario 7, install by one command (spec §3.7, C4.8)**
+
+Scenario 6 leaves the app uninstalled, and the staging manifest at N1. Ask the owner before this staging publish
+(handoff, Publishing). Then, from the Mac:
+
+```bash
+(cd cli && bash scripts/upload-install-ps1.sh --app) | tee "$EV/s7-publish.log"
+curl -fsSL https://cdn.autonomous.ai/harness/staging/desktop/install.ps1 | grep -E '^\$Harness(ManifestBase|InstallApp) =' | tee -a "$EV/s7-publish.log"
+```
+
+On the VM, in the test user's desktop session, type the line into a PowerShell window, as a person would. The window
+stays open 30 s afterwards for the screenshot:
+
+```bash
+$D cdn-status | tee "$EV/s7-install.log"                       # not enabled: the real staging CDN
+b64() { printf '%s' "$1" | iconv -t UTF-16LE | base64 | tr -d '\n'; }
+LINE="irm https://cdn.autonomous.ai/harness/staging/desktop/install.ps1 | iex; Write-Host 'still here'; Start-Sleep 30"
+$D stamp "s7 start" | tee -a "$EV/s7-install.log"
+RUN_TIMEOUT=330 $D run start-app.ps1 'Path=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe' \
+  "ArgumentList=[\"-NoProfile\",\"-EncodedCommand\",\"$(b64 "$LINE")\"]" WaitSec=300 | tee -a "$EV/s7-install.log"
+$D stamp "s7 window" | tee -a "$EV/s7-install.log"
+$D shot s7-installed
+$D state | tee "$EV/s7-layout.log"
+CHECK='$r = Join-Path $env:LOCALAPPDATA "Programs\Harness"; "files marked as downloaded: " + @(Get-ChildItem -LiteralPath $r -Recurse -File | Where-Object { Get-Item -LiteralPath $_.FullName -Stream Zone.Identifier -ErrorAction SilentlyContinue }).Count; "temp folders left: " + @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Filter ".harness-desktop-staging-*" -Force -ErrorAction SilentlyContinue).Count'
+$D sh "powershell -NoProfile -EncodedCommand $(b64 "$CHECK")" | tee "$EV/s7-motw.log"
+$D run start-app.ps1 'Path=%LOCALAPPDATA%\Programs\Harness\Harness.exe' 'ArgumentList=["--uninstall"]' NoWait=true
+sleep 15; $D state | tee "$EV/s7-uninstall.log"
+```
+
+Pass, scenario 7:
+- `s7-publish.log` shows the staging base `…/harness/staging/` and `$HarnessInstallApp = $true`.
+- `s7-install.log` ends with `harness-desktop.exe processes: 1; visible windows: 1`, and the path is the installed
+  `…\AppData\Local\Programs\Harness\app\<N1>\harness-desktop.exe`.
+- `s7-installed.png` shows no SmartScreen prompt. The PowerShell window says
+  `Harness <N1> is installed, and it is opening now.`, then `still here`. **UIA**, else **Person**.
+- `s7-layout.log` reads as scenario 1's layout, at `<N1>`.
+- `s7-motw.log`: `files marked as downloaded: 0` and `temp folders left: 0`.
+- `s7-uninstall.log` reads as scenario 5's after-state.
+- Times: from `s7 start` to `s7 window`.
+
+The doc's summary table gets a row for scenario 7.
+
 - [ ] **Step 9: The desktop on the Mac (Person)**
 
 While the VM is signed in (any time after Step 3), ask the owner to open their own Harness desktop app on the Mac,
@@ -25534,7 +26119,7 @@ cat >> "$SCR/pr-body.md" <<'MD'
 ## Validation
 
 - **Windows, real desktop (C5.2):** [docs/testing/windows-desktop-e2e.md](docs/testing/windows-desktop-e2e.md):
-  six scenarios on the Windows 11 ARM64 VM as a throwaway standard user, evidence in
+  seven scenarios on the Windows 11 ARM64 VM as a throwaway standard user, evidence in
   `desktop/scripts/windows-e2e/evidence/`. Results: <one line per scenario: pass / partial / finding>.
   Person-checked: <the list>.
 - **Windows CI:** `windows-desktop.yml` <run links: build-test x64 and arm64, release N and N1>; the last run is on

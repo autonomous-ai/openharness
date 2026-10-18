@@ -5,6 +5,9 @@ C3.1–C3.7, C4.1–C4.7, C5.1–C5.3. Each phase's "notes for reconciliation" s
 list. Files edited: the five phase files and `00-header.md` in this folder, the stitched plan, and the spec
 `docs/superpowers/specs/2026-10-18-windows-desktop-design.md`. Nothing was committed.
 
+Added after stitching, at the owner's request: Task C4.8 (install by one command, spec §3.7) and C5.2 Step 8b
+(scenario 7). The plan now has 28 tasks. C4.8 is not part of the table below.
+
 ## Seams and fixes
 
 | # | Seam | What was wrong | Fix |

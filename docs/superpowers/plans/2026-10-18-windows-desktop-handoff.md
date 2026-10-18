@@ -10,7 +10,7 @@ start.
   first.
 - **A** (terminal host) and **B** (the Harness CLI on native Windows) are finished, reviewed and green on CI. They live
   on `feat/windows-native-cli`, and `feat/windows-desktop` is built on top of it.
-- **C** (the Harness desktop app on native Windows) has an approved spec and a stitched plan of 27 tasks. Nothing of C
+- **C** (the Harness desktop app on native Windows) has an approved spec and a stitched plan of 28 tasks. Nothing of C
   is implemented yet. Your job is to execute the C plan, task by task, on `feat/windows-desktop`. That branch becomes
   the one PR that ships Windows.
 
@@ -21,7 +21,7 @@ start.
 | Branch | `feat/windows-native-cli`, pushed | `feat/windows-desktop`, created from B's head `338e589bc`, not pushed |
 | Worktree | `~/harnesses/worktrees/openharness/bold-finch` | `~/harnesses/worktrees/openharness/amber-heron` |
 | Spec | `docs/superpowers/specs/2026-10-16-windows-native-cli-design.md` | `docs/superpowers/specs/2026-10-18-windows-desktop-design.md` (untracked) |
-| Plan | `docs/superpowers/plans/2026-10-16-windows-native-cli.md` | `docs/superpowers/plans/2026-10-18-windows-desktop.md` (untracked, 25,577 lines, 27 tasks) |
+| Plan | `docs/superpowers/plans/2026-10-16-windows-native-cli.md` | `docs/superpowers/plans/2026-10-18-windows-desktop.md` (untracked, 28 tasks) |
 | Other | E2E results `docs/testing/windows-cli-e2e.md` | Reconcile report `docs/superpowers/plans/2026-10-18-windows-desktop-reconcile-report.md` (seams, rulings, spec coverage map) |
 
 C's spec and plan are **not committed**. Commit them as the first commit on `feat/windows-desktop` (`docs: Windows
@@ -30,7 +30,9 @@ desktop spec and plan`), together with this handoff and the reconcile report, be
 ## How to execute the C plan
 
 **Order.**
-- Run the tasks in plan order: C1.1–C1.6, C2.1–C2.4, C3.1–C3.7, C4.1–C4.7, C5.1–C5.3.
+- Run the tasks in plan order: C1.1–C1.6, C2.1–C2.4, C3.1–C3.7, C4.1–C4.8, C5.1–C5.3.
+- C4.8 (install by one command, `irm …/desktop/install.ps1 | iex`) was added after stitching, at the owner's
+  request. It changes B's `install.ps1` and `upload-install-ps1.sh`, so B's own `installPs1` cases must stay green.
 - Each task is TDD, with full code in the plan: write the failing test, see it fail, implement, see it pass, commit.
 - Every task's requirements include the plan's **Global Constraints**.
 - Read the plan's **Review Focus** before each phase. Each item names the task whose test pins it.
@@ -86,7 +88,7 @@ CI discipline (repo `AGENTS.md`):
 **Publishing.**
 - **No production publish.** Production manifests and versioned production paths are the owner's step, after merge.
 - **Staging publishes need the owner's OK first.** C5.2 Steps 1 and 6 publish to staging by pushing a
-  `ci(windows): desktop staging release <v>` commit. A published version is immutable. Ask before the first one.
+  `ci(windows): desktop staging release <v>` commit. C5.2 Step 8b runs `upload-install-ps1.sh --app`. A published version is immutable. Ask before the first one.
 - The GCS bucket is `s3-autonomous-upgrade-3`, and the CDN is `https://cdn.autonomous.ai`.
 
 **Git.**
@@ -105,7 +107,7 @@ CI discipline (repo `AGENTS.md`):
 
 ## Open decisions for the owner (ask; do not decide)
 
-1. **Staging publishes in C5.2.** See above.
+1. **Staging publishes in C5.2** (Steps 1, 6 and 8b). See above.
 2. **`kMinimumWindowsHarnessCliVersion = '0.4.20'`** (C1.3) assumes B ships as CLI 0.4.20. Production is 0.4.18
    today, and B's staging build is `0.4.18-dev.win1`. Raise it to B's real first release before C ships.
 3. **arm64.** If C1.4 Step 6 finds a plugin that cannot build for arm64, the fallback is x64-only with the publish
@@ -166,7 +168,9 @@ CI discipline (repo `AGENTS.md`):
      3. `upload-install-ps1.sh --production`;
      4. the CLI release.
    - **Desktop side:** the Windows desktop artifacts go to production in sub-project D (signing). Until D lands, ask
-     the owner whether the unsigned zip ships to production or waits for D.
+     the owner whether the unsigned build ships to production or waits for D. If it ships, it is the production
+     manifest's Windows keys, then `upload-install-ps1.sh --app --production`, so the website can give
+     `irm https://cdn.autonomous.ai/harness/desktop/install.ps1 | iex`.
 
 ## Working with the owner
 
