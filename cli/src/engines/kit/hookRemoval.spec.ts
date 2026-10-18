@@ -231,10 +231,16 @@ describe('removeJsonHooks and removeOwnedFile', () => {
 
 const LOOK_ALIKE_BLOCKS = [block('/x'), block("node '/home/u/tools/notify.mjs' --port 18473 --data-dir '/home/u/data' --verbose")]
 
-// B4's Windows command lines: every runner's form must be recognized as Harness's, on Windows, where they are written.
+// B4's Windows command lines: every runner's form that Harness writes on Windows must be recognized as Harness's there.
+// No engine runs its hooks through bash on Windows, so a POSIX-quoted line with drive paths is never Harness's on a
+// Windows host, and is left alone (carried B4.2, final review R2-1): under cmd.exe its quotes protect nothing.
 describe.runIf(process.platform === 'win32')('Windows hook runners', () => {
   const argv = ['C:\\Users\\u\\.harness\\runtime\\node-v22.23.2-win32-x64\\node.exe', 'C:\\Users\\u\\.harness\\cli\\notify.mjs', '--port', '18473', '--data-dir', 'C:\\Users\\u\\.harness\\cli\\data']
-  for (const runner of ['argv', 'bash', 'cmd', 'powershell'] as const) {
+  it('leaves a POSIX-quoted line with drive paths, which no Windows runner of Harness\'s writes', () => {
+    const text = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: quoteHookCommand('bash', argv) }] }] } })
+    expect(withoutHarnessHooks(text, { schema: 'nested' })).toEqual({ kind: 'unchanged' })
+  })
+  for (const runner of ['argv', 'cmd', 'powershell'] as const) {
     it(`removes a command written for the ${runner} runner`, () => {
       const quoted = quoteHookCommand(runner, argv)
       // As B4.6's notifyHookEntry writes it: exec form is the program in `command` and the rest in `args`.

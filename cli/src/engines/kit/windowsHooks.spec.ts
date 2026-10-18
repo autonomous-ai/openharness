@@ -261,7 +261,9 @@ describe('Copilot\'s PowerShell and Command Code\'s cmd.exe hooks on Windows', (
 
 // Fix round 1 of the B4.6 review: mac and Linux do not change. Off Windows the line alone decides whether a hook of
 // ours is current, as before Windows hooks: a stray `args` beside it is not drift there, and nothing is written.
-describe('a hook of ours with a stray args key, off Windows', () => {
+// Off Windows only: on a Windows host the POSIX line these write holds drive paths, which is no line of Harness's there
+// (carried B4.2, final review R2-1), so faking 'linux' on Windows would not install what macOS and Linux do.
+describe.skipIf(process.platform === 'win32')('a hook of ours with a stray args key, off Windows', () => {
   const stray = (file: string) => {
     const settings = JSON.parse(readFileSync(file, 'utf8')) as { hooks: Record<string, Array<{ hooks: Array<{ command: string; args?: string[] }> }>> }
     for (const blocks of Object.values(settings.hooks)) for (const block of blocks) for (const hook of block.hooks) {
