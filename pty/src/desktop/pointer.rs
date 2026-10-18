@@ -24,7 +24,12 @@ fn reserved(value: &str) -> bool {
         .trim_end()
         .to_ascii_uppercase();
     let numbered = |prefix: &str| {
-        stem.len() == 4 && stem.starts_with(prefix) && matches!(stem.as_bytes()[3], b'1'..=b'9')
+        // Win32 also reserves the three ISO-8859-1 superscript digits in COM/LPT
+        // names. Match the whole suffix so COM10 and ordinary Unicode stay valid.
+        matches!(
+            stem.strip_prefix(prefix),
+            Some("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
+        )
     };
     matches!(
         stem.as_str(),
@@ -146,5 +151,64 @@ mod tests {
         write(&dir.path().join(PREVIOUS), "1.0.0").unwrap();
         remove(&dir.path().join(PREVIOUS)).unwrap();
         assert!(!dir.path().join(PREVIOUS).exists());
+    }
+
+    #[test]
+    fn superscript_device_names_are_rejected_without_replacing_a_valid_pointer() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(CURRENT);
+        // These are pointer CONTENTS, never filesystem paths to COM/LPT devices.
+        for bad in [
+            "COM¹",
+            "COM²",
+            "COM³",
+            "LPT¹",
+            "LPT²",
+            "LPT³",
+            "com¹.txt",
+            "cOm².tar.gz",
+            "CoM³.log",
+            "lpt¹.txt",
+            "LpT².tar.gz",
+            "lPt³.log",
+        ] {
+            assert!(!valid(bad), "accepted device name {bad:?}");
+            fs::write(&file, b"1.2.3\r\n").unwrap();
+            assert_eq!(
+                write(&file, bad).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput,
+                "{bad:?}"
+            );
+            assert_eq!(
+                fs::read(&file).unwrap(),
+                b"1.2.3\r\n",
+                "invalid write replaced pointer: {bad:?}"
+            );
+            assert!(!file.with_extension("tmp").exists());
+            fs::write(&file, format!("{bad}\r\n")).unwrap();
+            assert!(read(&file).is_err(), "read accepted device name {bad:?}");
+        }
+    }
+
+    #[test]
+    fn ordinary_unicode_versions_and_longer_device_prefixes_still_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(CURRENT);
+        for good in [
+            "COM10",
+            "LPT10",
+            "Nguyễn-1.2.3",
+            "1.2.3-日²",
+            "COM⁴",
+            "LPT⁴",
+            "COM١",
+            "COM¹0",
+            "LPT¹0",
+        ] {
+            assert!(valid(good), "rejected ordinary name {good:?}");
+            write(&file, good).unwrap();
+            assert_eq!(fs::read(&file).unwrap(), format!("{good}\r\n").as_bytes());
+            assert_eq!(read(&file).unwrap(), good);
+        }
     }
 }
