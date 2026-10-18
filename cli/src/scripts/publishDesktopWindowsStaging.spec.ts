@@ -68,7 +68,11 @@ case "$2" in
           *arm64.zip) if [ "$SHIM_MODE" = fail-arm ]; then echo 'precondition failed' >&2; exit 1; fi ;;
           *metadata.json) if [ "$SHIM_MODE" = race ]; then echo 'precondition failed' >&2; exit 1; fi ;;
         esac
-        cp "$src" "$SHIM_ROOT/uploaded-$(basename "$dst")" ;;
+        cp "$src" "$SHIM_ROOT/uploaded-$(basename "$dst")"
+        case "$dst" in
+          *x64.zip) if [ "$SHIM_MODE" = fail-after-store-x64 ]; then echo 'transport closed' >&2; exit 1; fi ;;
+          *arm64.zip) if [ "$SHIM_MODE" = fail-after-store-arm ]; then echo 'transport closed' >&2; exit 1; fi ;;
+        esac ;;
       *)
         case "$src" in
           *metadata.json#17) cp "$SHIM_ROOT/seed.json" "$dst" ;;
@@ -215,11 +219,28 @@ describe.skipIf(process.platform === 'win32')('publish-desktop-windows-staging.s
     const root = scratch(), x64 = zip(root, '1.2.90', 'x64'), arm64 = zip(root, '1.2.90', 'arm64')
     const result = run(['1.2.90', x64, arm64], { SHIM_ROOT: root, SHIM_MODE: 'fail-arm', PATH: `${shim(root)}:${process.env.PATH}` })
     expect(result.status).toBe(1)
-    expect(result.stderr).toContain('x64 uploaded')
+    expect(result.stderr).toContain('Confirmed prior uploads: x64')
+    expect(result.stderr).toContain('arm64 object outcome is unknown')
     expect(result.stderr).toContain('new version')
     expect(existsSync(join(root, 'uploaded-metadata.json'))).toBe(false)
     expect(existsSync(join(root, 'uploaded-harness-desktop-1.2.90-windows-x64.zip'))).toBe(true)
     expect(existsSync(join(root, 'uploaded-harness-desktop-1.2.90-windows-arm64.zip'))).toBe(false)
+  })
+
+  it.each([
+    ['x64', 'fail-after-store-x64', 'none'],
+    ['arm64', 'fail-after-store-arm', 'x64'],
+  ])('reports an unknown %s upload result after the fake stores its object', (arch, mode, prior) => {
+    const root = scratch(), x64 = zip(root, '1.2.90', 'x64'), arm64 = zip(root, '1.2.90', 'arm64')
+    const result = run(['1.2.90', x64, arm64], { SHIM_ROOT: root, SHIM_MODE: mode, PATH: `${shim(root)}:${process.env.PATH}` })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain(`${arch} upload failed`)
+    expect(result.stderr).toContain(`${arch} object outcome is unknown`)
+    expect(result.stderr).toContain(`Confirmed prior uploads: ${prior}`)
+    expect(result.stderr).toContain('Inspect staging and publish a new version')
+    expect(existsSync(join(root, 'uploaded-metadata.json'))).toBe(false)
+    expect(existsSync(join(root, 'uploaded-harness-desktop-1.2.90-windows-x64.zip'))).toBe(true)
+    expect(existsSync(join(root, 'uploaded-harness-desktop-1.2.90-windows-arm64.zip'))).toBe(arch === 'arm64')
   })
 
   it('does not announce a zip whose served bytes fail the manifest hash', () => {

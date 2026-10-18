@@ -166,7 +166,7 @@ for i in 0 1; do
   uri="gs://${GCS_BUCKET}/${OBJECTS[$i]}"
   echo ">> uploading $arch zip (${SIZES[$i]} bytes) to $uri"
   if ! gcloud storage cp --if-generation-match=0 --cache-control='public, max-age=31536000, immutable' "${ZIPS[$i]}" "$uri"; then
-    echo "error: $arch upload failed; ${UPLOADED[*]:-no zip} uploaded by this attempt. Inspect staging and publish a new version; no metadata was written." >&2
+    echo "error: $arch upload failed; attempted $arch object outcome is unknown. Confirmed prior uploads: ${UPLOADED[*]:-none}. Inspect staging and publish a new version; no metadata was written." >&2
     exit 1
   fi
   UPLOADED+=("$arch")
