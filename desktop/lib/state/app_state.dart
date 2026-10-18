@@ -13457,14 +13457,16 @@ class AppNotifier extends ChangeNotifier {
         );
         if (result['creationId'] != creation._id) return unconfirmed;
       } else {
-        try {
-          await creation.beforeSubmit?.call(machineId, creation._id);
-        } catch (failure) {
-          // The native request has not been sent. A failed local journal write
-          // must leave the form editable instead of waiting on a nonexistent receipt.
-          return creation._complete(
-            'Could not save the launch request: $failure',
-          );
+        if (creation.beforeSubmit case final prepare?) {
+          try {
+            await prepare(machineId, creation._id);
+          } catch (failure) {
+            // The native request has not been sent. A failed local journal write
+            // must leave the form editable instead of waiting on a nonexistent receipt.
+            return creation._complete(
+              'Could not save the launch request: $failure',
+            );
+          }
         }
         result = await connection.request(
           operation,
