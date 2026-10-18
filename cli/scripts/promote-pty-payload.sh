@@ -6,13 +6,15 @@
 # publish-pty-payload.sh run would build zips of other bytes (zip file times) and be refused. So production names the
 # same objects: this script reads the staging `pty` entries, checks that both are <version>, fetches each URL and
 # checks its sha256 and size, then merges the two entries into the PRODUCTION manifest (harness/pty/metadata.json),
-# keeping every other key and platform there.
+# keeping every other key and platform there. Production then depends on those staging objects: they must never be
+# removed from harness/staging/pty/<version>/ while production names them. A version older than the one production
+# holds is refused unless --allow-downgrade is given.
 #
 # The owner's production order for Windows, once the staging E2E (docs/testing/windows-cli-e2e.md) has passed, and
 # after the merge to main. Each step reads what the one before it published:
 #   1. the Node runtime: run the "Node runtime for Windows" workflow (release-node-runtime-windows.yml) with
 #      metadata_path harness/runtime/metadata.json;
-#   2. the pty payload: bash cli/scripts/promote-pty-payload.sh <version>
+#   2. the pty payload: bash cli/scripts/promote-pty-payload.sh [--allow-downgrade] <version>
 #      (DRY_RUN=1 DRY_RUN_OUT=<dir> first: it checks the same things and writes the manifest it would publish into <dir>);
 #   3. the installer: bash cli/scripts/upload-install-ps1.sh --production
 #
@@ -21,9 +23,11 @@
 # the bucket. Needs gcloud (authenticated), curl and node.
 set -euo pipefail
 
+ALLOW_DOWNGRADE=0
+if [ "${1:-}" = --allow-downgrade ]; then ALLOW_DOWNGRADE=1; shift; fi
 VERSION="${1:-}"
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || [ "$#" -ne 1 ]; then
-  echo "usage: $0 <X.Y.Z>   (a release version: a prerelease stays on staging)" >&2
+  echo "usage: $0 [--allow-downgrade] <X.Y.Z>   (a release version: a prerelease stays on staging)" >&2
   exit 2
 fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # cli/
@@ -57,6 +61,23 @@ fi
 gcloud storage cp "gs://${GCS_BUCKET}/${STAGING_METADATA_PATH}" "$WORK/staging.json" >/dev/null
 # The existing target manifest: {} only when it is confirmed absent; any other failure aborts.
 fetch_manifest "gs://${GCS_BUCKET}/${METADATA_PATH}" "$WORK/metadata.json" "$METADATA_PATH"
+# Never back to an older payload by mistake: a production entry newer than <version> needs --allow-downgrade.
+if [ "$ALLOW_DOWNGRADE" != 1 ]; then
+  if ! node - "$WORK/metadata.json" "$VERSION" <<'JS'
+const [file, version] = process.argv.slice(2)
+const parts = (v) => String(v).split('-')[0].split('.').map(Number)
+const newer = (a, b) => { const x = parts(a), y = parts(b); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return (x[i] || 0) > (y[i] || 0); return false }
+const pty = JSON.parse(require('node:fs').readFileSync(file, 'utf8')).pty || {}
+for (const key of ['win32-x64', 'win32-arm64']) {
+  const held = pty[key] && pty[key].version
+  if (held && newer(held, version)) {
+    console.error(`error: production has the ${key} pty payload ${held}, newer than ${version}; to go back to ${version}, run again with --allow-downgrade. Nothing was promoted.`)
+    process.exit(1)
+  }
+}
+JS
+  then exit 1; fi
+fi
 
 printf '{}' > "$WORK/entries.json"
 for key in win32-x64 win32-arm64; do

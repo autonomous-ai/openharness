@@ -110,6 +110,22 @@ describe.skipIf(process.platform === 'win32')('promote-pty-payload.sh', () => {
     expect(world('1.2.3').run(['1.2.4']).status).toBe(1)
   })
 
+  // Re-review N6: nothing stopped a promote from putting an older payload over a newer one in production.
+  it('refuses to replace a newer production payload unless --allow-downgrade is given', () => {
+    const newer = { version: '1.2.4', url: 'https://cdn.autonomous.ai/harness/staging/pty/1.2.4/x.zip', sha256: 'a'.repeat(64), size: 1 }
+    const w = world('1.2.3', { production: { pty: { 'win32-arm64': newer } } })
+    const refused = w.run(['1.2.3'])
+    expect(refused.status).toBe(1)
+    expect(refused.stderr).toContain('production has the win32-arm64 pty payload 1.2.4, newer than 1.2.3; to go back to 1.2.3, run again with --allow-downgrade. Nothing was promoted.')
+    expect(w.production().pty['win32-arm64']).toEqual(newer)
+    const allowed = w.run(['--allow-downgrade', '1.2.3'])
+    expect(allowed.status, allowed.stderr).toBe(0)
+    expect(w.production().pty).toEqual(w.pty)
+    // The same version again, or a newer one, needs no flag.
+    expect(w.run(['1.2.3']).status).toBe(0)
+    expect(w.run(['--bogus', '1.2.3']).status).toBe(2)
+  })
+
   it('refuses a prerelease, a manifest that is not a pty manifest, and promoting a manifest into itself', () => {
     const w = world()
     expect(w.run(['1.2.3-dev.win1']).status).toBe(2)
