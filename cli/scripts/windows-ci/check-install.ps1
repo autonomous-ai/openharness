@@ -66,12 +66,13 @@ $task = "Harness harnessd ($env:USERNAME)"
 schtasks.exe /Query /TN $task /FO LIST /V | Out-Host
 if ($LASTEXITCODE -ne 0) { Fail "the task '$task' is not registered" }
 # Normal priority, as Task Scheduler has it registered: whether or not it is the task that started the daemon here.
-$registered = (schtasks.exe /Query /TN $task /XML | Out-String)
+# Joined by lines and without NULs, as harnessd/platform.ts reads it: in a pipe schtasks's XML may come as UTF-16.
+$registered = (@(schtasks.exe /Query /TN $task /XML) -join "`n") -replace "`0", ''
 if ($registered -notmatch '<Priority>4</Priority>') { Fail "the task '$task' does not run at normal priority (Priority 4):`n$registered" }
 Write-Host "ok   task $task"
 # The logon task beside it (harnessd/platform.ts logonTaskName): the start at sign-in, which forgets a harness stop.
 $logonTask = "Harness harnessd at sign-in ($env:USERNAME)"
-$logon = (schtasks.exe /Query /TN $logonTask /XML | Out-String)
+$logon = (@(schtasks.exe /Query /TN $logonTask /XML) -join "`n") -replace "`0", ''
 if ($LASTEXITCODE -ne 0) { Fail "the task '$logonTask' is not registered" }
 if ($logon -notmatch '--at-logon</Arguments>' -or $logon -notmatch '<Priority>4</Priority>') { Fail "the task '$logonTask' does not run harness start --if-down --at-logon at normal priority:`n$logon" }
 Write-Host "ok   task $logonTask"

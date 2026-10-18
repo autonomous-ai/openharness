@@ -51,6 +51,10 @@ describe('check-install.ps1', () => {
     expect(checkInstall).toMatch(/Fail "no node\.exe from \$root runs/)
     // And the task as Task Scheduler registered it, whether or not the task started the daemon on this runner.
     expect(checkInstall).toContain("-notmatch '<Priority>4</Priority>'")
+    // Read as harnessd/platform.ts reads it: lines joined, NULs dropped (UTF-16 in a pipe), never Out-String (re-review P1, P2).
+    expect(checkInstall).toContain('$registered = (@(schtasks.exe /Query /TN $task /XML) -join "`n") -replace "`0", \'\'')
+    expect(checkInstall).toContain('$logon = (@(schtasks.exe /Query /TN $logonTask /XML) -join "`n") -replace "`0", \'\'')
+    expect(checkInstall).not.toMatch(/schtasks\.exe [^\n]*\/XML \| Out-String/)
   })
 
   it('stays ASCII, which Windows PowerShell reads a .ps1 without a BOM in', () => {
