@@ -1,0 +1,40 @@
+## this tree's bundle: 0.4.18-dev.6617af96c.dirty
+## harness service install
+✗ launchd has harnessd, but it did not come up (running · pid 55249).
+  logs ~/.harness/cli/data/harness.log   ·   harness service status
+## launchctl print (first line)
+gui/502/ai.autonomous.harness.harnessd = {
+	active count = 1
+	path = /private$T/home/Library/LaunchAgents/ai.autonomous.harness.harnessd.plist
+## harness new terminal
+Harness is not running here. Start it with `harness start`.
+## harness uninstall --yes
+✓ removed the Harness daemon from launchd: it no longer starts at login
+✓ removed ~/.local/bin/harness
+✓ removed ~/.local/bin/hn
+✓ removed the PATH line Harness added to ~/.zshrc
+✗ Harness is uninstalled, except:
+  · could not remove ~/.harness/runtime: delete it yourself
+  · ~/.harness is still there, with what could not be removed in it
+exit=1 in 0 s
+## what is left
+$T/home:
+total 0
+drwxr-xr-x@ 7 <mac-user>  wheel  224 Oct 18 09:15 .
+drwx------@ 5 <mac-user>  wheel  160 Oct 18 09:14 ..
+drwx------@ 3 <mac-user>  wheel   96 Oct 18 09:14 .cache
+drwxr-xr-x@ 3 <mac-user>  wheel   96 Oct 18 09:15 .harness
+drwxr-xr-x@ 3 <mac-user>  wheel   96 Oct 18 09:14 .local
+-rw-r--r--@ 1 <mac-user>  wheel    0 Oct 18 09:15 .zshrc
+drwxr-xr-x@ 4 <mac-user>  wheel  128 Oct 18 09:14 Library
+
+$T/home/.local/bin:
+total 0
+drwxr-xr-x@ 2 <mac-user>  wheel  64 Oct 18 09:15 .
+drwxr-xr-x@ 3 <mac-user>  wheel  96 Oct 18 09:14 ..
+grep: $T/home/.zprofile: No such file or directory
+grep: $T/home/.bashrc: No such file or directory
+grep: $T/home/.profile: No such file or directory
+no process
+## launchctl print after
+Bad request.

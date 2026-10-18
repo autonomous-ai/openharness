@@ -1,0 +1,20 @@
+# daemon after the no-logon reboot: started over SSH (08:39:52)
+  Task Scheduler did not start harnessd (it runs the task only in a signed-in Windows session) — starting it directly
+
+  machine · remote machine
+  ─────────────────────────────────────
+   status     ● started · this computer only (not signed in)
+   version    v0.4.18-dev.win1
+   backend    not signed in · harness login
+   account    prod
+   state      ~\.harness\cli\data
+   auth       ~\.harness\auth
+   agents     0 available
+   pid        3148
+   logs       ~\.harness\cli\data\harness.log
+   dial log   ~\.harness\logs\dial-YYYYMMDD.log
+   local api  http://127.0.0.1:18474
+  ─────────────────────────────────────
+  running in background · stop with: harness stop
+
+  Agents, terminals and the cabled dial work here. `harness login` adds your other machines.
