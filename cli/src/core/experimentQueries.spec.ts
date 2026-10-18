@@ -27,6 +27,14 @@ describe('the cloud agents\' doors', () => {
 })
 
 describe('what an experiment in its own process may ask of the core', () => {
+  it('requires fresh native stop evidence, including when a core is older', async () => {
+    const core = fakeCore({ agents: { stopped: async id => id === 'stopped' } })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'stopped', { agentId: 'stopped' })).toEqual({ stopped: true })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'stopped', { agentId: 'live' })).toEqual({ stopped: false })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'stopped', {})).toEqual({ stopped: false })
+    expect(await answerExperimentQuery(fakeCore(), experiments, 'orchestrator', 'stopped', { agentId: 'unknown' })).toEqual({ stopped: false })
+  })
+
   it('shows the live agents as the apps are shown them: name, terminal and harness', async () => {
     const core = fakeCore({
       agents: {

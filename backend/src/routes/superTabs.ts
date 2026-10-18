@@ -43,6 +43,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get('/api/super-tabs/invitations', (req, reply) => respond(reply, () => store.invitations(req.user!)))
   app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId', { preHandler: validateParams(hostParams) },
     (req, reply) => respond(reply, () => store.hostTabs(req.user!, req.params.machineId)))
+  app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/assignments', { preHandler: validateParams(hostParams) },
+    (req, reply) => respond(reply, () => store.hostAssignments(req.user!, req.params.machineId)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.read(req.user!, req.params.tabId, req.query.asAgentId)))

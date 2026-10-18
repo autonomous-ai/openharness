@@ -64,6 +64,8 @@ export class SuperTabHost {
   private readonly stopHearing: () => void
   private stopped = false
   private running: Promise<void> | null = null
+  private stopsRunning: Promise<void> | null = null
+  private nextStopsAt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
@@ -101,9 +103,10 @@ export class SuperTabHost {
   private persist(): void { this.write(this.file, this.journal) }
   start(): void {
     if (this.stopped || this.timer) return
-    this.timer = setInterval(() => { void this.tick() }, 1_000)
+    this.timer = setInterval(() => { void this.tick(); void this.reconcileStops() }, 1_000)
     this.timer.unref?.()
     void this.tick()
+    void this.reconcileStops()
   }
   stop(): void {
     this.stopped = true
@@ -121,6 +124,29 @@ export class SuperTabHost {
     return this.running ??= this.poll().catch(error => {
       this.log(error instanceof Error ? error.message : String(error))
     }).finally(() => { this.running = null })
+  }
+
+  /** A saved native stop, never a timeout or missing live snapshot, releases
+   * ownership. This also runs for contributions withdrawn while working. */
+  reconcileStops(): Promise<void> {
+    if (this.stopped || !this.core.agents.stopped || this.now() < this.nextStopsAt) return Promise.resolve()
+    return this.stopsRunning ??= this.checkStops().catch(error => {
+      this.log(error instanceof Error ? error.message : String(error))
+    }).finally(() => { this.stopsRunning = null; this.nextStopsAt = this.now() + 5_000 })
+  }
+  private async checkStops(): Promise<void> {
+    const rows = await backend(this.core, 'GET', `/api/super-tabs/hosts/${this.machineId}/assignments`)
+    if (!Array.isArray(rows)) throw new Error('Invalid Super Tab execution list.')
+    for (const value of rows) {
+      if (this.stopped) return
+      const work = object(value)
+      if (![work.tabId, work.assignmentId, work.harnessId].every(identifier)) continue
+      if (!await this.core.agents.stopped!(String(work.harnessId)) || this.stopped) continue
+      await backend(this.core, 'POST', `/api/super-tabs/${work.tabId}/stopped`, {
+        assignmentId: work.assignmentId,
+        receipt: `native-stopped:${this.machineId}:${work.harnessId}:${work.assignmentId}`,
+      })
+    }
   }
 
   private async leases(): Promise<boolean> {

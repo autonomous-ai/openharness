@@ -159,6 +159,9 @@ export interface CoreApi {
     cloud?(): RegisteredSession[]
     /** Whether the agent's terminal is attached: a frame without one reads to the apps as "agent gone". */
     terminalAvailable(agentId: string): boolean
+    /** Fresh native lifecycle evidence. Absence from a live snapshot alone is
+     * not a stop: a saved stopped record must also exist in the core. */
+    stopped?(agentId: string): Promise<boolean>
     /** Send the agent's frame to the apps again. */
     sync(session: RegisteredSession): void
     /** The Model/Effort choices an agent's engine offers (opaque `runtime-v1` ids): one agent's, or
@@ -1715,6 +1718,7 @@ export function createCoreApi({
     conversations,
     agents: {
       all: () => [...registry.list(), ...stoppedAgents.list()],
+      stopped: async id => !registry.byAgent(id) && stoppedAgents.list().some(s => s.agentId === id),
       live: () => registry.list(),
       displayName: projectDisplayName,
       byAgent: (agentId) => registry.byAgent(agentId),

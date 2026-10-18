@@ -273,3 +273,15 @@ describe('the core API a light service runs on in its own process', () => {
     expect(isSession({ sessionId: 's' })).toBe(false)
   })
 })
+
+it('asks for native stop evidence and treats an absent or failed link as unknown', async () => {
+  const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ stopped: true }))
+  const api = processCoreApi('/data', 'superTabs', { ask })
+  expect(await api.agents.stopped!('a')).toBe(true)
+  expect(ask).toHaveBeenLastCalledWith('stopped', { agentId: 'a' })
+  ask.mockResolvedValueOnce({ stopped: false })
+  expect(await api.agents.stopped!('a')).toBe(false)
+  ask.mockRejectedValueOnce(new Error('offline'))
+  expect(await api.agents.stopped!('a')).toBe(false)
+  expect(await processCoreApi('/data', 'superTabs').agents.stopped!('a')).toBe(false)
+})

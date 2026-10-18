@@ -3451,6 +3451,10 @@ class NewHarnessController extends ChangeNotifier {
   AgentCreationAttempt? _attempt;
   final HarnessLaunchIntegration? integration;
   String get actionLabel => integration?.actionLabel ?? 'New Harness';
+  bool get needsAttachmentReview =>
+      integration?.needsAttachmentReview?.call() == true;
+  String get pendingActionLabel =>
+      needsAttachmentReview ? 'Review files' : 'Check status';
 
   /// The person has been told a typed task will not be sent, and pressed again.
   bool _dropAccepted = false;
@@ -3534,11 +3538,17 @@ class NewHarnessController extends ChangeNotifier {
 
   /// [quiet] is [followHeld]'s: a check on a held request that changes
   /// nothing on screen until it has an answer.
-  Future<NewHarnessOutcome> create({bool quiet = false}) async {
+  Future<NewHarnessOutcome> create({
+    bool quiet = false,
+    bool? resendAttachments,
+  }) async {
     if (busy || linkingProfile) {
       return NewHarnessOutcome.failed;
     }
-    final resume = integration?.resume;
+    final resume =
+        resendAttachments != null && integration?.resolveAttachments != null
+        ? () => integration!.resolveAttachments!(resendAttachments)
+        : integration?.resume;
     if (resume != null) {
       busy = true;
       status = 'Checking on the harness…';
@@ -3750,6 +3760,13 @@ class NewHarnessController extends ChangeNotifier {
         'Update Harness CLI on $machineLabel to attach files, or remove them.',
       );
     }
+    if (integration?.stageAttachments case final stage? when !recheck) {
+      try {
+        await stage(files, launchMessage);
+      } catch (failure) {
+        return _fail(failure.toString());
+      }
+    }
     final launchSetup = LaunchSetup(
       engine: base,
       harnessId: harness,
@@ -3810,7 +3827,9 @@ class NewHarnessController extends ChangeNotifier {
         );
       }
     }
-    if (failure == null && files.isNotEmpty) {
+    if (failure == null &&
+        files.isNotEmpty &&
+        destination?.stageAttachments == null) {
       _deliverFiles(attempt.agentId, files, launchMessage);
     }
     // Creation can replace an embedded form before this future returns. Save
@@ -3908,7 +3927,7 @@ class NewHarnessController extends ChangeNotifier {
     busy = false;
     status = null;
     error = message;
-    notifyListeners();
+    if (!_disposed) notifyListeners();
     return NewHarnessOutcome.failed;
   }
 

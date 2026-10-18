@@ -21,12 +21,15 @@ This is a new tab type. Existing tabs and running sessions are not converted.
 - Mentions retain agent identity across restarts; work details show acceptance checks and exact result links.
 - Session-only terminal views reuse the existing encrypted observer protocol, with backend membership checks and expiring host authority.
 - Scoped agent start/resume with native creation receipts and single-dispatch claims; machine and quota admission.
+- Background attachment delivery through the native terminal protocol, retained launch files,
+  explicit recovery after an uncertain transfer, and account-change cancellation.
+- Native stopped-session evidence releases backend assignments, including a removed contributor's work.
 - Experimental settings cleanup and retired PR branding, preserving compatibility fields and usage controls.
 
 The desktop surface is connected, but the complete workflow is not ready. Scoped autonomous
 agent starts and capacity checks are connected through the existing native creation protocol.
-Terminal access is connected. Delivery reconciliation and
-several creation/recovery edges remain. The PR stays a draft until these are implemented and
+Terminal access and native stop reconciliation are connected. Shared recording of native interventions,
+delivery reconciliation and several creation/recovery edges remain. The PR stays a draft until these are implemented and
 the complete workflow is tested and reviewed.
 
 ## Validation plan
@@ -66,9 +69,20 @@ Focused checks completed during implementation (18 October):
   persistent mention identity and lost acknowledgements.
 - Flutter Super Tab launch/account recovery and conversation state: 15 passed for both lead engines, lost native/join
   replies and account changes. Experimental settings: 15 passed earlier.
+- Latest attachment, account and conversation checks: 29 Flutter tests passed. Includes files reaching
+  both engines without a pane, retained files after restart, explicit resend after uncertainty,
+  a failed creation becoming editable, and closing a background writer on account change.
+- Native daemon fixture (`cli/e2e/superTabs.e2e.ts`): passed in 15 seconds. Real master/core/services,
+  private tmux and fake Claude Code/Codex engines; starts once, posts to the captured group,
+  types a shared instruction once, refuses a revoked contribution and confirms an actual native stop.
+  Its coordination HTTP fixture does not establish database or external SSO behavior.
+- Latest backend replica-set integration: 12 passed, including automatic stopped-assignment release.
+  CLI focused native lifecycle/service checks: 87 passed. Focused coverage for `core/api.ts`,
+  `core/experimentQueries.ts` and `services/processCoreApi.ts`: 70 tests, 100% in all four measures.
 
-These are focused checks, not end-to-end evidence. Full component suites, real-engine/native
-integration, visual inspection, independent review, merge, official build and release remain.
+These establish individual boundaries, not the complete customer workflow. Full component suites,
+two-machine/two-account integration, real-engine/native desktop validation, visual inspection,
+independent review, merge, official build and release remain.
 No production deployment has occurred.
 
 ## Follow-through

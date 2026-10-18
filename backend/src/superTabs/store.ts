@@ -20,7 +20,8 @@ const stateOf = (row: SuperTab): SuperTabState => {
 }
 const indexes = (state: SuperTabState) => ({
   memberIds: state.people.map(p => p.id), invitedEmails: state.invitations.map(i => i.email),
-  machineIds: [...new Set(state.agents.map(a => a.machineId))],
+  machineIds: [...new Set([...state.agents.map(a => a.machineId),
+    ...state.conversations.filter(activeWork).map(c => c.assignment!.execution.machineId)])],
 })
 
 /** Retrying a transaction never repeats a host action. All effects here are durable database writes. */
@@ -291,6 +292,21 @@ export class SuperTabStore {
     } catch (error) { if (error instanceof SuperTabError) return false; throw error }
   }
 
+  /** Execution identity survives removing a contributor. The host sees only
+   * its outstanding native sessions, without regaining conversation access. */
+  async hostAssignments(user: AuthUser, machineId: string) {
+    return transaction(this.db, async tx => {
+      const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+      if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
+      const rows = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, take: 100 })
+      return rows.flatMap(row => stateOf(row).conversations.filter(activeWork).flatMap(group => {
+        const work = group.assignment!
+        return work.execution.machineId === machineId && work.execution.machineOwnerId === user.sub
+          ? [{ tabId: row.id, assignmentId: work.id, harnessId: work.execution.harnessId }] : []
+      }))
+    })
+  }
+
   private deliveryAllowed(state: SuperTabState, delivery: SuperTabDelivery): boolean {
     const target = state.agents.find(a => a.id === delivery.agentId)
     const group = state.conversations.find(c => c.id === delivery.conversationId)
@@ -352,7 +368,8 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const row = await this.row(tx, user, tabId)
       const state = stateOf(row)
-      const assignment = state.conversations.find(c => c.assignment?.id === assignmentId)?.assignment
+      const group = state.conversations.find(c => c.assignment?.id === assignmentId)
+      const assignment = group?.assignment
       if (!assignment || assignment.execution.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can confirm this stop.', 403)
       const execution = assignment.execution
       const machine = await tx.machine.findFirst({ where: { machineId: execution.machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
@@ -360,7 +377,16 @@ export class SuperTabStore {
       const id = stableId('stop', tabId, assignmentId)
       const prior = await tx.superTabStopReceipt.findUnique({ where: { id } })
       if (prior && prior.receipt !== receipt) fail('RECEIPT_CONFLICT', 'This stop already has a host receipt.')
-      await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: { revision: { increment: 1 } } })
+      if (group && activeWork(group)) {
+        assignment.status = 'stopped'
+        assignment.result = 'The execution host confirmed that this harness stopped.'
+        await tx.superTabRun.deleteMany({ where: { tabId, assignmentId } })
+        await tx.superTabDelivery.updateMany({ where: { tabId, assignmentId,
+          status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled' } })
+      }
+      await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: {
+        revision: { increment: 1 }, state: json(state), ...indexes(state),
+      } })
       if (!prior) await tx.superTabStopReceipt.create({ data: { id, tabId, assignmentId, ...execution, receipt } })
       return { confirmed: true }
     })

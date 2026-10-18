@@ -103,6 +103,7 @@ class SuperTabController extends ChangeNotifier {
   SuperTabConversation? get selected => snapshot?.conversation(selectedId);
   bool get isOwner => snapshot?.ownerId == accountId;
   bool get canWrite =>
+      !_disposed &&
       !accessRevoked &&
       (snapshot?.people.where((p) => p.id == accountId).firstOrNull?.canWrite ??
           false);
@@ -127,6 +128,18 @@ class SuperTabController extends ChangeNotifier {
 
   void _changed() {
     if (!_disposed) notifyListeners();
+  }
+
+  /// Open dialogs and native panes lose their content immediately, before
+  /// account cleanup waits for an in-flight read or a draft write.
+  void revokeAccess(String message) {
+    if (_disposed) return;
+    accessRevoked = true;
+    error = message;
+    snapshot = null;
+    _messages.clear();
+    _poll?.cancel();
+    _changed();
   }
 
   Map<String, dynamic> _localState() => {
@@ -212,7 +225,7 @@ class SuperTabController extends ChangeNotifier {
     _changed();
     try {
       final answer = await request('GET', _path);
-      if (_disposed) return;
+      if (_disposed || accessRevoked) return;
       final nextRevision = (answer['revision'] as num).toInt();
       final next = SuperTabSnapshot.fromJson(superTabMap(answer['state']));
       if (next.id != tabId) {
@@ -220,6 +233,7 @@ class SuperTabController extends ChangeNotifier {
       }
       if (nextRevision >= revision) {
         snapshot = next;
+        if (next.conversation(selectedId) == null) selectedId = 'lead';
         revision = nextRevision;
         error = null;
       }

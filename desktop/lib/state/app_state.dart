@@ -4,6 +4,7 @@ import '../measurement/product_connections.dart';
 import '../core/crash_log.dart';
 import '../measurement/desktop_setup_report.dart';
 import 'attached_task_delivery.dart';
+import 'harness_attachments.dart';
 import 'task_route.dart';
 import '../core/permission_modes.dart';
 
@@ -1101,6 +1102,7 @@ class AppNotifier extends ChangeNotifier {
       !_disposed && revision == _authRevision;
 
   int _invalidateAuthWork() {
+    _closeAttachmentSessions();
     _phoneOffer = false;
     _closeOwnerMemories();
     _stopMachineRecovery();
@@ -1362,6 +1364,7 @@ class AppNotifier extends ChangeNotifier {
   CurrentUserProfile? get currentUser => _currentUser;
   set currentUser(CurrentUserProfile? profile) {
     if (_currentUser?.id != profile?.id) {
+      _closeAttachmentSessions();
       _closeOwnerMemories();
       deviceHosts.clear();
       _deviceReads.clear();
@@ -1643,14 +1646,14 @@ class AppNotifier extends ChangeNotifier {
       if (_disposed || controller.accountId != currentUser?.id) return;
       var shown = false;
       for (final tab in swarms.where((s) => s.superTabId == controller.tabId)) {
-        tab.name = controller.snapshot!.name;
-        tab.nameIsCustom = true;
-        shown = true;
+        if (tab.name != controller.snapshot!.name || !tab.nameIsCustom) {
+          tab.name = controller.snapshot!.name;
+          tab.nameIsCustom = true;
+          shown = true;
+        }
       }
-      if (shown) {
-        _persistLayout();
-        notifyListeners();
-      }
+      if (shown) _persistLayout();
+      notifyListeners();
     },
     transport: (method, path, {body}) async {
       final target = sharedTabsTarget;
@@ -1742,6 +1745,15 @@ class AppNotifier extends ChangeNotifier {
     );
     if (!_authWorkCurrent(revision)) {
       throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    }
+    if (result['creationId'] == creationId && result['state'] == 'failed') {
+      final failure = result['failure'] is Map
+          ? result['failure'] as Map
+          : const {};
+      throw SuperTabFailure(
+        'CREATION_FAILED',
+        failure['detail'] as String? ?? result['error'] as String? ?? 'The machine could not start this harness. You can change its settings and try again.',
+      );
     }
     if (result['creationId'] != creationId ||
         result['state'] != 'created' ||
@@ -10543,10 +10555,7 @@ class AppNotifier extends ChangeNotifier {
   /// scheduling turn to the socket's incoming queue. Matching frames enter the
   /// session's ordered renderer queue synchronously, regardless of tab order.
   Future<void> _handleTerminalBinary(String machineId, Uint8List raw) async {
-    final targets = panesFor(machineId)
-        .map((pane) => pane.session)
-        .whereType<TerminalSession>()
-        .toList();
+    final targets = _terminalSessionsFor(machineId).toList();
     if (targets.isEmpty) return;
     final clear = decodeTerminalLocal(raw);
     if (clear == null) {
@@ -13433,7 +13442,15 @@ class AppNotifier extends ChangeNotifier {
         );
         if (result['creationId'] != creation._id) return unconfirmed;
       } else {
-        await creation.beforeSubmit?.call(machineId, creation._id);
+        try {
+          await creation.beforeSubmit?.call(machineId, creation._id);
+        } catch (failure) {
+          // The native request has not been sent. A failed local journal write
+          // must leave the form editable instead of waiting on a nonexistent receipt.
+          return creation._complete(
+            'Could not save the launch request: $failure',
+          );
+        }
         result = await connection.request(
           operation,
           payload: {...launchChoices, 'creationId': creation._id},
@@ -16648,6 +16665,99 @@ class AppNotifier extends ChangeNotifier {
     await terminal.open(waitForViewportSize: true);
   }
 
+  // File delivery for a new background harness uses the same native terminal
+  // protocol, without manufacturing a pane or changing the selected group.
+  final _attachmentSessions = <TerminalSession>{};
+
+  Iterable<TerminalSession> _terminalSessionsFor(String machineId) sync* {
+    yield* panesFor(machineId).map((p) => p.session).nonNulls;
+    yield* _attachmentSessions.where((s) => s.machineId == machineId);
+  }
+
+  void _closeAttachmentSessions() {
+    final sessions = _attachmentSessions.toList();
+    _attachmentSessions.clear();
+    for (final session in sessions) {
+      unawaited(session.close().whenComplete(session.dispose));
+    }
+  }
+
+  Future<String?> deliverBackgroundAttachments({
+    required String machineId,
+    required String agentId,
+    required List<HarnessAttachment> files,
+    required String task,
+  }) async {
+    final machine = machineStates[machineId];
+    final revision = _authRevision, account = currentUser?.id;
+    bool current() =>
+        currentUser?.id == account &&
+        machine != null &&
+        _machineWorkCurrent(machine, revision);
+    if (!current() || machine!.machine.isShared) {
+      return 'This machine is no longer available for file delivery.';
+    }
+    if (!machine.agents.any((a) => a.id == agentId)) {
+      await _loadMachineData(machine, force: true);
+    }
+    if (!current()) return 'The account changed. No files were sent.';
+    final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+    if (agent == null) {
+      return 'The new harness is not available on its machine.';
+    }
+    final existing = panesFor(machineId)
+        .where((p) => p.agentId == agentId)
+        .map((p) => p.session)
+        .nonNulls
+        .firstOrNull;
+    final connection = _conn(machineId);
+    final session =
+        existing ??
+        TerminalSession(
+          machineId: machineId,
+          agentId: agentId,
+          agentName: agent.displayName,
+          engineId: agent.engine,
+          client: localClientDescriptor(),
+          takeover: true,
+          send: (type, payload) => current() || type == 'terminal_close'
+              ? connection.sendTerminalFrame(type, payload)
+              : Future.value(false),
+          sendBinary: (frame) {
+            if (!current()) return Future.value(false);
+            final bytes = encodeTerminalLocal(frame);
+            return bytes == null
+                ? Future.value(false)
+                : connection.sendTerminalBinary(bytes);
+          },
+          onOpenStalled: () async {
+            if (current()) await _forceRedial(machineId);
+          },
+          resyncTimeout: const Duration(seconds: 15),
+        );
+    if (existing == null) _attachmentSessions.add(session);
+    try {
+      if (existing == null) await session.open();
+      return await deliverAttachedTask(
+        this,
+        machineId: machineId,
+        agentId: agentId,
+        files: files,
+        task: task,
+        terminal: session,
+        stillWanted: current,
+      );
+    } finally {
+      if (_attachmentSessions.remove(session)) {
+        try {
+          await session.close();
+        } finally {
+          session.dispose();
+        }
+      }
+    }
+  }
+
   Future<void> _detachSession(
     TerminalPane pane, {
     required bool sendClose,
@@ -18839,8 +18949,8 @@ class AppNotifier extends ChangeNotifier {
     // Each session still sees terminal frames: ready replies match their own
     // request/agent, while transport errors must reach the whole machine.
     if (type.startsWith('terminal_')) {
-      for (final pane in panesFor(machineId).toList()) {
-        await pane.session?.handleFrame(type, payload);
+      for (final session in _terminalSessionsFor(machineId).toList()) {
+        await session.handleFrame(type, payload);
       }
       return;
     }
@@ -19724,6 +19834,7 @@ class AppNotifier extends ChangeNotifier {
     agentAlerts.dispose();
     agentUnread.dispose();
     _disposed = true;
+    _closeAttachmentSessions();
     _sharingDiscoveryTimer?.cancel();
     _deafMachineListTimer?.cancel();
     _stopMachineRecovery();

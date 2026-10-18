@@ -195,6 +195,17 @@ class _PeopleState extends State<_People> {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: c,
     builder: (context, _) {
+      if (c.accessRevoked) {
+        return AlertDialog(
+          content: Text(c.error ?? 'This Super Tab is no longer available.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      }
       final query = _search.text.trim().toLowerCase();
       final people =
           c.snapshot?.people

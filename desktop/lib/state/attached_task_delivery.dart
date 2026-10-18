@@ -70,14 +70,25 @@ Future<String?> deliverAttachedTask(
   required String agentId,
   required List<HarnessAttachment> files,
   required String task,
+  TerminalSession? terminal,
+  bool Function()? stillWanted,
 }) async {
   appLog.info('attach', 'waiting on $agentId for ${files.length} file(s)');
-  final session = await _readySession(app, machineId, agentId);
+  final session = await _readySession(
+    app,
+    machineId,
+    agentId,
+    terminal: terminal,
+    stillWanted: stillWanted,
+  );
   if (session == null) {
     appLog.warn('attach', '$agentId never took input');
     return 'The harness did not open in time. Attach the files in its pane.';
   }
   for (final file in files) {
+    if (stillWanted != null && !stillWanted()) {
+      return 'Attachment delivery stopped.';
+    }
     if (!await session.pasteFile(file.name, file.bytes) ||
         !await session.pasteText(' ')) {
       appLog.warn('attach', '${file.name} did not reach $agentId');
@@ -86,6 +97,9 @@ Future<String?> deliverAttachedTask(
   }
   appLog.info('attach', '${files.length} file(s) in $agentId; sending task');
   if (task.trim().isEmpty) return null;
+  if (stillWanted != null && !stillWanted()) {
+    return 'The files are attached, but the task was not sent.';
+  }
   return await session.sendComposerText(task)
       ? null
       : 'The files are attached, but the task was not sent.';
@@ -95,8 +109,10 @@ Future<String?> deliverAttachedTask(
 Future<TerminalSession?> _readySession(
   AppNotifier app,
   String machineId,
-  String agentId,
-) async {
+  String agentId, {
+  TerminalSession? terminal,
+  bool Function()? stillWanted,
+}) async {
   var claimed = false;
   TerminalSession? watchedSession;
   Terminal? watchedTerminal;
@@ -109,12 +125,14 @@ Future<TerminalSession?> _readySession(
         .where((agent) => agent.id == agentId)
         .firstOrNull;
     if (agent?.launchState != 'ready') return null;
-    final session = app
-        .panesFor(machineId)
-        .where((pane) => pane.agentId == agentId)
-        .map((pane) => pane.session)
-        .nonNulls
-        .firstOrNull;
+    final session =
+        terminal ??
+        app
+            .panesFor(machineId)
+            .where((pane) => pane.agentId == agentId)
+            .map((pane) => pane.session)
+            .nonNulls
+            .firstOrNull;
     if (session == null) return null;
     // Output and replacement keyframes need not change the agent inventory.
     // Watch both so the queued task wakes up when the new composer is drawn.
@@ -156,7 +174,12 @@ Future<TerminalSession?> _readySession(
   Timer? settle;
   check = () {
     if (found.isCompleted) return;
-    if (watchedSession != null &&
+    if (stillWanted != null && !stillWanted() || terminal?.closedHere == true) {
+      found.complete(null);
+      return;
+    }
+    if (terminal == null &&
+        watchedSession != null &&
         !app.panesFor(machineId).any((pane) => pane.agentId == agentId)) {
       found.complete(null);
       return;

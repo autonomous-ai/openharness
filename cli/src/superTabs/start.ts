@@ -51,7 +51,9 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
   const target = await open(where, request.machineId)
   try {
     let native = await target.request('agent_create_status', { creationId }, 10_000)
-    if (native.state === 'unknown') {
+    if (native.creationId !== creationId) return { error: 'START_UNCERTAIN', startId, creationId,
+      detail: 'The machine did not confirm the requested creation receipt. Nothing was dispatched.' }
+    if (native.state === 'missing') {
       if (start.dispatched) return { error: 'START_UNCERTAIN', startId, creationId,
         detail: 'This start was submitted but its machine has no receipt. Inspect the machine before creating another agent.' }
       const resources = await inspectCapacity(target, request)
@@ -67,6 +69,10 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       for (const key of ['permissionMode', 'codexHome', 'gridModel', 'gridName']) if (request[key] !== undefined) payload[key] = request[key]
       native = await target.request('agent_create', payload, 25_000)
     }
+    if (native.error) return { error: 'START_REFUSED', startId, creationId,
+      detail: String(native.detail ?? native.error) }
+    if (native.creationId !== creationId) return { error: 'START_UNCERTAIN', startId, creationId,
+      detail: 'The machine answered for a different creation receipt. Nothing further was dispatched.' }
     if (native.state === 'failed') {
       const failure = object(native.failure)
       const detail = String(failure.detail ?? failure.code ?? 'Native creation failed.')

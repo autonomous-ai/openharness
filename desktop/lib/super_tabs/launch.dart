@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../core/models.dart';
 import '../state/app_state.dart';
+import '../state/harness_attachments.dart';
 import '../state/harness_launch_integration.dart';
 import '../state/swarm.dart';
 import 'controller.dart';
@@ -50,7 +51,8 @@ class SuperTabLaunch {
     final launch = SuperTabLaunch._(app, tab.id, account, key, saved);
     final recovering =
         saved['phase'] == 'starting' || saved['phase'] == 'joining';
-    return HarnessLaunchIntegration(
+    late final HarnessLaunchIntegration integration;
+    integration = HarnessLaunchIntegration(
       creationId: saved['creationId'] as String? ?? superTabOperationId(),
       actionLabel: saved['lead'] == true ? 'New Super Tab' : 'New Harness',
       prepare: launch.prepare,
@@ -61,8 +63,32 @@ class SuperTabLaunch {
         await launch.persist();
       },
       complete: launch.complete,
-      resume: recovering ? launch.resume : null,
+      stageAttachments: launch.stageAttachments,
+      needsAttachmentReview: () => saved['filesState'] == 'sending',
+      resolveAttachments: (resend) async {
+        launch.checkAccount();
+        saved['filesState'] = resend ? 'pending' : 'delivered';
+        await launch.persist();
+        await launch.resume();
+      },
+      resume: recovering
+          ? () async {
+              try {
+                await launch.resume();
+              } on SuperTabFailure catch (failure) {
+                if (failure.code == 'CREATION_FAILED') {
+                  saved.remove('phase');
+                  saved.remove('creationId');
+                  await launch.persist();
+                  integration.pending = false;
+                  integration.resume = null;
+                }
+                rethrow;
+              }
+            }
+          : null,
     )..pending = recovering;
+    return integration;
   }
 
   void checkAccount() {
@@ -92,18 +118,37 @@ class SuperTabLaunch {
       await persist();
     }
     final command = 'harness super-tab --tab ${saved['tabId']}';
-    return 'You are an agent in a shared Harness Super Tab. '
+    final prompt =
+        'You are an agent in a shared Harness Super Tab. '
         '${saved['lead'] == true ? 'You are its coordinating lead. Start by discussing the person’s request; build after they authorize it.' : 'Join the conversation before beginning the person’s request.'}\n'
         'First run `$command status`. Registration may still be finishing: if it reports AGENT_UNAVAILABLE, wait briefly and retry. '
         'Do not start work or post until it confirms your participation.\n'
         'Read the conversation: `$command messages ${saved['conversationId']}`. '
         'Post explanations, questions and results with `$command post ${saved['conversationId']} "message" UNIQUE_OPERATION_ID`. '
         'Reuse that operation ID and exact message after a lost reply. Your native terminal is not the shared conversation.\n'
+        'If sandbox restrictions block this local Harness command, request permission to run it outside the sandbox. '
         'For work groups, assignments, acceptance evidence and messages to other agents, use `$command help`. '
         'Use a group for an independently assignable outcome with acceptance checks. Reuse existing groups and agents. '
         'Engine-native helper subagents do not need a group. Questions stay in the conversation where the work happens. '
         'Report exact revisions, evidence and links appropriate to the project.\n\n'
         'The person’s request:\n${task.isEmpty ? 'Ask what they would like to work on.' : task}';
+    saved['launchPrompt'] = prompt;
+    await persist();
+    return prompt;
+  }
+
+  Future<void> stageAttachments(
+    List<HarnessAttachment> files,
+    String prompt,
+  ) async {
+    checkAccount();
+    saved['files'] = [
+      for (final file in files)
+        {'name': file.name, 'bytes': base64Encode(file.bytes)},
+    ];
+    saved['launchPrompt'] = prompt;
+    saved['filesState'] = 'pending';
+    await persist();
   }
 
   Future<void> complete(
@@ -157,7 +202,11 @@ class SuperTabLaunch {
     await app.wakeSuperTabHost(machine);
     if (saved['lead'] == true) {
       final name = Swarm.titleFor(native);
-      final title = name == Swarm.defaultName ? 'Super Tab' : name;
+      final title =
+          saved['title'] as String? ??
+          (name == Swarm.defaultName ? 'Super Tab' : name);
+      saved['title'] = title;
+      await persist();
       await app.superTabs.map(
         'POST',
         '/api/super-tabs/$tabId/commands',
@@ -167,11 +216,41 @@ class SuperTabLaunch {
         },
       );
       checkAccount();
-      app.bindSuperTab(swarmId, tabId, title);
     }
     final controller = await app.superTabs.open(tabId);
     await controller.refresh();
     checkAccount();
+    final files = (saved['files'] as List? ?? []).map((value) {
+      final file = superTabMap(value);
+      return HarnessAttachment(
+        file['name'] as String,
+        base64Decode(file['bytes'] as String),
+      );
+    }).toList();
+    if (files.isNotEmpty && saved['filesState'] != 'delivered') {
+      if (saved['filesState'] == 'sending') {
+        throw const SuperTabFailure(
+          'FILES_UNCONFIRMED',
+          'The harness started, but file delivery was interrupted. Open its terminal to check before sending the files or request again.',
+        );
+      }
+      saved['filesState'] = 'sending';
+      await persist();
+      final problem = await app.deliverBackgroundAttachments(
+        machineId: machine,
+        agentId: harnessId,
+        files: files,
+        task: saved['launchPrompt'] as String,
+      );
+      checkAccount();
+      if (problem != null) throw SuperTabFailure('FILES_UNCONFIRMED', problem);
+      saved['filesState'] = 'delivered';
+      saved.remove('files');
+      await persist();
+    }
+    if (saved['lead'] == true) {
+      app.bindSuperTab(swarmId, tabId, saved['title'] as String);
+    }
     await app.superTabs.storage.delete(key);
   }
 

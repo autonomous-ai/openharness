@@ -125,3 +125,27 @@ describe('Super Tab native delivery handoff', () => {
     await expect(backend(t.core, 'GET', '/api/super-tabs/tab')).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 })
   })
 })
+
+it('confirms a stopped assignment only with fresh native evidence, including after contribution removal', async () => {
+  const t = setup()
+  const stopped = vi.fn(async (id: string) => id === 'gone')
+  t.core.agents.stopped = stopped
+  const proof: unknown[] = []
+  vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+    if (method === 'GET') return { status: 200, body: { data: [
+      { tabId: 'tab', assignmentId: 'work-1', harnessId: 'gone' },
+      { tabId: 'tab', assignmentId: 'work-2', harnessId: 'unconfirmed' },
+      { tabId: '', assignmentId: 'bad', harnessId: 'gone' },
+    ] } }
+    expect(path).toBe('/api/super-tabs/tab/stopped'); proof.push(body)
+    return { status: 200, body: { data: { confirmed: true } } }
+  })
+  const host = t.open()
+  await host.reconcileStops()
+  expect(proof).toEqual([{ assignmentId: 'work-1', receipt: 'native-stopped:machine-1:gone:work-1' }])
+  await host.reconcileStops()
+  expect(proof).toHaveLength(1)
+  host.stop()
+  await host.reconcileStops()
+  expect(proof).toHaveLength(1)
+})

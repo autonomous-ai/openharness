@@ -29,7 +29,7 @@ import type { AgentCreateRequest, CoreApi } from './api.js'
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'stopped', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -62,6 +62,8 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
   switch (query) {
     case 'shown':
       return shownAgents(core)
+    case 'stopped':
+      return { stopped: !!text(payload.agentId) && await core.agents.stopped?.(text(payload.agentId)) === true }
     case 'create': {
       if (!text(payload.engine) || !text(payload.cwd) || typeof payload.prompt !== 'string' || typeof payload.name !== 'string') return { ok: false, error: 'INVALID_REQUEST' }
       const request: AgentCreateRequest = {

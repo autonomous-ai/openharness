@@ -32,6 +32,11 @@ class SuperTabClient {
     if (_account == account) return;
     _account = account;
     _generation++;
+    for (final controller in _loaded.values) {
+      controller.revokeAccess(
+        'The account changed. Open this Super Tab again.',
+      );
+    }
     for (final future in _controllers.values) {
       unawaited(
         future

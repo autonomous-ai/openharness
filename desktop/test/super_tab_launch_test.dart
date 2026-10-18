@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
+import 'package:harness/state/harness_attachments.dart';
+import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/super_tabs/launch.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/ws/ws_conn.dart';
@@ -32,7 +35,72 @@ class _Connection extends WsConn {
   final calls = <(String, Map<String, dynamic>)>[];
   final joins = <Map<String, dynamic>>[];
   bool loseCreate = false, loseJoin = false;
+  bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
+  late AppNotifier app;
+  final sentFiles = <Uint8List>[];
+  final terminalCalls = <(String, Map<String, dynamic>)>[];
+  static const streamId = '00112233-4455-6677-8899-aabbccddeeff';
   Map<String, dynamic>? native;
+
+  Future<void> event(String type, Map<String, dynamic> payload) =>
+      app.handleMachineEventForTest('m', {'type': type, 'payload': payload});
+
+  @override
+  Future<bool> sendTerminalFrame(
+    String type,
+    Map<String, dynamic> payload,
+  ) async {
+    terminalCalls.add((type, Map.of(payload)));
+    if (type == 'terminal_open') {
+      await event('terminal_ready', {
+        'requestId': payload['requestId'],
+        'protocolVersion': 3,
+        'streamId': streamId,
+        'agentId': 'native-lead',
+      });
+      await app.handleTerminalBinaryForTest(
+        'm',
+        encodeTerminalLocal(
+          TerminalBinaryFrame(
+            kind: TerminalBinaryKind.keyframe,
+            streamId: streamId,
+            seq: 0,
+            bytes: Uint8List.fromList(utf8.encode('›\r\n? for shortcuts')),
+            compressed: false,
+            cols: 100,
+            rows: 30,
+          ),
+        )!,
+      );
+    }
+    if (type == 'terminal_chunked_upload_begin') {
+      if (changeAccountOnUpload) {
+        app.currentUser = const CurrentUserProfile(
+          id: 'different',
+          email: 'different@example.com',
+        );
+        return false;
+      }
+      await event('terminal_chunked_upload_begin_result', {
+        'streamId': streamId,
+        'accepted': !failFiles,
+      });
+    }
+    return true;
+  }
+
+  @override
+  Future<bool> sendTerminalBinary(Uint8List raw) async {
+    final frame = decodeTerminalLocal(raw)!;
+    if (frame.kind == TerminalBinaryKind.pasteFile) {
+      sentFiles.add(frame.bytes);
+      await event('terminal_paste_file_result', {
+        'streamId': streamId,
+        'path': '/fixture/design.png',
+      });
+    }
+    return true;
+  }
 
   @override
   Future<Map<String, dynamic>> request(
@@ -101,6 +169,13 @@ class _Connection extends WsConn {
       }
     }
     if (type == 'agent_create' || type == 'agent_create_status') {
+      if (failCreation) {
+        return {
+          'creationId': payload['creationId'],
+          'state': 'failed',
+          'failure': {'detail': 'Fixture engine unavailable'},
+        };
+      }
       return {
         'creationId': payload['creationId'],
         'state': native == null ? 'missing' : 'created',
@@ -133,7 +208,10 @@ class _Fixture {
     );
     app.machineStates['m']!
       ..localOnly = true
+      ..terminalPasteFileAvailable = true
+      ..terminalPasteRawAvailable = true
       ..agents = [];
+    connection.app = app;
     app.gitProjectReaderForTest = (_, _) async => {
       'isGit': false,
       'refreshed': true,
@@ -149,7 +227,10 @@ class _Fixture {
   late final AppNotifier app;
   late final _Connection connection;
 
-  Future<NewHarnessController> box({String engine = 'codex'}) async {
+  Future<NewHarnessController> box({
+    String engine = 'codex',
+    HarnessAttachments? attachments,
+  }) async {
     final integration = await SuperTabLaunch.open(app, app.activeSwarm, 'lead');
     final box = NewHarnessController(
       app,
@@ -158,6 +239,7 @@ class _Fixture {
       folder: '/work/project',
       task: 'Discuss the architecture.',
       integration: integration,
+      attachments: attachments,
     );
     addTearDown(box.dispose);
     await Future<void>.delayed(Duration.zero);
@@ -167,6 +249,156 @@ class _Fixture {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('switching accounts while files are being sent closes the background writer', () async {
+    final f = _Fixture()..connection.changeAccountOnUpload = true;
+    final files = HarnessAttachments()
+      ..add([
+        HarnessAttachment('design.png', Uint8List.fromList([1])),
+      ]);
+    final box = await f.box(engine: 'claude', attachments: files);
+    expect(await box.create(), NewHarnessOutcome.failed);
+    expect(box.error, contains('account changed'));
+    expect(f.connection.sentFiles, isEmpty);
+    expect(f.connection.terminalCalls.where((c) => c.$1 == 'message'), isEmpty);
+    expect(
+      f.connection.terminalCalls.where((c) => c.$1 == 'terminal_close'),
+      hasLength(1),
+    );
+  });
+
+  test('a confirmed failed creation makes a reopened form editable', () async {
+    final f = _Fixture()..connection.loseCreate = true;
+    expect(await (await f.box()).create(), NewHarnessOutcome.failed);
+    f.connection.failCreation = true;
+    final recovered = await f.box();
+    expect(await recovered.create(), NewHarnessOutcome.failed);
+    expect(recovered.error, contains('Fixture engine unavailable'));
+    expect(recovered.checking, isFalse);
+    f.connection.failCreation = false;
+    expect(
+      await recovered.create(),
+      NewHarnessOutcome.created,
+      reason: recovered.error,
+    );
+  });
+
+  test(
+    'account changes clear an already open conversation synchronously',
+    () async {
+      final server = ConversationServer()
+        ..append('Only the first account can see this.');
+      final client = SuperTabClient(
+        storage: MemoryStore(),
+        transport: server.request,
+      )..bind('owner');
+      addTearDown(client.dispose);
+      final controller = await client.open('tab');
+      await controller.refresh();
+      expect(controller.messages('lead'), hasLength(1));
+      client.bind('different');
+      expect(controller.snapshot, isNull);
+      expect(controller.messages('lead'), isEmpty);
+      expect(controller.canWrite, isFalse);
+    },
+  );
+  for (final engine in ['claude', 'codex']) {
+    test(
+      '$engine files reach the background harness before its first request without creating a pane',
+      () async {
+        final f = _Fixture();
+        final files = HarnessAttachments()
+          ..add([
+            HarnessAttachment('design.png', Uint8List.fromList([1, 2, 3])),
+          ]);
+        final box = await f.box(engine: engine, attachments: files);
+        expect(
+          await box.create(),
+          NewHarnessOutcome.created,
+          reason: box.error,
+        );
+        expect(f.connection.sentFiles.single, [1, 2, 3]);
+        expect(
+          f.connection.calls
+              .firstWhere((c) => c.$1 == 'agent_create')
+              .$2['prompt'],
+          isNull,
+        );
+        expect(
+          f.connection.terminalCalls
+              .singleWhere((c) => c.$1 == 'message')
+              .$2['content'],
+          contains('Discuss the architecture.'),
+        );
+        expect(f.connection.terminalCalls.last.$1, 'terminal_close');
+        expect(f.app.activeSwarm.panes, isEmpty);
+        expect(
+          f.store.values.keys.where(
+            (key) => key.startsWith('super_tab.launch.'),
+          ),
+          isEmpty,
+        );
+      },
+    );
+  }
+
+  test('a reopened launch retains its staged files and never launches another harness', () async {
+    final f = _Fixture()..connection.loseCreate = true;
+    final files = HarnessAttachments()
+      ..add([
+        HarnessAttachment('design.png', Uint8List.fromList([9, 8])),
+      ]);
+    final first = await f.box(engine: 'claude', attachments: files);
+    expect(await first.create(), NewHarnessOutcome.failed);
+    final recovered = await f.box();
+    // The inventory arrives independently of the lost creation response.
+    f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
+    expect(
+      await recovered.create(),
+      NewHarnessOutcome.created,
+      reason: recovered.error,
+    );
+    expect(f.connection.sentFiles.single, [9, 8]);
+    expect(
+      f.connection.calls.where((c) => c.$1 == 'agent_create'),
+      hasLength(1),
+    );
+  });
+
+  test('uncertain files are kept for recovery and never pasted again automatically', () async {
+    final f = _Fixture()..connection.failFiles = true;
+    final files = HarnessAttachments()
+      ..add([
+        HarnessAttachment('design.png', Uint8List.fromList([1])),
+      ]);
+    final first = await f.box(engine: 'claude', attachments: files);
+    expect(await first.create(), NewHarnessOutcome.failed);
+    f.connection.failFiles = false;
+    final recovered = await f.box();
+    expect(await recovered.create(), NewHarnessOutcome.failed);
+    expect(recovered.error, contains('file delivery was interrupted'));
+    expect(
+      f.connection.terminalCalls.where(
+        (c) => c.$1 == 'terminal_chunked_upload_begin',
+      ),
+      hasLength(1),
+    );
+    expect(f.connection.sentFiles, isEmpty);
+    expect(
+      f.store.values.keys.where((key) => key.startsWith('super_tab.launch.')),
+      hasLength(1),
+    );
+    expect(recovered.needsAttachmentReview, isTrue);
+    expect(
+      await recovered.create(resendAttachments: true),
+      NewHarnessOutcome.created,
+      reason: recovered.error,
+    );
+    expect(f.connection.sentFiles.single, [1]);
+    expect(
+      f.connection.calls.where((c) => c.$1 == 'agent_create'),
+      hasLength(1),
+    );
+  });
   for (final engine in ['codex', 'claude']) {
     test(
       '$engine lead uses the native form and joins without opening a terminal or another tab',

@@ -4,7 +4,7 @@ const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 function fixture() {
   const start = { creationId: 'super-native-receipt', request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
-  let nativeState = 'unknown', lostJoin = false
+  let nativeState = 'missing', lostJoin = false
   const scoped = vi.fn(async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     if (payload.action === 'startStatus') return { ok: true, value: structuredClone(start) }
     const cmd = payload.command as Record<string, unknown>
@@ -13,15 +13,15 @@ function fixture() {
     return { ok: true, value: { result: cmd.type === 'agent.start' ? { startId: 'start' } : { agentId: 'worker' } } }
   })
   const request = vi.fn(async (type: string): Promise<Record<string, unknown>> => {
-    if (type === 'agent_create_status') return { state: nativeState, ...(nativeState === 'created' ? { agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high' } } : {}) }
+    if (type === 'agent_create_status') return { creationId: start.creationId, state: nativeState, ...(nativeState === 'created' ? { agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high' } } : {}) }
     if (type === 'engines_probe') return { engines: [{ engine: 'claude', installed: true }] }
     if (type === 'usage_read') return { providers: [] }
     if (type === 'super_tabs') return { ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 100, projectDiskFreeBytes: 1000 }, tools: { git: true }, devices: {} }
-    if (type === 'agent_create') { nativeState = 'created'; return { state: 'created', agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high' } } }
+    if (type === 'agent_create') { nativeState = 'created'; return { creationId: start.creationId, state: 'created', agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high' } } }
     throw new Error(type)
   })
   const close = vi.fn(), open = vi.fn(async () => ({ machineId: 'target', request, close }))
-  return { scoped, start, request, open, close, loseJoin: () => { lostJoin = true }, forget: () => { nativeState = 'unknown' } }
+  return { scoped, start, request, open, close, loseJoin: () => { lostJoin = true }, forget: () => { nativeState = 'missing' } }
 }
 it('uses one native creation receipt and joins its captured group after a lost join reply', async () => {
   const f = fixture(); f.loseJoin()
