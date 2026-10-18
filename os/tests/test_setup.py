@@ -1,3 +1,4 @@
+import contextlib
 import importlib.util
 import json
 from pathlib import Path
@@ -274,28 +275,47 @@ class FactoryReset(unittest.TestCase):
         self.assertEqual(command[-3:], ['reset', '--here', '--keep-wifi'])
 
 
-class Screen(unittest.TestCase):
-    def test_a_wifi_chosen_on_the_screen_ends_setup_and_its_list_goes(self):
-        class Server:
-            def shutdown(self): pass
-            def server_close(self): pass
+class Server:
+    def shutdown(self): pass
+    def server_close(self): pass
 
-        with tempfile.TemporaryDirectory() as folder:
-            listed = Path(folder) / 'setup-networks.json'
-            seen = []
-            with patch.object(setup, 'SCREEN_NETWORKS', listed), \
-                 patch.object(setup, 'visible_networks', return_value=[dict(ssid='Glinks 1', signal=80, security='WPA2')]), \
-                 patch.object(setup, 'start_hotspot', return_value=True), \
-                 patch.object(setup, 'serve', return_value=Server()), \
-                 patch.object(setup, 'read_result', return_value={}), \
-                 patch.object(setup, 'signed_in', return_value=False), \
-                 patch.object(setup, 'stop_hotspot'), \
-                 patch.object(setup, 'hotspot_up', side_effect=lambda: seen.append(json.loads(listed.read_text())) or False), \
-                 patch.object(setup, 'online', return_value=True), \
-                 patch.object(setup.queue.Queue, 'get', side_effect=setup.queue.Empty):
-                self.assertTrue(setup.setup_mode('wlo1'))
-            self.assertEqual(seen[0], [dict(ssid='Glinks 1', signal=80, security='WPA2', device='wlo1')])
-            self.assertFalse(listed.exists())
+
+class Screen(unittest.TestCase):
+    def hotspot(self, **checks):
+        """setup_mode with nobody on the hotspot, each check (screen_here, signed_in, online,
+        hotspot_up) as given; returns its result and whether the hotspot went."""
+        values = dict(screen_here=False, signed_in=False, online=False, hotspot_up=True) | checks
+        with contextlib.ExitStack() as stack:
+            for name, value in values.items():
+                stack.enter_context(patch.object(setup, name, side_effect=value) if callable(value)
+                                    else patch.object(setup, name, return_value=value))
+            stack.enter_context(patch.object(setup, 'visible_networks', return_value=[]))
+            start = stack.enter_context(patch.object(setup, 'start_hotspot', return_value=True))
+            stack.enter_context(patch.object(setup, 'serve', return_value=Server()))
+            stack.enter_context(patch.object(setup, 'read_result', return_value={}))
+            stop = stack.enter_context(patch.object(setup, 'stop_hotspot'))
+            stack.enter_context(patch.object(setup, 'phones_on', return_value=True))
+            stack.enter_context(patch.object(setup, 'wait_online', return_value=False))
+            stack.enter_context(patch.object(setup.queue.Queue, 'get', side_effect=setup.queue.Empty))
+            return setup.setup_mode('wlo1'), start.call_count, stop.called
+
+    def test_the_screens_wifi_page_takes_the_radio(self):
+        # Someone typed the computer's password at its screen and opened its Wi-Fi page.
+        screen = iter([False, True])
+        self.assertEqual(self.hotspot(screen_here=lambda: next(screen)), (False, 1, True))
+
+    def test_signed_in_at_the_screen_the_hotspot_goes(self):
+        signed = iter([False, False, True])
+        self.assertEqual(self.hotspot(signed_in=lambda: next(signed), online=True), (True, 1, True))
+
+    def test_not_signed_in_a_cable_keeps_the_hotspot_for_the_phone(self):
+        # On a cable, the hotspot stays: the phone signs the computer in over it.
+        checks = iter([False, False, False, True])
+        result, starts, _ = self.hotspot(online=True, screen_here=lambda: next(checks))
+        self.assertEqual((result, starts), (True, 1))
+
+    def test_signed_in_a_cable_ends_the_hotspot(self):
+        self.assertEqual(self.hotspot(signed_in=True, online=True), (True, 1, True))
 
 
 class Machine(unittest.TestCase):
@@ -344,21 +364,48 @@ class Machine(unittest.TestCase):
 
     def test_when_the_hotspot_opens_by_itself(self):
         cases = [
-            # signed in, headless, saved Wi-Fi, seconds since start → seconds offline first (None: never)
-            (False, False, False, 0, 0),        # just installed, screen, no Wi-Fi: at once
-            (False, True, False, 0, 0),         # just installed, no screen: at once
-            (False, False, True, 3, setup.SAVED_GRACE),   # saved Wi-Fi as it starts: a moment for it
-            (False, False, True, 600, 0),       # later, still offline: at once
-            (True, False, True, 600, None),     # signed-in laptop: its Wi-Fi page, never the hotspot
-            (True, True, True, 3, setup.OFFLINE_AT_START),
-            (True, True, True, 600, setup.OFFLINE_LATER),
+            # signed in, headless, online, screen's Wi-Fi page open, seconds since start
+            #   → seconds as it is first (None: not now)
+            (False, False, False, False, 0, 0),     # just installed, screen, no network: at once
+            (False, True, False, False, 0, 0),      # just installed, no screen: at once
+            (False, False, True, False, 0, 0),      # not signed in on Wi-Fi or a cable: at once
+            (False, False, False, True, 0, None),   # someone at the screen chooses a Wi-Fi
+            (True, False, False, False, 600, None), # signed-in laptop: its Wi-Fi page, never the hotspot
+            (True, True, True, False, 600, None),   # signed in and online: nothing to do
+            (True, True, False, False, 3, setup.OFFLINE_AT_START),
+            (True, True, False, False, 600, setup.OFFLINE_LATER),
         ]
-        for signed, headless, saved, since, expected in cases:
+        for signed, headless, online, screen, since, expected in cases:
             with patch.object(setup, 'signed_in', return_value=signed), \
                  patch.object(setup, 'headless', return_value=headless), \
-                 patch.object(setup, 'saved_wifi', return_value=saved):
-                self.assertEqual(setup.offline_wait(1000 + since, 1000), expected,
-                                 (signed, headless, saved, since))
+                 patch.object(setup, 'online', return_value=online), \
+                 patch.object(setup, 'screen_here', return_value=screen):
+                self.assertEqual(setup.hotspot_wait(1000 + since, 1000), expected,
+                                 (signed, headless, online, screen, since))
+
+    def test_the_screen_holds_the_radio_until_signed_in(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'setup-screen'
+            with patch.object(setup, 'SCREEN', path), patch.object(setup, 'signed_in', return_value=False):
+                self.assertFalse(setup.screen_here())
+                path.touch()
+                self.assertTrue(setup.screen_here())
+            with patch.object(setup, 'SCREEN', path), patch.object(setup, 'signed_in', return_value=True):
+                self.assertFalse(setup.screen_here())
+                self.assertFalse(path.exists())
+
+    def test_on_a_cable_a_ticket_alone_signs_in(self):
+        self.assertIsNone(setup.check_request(dict(ticket='t'), wired=True))
+        self.assertEqual(setup.check_request(dict(ticket='t')), 'Choose a Wi-Fi network.')
+        self.assertIsNotNone(setup.check_request(dict(), wired=True))
+        with patch.object(setup, 'internet', return_value=True), \
+             patch.object(setup, 'connect') as connect, \
+             patch.object(setup, 'sign_in', return_value=(True, '')), \
+             patch.object(setup, 'signed_in', return_value=True):
+            self.assertEqual(setup.join(dict(ticket='t'), [], 'wlo1'), dict(state='done', ssid='', signedIn=True))
+        connect.assert_not_called()
+        with patch.object(setup, 'internet', return_value=False):
+            self.assertEqual(setup.join(dict(ticket='t'), [], 'wlo1')['error'], 'NO_INTERNET_WIRED')
 
     def test_the_hotspot_is_named_after_the_computer(self):
         with tempfile.TemporaryDirectory() as folder:

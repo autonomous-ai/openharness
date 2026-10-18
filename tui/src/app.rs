@@ -1919,6 +1919,14 @@ impl App {
                     }
                 }
             }
+            // The view that had the keyboard of a pane watched here left (a phone closed it): one on
+            // screen takes it back, at this window's size. Otherwise the agent kept the size of the
+            // one that left — a phone's, in a corner of a full screen — until someone typed here.
+            "terminal_free" => {
+                let stream = payload.get("streamId").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok());
+                let Some(id) = self.panes.values().find(|p| p.stream.is_some() && p.stream == stream).map(|p| p.id) else { return };
+                if self.rects.iter().any(|(pane, _)| *pane == id) { self.take_if_watching(id) }
+            }
             // ── models: the daemon's picture of the grids changed — the whole list, pushed ──
             "grid_models_changed" => crate::models::on_push(self, machine_id, &payload),
             _ => {}
@@ -4209,7 +4217,8 @@ impl App {
         // size the agent to its 80x24 layout under the window someone is using.
         if self.headless { return }
         let Some(p) = self.panes.get(&pane) else { return };
-        if matches!(p.phase, Phase::Watching(_)) && !p.read_only && !p.opening { self.open_stream(pane, true) }
+        // A watcher is read-only (the daemon's `readOnly`): that is what there is to take.
+        if matches!(p.phase, Phase::Watching(_)) && !p.opening { self.open_stream(pane, true) }
     }
 
     /// A machine's first roster since hn started, read against when you last looked at each of
@@ -7555,7 +7564,8 @@ mod recovery_tests {
         let pane = app.panes.get_mut(&1).unwrap();
         // Taken over (`takenBy`), watching until someone comes to it.
         pane.phase = Phase::Watching("Mac Auto terminal".into());
-        pane.read_only = false;
+        // Watching, as the daemon answers a watcher.
+        pane.read_only = true;
         app.headless = true;
         app.take_if_watching(1);
         assert!(!app.panes[&1].opening);
@@ -7564,6 +7574,26 @@ mod recovery_tests {
         app.headless = false;
         app.take_if_watching(1);
         assert!(app.panes[&1].opening);
+        app.links["test-peer"].link.as_ref().unwrap().close();
+    }
+
+    #[tokio::test]
+    async fn a_pane_on_screen_takes_back_what_a_phone_left() {
+        // A phone opened this agent and took it at its own size; this screen watched. The phone left.
+        let mut app = fixture();
+        let (on_screen, hidden) = (1, 2);
+        app.rects = vec![(on_screen, Rect::new(0, 0, 80, 24))];
+        for id in [on_screen, hidden] {
+            let pane = app.panes.get_mut(&id).unwrap();
+            pane.phase = Phase::Watching("Pixel 8 Pro".into());
+            pane.read_only = true;
+        }
+        for id in [on_screen, hidden] {
+            let stream = app.panes[&id].stream.unwrap().to_string();
+            app.on_machine("test-peer".into(), 1, MachineEvent::Frame { ty: "terminal_free".into(), payload: json!({"streamId": stream}) });
+        }
+        assert!(app.panes[&on_screen].opening, "the pane on screen takes it back");
+        assert!(!app.panes[&hidden].opening, "one out of sight stays a watcher until someone comes to it");
         app.links["test-peer"].link.as_ref().unwrap().close();
     }
 

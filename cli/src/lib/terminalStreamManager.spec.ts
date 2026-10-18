@@ -927,6 +927,39 @@ describe('TerminalStreamManager', () => {
     expect(ready?.payload).not.toHaveProperty('heldBy')
   })
 
+  // A phone set a Harness OS computer up and opened its OpenCode, taking it at the phone's size; the
+  // computer's screen watched. When the phone left, nothing told the screen, and OpenCode stayed
+  // phone-sized in a corner of the screen until someone typed there (2026-10-18).
+  it('tells the watchers when the controller leaves, not when it hands over', async () => {
+    await manager.handleFrame('screen-1', 'terminal_open', {
+      requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 211, rows: 57,
+    })
+    await manager.handleFrame('phone-1', 'terminal_open', {
+      requestId: 'open-2', protocolVersion: 3, agentId: 'agent-1', cols: 45, rows: 30,
+    })
+    await manager.handleFrame('screen-1', 'terminal_open', {
+      requestId: 'open-3', protocolVersion: 3, agentId: 'agent-1', cols: 211, rows: 57, takeover: false,
+    })
+    const ready = (connId: string) => sent.findLast((frame) => frame.connId === connId && frame.type === 'terminal_ready')
+    const watching = ready('screen-1')?.payload.streamId
+    expect(ready('screen-1')?.payload.readOnly).toBe(true)
+    const free = () => sent.filter((frame) => frame.type === 'terminal_free')
+    expect(free()).toHaveLength(0)
+
+    await manager.handleFrame('phone-1', 'terminal_close', { streamId: ready('phone-1')?.payload.streamId })
+    expect(free().map((frame) => [frame.connId, frame.payload.streamId])).toEqual([['screen-1', watching]])
+
+    // Taken by another view instead: that one has it, and nobody is told it is free.
+    sent.length = 0
+    await manager.handleFrame('phone-1', 'terminal_open', {
+      requestId: 'open-4', protocolVersion: 3, agentId: 'agent-1', cols: 45, rows: 30,
+    })
+    await manager.handleFrame('tablet-1', 'terminal_open', {
+      requestId: 'open-5', protocolVersion: 3, agentId: 'agent-1', cols: 90, rows: 40,
+    })
+    expect(free()).toHaveLength(0)
+  })
+
   // hn with no terminal (its server, kept for the sessions a closed window left) reads every pane of the desk. On
   // 2026-10-14 it reopened first after each daemon restart, took the terminals at its 80x24 layout and left the
   // window the person was using watching a shrunken agent until they typed. It opens with `watch: true` now.

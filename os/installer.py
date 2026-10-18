@@ -492,6 +492,10 @@ def install_image(config, source, target, progress, resources):
         if config['encrypt']:
             write(target, '/etc/systemd/system/getty@tty1.service.d/autologin.conf',
                   '[Service]\nExecStart=\n' + f'ExecStart=-/usr/bin/agetty --autologin {config["username"]} --noclear %I $TERM\n')
+        else:
+            # The one account is known: only its password is asked, as the disk's would be.
+            write(target, '/etc/systemd/system/getty@tty1.service.d/password.conf',
+                  '[Service]\nExecStart=\n' + f"ExecStart=-/usr/bin/agetty --skip-login --login-options '-p -- {config['username']}' --noclear %I $TERM\n")
         # An encrypted root cannot appear until its owner returns to unlock it.
         # Do not send a person who paused at the prompt into emergency mode.
         root_flags = 'subvol=@' + (',x-systemd.device-timeout=0' if config['encrypt'] else '')
