@@ -93,6 +93,27 @@ DaemonPipeRecord? readDaemonPipeRecord({
   }
 }
 
+/// The loopback port the daemon on [port] actually bound, from its record in
+/// [dataDir] (`daemon-<port>.json`'s `port`; CLI `savedDaemonPort`), or null
+/// when there is no record or it names no port.
+///
+/// It differs from [port] when another OS user's daemon held [port] at start
+/// (CLI `hookServer.ts`, `allowPortFallback`): [port] then leads to that
+/// user's daemon, never to this one.
+int? readDaemonTcpPort({required String dataDir, required int port}) {
+  try {
+    final record = _regularFile(p.join(dataDir, 'daemon-$port.json'));
+    if (record == null || record.lengthSync() > _maxRecordBytes) return null;
+    final value = jsonDecode(record.readAsStringSync());
+    final bound = value is Map ? value['port'] : null;
+    return bound is int && bound > 0 && bound <= 65535 ? bound : null;
+  } on FileSystemException {
+    return null;
+  } on FormatException {
+    return null;
+  }
+}
+
 /// [path] when it is a regular file itself, not a link to one, as the CLI's
 /// token reader requires (`requireWindowsStateFile`).
 File? _regularFile(String path) =>

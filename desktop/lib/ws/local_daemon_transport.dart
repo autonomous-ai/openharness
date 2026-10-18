@@ -7,6 +7,9 @@ import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 
 import '../core/test_run.dart';
+import 'daemon_pipe_record.dart';
+import 'trusted_pipe.dart';
+import 'windows_pipe.dart';
 
 /// The daemon's Unix socket, beside its loopback port (CLI `lib/localSocket.ts`).
 ///
@@ -57,17 +60,73 @@ HttpClient unixHttpClient(String path) => HttpClient()
 /// Which way the app currently reaches the daemon. One instance is shared by
 /// discovery, REST and the local WebSocket so they agree.
 class LocalDaemonTransport {
-  LocalDaemonTransport({this.candidate});
+  LocalDaemonTransport({this.candidate, this.trustedPipe, this.recordedPort});
 
   /// The transport to the daemon at [daemonBase] (the loopback address the app
-  /// would otherwise dial): the socket named for its port, except under
-  /// `flutter test`, where a real daemon's socket must never be reached.
+  /// would otherwise dial): the socket named for its port, or on Windows the
+  /// daemon's pipe for the trusted routes — except under `flutter test`, where
+  /// a real daemon's socket or pipe must never be reached.
   factory LocalDaemonTransport.detect(Uri daemonBase) => LocalDaemonTransport(
     candidate: kUnderTest ? null : defaultDaemonSocketPath(daemonBase.port),
+    trustedPipe: kUnderTest || !Platform.isWindows
+        ? null
+        : TrustedPipe.forPort(daemonBase.port),
+    recordedPort: kUnderTest || !Platform.isWindows
+        ? null
+        : () {
+            final dataDir = defaultDaemonDataDir();
+            return dataDir == null
+                ? null
+                : readDaemonTcpPort(dataDir: dataDir, port: daemonBase.port);
+          },
   );
 
   /// Where the socket would be, or null when this app never uses one.
   final String? candidate;
+
+  /// Windows: the daemon's authenticated pipe (CLI `listenAuthenticated`),
+  /// which carries the trusted routes ([trustedDaemonRoutes]) and this
+  /// computer's window connection, where the daemon takes its `daemon_*`
+  /// frames. Null elsewhere: there the socket's file mode is the trust.
+  final TrustedPipe? trustedPipe;
+
+  /// Whether the trusted routes cannot be served right now: on Windows, the
+  /// last look found no pipe that proved itself. Never true off Windows.
+  bool get trustedRoutesUnavailable => trustedPipe?.unavailable ?? false;
+
+  /// Windows: reads the loopback port the daemon actually bound from its
+  /// record ([readDaemonTcpPort]). Null elsewhere, where the socket named for
+  /// the configured port leads to this user's daemon whatever port it bound.
+  /// Another OS user's daemon may hold the configured port; this user's daemon
+  /// then binds another and records it (CLI `hookServer.ts`,
+  /// `allowPortFallback`), and the CLI's own clients read it the same way
+  /// (`savedDaemonPort`).
+  final int? Function()? recordedPort;
+
+  int? _tcpPort;
+
+  /// [daemonBase] on the port discovery last read from the daemon's record
+  /// ([refreshTcpBase]), or [daemonBase] itself.
+  Uri tcpBase(Uri daemonBase) {
+    final port = _tcpPort;
+    return port == null || port == daemonBase.port
+        ? daemonBase
+        : daemonBase.replace(port: port);
+  }
+
+  /// Reads the daemon's record again and returns the loopback address to ask,
+  /// as [tcpBase] then gives it. Discovery calls it before each loopback
+  /// probe, so a daemon that restarted on another port is followed. Null on
+  /// Windows while the daemon has recorded no port: the configured port may be
+  /// another user's daemon then, so nothing is asked there.
+  Uri? refreshTcpBase(Uri daemonBase) {
+    final read = recordedPort;
+    if (read == null) return daemonBase;
+    final port = read();
+    if (port == null) return null;
+    _tcpPort = port;
+    return tcpBase(daemonBase);
+  }
 
   String? _active;
 
@@ -138,8 +197,18 @@ class LocalDaemonHttpAdapter implements HttpClientAdapter {
         uri.scheme == daemonBase.scheme &&
         uri.host == daemonBase.host &&
         uri.port == daemonBase.port;
+    final pipe = transport.trustedPipe;
+    if (pipe != null &&
+        toDaemon &&
+        isTrustedDaemonRoute(options.method, uri.path)) {
+      return _overPipe(pipe, options, requestStream);
+    }
     if (path == null || !toDaemon) {
-      return _tcp.fetch(options, requestStream, cancelFuture);
+      return _tcp.fetch(
+        toDaemon ? _onTcpPort(options) : options,
+        requestStream,
+        cancelFuture,
+      );
     }
     try {
       return await _unixFor(path).fetch(options, requestStream, cancelFuture);
@@ -149,6 +218,61 @@ class LocalDaemonHttpAdapter implements HttpClientAdapter {
       // serve this request, and discovery will find the socket again later.
       transport.useTcp();
       return _tcp.fetch(options, requestStream, cancelFuture);
+    }
+  }
+
+  /// [options] aimed at the loopback port the daemon recorded, when that is
+  /// not [daemonBase]'s ([LocalDaemonTransport.tcpBase]; Windows only).
+  RequestOptions _onTcpPort(RequestOptions options) {
+    final port = transport.tcpBase(daemonBase).port;
+    final uri = options.uri;
+    if (port == uri.port) return options;
+    // The whole address goes in the path: Dio then ignores baseUrl, and the
+    // query is already part of it.
+    return options.copyWith(
+      path: uri.replace(port: port).toString(),
+      queryParameters: <String, dynamic>{},
+    );
+  }
+
+  /// A trusted route on Windows: over the daemon's pipe, never the port, where
+  /// the daemon would refuse it. No proven pipe is a connection error, which
+  /// the caller already treats as an older daemon's missing route.
+  Future<ResponseBody> _overPipe(
+    TrustedPipe pipe,
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+  ) async {
+    final body = BytesBuilder(copy: false);
+    if (requestStream != null) {
+      await for (final chunk in requestStream) {
+        body.add(chunk);
+      }
+    }
+    final headers = <String, String>{
+      for (final MapEntry(:key, :value) in options.headers.entries)
+        if (value != null && key.toLowerCase() != 'content-length')
+          key.toLowerCase(): '$value',
+    };
+    final uri = options.uri;
+    try {
+      final answer = await pipe.request(
+        options.method,
+        uri.hasQuery ? '${uri.path}?${uri.query}' : uri.path,
+        headers: headers,
+        body: body.takeBytes(),
+      );
+      return ResponseBody.fromBytes(
+        answer.body,
+        answer.status,
+        headers: answer.headers,
+      );
+    } on PipeFailure catch (failure) {
+      throw DioException.connectionError(
+        requestOptions: options,
+        reason: failure.message,
+        error: failure,
+      );
     }
   }
 

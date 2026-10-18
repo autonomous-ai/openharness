@@ -14,6 +14,8 @@ import '../core/models.dart';
 import 'local_daemon_transport.dart';
 import 'relay_codec.dart';
 import 'terminal_transport_plugin.dart';
+import 'trusted_pipe.dart';
+import 'windows_pipe.dart';
 
 typedef AccessTokenProvider = Future<String> Function(
   bool forceRefresh,
@@ -101,6 +103,12 @@ class WsConn {
   /// An auxiliary local client must not count as an active desktop window.
   final bool localToolClient;
 
+  /// This computer's own window connection: the one the daemon takes its
+  /// `daemon_*` frames on, and only over its own socket. On Windows that is
+  /// its pipe ([LocalDaemonTransport.trustedPipe]), so this connection dials
+  /// the pipe first. Elsewhere it changes nothing.
+  final bool trustedLocal;
+
   /// A flat delay between reconnect attempts instead of the exponential backoff (1s→30s). Set for
   /// the socket to THIS computer's daemon: a refused connect on the loopback costs microseconds and
   /// nothing on the wire, and the daemon comes back within a second or two of a restart or an
@@ -187,8 +195,21 @@ class WsConn {
   /// socket only when the two agree, and closes it otherwise. A key that could never match churned
   /// every socket on every `_conn()` call (measured: `agents_list` failing "WS closed" in a loop).
   String get endpointKey => isLocal
-      ? 'local:${localWsUri.toString()}:${fixedReconnectDelay?.inMilliseconds ?? 'backoff'}'
+      ? 'local:${localWsUri.toString()}:${fixedReconnectDelay?.inMilliseconds ?? 'backoff'}${trustedLocal ? ':trusted' : ''}'
       : 'cloud:$wsBaseUrl:$autonomousEnv';
+
+  bool _overPipe = false;
+  DateTime? _pipeAskedAt;
+  bool _askingPipe = false;
+
+  /// How often [moveToTrustedPipe] asks the pipe again.
+  static const trustedPipeRetry = Duration(seconds: 10);
+
+  /// Whether this is the trusted window connection on Windows but rides the
+  /// loopback port: the pipe was missing, unproven or broken when it
+  /// connected, so the daemon would refuse its `daemon_*` frames.
+  bool get trustedPipeMissing =>
+      trustedLocal && localTransport?.trustedPipe != null && !_overPipe;
 
   WsConn({
     required this.wsBaseUrl,
@@ -207,6 +228,7 @@ class WsConn {
     this.observerLink = false,
     this.localProtocolVersion = 1,
     this.localToolClient = false,
+    this.trustedLocal = false,
     this.fixedReconnectDelay,
     this.relayCodecs,
     this.transportPlugins,
@@ -244,6 +266,45 @@ class WsConn {
     } catch (error) {
       if (isConnectionFailure(error)) localTransport?.useTcp();
       return null;
+    }
+  }
+
+  /// This computer's window connection over the daemon's Windows pipe, or null
+  /// when the pipe is missing, did not prove itself, or broke: the loopback
+  /// port carries the connection then, and the trusted frames wait. The pipe is
+  /// looked up afresh on every connect, so a daemon that restarted under a new
+  /// pipe name is found, and the name it left is never dialled again.
+  Future<WebSocketChannel?> _connectTrustedPipe(
+    Uri uri,
+    TrustedPipe pipe,
+  ) async {
+    try {
+      return IOWebSocketChannel(await pipe.webSocket(uri.path));
+    } on PipeFailure {
+      return null;
+    }
+  }
+
+  /// Puts the trusted frames back on the pipe. When this connection had to take
+  /// the loopback port ([trustedPipeMissing]), asks whether a pipe proves itself
+  /// now, at most once per [trustedPipeRetry]; if one does, drops the port
+  /// connection, and the reconnect (a second, for this computer) dials the pipe.
+  /// The trusted callers call it each time they find the pipe missing.
+  Future<void> moveToTrustedPipe() async {
+    final pipe = localTransport?.trustedPipe;
+    if (pipe == null || !trustedPipeMissing || _closing || _askingPipe) return;
+    final now = DateTime.now();
+    final asked = _pipeAskedAt;
+    if (asked != null && now.difference(asked) < trustedPipeRetry) return;
+    _pipeAskedAt = now;
+    _askingPipe = true;
+    try {
+      if (!await pipe.probe()) return;
+      final channel = _channel;
+      if (_closing || channel == null || !trustedPipeMissing) return;
+      await channel.sink.close(4000, 'the trusted pipe is back');
+    } finally {
+      _askingPipe = false;
     }
   }
 
@@ -311,16 +372,23 @@ class WsConn {
           },
         );
       }
-      final socket = isLocal ? _localSocket() : null;
-      final channel = !isLocal
-          ? WebSocketChannel.connect(
-              uri,
-              protocols: token == null || token.isEmpty ? null : [token],
-            )
-          : socket != null
-          ? await _connectLocalSocket(uri, socket) ??
-                WebSocketChannel.connect(uri)
-          : WebSocketChannel.connect(uri);
+      final pipe = isLocal && trustedLocal ? localTransport?.trustedPipe : null;
+      final overPipe = pipe == null
+          ? null
+          : await _connectTrustedPipe(uri, pipe);
+      final socket = isLocal && overPipe == null ? _localSocket() : null;
+      final channel =
+          overPipe ??
+          (!isLocal
+              ? WebSocketChannel.connect(
+                  uri,
+                  protocols: token == null || token.isEmpty ? null : [token],
+                )
+              : socket != null
+              ? await _connectLocalSocket(uri, socket) ??
+                    WebSocketChannel.connect(uri)
+              : WebSocketChannel.connect(uri));
+      _overPipe = overPipe != null;
       if (_closing) {
         await channel.sink.close();
         return;

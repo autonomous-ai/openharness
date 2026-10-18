@@ -534,10 +534,18 @@ class LocalCliDiscovery {
     if (base.host != '127.0.0.1' && base.host != 'localhost') {
       return const LocalCliProbe.down('the local CLI address is not loopback');
     }
+    // Windows: the port the daemon recorded. Another user's daemon on the
+    // configured port is never asked.
+    final tcpBase = transport.refreshTcpBase(base);
+    if (tcpBase == null) {
+      return const LocalCliProbe.down(
+        'the daemon has not recorded its port yet',
+      );
+    }
     return _probeStatus(
       _dio,
-      base.resolve('/api/status'),
-      base,
+      tcpBase.resolve('/api/status'),
+      tcpBase,
       localComputerId,
       socketPath: null,
     );

@@ -10379,6 +10379,9 @@ class AppNotifier extends ChangeNotifier {
                 machineStates[machineId]?.isLocalMachine == true
                 ? localDaemonReconnectDelay
                 : null,
+            // This computer's window connection carries the daemon_* frames, which on Windows the
+            // daemon takes only over its pipe (WsConn.trustedLocal). A relayed machine needs no trust.
+            trustedLocal: machineStates[machineId]?.isLocalMachine == true,
           );
     _wireConnectionHooks(connection, machineId);
     return connection;

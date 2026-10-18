@@ -328,6 +328,13 @@ class ApiClient {
     );
   }
 
+  /// Whether Add Phone's sign-in code cannot be had on this computer right
+  /// now: on Windows, the daemon's pipe did not prove itself at the last ask
+  /// ([LocalDaemonTransport.trustedRoutesUnavailable]). Never in a viewer
+  /// build, which asks the backend itself.
+  bool get phoneSignInUnavailable =>
+      auth == null && (localTransport?.trustedRoutesUnavailable ?? false);
+
   /// A one-time code that signs a phone in to this account: the Add Phone
   /// QR's `h=`, which the phone redeems for a session of its own instead of
   /// asking for an emailed code (backend `lib/harnessSession.ts`).
