@@ -585,6 +585,64 @@ void main() {
       }
     });
 
+    test('fixture cleanup rejects success after a delayed retry passes its deadline', () async {
+      final owned = await Directory.systemTemp.createTemp(
+        'harness-cleanup-late-',
+      );
+      final target = File(
+        p.join(owned.path, _profileName, '.harness', 'node.exe'),
+      );
+      await target.create(recursive: true);
+      final handle = _NoDeleteShareHandle.open(target.path);
+      var sawSharing = false;
+      var delayedRetry = false;
+      try {
+        final deletion = runZoned(
+          () => deleteWindowsScratch(
+            owned,
+            timeout: const Duration(milliseconds: 300),
+            onSharingViolation: (error) {
+              expect(error.osError?.errorCode, 32);
+              sawSharing = true;
+            },
+          ),
+          zoneSpecification: ZoneSpecification(
+            createTimer: (self, parent, zone, duration, callback) {
+              if (duration > const Duration(milliseconds: 20)) {
+                return parent.createTimer(zone, duration, callback);
+              }
+              delayedRetry = true;
+              return parent.createTimer(
+                zone,
+                const Duration(milliseconds: 600),
+                () {
+                  handle.close();
+                  callback();
+                },
+              );
+            },
+          ),
+        );
+        await expectLater(
+          deletion,
+          throwsA(
+            isA<FileSystemException>().having(
+              (error) => error.osError?.errorCode,
+              'Windows error',
+              32,
+            ),
+          ),
+        );
+        expect(sawSharing, isTrue);
+        expect(delayedRetry, isTrue);
+        expect(await owned.exists(), isTrue);
+      } finally {
+        handle.close();
+        if (await owned.exists()) await owned.delete(recursive: true);
+      }
+      expect(await owned.exists(), isFalse);
+    });
+
     Future<HttpServer> serve(
       Map<String, String> scripts, {
       List<Uri>? requests,

@@ -23,6 +23,7 @@ Future<void> deleteWindowsScratch(
       if (remaining <= Duration.zero) rethrow;
       const interval = Duration(milliseconds: 20);
       await Future<void>.delayed(remaining < interval ? remaining : interval);
+      if (elapsed.elapsed >= timeout) rethrow;
     }
   }
 }
