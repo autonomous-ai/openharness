@@ -153,22 +153,44 @@ HarnessTray::HarnessTray(flutter::BinaryMessenger* messenger, HWND window,
       ::GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON,
       ::GetSystemMetrics(SM_CXSMICON), ::GetSystemMetrics(SM_CYSMICON),
       LR_DEFAULTCOLOR));
-  channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+  channel_ = std::make_shared<flutter::MethodChannel<flutter::EncodableValue>>(
       messenger, "harness/status_menu",
       &flutter::StandardMethodCodec::GetInstance());
-  channel_->SetMethodCallHandler([this](const auto& call, auto result) {
+}
+
+void HarnessTray::Start() {
+  if (quitting_) {
+    return;
+  }
+  const std::weak_ptr<HarnessTray> weak = shared_from_this();
+  channel_->SetMethodCallHandler([weak](const auto& call, auto result) {
+    const auto tray = weak.lock();
+    if (!tray || tray->detached_) {
+      // Shutdown already retired the messenger: do not send a late response.
+      return;
+    }
     if (call.method_name() == "update") {
-      if (const auto* state =
-              std::get_if<flutter::EncodableMap>(call.arguments())) {
-        Update(*state);
+      const auto* state = std::get_if<flutter::EncodableMap>(call.arguments());
+      const bool update = state != nullptr && !tray->quitting_;
+      if (update) {
+        tray->Update(*state);
       }
+      // Payload mutation is pure. Finish the reply before icon recovery can
+      // reveal the window and reenter OnDestroy through native activation.
       result->Success();
+      result.reset();
+      if (update && !tray->quitting_) {
+        tray->RefreshIcon();
+      }
       return;
     }
     if (call.method_name() == "quit") {
+      // RequestQuit can synchronously destroy the window and clear this field.
+      const auto request_quit = tray->request_quit_;
       result->Success();
-      if (request_quit_) {
-        request_quit_();
+      result.reset();
+      if (!tray->quitting_ && request_quit) {
+        request_quit();
       }
       return;
     }
@@ -178,17 +200,42 @@ HarnessTray::HarnessTray(flutter::BinaryMessenger* messenger, HWND window,
 }
 
 HarnessTray::~HarnessTray() {
-  channel_->SetMethodCallHandler(nullptr);
-  if (installed_) {
+  Shutdown();
+}
+
+void HarnessTray::BeginQuit() {
+  if (quitting_) {
+    return;
+  }
+  quitting_ = true;
+  if (menu_active_) {
+    // TrackPopupMenuEx owns the HMENU until its nested loop returns.
+    ::EndMenu();
+  }
+}
+
+void HarnessTray::Shutdown() {
+  if (detached_) {
+    return;
+  }
+  detached_ = true;
+  BeginQuit();
+  const auto channel = std::move(channel_);
+  if (channel) {
+    channel->SetMethodCallHandler(nullptr);
+  }
+  const HWND window = std::exchange(window_, nullptr);
+  if (std::exchange(installed_, false)) {
     NOTIFYICONDATAW data = {};
     data.cbSize = sizeof(data);
-    data.hWnd = window_;
+    data.hWnd = window;
     data.uID = kTrayIconId;
     ::Shell_NotifyIconW(NIM_DELETE, &data);
   }
-  if (icon_ != nullptr) {
-    ::DestroyIcon(icon_);
+  if (const HICON icon = std::exchange(icon_, nullptr)) {
+    ::DestroyIcon(icon);
   }
+  request_quit_ = {};
 }
 
 std::wstring HarnessTray::Tooltip() const {
@@ -198,6 +245,9 @@ std::wstring HarnessTray::Tooltip() const {
 }
 
 void HarnessTray::Install() {
+  if (quitting_) {
+    return;
+  }
   NOTIFYICONDATAW data = {};
   data.cbSize = sizeof(data);
   data.hWnd = window_;
@@ -238,16 +288,15 @@ void HarnessTray::Update(const flutter::EncodableMap& state) {
       working_ = *rows;
     }
   }
-  RefreshIcon();
 }
 
 bool HarnessTray::installed() {
   RefreshIcon();
-  return installed_;
+  return !quitting_ && installed_;
 }
 
 void HarnessTray::RefreshIcon() {
-  if (installed_) {
+  if (!quitting_ && installed_) {
     NOTIFYICONDATAW data = {};
     data.cbSize = sizeof(data);
     data.hWnd = window_;
@@ -267,6 +316,9 @@ void HarnessTray::RefreshIcon() {
 
 bool HarnessTray::HandleMessage(UINT message, WPARAM wparam, LPARAM lparam,
                                 LRESULT* result) {
+  if (quitting_) {
+    return false;
+  }
   if (taskbar_created_ != 0 && message == taskbar_created_) {
     // Explorer restarted and forgot every icon.
     installed_ = false;
@@ -293,6 +345,9 @@ bool HarnessTray::HandleMessage(UINT message, WPARAM wparam, LPARAM lparam,
 }
 
 void HarnessTray::ShowMenu(int x, int y) {
+  if (quitting_ || menu_active_) {
+    return;
+  }
   // The rows as they are now. A choice answers with this snapshot's row, and
   // Dart checks that it is still current (statusMenuReceiptIsCurrent).
   const flutter::EncodableList entries = entries_;
@@ -327,20 +382,32 @@ void HarnessTray::ShowMenu(int x, int y) {
   ::SetMenuDefaultItem(menu, kOpenCommand, FALSE);
   // A tray menu closes on a click elsewhere only if its owner is in front.
   ::SetForegroundWindow(window_);
+  if (quitting_) {
+    ::DestroyMenu(menu);
+    return;
+  }
   const UINT align = ::GetSystemMetrics(SM_MENUDROPALIGNMENT) != 0
                          ? TPM_RIGHTALIGN
                          : TPM_LEFTALIGN;
+  menu_active_ = true;
   const UINT command = static_cast<UINT>(::TrackPopupMenuEx(
       menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN |
                 align,
       x, y, window_, nullptr));
-  ::PostMessageW(window_, WM_NULL, 0, 0);
+  menu_active_ = false;
   ::DestroyMenu(menu);
+  // OnDestroy may already have detached the channel and cleared the HWND.
+  // The dispatch's lease keeps only this inert receiver alive until return.
+  if (quitting_) {
+    return;
+  }
+  ::PostMessageW(window_, WM_NULL, 0, 0);
   if (command == kOpenCommand) {
     ShowApp();
   } else if (command == kQuitCommand) {
-    if (request_quit_) {
-      request_quit_();
+    const auto request_quit = request_quit_;
+    if (request_quit) {
+      request_quit();
     }
   } else if (command >= kEntryCommand &&
              static_cast<size_t>(command - kEntryCommand) <
@@ -353,17 +420,38 @@ void HarnessTray::ShowMenu(int x, int y) {
 }
 
 void HarnessTray::ShowApp() {
+  if (quitting_) {
+    return;
+  }
   HarnessSingleInstance::BringToFront(window_);
-  channel_->InvokeMethod("openApp", nullptr);
+  if (quitting_) {
+    return;
+  }
+  const auto channel = channel_;
+  if (channel) {
+    channel->InvokeMethod("openApp", nullptr);
+  }
 }
 
 void HarnessTray::Select(const flutter::EncodableValue& row) {
   // Dart opens the destination, then reveals the window: activating the tab
   // shown before cannot acknowledge the wrong notification.
-  channel_->InvokeMethod("selected",
-                         std::make_unique<flutter::EncodableValue>(row));
+  if (quitting_) {
+    return;
+  }
+  const auto channel = channel_;
+  if (channel) {
+    channel->InvokeMethod("selected",
+                          std::make_unique<flutter::EncodableValue>(row));
+  }
 }
 
 void HarnessTray::OnHidden() {
-  channel_->InvokeMethod("hidden", nullptr);
+  if (quitting_) {
+    return;
+  }
+  const auto channel = channel_;
+  if (channel) {
+    channel->InvokeMethod("hidden", nullptr);
+  }
 }

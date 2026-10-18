@@ -1,6 +1,7 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <utility>
 
 #include "flutter/generated_plugin_registrant.h"
 #include "community_links.h"
@@ -24,6 +25,10 @@ void FlutterWindow::RequestQuit() {
     return;
   }
   quitting_ = true;
+  const auto tray = tray_;
+  if (tray) {
+    tray->BeginQuit();
+  }
   HWND window = GetHandle();
   if (window == nullptr) {
     ::PostQuitMessage(0);
@@ -63,8 +68,14 @@ bool FlutterWindow::OnCreate() {
       flutter_controller_->engine()->messenger();
   HarnessCommunityLinks::Instance().Attach(messenger);
   notifications_ = std::make_unique<HarnessNotifications>(messenger);
-  tray_ = std::make_unique<HarnessTray>(
+  const auto tray = std::make_shared<HarnessTray>(
       messenger, GetHandle(), [this]() { RequestQuit(); });
+  tray_ = tray;
+  tray->Start();
+  // Failed icon installation can reveal the window and reenter destruction.
+  if (!flutter_controller_) {
+    return false;
+  }
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -80,10 +91,15 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  // A popup or channel callback may retain the native receiver until unwind;
+  // detach its messenger now, before destroying the Flutter engine.
+  const auto tray = std::move(tray_);
+  if (tray) {
+    tray->Shutdown();
+  }
   // Every feature's channel goes before the engine its messenger belongs to.
   HarnessCommunityLinks::Instance().Detach();
   notifications_ = nullptr;
-  tray_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -102,9 +118,12 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     return 0;
   }
 
-  if (tray_) {
+  // TrackPopupMenuEx can dispatch WM_DESTROY in a nested message loop.
+  // Lease the receiver through the entire call, even if OnDestroy clears tray_.
+  const auto tray = tray_;
+  if (tray) {
     LRESULT tray_result = 0;
-    if (tray_->HandleMessage(message, wparam, lparam, &tray_result)) {
+    if (tray->HandleMessage(message, wparam, lparam, &tray_result)) {
       return tray_result;
     }
   }
@@ -112,9 +131,14 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   // Decide before Flutter and window_manager see WM_CLOSE. A real Quit has
   // already set quitting_, so Flutter still saves the layout on its exit path.
   // Without a usable tray, closing must never leave an inaccessible window.
-  if (message == WM_CLOSE && !quitting_ && tray_ && tray_->installed()) {
+  if (message == WM_CLOSE && !quitting_ && tray && tray->installed()) {
     ::ShowWindow(hwnd, SW_HIDE);
-    tray_->OnHidden();
+    tray->OnHidden();
+    return 0;
+  }
+
+  // The availability check's recovery may have reentered OnDestroy.
+  if (GetHandle() == nullptr) {
     return 0;
   }
 

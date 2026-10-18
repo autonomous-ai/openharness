@@ -19,7 +19,7 @@
 //  - Dart -> native: `update({entries, workingEntries, workspaceAvailable})`,
 //    `quit`.
 //  - Native -> Dart: `selected(<row>)`, `openApp`, `hidden`.
-class HarnessTray {
+class HarnessTray : public std::enable_shared_from_this<HarnessTray> {
  public:
   HarnessTray(flutter::BinaryMessenger* messenger, HWND window,
               std::function<void()> request_quit);
@@ -27,6 +27,16 @@ class HarnessTray {
 
   HarnessTray(const HarnessTray&) = delete;
   HarnessTray& operator=(const HarnessTray&) = delete;
+
+  // Once, after shared ownership exists, so channel callbacks can lease it.
+  void Start();
+
+  // Cancel a popup without delaying Flutter's exit or its quit deadline.
+  void BeginQuit();
+
+  // Detach from the messenger before the engine dies, even if a popup or
+  // channel callback still owns this native receiver until it unwinds.
+  void Shutdown();
 
   // The tray's own messages on the main window. True when handled.
   bool HandleMessage(UINT message, WPARAM wparam, LPARAM lparam,
@@ -48,12 +58,15 @@ class HarnessTray {
   void Select(const flutter::EncodableValue& row);
   std::wstring Tooltip() const;
 
-  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
+  std::shared_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
   HWND window_;
   std::function<void()> request_quit_;
   UINT taskbar_created_;
   HICON icon_ = nullptr;
   bool installed_ = false;
+  bool quitting_ = false;
+  bool detached_ = false;
+  bool menu_active_ = false;
   bool workspace_available_ = false;
   flutter::EncodableList entries_;
   flutter::EncodableList working_;
