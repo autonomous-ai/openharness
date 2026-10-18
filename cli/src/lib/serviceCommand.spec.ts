@@ -502,6 +502,17 @@ describe('harness service with Task Scheduler', () => {
         expect.stringMatching(/^ {2}schtasks \/Create .* failed \(exit 1\): ERROR: The task XML is malformed\.$/),
       ])
       expect(existsSync(join(refused.data, 'harnessd-task.xml'))).toBe(false)
+      // Over a task registered before, the five-minute task taken and the logon task refused: the one there before was
+      // replaced and then removed (re-review N4), and it says so. A refused five-minute task leaves the old one.
+      const over = windows({ registered: true, answers: { 'schtasks /Create /TN Harness harnessd at sign-in': { status: 1, stdout: '', stderr: 'ERROR: Access is denied.' } } })
+      const kept = windows({ registered: true, answers: { 'schtasks /Create': { status: 1, stdout: '', stderr: 'ERROR: The task XML is malformed.' } } })
+      try {
+        await expect(serviceCommand(['install'], kept.deps)).resolves.toBe(1)
+        expect(kept.err[0]).toBe('✗ Task Scheduler did not accept the task that starts harnessd; nothing was changed.')
+        await expect(serviceCommand(['install'], over.deps)).resolves.toBe(1)
+        expect(over.calls).toContain(`schtasks /Delete /TN ${taskName('demo')} /F`)
+        expect(over.err[0]).toBe('✗ Task Scheduler did not accept the new task that starts harnessd, and no longer has the old one: `harness start` still starts harnessd, and `harness service install` tries again.')
+      } finally { for (const w of [over, kept]) rmSync(w.dir, { recursive: true, force: true }) }
       // Registered all the same: the task starts harnessd at the next sign-in, which install.ps1 reads from the code.
       await expect(serviceCommand(['install'], idle.deps)).resolves.toBe(SERVICE_REGISTERED_NOT_RUNNING)
       expect(idle.deps.service!.inspect().registered).toBe(true)

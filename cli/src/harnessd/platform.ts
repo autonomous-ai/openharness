@@ -705,7 +705,11 @@ export class PlatformService {
     if (this.platform === 'taskscheduler') {
       // The five-minute task first: its file is the one `installed` and `ownedBy` read.
       const created = this.checked('schtasks', ['/Create', '/TN', this.target, '/XML', this.file, '/F'])
-      return created.ok ? this.checked('schtasks', ['/Create', '/TN', this.logonTarget, '/XML', this.logonFile, '/F']) : created
+      if (!created.ok) return created
+      const logon = this.checked('schtasks', ['/Create', '/TN', this.logonTarget, '/XML', this.logonFile, '/F'])
+      // No half registration: the five-minute task goes again, so the caller's "nothing was changed" holds (re-review N4).
+      if (!logon.ok) this.deps.run('schtasks', ['/Delete', '/TN', this.target, '/F'])
+      return logon
     }
     if (this.platform === 'launchd') {
       // A job someone disabled stays disabled through a bootstrap; installing is asking for it.

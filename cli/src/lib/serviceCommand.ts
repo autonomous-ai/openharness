@@ -310,12 +310,17 @@ async function installTask(deps: ServiceCommandDeps): Promise<number> {
     if (!written && before.registered && before.state !== 'disabled') return 'already' as const
     const outcome = service.register()
     if (!outcome.ok) service.discard()
-    return { ...outcome, unwritten: false }
+    // Gone now though it was there: the five-minute task replaced (/F), then removed again with its refused logon task.
+    return { ...outcome, unwritten: false, lost: !outcome.ok && before.registered && !service.inspect().registered }
   })
   if (registered !== 'already' && !registered.ok) {
     deps.err(registered.unwritten
       ? '✗ Harness could not set up the task that starts harnessd when you sign in to Windows; nothing was changed.'
-      : '✗ Task Scheduler did not accept the task that starts harnessd; nothing was changed.')
+      // A refused logon task removes the five-minute task just made (harnessd/platform.ts register), which with /F had
+      // replaced the one there before.
+      : 'lost' in registered && registered.lost
+        ? '✗ Task Scheduler did not accept the new task that starts harnessd, and no longer has the old one: `harness start` still starts harnessd, and `harness service install` tries again.'
+        : '✗ Task Scheduler did not accept the task that starts harnessd; nothing was changed.')
     deps.err(`  ${registered.detail}`)
     return 1
   }

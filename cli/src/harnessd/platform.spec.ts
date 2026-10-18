@@ -626,9 +626,11 @@ describe('PlatformService over schtasks', () => {
     expect(service.current(definition())).toBe(false)
     expect(service.write(definition())).toBe(true)
     expect(service.current(definition())).toBe(true)
-    // The logon task is refused: the five-minute one is registered, and what schtasks said is the outcome.
+    // The logon task is refused: the five-minute one just registered goes again, so a refusal leaves no half (re-review
+    // N4), and what schtasks said of the logon task is the outcome.
     const refused = make({ [`schtasks /Create /TN ${LOGON}`]: fail(1, 'ERROR: Access is denied.') })
     expect(refused.service.register()).toEqual({ ok: false, detail: `schtasks /Create /TN ${LOGON} /XML ${refused.service.logonFile} /F failed (exit 1): ERROR: Access is denied.` })
+    expect(refused.calls.slice(-1)).toEqual([`schtasks /Delete /TN ${NAME} /F`])
   })
 
   it('finds this data folder\'s task by what schtasks has registered, when its file is gone', () => {
