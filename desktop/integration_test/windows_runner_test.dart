@@ -1,9 +1,10 @@
 // Ordinary Windows application channels and single-instance delivery. Run with
 // FLUTTER_TEST=1 and a unique HARNESS_DESKTOP_INSTANCE, never an installed app's
 // instance. windows-desktop.yml owns the profile used by the integration runner.
-// The same executable can be a child, with all coordination under its scratch
-// directory. This checks startup before Dart's ready, not the native pre-Listen
-// windowless race. Interactive toast/tray behavior remains Windows E2E work.
+// HARNESS_RUNNER_TEST_CHILD_EXE names a separately built normal Debug bundle
+// targeting windows_runner_child.dart, without Flutter's test-host bootstrap.
+// Coordination stays under its scratch directory. This checks startup before
+// Dart's ready; the native pre-Listen race and interactive behavior are separate.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -21,17 +22,27 @@ const _fork =
     'harness://fork/starter-runner-test?request=0b6b4b8e-6f6a-4c64-9d1b-6f0d0c1a2b3c';
 
 void main() {
-  final childLog = Platform.environment['HARNESS_RUNNER_TEST_CHILD'];
-  if (Platform.isWindows && childLog != null) {
-    _runChild(childLog);
-    return;
-  }
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   final skip = !Platform.isWindows;
+  late String childExecutable;
   setUpAll(() {
     if (skip) return;
     expect(Platform.environment['FLUTTER_TEST'], '1');
     expect(Platform.environment['HARNESS_DESKTOP_INSTANCE'], isNotEmpty);
+    final path = Platform.environment['HARNESS_RUNNER_TEST_CHILD_EXE'];
+    expect(
+      path,
+      isNotNull,
+      reason: 'a separately built child bundle is required',
+    );
+    final child = File(path!);
+    expect(
+      child.isAbsolute,
+      isTrue,
+      reason: 'child executable must be absolute',
+    );
+    expect(child.existsSync(), isTrue, reason: 'child executable is missing');
+    childExecutable = child.path;
   });
 
   testWidgets('fonts: installed families and concurrent answers agree', (
@@ -196,7 +207,7 @@ try {
             'harness://fork/starter-cold?request=1b6b4b8e-6f6a-4c64-9d1b-6f0d0c1a2b3c';
         const warm =
             'harness://fork/starter-warm?request=2b6b4b8e-6f6a-4c64-9d1b-6f0d0c1a2b3c';
-        final first = await _startOwned(Platform.resolvedExecutable, [
+        final first = await _startOwned(childExecutable, [
           cold,
         ], environment: environment);
         var firstExited = false;
@@ -215,9 +226,12 @@ try {
           File('${log.path}.waiting-before-ready').readAsStringSync(),
           '${first.pid}',
         );
+        debugPrint(
+          'Child startup marker confirmed: PID ${first.pid}, $childExecutable',
+        );
         expect(firstExited, isFalse);
         expect(log.existsSync(), isFalse);
-        final second = await _startOwned(Platform.resolvedExecutable, [
+        final second = await _startOwned(childExecutable, [
           warm,
         ], environment: environment);
         expect(
@@ -241,7 +255,7 @@ try {
           isFalse,
           reason: 'only the original app remains running',
         );
-        final quit = await _startOwned(Platform.resolvedExecutable, [
+        final quit = await _startOwned(childExecutable, [
           '--quit',
         ], environment: environment);
         expect(await quit.exitCode.timeout(_channelTimeout), 0);
@@ -293,57 +307,6 @@ try {
   }, skip: skip);
 }
 
-void _runChild(String log) {
-  WidgetsFlutterBinding.ensureInitialized();
-  final file = File(log);
-  var tail = Future<void>.value();
-  var ready = false;
-  final beforeReady = <String>[];
-  Future<void> record(String url) => tail = tail.then((_) async {
-    await file.writeAsString('$url\n', mode: FileMode.append, flush: true);
-  });
-  _links.setMethodCallHandler((call) async {
-    if (call.method != 'open' || call.arguments is! String) return;
-    final url = call.arguments as String;
-    if (!ready) {
-      beforeReady.add(url);
-    } else {
-      await record(url);
-    }
-  });
-  runApp(
-    const MaterialApp(
-      home: Scaffold(body: Center(child: Text('Harness runner test child'))),
-    ),
-  );
-  unawaited(() async {
-    await _mark('$log.waiting-before-ready');
-    await _until(
-      () => File('$log.release').existsSync(),
-      within: const Duration(seconds: 60),
-    );
-    final pending = await _links
-        .invokeListMethod<String>('ready')
-        .timeout(_channelTimeout);
-    // Queue the ready reply's cold links before any live open callback that
-    // overtook that reply. No await may interleave this queue transition.
-    for (final url in [...?pending, ...beforeReady]) {
-      unawaited(record(url));
-    }
-    beforeReady.clear();
-    ready = true;
-    await tail;
-    await _mark('$log.ready');
-  }());
-}
-
-Future<void> _mark(String path) async {
-  // Publish only complete markers; existence must not race the PID write.
-  final temporary = File('$path.tmp');
-  await temporary.writeAsString('$pid', flush: true);
-  await temporary.rename(path);
-}
-
 Future<Directory> _scratch(String prefix) async {
   final root = await Directory.systemTemp.createTemp(prefix);
   addTearDown(() async {
@@ -381,7 +344,9 @@ Future<Process> _startOwned(
     executable,
     arguments,
     environment: environment,
-    workingDirectory: File(Platform.resolvedExecutable).parent.path,
+    workingDirectory: File(executable).isAbsolute
+        ? File(executable).parent.path
+        : File(Platform.resolvedExecutable).parent.path,
   );
   var exited = false;
   final output = StringBuffer();

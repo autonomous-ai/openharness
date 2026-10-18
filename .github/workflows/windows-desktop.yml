@@ -121,7 +121,10 @@ jobs:
           HARNESS_DESKTOP_INSTANCE: ci-${{ matrix.arch }}-${{ github.run_id }}
         run: |
           # The runner and every child use owned profiles, never installed app state.
-          $root = Join-Path $env:RUNNER_TEMP ("harness-runner-" + [guid]::NewGuid().ToString('N'))
+          $runnerTemp = $env:RUNNER_TEMP
+          $originalTemp = $env:TEMP
+          $originalTmp = $env:TMP
+          $root = Join-Path $runnerTemp ("harness-runner-" + [guid]::NewGuid().ToString('N'))
           New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
           try {
             $env:USERPROFILE = Join-Path $root 'profile'
@@ -132,8 +135,32 @@ jobs:
             $env:TMP = $env:TEMP
             New-Item -ItemType Directory -Path $env:APPDATA,$env:LOCALAPPDATA,$env:TEMP -Force -ErrorAction Stop | Out-Null
             Remove-Item Env:HARNESS_DESKTOP_PIPE_IO_DLL -ErrorAction SilentlyContinue
+            # A normal entrypoint reaches Dart without Flutter test's host handshake.
+            # Preserve its WHOLE bundle before the parent test overwrites Debug output.
+            flutter build windows --debug --no-pub --target integration_test/windows_runner_child.dart
+            if ($LASTEXITCODE -ne 0) { throw "Runner child build failed ($LASTEXITCODE)" }
+            $debugBundle = (Resolve-Path -LiteralPath "build\windows\${{ matrix.arch }}\runner\Debug" -ErrorAction Stop).Path
+            $childBundle = Join-Path $root 'child-bundle'
+            Copy-Item -LiteralPath $debugBundle -Destination $childBundle -Recurse -Force -ErrorAction Stop
+            foreach ($required in @('harness-desktop.exe', 'harness_pipe_io.dll', 'flutter_windows.dll', 'data\flutter_assets\kernel_blob.bin')) {
+              if (-not (Test-Path -LiteralPath (Join-Path $childBundle $required) -PathType Leaf)) { throw "Child bundle missing $required" }
+            }
+            $env:HARNESS_RUNNER_TEST_CHILD_EXE = (Resolve-Path -LiteralPath (Join-Path $childBundle 'harness-desktop.exe') -ErrorAction Stop).Path
+            $sourceHead = git rev-parse HEAD
+            if ($LASTEXITCODE -ne 0) { throw 'Could not identify child source revision' }
+            "Child source revision: $sourceHead"
+            Get-FileHash -Algorithm SHA256 -LiteralPath 'integration_test\windows_runner_child.dart','integration_test\windows_runner_test.dart'
+            $bundleManifest = @(Get-ChildItem -LiteralPath $childBundle -File -Recurse -ErrorAction Stop | Sort-Object FullName | ForEach-Object {
+              [ordered]@{ path = $_.FullName.Substring($childBundle.Length + 1); sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName -ErrorAction Stop).Hash }
+            })
+            $manifestPath = Join-Path $root 'child-bundle-sha256.json'
+            $bundleManifest | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $manifestPath -Encoding utf8 -ErrorAction Stop
+            "Child bundle files: $($bundleManifest.Count); identity SHA256: $((Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath -ErrorAction Stop).Hash)"
+            Get-FileHash -Algorithm SHA256 -LiteralPath $env:HARNESS_RUNNER_TEST_CHILD_EXE,(Join-Path $childBundle 'harness_pipe_io.dll')
             flutter test -d windows --no-pub integration_test/windows_runner_test.dart
             if ($LASTEXITCODE -ne 0) { throw "Runner integration failed ($LASTEXITCODE)" }
           } finally {
+            $env:TEMP = $originalTemp
+            $env:TMP = $originalTmp
             Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
           }
