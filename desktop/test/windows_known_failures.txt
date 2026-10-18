@@ -101,7 +101,7 @@ test/workspace_machine_prompt_test.dart::(setUpAll)
 test/workspace_pull_request_label_test.dart::(setUpAll)
 test/workspace_welcome_test.dart::(setUpAll)
 
-# POSIX-path-fixture (22)
+# POSIX-path-fixture (21)
 # Fixtures compare slash-only paths, POSIX HOME/XDG or /work and /home remote listings; local Git watch fakes key raw slash paths while production normalizes native paths.
 test/asset_paths_test.dart::every bundled asset is named by code, or is a licence beside one
 test/daemons/pair_rules_file_test.dart::a missing file is written once; an existing one is never touched
@@ -117,7 +117,6 @@ test/pet_settings_test.dart::a folder with pet.json previews under the pet’s o
 test/pet_source_test.dart::a folder with pet.json: the sheet it names and the display name
 test/pet_source_test.dart::a pet.json file resolves like its folder
 test/pet_source_test.dart::without pet.json, exactly one spritesheet.(webp|png)
-test/route_screen_test.dart::⌘B makes new work at once, set up as the router chose
 test/terminal_link_opener_test.dart::hands the exact Unicode file URI to the OS without a shell
 test/terminal_link_opener_test.dart::opens a page the agent named, in its project folder
 test/terminal_link_opener_test.dart::resolves remote paths on their owner and opens only the local completed copy
