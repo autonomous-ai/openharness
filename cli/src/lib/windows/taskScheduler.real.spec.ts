@@ -31,6 +31,8 @@ describe.skipIf(process.platform !== 'win32')('the scheduled task on Windows', (
       expect(text).toMatch(/<LogonTrigger>/)
       expect(text).toMatch(/<Interval>PT5M<\/Interval>/)
       expect(text).toMatch(/<MultipleInstancesPolicy>IgnoreNew<\/MultipleInstancesPolicy>/)
+      // Not the default 7 (below normal), so schtasks shows it.
+      expect(text).toMatch(/<Priority>4<\/Priority>/)
       // Enabled: schtasks shows a setting only when it is not the default, so an enabled task has no <Enabled> in its
       // settings, and a disabled one says false (the rule PlatformService.inspect reads it by).
       const DISABLED = /<Settings>[\s\S]*?<Enabled>false<\/Enabled>[\s\S]*?<\/Settings>/

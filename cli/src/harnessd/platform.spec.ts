@@ -513,6 +513,9 @@ describe('the scheduled task', () => {
     expect(text).toMatch(new RegExp(`<TimeTrigger>[\\s\\S]*<Repetition>\\s*<Interval>${TASK_REPEAT}</Interval>\\s*<StopAtDurationEnd>false</StopAtDurationEnd>\\s*</Repetition>[\\s\\S]*</TimeTrigger>`))
     expect(text).toContain('<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>')
     expect(text).toContain('<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>')
+    // Normal priority: Task Scheduler's default, 7, starts the task below normal, and the daemon and every agent it
+    // starts inherit that class (R1b-1, final review).
+    expect(text).toMatch(/<Settings>[\s\S]*<Priority>4<\/Priority>[\s\S]*<\/Settings>/)
     expect(text).toMatch(/<LogonType>InteractiveToken<\/LogonType>\s*<RunLevel>LeastPrivilege<\/RunLevel>/)
     expect(text).toContain('<Command>C:\\Users\\Demo User\\.harness\\bin\\harness-launch.exe</Command>')
     expect(text).toContain('<Arguments>--root &quot;C:\\Users\\Demo User\\.harness&quot; -- start --if-down</Arguments>')

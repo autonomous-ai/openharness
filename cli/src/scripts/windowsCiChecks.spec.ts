@@ -40,6 +40,19 @@ describe('check-install.ps1', () => {
     expect(out).toBe('1')
   })
 
+  // Final review R1b-1: a task runs at Task Scheduler's priority 7, below normal, unless it says otherwise, and the
+  // daemon and every agent inherit it. The install job proves the class of what the install started.
+  it('checks that the daemon, the terminal host and its shells run at normal priority', () => {
+    const at = checkInstall.indexOf('$slow = @($mine')
+    expect(at).toBeGreaterThan(checkInstall.indexOf('$shells = @(Processes'))
+    expect(checkInstall).toContain("Get-Process -Name 'harness-pty', 'node'")
+    expect(checkInstall).toContain('@($hosts.ProcessId) + @($shells.ProcessId)')
+    expect(checkInstall.slice(at)).toMatch(/PriorityClass\)" -ne 'Normal'/)
+    expect(checkInstall).toMatch(/Fail "no node\.exe from \$root runs/)
+    // And the task as Task Scheduler registered it, whether or not the task started the daemon on this runner.
+    expect(checkInstall).toContain("-notmatch '<Priority>4</Priority>'")
+  })
+
   it('stays ASCII, which Windows PowerShell reads a .ps1 without a BOM in', () => {
     expect(checkInstall).toMatch(/^[\x00-\x7f]*$/)
   })

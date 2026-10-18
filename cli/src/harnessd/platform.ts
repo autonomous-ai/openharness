@@ -237,6 +237,11 @@ WantedBy=default.target
  * trigger names the user by SID, as whoami gives it: without a user it would fire at anyone's logon.
  * IgnoreNew: a start still running when the next one is due is not doubled. No time limit, though each start lasts
  * seconds: the launcher exits once it has started the CLI, and the master it starts is outside the task's job.
+ * Priority 4, normal: Task Scheduler's default, 7, starts the task below normal priority (and lower I/O and memory
+ * priority), and a process Windows starts without a class of its own takes its parent's, so the daemon and every
+ * agent it starts ran below normal (final review R1b-1). In the XML rather than in harness-launch: the text change
+ * makes `current` false, so the next `harness start` or `harness service install` (which install.ps1 runs on every
+ * install) registers the task again, and an install whose launcher is older is covered as well.
  * The time trigger's start is fixed, so the same install writes the same text and `current` can compare it.
  */
 /** The task of [user], the bare user name (USERNAME): `Harness harnessd (<name>)`; a `DOMAIN\` before it is left out. */
@@ -315,6 +320,7 @@ export function taskSchedulerXml(opts: TaskDefinition): string {
       <RestartOnIdle>false</RestartOnIdle>
     </IdleSettings>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>4</Priority>
     <Enabled>true</Enabled>
   </Settings>
   <Actions Context="Author">

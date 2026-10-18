@@ -65,6 +65,9 @@ Write-Host "ok   version $v"
 $task = "Harness harnessd ($env:USERNAME)"
 schtasks.exe /Query /TN $task /FO LIST /V | Out-Host
 if ($LASTEXITCODE -ne 0) { Fail "the task '$task' is not registered" }
+# Normal priority, as Task Scheduler has it registered: whether or not it is the task that started the daemon here.
+$registered = (schtasks.exe /Query /TN $task /XML | Out-String)
+if ($registered -notmatch '<Priority>4</Priority>') { Fail "the task '$task' does not run at normal priority (Priority 4):`n$registered" }
 Write-Host "ok   task $task"
 
 $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
@@ -106,3 +109,13 @@ do {
 } while ((Get-Date) -lt $deadline)
 if (-not $shells.Count) { Fail "no PowerShell runs under harness-pty.exe (pid $($hosts.ProcessId -join ', ')) 30 s after creating terminal $($created.agent.id)" }
 Write-Host "ok   terminal $($created.agent.id) on harness-pty pid $($hosts[0].ProcessId) ($($shells.Count) shell(s) under it)"
+# Normal priority: Task Scheduler starts a task at its default priority 7, below normal, unless the task says otherwise,
+# and the daemon, the terminal host and every shell in it inherit it (harnessd/platform.ts taskSchedulerXml, Priority 4;
+# final review R1b-1). Get-Process, not WMI: these are this user's own processes, and it is what gives the class.
+$ids = @($hosts.ProcessId) + @($shells.ProcessId)
+$mine = @(Get-Process -Name 'harness-pty', 'node' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith("$root\", 'OrdinalIgnoreCase') })
+$mine += @(Get-Process -Id $ids -ErrorAction SilentlyContinue | Where-Object { $mine.Id -notcontains $_.Id })
+if (-not @($mine | Where-Object { $_.ProcessName -eq 'node' }).Count) { Fail "no node.exe from $root runs, so the daemon's priority cannot be read" }
+$slow = @($mine | Where-Object { "$($_.PriorityClass)" -ne 'Normal' })
+if ($slow.Count) { Fail "not at normal priority: $(($slow | ForEach-Object { "$($_.ProcessName) $($_.Id) $($_.PriorityClass)" }) -join ', ')" }
+Write-Host "ok   priority Normal for $($mine.Count) process(es): $(($mine | ForEach-Object { "$($_.ProcessName) $($_.Id)" }) -join ', ')"
