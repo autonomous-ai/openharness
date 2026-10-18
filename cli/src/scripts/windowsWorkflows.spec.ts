@@ -33,4 +33,10 @@ describe('the Windows release workflows', () => {
     expect(release).not.toMatch(/METADATA_PATH=harness\/pty\/metadata\.json/)
     expect(release).not.toContain('upload-install-ps1.sh --production')
   })
+
+  it('lets the Node runtime workflow write only a runtime manifest', () => {
+    const node = read('release-node-runtime-windows.yml')
+    // Final review R3-4: never the fleet's harness/cli/metadata.json, whatever is typed into the dispatch.
+    expect(node).toContain('[[ "$METADATA_PATH" =~ ^harness/(staging[a-z0-9-]*/)?runtime/metadata\\.json$ ]]')
+  })
 })

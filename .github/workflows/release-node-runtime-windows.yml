@@ -42,7 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$NODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::node_version must be X.Y.Z"; exit 1; }
-          [[ "$METADATA_PATH" =~ ^harness/[a-z0-9/_.-]+\.json$ ]] || { echo "::error::metadata_path must be a manifest under harness/"; exit 1; }
+          [[ "$METADATA_PATH" =~ ^harness/(staging[a-z0-9-]*/)?runtime/metadata\.json$ ]] || { echo "::error::metadata_path must be harness/runtime/metadata.json, or one under a staging prefix"; exit 1; }
           command -v gpgv
       - name: Authenticate to GCP (workload identity federation)
         uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2

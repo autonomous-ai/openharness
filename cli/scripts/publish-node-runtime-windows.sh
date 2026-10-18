@@ -33,7 +33,8 @@ if [ "$DRY_RUN" != 0 ] && [ "$DRY_RUN" != 1 ]; then
   echo "error: DRY_RUN must be 0 or 1, not '$DRY_RUN'; nothing was published." >&2
   exit 2
 fi
-[[ "$METADATA_PATH" =~ ^harness/[a-z0-9/_.-]+\.json$ ]] || { echo "error: METADATA_PATH '$METADATA_PATH' is not a manifest under harness/" >&2; exit 2; }
+# Only a runtime manifest, production's or a staging prefix's: a typo must never rewrite the cli manifest every daemon polls.
+[[ "$METADATA_PATH" =~ ^harness/(staging[a-z0-9-]*/)?runtime/metadata\.json$ ]] || { echo "error: METADATA_PATH '$METADATA_PATH' is not a runtime manifest (harness/runtime/metadata.json, or one under a staging prefix)" >&2; exit 2; }
 
 for command in curl gpgv node; do
   command -v "$command" >/dev/null 2>&1 || { echo "error: $command is required" >&2; exit 1; }

@@ -88,6 +88,18 @@ describe.skipIf(process.platform === 'win32' || !hasPython)('publish-pty-payload
     expect(manifestFiles).toEqual(FILES)
   })
 
+  // Final review R3-4: a typo such as harness/cli/metadata.json would rewrite the manifest every daemon polls.
+  it('publishes only into a pty manifest, production\'s or a staging prefix\'s', () => {
+    const root = payloads()
+    const args = ['1.2.3', join(root, 'x64'), join(root, 'arm64')]
+    for (const path of ['harness/cli/metadata.json', 'harness/runtime/metadata.json', 'harness/staging/cli/metadata.json', 'harness/pty/../cli/metadata.json']) {
+      const refused = run(root, args, { METADATA_PATH: path })
+      expect(refused.status, path).toBe(2)
+      expect(refused.stderr).toContain('is not a pty manifest')
+    }
+    for (const path of ['harness/pty/metadata.json', 'harness/staging-dry-run/pty/metadata.json']) expect(run(root, args, { METADATA_PATH: path }).status, path).toBe(0)
+  })
+
   it('rejects a DRY_RUN value that is neither 0 nor 1', () => {
     const root = payloads()
     const result = run(root, ['1.2.3', join(root, 'x64'), join(root, 'arm64')], { DRY_RUN: 'true' })

@@ -12,7 +12,7 @@ const sha = (bytes: Buffer | string) => createHash('sha256').update(bytes).diges
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
-function fixture(options: { signed?: boolean; tamper?: boolean; keyringSha?: string; dryRun?: string; dropArm64Line?: boolean; gcloud?: string } = {}) {
+function fixture(options: { signed?: boolean; tamper?: boolean; keyringSha?: string; dryRun?: string; dropArm64Line?: boolean; gcloud?: string; metadataPath?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'harness-node-win-'))
   dirs.push(root)
   const dist = join(root, 'dist', 'v22.0.0')
@@ -38,7 +38,7 @@ function fixture(options: { signed?: boolean; tamper?: boolean; keyringSha?: str
     env: {
       ...process.env, PATH: `${bin}:${process.env.PATH}`, DRY_RUN: options.dryRun ?? '1', DRY_RUN_OUT: join(root, 'out'),
       NODE_DIST_BASE: `file://${join(root, 'dist')}`, NODE_RELEASE_KEYRING_URL: `file://${join(root, 'pubring.kbx')}`,
-      NODE_RELEASE_KEYRING_SHA256: options.keyringSha ?? sha('keyring'), METADATA_PATH: 'harness/staging/runtime/metadata.json',
+      NODE_RELEASE_KEYRING_SHA256: options.keyringSha ?? sha('keyring'), METADATA_PATH: options.metadataPath ?? 'harness/staging/runtime/metadata.json',
       GCS_BUCKET: 's3-autonomous-upgrade-3', GCS_PUBLIC_BASE_URL: 'https://storage.googleapis.com/s3-autonomous-upgrade-3',
     },
   })
@@ -83,6 +83,18 @@ describe.skipIf(process.platform === 'win32')('publish-node-runtime-windows.sh, 
     const { result } = fixture({ dryRun: 'yes' })
     expect(result.status).toBe(2)
     expect(result.stderr).toContain('DRY_RUN must be 0 or 1')
+  })
+
+  // Final review R3-4: a typo such as harness/cli/metadata.json would rewrite the manifest every daemon polls.
+  it('publishes only into a runtime manifest, production\'s or a staging prefix\'s', () => {
+    for (const path of ['harness/cli/metadata.json', 'harness/pty/metadata.json', 'harness/staging/cli/metadata.json', 'harness/runtime/../cli/metadata.json']) {
+      const { result } = fixture({ metadataPath: path })
+      expect(result.status, path).toBe(2)
+      expect(result.stderr).toContain('is not a runtime manifest')
+    }
+    for (const path of ['harness/runtime/metadata.json', 'harness/staging-dry-run/runtime/metadata.json']) {
+      expect(fixture({ metadataPath: path }).result.status, path).toBe(0)
+    }
   })
 
   it('refuses a signed list that has no checksum line for an archive', () => {
