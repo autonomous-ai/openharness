@@ -17,9 +17,27 @@ const kAttachedTaskSettle = Duration(milliseconds: 800);
 
 /// Codex can be alive in its updater before it opens a conversation. An empty
 /// chat may not have a session ID yet either. Read only the visible terminal,
-/// looking for its composer and footer together, not a menu's selected row or
-/// an old prompt in scrollback.
+/// looking for its composer as the last thing drawn, not a menu's selected row
+/// or an old prompt in scrollback.
 enum _CodexStartup { waiting, updating, ready }
+
+/// Codex's composer row (CLI engines/codex/composer.ts), never a numbered row
+/// of a menu: a trust, hooks or update question selects its first row with `›`.
+final _codexComposer = RegExp(r'^\s*›(?:\s|$)');
+final _codexMenuRow = RegExp(r'^\s*[›>]?\s*\d+\.\s');
+
+/// Under the composer Codex draws only its footer, at most a few rows. More
+/// is some other screen below a prompt left in the conversation.
+const _codexFooterRows = 3;
+
+/// Codex updating itself: its update question, or the updater running. Not
+/// the "✨ Update available!" box a ready Codex 0.154 draws above its chat —
+/// read as an update, it cancelled the open timeout and the files waited
+/// forever.
+final _codexUpdating = RegExp(
+  r'^\s*[›>]?\s*1\. Update now|Updating Codex via|Update ran successfully! Please restart Codex\.',
+  multiLine: true,
+);
 
 _CodexStartup _codexStartup(Terminal terminal) {
   final buffer = terminal.buffer;
@@ -27,24 +45,25 @@ _CodexStartup _codexStartup(Terminal terminal) {
     for (var row = buffer.scrollBack; row < buffer.height; row++)
       buffer.lines[row].getText(),
   ];
-  final prompt = lines.lastIndexWhere(
-    (line) => RegExp(r'^\s*›').hasMatch(line),
-  );
-  if (prompt >= 0 &&
-      lines
-          .skip(prompt + 1)
-          .any(
-            (line) =>
-                RegExp(r'\? for shortcuts|\d+% context left').hasMatch(line),
-          )) {
-    return _CodexStartup.ready;
-  }
-  if (RegExp(
-    r'Update available!|Updating Codex via|Update ran successfully! Please restart Codex\.',
-  ).hasMatch(lines.join('\n'))) {
-    return _CodexStartup.updating;
-  }
+  if (_codexComposerIsLast(lines)) return _CodexStartup.ready;
+  if (_codexUpdating.hasMatch(lines.join('\n'))) return _CodexStartup.updating;
   return _CodexStartup.waiting;
+}
+
+/// The composer with only a footer under it. Its footer's words are not
+/// relied on: Codex 0.154 replaced `? for shortcuts` and `% context left`
+/// with a status line (`gpt-5.5 default · ~/project`), and a harness given a
+/// picture never received it or its task (2026-10-18).
+bool _codexComposerIsLast(List<String> lines) {
+  final composer = lines.lastIndexWhere(
+    (line) => _codexComposer.hasMatch(line) && !_codexMenuRow.hasMatch(line),
+  );
+  if (composer < 0) return false;
+  final footer = lines
+      .skip(composer + 1)
+      .where((line) => line.trim().isNotEmpty);
+  return footer.length <= _codexFooterRows &&
+      !footer.any(_codexMenuRow.hasMatch);
 }
 
 /// Can [machineId] take files into a harness's prompt? Both halves are the
