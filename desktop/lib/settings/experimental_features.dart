@@ -54,6 +54,10 @@ enum ExperimentalFeature {
   const ExperimentalFeature(this.id, this.label, this.description);
   final String id, label, description;
 
+  /// Super Tab owns coordination. Keep the old wire values readable for existing
+  /// clients and sessions, without asking people to assemble the feature here.
+  bool get visibleInSettings => this == focusBarCreature || this == shareButton;
+
   /// The switch shows the opposite of the stored value.
   bool get inverted => this == agentMessagesHideSummary;
   bool get available => switch (this) {

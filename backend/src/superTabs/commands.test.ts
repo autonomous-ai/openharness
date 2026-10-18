@@ -1,0 +1,158 @@
+import { describe, expect, it } from 'vitest'
+import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
+import { createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
+
+const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
+const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
+const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
+function fixture() {
+  let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
+  let sequence = 0
+  const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
+    const effects = applyCommand(state, actor, command, { now: 1000, operationId: `op-${++sequence}`, ...context })
+    state = effects.state
+    return effects
+  }
+  const invite = (role: 'viewer' | 'collaborator' = 'collaborator') => {
+    const invited = run({ type: 'invite.create', email: peer.email, role, conversationId: 'lead' })
+    run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, peer)
+  }
+  const add = (harnessId: string, contributorId = 'owner', group = 'lead', lead = false) => {
+    const result = run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId,
+      name: harnessId, configuration: config, lead }, contributorId === 'owner' ? owner : peer,
+    { contribution: { machineOwnerId: 'host-owner', contributorId } })
+    return result.result.agentId as string
+  }
+  const group = () => run({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits while offline.',
+    checks: [{ description: 'Reconnect preserves the edits.', independent: true }] }).result.conversationId as string
+  return { run, invite, add, group, get state() { return state } }
+}
+
+describe('Super Tab collaboration policy', () => {
+  it('keeps adding an agent separate from creating conversations and assigning work', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const group = f.group()
+    const worker = f.add('worker', 'owner', group)
+    expect(f.state.conversations.map(c => c.title)).toEqual(['Lead', 'Offline editing'])
+    expect(f.state.conversations[1]).toMatchObject({ leadId: lead, agentIds: [lead, worker], assignment: null })
+    f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: worker, present: true, lead: false })
+    expect(f.state.agents).toHaveLength(2)
+    expect(f.state.conversations).toHaveLength(2)
+  })
+
+  it('routes a human reply to its author, and does not create agent chatter loops', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const worker = f.add('worker')
+    const posted = f.run({ type: 'message.send', conversationId: 'lead', text: 'Which behavior?', replyTo: null, recipientIds: [] },
+      { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }).messages[0]!
+    expect(posted.recipients).toEqual([])
+    const reply = f.run({ type: 'message.send', conversationId: 'lead', text: 'Keep the local copy.', replyTo: posted.id, recipientIds: [] }, owner,
+      { reply: { id: posted.id, conversationId: 'lead', author: posted.author } })
+    expect(reply.messages[0]!.recipients).toEqual([worker])
+    const fresh = f.run({ type: 'message.send', conversationId: 'lead', text: 'Continue.', replyTo: null, recipientIds: [] })
+    expect(fresh.messages[0]!.recipients).toEqual([lead])
+    expect(() => f.run({ type: 'message.send', conversationId: 'lead', text: 'Cross-group reply', replyTo: posted.id, recipientIds: [] }, owner,
+      { reply: { id: posted.id, conversationId: 'elsewhere', author: posted.author } })).toThrow('Reply to a message in this conversation')
+  })
+
+  it('lets a viewer read and leave, but not send, assign, attach or invite', () => {
+    const f = fixture()
+    f.invite('viewer')
+    const commands: Command[] = [
+      { type: 'message.send', conversationId: 'lead', text: 'Run this', replyTo: null, recipientIds: [] },
+      { type: 'work.assign', conversationId: 'lead', agentId: 'worker' },
+      { type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'worker', name: 'Worker', configuration: config, lead: false },
+      { type: 'invite.create', email: 'next@example.com', role: 'collaborator', conversationId: 'lead' },
+    ]
+    for (const command of commands) expect(() => f.run(command, peer)).toThrow('read-only')
+    expect(visibleState(f.state, peer).people).toHaveLength(2)
+    f.run({ type: 'member.remove', userId: 'peer' }, peer)
+    expect(() => visibleState(f.state, peer)).toThrow('no longer have access')
+  })
+
+  it('requires the addressed account to accept an unexpired invitation and keeps other invitations private', () => {
+    const f = fixture()
+    const invited = f.run({ type: 'invite.create', email: 'PEER@example.com', role: 'collaborator', conversationId: 'lead' })
+    const command: Command = { type: 'invite.accept', inviteId: invited.result.inviteId as string }
+    expect(() => f.run(command, { kind: 'person', userId: 'stranger', email: 'else@example.com' })).toThrow('unavailable')
+    expect(() => f.run(command, peer, { now: 1000 + 7 * 86400000 })).toThrow('expired')
+    f.run(command, peer)
+    f.run({ type: 'invite.create', email: 'next@example.com', role: 'viewer', conversationId: 'lead' })
+    expect(visibleState(f.state, owner).invitations).toHaveLength(1)
+    expect(visibleState(f.state, peer).invitations).toHaveLength(0)
+    const snapshot = visibleState(f.state, owner)
+    snapshot.people.splice(0)
+    expect(f.state.people).toHaveLength(2)
+  })
+
+  it('withdraws a departing contributor and preserves execution identity until the host confirms a stop', () => {
+    const f = fixture()
+    f.invite()
+    const group = f.group()
+    const worker = f.add('worker', 'peer', group)
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
+    const removed = f.run({ type: 'member.remove', userId: 'peer' })
+    expect(removed.cancelledAgents).toEqual([worker])
+    expect(f.state.conversations[1]!.assignment).toMatchObject({ status: 'reconciling', execution: { machineId: 'host', harnessId: 'worker', machineOwnerId: 'host-owner' } })
+    f.invite()
+    expect(f.state.agents).toHaveLength(0)
+    const stop: Command = { type: 'work.status', conversationId: group, assignmentId, status: 'stopped', result: 'Host receipt' }
+    expect(() => f.run(stop)).toThrow('confirm the stop')
+    f.run(stop, owner, { confirmedStopped: true })
+    expect(f.state.conversations[1]!.assignment!.status).toBe('stopped')
+  })
+
+  it('keeps ownership exclusive and requires independent evidence before closing an attempt', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const group = f.group()
+    const worker = f.add('worker', 'owner', group)
+    const second = f.group()
+    const assigned = f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    const assignmentId = assigned.result.assignmentId as string
+    expect(assigned.messages[0]!.recipients).toEqual([worker])
+    expect(() => f.run({ type: 'work.assign', conversationId: second, agentId: worker })).toThrow('active assignment')
+    expect(() => f.run({ type: 'conversation.agent', conversationId: group, agentId: worker, present: true, lead: true })).toThrow('replacing its lead')
+    const done: Command = { type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Revision fixture-1' }
+    expect(() => f.run(done)).toThrow('evidence')
+    const check: Command = { type: 'work.check', conversationId: group, assignmentId,
+      checkId: f.state.conversations[1]!.checks[0]!.id, passed: true, evidence: 'Reconnect test passed on revision fixture-1.' }
+    expect(() => f.run(check, { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' })).toThrow('Another agent')
+    f.run(check, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })
+    f.run(done)
+    expect(() => f.run(check)).toThrow('new attempt')
+    expect(() => f.run({ ...done, status: 'working' })).toThrow('new attempt')
+    const retry = f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    expect(retry.previousAttempts[0]!.assignment).toMatchObject({ id: assignmentId, status: 'done', configuration: config })
+    expect(f.state.conversations[1]!.checks[0]!.evidence).toBeNull()
+  })
+
+  it('allows discussion while paused and refuses new work, without mutating rejected state', () => {
+    const f = fixture()
+    f.run({ type: 'tab.pause', paused: true })
+    const before = JSON.stringify(f.state)
+    expect(() => f.group()).toThrow('paused')
+    expect(JSON.stringify(f.state)).toBe(before)
+    expect(f.run({ type: 'message.send', conversationId: 'lead', text: 'Let’s reconsider.', replyTo: null, recipientIds: [] }).messages).toHaveLength(1)
+  })
+
+  it('lets a person create an empty group and define its acceptance criteria before delegation', () => {
+    const f = fixture()
+    const id = f.run({ type: 'conversation.create', title: 'Sketch', brief: '', checks: [] }).result.conversationId as string
+    const worker = f.add('worker', 'owner', id)
+    expect(() => f.run({ type: 'work.assign', conversationId: id, agentId: worker })).toThrow('acceptance checks')
+    f.run({ type: 'work.define', conversationId: id, brief: 'Document the flow.', checks: [{ description: 'A person reviews the document.', independent: true }] })
+    f.run({ type: 'work.assign', conversationId: id, agentId: worker })
+    expect(() => f.run({ type: 'conversation.archive', conversationId: id, archived: true })).toThrow('active assignment')
+  })
+
+  it('rejects spoofed grant fields and execution identities', () => {
+    expect(commandSchema.safeParse({ type: 'tab.pause', paused: false, machineOwnerId: 'someone' }).success).toBe(false)
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    expect(() => f.run({ type: 'tab.pause', paused: false }, { kind: 'agent', agentId: lead, machineOwnerId: 'stranger' })).toThrow('execution host')
+    expect(() => f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'extra', name: 'Extra', configuration: config, lead: false })).toThrow('explicitly shared')
+  })
+})
