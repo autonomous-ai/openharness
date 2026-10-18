@@ -33,12 +33,13 @@ class SetupHotspot {
   static bool get joinsByItself => Platform.isAndroid;
 
   /// `joined` (with the address the hotspot gave this phone), `unavailable` (the person cancelled,
-  /// or no device was found), or `unsupported`. Android's list shows only the `Harness-…` Wi-Fi.
-  Future<({String state, String? address})> join() async {
+  /// or no device was found), or `unsupported`. Android's list shows only the `Harness-…` Wi-Fi, or
+  /// only [name]'s: the same device again, once it has started after being unlocked.
+  Future<({String state, String? address})> join({String? name}) async {
     if (!joinsByItself) return (state: 'unsupported', address: null);
     try {
       final reply = await _channel.invokeMethod<Map<Object?, Object?>>('join', {
-        'prefix': prefix,
+        'prefix': name ?? prefix,
       });
       return (
         state: reply?['state'] as String? ?? 'unavailable',
@@ -63,8 +64,10 @@ class SetupHotspot {
     }
   }
 
-  /// The device: `{protocol, name, hotspot, run, computerId, signedIn, result}`, or null while the
-  /// phone is not on its hotspot.
+  /// The device: `{protocol, name, hotspot, run, computerId, signedIn, online, result}`, or null
+  /// while the phone is not on its hotspot. `online`: on a cable already, so no Wi-Fi is asked for.
+  /// `{protocol, hotspot, locked: true, wait}` while its disk is still locked as it starts: it asks
+  /// for the computer's password first (os/root/usr/lib/harness-os/unlock, in its startup).
   Future<Map<String, dynamic>?> info() async {
     try {
       final res = await _dio.get('/setup');
@@ -93,7 +96,33 @@ class SetupHotspot {
     ];
   }
 
-  /// Hands the device the Wi-Fi and the ticket. Answers the run to look for in a later result.
+  /// The computer's password, for a device still locked as it starts: its disk opens with it, and
+  /// it goes on starting. Null when it opened; otherwise why not (a wrong password, too many tries).
+  Future<String?> unlock(String password) async {
+    final Response<dynamic> res;
+    try {
+      res = await _dio.post(
+        '/setup/unlock',
+        data: password,
+        options: Options(
+          contentType: 'text/plain; charset=utf-8',
+          // Opening the disk takes a few seconds: the password is checked slowly on purpose.
+          receiveTimeout: const Duration(seconds: 50),
+        ),
+      );
+    } on DioException {
+      throw const SetupException(
+        'Lost the device\'s Wi-Fi. Stay close to it and try again.',
+      );
+    }
+    if (res.statusCode == 200) return null;
+    final body = res.data is Map ? res.data as Map : const {};
+    return body['message'] as String? ??
+        'The device said no (${res.statusCode}).';
+  }
+
+  /// Hands the device the Wi-Fi and the ticket, or on a cable ([ssid] empty) the ticket alone.
+  /// Answers the run to look for in a later result.
   Future<int> connect({
     required String ssid,
     required String password,
@@ -103,7 +132,9 @@ class SetupHotspot {
     try {
       res = await _dio.post(
         '/setup/connect',
-        data: {'ssid': ssid, 'password': password, 'ticket': ticket},
+        data: ssid.isEmpty
+            ? {'ticket': ticket}
+            : {'ssid': ssid, 'password': password, 'ticket': ticket},
       );
     } on DioException {
       throw const SetupException(

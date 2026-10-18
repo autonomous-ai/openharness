@@ -24,6 +24,10 @@ import 'setup_hotspot.dart';
 ///
 /// When the Wi-Fi fails (wrong password, out of reach, no Internet) the device brings its hotspot
 /// back with the reason; joining it again shows that reason above the list.
+///
+/// A device whose disk is locked as it starts hosts the same hotspot before anything else and asks
+/// for the computer's password first; opened, it starts, and its hotspot comes back for the rest.
+/// One on a cable is online already: it is only signed in, with no Wi-Fi to choose.
 class AddDevicePage extends StatefulWidget {
   const AddDevicePage({super.key, required this.notifier, this.hotspot});
 
@@ -34,7 +38,7 @@ class AddDevicePage extends StatefulWidget {
   State<AddDevicePage> createState() => _AddDevicePageState();
 }
 
-enum _Step { start, join, networks, password, waiting, done }
+enum _Step { start, join, unlock, networks, password, waiting, done }
 
 /// Joining the device's hotspot, shown as it goes: the person picking it, the phone on it and
 /// asking the device, then reading its Wi-Fi list.
@@ -80,6 +84,12 @@ class _AddDevicePageState extends State<AddDevicePage> {
   final _password = TextEditingController();
   final _name = TextEditingController();
 
+  /// The computer's own password, for a device still locked as it starts.
+  final _secret = TextEditingController();
+
+  /// Unlocked from here: it is starting, and its hotspot comes back under the same name.
+  bool _unlocked = false;
+
   _Step _step = _Step.start;
   bool _busy = false;
   String _error = '';
@@ -119,6 +129,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
     _ssid.dispose();
     _password.dispose();
     _name.dispose();
+    _secret.dispose();
     super.dispose();
   }
 
@@ -166,7 +177,10 @@ class _AddDevicePageState extends State<AddDevicePage> {
       _address = null;
     });
     if (SetupHotspot.joinsByItself) {
-      final joined = await _hotspot.join();
+      // The same device again once it has started: only its own name in Android's list.
+      final joined = await _hotspot.join(
+        name: _unlocked ? _device['hotspot'] as String? : null,
+      );
       if (!mounted) return;
       if (joined.state == 'joined') {
         setState(() {
@@ -199,17 +213,32 @@ class _AddDevicePageState extends State<AddDevicePage> {
     try {
       final info = await _hotspot.info();
       if (info == null || !mounted || _step != _Step.join) return;
+      // Still the locked one, just unlocked from here: it has not started yet.
+      if (_unlocked && info['locked'] == true) return;
       _poll?.cancel();
       _device = info;
       _retrying = false;
+      if (info['locked'] == true) {
+        _secret.clear();
+        _show(_Step.unlock);
+        return;
+      }
+      _unlocked = false;
+      // A failed try before this one: the device says why, once the phone is back on its hotspot.
+      final last = info['result'];
+      final why =
+          last is Map && (last['state'] == 'failed' || last['error'] != null)
+          ? last['message'] as String? ?? ''
+          : '';
+      // On a cable: online already, so it is only signed in. Not again after that failed: the
+      // person sees why, and may give it a Wi-Fi instead.
+      if (info['online'] == true && info['signedIn'] != true && why.isEmpty) {
+        await _sendWired();
+        return;
+      }
       setState(() => _progress = _Progress.reading);
       final networks = await _hotspot.networks();
       if (!mounted) return;
-      // A failed try before this one: the device says why, once the phone is back on its hotspot.
-      final last = info['result'];
-      final why = last is Map && last['state'] == 'failed'
-          ? last['message'] as String? ?? ''
-          : '';
       setState(() {
         _networks = networks;
         _step = _Step.networks;
@@ -224,6 +253,57 @@ class _AddDevicePageState extends State<AddDevicePage> {
     } finally {
       _reaching = false;
     }
+  }
+
+  // -- 2b. a device locked as it starts: the computer's password --
+
+  Future<void> _unlock() async {
+    final secret = _secret.text;
+    if (secret.isEmpty) {
+      _show(_Step.unlock, error: 'Enter the computer\'s password.');
+      return;
+    }
+    setState(() => _busy = true);
+    final String? why;
+    try {
+      why = await _hotspot.unlock(secret);
+    } on SetupException catch (e) {
+      _show(_Step.unlock, error: e.message);
+      return;
+    }
+    _secret.clear();
+    if (why != null) {
+      _show(_Step.unlock, error: why);
+      return;
+    }
+    // It starts now. Its hotspot goes, and comes back under the same name for the rest of the
+    // setup — unless it was set up before: then it goes on to its own Wi-Fi.
+    _unlocked = true;
+    await _hotspot.leave();
+    _show(_Step.join);
+    setState(() {
+      _busy = true;
+      _progress = _Progress.choosing;
+    });
+    await Future<void>.delayed(const Duration(seconds: 15));
+    if (!mounted || _step != _Step.join) return;
+    await _join();
+  }
+
+  // -- 2c. on a cable: only the sign-in --
+
+  Future<void> _sendWired() async {
+    _alreadyHere = false;
+    _wasRunning = _machine?.status == 'running';
+    _ssid.clear();
+    try {
+      await _hotspot.connect(ssid: '', password: '', ticket: _ticket);
+    } on SetupException catch (e) {
+      _show(_Step.join, error: e.message);
+      return;
+    }
+    await _hotspot.leave();
+    _wait('');
   }
 
   // -- 3. the person's Wi-Fi --
@@ -451,6 +531,13 @@ class _AddDevicePageState extends State<AddDevicePage> {
               'The device is still trying the Wi-Fi. Its hotspot comes back within a minute.',
             ),
           ],
+          if (_unlocked) ...[
+            const SizedBox(height: 12),
+            say(
+              '$name is unlocked and starting. Its Wi-Fi comes back within a minute for the rest '
+              'of the setup. Set up before? Then it joins its own Wi-Fi instead, and you are done.',
+            ),
+          ],
           const SizedBox(height: 16),
           // Where it is, as a Wi-Fi settings page shows joining: what is done, and what is going on.
           _Line(
@@ -474,6 +561,33 @@ class _AddDevicePageState extends State<AddDevicePage> {
               text: 'Reading the Wi-Fi the device sees…',
             ),
         ];
+      case _Step.unlock:
+        return [
+          say(
+            '$name is locked. Enter the computer\'s password — the one set when it was installed — '
+            'to start it.',
+          ),
+          const SizedBox(height: 8),
+          TtyField(
+            key: const Key('add-device-unlock-password'),
+            controller: _secret,
+            hint: 'Computer password',
+            autofocus: true,
+            keyboardType: TextInputType.visiblePassword,
+            obscure: !_reveal,
+            onSubmitted: _busy ? null : () => unawaited(_unlock()),
+            trailing: [
+              AppIconButton(
+                key: const Key('add-device-unlock-reveal'),
+                icon: _reveal ? LucideIcons.eyeOff300 : LucideIcons.eye300,
+                size: 20,
+                tooltip: _reveal ? 'Hide password' : 'Show password',
+                color: tty.dim,
+                onPressed: () => setState(() => _reveal = !_reveal),
+              ),
+            ],
+          ),
+        ];
       case _Step.networks:
         return [
           say(
@@ -482,6 +596,13 @@ class _AddDevicePageState extends State<AddDevicePage> {
           const SizedBox(height: 12),
           SettingsGroup(
             children: [
+              if (_device['online'] == true)
+                SettingsRow(
+                  key: const Key('add-device-cable'),
+                  title: 'Use its cable',
+                  value: 'Online',
+                  onTap: () => unawaited(_sendWired()),
+                ),
               for (final network in _networks)
                 SettingsRow(
                   key: ValueKey('add-device-wifi-${network.ssid}'),
@@ -542,10 +663,13 @@ class _AddDevicePageState extends State<AddDevicePage> {
       case _Step.waiting:
         return [
           say(
-            _error.isEmpty
-                ? '$name is joining "${_ssid.text.trim()}" and signing in to your account. '
+            _error.isNotEmpty
+                ? ''
+                : _ssid.text.trim().isEmpty
+                ? '$name is on a cable: it is signing in to your account. '
                       'This phone goes back to its own Wi-Fi meanwhile.'
-                : '',
+                : '$name is joining "${_ssid.text.trim()}" and signing in to your account. '
+                      'This phone goes back to its own Wi-Fi meanwhile.',
           ),
         ];
       case _Step.done:
@@ -589,6 +713,22 @@ class _AddDevicePageState extends State<AddDevicePage> {
               onPressed: () =>
                   unawaited(SetupHotspot.joinsByItself ? _join() : _reach()),
             ),
+          if (_unlocked)
+            TtyTextButton(
+              key: const Key('add-device-unlocked-done'),
+              label: 'It was set up before: done',
+              onPressed: () => Navigator.of(context).maybePop(),
+            ),
+        ];
+      case _Step.unlock:
+        return [
+          TtyPrimaryButton(
+            key: const Key('add-device-unlock'),
+            label: 'Unlock',
+            busy: _busy,
+            busyLabel: 'Unlocking…',
+            onPressed: () => unawaited(_unlock()),
+          ),
         ];
       case _Step.networks:
         return [
