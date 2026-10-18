@@ -11,6 +11,7 @@ use std::time::Duration;
 use super::pointer::{self, CURRENT};
 use super::system::System;
 use super::{APP_DIR, APP_EXE, EXIT_BROKEN, EXIT_FAILED, EXIT_OK, EXIT_SPAWN};
+use super::{LAUNCHER_EXE, registry};
 
 pub const LOG: &str = "launch.log";
 /// Past this the log keeps its newer half.
@@ -53,6 +54,72 @@ pub fn log(root: &Path, message: &str) {
     }
 }
 
+/// The `harness://` key names this launcher; rewritten when it names anything else. One registry read when it does.
+pub fn heal_protocol_key(root: &Path, registry_root: &str, system: &mut impl System) {
+    let launcher = root.join(LAUNCHER_EXE);
+    let want = registry::open_command(&launcher);
+    let key = registry::protocol_command_key(registry::SCHEME);
+    if system.read_value(registry_root, &key, "").as_deref() == Some(want.as_os_str()) {
+        return;
+    }
+    match system.write_keys(
+        registry_root,
+        &registry::protocol_keys(registry::SCHEME, &launcher),
+    ) {
+        Ok(()) => log(
+            root,
+            &format!("harness:// links now open {}", launcher.display()),
+        ),
+        Err(err) => log(
+            root,
+            &format!(
+                "could not point harness:// links at {}: {err}",
+                launcher.display()
+            ),
+        ),
+    }
+}
+
+/// Wait before any launch/installation side effect. The caller chooses the diagnostic location.
+pub(super) fn wait_for_replaced(
+    wait_pid: Option<u32>,
+    system: &mut impl System,
+) -> Result<(), String> {
+    if let Some(pid) = wait_pid {
+        system.wait_for_exit(pid, WAIT_FOR_REPLACED).map_err(|error| format!("could not wait for previous Harness process {pid}: {error}. Close Harness and try again"))?;
+    }
+    Ok(())
+}
+
+pub(super) fn wait_before_launch(
+    root: &Path,
+    wait_pid: Option<u32>,
+    system: &mut impl System,
+) -> bool {
+    match wait_for_replaced(wait_pid, system) {
+        Ok(()) => true,
+        Err(reason) => {
+            log(root, &reason);
+            system.say(&format!("Harness could not start: {reason}."));
+            false
+        }
+    }
+}
+
+/// B's fallback warning belongs to this install for either a launcher or app child.
+#[cfg(any(windows, test))]
+pub(super) fn start_warning(exe: &Path, dir: &Path, warning: &str) {
+    let root = if exe
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case(LAUNCHER_EXE))
+    {
+        dir
+    } else {
+        dir.parent().and_then(Path::parent).unwrap_or(dir)
+    };
+    log(root, warning);
+}
+
 fn broken(root: &Path, reason: &str, system: &mut impl System) -> i32 {
     log(root, reason);
     system.say(&format!(
@@ -63,14 +130,7 @@ fn broken(root: &Path, reason: &str, system: &mut impl System) -> i32 {
 
 /// The launch: see the module comment.
 pub fn run(root: &Path, wait_pid: Option<u32>, args: &[OsString], system: &mut impl System) -> i32 {
-    if let Some(pid) = wait_pid
-        && let Err(error) = system.wait_for_exit(pid, WAIT_FOR_REPLACED)
-    {
-        log(
-            root,
-            &format!("could not wait for previous Harness process {pid}: {error}"),
-        );
-        system.say(&format!("Harness could not start while waiting for the previous app: {error}. Close Harness and try again."));
+    if !wait_before_launch(root, wait_pid, system) {
         return EXIT_FAILED;
     }
     let Ok(version) = pointer::read(&root.join(CURRENT)) else {
@@ -240,5 +300,18 @@ mod tests {
         let text = fs::read_to_string(dir.path().join(LOG)).unwrap();
         assert!(text.len() as u64 <= LOG_MAX_BYTES, "{}", text.len());
         assert!(text.contains(" newest\n") && text.ends_with("Harness.exe: afterwards\n"));
+    }
+    #[test]
+    fn start_warnings_stay_beside_the_launcher_for_both_child_kinds() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Harness");
+        let app = root.join("app/1.2.3");
+        fs::create_dir_all(&app).unwrap();
+        start_warning(&root.join(LAUNCHER_EXE), &root, "launcher fallback");
+        start_warning(&app.join(APP_EXE), &app, "app fallback");
+        let text = fs::read_to_string(root.join(LOG)).unwrap();
+        assert!(text.contains("launcher fallback") && text.contains("app fallback"));
+        assert!(!dir.path().join(LOG).exists());
+        assert!(!app.join(LOG).exists());
     }
 }

@@ -1,12 +1,12 @@
 //! The Windows calls behind system.rs's [Real](super::system::Real): starting the app, waiting for a process and
 //! the message box.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::{OsStr, OsString, c_void};
 use std::io;
-use std::os::windows::ffi::OsStrExt;
-use std::path::Path;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, FILETIME, HANDLE,
@@ -23,8 +23,55 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MessageBoxW,
 };
 
+use super::KnownFolder;
+use super::registry::{Key, Value};
+use windows_sys::Win32::Foundation::{BOOL, ERROR_FILE_NOT_FOUND, HWND, LPARAM, TRUE};
+use windows_sys::Win32::System::Com::CoTaskMemFree;
+use windows_sys::Win32::System::Registry::{
+    HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ,
+    RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegGetValueW, RegSetValueExW,
+};
+use windows_sys::Win32::System::Threading::{
+    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    QueryFullProcessImageNameW, TerminateProcess,
+};
+use windows_sys::Win32::UI::Shell::{
+    FOLDERID_Profile, FOLDERID_Programs, FOLDERID_UserProgramFiles, KF_FLAG_DONT_VERIFY,
+    SHGetKnownFolderPath,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetClassNameW, GetWindowThreadProcessId, PostMessageW, RegisterWindowMessageW,
+};
+
+/// The Flutter runner's window class (desktop/windows/runner/win32_window.cpp, kWindowClassName). Every Flutter app
+/// has it, so a window counts only when its process is `<root>\app\*\harness-desktop.exe`; the title is not used.
+const WINDOW_CLASS: &str = "FLUTTER_RUNNER_WIN32_WINDOW";
+/// `WM_HARNESS_QUIT` (desktop/windows/runner/single_instance.h): a registered message, so it means the same in
+/// every process and no other program's message collides with it.
+pub const QUIT_MESSAGE: &str = "Autonomous.Harness.Quit";
+
 pub fn wide(text: &OsStr) -> Vec<u16> {
     text.encode_wide().chain(std::iter::once(0)).collect()
+}
+
+pub fn known_folder(folder: KnownFolder) -> Option<PathBuf> {
+    let (id, flags) = match folder {
+        // Resolve even if missing; installing creates directories only after waiting.
+        KnownFolder::UserProgramFiles => (&FOLDERID_UserProgramFiles, KF_FLAG_DONT_VERIFY as u32),
+        KnownFolder::Programs => (&FOLDERID_Programs, KF_FLAG_DONT_VERIFY as u32),
+        KnownFolder::Profile => (&FOLDERID_Profile, KF_FLAG_DONT_VERIFY as u32),
+    };
+    let mut out = null_mut();
+    let hr = unsafe { SHGetKnownFolderPath(id, flags, null_mut(), &mut out) };
+    let path = (hr >= 0 && !out.is_null()).then(|| {
+        let length = (0..).take_while(|&i| unsafe { *out.add(i) } != 0).count();
+        PathBuf::from(OsString::from_wide(unsafe {
+            std::slice::from_raw_parts(out, length)
+        }))
+    });
+    // Freed whatever the answer: the shell may allocate it on a failure too.
+    unsafe { CoTaskMemFree(out as *const c_void) };
+    path
 }
 
 pub fn message_box(text: &str) {
@@ -112,7 +159,7 @@ pub fn start_app(exe: &Path, dir: &Path, args: &[OsString]) -> io::Result<(u32, 
                 pid_created.0
             })
         },
-        |warning| super::launch::log(dir.parent().and_then(Path::parent).unwrap_or(dir), &warning),
+        |warning| super::launch::start_warning(exe, dir, &warning),
     );
     started.map(|_| made.unwrap_or((0, 0)))
 }
@@ -181,6 +228,340 @@ pub fn wait_for_exit(pid: u32, wait: Duration) -> io::Result<()> {
     };
     unsafe { CloseHandle(process) };
     result
+}
+
+fn image_of(pid: u32) -> io::Result<Option<PathBuf>> {
+    let process = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            pid,
+        )
+    };
+    if process.is_null() {
+        let error = io::Error::last_os_error();
+        return if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32)
+            && !process_exists(pid)?
+        {
+            Ok(None)
+        } else {
+            Err(error)
+        };
+    }
+    let mut buffer = vec![0u16; 32_768];
+    let mut size = buffer.len() as u32;
+    let result = if unsafe {
+        QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buffer.as_mut_ptr(), &mut size)
+    } != 0
+    {
+        Ok(Some(PathBuf::from(OsString::from_wide(
+            &buffer[..size as usize],
+        ))))
+    } else {
+        let error = io::Error::last_os_error();
+        if unsafe { WaitForSingleObject(process, 0) } == WAIT_OBJECT_0 {
+            Ok(None)
+        } else {
+            Err(error)
+        }
+    };
+    unsafe { CloseHandle(process) };
+    result
+}
+
+/// Whether [image] is `<root>\app\<one folder>\harness-desktop.exe`.
+fn from_install(image: &Path, root: &Path) -> bool {
+    let Some(folder) = image.parent() else {
+        return false;
+    };
+    let named = image
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(super::APP_EXE));
+    named
+        && folder
+            .parent()
+            .is_some_and(|app| super::same_folder(app, &root.join(super::APP_DIR)))
+}
+
+/// Each top-level window of [WINDOW_CLASS], hidden ones too (a window hidden to the tray is still there), with its
+/// process id.
+fn flutter_windows() -> io::Result<Vec<(HWND, u32)>> {
+    unsafe extern "system" fn each(window: HWND, found: LPARAM) -> BOOL {
+        let found = unsafe { &mut *(found as *mut Vec<(HWND, u32)>) };
+        let mut class = [0u16; 64];
+        let length = unsafe { GetClassNameW(window, class.as_mut_ptr(), class.len() as i32) };
+        if length > 0 && String::from_utf16_lossy(&class[..length as usize]) == WINDOW_CLASS {
+            let mut pid = 0u32;
+            unsafe { GetWindowThreadProcessId(window, &mut pid) };
+            found.push((window, pid));
+        }
+        TRUE
+    }
+    let mut found: Vec<(HWND, u32)> = Vec::new();
+    if unsafe { EnumWindows(Some(each), &mut found as *mut Vec<(HWND, u32)> as LPARAM) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(found)
+}
+
+fn app_windows(root: &Path) -> io::Result<Vec<(HWND, u32)>> {
+    let mut found = Vec::new();
+    for (window, pid) in flutter_windows()? {
+        if image_of(pid)?.is_some_and(|image| from_install(&image, root)) {
+            found.push((window, pid));
+        }
+    }
+    Ok(found)
+}
+
+/// Best-effort observer: processes from [root] with a window, each once. Destructive
+/// operations use checked enumeration instead and never infer exit from an observation error.
+pub fn app_processes(root: &Path) -> Vec<u32> {
+    let mut pids: Vec<u32> = app_windows(root)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, pid)| pid)
+        .collect();
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+/// Post `WM_HARNESS_QUIT` to each app window from [root], wait up to [wait] for their processes, then end the ones
+/// still there (an install or uninstall must not leave the app holding its folder). How many processes there were.
+pub fn quit_app(root: &Path, wait: Duration) -> io::Result<usize> {
+    let windows = app_windows(root)?;
+    if windows.is_empty() {
+        return Ok(0);
+    }
+    // Keep the actual validated process alive as an identity until its handle closes.
+    // Re-opening only by PID after posting/waiting could target a recycled PID.
+    struct Process(HANDLE);
+    impl Drop for Process {
+        fn drop(&mut self) {
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+    let mut processes = Vec::new();
+    for &(_, pid) in &windows {
+        if processes.iter().any(|(id, _): &(u32, Process)| *id == pid) {
+            continue;
+        }
+        let handle = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE,
+                0,
+                pid,
+            )
+        };
+        if handle.is_null() {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) && !process_exists(pid)?
+            {
+                continue;
+            }
+            return Err(error);
+        }
+        let process = Process(handle);
+        let mut image = vec![0u16; 32_768];
+        let mut length = image.len() as u32;
+        if unsafe {
+            QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, image.as_mut_ptr(), &mut length)
+        } == 0
+        {
+            let error = io::Error::last_os_error();
+            if unsafe { WaitForSingleObject(handle, 0) } == WAIT_OBJECT_0 {
+                continue;
+            }
+            return Err(error);
+        }
+        if !from_install(
+            &PathBuf::from(OsString::from_wide(&image[..length as usize])),
+            root,
+        ) {
+            return Err(io::Error::other(
+                "the app process changed before it could be stopped",
+            ));
+        }
+        processes.push((pid, process));
+    }
+    if processes.is_empty() {
+        return Ok(0);
+    }
+    let message = unsafe { RegisterWindowMessageW(wide(OsStr::new(QUIT_MESSAGE)).as_ptr()) };
+    if message == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    for (window, pid) in windows {
+        let Some((_, process)) = processes.iter().find(|(id, _)| *id == pid) else {
+            continue;
+        };
+        let mut current = 0;
+        unsafe { GetWindowThreadProcessId(window, &mut current) };
+        if current != pid {
+            if unsafe { WaitForSingleObject(process.0, 0) } == WAIT_OBJECT_0 {
+                continue;
+            }
+            return Err(io::Error::other(
+                "the app window changed before it could be asked to quit",
+            ));
+        }
+        if unsafe { PostMessageW(window, message, 0, 0) } == 0 {
+            let error = io::Error::last_os_error();
+            if unsafe { WaitForSingleObject(process.0, 0) } != WAIT_OBJECT_0 {
+                return Err(error);
+            }
+        }
+    }
+    let deadline = Instant::now() + wait;
+    for (pid, process) in &processes {
+        let left = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(u128::from(u32::MAX - 1)) as u32;
+        match unsafe { WaitForSingleObject(process.0, left) } {
+            WAIT_OBJECT_0 => continue,
+            WAIT_TIMEOUT => {}
+            WAIT_FAILED => return Err(io::Error::last_os_error()),
+            other => {
+                return Err(io::Error::other(format!(
+                    "unexpected app wait result {other}"
+                )));
+            }
+        }
+        super::launch::log(
+            root,
+            &format!("Harness (process {pid}) did not quit when asked; ending it"),
+        );
+        if unsafe { TerminateProcess(process.0, 1) } == 0 {
+            let error = io::Error::last_os_error();
+            if unsafe { WaitForSingleObject(process.0, 0) } == WAIT_OBJECT_0 {
+                continue;
+            }
+            return Err(error);
+        }
+        // TerminateProcess is asynchronous; copying/removing mapped files must wait for exit.
+        match unsafe { WaitForSingleObject(process.0, 5_000) } {
+            WAIT_OBJECT_0 => {}
+            WAIT_TIMEOUT => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Harness did not exit after being stopped",
+                ));
+            }
+            WAIT_FAILED => return Err(io::Error::last_os_error()),
+            other => {
+                return Err(io::Error::other(format!(
+                    "unexpected final app wait result {other}"
+                )));
+            }
+        }
+    }
+    Ok(processes.len())
+}
+
+fn key_path(registry: &str, key: &str) -> Vec<u16> {
+    wide(OsStr::new(&format!("{registry}\\{key}")))
+}
+
+fn win32(code: u32) -> io::Result<()> {
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::from_raw_os_error(code as i32))
+    }
+}
+
+pub fn read_value(registry: &str, key: &str, name: &str) -> Option<OsString> {
+    let path = key_path(registry, key);
+    let name = wide(OsStr::new(name));
+    let mut size = 0u32;
+    let probe = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            path.as_ptr(),
+            name.as_ptr(),
+            RRF_RT_REG_SZ,
+            null_mut(),
+            null_mut(),
+            &mut size,
+        )
+    };
+    if probe != 0 || size == 0 {
+        return None;
+    }
+    let mut buffer = vec![0u16; (size as usize).div_ceil(2)];
+    let read = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            path.as_ptr(),
+            name.as_ptr(),
+            RRF_RT_REG_SZ,
+            null_mut(),
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    if read != 0 {
+        return None;
+    }
+    let length = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+    Some(OsString::from_wide(&buffer[..length]))
+}
+
+pub fn write_keys(registry: &str, keys: &[Key]) -> io::Result<()> {
+    for key in keys {
+        let path = key_path(registry, &key.path);
+        let mut handle: HKEY = null_mut();
+        win32(unsafe {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                path.as_ptr(),
+                0,
+                null(),
+                REG_OPTION_NON_VOLATILE,
+                KEY_SET_VALUE,
+                null(),
+                &mut handle,
+                null_mut(),
+            )
+        })?;
+        let written = key.values.iter().try_for_each(|(name, value)| {
+            let name = wide(OsStr::new(name));
+            match value {
+                Value::Text(text) => {
+                    let data = wide(text);
+                    win32(unsafe {
+                        RegSetValueExW(
+                            handle,
+                            name.as_ptr(),
+                            0,
+                            REG_SZ,
+                            data.as_ptr().cast(),
+                            (data.len() * 2) as u32,
+                        )
+                    })
+                }
+                Value::Number(number) => {
+                    let data = number.to_le_bytes();
+                    win32(unsafe {
+                        RegSetValueExW(handle, name.as_ptr(), 0, REG_DWORD, data.as_ptr(), 4)
+                    })
+                }
+            }
+        });
+        unsafe { RegCloseKey(handle) };
+        written?;
+    }
+    Ok(())
+}
+
+/// `HKCU\<registry>\<key>` and everything under it; a missing key is already removed.
+pub fn delete_key(registry: &str, key: &str) -> io::Result<()> {
+    match unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, key_path(registry, key).as_ptr()) } {
+        0 | ERROR_FILE_NOT_FOUND => Ok(()),
+        code => win32(code),
+    }
 }
 
 #[cfg(test)]

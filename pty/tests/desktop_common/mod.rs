@@ -43,10 +43,28 @@ pub fn main(tests: &[(&str, fn())]) {
 }
 
 fn stand_in(out: &Path) {
+    let environment = [
+        "USERPROFILE",
+        "HOME",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
+        "HARNESS_DESKTOP_INSTALL_ROOT",
+        "HARNESS_DESKTOP_PROGRAMS_DIR",
+        "HARNESS_DESKTOP_REGISTRY_ROOT",
+        "HARNESS_DESKTOP_NO_DIALOG",
+        STANDIN_OUT,
+    ]
+    .into_iter()
+    .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)))
+    .collect::<std::collections::BTreeMap<_, _>>();
     let report = serde_json::json!({
         "args": std::env::args().skip(1).collect::<Vec<_>>(),
         "cwd": std::env::current_dir().unwrap(),
         "pid": std::process::id(),
+        "exe": std::env::current_exe().unwrap(),
+        "env": environment,
     });
     let tmp = out.with_extension("tmp");
     fs::write(&tmp, report.to_string()).unwrap();

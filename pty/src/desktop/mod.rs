@@ -21,8 +21,11 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+pub mod install;
 pub mod launch;
 pub mod pointer;
+pub mod registry;
+pub mod shortcut;
 pub mod system;
 #[cfg(windows)]
 pub mod win;
@@ -112,6 +115,165 @@ pub fn launch_root(own_exe: &Path, env: impl Fn(&str) -> Option<OsString>) -> Op
         .map(Path::to_path_buf)
 }
 
+/// The folders and the registry root an install and an uninstall use. Each comes from a known folder, never from a
+/// hard-coded path or `%LOCALAPPDATA%` text, so a redirected Start Menu or profile is followed (Review Focus 5), and
+/// each has an override for the tests (they never write the real Start Menu, `harness://` key or uninstall entry).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Paths {
+    /// The folder this Harness.exe runs from: an extracted zip, or the install.
+    pub own: PathBuf,
+    /// `<FOLDERID_UserProgramFiles>\Harness` (`%LOCALAPPDATA%\Programs\Harness`), or [INSTALL_ROOT_ENV].
+    pub install: PathBuf,
+    /// `FOLDERID_Programs`, the Start Menu's Programs folder, or [PROGRAMS_DIR_ENV].
+    pub programs: PathBuf,
+    /// The HKCU subkey that stands for `Software`, or [REGISTRY_ROOT_ENV].
+    pub registry: String,
+    /// The profile the app keeps `.harness\desktop-app*` in: `USERPROFILE`, as the app's `homeDir()` reads it, then
+    /// `FOLDERID_Profile` (`HOME` off Windows).
+    pub profile: PathBuf,
+}
+
+/// The known folders [Paths] asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KnownFolder {
+    UserProgramFiles,
+    Programs,
+    Profile,
+}
+
+/// A registry override is a relative HKCU path: no leading, trailing or doubled backslash, and no `/`.
+pub fn valid_registry_root(value: &str) -> bool {
+    !value.is_empty()
+        && !value.contains('/')
+        && value
+            .split('\\')
+            .all(|part| !part.is_empty() && part != "..")
+}
+
+impl Paths {
+    pub fn resolve(
+        own_exe: &Path,
+        env: impl Fn(&str) -> Option<OsString>,
+        known: impl Fn(KnownFolder) -> Option<PathBuf>,
+    ) -> Result<Paths, String> {
+        let set = |key: &str| env(key).filter(|value| !value.is_empty());
+        // A test's install root never comes with the real Start Menu or registry.
+        if set(INSTALL_ROOT_ENV).is_some()
+            && (set(PROGRAMS_DIR_ENV).is_none() || set(REGISTRY_ROOT_ENV).is_none())
+        {
+            return Err(format!(
+                "{INSTALL_ROOT_ENV} needs {PROGRAMS_DIR_ENV} and {REGISTRY_ROOT_ENV} as well"
+            ));
+        }
+        let own = own_exe
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or("Harness.exe does not know its own folder")?;
+        let install = match set(INSTALL_ROOT_ENV) {
+            Some(root) => PathBuf::from(root),
+            None => known(KnownFolder::UserProgramFiles)
+                .ok_or("Windows did not say where your programs go")?
+                .join(DISPLAY_NAME),
+        };
+        let programs = match set(PROGRAMS_DIR_ENV) {
+            Some(dir) => PathBuf::from(dir),
+            None => {
+                known(KnownFolder::Programs).ok_or("Windows did not say where the Start Menu is")?
+            }
+        };
+        let registry = match set(REGISTRY_ROOT_ENV) {
+            Some(root) => {
+                let root = root
+                    .into_string()
+                    .map_err(|_| format!("{REGISTRY_ROOT_ENV} is not text"))?;
+                if !valid_registry_root(&root) {
+                    return Err(format!(
+                        "{REGISTRY_ROOT_ENV} {root:?} is not a registry path under HKEY_CURRENT_USER"
+                    ));
+                }
+                root
+            }
+            None => "Software".to_owned(),
+        };
+        let profile = set("USERPROFILE")
+            .map(PathBuf::from)
+            .or_else(|| known(KnownFolder::Profile))
+            .or_else(|| set("HOME").filter(|_| !cfg!(windows)).map(PathBuf::from))
+            .ok_or("Windows did not say where your profile is")?;
+        for (name, path) in [
+            ("the install folder", &install),
+            ("the Start Menu folder", &programs),
+            ("the profile", &profile),
+        ] {
+            if !path.is_absolute() {
+                return Err(format!("{name} {} is not a full path", path.display()));
+            }
+        }
+        Ok(Paths {
+            own,
+            install,
+            programs,
+            registry,
+            profile,
+        })
+    }
+
+    /// This computer's, for the running program.
+    pub fn current() -> Result<Paths, String> {
+        let exe = std::env::current_exe()
+            .map_err(|err| format!("Harness.exe does not know its own path: {err}"))?;
+        #[cfg(windows)]
+        let known = win::known_folder;
+        #[cfg(not(windows))]
+        let known = |_: KnownFolder| None;
+        Paths::resolve(&exe, |key| std::env::var_os(key), known)
+    }
+
+    pub fn launcher(&self) -> PathBuf {
+        self.install.join(LAUNCHER_EXE)
+    }
+
+    pub fn shortcut(&self) -> PathBuf {
+        self.programs.join(shortcut::LINK_NAME)
+    }
+
+    /// Whether this Harness.exe is the installed one.
+    pub fn running_installed(&self) -> bool {
+        same_folder(&self.own, &self.install)
+    }
+}
+
+/// Two folders compared as Windows does: resolved when they exist (8.3 names, links), and without case.
+pub fn same_folder(a: &Path, b: &Path) -> bool {
+    let plain = |path: &Path| {
+        let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let text = resolved.to_string_lossy().into_owned();
+        let text = text
+            .strip_prefix(r"\\?\")
+            .map(str::to_owned)
+            .unwrap_or(text);
+        text.trim_end_matches(['\\', '/']).to_lowercase()
+    };
+    plain(a) == plain(b)
+}
+
+/// Dispatch only after waiting, and only an actual installed launcher owns its protocol.
+fn launch_from(
+    root: &Path,
+    paths: Option<&Paths>,
+    wait_pid: Option<u32>,
+    args: &[OsString],
+    system: &mut impl system::System,
+) -> i32 {
+    if !launch::wait_before_launch(root, wait_pid, system) {
+        return EXIT_FAILED;
+    }
+    if let Some(paths) = paths.filter(|p| p.running_installed() && same_folder(root, &p.install)) {
+        launch::heal_protocol_key(root, &paths.registry, system);
+    }
+    launch::run(root, None, args, system)
+}
+
 /// The program: see the module comment.
 pub fn run(args: Vec<OsString>) -> i32 {
     let command = match parse(&args) {
@@ -134,11 +296,25 @@ pub fn run(args: Vec<OsString>) -> i32 {
                 system::say("Harness.exe does not know its own folder.");
                 return EXIT_BROKEN;
             };
-            launch::run(&root, wait_pid, &args, &mut system::Real::default())
+            let paths = Paths::current().ok();
+            launch_from(
+                &root,
+                paths.as_ref(),
+                wait_pid,
+                &args,
+                &mut system::Real::default(),
+            )
         }
-        // C4.2 and C4.3.
-        Command::Install { .. } | Command::Uninstall => {
-            system::say("This Harness.exe does not install or uninstall yet.");
+        Command::Install { wait_pid } => match Paths::current() {
+            Ok(paths) => install::main(&paths, wait_pid, &mut system::Real::default()),
+            Err(error) => {
+                system::say(&format!("Harness could not install itself: {error}."));
+                EXIT_FAILED
+            }
+        },
+        // C4.3 owns uninstallation.
+        Command::Uninstall => {
+            system::say("This Harness.exe does not uninstall yet.");
             EXIT_USAGE
         }
     }
@@ -254,5 +430,187 @@ mod tests {
         let empty = |key: &str| (key == INSTALL_ROOT_ENV).then(OsString::new);
         assert_eq!(launch_root(&exe, empty), Some(dir.path().to_path_buf()));
         assert_eq!(launch_root(Path::new("Harness.exe"), |_| None), None);
+    }
+    /// A full path on this OS: `C:\<path>` on Windows, `/<path>` elsewhere.
+    fn at(path: &str) -> PathBuf {
+        Path::new(if cfg!(windows) { "C:\\" } else { "/" }).join(path)
+    }
+
+    fn known(folder: KnownFolder) -> Option<PathBuf> {
+        Some(at(match folder {
+            KnownFolder::UserProgramFiles => "K/Programs",
+            KnownFolder::Programs => "K/Start Menu/Programs",
+            KnownFolder::Profile => "K/Profile",
+        }))
+    }
+
+    #[test]
+    fn paths_come_from_the_known_folders() {
+        let paths = Paths::resolve(&at("zip/Harness.exe"), |_| None, known).unwrap();
+        assert_eq!(
+            paths,
+            Paths {
+                own: at("zip"),
+                install: at("K/Programs").join("Harness"),
+                programs: at("K/Start Menu/Programs"),
+                registry: "Software".to_owned(),
+                profile: at("K/Profile"),
+            }
+        );
+        assert_eq!(
+            paths.launcher(),
+            at("K/Programs").join("Harness").join("Harness.exe")
+        );
+        assert_eq!(
+            paths.shortcut(),
+            at("K/Start Menu/Programs").join("Harness.lnk")
+        );
+    }
+
+    #[test]
+    fn the_tests_overrides_win_and_userprofile_comes_before_the_known_profile() {
+        let env = |key: &str| {
+            Some(
+                at(match key {
+                    INSTALL_ROOT_ENV => "T/Harness",
+                    PROGRAMS_DIR_ENV => "T/Programs",
+                    "USERPROFILE" => "T/Nguyễn Văn A'",
+                    REGISTRY_ROOT_ENV => return Some(OsString::from(r"Software\HarnessTest\1")),
+                    _ => return None,
+                })
+                .into_os_string(),
+            )
+        };
+        let paths = Paths::resolve(&at("zip/Harness.exe"), env, known).unwrap();
+        assert_eq!(paths.install, at("T/Harness"));
+        assert_eq!(paths.programs, at("T/Programs"));
+        assert_eq!(paths.registry, r"Software\HarnessTest\1");
+        assert_eq!(paths.profile, at("T/Nguyễn Văn A'"));
+    }
+
+    #[test]
+    fn refuses_a_registry_override_that_is_not_a_relative_key_and_a_relative_folder() {
+        for bad in [
+            "",
+            r"\Software",
+            r"Software\",
+            r"Software\\X",
+            "Software/X",
+            r"Software\..\X",
+        ] {
+            assert!(!valid_registry_root(bad), "{bad:?}");
+        }
+        let env = |key: &str| (key == REGISTRY_ROOT_ENV).then(|| OsString::from(r"\Software"));
+        assert!(
+            Paths::resolve(&at("zip/Harness.exe"), env, known)
+                .unwrap_err()
+                .contains("not a registry path")
+        );
+        let env = |key: &str| (key == PROGRAMS_DIR_ENV).then(|| OsString::from("relative"));
+        assert!(
+            Paths::resolve(&at("zip/Harness.exe"), env, known)
+                .unwrap_err()
+                .contains("not a full path")
+        );
+        // The tests' install root alone would reach the real Start Menu and registry.
+        let env = |key: &str| (key == INSTALL_ROOT_ENV).then(|| at("T/Harness").into_os_string());
+        assert!(
+            Paths::resolve(&at("zip/Harness.exe"), env, known)
+                .unwrap_err()
+                .contains("needs")
+        );
+        assert!(Paths::resolve(&at("zip/Harness.exe"), |_| None, |_| None).is_err());
+    }
+
+    #[test]
+    fn folders_compare_without_case_and_trailing_separators() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Harness");
+        std::fs::create_dir(&path).unwrap();
+        let mut trailing = path.clone().into_os_string();
+        trailing.push(std::path::MAIN_SEPARATOR_STR);
+        assert!(same_folder(&path, Path::new(&trailing)));
+        assert!(same_folder(
+            Path::new("/X/Harness"),
+            Path::new("/x/harness/")
+        ));
+        assert!(!same_folder(
+            Path::new("/X/Harness"),
+            Path::new("/X/Harness2")
+        ));
+    }
+    #[test]
+    fn only_the_actual_installed_launcher_heals_after_a_successful_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Harness");
+        std::fs::create_dir_all(install.join("app/1.2.3")).unwrap();
+        std::fs::write(install.join("app/1.2.3").join(APP_EXE), b"app").unwrap();
+        pointer::write(&install.join("current"), "1.2.3").unwrap();
+        let mut paths = Paths {
+            own: dir.path().join("zip"),
+            install: install.clone(),
+            programs: dir.path().join("programs"),
+            registry: r"Software\HarnessTest\dispatch".into(),
+            profile: dir.path().to_owned(),
+        };
+        let mut system = system::Fake::default();
+        assert_eq!(
+            launch_from(&install, Some(&paths), None, &[], &mut system),
+            EXIT_OK
+        );
+        assert_eq!(
+            system.writes, 0,
+            "a zip with a root override cannot acquire the scheme"
+        );
+        paths.own = install.clone();
+        let mut system = system::Fake {
+            fail_wait: Some(std::io::ErrorKind::TimedOut),
+            ..Default::default()
+        };
+        assert_eq!(
+            launch_from(&install, Some(&paths), Some(77), &[], &mut system),
+            EXIT_FAILED
+        );
+        assert_eq!(system.waited, vec![77]);
+        assert_eq!(system.writes, 0);
+        assert_eq!(system.reads, 0);
+        assert!(system.started.is_empty());
+        system.fail_wait = None;
+        assert_eq!(
+            launch_from(&install, Some(&paths), Some(78), &[], &mut system),
+            EXIT_OK
+        );
+        assert_eq!(
+            system.waited,
+            vec![77, 78],
+            "the successful wait is not repeated"
+        );
+        assert_eq!(system.writes, 1);
+        let key = (
+            paths.registry.clone(),
+            r"Classes\harness\shell\open\command".into(),
+            String::new(),
+        );
+        assert_eq!(
+            system.values.get(&key),
+            Some(&OsString::from(format!(
+                "\"{}\" \"%1\"",
+                paths.launcher().display()
+            )))
+        );
+        let reads = system.reads;
+        assert_eq!(
+            launch_from(&install, Some(&paths), None, &[], &mut system),
+            EXIT_OK
+        );
+        assert_eq!(system.writes, 1);
+        assert_eq!(system.reads, reads + 1);
+        let another_root = dir.path().join("another");
+        launch_from(&another_root, Some(&paths), None, &[], &mut system);
+        assert_eq!(
+            system.reads,
+            reads + 1,
+            "an overridden launch elsewhere does not heal"
+        );
     }
 }

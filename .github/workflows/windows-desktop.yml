@@ -48,7 +48,7 @@ jobs:
         run: |
           cargo test --locked --lib desktop
           if ($LASTEXITCODE -ne 0) { throw "Desktop launcher unit tests failed ($LASTEXITCODE)" }
-          cargo test --locked --test desktop_launch
+          cargo test --locked --test desktop_launch --test desktop_install
           if ($LASTEXITCODE -ne 0) { throw "Desktop launcher integration tests failed ($LASTEXITCODE)" }
       # A real node.exe for the tests that run one (harness_cli_runner_windows_test.dart,
       # environment_provisioner_windows_test.dart). Same runtime pin as windows.yml.
