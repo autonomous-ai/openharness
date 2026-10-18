@@ -144,5 +144,9 @@ export async function creationForExperiment(read: BackendSocket['createStatusPro
   try { await read({ creationId }, value => { reply = value }) } catch { return null }
   const frame = reply as Record<string, unknown> | null
   const agent = frame?.agent as { id?: unknown } | undefined
-  return creationObservation(creationId, { ...frame, agentId: agent?.id })
+  // A closed terminal is unavailable to a window, but its durable creation
+  // receipt still identifies what launched. A service can check its stop.
+  return creationObservation(creationId, frame?.state === 'unavailable'
+    ? { ...frame, state: 'created', agentId: frame.createdAgentId }
+    : { ...frame, agentId: agent?.id })
 }

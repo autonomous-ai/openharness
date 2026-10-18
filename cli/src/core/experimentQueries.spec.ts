@@ -42,6 +42,9 @@ describe('what an experiment in its own process may ask of the core', () => {
     expect(await creationForExperiment(async () => { throw new Error('Disk unavailable') }, id)).toBeNull()
     expect(await creationForExperiment(async (input, reply) => { reply({ ...input, state: 'cancelled' }) }, id)).toEqual(known)
     expect(await creationForExperiment(async (_, reply) => { reply({ creationId: 'other', state: 'cancelled' }) }, id)).toBeNull()
+    expect(await creationForExperiment(async (input, reply) => { reply({ ...input, state: 'unavailable', createdAgentId: 'closed-native' }) }, id))
+      .toEqual({ creationId: id, state: 'created', agentId: 'closed-native' })
+    expect(await creationForExperiment(async (input, reply) => { reply({ ...input, state: 'unavailable' }) }, id)).toBeNull()
   })
   it('requires fresh native stop evidence, including when a core is older', async () => {
     const core = fakeCore({ agents: { stopped: async id => id === 'stopped' } })

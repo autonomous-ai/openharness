@@ -840,7 +840,7 @@ describe('agent_create_status', () => {
     expect(created).toStrictEqual({ creationId: CREATION, state: 'created', agent: { id: 'forked' }, level: 'handoff', resumed: true })
     expect(Object.keys(created!)).toEqual(['creationId', 'state', 'agent', 'level', 'resumed'])
     outcome({ state: 'created', agentId: 'deleted-since' })
-    expect(await status({ creationId: CREATION })).toStrictEqual({ creationId: CREATION, state: 'unavailable' })
+    expect(await status({ creationId: CREATION })).toStrictEqual({ creationId: CREATION, state: 'unavailable', createdAgentId: 'deleted-since' })
     outcome({ state: 'failed', error: 'ENGINE_MISSING', detail: 'claude is not installed', preparedFolder: '/projects/prepared' })
     expect(await status({ creationId: CREATION })).toStrictEqual({ creationId: CREATION, state: 'failed', preparedFolder: '/projects/prepared', failure: { code: 'ENGINE_MISSING', detail: 'claude is not installed' } })
     outcome({ state: 'unconfirmed' })

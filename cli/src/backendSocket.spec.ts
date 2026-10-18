@@ -2755,7 +2755,7 @@ describe('agent_fork RPC', () => {
       lookup.mockReturnValue(undefined)
       ask('agent_fork', 'deleted')
       await vi.waitFor(() => expect(frames).toContainEqual({
-        type: 'agent_fork_result', payload: { requestId: 'deleted', creationId, state: 'unavailable' },
+        type: 'agent_fork_result', payload: { requestId: 'deleted', creationId, state: 'unavailable', createdAgentId: FORK.agentId },
       }))
       expect(fork).toHaveBeenCalledTimes(1)
     } finally {
