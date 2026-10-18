@@ -249,6 +249,9 @@ bool HarnessSingleInstance::NotifyQuit(DWORD wait_ms) {
     if (state == WAIT_FAILED) {
       break;
     }
+    if (::GetTickCount64() >= deadline) {
+      break;
+    }
     HWND target =
         ::FindWindowExW(HWND_MESSAGE, nullptr, kWindowClass, name.c_str());
     if (target != nullptr) {
@@ -268,9 +271,15 @@ bool HarnessSingleInstance::NotifyQuit(DWORD wait_ms) {
         const ULONGLONG now = ::GetTickCount64();
         const DWORD remaining =
             now >= deadline ? 0 : static_cast<DWORD>(deadline - now);
-        exited = ::WaitForSingleObject(process, remaining) == WAIT_OBJECT_0;
+        const bool process_exited =
+            ::WaitForSingleObject(process, remaining) == WAIT_OBJECT_0;
         ::CloseHandle(process);
-        break;
+        if (!process_exited) {
+          break;
+        }
+        // A waiting launch may already own the mutex after this PID exits.
+        // Recheck the instance, and quit any successor within the same bound.
+        continue;
       }
       if (process != nullptr) {
         ::CloseHandle(process);
