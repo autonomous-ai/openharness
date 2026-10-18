@@ -404,6 +404,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // The router (services/routerProcess.ts), an experiment: started at its first request. A few decisions in
   // flight, each one bounded Jev answer.
   router: { services: ['router'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
+  superTabs: { services: ['superTabs'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
   // Cloud agents (services/cloudProcess.ts), an experiment: started once one is on, for a saved harness or a
   // request. A timer and a bounded look per working harness, and each conversation read a file at a time.
   cloud: { services: ['cloud'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },

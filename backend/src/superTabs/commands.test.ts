@@ -29,6 +29,14 @@ function fixture() {
 }
 
 describe('Super Tab collaboration policy', () => {
+  it('records the native launch request without dispatching it a second time', () => {
+    const f = fixture()
+    const result = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'lead',
+      name: 'Lead', configuration: config, lead: true, initialMessage: 'Discuss the architecture.' }, owner,
+    { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } })
+    expect(result.messages).toEqual([expect.objectContaining({ text: 'Discuss the architecture.', recipients: [], author: expect.objectContaining({ kind: 'person', id: 'owner' }) })])
+    expect(f.state.conversations[0]!.leadId).toBe(result.result.agentId)
+  })
   it('keeps adding an agent separate from creating conversations and assigning work', () => {
     const f = fixture()
     const lead = f.add('lead', 'owner', 'lead', true)
@@ -121,7 +129,8 @@ describe('Super Tab collaboration policy', () => {
       checkId: f.state.conversations[1]!.checks[0]!.id, passed: true, evidence: 'Reconnect test passed on revision fixture-1.' }
     expect(() => f.run(check, { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' })).toThrow('Another agent')
     f.run(check, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })
-    f.run(done)
+    const completion = f.run(done, { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' })
+    expect(completion.messages[0]).toMatchObject({ conversationId: group, text: 'Done\n\nRevision fixture-1', recipients: [lead] })
     expect(() => f.run(check)).toThrow('new attempt')
     expect(() => f.run({ ...done, status: 'working' })).toThrow('new attempt')
     const retry = f.run({ type: 'work.assign', conversationId: group, agentId: worker })

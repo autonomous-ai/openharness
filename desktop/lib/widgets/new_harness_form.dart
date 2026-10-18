@@ -382,7 +382,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _Row.worktree => 'Worktree',
     _Row.approvals => 'Approvals',
     _Row.profile => widget.desktop ? 'Account' : 'Profile',
-    _Row.start => 'New Harness',
+    _Row.start => box.actionLabel,
   };
 
   /// What the row currently answers — or, while its list is open, what the
@@ -2202,7 +2202,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           ? (_checkingLaunch ? 'Checking…' : 'Starting…')
           : box.checking
           ? 'Check status'
-          : 'New Harness';
+          : box.actionLabel;
       return FocusTraversalOrder(
         order: const NumericFocusOrder(10),
         child: FilledButton(

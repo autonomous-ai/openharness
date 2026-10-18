@@ -30,6 +30,7 @@ import 'app_state.dart';
 import 'attached_task_delivery.dart';
 import 'harness_placement.dart';
 import 'harness_attachments.dart';
+import 'harness_launch_integration.dart';
 import 'pane_arrangement.dart';
 
 /// Whether New Harness opens as a line in the box, or as the full form.
@@ -300,6 +301,7 @@ class NewHarnessDraft {
     this.profile,
     this.profileChosen = false,
     this.attempt,
+    this.integration,
     this.error,
     this.dismissalWarningShown = false,
     this.projectsByMachine = const {},
@@ -321,6 +323,7 @@ class NewHarnessDraft {
   final LocalCodexProfile? profile;
   final bool profileChosen;
   final AgentCreationAttempt? attempt;
+  final HarnessLaunchIntegration? integration;
   final String? error;
   // The visible "Escape again" message must keep the same meaning if the
   // unresolved prompt is dismissed and then restored.
@@ -429,7 +432,9 @@ class NewHarnessController extends ChangeNotifier {
     ModelsMenuController? modelUsage,
     Random? random,
     this.attachments,
+    HarnessLaunchIntegration? integration,
   }) : _random = random ?? Random(),
+       integration = draft?.integration ?? integration,
        placement =
            placement ?? (split == null ? HarnessPlacement.currentTab : null),
        _targetId = swarmId ?? app.activeSwarmId,
@@ -1192,6 +1197,7 @@ class NewHarnessController extends ChangeNotifier {
     profile: _profile,
     profileChosen: _profileChosen,
     attempt: _attempt,
+    integration: integration,
     error: error,
     dismissalWarningShown: _warnedAboutClosing,
     projectsByMachine: Map.unmodifiable({
@@ -3443,12 +3449,15 @@ class NewHarnessController extends ChangeNotifier {
   /// never came back may have worked, and asking again must ask the machine
   /// what happened to THAT request rather than start a second harness.
   AgentCreationAttempt? _attempt;
+  final HarnessLaunchIntegration? integration;
+  String get actionLabel => integration?.actionLabel ?? 'New Harness';
 
   /// The person has been told a typed task will not be sent, and pressed again.
   bool _dropAccepted = false;
 
   /// A reply was lost; Return now checks on it instead of creating again.
-  bool get checking => _attempt?.awaitingConfirmation == true;
+  bool get checking =>
+      _attempt?.awaitingConfirmation == true || integration?.pending == true;
   bool get canCancelPending => _attempt?.canCancelPending == true;
 
   /// The check [followHeld] is making. Nobody pressed for it, so it shows
@@ -3529,6 +3538,20 @@ class NewHarnessController extends ChangeNotifier {
     if (busy || linkingProfile) {
       return NewHarnessOutcome.failed;
     }
+    final resume = integration?.resume;
+    if (resume != null) {
+      busy = true;
+      status = 'Checking on the harness…';
+      notifyListeners();
+      try {
+        await resume();
+        busy = false;
+        integration!.pending = false;
+        return NewHarnessOutcome.created;
+      } catch (failure) {
+        return _fail(failure.toString());
+      }
+    }
     if (!checking && usesProfile && _profile != null) {
       if (loadingProfiles) {
         return _fail(
@@ -3553,6 +3576,11 @@ class NewHarnessController extends ChangeNotifier {
     if (requiredChoice case final choice?) {
       focusField(choice.field);
       return _fail(choice.message);
+    }
+    if (integration != null && (isCloud || !takesTask)) {
+      return _fail(
+        'Choose an agent that runs on a machine, such as Claude Code or Codex.',
+      );
     }
     if (isCloud) return _createCloud();
     if (!checking) {
@@ -3636,7 +3664,10 @@ class NewHarnessController extends ChangeNotifier {
     // A cached availability probe must not block that first launch.
     final recheck = checking;
     if (!recheck) {
-      _attempt = AgentCreationAttempt();
+      _attempt = AgentCreationAttempt(
+        background: integration != null,
+        beforeSubmit: integration?.beforeSubmit,
+      );
       _warnedAboutClosing = false;
       _installing = null;
     }
@@ -3700,6 +3731,15 @@ class NewHarnessController extends ChangeNotifier {
         permissionMode != null && permissionModeApproves(permissionMode);
     final folder = _project.folder;
     final firstMessage = task.trim();
+    String launchMessage = firstMessage;
+    if (integration case final destination?) {
+      try {
+        launchMessage = destination.preparedPrompt ??= await destination
+            .prepare(_machineId, firstMessage);
+      } catch (failure) {
+        return _fail(failure.toString());
+      }
+    }
     // Files ride into the live terminal after creation, and the task follows
     // them there (see deliverAttachedTask), so neither is a launch argument.
     final files = takesTask
@@ -3736,8 +3776,8 @@ class NewHarnessController extends ChangeNotifier {
       model: _model,
       dsh: harness,
       // Sent exactly as written; an agent that cannot take one is never sent it.
-      prompt: takesTask && files.isEmpty && firstMessage.isNotEmpty
-          ? firstMessage
+      prompt: takesTask && files.isEmpty && launchMessage.isNotEmpty
+          ? launchMessage
           : null,
       // A new project named by the person, or after its task, names the agent
       // too — until the engine titles the session. So does a first message
@@ -3755,8 +3795,23 @@ class NewHarnessController extends ChangeNotifier {
     // Before the disposed check: on an empty tab the new pane replaces this
     // box as soon as it opens, disposing it while createAgent returns — and
     // the files still have to follow the harness there.
+    final destination = integration;
+    if (failure == null && attempt.agentId != null && destination != null) {
+      destination.pending = true;
+      try {
+        if (!destination.completed) {
+          await destination.complete(_machineId, attempt.agentId!);
+          destination.completed = true;
+        }
+        destination.pending = false;
+      } catch (problem) {
+        return _fail(
+          'Harness started. Could not join the conversation: $problem',
+        );
+      }
+    }
     if (failure == null && files.isNotEmpty) {
-      _deliverFiles(attempt.agentId, files, firstMessage);
+      _deliverFiles(attempt.agentId, files, launchMessage);
     }
     // Creation can replace an embedded form before this future returns. Save
     // the confirmed choices even if that form has already been disposed.
@@ -3772,6 +3827,7 @@ class NewHarnessController extends ChangeNotifier {
     }
     if (_disposed) return NewHarnessOutcome.failed;
     if (failure != null) {
+      if (!checking) integration?.preparedPrompt = null;
       // A folder already made for this attempt is the project now: a retry
       // goes into it rather than making a second one beside it.
       if (!checking && attempt.preparedFolder != null) {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { TurnDelivery } from './api.js'
-import { createDeliveries, HELD_DELIVERIES, KEPT_DELIVERERS, type DeliveriesDeps } from './deliveries.js'
+import { createDeliveries, DELIVERY_LEASE_MS, HELD_DELIVERIES, KEPT_DELIVERERS, type DeliveriesDeps } from './deliveries.js'
 
 const setup = (over: Partial<Pick<DeliveriesDeps, 'submit' | 'cancel' | 'deliverers'>> = {}, ready = true) => {
   const deps = {
@@ -17,6 +17,35 @@ const setup = (over: Partial<Pick<DeliveriesDeps, 'submit' | 'cancel' | 'deliver
 const event = (deliveryId: string, state: TurnDelivery['state'] = 'queued'): TurnDelivery => ({ deliveryId, sessionId: 'agent-1', state })
 
 describe('delivered turns', () => {
+  it('expires a service permission at the terminal write and replaces it on revocation', async () => {
+    let clock = 10_000
+    const deliveries = createDeliveries({ submit: vi.fn(), cancel: vi.fn(() => false), tell: vi.fn(), deliverers: new Set(['worker']), now: () => clock })
+    const id = 'team:service:worker:one'
+    expect(deliveries.canWrite('team:legacy')).toBeNull()
+    expect(deliveries.canWrite(id)).toBe(false)
+    expect(await deliveries.turns.leaseDeliveries('worker', { [id]: clock + 60_000 })).toBe(true)
+    expect(deliveries.canWrite(id)).toBe(true)
+    clock += DELIVERY_LEASE_MS
+    expect(deliveries.canWrite(id)).toBe(false)
+    expect(deliveries.answer('worker', 'lease_deliveries', { leases: { [id]: clock + 1000 } })).toEqual({ leased: true })
+    expect(deliveries.canWrite(id)).toBe(true)
+    await deliveries.turns.leaseDeliveries('worker', {})
+    expect(deliveries.canWrite(id)).toBe(false)
+    expect(deliveries.answer('worker', 'deliver', { deliveryId: id, agentId: 'a', text: 'x' })).toEqual({})
+  })
+
+  it('cannot grant, cancel or submit another service namespace or unbounded permissions', async () => {
+    const { deliveries, deps } = setup()
+    const id = 'team:service:other:one'
+    expect(deliveries.answer('orchestrator', 'deliver', { deliveryId: id, agentId: 'a', text: 'x' })).toEqual({ error: 'INVALID_DELIVERY' })
+    expect(deliveries.answer('orchestrator', 'cancel_delivery', { deliveryId: id })).toEqual({ error: 'INVALID_DELIVERY' })
+    expect(await deliveries.turns.leaseDeliveries('unknown', {})).toBe(false)
+    for (const leases of [null, 4, [], { [id]: Date.now() }, { 'team:service:orchestrator:a': 'later' }, { 'team:service:orchestrator:a': Infinity }, { [`team:service:orchestrator:${'x'.repeat(240)}`]: 100 }, Object.fromEntries(Array.from({ length: HELD_DELIVERIES + 1 }, (_, i) => [`team:service:orchestrator:${i}`, 100]))]) {
+      expect(deliveries.answer('orchestrator', 'lease_deliveries', { leases })).toEqual({ leased: false })
+    }
+    expect(deps.submit).not.toHaveBeenCalled()
+    expect(deps.cancel).not.toHaveBeenCalled()
+  })
   it('writes a delivery from the core\'s own process into the agent, and takes one back at once', () => {
     const { deps, deliveries } = setup({ cancel: vi.fn(() => false) })
     deliveries.turns.deliver('agent-1', 'hello', 'd1')

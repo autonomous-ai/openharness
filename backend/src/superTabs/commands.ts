@@ -20,7 +20,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('conversation.create'), title, brief: z.string().trim().max(8000), checks: z.array(check).max(40) }).strict(),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
-  z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean() }).strict(),
+  z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), initialMessage: text.optional() }).strict(),
   z.object({ type: z.literal('agent.remove'), agentId: id }).strict(),
   z.object({ type: z.literal('conversation.agent'), conversationId: id, agentId: id, present: z.boolean(), lead: z.boolean() }).strict(),
   z.object({ type: z.literal('invite.create'), email: z.email().max(320), role: z.enum(['collaborator', 'viewer']), conversationId: id }).strict(),
@@ -41,7 +41,7 @@ export interface CommandContext {
   operationId: string
   now: number
   /** Read from host ownership/access records by the store, never copied from the request. */
-  contribution?: { machineOwnerId: string; contributorId: string }
+  contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null }
   /** Loaded from this tab and conversation by the store. */
   reply?: { id: string; conversationId: string; author: Author }
   /** A host's receipt, not an elapsed lease, proves that an assignment stopped. */
@@ -150,9 +150,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const existing = state.agents.find(a => a.id === agentId)
       if (!existing) state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId,
         machineOwnerId: grant.machineOwnerId, contributorId: grant.contributorId, membershipGeneration: contributor.generation,
+        hostGrant: grant.hostGrant ?? null,
         name: command.name, configuration: command.configuration })
       if (existing && (existing.machineOwnerId !== grant.machineOwnerId || existing.contributorId !== grant.contributorId)) {
         fail('ALREADY_SHARED', 'This session already has a contributor. Use the existing tab agent.')
+      }
+      if (existing && (existing.hostGrant ?? null) !== (grant.hostGrant ?? null)) {
+        fail('CONTRIBUTION_REVOKED', 'Reconcile and remove this old contribution before adding it under the new machine share.', 403)
       }
       if (!group.agentIds.includes(agentId)) group.agentIds.push(agentId)
       if (command.lead) {
@@ -160,6 +164,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         group.leadId = agentId
       }
       result.agentId = agentId
+      // Creation already handed this first request to the native harness (and
+      // any attachments through its existing launch path). Record it once in
+      // the shared conversation without delivering the same request twice.
+      if (command.initialMessage) {
+        if (actor.kind !== 'person') fail('FORBIDDEN', 'Only a person can record their initial launch request.', 403)
+        message(group.id, command.initialMessage)
+      }
       break
     }
     case 'agent.remove': {
@@ -272,8 +283,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.status === 'done' && (!command.result || !group.checks.every(c => c.passedBy && c.evidence))) {
         fail('CHECKS_PENDING', 'Completion needs a result and evidence for every acceptance check.')
       }
+      const changed = assignment.status !== command.status || assignment.result !== command.result
       assignment.status = command.status
       assignment.result = command.result
+      if (changed) {
+        const label = { working: 'Working', needs_human: 'Needs a human', review: 'Ready for review', done: 'Done', stopped: 'Stopped' }[command.status]
+        const lead = group.leadId
+        const tellLead = actor.kind === 'agent' && actor.agentId === assignment.agentId && lead && lead !== actor.agentId &&
+          ['needs_human', 'review', 'done'].includes(command.status)
+        message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}`, tellLead ? [lead] : [])
+      }
       break
     }
     case 'work.check': {

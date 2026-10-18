@@ -41,6 +41,10 @@ class SuperTabConversation {
       leadId = row['leadId'] as String?,
       agentIds = List.unmodifiable((row['agentIds'] as List).cast<String>()),
       archived = row['archived'] == true,
+      checks = _list(
+        row['checks'] ?? const [],
+        (check) => Map<String, dynamic>.unmodifiable(check),
+      ),
       brief = _text(row, 'brief'),
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       assignment = row['assignment'] == null
@@ -50,6 +54,7 @@ class SuperTabConversation {
   final String? leadId;
   final List<String> agentIds;
   final bool archived;
+  final List<Map<String, dynamic>> checks;
   final int lastMessageSequence;
   final Map<String, dynamic>? assignment;
 }

@@ -34,6 +34,7 @@ const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_workt
   'os_device',
   // Sharing a machine across accounts (services/sharedMachines.ts): the addresses it is shared with.
   'shared_machines',
+  'super_tabs',
   // A sign-in a phone caught for a page a harness's program opened (core/terminals/browser.ts): it holds the code.
   'browser_callback', ...ROUTE_COMMAND_TYPES])
 const MACHINE_RESULTS = new Set([...MACHINE_REQUESTS].map(type => `${type}_result`))

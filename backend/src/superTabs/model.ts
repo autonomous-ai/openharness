@@ -16,6 +16,7 @@ export interface Agent {
   machineOwnerId: string
   contributorId: string
   membershipGeneration: string
+  hostGrant?: string | null
   name: string
   configuration: AgentConfiguration
 }

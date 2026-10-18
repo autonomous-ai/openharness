@@ -689,6 +689,13 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.actions,
     keywords: ['hide guide', 'dismiss tutorial'],
   ),
+  const HarnessCommand(
+    'super_tab.new',
+    'New Super Tab',
+    ShortcutGroup.actions,
+    extraKeys: ['cmd+alt+shift+t'],
+    hidden: true,
+  ),
   if (kDebugSurfaceEnabled)
     const HarnessCommand(
       'app.debug',

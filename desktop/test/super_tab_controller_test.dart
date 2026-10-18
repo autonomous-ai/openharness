@@ -1,139 +1,37 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
 
-Map<String, dynamic> group(String id, String title) => {
-  'id': id,
-  'title': title,
-  'leadId': null,
-  'agentIds': <String>[],
-  'archived': false,
-  'brief': '',
-  'checks': <dynamic>[],
-  'assignment': null,
-  'lastMessageSequence': 0,
-};
-
-class ConversationServer {
-  int revision = 0;
-  bool loseReply = false, reject = false, failSave = false;
-  Map<String, dynamic>? saved;
-  final posts = <Map<String, dynamic>>[];
-  final receipts = <String, Map<String, dynamic>>{};
-  final messages = <Map<String, dynamic>>[];
-  final state = <String, dynamic>{
-    'version': 1,
-    'id': 'tab',
-    'name': 'Pilot',
-    'ownerId': 'owner',
-    'paused': false,
-    'people': [
-      {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
-    ],
-    'agents': <dynamic>[],
-    'invitations': <dynamic>[],
-    'conversations': [
-      group('lead', 'Lead'),
-      group('offline', 'Offline editing'),
-    ],
-  };
-  Future<void> save(Map<String, dynamic> value) async {
-    if (failSave) throw StateError('Disk full');
-    saved = jsonDecode(jsonEncode(value)) as Map<String, dynamic>;
-  }
-
-  void append(String text, {String conversationId = 'lead'}) {
-    revision++;
-    messages.add({
-      'id': 'message-$revision',
-      'conversationId': conversationId,
-      'sequence': revision,
-      'text': text,
-      'createdAt': '2026-10-18T00:00:00Z',
-      'author': {'kind': 'person', 'id': 'owner', 'name': 'owner@example.com'},
-      'deliveries': <dynamic>[],
-    });
-    (state['conversations'] as List).cast<Map<String, dynamic>>().firstWhere(
-      (g) => g['id'] == conversationId,
-    )['lastMessageSequence'] = revision;
-  }
-
-  Future<Map<String, dynamic>> request(
-    String method,
-    String path, {
-    Map<String, dynamic>? body,
-  }) async {
-    if (method == 'POST') {
-      posts.add(Map<String, dynamic>.from(body!));
-      if (reject) {
-        throw const SuperTabFailure(
-          'INVALID_RECIPIENT',
-          'Choose an agent in this conversation.',
-          statusCode: 400,
-        );
-      }
-      final operationId = body['operationId'] as String;
-      if (receipts[operationId] case final receipt?) return receipt;
-      final command = body['command'] as Map;
-      if (command['type'] == 'message.send') {
-        append(
-          command['text'] as String,
-          conversationId: command['conversationId'] as String,
-        );
-      }
-      final result = {
-        'revision': revision,
-        'result': {'messageId': 'message-$revision'},
-      };
-      receipts[operationId] = result;
-      if (loseReply) {
-        loseReply = false;
-        throw StateError('Connection lost after commit');
-      }
-      return result;
-    }
-    final uri = Uri.parse(path);
-    if (uri.pathSegments.last == 'messages') {
-      final conversationId = uri.pathSegments[4];
-      final after = int.tryParse(uri.queryParameters['after'] ?? '');
-      final before = int.tryParse(uri.queryParameters['before'] ?? '');
-      var rows = messages
-          .where(
-            (m) =>
-                m['conversationId'] == conversationId &&
-                (after == null || (m['sequence'] as int) > after) &&
-                (before == null || (m['sequence'] as int) < before),
-          )
-          .toList();
-      if (after == null) rows = rows.reversed.toList();
-      final page = rows.take(100).toList();
-      final next = rows.length > 100 ? page.last['sequence'] : null;
-      return {
-        'messages': after == null ? page.reversed.toList() : page,
-        'next': next,
-        'revision': revision,
-      };
-    }
-    return jsonDecode(jsonEncode({'revision': revision, 'state': state}))
-        as Map<String, dynamic>;
-  }
-
-  SuperTabController controller({
-    Map<String, dynamic>? initial,
-    String account = 'owner',
-  }) => SuperTabController(
-    tabId: 'tab',
-    accountId: account,
-    request: request,
-    save: save,
-    initial: initial ?? const {},
-    pollInterval: Duration.zero,
-  );
-}
+import 'support/super_tab_fixture.dart';
 
 void main() {
+  test('mentions keep stable agent identities through rename, reopen and deletion', () async {
+    final server = ConversationServer();
+    (server.state['conversations'] as List)[0]['agentIds'] = ['worker-1'];
+    final first = server.controller();
+    await first.refresh();
+    first.setDraft('lead', '@Worker 1 review this.');
+    first.mention('lead', 'worker-1', '@Worker 1');
+    await first.flush();
+    first.dispose();
+    final reopened = server.controller(initial: server.saved);
+    await reopened.refresh();
+    await reopened.send();
+    expect((server.posts.single['command'] as Map)['recipientIds'], ['worker-1']);
+    reopened.setDraft('lead', '@Worker 1 again');
+    reopened.mention('lead', 'worker-1', '@Worker 1');
+    reopened.setDraft('lead', '@Worker 10 again');
+    expect(reopened.mentions('lead'), isEmpty);
+    reopened.setDraft('lead', '@Worker 1 check');
+    reopened.mention('lead', 'worker-1', '@Worker 1');
+    (server.state['conversations'] as List)[0]['agentIds'] = <String>[];
+    await reopened.refresh();
+    expect(await reopened.send(), isNull);
+    expect(server.posts, hasLength(1));
+    expect(reopened.operationError, contains('no longer'));
+    await reopened.flush(); reopened.dispose();
+  });
   Future<SuperTabController> open(ConversationServer server) async {
     final controller = server.controller();
     addTearDown(() async {
@@ -154,7 +52,7 @@ void main() {
       controller.setDraft('offline', 'Keep local changes');
       server.append('Another person answered.');
       (server.state['conversations'] as List).add(
-        group('onboarding', 'Onboarding'),
+        conversationFixture('onboarding', 'Onboarding'),
       );
       await controller.refresh();
       expect(controller.selectedId, 'offline');
@@ -275,6 +173,35 @@ void main() {
     expect(other.draft('lead'), isEmpty);
     expect(other.hasPendingAction, isFalse);
   });
+
+  test(
+    'a confirmed new group cannot send into the old group when its read fails',
+    () async {
+      final server = ConversationServer();
+      final controller = await open(server);
+      controller.setDraft('lead', 'Keep this in Lead');
+      server.failReads = true;
+      final result = await controller.command({
+        'type': 'conversation.create',
+        'title': 'New feature',
+        'brief': '',
+        'checks': <dynamic>[],
+      });
+      expect(controller.selectedId, result!['conversationId']);
+      expect(controller.selected, isNull);
+      controller.setDraft(controller.selectedId, 'Work here');
+      expect(await controller.send(), isNull);
+      expect(server.messages, isEmpty);
+      server.failReads = false;
+      await controller.refresh();
+      await controller.send();
+      expect(
+        server.messages.single['conversationId'],
+        result['conversationId'],
+      );
+      expect(controller.draft('lead'), 'Keep this in Lead');
+    },
+  );
 
   test('viewers cannot send messages but can leave', () async {
     final server = ConversationServer();

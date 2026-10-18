@@ -1,0 +1,127 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { CoreApi, TurnDelivery } from '../core/api.js'
+import { fakeCore } from '../testing/fakeCore.js'
+import { backend, hostJournalFile, SuperTabHost } from './host.js'
+
+const roots: string[] = []
+const hosts: SuperTabHost[] = []
+afterEach(() => { for (const host of hosts.splice(0)) host.stop(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+
+function setup() {
+  const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
+  const listeners = new Set<(e: TurnDelivery) => void>()
+  const row = { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }
+  let removed = false, revoked = false, status = 'queued', claimId: string | null = null
+  const receipts: Record<string, unknown>[] = []
+  const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
+    let data: unknown
+    if (path.includes('/hosts/')) data = removed ? [] : [row]
+    else if (revoked) return { status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'Grant removed' } } }
+    else if (method === 'GET') data = status === 'delivered' ? [] : [{ id: 'delivery', claimId, status }]
+    else {
+      const command = body as Record<string, unknown>
+      if (command.type === 'claim') { claimId = command.claimId as string; status = 'claimed' }
+      else { receipts.push(command); status = command.uncertain ? 'uncertain' : 'delivered' }
+      data = { delivery: { id: 'delivery', claimId, status }, message: { id: 'message', conversationId: 'lead', text: 'Build the agreed feature.', authorName: 'Collaborator' } }
+    }
+    return { status: 200, body: { success: true, data } }
+  })
+  const core = fakeCore({ dataDir: dir,
+    agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) },
+    account: { backend: call },
+    turns: { onDelivery: vi.fn(fn => { listeners.add(fn); return () => { listeners.delete(fn) } }) },
+  })
+  const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
+  const event = (state: TurnDelivery['state'], reason?: string) => {
+    for (const fn of listeners) fn({ deliveryId: 'team:service:superTabs:delivery', sessionId: 'harness', state, reason })
+  }
+  const saved = () => JSON.parse(readFileSync(hostJournalFile(dir, 'machine-1'), 'utf8'))
+  return { core, call, open, event, receipts, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' } }
+}
+
+describe('Super Tab native delivery handoff', () => {
+  it('persists before typing, keeps one native delivery during polls, and acknowledges the exact receipt', async () => {
+    const t = setup(), host = t.open()
+    vi.mocked(t.core.turns.deliver).mockImplementation(() => expect(t.saved().entries.delivery.stage).toBe('submitting'))
+    await host.tick(); await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.core.turns.deliver).toHaveBeenCalledWith('harness', expect.stringContaining('post'), 'team:service:superTabs:delivery')
+    expect(t.core.turns.leaseDeliveries).toHaveBeenCalledWith('superTabs', expect.objectContaining({ 'team:service:superTabs:delivery': expect.any(Number) }))
+    t.event('queued'); t.event('delivered')
+    const receipt = t.saved().entries.delivery.receipt
+    await host.tick()
+    expect(t.receipts).toEqual([expect.objectContaining({ receipt, uncertain: false })])
+    expect(t.saved().entries).toEqual({})
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not type again after a crash between submission and its native acknowledgement', async () => {
+    const t = setup(), first = t.open()
+    await first.tick(); first.stop()
+    const restarted = t.open()
+    await restarted.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.receipts).toEqual([expect.objectContaining({ uncertain: true, receipt: expect.stringContaining('restarted') })])
+  })
+
+  it('replays a saved receipt after a lost backend acknowledgement without another native send', async () => {
+    const t = setup(), first = t.open()
+    await first.tick(); t.event('delivered'); first.stop()
+    const restarted = t.open()
+    await restarted.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.receipts[0].uncertain).toBe(false)
+  })
+
+  it('retries an explicitly withheld busy-terminal write but never an ambiguous paste', async () => {
+    const t = setup(), host = t.open()
+    await host.tick(); t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    t.event('unknown', 'dispatch_ambiguous')
+    await host.tick(); await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    expect(t.receipts.every(r => r.uncertain === true)).toBe(true)
+  })
+
+  it('withdraws queued input on removal or revoked machine access and cannot revive it by re-sharing', async () => {
+    const t = setup(), host = t.open()
+    await host.tick(); t.revoke(); await host.tick()
+    expect(t.core.turns.cancelDelivery).toHaveBeenCalledWith('team:service:superTabs:delivery')
+    expect(t.core.turns.leaseDeliveries).toHaveBeenLastCalledWith('superTabs', {})
+    t.revoke(false); await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.receipts[0].uncertain).toBe(true)
+    t.remove(); await host.tick()
+  })
+
+  it('never steals another process claim or substitutes a different native harness', async () => {
+    const t = setup(), host = t.open()
+    t.foreignClaim(); await host.tick()
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+    vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined)
+    await host.tick()
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+  })
+
+  it('refuses to type without a durable local intent or the core guard', async () => {
+    const t = setup(), host = t.open()
+    vi.mocked(t.core.turns.leaseDeliveries).mockResolvedValue(false)
+    await host.tick()
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+    host.stop()
+    expect(() => new SuperTabHost(t.core, 'machine-1', { write: () => { throw new Error('Disk full') } })).toThrow('Disk full')
+    writeFileSync(hostJournalFile(t.dir, 'machine-1'), 'not json')
+    expect(() => t.open()).toThrow()
+  })
+
+  it('preserves the backend error code and never treats an error body as an empty roster', async () => {
+    const t = setup()
+    t.revoke()
+    await expect(backend(t.core, 'GET', '/api/super-tabs/tab')).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 })
+  })
+})

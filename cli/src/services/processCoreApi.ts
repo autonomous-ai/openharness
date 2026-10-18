@@ -148,6 +148,10 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       recent: async () => [],
       asks: async () => [],
       ...(view.deliveries?.turns ?? DELIVERIES_OFF),
+      // The connected service identity decides the namespace; the payload cannot
+      // grant another process permission to write a queued instruction.
+      leaseDeliveries: async (maker, leases) => maker === service &&
+        (await ask?.('lease_deliveries', { leases }).catch(() => null))?.leased === true,
     },
     questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn },

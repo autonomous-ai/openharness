@@ -2507,6 +2507,7 @@ async function logsExportCommand(json: boolean): Promise<void> {
 }
 
 import { orchestratorCommand } from './orchestrator/command.js'
+import { superTabCommand } from './superTabs/command.js'
 import { paneOwner, sendCommand } from './messages/command.js'
 import { agentOrigin, closeCommand, psCommand, showCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
@@ -2577,6 +2578,9 @@ switch (cmd) {
     break
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'super-tab':
+    superTabCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login':
     // The result line goes out FIRST (loginCommand prints it), then the daemon is swapped onto the

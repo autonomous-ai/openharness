@@ -221,6 +221,10 @@ export interface CoreApi {
     /** Hear what becomes of each delivery: queued, written, its turn started, refused and why, or past
      *  knowing. Returns how to stop hearing. */
     onDelivery(listener: (event: TurnDelivery) => void): () => void
+    /** Replace a service's short-lived permission to write queued typed deliveries.
+     * IDs use `team:service:<service>:`; expired or absent permission means wait.
+     * This guards the final terminal write even when its authorizing service stops. */
+    leaseDeliveries(service: string, leases: Record<string, number>): Promise<boolean>
   }
   questions: {
     /** Answer a live agent's question, keyed by the question keys it asked with. */
@@ -539,10 +543,11 @@ export type TurnDelivery = SessionInputDelivery
 
 /** The delivery members of a core that delivers nothing for this service: nothing is written, nothing is
  *  taken back, and nothing is heard. */
-export const DELIVERIES_OFF: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery'> = {
+export const DELIVERIES_OFF: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'leaseDeliveries'> = {
   deliver: () => {},
   cancelDelivery: () => false,
   onDelivery: () => () => {},
+  leaseDeliveries: async () => false,
 }
 
 /** A turn's card for the devices: the dial's and the Wi-Fi device's tiles and their notifications. */
@@ -617,6 +622,9 @@ export const MEMORY_REQUESTS = ['memory_snapshot', 'memory_about_put', 'memory_d
 /** The router (services/router.ts), an experiment: where a task a person typed or said should go, decided for
  *  the client that asks, which acts on it. */
 export const ROUTER_REQUESTS = ['route_decide'] as const
+export const SUPER_TAB_REQUESTS = ['super_tabs'] as const
+export interface SuperTabsPort { connected(): void; disconnected(): void; stop(): void }
+export const SUPER_TAB_FALLBACKS: PortFallbacks<SuperTabsPort> = { connected: undefined, disconnected: undefined, stop: undefined }
 /** The project and folder readers (services/projects.ts). */
 export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
 /** A window's name for its repo and its work, by a small model in the background (services/windowNames.ts). */
@@ -778,6 +786,7 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
   memory: { requests: MEMORY_REQUESTS, state: [] },
   // Request-only too: it keeps nothing, and asks Jev only when a client asks it.
   router: { requests: ROUTER_REQUESTS, state: [] },
+  superTabs: { requests: SUPER_TAB_REQUESTS, state: ['super-tabs/host-*.json'] },
   // Cloud agents. Its harnesses: one was started here, and is watched again as the daemon starts. A New Harness
   // for one, an answer or a message to one wakes it too (its port's calls, core/agents/cloud.ts).
   cloud: { requests: CLOUD_REQUESTS, state: ['cloud/harnesses.json'] },
@@ -1608,10 +1617,11 @@ export interface CorePorts {
   recaps: RecapsPort | null
   agentCleanup: AgentCleanupPort | null
   cloud: CloudPort | null
+  superTabs: SuperTabsPort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null }
+  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null }
 }
 
 export interface CoreApiDeps {

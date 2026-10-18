@@ -12,6 +12,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
+import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -192,12 +193,41 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, { ...message('Only on an authorized machine.'), recipientIds: [agentId] } as Command)
     expect(await store.deliveries(host, tab, agentId)).toHaveLength(1)
     try {
-      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [owner.email] } })
+      const before = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
+      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [owner.email],
+        grantVersions: nextMachineShareGrants(before, [owner.email], null) } })
       expect((await store.read(peer, tab)).state.people).toHaveLength(2)
       await expect(store.deliveries(host, tab, agentId)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
     } finally {
-      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [owner.email, peer.email] } })
+      const before = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
+      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [owner.email, peer.email],
+        grantVersions: nextMachineShareGrants(before, [owner.email, peer.email], null) } })
     }
+    // The host may have been offline throughout the revocation. A restored share
+    // still cannot revive a contribution made under the earlier grant.
+    await expect(store.deliveries(host, tab, agentId)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
+  })
+
+  it('also withholds outgoing instructions from an agent whose machine grant was revoked', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Peer worker', configuration: config, lead: false }, peer)).result.agentId as string
+    await store.execute(host, tab, { operationId: randomUUID(), command: { ...message('Delegated before revocation.'), recipientIds: [worker] } as Command }, lead)
+    const [delivery] = await store.deliveries(host, tab, worker)
+    expect(delivery).toBeTruthy()
+    const before = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
+    try {
+      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [peer.email],
+        grantVersions: nextMachineShareGrants(before, [peer.email], null) } })
+      expect(await store.deliveries(host, tab, worker)).toEqual([])
+      await expect(store.delivery(host, tab, worker, delivery!.id, { type: 'claim', claimId: randomUUID() })).rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+    } finally {
+      const current = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
+      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [owner.email, peer.email],
+        grantVersions: nextMachineShareGrants(current, [owner.email, peer.email], null) } })
+    }
+    expect(await store.deliveries(host, tab, worker)).toEqual([])
   })
 
   it('does not authorize a host through a contributor’s obsolete email address', async () => {

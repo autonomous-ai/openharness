@@ -38,6 +38,7 @@ const Set<String> encryptedDownTypes = {
   'connectors',
   // Sharing a machine across accounts (CLI services/sharedMachines.ts): the addresses it is shared with.
   'shared_machines',
+  'super_tabs',
   'orchestrator',
   'route_task',
   'route_send',

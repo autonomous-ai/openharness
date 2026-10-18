@@ -2,12 +2,12 @@ import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
-import { sharedVia } from '../lib/machineSharePolicy.js'
+import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { applyCommand, operationSchema, type Command, type CommandContext } from './commands.js'
 import {
   activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState,
-  type Actor, type Author, type SuperTabState,
+  SuperTabError, type Actor, type Agent, type Author, type SuperTabState,
 } from './model.js'
 
 type Transaction = Prisma.TransactionClient
@@ -46,19 +46,24 @@ export class SuperTabStore {
     if (!agentId) return { kind: 'person', userId: user.sub, email: user.email }
     const target = agent(state, agentId)
     if (target.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can speak as this agent.', 403)
-    const machine = await tx.machine.findFirst({ where: { machineId: target.machineId, userId: user.sub,
-      autonomousEnv: user.autonomousEnv, ...machineAlive } })
+    await this.agentGrant(tx, state, target)
+    return { kind: 'agent', agentId, machineOwnerId: user.sub }
+  }
+
+  private async agentGrant(tx: Transaction, state: SuperTabState, target: Agent): Promise<void> {
+    const machine = await tx.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId,
+      autonomousEnv: state.environment, ...machineAlive } })
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
     if (target.contributorId !== machine.userId) {
       person(state, target.contributorId)
       const contributor = await tx.user.findUnique({ where: { id: target.contributorId }, select: { email: true, autonomousEnv: true } })
       const share = await tx.machineShare.findUnique({ where: { machineId: machine.machineId } })
       if (!contributor || contributor.autonomousEnv !== state.environment || !share || share.ownerId !== machine.userId ||
-          share.autonomousEnv !== state.environment || !sharedVia(share, contributor.email)) {
+          share.autonomousEnv !== state.environment || !sharedVia(share, contributor.email) ||
+          machineShareGrant(share, contributor.email) !== target.hostGrant) {
         fail('CONTRIBUTION_REVOKED', 'The contributor no longer has access to this machine.', 403)
       }
     }
-    return { kind: 'agent', agentId, machineOwnerId: user.sub }
   }
 
   private async contribution(tx: Transaction, state: SuperTabState, actor: Actor, command: Extract<Command, { type: 'agent.add' }>) {
@@ -66,6 +71,7 @@ export class SuperTabStore {
     person(state, contributorId)
     const machine = await tx.machine.findFirst({ where: { machineId: command.machineId, autonomousEnv: state.environment, ...machineAlive } })
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This machine is unavailable.', 403)
+    let hostGrant: string | null = null
     if (machine.userId !== contributorId) {
       const contributor = actor.kind === 'person' ? { email: actor.email, autonomousEnv: state.environment } :
         await tx.user.findUnique({ where: { id: contributorId }, select: { email: true, autonomousEnv: true } })
@@ -74,8 +80,9 @@ export class SuperTabStore {
           share.autonomousEnv !== state.environment || !sharedVia(share, contributor.email)) {
         fail('HOST_REQUIRED', 'This machine has not been shared with the contributor.', 403)
       }
+      hostGrant = machineShareGrant(share, contributor.email)
     }
-    return { machineOwnerId: machine.userId, contributorId }
+    return { machineOwnerId: machine.userId, contributorId, hostGrant }
   }
 
   async create(user: AuthUser, operationId: string, name: string) {
@@ -242,6 +249,12 @@ export class SuperTabStore {
     return generation === delivery.authorGeneration && (!('role' in sender) || sender.role !== 'viewer')
   }
 
+  private async senderAllowed(tx: Transaction, state: SuperTabState, delivery: SuperTabDelivery): Promise<boolean> {
+    if (delivery.authorKind !== 'agent') return true
+    try { await this.agentGrant(tx, state, agent(state, delivery.authorId)); return true }
+    catch (error) { if (error instanceof SuperTabError) return false; throw error }
+  }
+
   async deliveries(user: AuthUser, tabId: string, agentId: string) {
     return transaction(this.db, async tx => {
       const row = await this.row(tx, user, tabId)
@@ -249,7 +262,11 @@ export class SuperTabStore {
       author(state, await this.actor(tx, user, state, agentId), true)
       const rows = await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: ['queued', 'claimed', 'uncertain'] } },
         orderBy: { createdAt: 'asc' }, take: 100 })
-      return rows.filter(d => this.deliveryAllowed(state, d))
+      const allowed: SuperTabDelivery[] = []
+      for (const delivery of rows) {
+        if (this.deliveryAllowed(state, delivery) && await this.senderAllowed(tx, state, delivery)) allowed.push(delivery)
+      }
+      return allowed
     })
   }
 
@@ -261,7 +278,8 @@ export class SuperTabStore {
       const state = stateOf(row)
       author(state, await this.actor(tx, user, state, agentId), true)
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId } })
-      if (!delivery || !this.deliveryAllowed(state, delivery) || delivery.status === 'cancelled') fail('DELIVERY_REVOKED', 'This instruction is no longer authorized.', 403)
+      if (!delivery || !this.deliveryAllowed(state, delivery) || delivery.status === 'cancelled' ||
+          !await this.senderAllowed(tx, state, delivery)) fail('DELIVERY_REVOKED', 'This instruction is no longer authorized.', 403)
       if (delivery.claimId && delivery.claimId !== action.claimId) fail('CLAIM_CONFLICT', 'Reconcile the existing delivery before claiming it again.')
       if (action.type === 'ack' && !delivery.claimId) fail('NOT_CLAIMED', 'Claim this instruction before acknowledging it.')
       const status = action.type === 'claim' ? delivery.status === 'queued' ? 'claimed' : delivery.status : action.uncertain ? 'uncertain' : 'delivered'

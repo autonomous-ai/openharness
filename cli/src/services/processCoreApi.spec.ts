@@ -3,6 +3,18 @@ import { TAB_KEY_OFF, TAB_RELAY_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { agentsIn, daemonIn, isSession, processCoreApi, UNASKED, type ShownAgent } from './processCoreApi.js'
 import { turnsLink } from './turnsLink.js'
+
+it('grants typed deliveries only in its connected service namespace and refuses a missing or failed core', async () => {
+  const ask = vi.fn(async () => ({ leased: true }))
+  const api = processCoreApi('/data', 'worker', { ask })
+  expect(await api.turns.leaseDeliveries('other', {})).toBe(false)
+  expect(ask).not.toHaveBeenCalled()
+  expect(await api.turns.leaseDeliveries('worker', { delivery: 100 })).toBe(true)
+  expect(ask).toHaveBeenCalledWith('lease_deliveries', { leases: { delivery: 100 } })
+  ask.mockRejectedValueOnce(new Error('Disconnected'))
+  expect(await api.turns.leaseDeliveries('worker', {})).toBe(false)
+  expect(await processCoreApi('/data', 'worker').turns.leaseDeliveries('worker', {})).toBe(false)
+})
 import { usageTarget } from '../lib/agentUsageWire.js'
 
 const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/work/${agentId}`, ...over }) as RegisteredSession

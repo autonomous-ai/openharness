@@ -852,6 +852,9 @@ model MachineShare {
   /// The owner's email domain while "Everyone at @domain" is on; null when off. Written by the backend
   /// from the owner's verified address, never taken from the client, and never a public domain.
   domain        String?
+  /// Stable while an email/domain grant continues; a removed and restored grant
+  /// gets a new version so old Super Tab contributions cannot resume silently.
+  grantVersions Json?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

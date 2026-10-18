@@ -49,6 +49,18 @@ class SuperTabController extends ChangeNotifier {
         }
       }
       final read = initial['readAt'];
+      final mentions = initial['mentions'];
+      if (mentions is Map) {
+        for (final group in mentions.entries) {
+          if (group.key is String && group.value is Map) {
+            _mentions[group.key as String] = {
+              for (final mention in (group.value as Map).entries)
+                if (mention.key is String && mention.value is String)
+                  mention.key as String: mention.value as String,
+            };
+          }
+        }
+      }
       if (read is Map) {
         for (final entry in read.entries) {
           if (entry.key is String && entry.value is num) {
@@ -81,6 +93,7 @@ class SuperTabController extends ChangeNotifier {
   Future<void> _persisting = Future.value();
   Map<String, dynamic>? _pending;
   final _drafts = <String, String>{};
+  final _mentions = <String, Map<String, String>>{};
   final _readAt = <String, int>{};
   final _messages = <String, List<SuperTabMessage>>{};
   final _before = <String, int?>{};
@@ -121,6 +134,10 @@ class SuperTabController extends ChangeNotifier {
     'accountId': accountId,
     'selectedId': selectedId,
     'drafts': Map<String, String>.of(_drafts),
+    'mentions': {
+      for (final entry in _mentions.entries)
+        entry.key: Map<String, String>.of(entry.value),
+    },
     'readAt': Map<String, int>.of(_readAt),
     if (_pending != null) 'pending': _pending,
   };
@@ -148,8 +165,26 @@ class SuperTabController extends ChangeNotifier {
 
   void setDraft(String conversationId, String value) {
     _drafts[conversationId] = value;
+    _mentions[conversationId]?.removeWhere(
+      (_, token) => !containsMention(value, token),
+    );
     _saveSoon();
   }
+
+  static bool containsMention(String text, String token) =>
+      RegExp('(?:^|\\s)${RegExp.escape(token)}(?=\$|\\s|[.,!?;:])')
+          .hasMatch(text);
+
+  void mention(String conversationId, String agentId, String token) {
+    if (containsMention(draft(conversationId), token)) {
+      (_mentions[conversationId] ??= {})[agentId] = token;
+      _saveSoon();
+      _changed();
+    }
+  }
+
+  Map<String, String> mentions(String conversationId) =>
+      Map.unmodifiable(_mentions[conversationId] ?? const {});
 
   void select(String id) {
     if (snapshot?.conversation(id) == null || id == selectedId) return;
@@ -301,7 +336,16 @@ class SuperTabController extends ChangeNotifier {
       final command = superTabMap(pending['command']);
       if (command['type'] == 'message.send') {
         final id = command['conversationId'] as String;
-        if (_drafts[id]?.trim() == command['text']) _drafts.remove(id);
+        if (_drafts[id]?.trim() == command['text']) {
+          _drafts.remove(id);
+          _mentions.remove(id);
+        }
+      }
+      if (command['type'] == 'conversation.create' &&
+          result['conversationId'] is String) {
+        // A successful create selects its confirmed destination even when the
+        // following read is offline. Never leave the old group's composer active.
+        selectedId = result['conversationId'] as String;
       }
       _pending = null;
       try {
@@ -362,13 +406,26 @@ class SuperTabController extends ChangeNotifier {
     List<String> recipients = const [],
   }) {
     final text = draft(selectedId).trim();
-    if (text.isEmpty || selected?.archived == true) return Future.value(null);
+    if (text.isEmpty || selected == null || selected!.archived) {
+      return Future.value(null);
+    }
+    final addressed = recipients.isEmpty
+        ? mentions(selectedId).entries
+              .where((entry) => containsMention(text, entry.value))
+              .map((entry) => entry.key)
+              .toList()
+        : recipients;
+    if (addressed.any((id) => !selected!.agentIds.contains(id))) {
+      operationError = 'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.';
+      _changed();
+      return Future.value(null);
+    }
     return command({
       'type': 'message.send',
       'conversationId': selectedId,
       'text': text,
       'replyTo': replyTo,
-      'recipientIds': recipients,
+      'recipientIds': addressed,
     });
   }
 
