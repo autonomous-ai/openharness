@@ -9,6 +9,18 @@ name: Windows
 # harness.exe (the `harness` command, pty/src/command.rs), conpty.dll and OpenConsole.exe.
 on:
   workflow_dispatch:
+    # The same inputs as workflow_call, so a staging payload can be built by hand (Actions -> Windows -> Run workflow).
+    inputs:
+      version:
+        description: 'The CLI release version the host reports (X.Y.Z, or a prerelease)'
+        type: string
+        required: false
+        default: ''
+      release:
+        description: 'Build the release payload only, without the tests'
+        type: boolean
+        required: false
+        default: false
   # TEMPORARY: remove before merging (workflow_dispatch needs the file on main)
   push:
     branches: [feat/windows-native-cli]
