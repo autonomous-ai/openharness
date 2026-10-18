@@ -143,7 +143,7 @@ if (Get-LocalUser -Name \$p.User -ErrorAction SilentlyContinue) { throw 'the acc
 \$profiles=[Environment]::ExpandEnvironmentVariables((Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList').ProfilesDirectory)
 \$profile=Join-Path \$profiles \$p.User
 if (Test-Path -LiteralPath \$profile) { throw 'profile directory already exists; choose a new test account' }
-\$new=New-LocalUser -Name \$p.User -Password (ConvertTo-SecureString \$p.Password -AsPlainText -Force) -PasswordNeverExpires -AccountNeverExpires -Description ('Harness desktop E2E ' + \$p.RunId)
+\$new=New-LocalUser -Name \$p.User -Password (ConvertTo-SecureString \$p.Password -AsPlainText -Force) -PasswordNeverExpires -AccountNeverExpires -Description ('Harness E2E ' + \$p.RunId)
 Add-LocalGroupMember -SID 'S-1-5-32-545' -Member \$new
 \$owner=@{run_id=\$p.RunId;user=\$p.User;sid=\$new.SID.Value;profile=\$profile;created=\$true;created_at=[DateTime]::UtcNow.ToString('o');tasks=@();baseline_tasks=@(Get-ScheduledTask | ForEach-Object { \$_.TaskPath + \$_.TaskName })}
 \$owner | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path \$p.Root ('users\\'+\$p.User+'.json')) -Encoding utf8
