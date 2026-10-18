@@ -53,6 +53,11 @@ fn main() {
         ),
         #[cfg(windows)]
         (
+            "windowless_original_survives_ended_secondary_attempts",
+            windows_rollback::windowless_original_survives_ended_secondary_attempts,
+        ),
+        #[cfg(windows)]
+        (
             "two_starts_without_a_window_go_back_to_previous",
             windows_rollback::two_starts_without_a_window_go_back_to_previous,
         ),
@@ -534,7 +539,12 @@ mod windows_rollback {
             values.push(world.start(&format!("slow-{n}"), 3000));
         }
         assert_eq!(pointer::read(&world.root.join("current")).unwrap(), "2.0.0");
-        assert_eq!(launch::read_state(&world.root).starts.len(), 2);
+        let history = launch::read_state(&world.root);
+        assert_eq!(history.starts.len(), 1);
+        assert_eq!(
+            u64::from(history.starts[0].pid),
+            values[0]["pid"].as_u64().unwrap()
+        );
         for value in &values {
             finish_app(value);
         }
@@ -547,6 +557,132 @@ mod windows_rollback {
         assert_eq!(pointer::read(&world.root.join("current")).unwrap(), "2.0.0");
         assert!(launch::read_state(&world.root).starts.is_empty());
     }
+    /// Actual recorded-process observation, not execution of the runner's 15s listener timeout.
+    pub fn windowless_original_survives_ended_secondary_attempts() {
+        use harness_pty::desktop::rollback::{Liveness, Start};
+        use std::os::windows::io::AsRawHandle;
+        use std::process::Child;
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::GetProcessTimes;
+
+        fn created(child: &Child) -> u64 {
+            let zero = FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            };
+            let (mut made, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+            assert_ne!(
+                unsafe {
+                    GetProcessTimes(
+                        child.as_raw_handle() as _,
+                        &mut made,
+                        &mut exited,
+                        &mut kernel,
+                        &mut user,
+                    )
+                },
+                0
+            );
+            (u64::from(made.dwHighDateTime) << 32) | u64::from(made.dwLowDateTime)
+        }
+        let world = World::new();
+        let primary_out = world.dir.path().join("windowless-primary.json");
+        let environment = world.command(&primary_out, 30_000);
+        let mut command = isolated_command(world.app("2.0.0"));
+        command.envs(
+            environment
+                .get_envs()
+                .filter_map(|(key, value)| value.map(|v| (key, v))),
+        );
+        let mut primary = command.spawn().unwrap();
+        world
+            .owned
+            .observe_child(&primary, &world.app("2.0.0"), &[])
+            .unwrap();
+        let pid = primary.id();
+        let creation = created(&primary);
+        assert_ne!(creation, 0);
+        let ready = report(&primary_out);
+        assert_eq!(ready["pid"].as_u64().unwrap(), u64::from(pid));
+        assert!(same(
+            Path::new(ready["exe"].as_str().unwrap()),
+            &world.app("2.0.0")
+        ));
+        assert!(
+            win::app_processes(&world.root).is_empty(),
+            "A must have no Flutter window"
+        );
+        assert_eq!(win::liveness(pid, creation), Liveness::Running);
+        launch::write_state(
+            &world.root,
+            &launch::State {
+                starts: vec![Start {
+                    version: "2.0.0".into(),
+                    at_ms: 1,
+                    pid,
+                    created: creation,
+                }],
+            },
+        )
+        .unwrap();
+        let original = fs::read(world.root.join("launch-state.json")).unwrap();
+        for secondary in ["B", "C", "D"] {
+            let value = world.start(&format!("windowless-{secondary}"), 500);
+            assert!(same(
+                Path::new(value["cwd"].as_str().unwrap()),
+                &world.root.join("app").join("2.0.0")
+            ));
+            finish_app(&value);
+            assert_eq!(primary.id(), pid);
+            assert_eq!(created(&primary), creation);
+            assert!(primary.try_wait().unwrap().is_none());
+            assert_eq!(win::liveness(pid, creation), Liveness::Running);
+            assert!(win::app_processes(&world.root).is_empty());
+            assert_eq!(
+                fs::read(world.root.join("launch-state.json")).unwrap(),
+                original
+            );
+            assert_eq!(pointer::read(&world.root.join("current")).unwrap(), "2.0.0");
+            assert_eq!(
+                pointer::read(&world.root.join("previous")).unwrap(),
+                "1.0.0"
+            );
+        }
+        assert!(
+            !fs::read_to_string(world.root.join("launch.log"))
+                .unwrap()
+                .contains("went back")
+        );
+        // Kill/reap only this retained actual Child. A and the next cold start now
+        // become two ended attempts; the following launch must recover normally.
+        primary.kill().unwrap();
+        primary.wait().unwrap();
+        assert_eq!(win::liveness(pid, creation), Liveness::Ended);
+        assert!(
+            !world
+                .root
+                .join("app")
+                .join("2.0.0")
+                .join(".started")
+                .exists()
+        );
+        let cold = world.start("cold-after-windowless-primary", 500);
+        assert!(same(
+            Path::new(cold["cwd"].as_str().unwrap()),
+            &world.root.join("app").join("2.0.0")
+        ));
+        finish_app(&cold);
+        assert_eq!(launch::read_state(&world.root).starts.len(), 2);
+        let recovered = world.start("recovered-after-cold-failures", 500);
+        assert!(same(
+            Path::new(recovered["cwd"].as_str().unwrap()),
+            &world.root.join("app").join("1.0.0")
+        ));
+        finish_app(&recovered);
+        assert!(!world.root.join("previous").exists());
+        assert!(launch::read_state(&world.root).starts.is_empty());
+    }
+
     pub fn contended_history_does_not_spawn_then_recovers() {
         let world = World::new();
         let lock = fs::OpenOptions::new()

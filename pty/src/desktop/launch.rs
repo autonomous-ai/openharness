@@ -155,20 +155,28 @@ pub fn look(root: &Path, state: &State, system: &mut impl System) -> LaunchHisto
         v.as_ref()
             .is_some_and(|v| root.join(APP_DIR).join(v).join(name).is_file())
     };
+    let starts: Vec<_> = state
+        .starts
+        .iter()
+        .map(|start| Looked {
+            start: start.clone(),
+            liveness: system.liveness(start.pid, start.created),
+        })
+        .collect();
+    // A recorded current app can still own the instance before creating its
+    // Flutter window. Preserve that proof instead of recording handover exits.
+    let instance_running = !system.app_processes(root).is_empty()
+        || starts.iter().any(|looked| {
+            current.as_ref() == Some(&looked.start.version)
+                && looked.liveness == rollback::Liveness::Running
+        });
     LaunchHistory {
         now_ms: system.now_ms(),
         current_exe: has(&current, APP_EXE),
         current_started: has(&current, super::STARTED_MARKER),
         previous_exe: has(&previous, APP_EXE),
-        instance_running: !system.app_processes(root).is_empty(),
-        starts: state
-            .starts
-            .iter()
-            .map(|start| Looked {
-                start: start.clone(),
-                liveness: system.liveness(start.pid, start.created),
-            })
-            .collect(),
+        instance_running,
+        starts,
         current,
         previous,
     }
@@ -761,6 +769,57 @@ mod rollback_tests {
         assert!(began.elapsed() < Duration::from_secs(1));
         assert!(sys.started.is_empty());
         assert_eq!(fs::read(file).unwrap(), b"unchanged");
+    }
+    #[test]
+    fn a_windowless_running_current_start_survives_ended_secondary_attempts() {
+        let dir = install();
+        let mut sys = Fake::default();
+        assert_eq!(run(dir.path(), None, &[], &mut sys), EXIT_OK);
+        let original = read_state(dir.path());
+        assert_eq!(original.starts.len(), 1);
+        let before = fs::read(dir.path().join(STATE)).unwrap();
+        // A has no window. B/C/D are handover attempts; none may replace A's proof.
+        sys.liveness = Liveness::Running;
+        for _ in 0..3 {
+            assert_eq!(run(dir.path(), None, &[], &mut sys), EXIT_OK);
+            assert_eq!(fs::read(dir.path().join(STATE)).unwrap(), before);
+            assert_eq!(pointer::read(&dir.path().join(CURRENT)).unwrap(), "2.0.0");
+        }
+        assert!(
+            !fs::read_to_string(dir.path().join(LOG))
+                .unwrap()
+                .contains("went back")
+        );
+        // A ends without a frame. A and the next cold start are two genuine failures.
+        sys.liveness = Liveness::Ended;
+        assert_eq!(run(dir.path(), None, &[], &mut sys), EXIT_OK);
+        assert_eq!(pointer::read(&dir.path().join(CURRENT)).unwrap(), "2.0.0");
+        assert_eq!(read_state(dir.path()).starts.len(), 2);
+        assert_eq!(run(dir.path(), None, &[], &mut sys), EXIT_OK);
+        assert_eq!(pointer::read(&dir.path().join(CURRENT)).unwrap(), "1.0.0");
+    }
+    #[test]
+    fn only_positive_current_evidence_adds_a_running_instance() {
+        let dir = install();
+        let mut state = State {
+            starts: vec![start(1)],
+        };
+        let mut sys = Fake {
+            liveness: Liveness::Running,
+            ..Default::default()
+        };
+        assert!(look(dir.path(), &state, &mut sys).instance_running);
+        state.starts[0].version = "1.0.0".into();
+        assert!(!look(dir.path(), &state, &mut sys).instance_running);
+        state.starts[0].version = "2.0.0".into();
+        for liveness in [Liveness::Unknown, Liveness::Ended] {
+            sys.liveness = liveness;
+            assert!(!look(dir.path(), &state, &mut sys).instance_running);
+        }
+        sys.liveness = Liveness::Running;
+        fs::remove_file(dir.path().join("app/2.0.0").join(APP_EXE)).unwrap();
+        let history = look(dir.path(), &state, &mut sys);
+        assert!(matches!(rollback::decide(&history), Choice::RollBack { to, .. } if to == "1.0.0"));
     }
     #[test]
     fn lock_child() {
