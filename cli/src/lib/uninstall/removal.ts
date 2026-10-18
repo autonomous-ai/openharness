@@ -17,7 +17,7 @@
  * symlink, or on Windows a junction) is removed as a link and never followed: on the Windows VM `del` given a
  * junction emptied the folder it pointed to (B5.4), so the last step never hands del anything that is a folder.
  */
-import { lstatSync, readdirSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, readdirSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { posix, win32 } from 'node:path'
 import { runPowershell, type PowershellRun } from '../windows/powershell.js'
@@ -202,6 +202,14 @@ export function checkRemovable(plan: RemovalPlan, o: { platform?: NodeJS.Platfor
   return root
 }
 
+/** Every folder in [dir], itself first, made writable by its owner. A link is never followed: its far side keeps its mode. */
+function writable(dir: string): void {
+  const stat = lstatSync(dir)
+  if (!stat.isDirectory()) return
+  if (!(stat.mode & 0o200)) chmodSync(dir, (stat.mode & 0o7777) | 0o700)
+  for (const entry of readdirSync(dir, { withFileTypes: true })) if (entry.isDirectory()) writable(posix.join(dir, entry.name))
+}
+
 /** mac and Linux: the plan, carried out now. Returns what is still there. Throws, removing nothing, on a bad plan. */
 export function removeNow(plan: RemovalPlan, o: { platform?: NodeJS.Platform; home?: string } = {}): string[] {
   const platform = o.platform ?? process.platform
@@ -212,7 +220,11 @@ export function removeNow(plan: RemovalPlan, o: { platform?: NodeJS.Platform; ho
     try {
       if (isLink(target.path)) removeLink(target.path)
       else rmSync(target.path, { recursive: true, force: true })
-    } catch { /* reported below */ }
+    } catch {
+      // A read-only folder keeps its entries: the managed grid installs runtime/grid-<v>-<platform>/bin as 0555, and
+      // the uninstall left ~/.harness/runtime on macOS (task B5.14). Its folders are made writable, then it goes.
+      try { if (!isLink(target.path)) { writable(target.path); rmSync(target.path, { recursive: true, force: true }) } } catch { /* reported below */ }
+    }
   }
   // The root only once empty, never with something the plan did not name (an entry that arrived since).
   if (plan.removeRoot) { try { rmdirSync(plan.root) } catch { /* reported below */ } }

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -181,6 +181,32 @@ describe('removeNow', () => {
     const plan = removalPlan({ platform: process.platform, root, cliDir: join(root, 'cli'), dataDir: join(root, 'cli', 'data'), entries: listEntries(root), cliEntries: listEntries(join(root, 'cli')), keepData: false })
     expect(removeNow(plan)).toEqual([])
     expect(existsSync(root)).toBe(false)
+  })
+
+  // The managed grid installs its bin folder read-only (0555, ~/.harness/runtime/grid-<v>-<platform>/bin): on macOS
+  // `harness uninstall` then said "could not remove ~/.harness/runtime" and left the root (task B5.14, 2026-10-18).
+  // A folder of the plan that will not let go of its entries is made writable, its links never followed, and removed.
+  it.runIf(process.platform !== 'win32')('removes a read-only folder in the plan, as the managed grid installs it', () => {
+    const base = home()
+    const root = join(base, '.harness')
+    const bin = join(root, 'runtime', 'grid-0.3.59-darwin-arm64', 'bin')
+    mkdirSync(bin, { recursive: true })
+    writeFileSync(join(bin, 'grid'), 'g')
+    const outside = join(base, 'outside')
+    mkdirSync(outside)
+    chmodSync(outside, 0o555)
+    symlinkSync(outside, join(bin, 'outside-link'))
+    chmodSync(join(bin, 'grid'), 0o555)
+    chmodSync(bin, 0o555)
+    try {
+      expect(removeNow(planOf(root))).toEqual([])
+      expect(existsSync(root)).toBe(false)
+      // The link's far side is not the root's: its mode is left as it was.
+      expect(statSync(outside).mode & 0o777).toBe(0o555)
+    } finally {
+      chmodSync(outside, 0o755)
+      if (existsSync(bin)) chmodSync(bin, 0o755)
+    }
   })
 
   it('with --keep-data leaves cli/data and the rest of the person\'s data', () => {
