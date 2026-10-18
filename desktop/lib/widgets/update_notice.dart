@@ -25,9 +25,8 @@ String formatDownloadSize(int bytes) {
 /// The band across the top of the app when a newer build is out.
 ///
 /// It carries three states off one flag pair on [AppNotifier]: an offer, the
-/// install running, and a failed install. The failure keeps the offer alive —
-/// nothing was changed on disk, so the only honest thing to show is a way to
-/// try again.
+/// install running, and a failed install. An untouched-install failure can be
+/// retried; a partially published Windows update gives restart/repair guidance.
 class UpdateNotice extends StatelessWidget {
   final AppNotifier notifier;
 
@@ -169,15 +168,17 @@ class UpdateNotice extends StatelessWidget {
                         label: 'Dismiss',
                         onPressed: notifier.dismissUpdateError,
                       ),
-                      const SizedBox(width: 6),
-                      _NoticeAction(
-                        key: const Key('retry-update-button'),
-                        label: 'Try again',
-                        kind: _ActionKind.ghost,
-                        onPressed: () => unawaited(
-                          notifier.installAvailableUpdate(update: update),
+                      if (!notifier.windowsUpdatePartiallyPublished) ...[
+                        const SizedBox(width: 6),
+                        _NoticeAction(
+                          key: const Key('retry-update-button'),
+                          label: 'Try again',
+                          kind: _ActionKind.ghost,
+                          onPressed: () => unawaited(
+                            notifier.installAvailableUpdate(update: update),
+                          ),
                         ),
-                      ),
+                      ],
                     ] else ...[
                       _NoticeAction(
                         key: const Key('skip-update-button'),
@@ -432,6 +433,10 @@ Future<void> showUpdateCheckDialog(
                               // A successful install never returns — the process is
                               // replaced. Reaching here means it did not happen.
                               if (!context.mounted || installed) return;
+                              if (notifier.windowsUpdatePartiallyPublished) {
+                                Navigator.of(dialogContext).pop();
+                                return;
+                              }
                               // The install re-reads the manifest, and the build
                               // can be gone from it by then. There is no error to
                               // show for that and no offer left to carry one, so

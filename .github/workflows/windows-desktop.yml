@@ -50,6 +50,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Desktop launcher unit tests failed ($LASTEXITCODE)" }
           cargo test --locked --test desktop_launch --test desktop_install
           if ($LASTEXITCODE -ne 0) { throw "Desktop launcher integration tests failed ($LASTEXITCODE)" }
+          # Reuse the cached lib-test build as the Rust peer of Dart's lock test.
+          $messages = cargo test --locked --no-run --lib --message-format=json
+          if ($LASTEXITCODE -ne 0) { throw "Desktop launcher lib-test artifact build failed ($LASTEXITCODE)" }
+          $artifacts = @($messages | ForEach-Object {
+            try { $_ | ConvertFrom-Json } catch { $null }
+          } | Where-Object {
+            $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'harness_pty' -and
+            $_.target.kind -contains 'lib' -and $_.profile.test -eq $true -and $_.executable
+          })
+          if ($artifacts.Count -ne 1) { throw "Expected one Rust lib-test executable, found $($artifacts.Count)" }
+          $lockTestExe = $artifacts[0].executable
+          if (-not (Test-Path -LiteralPath $lockTestExe -PathType Leaf)) { throw "Rust lock test executable is missing: $lockTestExe" }
+          "HARNESS_RUST_LOCK_TEST_EXE=$lockTestExe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       # A real node.exe for the tests that run one (harness_cli_runner_windows_test.dart,
       # environment_provisioner_windows_test.dart). Same runtime pin as windows.yml.
       - uses: actions/setup-node@v7
@@ -97,6 +110,7 @@ jobs:
       - name: Test (the whole suite, against test/windows_known_failures.txt)
         env:
           HARNESS_TEST_NODE: ${{ steps.node.outputs.path }}
+          HARNESS_EXPECTED_WINDOWS_ARCH: ${{ matrix.arch }}
         run: |
           # flutter_tester.exe lives in the SDK, outside the app bundle.
           $env:HARNESS_DESKTOP_PIPE_IO_DLL = (Resolve-Path -LiteralPath "build\windows\${{ matrix.arch }}\runner\Release\harness_pipe_io.dll" -ErrorAction Stop).Path

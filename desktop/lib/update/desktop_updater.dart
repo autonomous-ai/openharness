@@ -5,15 +5,20 @@ import 'dart:isolate';
 import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 
 import '../core/runtime_architecture.dart';
 import '../core/runtime_platform.dart';
 import '../core/app_version.dart';
+import '../core/staging_build.dart';
+import 'windows_update_swap.dart';
 
 /// Published by `scripts/upload-desktop.sh` (`make upload-desktop`) — see
 /// `RELEASE.md` for the full publish-side design this mirrors.
 const _defaultMetadataUrl =
     'https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/metadata.json';
+const _stagingMetadataUrl =
+    'https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/staging/desktop/metadata.json';
 
 /// Override for testing against a scratch manifest without touching the real one — see RELEASE.md's
 /// "Rolling out safely" section. Empty (the default) means "use the real manifest".
@@ -37,15 +42,23 @@ const _otaKeyMacOS = 'desktop-macos';
 /// The Apple Silicon build, rendered on Impeller. Must match the `apple-silicon` row of
 /// scripts/publish-macos-variant.sh.
 const _otaKeyMacOSArm64 = 'desktop-macos-arm64';
+const _otaKeyWindowsX64 = 'desktop-windows-x64';
+const _otaKeyWindowsArm64 = 'desktop-windows-arm64';
 
 /// `arm64` or `x64` for the CPU this process runs on: which Linux artifact to fetch, and whether the
 /// Apple Silicon macOS build is on offer. An Apple Silicon Mac running this under Rosetta reports x64
 /// and is offered only the Skia build — harmless, since both macOS builds are universal.
 String _currentArchitecture() => runtimeArchitecture;
 
-String get _metadataUrl => _metadataUrlOverride.isNotEmpty
-    ? _metadataUrlOverride
-    : _defaultMetadataUrl;
+@visibleForTesting
+String desktopUpdateMetadataUrl({
+  String override = _metadataUrlOverride,
+  bool staging = kHarnessStagingBuild,
+}) => override.isNotEmpty
+    ? override
+    : (staging ? _stagingMetadataUrl : _defaultMetadataUrl);
+
+String get _metadataUrl => desktopUpdateMetadataUrl();
 
 class UpdateInfo {
   final String version;
@@ -90,12 +103,35 @@ class StagedUpdate {
   /// [stagingDirPath] — there is nothing to unpack.
   final String bundlePath;
   final String stagingDirPath;
+  final WindowsUpdateSwap? _windowsSwap;
 
   const StagedUpdate({
     required this.version,
     required this.bundlePath,
     required this.stagingDirPath,
+  }) : _windowsSwap = null;
+
+  const StagedUpdate._windows({
+    required this.version,
+    required this.bundlePath,
+    required this.stagingDirPath,
+    required WindowsUpdateSwap swap,
+  }) : _windowsSwap = swap;
+}
+
+/// Publication has begun, so a failed update may need a manual restart or repair.
+class WindowsPartialUpdateException implements Exception {
+  const WindowsPartialUpdateException(
+    this.detail, {
+    this.launcherNeedsRepair = false,
+    this.publicationIncomplete = false,
   });
+  final String detail;
+  final bool launcherNeedsRepair;
+  final bool publicationIncomplete;
+
+  @override
+  String toString() => detail;
 }
 
 /// Strict X.Y.Z compare, prerelease/build metadata ignored — same rule as the CLI's own
@@ -150,11 +186,19 @@ String _sha256Hex(List<int> bytes) => const DartSha256()
 /// not from that file — so the file's own path comes from [appImagePath] (tests) or the `APPIMAGE`
 /// environment variable the AppImage runtime sets on launch (production), never from
 /// `RuntimePlatform.resolvedExecutable`.
+/// On Windows it is the install root above `app/<version>/harness-desktop.exe`;
+/// a development executable outside this layout has no update destination.
 String? currentBundlePath({
   String? executablePath,
   bool? isLinux,
   String? appImagePath,
+  bool? isWindows,
 }) {
+  if (isWindows ?? (isLinux == null && RuntimePlatform.isWindows)) {
+    return windowsInstallRootOf(
+      executablePath ?? RuntimePlatform.resolvedExecutable,
+    );
+  }
   if (isLinux ?? RuntimePlatform.isLinux) {
     return appImagePath ?? RuntimePlatform.environment['APPIMAGE'];
   }
@@ -190,6 +234,8 @@ class DesktopUpdater {
   final bool _isLinux;
   final bool _isWindows;
   final String _architecture;
+  final String? _windowsInstallRoot;
+  final Future<void> Function(String, List<String>)? _startDetached;
   final _checksInFlight = <String?, Future<DesktopUpdateCheck>>{};
 
   /// How often the background poll asks the manifest.
@@ -203,9 +249,7 @@ class DesktopUpdater {
   /// own self-updater polls on the same order (`cli/src/lib/selfUpdate.ts`).
   static const checkInterval = Duration(minutes: 5);
 
-  /// Off on Windows until its update branch exists (spec §3.4, C4.5): without one, [_otaKeys]
-  /// falls through to the macOS keys and would offer a Mac build.
-  bool get canCheck => !kIsWeb && !_isWindows && _enabled && _releaseMode;
+  bool get canCheck => !kIsWeb && _enabled && _releaseMode;
 
   DesktopUpdater({
     this._enabled = true,
@@ -229,6 +273,9 @@ class DesktopUpdater {
     // Defaults to the running CPU (`arm64`/`x64`): which Linux artifact to fetch, and whether the
     // Apple Silicon macOS build is on offer. Tests override it to exercise every key from any host.
     String? architecture,
+    String? windowsInstallRoot,
+    Future<void> Function(String executable, List<String> arguments)?
+    startDetached,
   }) : _dio =
            dio ??
            Dio(
@@ -242,11 +289,25 @@ class DesktopUpdater {
        _releaseMode = releaseMode ?? (kReleaseMode || _forceUpdateChecks),
        _isLinux = isLinux ?? RuntimePlatform.isLinux,
        _isWindows = isWindows ?? (isLinux == null && RuntimePlatform.isWindows),
-       _architecture = architecture ?? _currentArchitecture();
+       _architecture =
+           architecture ??
+           ((isWindows ?? (isLinux == null && RuntimePlatform.isWindows))
+               ? windowsMachineArchitecture()
+               : _currentArchitecture()),
+       // Public injection names keep the fixture seam usable outside this library.
+       // ignore: prefer_initializing_formals
+       _windowsInstallRoot = windowsInstallRoot,
+       // ignore: prefer_initializing_formals
+       _startDetached = startDetached;
 
   /// The manifest entries this build may install, most preferred first — [_newestEntry] takes the
   /// newest of them, an earlier key winning a tie.
   List<String> get _otaKeys {
+    if (_isWindows) {
+      return _architecture == 'arm64'
+          ? const [_otaKeyWindowsArm64, _otaKeyWindowsX64]
+          : const [_otaKeyWindowsX64];
+    }
     if (_isLinux) return ['desktop-linux-$_architecture'];
     // An Intel Mac reads only the Skia build: the arm64 one renders on Impeller, which is exactly
     // what it must not get, however new.
@@ -300,6 +361,7 @@ class DesktopUpdater {
     for (final key in _otaKeys) {
       final entry = _parseEntry(manifest?[key]);
       if (entry == null) continue;
+      if (_isWindows && !windowsPackageVersion(entry.version)) continue;
       if (newest == null || semverGt(entry.version, newest.version)) {
         newest = entry;
       }
@@ -375,6 +437,7 @@ class DesktopUpdater {
     void Function(int received, int total)? onProgress,
   }) async {
     if (!_enabled) return null;
+    if (_isWindows && !windowsPackageVersion(info.version)) return null;
     Directory? stagingDir;
     try {
       final response = await _dio.get<List<int>>(
@@ -400,6 +463,35 @@ class DesktopUpdater {
       }
 
       stagingDir = await Directory.systemTemp.createTemp('harness-update-');
+
+      if (_isWindows) {
+        final root = _windowsInstallRoot ?? currentBundlePath(isWindows: true);
+        if (root == null) {
+          await stagingDir.delete(recursive: true);
+          return null;
+        }
+        final zipPath = p.join(
+          stagingDir.path,
+          'harness-desktop-${info.version}.zip',
+        );
+        await File(zipPath).writeAsBytes(bytes, flush: true);
+        final swap = WindowsUpdateSwap(
+          installRoot: root,
+          start: _startDetached,
+        );
+        final error = await swap.stage(zipPath: zipPath, version: info.version);
+        if (error != null) {
+          debugPrint('DesktopUpdater: Windows staging failed: $error');
+          await stagingDir.delete(recursive: true);
+          return null;
+        }
+        return StagedUpdate._windows(
+          version: info.version,
+          bundlePath: root,
+          stagingDirPath: stagingDir.path,
+          swap: swap,
+        );
+      }
 
       if (_isLinux) {
         final appImagePath =
@@ -481,6 +573,41 @@ class DesktopUpdater {
     String? runningBundlePath,
   }) async {
     if (!_enabled) return false;
+    if (_isWindows) {
+      final swap = staged._windowsSwap;
+      if (swap == null ||
+          swap.installRoot != staged.bundlePath ||
+          !windowsPackageVersion(staged.version)) {
+        return false;
+      }
+      final error = swap.commit(version: staged.version);
+      try {
+        await Directory(staged.stagingDirPath).delete(recursive: true);
+      } catch (_) {
+        // Only the downloaded zip is here; the OS can clear this temp folder.
+      }
+      if (error != null) {
+        debugPrint('DesktopUpdater: Windows swap failed: $error');
+        if (swap.publicationStarted) {
+          throw WindowsPartialUpdateException(
+            error,
+            launcherNeedsRepair: swap.launcherNeedsRepair,
+            publicationIncomplete: true,
+          );
+        }
+        await swap.discardStaged();
+        return false;
+      }
+      try {
+        await swap.relaunch(selfPid);
+      } catch (error) {
+        throw WindowsPartialUpdateException(
+          'The new Harness files were installed, but the launcher could not start: $error',
+          launcherNeedsRepair: swap.launcherNeedsRepair,
+        );
+      }
+      return true;
+    }
     final bundlePath =
         runningBundlePath ?? currentBundlePath(isLinux: _isLinux);
     if (bundlePath == null) {

@@ -1103,6 +1103,7 @@ class AppNotifier extends ChangeNotifier {
   /// than sitting at a 100% that has not finished anything.
   double? updateDownloadFraction;
   String? updateError;
+  bool windowsUpdatePartiallyPublished = false;
   final Set<String> _offlinePollsInFlight = {};
   final Map<String, Object> _offlineRecoveryInFlight = {};
   bool _disposed = false;
@@ -6534,6 +6535,7 @@ class AppNotifier extends ChangeNotifier {
   void _recordUpdateCheck(DesktopUpdateCheck result, {bool manual = false}) {
     if (_disposed) return;
     lastUpdateCheck = result;
+    if (windowsUpdatePartiallyPublished) return;
     if (isInstallingUpdate) return;
     final info = result.update;
     if (info != null) {
@@ -6646,7 +6648,8 @@ class AppNotifier extends ChangeNotifier {
     return result.status == DesktopUpdateCheckStatus.upToDate ? null : captured;
   }
 
-  /// Clears a failed install without burying the offer.
+  /// Clears an untouched-install failure without burying the offer. A partial
+  /// Windows publication clears the offer so it cannot prompt the same retry.
   ///
   /// Skipping is permanent — it records the version so the background check
   /// stops raising it. A failure is not a decision about the version, so the
@@ -6654,6 +6657,7 @@ class AppNotifier extends ChangeNotifier {
   void dismissUpdateError() {
     if (updateError == null) return;
     updateError = null;
+    if (windowsUpdatePartiallyPublished) availableUpdate = null;
     notifyListeners();
   }
 
@@ -6671,10 +6675,15 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Downloads, verifies, and installs only after an explicit user action.
-  /// A failed operation leaves the running app untouched and retryable.
+  /// A Windows publication failure may leave installed files changed and
+  /// requires a restart or launcher repair before another attempt.
   Future<bool> installAvailableUpdate({UpdateInfo? update}) async {
     final chosen = update ?? availableUpdate;
-    if (_disposed || viewer != null || chosen == null || isInstallingUpdate) {
+    if (_disposed ||
+        viewer != null ||
+        chosen == null ||
+        isInstallingUpdate ||
+        windowsUpdatePartiallyPublished) {
       return false;
     }
     // Reassigned once the manifest has been re-read below; the failure messages
@@ -6756,6 +6765,17 @@ class AppNotifier extends ChangeNotifier {
       flushAppLog(durable: true);
       productRuntimeHealth?.cleanExit();
       exit(0);
+    } on WindowsPartialUpdateException catch (error) {
+      finish(ProductOutcome.failed);
+      finishApply?.call(ProductOutcome.failed);
+      productRuntimeHealth?.cancelUpdate();
+      windowsUpdatePartiallyPublished = true;
+      updateError = error.launcherNeedsRepair
+          ? 'Harness changed update files but could not finish. Close Harness, rename Harness.exe.old to Harness.exe in the install folder, then open Harness again.'
+          : error.publicationIncomplete
+          ? 'Harness changed update files but could not finish. Close Harness and open it again. The update may not be installed.'
+          : 'Harness installed update files but could not open. Close Harness and open it again.';
+      return false;
     } catch (error) {
       finish(ProductOutcome.failed);
       finishApply?.call(ProductOutcome.failed);

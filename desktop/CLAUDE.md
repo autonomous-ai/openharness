@@ -15,8 +15,9 @@ Windows is a local desktop too, not a viewer (`lib/core/viewer_mode.dart`): `hom
 (`lib/core/home_dir.dart`) reads `USERPROFILE` there even when Git Bash set `HOME`, console
 children start through `lib/core/hidden_process.dart` so no window flashes, and the executable is
 `harness-desktop.exe` (the CLI owns `harness.exe`). `.github/workflows/windows-desktop.yml` builds
-and runs the whole suite on x64 and arm64 against `test/windows_known_failures.txt`. Self-update is
-off on Windows until its branch lands (`DesktopUpdater.canCheck`).
+and runs the whole suite on x64 and arm64 against `test/windows_known_failures.txt`. Self-update
+adds a version folder beside the running one and relaunches through `Harness.exe`
+(`lib/update/windows_update_swap.dart`).
 
 Package name is `harness`
 (`import 'package:harness/...'`). It lives under `desktop/` in the `autonomous-harness` repo, beside
