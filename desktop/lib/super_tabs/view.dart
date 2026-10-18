@@ -373,7 +373,7 @@ class _SuperTabViewState extends State<SuperTabView> {
     final c = this.c;
     var query = '';
     var handedOff = false;
-    await showAppDialog<void>(
+    final addition = await showAppDialog<SuperTabConversation>(
       context: context,
       builder: (context) => SuperTabDialogScope(
         controller: c,
@@ -484,9 +484,8 @@ class _SuperTabViewState extends State<SuperTabView> {
                               alignment: Alignment.centerRight,
                               child: TextButton(
                                 onPressed: () {
-                                  Navigator.of(context).pop();
+                                  Navigator.of(context).pop(currentGroup);
                                   handedOff = true;
-                                  widget.onAddAgent(currentGroup);
                                 },
                                 child: const Text('Add agent'),
                               ),
@@ -502,6 +501,17 @@ class _SuperTabViewState extends State<SuperTabView> {
         ),
       ),
     );
+    if (addition != null) {
+      // The workspace enables its picker when the modal route is gone. Wait
+      // for that dependency update before handing focus to the next surface.
+      await WidgetsBinding.instance.endOfFrame;
+      if (mounted &&
+          identical(c, this.c) &&
+          c.canWrite &&
+          c.snapshot?.conversation(addition.id) != null) {
+        widget.onAddAgent(addition);
+      }
+    }
     if (mounted && !handedOff) _focus.requestFocus();
   }
 

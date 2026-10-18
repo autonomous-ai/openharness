@@ -30,6 +30,7 @@ This is a new tab type. Existing tabs and running sessions are not converted.
 - Shared desktop typography, colors, selectors, modal backdrop and focus behavior; readable large-text controls and searchable archived conversations.
 - Recent-harness navigation consumes an empty Super Tab draft only after opening work; ordinary search opens native work outside completed Super Tabs and preserves their conversations and terminal selection.
 - Definitive native-start refusals are reconciled through durable cancellation receipts. Lost cancellation or backend replies resume the same identity, and unknown/storage/conflict failures never become permission to launch again.
+- Add agent uses the existing desktop picker with a focused conversation title, sharing scope and one action. A teammate's contributed agent can join another conversation without machine access or another native pane. The participants dialog hands focus over after closing; creating a new harness retains the captured conversation. Membership and archive changes update or dismiss an open picker.
 - Experimental settings cleanup and retired PR branding, preserving compatibility fields and usage controls.
 
 The desktop surface is connected, but the complete workflow is not ready. Scoped autonomous
@@ -111,15 +112,23 @@ Focused checks completed during implementation (18 October):
 - Native-start refusal recovery: CLI typecheck and 20 focused start/command/capacity tests passed. The real-daemon
   fixture passed in 15.63 seconds, including both fake engines, a refused permission mode, its durable cancellation,
   a delayed create that cannot revive it, and a resume that retains the failed result. No production sessions were used.
+- Agent picker and ordinary navigation regression: 153 Flutter tests passed across the actual workspace picker,
+  Super Tab view/launch/navigation and normal search identity, previews, rendering and keyboard edge cases. After the
+  final live-membership guards, all 8 picker tests passed again, including a disabled action when a teammate already
+  added the agent, removal of access and archiving the target. Inspected light/dark 1280×800 and 200% text at 800×480
+  fixture renders; the contribution picker has no unrelated preview/actions and its selected row remains visible.
+  Focused Dart analysis had no errors or warnings; it reported two existing brace-style informational diagnostics
+  in `swarm_screen.dart`. These checks do not replace native or official-build acceptance.
 
 These establish individual boundaries, not the complete customer workflow. Full component suites,
 two-machine/two-account integration, real-engine/native desktop validation, full-app visual inspection,
 independent review, merge, official build and release remain.
 No production deployment has occurred.
 
-Implementation remains on `feat/super-tab`, draft PR #1405. Recovery is committed as `3568a03e1f` and UI/navigation
-as `0e27173ea6`. Earlier pushes failed with connection resets. The latest attempt stalled and was interrupted;
-a remote-head lookup also timed out after 25 seconds, so upload of these commits is unconfirmed.
+Implementation remains on `feat/super-tab`, draft PR #1405. Native refusal recovery is committed as `239a094bd4`
+and ordinary navigation as `1c30d01ca9`, following the earlier recovery/UI commits. Earlier pushes failed with
+connection resets. The latest push exceeded its 45-second bound and was terminated; a remote-head lookup also
+timed out after 25 seconds, so upload of the local commits is unconfirmed.
 Local commits and validation are preserved. The original research worktree's merge remains untouched.
 
 ## Remaining implementation and acceptance

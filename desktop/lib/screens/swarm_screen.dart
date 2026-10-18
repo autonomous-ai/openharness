@@ -909,6 +909,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _searchOverlay?.remove();
     _searchOverlay?.dispose();
     _searchDevice?.close();
+    _stopSuperTabPickerWatch?.call();
     _search?.dispose();
     _pickerModels?.dispose();
     _previewControls.dispose();
@@ -3473,6 +3474,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     String? engine,
     String? projectName,
     String? task,
+    String? superTabConversationId,
     HarnessPlacement? placement,
     _NewHarnessSource source = _NewHarnessSource.workspace,
     bool Function()? stillCurrent,
@@ -3499,11 +3501,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final superTab = app.swarms
         .where((s) => s.id == target && s.isSuperTab)
         .firstOrNull;
-    final conversation = superTab?.superTabId == null
-        ? 'lead'
-        : search != null && _superTabAddTarget?.swarmId == target
-        ? _superTabAddTarget!.groupId
-        : app.superTabs.peek(superTab!.superTabId!)?.selectedId ?? 'lead';
+    final conversation = superTabConversationId ??
+        (superTab?.superTabId == null
+            ? 'lead'
+            : search != null && _superTabAddTarget?.swarmId == target
+            ? _superTabAddTarget!.groupId
+            : app.superTabs.peek(superTab!.superTabId!)?.selectedId ?? 'lead');
     final requestedSplit = split ?? search?.split;
     if (app.activeSwarmId != target) return;
     _rememberWorkingProject();
@@ -5959,9 +5962,44 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _canvasFocus.descendantsAreFocusable = false;
     _searchInputKey = GlobalKey();
     _resourcePreviewKey = GlobalKey();
+    final contribution = superTabTarget == null
+        ? null
+        : app.superTabs.peek(superTabTarget.tabId);
+    final groupTitle = superTabTarget == null
+        ? null
+        : contribution?.snapshot?.conversation(superTabTarget.groupId)?.title;
     _search = SwarmSearchController(
       app,
       _navigation.recent,
+      harnessContext: superTabTarget == null
+          ? null
+          : HarnessPickerContext(
+              title: 'Add agent to ${groupTitle ?? 'conversation'}',
+              description: 'Shared with everyone in ${app.activeSwarm.name}.',
+              action: 'Add agent',
+              unavailable: (row) {
+                final shared = app.superTabs.peek(superTabTarget.tabId)?.snapshot;
+                final agent = shared?.agents.where(
+                  (agent) => agent.machineId == row.machineId &&
+                      agent.harnessId == row.agentId,
+                ).firstOrNull;
+                if (agent != null) {
+                  return shared!.conversation(superTabTarget.groupId)
+                          ?.agentIds.contains(agent.id) == true
+                      ? 'Already in this conversation.'
+                      : null;
+                }
+                final native = app.stateOf(row.machineId ?? '')?.agents
+                    .where((agent) => agent.id == row.agentId)
+                    .firstOrNull;
+                return native != null &&
+                        native.engine != 'terminal' &&
+                        native.terminalAvailable &&
+                        !native.isStopped
+                    ? null
+                    : 'Choose a running agent.';
+              },
+            ),
       additionalDestinations: [
         if (superTabTarget != null)
           for (final agent
@@ -5971,12 +6009,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
               id: agentDestinationId(agent.machineId, agent.harnessId),
               title: agent.name,
               detail:
-                  '${agent.engine} · ${app.stateOf(agent.machineId)?.machine.displayName ?? 'Shared agent'}',
+                  '${engineIdentity(agent.engine).label} · ${app.stateOf(agent.machineId)?.machine.displayName ?? 'Shared agent'}',
               swarmId: superTabTarget.swarmId,
               current: false,
               machineId: agent.machineId,
               agentId: agent.harnessId,
-              agentEngine: agent.engine,
+              engine: agent.engine,
             ),
       ],
       projects: _projects,
@@ -5989,9 +6027,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ),
       adding: adding,
       offersCreate: adding,
-      offersHarnessCreate: split != null,
+      offersHarnessCreate: split != null || superTabTarget != null,
       activityFirst: split == null,
-      selectOnEmptyQuery: split != null,
+      selectOnEmptyQuery: split != null || superTabTarget != null,
       // Results read downward from the input.
       resultsFromBottom: false,
       noteFor: _easterNote,
@@ -6010,6 +6048,20 @@ class _SwarmScreenState extends State<SwarmScreen> {
       catalog: _searchCatalog,
     )..setQuery(query);
     final deviceSearch = _search!;
+    if (contribution != null && superTabTarget != null) {
+      void guardContribution() {
+        if (!mounted || !identical(_search, deviceSearch)) return;
+        final group = contribution.snapshot?.conversation(superTabTarget.groupId);
+        if (!contribution.canWrite || group == null || group.archived) {
+          _closeSearch();
+        } else {
+          deviceSearch.refreshAvailability();
+        }
+      }
+      contribution.addListener(guardContribution);
+      _stopSuperTabPickerWatch = () =>
+          contribution.removeListener(guardContribution);
+    }
     _searchDevice = DeviceFinder(
       deviceSearch,
       isComposing: () =>
@@ -6198,6 +6250,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   void _closeSearch({bool restoreFocus = true}) {
     if (_search == null) return;
+    _stopSuperTabPickerWatch?.call();
+    _stopSuperTabPickerWatch = null;
     _machineSearchVisible = false;
     _storeSearchVisible = false;
     // Enable the chosen terminal synchronously, before activation requests its
@@ -6437,12 +6491,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // What was typed and found nothing is what the new harness starts on.
       final task = choice.destination.task;
       final machineId = _search!.scopedMachineId;
+      final conversationId = _superTabAddTarget?.swarmId == target
+          ? _superTabAddTarget!.groupId
+          : null;
       _closeSearch(restoreFocus: false);
       await _newAgent(
         machineId: machineId,
         swarmId: target,
         split: split,
         task: task,
+        superTabConversationId: conversationId,
         placement: placement,
       );
       return;
@@ -6628,6 +6686,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   ({String swarmId, String tabId, String groupId})? _superTabAddTarget;
+  VoidCallback? _stopSuperTabPickerWatch;
 
   Future<void> _addAgent({String query = '#', String? conversationId}) async {
     if ((app.activeSwarm.isUtility || app.activeSwarm.isOrchestrator) &&
@@ -6651,10 +6710,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 'lead',
           )
         : null;
+    if (superTabTarget != null) {
+      final controller = app.superTabs.peek(superTabTarget.tabId);
+      final group = controller?.snapshot?.conversation(superTabTarget.groupId);
+      if (controller?.canWrite != true || group == null || group.archived) return;
+    }
     _openSearch(
       adding: true,
       placement: HarnessPlacement.currentTab,
-      query: query,
+      query: superTabTarget == null ? query : '',
       superTabTarget: superTabTarget,
     );
   }

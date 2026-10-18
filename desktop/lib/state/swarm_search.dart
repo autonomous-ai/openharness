@@ -34,6 +34,19 @@ const kHarnessPickerHint = kSwarmSearchHint;
 
 const kSwarmCreateRowId = 'create:harness';
 
+/// A session picker can choose a contribution without opening a native pane.
+/// The caller owns that purpose and revalidates its authority on submission.
+class HarnessPickerContext {
+  const HarnessPickerContext({
+    required this.title,
+    required this.description,
+    required this.action,
+    required this.unavailable,
+  });
+  final String title, description, action;
+  final String? Function(SwarmDestination) unavailable;
+}
+
 /// The Machines picker's two runs of rows: the account's computers, then its phones and apps.
 enum MachineSearchSection {
   computers('Computers'),
@@ -86,6 +99,7 @@ class SwarmSearchController extends ChangeNotifier {
     this.resultsFromBottom = false,
     this.noteFor,
     this.additionalDestinations = const [],
+    this.harnessContext,
     this._placement,
     this._split,
     bool previewInitiallyVisible = true,
@@ -96,7 +110,7 @@ class SwarmSearchController extends ChangeNotifier {
        _locations = locations ?? SwarmLocationCatalog(),
        targetId = app.activeSwarmId,
        targetName = app.activeSwarm.name {
-    if (activityFirst && history == null && !navigating) {
+    if (activityFirst && history == null && !navigating && harnessContext == null) {
       _content = SessionContentSearch(
         machines: () => app.searchableMachineIds,
         ask: (machineId, words, when) =>
@@ -119,6 +133,7 @@ class SwarmSearchController extends ChangeNotifier {
   /// taken by Return (the daemons' easter words: `xyzzy`).
   final String? Function(String query)? noteFor;
   final List<SwarmDestination> additionalDestinations;
+  final HarnessPickerContext? harnessContext;
   final SwarmProjectStore? projects;
   final ModelSearchCatalog? models;
   bool modelDownloadsVisible = false;
@@ -1019,7 +1034,8 @@ class SwarmSearchController extends ChangeNotifier {
   HarnessPlacement? get placement => _placement;
   PaneSplitRequest? _split;
   PaneSplitRequest? get split => _split;
-  bool get allowsCommands => history == null && !navigating;
+  bool get allowsCommands =>
+      harnessContext == null && history == null && !navigating;
   bool get isCommandMode =>
       allowsCommands && (commandsOnly || query.trimLeft().startsWith('>'));
 
@@ -1165,6 +1181,7 @@ class SwarmSearchController extends ChangeNotifier {
   bool _previewVisible;
   bool get previewVisible => _previewVisible;
   bool get supportsPreview =>
+      harnessContext == null &&
       history == null && (setupLayout || !isCommandMode && !isHelpMode);
   bool get canPreview =>
       supportsPreview &&
@@ -1174,6 +1191,7 @@ class SwarmSearchController extends ChangeNotifier {
       rows.any((row) => !row.isCreate);
 
   bool get hasPreview =>
+      harnessContext == null &&
       _previewVisible &&
       (canPreview ||
           setupLayout ||
@@ -1255,7 +1273,8 @@ class SwarmSearchController extends ChangeNotifier {
   /// Cmd-T and Cmd-P change where Enter opens the result, while the query,
   /// highlighted result and project/machine scope remain the person's choices.
   bool changePlacement(HarnessPlacement placement) {
-    if (!adding ||
+    if (harnessContext != null ||
+        !adding ||
         navigating ||
         history != null ||
         targetId != app.activeSwarmId) {
@@ -1272,7 +1291,9 @@ class SwarmSearchController extends ChangeNotifier {
   }
 
   int get capacity {
-    if (placement == HarnessPlacement.newTab) return AppNotifier.maxPanes;
+    if (harnessContext != null || placement == HarnessPlacement.newTab) {
+      return AppNotifier.maxPanes;
+    }
     final target = app.swarms
         .where((swarm) => swarm.id == targetId)
         .firstOrNull;
@@ -1384,6 +1405,7 @@ class SwarmSearchController extends ChangeNotifier {
   String get commandQuery => query.trimLeft().replaceFirst(_commandPrefix, '');
 
   String get primaryAction =>
+      harnessContext?.action ??
       placement?.action ??
       switch (split?.axis) {
         PaneResizeAxis.x => 'Split right',
@@ -1391,7 +1413,10 @@ class SwarmSearchController extends ChangeNotifier {
         null => 'Open Harness',
       };
 
-  String actionLabel(SwarmDestination? row) => row?.isAgentChoice == true
+  String actionLabel(SwarmDestination? row) =>
+      harnessContext != null && row?.agentId != null
+      ? harnessContext!.action
+      : row?.isAgentChoice == true
       ? 'Change agent'
       : row?.isCreate == true
       ? isModelMode
@@ -1534,6 +1559,12 @@ class SwarmSearchController extends ChangeNotifier {
     if (!isCommandMode) return;
     _filter();
     notifyListeners();
+  }
+
+  /// A contribution's permissions and membership can change without changing
+  /// the native machine catalog. Keep the person's query and selection intact.
+  void refreshAvailability() {
+    if (harnessContext != null) notifyListeners();
   }
 
   void _modelsChanged() {
@@ -2212,6 +2243,10 @@ class SwarmSearchController extends ChangeNotifier {
                   matchQuery.trim().isNotEmpty)
         ? 1
         : cursor.clamp(0, rows.length - 1);
+    if (harnessContext != null && preferred == null) {
+      final agent = rows.indexWhere((row) => row.agentId != null && canSubmit(row));
+      if (agent >= 0) cursor = agent;
+    }
     // Nor on a row Return cannot take: "Already added", dimmed, with its
     // reason stranded at the bottom. Only when the position is ours to pick —
     // a row somebody arrowed to stays theirs.
@@ -2386,6 +2421,9 @@ class SwarmSearchController extends ChangeNotifier {
 
   /// Read live state at activation too: a rendered row can outlive a disconnect.
   String? sessionUnavailable(SwarmDestination? row) {
+    if (harnessContext != null && row?.agentId != null) {
+      return harnessContext!.unavailable(row!);
+    }
     if (row?.external case final external?) {
       // Short: it is a row's note. The preview says what to do about it. Its
       // preview's answer is the fresher, when there is one.
@@ -2460,9 +2498,12 @@ class SwarmSearchController extends ChangeNotifier {
       : row.members.any((id) => !_presentIds.contains(id));
 
   bool alreadyHere(SwarmDestination row) =>
+      harnessContext == null &&
       adding && row.agentId != null && _presentIds.contains(row.id);
 
-  bool canAdd(SwarmDestination? row) => row?.external != null
+  bool canAdd(SwarmDestination? row) => harnessContext != null
+      ? adding && row?.agentId != null && sessionUnavailable(row) == null
+      : row?.external != null
       // A conversation Harness did not start becomes a new harness: room for
       // one more pane, or a tab of its own.
       ? !navigating &&
