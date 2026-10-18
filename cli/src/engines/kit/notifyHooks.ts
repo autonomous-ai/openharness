@@ -107,7 +107,7 @@ export function quoteHookCommand(runner: HookRunner, argv: string[]): string | s
   switch (runner) {
     case 'argv': return [...argv]
     case 'bash': return argv.map((arg) => BARE_WORD.test(arg) ? arg : shellQuote(arg)).join(' ')
-    case 'cmd': return argv.map((arg) => {
+    case 'cmd': return argv.map(withoutTrailingSeparators).map((arg) => {
       // cmd.exe expands %…% (and !…! with delayed expansion) even inside quotes, and a quote ends them. `& | < > ^ ( )`
       // are refused too, in case an engine does not wrap the line: unquoted, cmd.exe reads them as its own syntax. A
       // trailing backslash would escape the closing quote for the program's own parser (CommandLineToArgvW's rules).
@@ -115,7 +115,7 @@ export function quoteHookCommand(runner: HookRunner, argv: string[]): string | s
       if (arg.endsWith('\\')) refuse('ends in a backslash, which would escape its closing quote')
       return BARE_WORD.test(arg) ? arg : `"${arg}"`
     }).join(' ')
-    case 'powershell': return `& ${argv.map((arg) => {
+    case 'powershell': return `& ${argv.map(withoutTrailingSeparators).map((arg) => {
       // Inside single quotes PowerShell reads only a quote, typographic ones too. Windows PowerShell 5.1 passes a
       // double quote inside an argument to a native program unescaped.
       if (arg === '') refuse('is empty, which Windows PowerShell 5.1 drops')
@@ -124,6 +124,19 @@ export function quoteHookCommand(runner: HookRunner, argv: string[]): string | s
       return BARE_WORD.test(arg) ? arg : `'${arg.replace(/'/g, "''")}'`
     }).join(' ')}`
   }
+}
+
+/**
+ * A Windows folder without its trailing backslashes, which name the same folder: `CODEX_HOME=C:\codex\`, as the
+ * environment dialog takes a folder, turned that engine's hooks off as "ends in a backslash" (final review R2-3). A root
+ * (`C:\`, `\\server\share\`) has nothing to drop, and anything that is not an absolute path is left as it is.
+ */
+function withoutTrailingSeparators(arg: string): string {
+  if (!win32.isAbsolute(arg)) return arg
+  const root = win32.parse(arg).root
+  let end = arg.length
+  while (end > root.length && arg[end - 1] === '\\') end--
+  return arg.slice(0, end)
 }
 
 type NotifyEngine = 'claude' | 'codex' | 'cursor' | 'hermes' | 'commandcode' | 'devin' | 'grok' | 'agy' | 'copilot'

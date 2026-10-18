@@ -49,14 +49,23 @@ describe('quoteHookCommand', () => {
   })
 
   it.each([
-    ['cmd', 'C:\\100%\\data'], ['cmd', 'C:\\wow!\\data'], ['cmd', 'C:\\a"b'], ['cmd', 'C:\\data\\'],
+    ['cmd', 'C:\\100%\\data'], ['cmd', 'C:\\wow!\\data'], ['cmd', 'C:\\a"b'], ['cmd', 'C:\\'], ['cmd', 'data\\'],
     ['cmd', 'a&b'], ['cmd', 'a|b'], ['cmd', 'a<b'], ['cmd', 'a>b'], ['cmd', 'a^b'], ['cmd', 'a(b'], ['cmd', 'a)b'],
-    ['powershell', 'C:\\a"b'], ['powershell', 'C:\\data\\'], ['powershell', ''],
+    ['powershell', 'C:\\a"b'], ['powershell', 'C:\\'], ['powershell', '\\\\server\\share\\'], ['powershell', ''],
     ['powershell', 'C:\\a\u2018b'], ['powershell', 'C:\\a\u2019b'], ['powershell', 'C:\\a\u201ab'], ['powershell', 'C:\\a\u201bb'],
     ['bash', 'a\rb'],
     ['bash', 'line\nbreak'], ['argv', 'nul\0'],
   ] as const)('refuses what %s would read as something other than one argument: %j', (runner, value) => {
     expect(() => quoteHookCommand(runner, ['C:\\node.exe', value])).toThrow(HookPreparationHeld)
+  })
+
+  // Final review R2-3: CODEX_HOME=C:\codex\, as the Windows environment dialog takes a folder, turned the Codex, Copilot
+  // and Command Code hooks off ("ends in a backslash"). A folder's trailing separators name the same folder; a drive
+  // root has nothing to drop and is still refused.
+  it('drops the trailing backslashes of a Windows folder for cmd.exe and PowerShell, and keeps them for the others', () => {
+    expect(quoteHookCommand('cmd', ['C:\\node.exe', '--codex-home', 'C:\\codex\\'])).toBe('"C:\\node.exe" --codex-home "C:\\codex"')
+    expect(quoteHookCommand('powershell', ['C:\\node.exe', '--codex-home', 'C:\\My Codex\\\\'])).toBe("& 'C:\\node.exe' --codex-home 'C:\\My Codex'")
+    expect(quoteHookCommand('argv', ['C:\\node.exe', 'C:\\codex\\'])).toEqual(['C:\\node.exe', 'C:\\codex\\'])
   })
 
   it('builds the POSIX command line from the same argument list as before', () => {
