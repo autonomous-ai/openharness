@@ -5,6 +5,10 @@ import type { ScreenReader } from './screenReader.js'
 import { stripAnsi } from '../engines/kit/pane.js'
 export type { PaneInspection, PaneTakeover } from '../engines/facets/screen.js'
 import { parseRuntimeProfile } from './runtimeProfileWire.js'
+import { readFile, rename, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { env } from '../config/env.js'
 import type { RegisteredSession } from './registry.js'
 import type { OpencodeModelTarget, OpencodePickerRow } from '../engines/opencode/runtimeProfile.js'
 import { engineNow, isOtherEngine, loadEngine, type InProcessModules, type OtherEngine } from '../engines/inProcess.js'
@@ -108,6 +112,94 @@ export function parseCursorParameterRows(capture: string): CursorParameterRow[] 
   return rows.length ? rows : null
 }
 
+/**
+ * What Prime Agent's `/model` and `/effort` write to its GLOBAL settings.json besides switching the session
+ * (prime-agent 0.9.5, measured: `AgentSession.setThinkingLevel` calls `settingsManager.setDefaultThinkingLevel`,
+ * and a model switch sets `defaultProvider`/`defaultModel` and puts the model first in `recentModels` — a model
+ * switch that clamps the level writes `defaultThinkingLevel` too). Every new Prime session then starts on
+ * it. Switching one agent from a device must not move the person's default, so the switch puts these back.
+ */
+export const PRIME_DEFAULT_KEYS = ['defaultProvider', 'defaultModel', 'defaultThinkingLevel', 'recentModels'] as const
+
+/**
+ * [current] settings.json with [PRIME_DEFAULT_KEYS] as they were in [before] (a key absent then is removed),
+ * every other key as it is now. Null when nothing differs, or either text is not a JSON object.
+ */
+export function restorePrimeDefaults(current: string, before: string): string | null {
+  let now: Record<string, unknown>
+  let then: Record<string, unknown>
+  try {
+    now = JSON.parse(current) as Record<string, unknown>
+    then = JSON.parse(before) as Record<string, unknown>
+  } catch { return null }
+  if (!now || typeof now !== 'object' || Array.isArray(now) || !then || typeof then !== 'object' || Array.isArray(then)) return null
+  let changed = false
+  for (const key of PRIME_DEFAULT_KEYS) {
+    if (JSON.stringify(now[key]) === JSON.stringify(then[key])) continue
+    changed = true
+    if (key in then) now[key] = then[key]
+    else delete now[key]
+  }
+  // Prime writes it as `JSON.stringify(settings, null, 2)`, no trailing newline.
+  return changed ? JSON.stringify(now, null, 2) : null
+}
+
+const PRIME_SETTINGS_SETTLE_MS = 1_000
+
+/** Read Prime's settings.json now; the returned function puts its defaults back once Prime's own write lands. */
+async function snapshotPrimeDefaults(): Promise<() => Promise<void>> {
+  const path = join(env.PRIME_AGENT_DIR, 'settings.json')
+  const before = await readFile(path, 'utf8').catch(() => null)
+  return async () => {
+    if (before === null) return
+    try {
+      // Prime saves through an async queue under a lock (`settings.json.lock`): wait until its write has
+      // landed and the file holds still, so the restore is not overwritten by the write it undoes.
+      const deadline = Date.now() + PRIME_SETTINGS_SETTLE_MS
+      let last = await readFile(path, 'utf8')
+      while (Date.now() < deadline) {
+        await sleep(150)
+        const next = await readFile(path, 'utf8')
+        if (next === last && next !== before && !existsSync(`${path}.lock`)) break
+        last = next
+      }
+      const restored = restorePrimeDefaults(last, before)
+      if (restored === null) return
+      const temporary = `${path}.harness-${process.pid}.tmp`
+      await writeFile(temporary, restored, { mode: 0o600 })
+      await rename(temporary, path)
+    } catch (error) {
+      console.warn(`[runtime-profile] prime: could not restore the default model/thinking level: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+}
+
+/** A Prime completion row (`    › medium     Moderate reasoning`) drawn over the composer. */
+const PRIME_COMPLETION_ROW = /^\s{2,}›\s+\S/
+/** Prime's model selector: what `/model` opens when its argument is no exact model. */
+const PRIME_MODEL_SELECTOR = /Enter select · Esc close|No matching models/
+
+function primeComposer(capture: string): { draft: string; completion: boolean } | null {
+  const lines = stripAnsi(capture).split('\n')
+  const at = lines.findLastIndex((line) => /^ >(?:\s|$)/.test(line))
+  if (at < 0) return null
+  return {
+    draft: lines[at].slice(2).replace(/\u00a0/g, ' ').trim(),
+    completion: lines.slice(Math.max(0, at - 10), at).some((line) => PRIME_COMPLETION_ROW.test(line)),
+  }
+}
+
+/** The level in Prime's latest `/effort` error (`⚠ Error: Unknown thinking level 'max'. Available: …`), when that is its latest answer. */
+export function primeRefusedThinkingLevel(capture: string): string | null {
+  const lines = stripAnsi(capture).split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const refused = /Unknown thinking level '([^']+)'/.exec(lines[i])
+    if (refused) return refused[1]
+    if (/^\s*(?:Thinking level|Model):\s+\S/.test(lines[i])) return null
+  }
+  return null
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -174,6 +266,11 @@ export class RuntimeProfileController {
       } else if (session.engine === 'pi') {
         pickerOpen = true
         await this.setPi(session, target, current)
+        pickerOpen = false
+      } else if (session.engine === 'prime') {
+        // A command that names no exact model opens Prime's selector: Escape is how that is backed out of.
+        pickerOpen = true
+        await this.setPrime(session, target, current)
         pickerOpen = false
       } else if (session.engine === 'opencode') {
         pickerOpen = true
@@ -327,6 +424,79 @@ export class RuntimeProfileController {
     if (!await this.waitObservedProfile(session, target)) {
       throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
     }
+  }
+
+  /**
+   * Prime Agent (Pi's fork) has a command for each axis, measured on 0.9.5: `/model <provider>/<model>`
+   * (answered `Model: <model>`; a name that is no exact model opens the selector instead) and
+   * `/effort <level>` (answered `Thinking level: <level>`, or `⚠ Error: Unknown thinking level …` when the
+   * model's ladder stops short). Both persist the person's global defaults, which are put back afterwards.
+   */
+  private async setPrime(
+    session: RegisteredSession,
+    target: RuntimeProfile,
+    current: RuntimeProfile | null,
+  ): Promise<void> {
+    const restoreDefaults = await snapshotPrimeDefaults()
+    try {
+      if (current?.model !== target.model) {
+        await this.primeCommand(session, `/model ${target.model}`)
+        let selector = false
+        const landed = await this.waitPane(session.agentId, async (value) => {
+          if (PRIME_MODEL_SELECTOR.test(stripAnsi(value).split('\n').slice(-30).join('\n'))) return (selector = true)
+          await this.deps.manager.ingestPane(session, value, true)
+          return this.deps.manager.getState(session.sessionId).model === target.model
+        }, COMMAND_CONFIRM_MS)
+        if (selector) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
+        if (!landed) throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
+      }
+      // A model switch can move the level too (Prime clamps it to the new model's ladder), so the level
+      // to compare against is the one observed now, not the one before.
+      if (target.effort === 'auto' || this.deps.manager.getState(session.sessionId).effort === target.effort) {
+        this.deps.manager.confirmEffort(session.sessionId, target.effort)
+        return
+      }
+      await this.primeCommand(session, `/effort ${target.effort}`)
+      let refused = false
+      const confirmed = await this.waitPane(session.agentId, async (value) => {
+        if (primeRefusedThinkingLevel(value) === target.effort) return (refused = true)
+        await this.deps.manager.ingestPane(session, value, true)
+        return this.deps.manager.selectedModel(session) === target.id
+      }, COMMAND_CONFIRM_MS)
+      if (refused) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
+      if (!confirmed) throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
+    } finally {
+      await restoreDefaults()
+    }
+  }
+
+  /**
+   * Submit one slash command to Prime. Typing a slash command opens an autocomplete whose highlighted row
+   * the first Enter TAKES rather than submits — for `/model anthropic/claude-opus-5` that row is
+   * OpenRouter's `anthropic/claude-opus-5`, a different model. Escape closes the list and keeps the text
+   * (measured), so the Enter that follows submits exactly what was typed.
+   */
+  private async primeCommand(session: RegisteredSession, command: string): Promise<void> {
+    if (!await this.deps.sendLiteral(session.agentId, command)) throw new RuntimeProfileControlError('TMUX_FAILED')
+    const typed = await this.waitPane(session.agentId, (value) => primeComposer(value)?.draft === command, PICKER_OPEN_MS)
+    if (!typed) {
+      await this.deps.sendKey(session.agentId, 'C-u').catch(() => false)
+      throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
+    }
+    // The list draws a moment after the text; give it that moment, then close it until none is drawn.
+    await sleep(150)
+    let closed = false
+    for (let attempt = 0; attempt < 3 && !closed; attempt++) {
+      if (!await this.deps.sendKey(session.agentId, 'Escape')) throw new RuntimeProfileControlError('TMUX_FAILED')
+      await sleep(120)
+      const after = primeComposer(await this.deps.capture(session.agentId, 100) ?? '')
+      closed = !!after && after.draft === command && !after.completion
+    }
+    if (!closed) {
+      await this.deps.sendKey(session.agentId, 'C-u').catch(() => false)
+      throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
+    }
+    if (!await this.deps.sendKey(session.agentId, 'Enter')) throw new RuntimeProfileControlError('TMUX_FAILED')
   }
 
   /** Poll the pane INTO the manager until it reports the profile we asked for. */

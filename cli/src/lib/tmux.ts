@@ -731,6 +731,13 @@ export const ENGINE_PROCESS_SIGNATURES: Readonly<Record<RegisteredSession['engin
     basenames: [/^copilot$/],
     entrypoints: [/@github[\/\\]copilot[\/\\](?:npm-loader\.js|index\.js|bin[\/\\]copilot)$/],
   },
+  // The pane runs Prime Agent's TUI client: `prime-agent …`, a Bun-compiled image the installer keeps at
+  // ~/.local/share/prime-agent/releases/<version>-<platform>-<sha>/prime-agent. Its supervisor and workers
+  // (`--mode daemon`) run detached, in no pane.
+  prime: {
+    basenames: [/^prime-agent$/],
+    entrypoints: [/prime-agent[\/\\]releases[\/\\][^/\\]+[\/\\]prime-agent$/],
+  },
   // A terminal is a shell, and a shell is what every pane starts as — so nothing matches it, ever.
   // Discovery walks PROCESS_ENGINES and never asks; this entry exists for the Record's sake.
   terminal: { basenames: [], entrypoints: [] },
@@ -932,6 +939,9 @@ const RESUME_ARGS: Partial<Record<RegisteredSession['engine'], { flags: readonly
   // `copilot --resume=<id>` and `--session-id <id>`; bare `--resume`/`--continue` name nothing and
   // fall through to the directory scan in sessionRepair.
   copilot: { flags: ['--resume', '--session-id'], id: /^[0-9a-f-]{16,}$/i },
+  // `prime-agent --resume <id>` / `-r <id>` (a uuidv7, or a unique prefix of one). A bare `-r` opens the picker
+  // and names nothing; `attach <agent>` names an AGENT id, resolved in sessionRepair through `prime-agent list`.
+  prime: { flags: ['--resume', '-r'], id: /^[0-9a-f][0-9a-f-]{7,}$/i },
 }
 
 /**

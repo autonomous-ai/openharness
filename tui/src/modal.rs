@@ -210,7 +210,7 @@ pub enum Modal {
     Copy { pane: u64 },
 }
 
-pub const ENGINES: [&str; 15] = ["claude", "codex", "opencode", "cursor", "pi", "amp", "hermes", "kilo", "grok", "devin", "copilot", "commandcode", "muse", "agy", "terminal"];
+pub const ENGINES: [&str; 16] = ["claude", "codex", "opencode", "cursor", "pi", "amp", "hermes", "kilo", "grok", "devin", "copilot", "commandcode", "muse", "agy", "prime", "terminal"];
 
 /// The palette's commands: (id, title, keys, hint, group).
 pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[

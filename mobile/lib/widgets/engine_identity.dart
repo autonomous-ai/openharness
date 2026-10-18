@@ -103,6 +103,12 @@ const _engines = <String, EngineIdentity>{
     color: Color(0xff3287fb),
     asset: 'assets/engine-icons/agy.png',
   ),
+  'prime': EngineIdentity(
+    id: 'prime',
+    label: 'Prime Agent',
+    color: Colors.white,
+    asset: 'assets/engine-icons/prime.png',
+  ),
 };
 
 /// All known engines, in declaration order — for the New Agent engine picker.
@@ -115,7 +121,7 @@ bool isHarnessId(String? id) => id != null && id.contains('/');
 /// Whether [engine] is a coding engine — the desktop's `category: 'Code'`.
 ///
 /// ⚠️ **Every engine in [_engines] is one**, as every engine in the desktop's own table is (the
-/// same fourteen, claude to agy); it is the harnesses that carry other categories, and those are
+/// same fifteen, claude to prime); it is the harnesses that carry other categories, and those are
 /// told apart by [isHarnessId]. An engine added here that does not write code has to be excluded
 /// by name, or a tab of it would be called `code`.
 bool isCodeEngine(String? engine) =>

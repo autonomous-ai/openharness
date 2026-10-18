@@ -18,7 +18,7 @@ vi.mock('node:child_process', () => ({ execFile: (command: string, args: string[
 } }))
 vi.mock('./hooks.js', () => ({ engineHooks: { claude: { installIn: vi.fn(async () => fixture.hooks) }, codex: { installIn: vi.fn(async () => fixture.hooks) } } }))
 vi.mock('./nativeHooks.js', () => Object.fromEntries(['installOpencodePlugin', 'installHermesHooks', 'installCursorHooks',
-  'installCommandCodeHooks', 'installDevinHooks', 'installAmpPlugin', 'installKiloPlugin', 'installGrokHooks', 'installAgyHooks', 'installCopilotHooks', 'installPiExtension',
+  'installCommandCodeHooks', 'installDevinHooks', 'installAmpPlugin', 'installKiloPlugin', 'installGrokHooks', 'installAgyHooks', 'installCopilotHooks', 'installPiExtension', 'installPrimeExtension',
 ].map(name => [name, vi.fn(async () => fixture.hooks)])))
 beforeEach(() => { fixture.current = true; fixture.hooks = true; fixture.version = '2.0.0'; fixture.help = '--auto --permission-mode --approve-for-me'; fixture.calls = []; fixture.pending = []; fixture.stalled = false; fixture.failed = false; fixture.environments = []; fixture.exit = 0; fixture.stderr = '' })
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllEnvs() })

@@ -13,6 +13,7 @@ import * as nativeHooks from '../../engines/nativeHooks.js'
 import type { NativeHookOptions } from '../../engines/kit/nativeLocations.js'
 import type { OpencodeLaunchSnapshot } from '../../engines/launchControl.js'
 import { sid } from '../../lib/log.js'
+import { primeSessionAttached } from '../../lib/primeAgents.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import type { ProcessRow } from '../../lib/tmux.js'
@@ -113,8 +114,21 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
     }
   }
 
-  const resolveHookAgent: ResolveHookAgent = async ({ engine, runtimeHints, callerPid, onWait }) => {
+  const resolveHookAgent: ResolveHookAgent = async ({ engine, sessionId, runtimeHints, callerPid, onWait }) => {
     if (!callerPid) return null
+    /**
+     * Prime Agent's hook comes from its daemon worker, never from below the pane, and the worker's TMUX_PANE
+     * is whichever client LAUNCHED it: a `-p` run from inside another agent's tool inherits that agent's pane
+     * (measured, engines/prime/contract.ts). So its pane-only candidate stands only while Prime's own list
+     * shows that session as an attached, top-level, live conversation.
+     */
+    const primeChecked = async <F extends { candidates: Map<string, RegisteredSession>; onHintedRuntime: Map<string, RegisteredSession> }>(f: F): Promise<F> => {
+      if (engine === 'prime' && !f.candidates.size && f.onHintedRuntime.size && !await primeSessionAttached(sessionId)) {
+        console.log(`[hooks] prime hook for ${sid(sessionId ?? '?')} not attached in \`prime-agent list\`; pane evidence ignored`)
+        f.onHintedRuntime.clear()
+      }
+      return f
+    }
     // Who the hook came from, read as it arrives. On Linux dash keeps its `sh -c` as the hook's parent, a
     // shell that exits with the hook (its 500ms, or `onWait`'s answer); read after the reconcile pass or
     // the wait, the ancestry stopped at a pid already gone and a restart's new conversation was never
@@ -141,7 +155,7 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
       pid = row.parentPid
     }
 
-    let found = (await matchCaller(resolved, engine, ancestry, table))!
+    let found = await primeChecked((await matchCaller(resolved, engine, ancestry, table))!)
     let choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
     // Every relaunch starts its engine before it records the new process — create, fork, resume, a
     // restart and the new conversation it falls back to, a retarget — so a SessionStart in between came
@@ -156,7 +170,7 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
       await recordChanged(resolved, engine)
       const again = await matchCaller(resolved, engine, ancestry)
       if (!again) return null
-      found = again
+      found = await primeChecked(again)
       choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
     }
     // Cursor may admit a unique runtime without recorded ancestry. A hook from the engine just
@@ -169,7 +183,7 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
       try { await pending } catch { return null }
       const again = await matchCaller(resolved, engine, ancestry)
       if (!again) return null
-      found = again
+      found = await primeChecked(again)
       choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
     }
     const { candidates } = found
@@ -233,6 +247,7 @@ const OTHER_INSTALLERS: Array<[string, (port: number, options: NativeHookOptions
   ['opencode', (port, options) => nativeHooks.installOpencodePlugin(port, undefined, options)],
   ['kilo', nativeHooks.installKiloPlugin],
   ['pi', nativeHooks.installPiExtension],
+  ['prime', nativeHooks.installPrimeExtension],
   // A self-update refreshes plugin files here; running engine processes pick them up according to each
   // vendor's own plugin reload lifecycle.
   ['amp', nativeHooks.installAmpPlugin],

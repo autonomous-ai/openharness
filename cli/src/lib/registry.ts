@@ -1849,6 +1849,8 @@ class Registry {
       || (engine === 'agy' && !GROK_SESSION_RE.test(sessionId))
       // Copilot's session id is a uuid and names the directory its event stream lives in.
       || (engine === 'copilot' && !GROK_SESSION_RE.test(sessionId))
+      // Prime Agent's session ids are uuidv7 and name the file in its flat sessions folder.
+      || (engine === 'prime' && !GROK_SESSION_RE.test(sessionId))
       || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && !transcriptPath)
       // The already-registered agent (opened at agent_create time) already carries its own
       // CODEX_HOME profile, if it has one other than the default — see RegisteredSession.codexHome.

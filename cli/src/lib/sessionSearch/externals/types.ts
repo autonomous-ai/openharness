@@ -15,7 +15,7 @@ import type { LiveEvent } from '../../normalize.js'
  */
 export const EXTERNAL_ENGINES = [
   'claude', 'codex', 'cursor', 'opencode', 'kilo', 'hermes', 'devin', 'pi', 'commandcode', 'muse', 'grok',
-  'agy', 'copilot',
+  'agy', 'copilot', 'prime',
 ] as const
 export type ExternalEngine = typeof EXTERNAL_ENGINES[number]
 

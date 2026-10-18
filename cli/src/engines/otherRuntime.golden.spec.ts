@@ -35,7 +35,7 @@ const SRC = fileURLToPath(new URL('..', import.meta.url))
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/other-runtime.golden.json', import.meta.url))
 const TRANSCRIPTS = fileURLToPath(new URL('./__fixtures__/other-transcripts.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_OTHER_ENGINES_GOLDEN === '1'
-const ENGINES = ['opencode', 'cursor', 'kilo', 'devin', 'hermes', 'amp', 'agy', 'grok', 'copilot', 'commandcode', 'muse', 'pi'] as const
+const ENGINES = ['opencode', 'cursor', 'kilo', 'devin', 'hermes', 'amp', 'agy', 'grok', 'copilot', 'commandcode', 'muse', 'pi', 'prime'] as const
 type Engine = (typeof ENGINES)[number]
 const SPEC_FILES = [
   ...['agy', 'commandcode', 'devin', 'grok', 'hermes', 'kilo', 'opencode', 'pi'].map((e) => `engines/${e}/runtimeProfile.spec.ts`),
@@ -100,7 +100,7 @@ function readPanes(engine: Engine, panes: string[], m: Manager = manager()): unk
 function binaries(): void {
   const bin = join(root, 'bin')
   mkdirSync(bin, { recursive: true })
-  for (const name of ['opencode', 'kilo', 'devin', 'pi', 'commandcode', 'agent', 'hermes']) {
+  for (const name of ['opencode', 'kilo', 'devin', 'pi', 'commandcode', 'agent', 'hermes', 'prime-agent']) {
     const out = join(root, 'out', name)
     writeFileSync(join(bin, name), `#!/bin/sh\nif [ -f ${JSON.stringify(out)} ]; then cat ${JSON.stringify(out)}; else exit 1; fi\n`)
     chmodSync(join(bin, name), 0o755)
@@ -128,6 +128,7 @@ beforeAll(async () => {
     HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local', 'share'), ADAPTER_DATA_DIR: join(root, 'data'),
     HERMES_HOME: join(home, '.hermes'), COMMANDCODE_HOME: join(home, '.commandcode'), MUSE_CONFIG_DIR: undefined, AMP_STATE_DIR: undefined,
     OPENCODE_PATH: join(root, 'bin', 'opencode'), KILO_PATH: join(root, 'bin', 'kilo'), CURSOR_HOME: join(home, '.cursor'), DEVIN_HOME: undefined,
+    PRIME_AGENT_PATH: undefined, PRIME_AGENT_CODING_AGENT_DIR: undefined,
     PATH: `${join(root, 'bin')}:/usr/bin:/bin`, TZ: 'UTC',
   }
   for (const [name, value] of Object.entries(env)) {

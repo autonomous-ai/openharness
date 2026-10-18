@@ -645,7 +645,7 @@ export class SessionInputController {
       else void retry
     }, this.deps.submission.policy(session.engine)?.verifyMs ?? (session.engine === 'opencode'
         ? OPENCODE_SUBMIT_VERIFY_MS
-        : session.engine === 'pi'
+        : session.engine === 'pi' || session.engine === 'prime'
           ? PI_SUBMIT_VERIFY_MS
           : session.engine === 'hermes'
             ? HERMES_SUBMIT_VERIFY_MS
@@ -705,7 +705,8 @@ export class SessionInputController {
         return
       }
     } else if (session.engine === 'opencode' || session.engine === 'kilo' || session.engine === 'pi' || session.engine === 'hermes' || session.engine === 'muse'
-      || session.engine === 'amp' || session.engine === 'grok' || session.engine === 'agy' || session.engine === 'copilot') {
+      || session.engine === 'amp' || session.engine === 'grok' || session.engine === 'agy' || session.engine === 'copilot'
+      || session.engine === 'prime') {
       // OpenCode has no composer glyph, and the submitted text stays visible in the message area, so a
       // pane scrape can't tell "still in the composer" from "already sent". Rely purely on the reader-
       // derived turn_started (a new user row in opencode.db) to clear awaitingFingerprint; if it hasn't

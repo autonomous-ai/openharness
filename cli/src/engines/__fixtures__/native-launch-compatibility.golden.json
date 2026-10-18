@@ -303,6 +303,29 @@
     "refused": "FirstPromptUnsupportedError",
     "detail": "copilot has no documented way to start with a first prompt, so the agent was not created."
   },
+  "prime fresh": [
+    "prime-agent"
+  ],
+  "prime resume": [
+    "prime-agent",
+    "--resume",
+    "fixture-conversation"
+  ],
+  "prime fork": [
+    "prime-agent",
+    "--fork",
+    "fixture-parent"
+  ],
+  "prime permission": [
+    "prime-agent",
+    "--model",
+    "fixture/model"
+  ],
+  "prime first": [
+    "prime-agent",
+    "--",
+    "literal ; $(first message)"
+  ],
   "installation installed": {
     "code": 0,
     "trace": [

@@ -6139,7 +6139,7 @@ impl App {
     /// with the most votes names it, then the one fewer other tabs share, then type, project,
     /// machine in that order. A tab with no harness the app knows is `New Tab`.
     pub fn desk_tab_names(&self) -> HashMap<String, String> {
-        const CODE: [&str; 14] = ["claude", "codex", "cursor", "opencode", "pi", "hermes", "commandcode", "devin", "muse", "amp", "kilo", "grok", "copilot", "agy"];
+        const CODE: [&str; 15] = ["claude", "codex", "cursor", "opencode", "pi", "hermes", "commandcode", "devin", "muse", "amp", "kilo", "grok", "copilot", "agy", "prime"];
         let mut candidates: Vec<(String, Vec<(usize, String, usize)>)> = Vec::new();
         for tab in self.tabs.iter().filter(|t| t.on_desk && !t.named) {
             let mut votes: [Vec<(String, usize)>; 3] = Default::default();

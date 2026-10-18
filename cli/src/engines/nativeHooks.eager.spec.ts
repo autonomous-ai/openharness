@@ -17,6 +17,6 @@ vi.mock('./inProcess.js', () => ({ loadEngine: vi.fn(() => { throw new Error('op
 
 it('composes hook declarations without probing, installing or requesting optional code', async () => {
   const hooks = await import('./nativeHooks.js')
-  expect(Object.keys(hooks)).toHaveLength(11)
+  expect(Object.keys(hooks)).toHaveLength(12)
   for (const operation of [opencodeBin, opencodeBinAsync, loadEngine, mkdirSync, renameSync, unlinkSync, writeFileSync]) expect(operation).not.toHaveBeenCalled()
 })

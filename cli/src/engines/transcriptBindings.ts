@@ -4,6 +4,7 @@ import { env } from '../config/env.js'
 import { engineHomeSnapshot, sessionRoots, type EngineHomeSnapshot } from '../lib/engineHomes.js'
 import { controlIdentity as claudeIdentity } from './claude/sessionStore.js'
 import { PI_CONTROL_IDENTITY } from './pi/contract.js'
+import { PRIME_CONTROL_IDENTITY } from './prime/contract.js'
 import { cursorDataDir } from './cursor/contract.js'
 import { NativeFiles } from './kit/nativeFiles.js'
 import type { ControlIdentityRule } from './kit/controlIdentity.js'
@@ -22,6 +23,7 @@ export const transcriptRoot: Readonly<Record<AgentEngine, (() => string) | 'stor
   copilot: () => join(env.COPILOT_HOME, 'session-state'),
   cursor: () => join(cursorDataDir(), 'projects'),
   pi: () => join(env.PI_HOME, 'agent', 'sessions'),
+  prime: () => join(env.PRIME_AGENT_DIR, 'sessions'),
   commandcode: () => join(env.COMMANDCODE_HOME, 'projects'),
   claude: 'store',
   opencode: null, kilo: null, hermes: null, devin: null, terminal: null,
@@ -174,7 +176,7 @@ export function controlTranscriptEvidence(engine: AgentEngine, sessionId: string
   const read = () => {
     const proof = savedTranscriptEvidence(engine, sessionId, path, profile)
     if (!proof.path) return nativeUnavailable('the saved conversation file is unavailable')
-    const rule: ControlIdentityRule | undefined = engine === 'claude' ? claudeIdentity : engine === 'pi' ? PI_CONTROL_IDENTITY : undefined
+    const rule: ControlIdentityRule | undefined = engine === 'claude' ? claudeIdentity : engine === 'pi' ? PI_CONTROL_IDENTITY : engine === 'prime' ? PRIME_CONTROL_IDENTITY : undefined
     if (rule) {
       const files = new NativeFiles()
       const head = files.opening(proof.path, rule)

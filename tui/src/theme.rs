@@ -1274,6 +1274,7 @@ fn engine_mark_raw(engine: &str) -> (&'static str, Color) {
         "commandcode" => ("⌘", Color::Blue),
         "muse" => ("♪", ATTENTION),
         "agy" => ("◈", Color::Rgb(0x42, 0x85, 0xF4)),
+        "prime" => ("P", TEXT),
         "terminal" => ("❯", SOFT),
         _ => ("▸", SOFT),
     }
@@ -1298,7 +1299,7 @@ pub fn engine_label(engine: &str) -> &str {
     match engine {
         "claude" => "Claude Code", "codex" => "Codex", "cursor" => "Cursor", "opencode" => "OpenCode", "pi" => "Pi",
         "hermes" => "Hermes", "amp" => "Amp", "kilo" => "Kilo", "grok" => "Grok", "devin" => "Devin", "copilot" => "Copilot",
-        "commandcode" => "Command Code", "muse" => "Muse", "agy" => "Antigravity", "terminal" => "Terminal",
+        "commandcode" => "Command Code", "muse" => "Muse", "agy" => "Antigravity", "prime" => "Prime Agent", "terminal" => "Terminal",
         other => other,
     }
 }

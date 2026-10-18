@@ -7,7 +7,7 @@ from pathlib import Path
 PRO = Path(__file__).resolve().parents[1]
 C = (PRO / 'main/pod/engine_logos.c').read_text()
 H = (PRO / 'main/pod/engine_logos.h').read_text()
-ENGINES = "agy amp claude codex commandcode copilot cursor devin grok hermes kilo muse opencode pi".split()
+ENGINES = "agy amp claude codex commandcode copilot cursor devin grok hermes kilo muse opencode pi prime".split()
 
 
 class LogoTests(unittest.TestCase):

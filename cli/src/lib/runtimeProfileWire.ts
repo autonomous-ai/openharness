@@ -3,7 +3,7 @@ import type { AgentEngine } from '../engines/types.js'
 import type { RuntimeProfile } from '../engines/facets/runtime.js'
 import { RUNTIME_EFFORTS } from '../engines/kit/runtime.js'
 
-const PROFILE_RE = /^runtime-v1:([^:]+):(claude|codex|cursor|commandcode|pi|devin|opencode|hermes|muse|amp|kilo|grok|agy|copilot):([^@]+)@([a-z0-9_-]+)$/i
+const PROFILE_RE = /^runtime-v1:([^:]+):(claude|codex|cursor|commandcode|pi|devin|opencode|hermes|muse|amp|kilo|grok|agy|copilot|prime):([^@]+)@([a-z0-9_-]+)$/i
 
 function decode(value: string): string | null {
   try {

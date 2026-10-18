@@ -29,6 +29,8 @@ export const HARNESS_ADAPTERS = {
   grok: { instructionFiles: ['AGENTS.md'] },
   agy: { instructionFiles: ['AGENTS.md', 'GEMINI.md'] },
   copilot: { instructionFiles: ['AGENTS.md'] },
+  // Pi's loader (`-nc`: AGENTS.md and CLAUDE.md). `--append-system-prompt <file>` measured to read the file.
+  prime: { instructionFiles: ['AGENTS.md', 'CLAUDE.md'], contextArgs: (file: string) => ['--append-system-prompt', file] },
 } satisfies Record<ProcessEngine, HarnessAdapter>
 
 /**

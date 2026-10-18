@@ -24,6 +24,7 @@ vi.mock('../../engines/nativeHooks.js', () => ({
   installOpencodePlugin: (port: number) => world.install('opencode', port),
   installKiloPlugin: (port: number) => world.install('kilo', port),
   installPiExtension: (port: number) => world.install('pi', port),
+  installPrimeExtension: (port: number) => world.install('prime', port),
   installAmpPlugin: (port: number) => world.install('amp', port),
   installHermesHooks: (port: number) => world.install('hermes', port),
   installDevinHooks: (port: number) => world.install('devin', port),

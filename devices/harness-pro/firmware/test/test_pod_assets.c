@@ -21,7 +21,7 @@ int main(void) {
     assert(pod_mark("cursor") && pod_mark("cursor")->light);
     assert(pod_mark("claude") && !pod_mark("claude")->light);
     assert(pod_mark("nope") == NULL);
-    assert(pod_mark_count == 14);
+    assert(pod_mark_count == 15);
     // The light list: marks that vanish on the white glass and so sit on the dark chip / cover.
     static const char *const light[] = {"cursor", "devin", "opencode"};   // from the logo art; see scripts/pod_gen_logos.py
     for (unsigned i = 0; i < pod_mark_count; i++) {
@@ -29,7 +29,7 @@ int main(void) {
         for (unsigned k = 0; k < sizeof light / sizeof *light; k++) want |= !strcmp(pod_marks[i].engine, light[k]);
         assert(pod_marks[i].light == want);
     }
-    // Every size Pod draws a mark at exists for all 14 engines, with both arrays: the notice logo (44) and the one cover
+    // Every size Pod draws a mark at exists for all 15 engines, with both arrays: the notice logo (44) and the one cover
     // size (72) for the cover sides the views use (Recap 132, Agent 270 and 230 asking, Talking 260).
     static const int cover_sides[] = {132, 270, 230, 260};
     for (unsigned i = 0; i < pod_mark_count; i++) {

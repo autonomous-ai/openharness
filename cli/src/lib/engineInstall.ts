@@ -129,7 +129,14 @@ export const ENGINE_INSTALL: Readonly<Record<ProcessEngine, EngineInstallRecipe>
     command: 'npm install -g @github/copilot',
     source: 'https://docs.github.com/en/copilot/get-started/cli-quickstart',
     executable: { names: ['copilot'], npmGlobal: true, homeRelativePaths: ['.local/bin/copilot'] },
+  },  prime: {
+    // Prime Agent ships versioned release tarballs; its README warns the inherited npm package is not an
+    // install path. The installer links ~/.local/bin/prime-agent to ~/.local/share/prime-agent/bin.
+    command: 'curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh',
+    source: 'https://github.com/PrimeIntellect-ai/prime-agent',
+    executable: { names: ['prime-agent'], homeRelativePaths: ['.local/bin/prime-agent', '.local/share/prime-agent/bin/prime-agent'] },
   },
+
 }
 
 /** A terminal has nothing to install — the login shell is already there — hence `undefined`. */

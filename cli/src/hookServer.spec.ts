@@ -78,8 +78,8 @@ describe('process-owned hook server', () => {
 
     expect(await response.json()).toEqual({ ignored: true, reason: 'no_matching_engine_process' })
     expect(resolveHookAgent).toHaveBeenCalledWith({
-      engine: 'codex', tmuxPane: '%41', runtimeHints: [{ backend: 'tmux', paneId: '%41' }], callerPid: undefined,
-      onWait: expect.any(Function),
+      engine: 'codex', sessionId: '019fea92-e31a-7692-9c35-f616e9d458b7', tmuxPane: '%41',
+      runtimeHints: [{ backend: 'tmux', paneId: '%41' }], callerPid: undefined, onWait: expect.any(Function),
     })
     expect(handlers.onRegistered).not.toHaveBeenCalled()
   })
@@ -103,8 +103,8 @@ describe('process-owned hook server', () => {
 
     expect(response.status).toBe(200)
     expect(resolveHookAgent).toHaveBeenCalledWith({
-      engine: 'codex', tmuxPane: '%41', runtimeHints: [{ backend: 'tmux', paneId: '%41' }], callerPid: undefined,
-      onWait: expect.any(Function),
+      engine: 'codex', sessionId: '019fea92-e31a-7692-9c35-f616e9d458b7', tmuxPane: '%41',
+      runtimeHints: [{ backend: 'tmux', paneId: '%41' }], callerPid: undefined, onWait: expect.any(Function),
     })
   })
 
@@ -556,7 +556,14 @@ describe('chooseHookAgent', () => {
     expect(chooseHookAgent(['a', 'b'], ['c'], 'cursor')).toEqual({ agent: null, reason: 'ambiguous' })
   })
 
-  it.each(ENGINES.filter((engine) => engine !== 'cursor'))(
+  it('lets Prime Agent use the runtime too: its hook comes from a daemon worker never below the pane', () => {
+    // engines/prime/contract.ts. core/engines/hooks.ts drops the runtime candidate unless
+    // `prime-agent list` shows the session attached; that check is lib/primeAgents.spec.ts.
+    expect(chooseHookAgent([], ['only-agent-on-that-pane'], 'prime')).toEqual({ agent: 'only-agent-on-that-pane', reason: 'runtime' })
+    expect(chooseHookAgent([], ['a', 'b'], 'prime')).toEqual({ agent: null, reason: 'ambiguous' })
+  })
+
+  it.each(ENGINES.filter((engine) => engine !== 'cursor' && engine !== 'prime'))(
     'rejects a late %s hook when the pane now belongs to a replacement process',
     (engine) => {
       const replacement = { agentId: 'replacement-agent', sessionId: 'new-session' }

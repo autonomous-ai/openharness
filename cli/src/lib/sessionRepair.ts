@@ -29,6 +29,9 @@ import { readStorePool } from '../engines/kit/storePool.js'
 import { isInteractiveSource } from '../engines/kit/storeSource.js'
 import { museSessionIdentity, piSessionFolder, readPiHead } from '../engines/repairIdentities.js'
 import { PI_HEADER, PI_SESSION_ID } from '../engines/pi/contract.js'
+import { PRIME_HEADER, primeSessionsDir } from '../engines/prime/contract.js'
+import { primeAttachedSession } from './primeAgents.js'
+import { processArgs, processRows } from './tmux.js'
 import { transcriptOf, processSessionOf as nativeProcessSession } from '../engines/identities.js'
 import { COPILOT_CWD } from '../engines/copilot/contract.js'
 import { recordCwd } from '../engines/kit/sessionLocation.js'
@@ -378,6 +381,16 @@ export async function findLiveSession(
   switch (engine) {
     case 'pi':
       return fileEngineSession(join(env.PI_HOME, 'agent', 'sessions'), cwd, startedAtMs, readTranscriptMeta, opts)
+    case 'prime': {
+      // The pane holds a client; the session lives in a daemon worker (engines/prime/contract.ts). Prime's own
+      // list names what an attached client shows, and `prime-agent attach <agent>` names an agent, not a
+      // session. The folder scan stays the fallback: flat, so `-p` runs from the same folder sit beside it.
+      const args = opts?.expectedProcess ? await processArgs(opts.expectedProcess)
+        : opts?.pid ? (await processRows())?.find((row) => row.pid === opts.pid)?.args : undefined
+      const attached = await primeAttachedSession(cwd, args)
+      if (attached && attached.sessionId !== opts?.excludedSessionId) return attached
+      return fileEngineSession(primeSessionsDir(), cwd, startedAtMs, readTranscriptMeta, { ...opts, leafDepth: 0 })
+    }
     case 'commandcode':
       return fileEngineSession(join(env.COMMANDCODE_HOME, 'projects'), cwd, startedAtMs, readTranscriptMeta, opts)
     case 'muse': {
@@ -572,6 +585,13 @@ export async function findResumedTranscript(
       verify: workspaces.verify,
       ambiguous: 'More than one file matches this Pi conversation.',
     })
+  }
+  if (engine === 'prime') {
+    // Flat: `<agentDir>/sessions/<id>.jsonl`, the file named by the id the header also carries.
+    if (!/^[0-9a-f-]{16,128}$/i.test(sessionId)) return null
+    const path = join(primeSessionsDir(), `${sessionId}.jsonl`)
+    const head = await readSessionHeader(PRIME_HEADER, async bytes => (await identityBytes(path, bytes)).toString('utf8')).catch(() => null)
+    return head && typeof head !== 'symbol' && head.sessionId === sessionId ? path : null
   }
   if (!/^[0-9a-f-]{16,128}$/i.test(sessionId)) return null
   const byId = sessionStoreOf(engine)?.byId

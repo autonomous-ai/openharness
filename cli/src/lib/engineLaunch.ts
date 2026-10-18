@@ -50,6 +50,8 @@ export const BYPASS_PERMISSION_FLAGS: Readonly<Record<AgentEngine, string[] | nu
   grok: null,
   agy: null,
   copilot: null,
+  // Prime Agent asks no permission (Pi's lineage: no such flag in `--help`; `--autonomous` is a loop, not one).
+  prime: null,
   // A shell has no permissions to bypass.
   terminal: null,
 }
@@ -111,6 +113,9 @@ export const FIRST_PROMPT_ARGS: Readonly<Record<AgentEngine, readonly string[] |
   grok: null,
   agy: null,
   copilot: null,
+  // `prime-agent [options] [messages...]`, after `--` ("Treat all following arguments as messages"), so a
+  // prompt that starts with `-` is not read as a flag. Measured: answered, and the TUI stays open.
+  prime: ['--'],
   terminal: null,
 }
 
@@ -166,6 +171,7 @@ export const NAMED_AGENT_ARGS: Readonly<Record<AgentEngine, readonly string[] | 
   grok: null,
   agy: null,
   copilot: null,
+  prime: null,
   terminal: null,
 }
 
@@ -324,6 +330,9 @@ export const LAUNCH_RESUME_FLAG: Readonly<Partial<Record<AgentEngine, string[]>>
   grok: ['--resume'],
   agy: ['--conversation'],
   copilot: ['--resume'],
+  // `prime-agent --resume <path|id>`. Prime writes the session file at session start, so Pi's "no file yet"
+  // trap (`--session-id` above) does not apply. A live session's worker is attached to, not reopened.
+  prime: ['--resume'],
   devin: ['--resume'],
 }
 
@@ -340,6 +349,8 @@ export const LAUNCH_RESUME_FLAG: Readonly<Partial<Record<AgentEngine, string[]>>
  */
 export const LAUNCH_FORK_FLAG: Readonly<Partial<Record<AgentEngine, { lead: string[]; after?: string[] }>>> = {
   ...launchField('forkArgs'),
+  // `prime-agent --fork <path|id>`: "Fork a saved session into a new session" (--help, 0.9.5).
+  prime: { lead: ['--fork'] },
 }
 
 /** Whether a relaunch can reopen this engine's previous conversation — see [LAUNCH_RESUME_FLAG].

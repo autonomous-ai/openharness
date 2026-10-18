@@ -40,7 +40,7 @@ export function createIngest({
 }: IngestDeps) {
   const {
     liveParsers, cursorNormalizers, museNormalizers, ampNormalizers, grokNormalizers, agyNormalizers,
-    copilotNormalizers, piNormalizers, commandcodeNormalizers,
+    copilotNormalizers, piNormalizers, primeNormalizers, commandcodeNormalizers,
   } = normalizers
   const sideRead = createSideReads()
   // JSONL watcher → normalize each appended line → stream up. ONE lineToEvents pass feeds BOTH
@@ -111,6 +111,11 @@ export function createIngest({
       let normalizer = piNormalizers.get(evt.sessionId)
       const pi = normalizer ? null : engineNow('pi', 'a transcript line came')
       if (!normalizer && pi) { normalizer = new pi.PiNormalizer('live'); piNormalizers.set(evt.sessionId, normalizer) }
+      events = normalizer ? normalizer.ingest(evt.text) : []
+    } else if (session.engine === 'prime') {
+      let normalizer = primeNormalizers.get(evt.sessionId)
+      const prime = normalizer ? null : engineNow('prime', 'a transcript line came')
+      if (!normalizer && prime) { normalizer = new prime.PrimeNormalizer('live'); primeNormalizers.set(evt.sessionId, normalizer) }
       events = normalizer ? normalizer.ingest(evt.text) : []
     } else if (session.engine === 'commandcode') {
       const commandcode = engineNow('commandcode', 'a transcript line came')

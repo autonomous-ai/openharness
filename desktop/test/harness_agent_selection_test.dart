@@ -484,6 +484,20 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(box.engine, 'agy');
+      // Prime Agent, the fifteenth engine, sits after Pi, past the first
+      // rows too; it must be reachable the same way.
+      await openLaunchRow(tester, 'agent');
+      for (var i = 0; i < 30 && box.selected?.id != 'prime'; i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+      }
+      expect(
+        find.byKey(const ValueKey('new-harness-option-prime')).hitTestable(),
+        findsOneWidget,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(box.engine, 'prime');
       await openLaunchRow(tester, 'harness');
       for (
         var i = 0;

@@ -188,6 +188,41 @@ real recording: a hand-written sequence would not reveal the Stop-before-final-m
 
 ---
 
+## When your agent runs outside the pane
+
+Prime Agent is Pi's fork, and its transcript reads almost exactly like Pi's. Its process model does not.
+The pane holds a TUI **client** with no children. The session runs in a daemon **worker**, a child of
+Prime's detached supervisor, and extensions run in that worker. Measured on prime-agent 0.9.5:
+
+- **No ancestry, ever.** The extension's `process.pid` is the worker's, never below the pane, so the
+  ancestry check rejected every hook. Prime shares Cursor's runtime-evidence exception in
+  `chooseHookAgent`, but only after `prime-agent list --json` shows that session as a live, top-level,
+  attached conversation (`lib/primeAgents.ts`, applied in `core/engines/hooks.ts`).
+- **The worker's `TMUX_PANE` is whoever launched it.** It stayed `%6` after that client quit and
+  `prime-agent attach` reopened the agent in `%7`. RLM children start in the parent's worker with the
+  parent's pane, and a `-p` run from inside an agent's tool inherits that agent's pane, with a saved
+  session file. Without the list check, each of those would have taken over a real Prime pane.
+- **Register on `session_start` only**, and briefly retry: the header lands about 1 ms after the event,
+  and a `/new` session is a `draft` with no file until its first message (and a new agent id). A later
+  turn event can come from a detached worker.
+- **`/new` and `/resume` switch inside the same worker**, like Copilot's `/resume`. Here `session_start`
+  fires again with the new id, so the extension re-registers; nothing has to be scanned.
+- **Most turns are not typed.** On one machine's history, 1,036 user messages against 8,332
+  `agent_message`, 1,298 `async_bash_completion`, 192 `rlm_child_terminal_notice` and 119
+  `heartbeat_prompt` custom messages, each answered by the model. Pi's rule, "a user line opens a turn",
+  streamed all of those with no `turn_started` or `turn_ended`. Other displayed custom messages
+  (`refinement_outcome`, `compaction_outcome`, …) are notices that are never answered: a turn opened on
+  one would never close. So known prompts open a turn, and any other displayed message opens one only
+  when an assistant message follows (`engines/prime/normalizer.ts`).
+- **`/model` and `/effort` save the person's global default** (`settings.json`); the runtime driver
+  restores those keys after a switch. `-p` stops waiting for stdin 250 ms after it starts reading, so the
+  one-shot worker cannot be pre-warmed.
+
+If your agent has a client/daemon split, ask early which process runs your hook, what environment it
+inherits, and which public command can say which session a client shows.
+
+---
+
 ## Before you open a PR
 
 Open an issue first with:
@@ -302,6 +337,7 @@ fallbacks for launchers that exec an interpreter or rewrite their process title.
 | Grok | installed/downloaded image; `~/.grok` layout; file-owned legacy `agent` alias |
 | AGY | native `~/.local/bin/agy`; explicitly rejects the IDE `.app` binary |
 | Copilot | installed native image; `@github/copilot` npm loader/entrypoint |
+| Prime | `prime-agent` client; `~/.local/share/prime-agent/releases/<version>/prime-agent` image |
 
 Never add a bare version or generic executable name as proof. When file identities conflict, leave the
 pane ambiguous rather than registering the wrong engine. A pane-scoped hook may resolve an otherwise

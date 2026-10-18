@@ -37,9 +37,11 @@ import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib
  * always wins. It is not always available: Cursor posts its hooks from outside the pane's process tree,
  * so requiring ancestry rejected every hook that engine ever sent and no session bound at all.
  *
- * Only Cursor may use the weaker runtime evidence: the hook named a pane carrying exactly one Cursor
- * agent, and the caller already proved it can read the 0600 hook credential. Other engines must match
- * ancestry. A delayed hook from an exited Codex process can name a pane now running a NEW Codex
+ * Only Cursor and Prime Agent may use the weaker runtime evidence: the hook named a pane carrying exactly
+ * one agent of that engine, and the caller already proved it can read the 0600 hook credential. Prime's
+ * extension runs in a daemon worker that is never below the pane (engines/prime/contract.ts), so its caller
+ * can have no ancestry at all; core/engines/hooks.ts keeps its runtime candidate only once Prime's own list
+ * shows the session attached (lib/primeAgents.ts). Other engines must match ancestry. A delayed hook from an exited Codex process can name a pane now running a NEW Codex
  * session; trusting that pane alone binds the old transcript to the replacement agent.
  * Two candidates is not a tie to break, so we answer nothing.
  */
@@ -49,7 +51,7 @@ export function chooseHookAgent<T>(byAncestry: readonly T[], byRuntimeOnly: read
 } {
   if (byAncestry.length === 1) return { agent: byAncestry[0], reason: 'ancestry' }
   if (byAncestry.length > 1) return { agent: null, reason: 'ambiguous' }
-  if (engine !== 'cursor') return { agent: null, reason: 'none' }
+  if (engine !== 'cursor' && engine !== 'prime') return { agent: null, reason: 'none' }
   if (byRuntimeOnly.length === 1) return { agent: byRuntimeOnly[0], reason: 'runtime' }
   return { agent: null, reason: byRuntimeOnly.length ? 'ambiguous' : 'none' }
 }
@@ -79,6 +81,8 @@ export interface HookServerHandlers {
   /** Ensure a matching process-owned agent exists before a hook binds its mutable engine session. */
   resolveHookAgent?: (session: {
     engine: RegisteredSession['engine']
+    /** The conversation the hook names. Prime's runtime-only evidence is checked against it. */
+    sessionId?: string
     tmuxPane?: string
     runtimeHints: HookTerminalHint[]
     callerPid?: number
@@ -321,6 +325,7 @@ async function verifiedBoundMutation(
   const processAgent = handlers.resolveHookAgent
     ? await handlers.resolveHookAgent({
       engine: body.engine,
+      sessionId: body.sessionId,
       tmuxPane: body.tmuxPane,
       runtimeHints,
       callerPid: Number.isSafeInteger(body.callerPid) && body.callerPid! > 0 ? body.callerPid : undefined,
@@ -547,6 +552,7 @@ export function startHookServer(
         try { processAgent = handlers.resolveHookAgent
           ? await handlers.resolveHookAgent({
             engine,
+            sessionId: body.sessionId,
             tmuxPane: body.tmuxPane,
             runtimeHints,
             callerPid: Number.isSafeInteger(body.callerPid) && body.callerPid! > 0 ? body.callerPid : undefined,

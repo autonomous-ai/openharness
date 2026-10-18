@@ -2977,6 +2977,7 @@ class NewHarnessController extends ChangeNotifier {
             'cursor-cloud',
             'fo',
             'pi',
+            'prime',
             'hermes',
             'commandcode',
             'muse',

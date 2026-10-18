@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 from PIL import Image
 
-ENGINES = "agy amp claude codex commandcode copilot cursor devin grok hermes kilo muse opencode pi".split()
+ENGINES = "agy amp claude codex commandcode copilot cursor devin grok hermes kilo muse opencode pi prime".split()
 SIZES = [44, 72]
 COVER = 72
 LIGHT_LUMA = 0.75

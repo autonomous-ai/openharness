@@ -155,6 +155,7 @@ _hn_native() {
     case "$_hn_engine" in
         cursor) _hn_binary=cursor-agent ;;
         commandcode) _hn_binary=cmd ;;
+        prime) _hn_binary=prime-agent ;;
     esac
     if [ -n "${ZSH_VERSION-}" ]; then
         _hn_resolved=$(whence -p -- "$_hn_binary") || _hn_resolved=''
@@ -171,8 +172,9 @@ _hn_agent() {
     local _hn_engine="$1" _hn_route _hn_grid _hn_model _hn_arg
     shift
     case "$_hn_engine" in
-        codex|claude|cursor|opencode|pi|hermes|commandcode|devin|muse|amp|kilo|grok|agy|copilot) ;;
+        codex|claude|cursor|opencode|pi|hermes|commandcode|devin|muse|amp|kilo|grok|agy|copilot|prime) ;;
         cursor-agent) _hn_engine=cursor ;;
+        prime-agent) _hn_engine=prime ;;
         cmd) _hn_engine=commandcode ;;
         *) printf '%s\n' 'Use hn run with a supported agent, such as codex, claude, or pi.' >&2; return 2 ;;
     esac
@@ -232,6 +234,7 @@ if [ -n "${ZSH_VERSION-}" ]; then
     (( $+aliases[grok] || $+functions[grok] )) || function grok { _hn_agent grok "$@"; }
     (( $+aliases[agy] || $+functions[agy] )) || function agy { _hn_agent agy "$@"; }
     (( $+aliases[copilot] || $+functions[copilot] )) || function copilot { _hn_agent copilot "$@"; }
+    (( $+aliases[prime-agent] || $+functions[prime-agent] )) || function prime-agent { _hn_agent prime "$@"; }
 elif [ -n "${BASH_VERSION-}" ]; then
     alias codex >/dev/null 2>&1 || declare -F codex >/dev/null || function codex { _hn_agent codex "$@"; }
     alias claude >/dev/null 2>&1 || declare -F claude >/dev/null || function claude { _hn_agent claude "$@"; }
@@ -247,6 +250,7 @@ elif [ -n "${BASH_VERSION-}" ]; then
     alias grok >/dev/null 2>&1 || declare -F grok >/dev/null || function grok { _hn_agent grok "$@"; }
     alias agy >/dev/null 2>&1 || declare -F agy >/dev/null || function agy { _hn_agent agy "$@"; }
     alias copilot >/dev/null 2>&1 || declare -F copilot >/dev/null || function copilot { _hn_agent copilot "$@"; }
+    alias prime-agent >/dev/null 2>&1 || declare -F prime-agent >/dev/null || function prime-agent { _hn_agent prime "$@"; }
 fi
 function hn {
     case "${1-}" in
@@ -380,7 +384,7 @@ _hn_auto_context() {
     [ "${HN_AUTOCOMPLETE-1}" != 0 ] || return 1
     case "$1" in *' @'|*' :'|*' %'|*' @'*':') ;; *) return 1;; esac
     local _hn_command=${1%% *} _hn_definition
-    case "$_hn_command" in codex|claude|cursor-agent|opencode|pi|hermes|cmd|devin|muse|amp|kilo|grok|agy|copilot) ;; *) return 1;; esac
+    case "$_hn_command" in codex|claude|cursor-agent|opencode|pi|hermes|cmd|devin|muse|amp|kilo|grok|agy|copilot|prime-agent) ;; *) return 1;; esac
     # Customized commands retain their normal completion behavior.
     if [ -n "${ZSH_VERSION-}" ]; then
         (( $+aliases[$_hn_command] )) && return 1

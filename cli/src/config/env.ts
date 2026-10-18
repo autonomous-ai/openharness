@@ -178,6 +178,10 @@ const fields = {
   // Pi state root. Session transcripts live under <PI_HOME>/agent/sessions/--<mangled-cwd>--/*.jsonl and
   // the adapter's discovery extension is installed into <PI_HOME>/agent/extensions.
   PI_HOME: text(join(homedir(), '.pi')),
+  // Prime Agent's agent directory (Pi's `<PI_HOME>/agent`, renamed by its fork). Transcripts are flat in
+  // <dir>/sessions/<id>.jsonl; the discovery extension goes into <dir>/extensions. Prime Agent reads the
+  // same override itself (PRIME_AGENT_CODING_AGENT_DIR, measured in a daemon worker's environment).
+  PRIME_AGENT_DIR: text(process.env.PRIME_AGENT_CODING_AGENT_DIR || join(homedir(), '.prime', 'agent')),
   // Hermes state root — the SQLite store is <HERMES_HOME>/state.db and the shell hooks the adapter
   // installs live in <HERMES_HOME>/config.yaml (+ shell-hooks-allowlist.json).
   HERMES_HOME: text(join(homedir(), '.hermes')),
@@ -278,6 +282,8 @@ const fields = {
   OPENCODE_PATH: maybe,
   // Path to the `pi` CLI for Pi recap one-shots (else `pi` is resolved from PATH).
   PI_PATH: maybe,
+  // Path to the Prime Agent CLI (`prime-agent`).
+  PRIME_AGENT_PATH: maybe,
   // Path to the `hermes` CLI for Hermes recap one-shots (else `hermes` is resolved from PATH).
   HERMES_PATH: maybe,
   // Path to the `commandcode` CLI for Command Code recap one-shots (else resolved from PATH).

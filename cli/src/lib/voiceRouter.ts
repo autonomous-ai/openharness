@@ -57,7 +57,7 @@ const ROUTE_SCRATCH = join(env.ADAPTER_DATA_DIR, 'voice-route-scratch')
 
 /** Engines that can serve the router, best first. Grok takes the prompt as argv and cannot be warmed, but
  * its isolated direct one-shot is still bounded enough to route a Grok-only machine. */
-const ROUTER_ENGINE_PRIORITY = ['claude', 'codex', 'commandcode', 'cursor', 'pi', 'opencode', 'kilo', 'grok'] as const
+const ROUTER_ENGINE_PRIORITY = ['claude', 'codex', 'commandcode', 'cursor', 'pi', 'prime', 'opencode', 'kilo', 'grok'] as const
 export type RouterEngine = (typeof ROUTER_ENGINE_PRIORITY)[number]
 
 /**

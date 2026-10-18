@@ -106,9 +106,9 @@ describe('the core\'s side', () => {
     } finally { vi.doUnmock('../lib/sessionSearch/externals/opencode.js') }
   })
 
-  it('names the twelve engines besides Claude Code, Codex and the terminal', () => {
+  it('names the thirteen engines besides Claude Code, Codex and the terminal', () => {
     expect(ENGINES.filter(isOtherEngine)).toEqual(ENGINES.filter((engine) => !['claude', 'codex', 'terminal'].includes(engine)))
-    expect(OTHER_ENGINES).toHaveLength(12)
+    expect(OTHER_ENGINES).toHaveLength(13)
   })
 
   it('preloads the screens for a session of theirs, once; Claude Code, Codex and the terminal load nothing', async () => {

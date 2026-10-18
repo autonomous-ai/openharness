@@ -20,6 +20,7 @@ vendor's own hooks or plugin to learn when a turn starts and ends. Your credenti
 | Grok Build | `grok` | hooks + `updates.jsonl` | `--resume` | — | yes |
 | Antigravity | `agy` | hooks + transcript | `--conversation` | — | — |
 | GitHub Copilot | `copilot` | hooks + transcript | `--resume` | — | yes |
+| Prime Agent | `prime-agent` | extension + transcript | `--resume` | — | — |
 
 **Auto-approve** is the default permission mode for a new harness: the engine's own auto mode, not its
 skip-every-check flag. New Harness ▸ Advanced offers the engine's other modes (`PERMISSION_MODES` in

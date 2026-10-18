@@ -2,8 +2,11 @@ import type { AgentEngine } from '../engines/types.js'
 import type { PaneInspection } from '../engines/facets/screen.js'
 import { inspectPane, stripAnsi } from '../engines/kit/pane.js'
 import { parsePiFooterProfile } from '../engines/pi/runtimeProfile.js'
+import { parsePrimeThinkingSelection } from '../engines/prime/runtimeProfile.js'
 const PI_FOOTER_BUDGET = /\d+(?:\.\d+)?%\s*\/\s*\S+/
-export function inspectRuntimePane(engine: AgentEngine, capture: string): PaneInspection { return engine === 'pi' ? inspectPiPane(capture) : inspectPane(engine, capture) }
+export function inspectRuntimePane(engine: AgentEngine, capture: string): PaneInspection {
+  return engine === 'pi' ? inspectPiPane(capture) : engine === 'prime' ? inspectPrimePane(capture) : inspectPane(engine, capture)
+}
 function inspectPiPane(capture: string): PaneInspection {
   const lines = stripAnsi(capture).split('\n').map((line) => line.replace(/\s+$/, ''))
   const text = lines.join('\n')
@@ -34,3 +37,31 @@ function inspectPiPane(capture: string): PaneInspection {
   return { idle: footer && !dialog && !draft, plan: false, dialog, draft }
 }
 
+
+/** The end of Prime's footer: `claude-opus-5-5:high · 9.7k (1%)`, or a model with no level drawn. */
+const PRIME_FOOTER_USAGE = /·\s+\S+\s+\(\d+(?:\.\d+)?%\)\s*$/
+/** Its working line: a braille spinner, a verb and the elapsed time (`⠋ Executing · 4s · ↑ 73 tokens`). */
+const PRIME_SPINNER = /^\s*[\u2801-\u28ff]\s+\S.*·\s*\d+(?:\.\d+)?[smh]\b/
+/** The model selector (`/model`, or a `/model` with no exact match): its key hints replace the composer. */
+const PRIME_SELECTOR = /Enter select · Esc close|No matching models/
+
+/**
+ * Prime Agent (Pi's fork) draws its composer as ` >` — not a glyph the generic reader knows — and keeps its
+ * footer on screen while it works, so neither Pi's rule (footer drawn = idle) nor the generic one holds.
+ * Measured on prime-agent 0.9.5 (`lib/__fixtures__/prime-*.txt`): working is the spinner line just above
+ * the composer, which is drawn through waiting, thinking, writing and a tool run alike; a selector replaces
+ * the composer and footer; the slash-command autocomplete (`› medium   Moderate reasoning`) only ever opens
+ * over typed text, which is a draft already.
+ */
+function inspectPrimePane(capture: string): PaneInspection {
+  const lines = stripAnsi(capture).split('\n').map((line) => line.replace(/\s+$/, ''))
+  const footerAt = lines.findLastIndex((line) => PRIME_FOOTER_USAGE.test(line))
+  const composerAt = lines.findLastIndex((line) => /^ >(?:\s|$)/.test(line))
+  // Only what is drawn below the latest footer: a closed selector can linger in the history above it.
+  const below = lines.slice(footerAt + 1).join('\n')
+  const dialog = PRIME_SELECTOR.test(below) || parsePrimeThinkingSelection(below) !== null
+  if (footerAt < 0 || composerAt < 0 || composerAt > footerAt) return { idle: false, plan: false, dialog, draft: false }
+  const draft = lines[composerAt].slice(2).replace(/\u00a0/g, ' ').trim().length > 0
+  const working = lines.slice(Math.max(0, composerAt - 8), composerAt).some((line) => PRIME_SPINNER.test(line))
+  return { idle: !working && !dialog && !draft, plan: false, dialog, draft }
+}
