@@ -349,6 +349,10 @@ separately); WSL.
   on Windows: one pointed into another account's writable folder could be swapped under Harness.
 - **A daemon token outside the profile**: a data folder set with `ADAPTER_DATA_DIR` outside the
   profile (for example under `C:\`) can inherit access for every local account, and the token with it.
+- **The data folder claim can be skipped.** When its fixed name is held by something that does not
+  prove the daemon's token (another program, or a core that answers too slowly), the start goes on
+  without it, so two starts at the same moment could both run on one folder. The served-folder check
+  and the spawn lock still cover the ordinary paths.
 - **A start inside a job that forbids breakaway** (a Harness pane, on an install without the task)
   starts the daemon inside that job; closing the pane ends it, and only `launch.log` says so.
 - **Ending `harness.exe`** (a caller's timeout) leaves the `node` it started running.
