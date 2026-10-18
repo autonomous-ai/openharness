@@ -15,6 +15,7 @@ automatically proven improvement. Changes still need review, tests and a deliber
 | Do installations return to work? | D1/D7/D28 working-day cohorts, consecutive complete-week and calendar-month returns, return after a seven-day gap | Any working day can be a cohort; not new-signup retention. Local date flags produce unlinked totals. Opt-outs, reinstallations, resets and missing uploads affect results. |
 | Was the task useful? | Optional Completed / Partly completed / Not completed plus five fixed reason choices from clients that offer feedback; current Desktop Settings no longer exposes feedback controls | Voluntary and self-selected; not representative success or satisfaction. There is no free-text input. |
 | Is there usage at all? | Active and working computer counts; app opens; older-client relay totals | Background windows can count as active. An open is a surface going from no attached window to one, not each connection (the desktop holds one per machine and redials). Relay events are not distinct people; the populations must not be added together. |
+| Why are Desktop frames long, and on how many computers? | One in 60 rendered frames by duration; a sample of 50 ms or more also by its longest phase (`frame_slow_wait`, `frame_slow_build`, `frame_slow_raster`); once per collector day, the first sample over 250 ms (`frame_long_collector`) | Wait is the UI thread busy before the frame could start (on macOS and Linux the platform's main thread: timers, channel and native callbacks, synchronous IO, AppKit or GTK); build is the framework's build, layout and paint; raster is drawing. The phases add up to the samples of 50 ms or more counted beside them. `frame_long_collector` over `collector_days` is the share of collector days with a long sample: many long samples on few such days are a few computers, not a broad problem. Counted only once the computer's CLI has announced them (below), so not before a run's first report answer or behind an older CLI; compare releases separately. |
 
 | Which features get tried and used again? | First measured installations and daily first/repeat feature reach | Locally deduplicated installation-days, not unique accounts. Reads the apps make on their own (history, history paging, Store list, model list; `PRODUCT_USAGE_AUTOMATIC_ACTIONS`) count reliability only. The Store and model lists get reach only from the request an app marks `userAction` when a person opens them (`<action>_user_*`, `PRODUCT_USAGE_USER_OPENED_ACTIONS`); history has none. |
 | Where do app flows break? | Setup, Harness/tmux/clipboard steps, sign-in, workspace/remote connections, computer linking, viewer-pane opening and manual update checking/staging; a setup step whose tool was missing at a check (`setup_desktop_setup_<step>_missing`); the agents a new computer downloads beside setup (`setup_desktop_agent_download_<opencode\|codex\|claude>_started`, `_ok`, `_failed`, with under 1 min, 1–5 min and over 5 min) | Fixed started/ok/failed/cancelled/unknown counts and coarse duration buckets. Opening a viewer pane is not rendering its content; staging an update is not a successful relaunch. A setup step stays open from the first check until its tool is in place, so a tool that was missing and then installed is one ok step and one `_missing` mark; only a setup that ends failed fails its step. Earlier Desktop releases counted every check that found a tool missing as a failed step (on 2026-10-16 the Harness step read 72 failed of 221 while 0 setups failed): compare releases separately. `_missing` is any tool a check found absent or out of date (a Harness CLI older than this Desktop needs, on a computer already in use, counts too), not only new computers. A step left waiting (the review, a Linux Terminal handoff, manual mode, someone who walks away) now ends `unknown` at the 15-minute observation bound instead of `failed`, so expect `setup_*_unknown` to rise, mostly on Linux. `_missing` and the download counts are anonymous setup counts only. A download whose prerequisite (curl, Harness's Node) never arrived counts as started and failed; `ok` means the agent's program is in place, judged per engine. |
@@ -86,7 +87,15 @@ The startup bucket measures launch to the first consented observation of a conne
 including preference/sign-in delay. One in 60 rendered frames supplies a coarse duration bucket;
 it cannot reliably detect an idle freeze. Frames of a hidden, minimised or occluded window, and the
 first frame after it is shown again, are not sampled (the OS throttles them), nor is each launch's
-first frame, which `app_start` already times; earlier releases sampled both. Error hooks pass only framework/async categories.
+first frame, which `app_start` already times; earlier releases sampled both. A sample of 50 ms or more
+also counts its longest phase: `frame_slow_wait` (vsync to build start, the UI thread busy with
+something else first), `frame_slow_build` or `frame_slow_raster`, a tie going to the earlier one; the
+wait for a raster thread still busy with an earlier frame is no phase of its own. The first sample over
+250 ms of each collector day also counts `frame_long_collector`, so long frames can be told broad or
+concentrated against `collector_days`. These four are counted only while the latest report answer
+from the local CLI named counter vocabulary 2 or later (`x-harness-usage-vocabulary`), because an
+older proxy refused a whole report for one name it did not know; samples before a run's first answer
+count only their duration. Error hooks pass only framework/async categories.
 Desktop RSS samples once per minute and gateway RSS/CPU once per report tick (45 to 75 seconds, a
 minute on average); they describe those processes, not the whole machine or agents. Sampling adds
 no core timer, process enumeration, or subprocess.
@@ -146,6 +155,12 @@ or oversized packet is discarded so it cannot block newer reports; transient err
 same receipt. Delayed errors after a choice or account change are discarded.
 The local app proxy accepts only bounded UI counts, or Desktop health/UI counts with the exact
 public release, OS and channel context. It does not accept daemon counters or arbitrary context.
+Like the backend, it keeps a report whose only problem is a counter name this CLI does not know yet:
+the name is dropped, never forwarded or logged, and a Desktop report counts
+`health_desktop_report_unknown_metric` once. Earlier CLIs refused the whole report, and the Desktop
+discards a refused packet. A known name an app may not send, a bad value, or a report with no known
+counter left is still refused. Every answer of that route carries `x-harness-usage-vocabulary`, the
+revision of the names it forwards (2: the frame phases); a Desktop counts newer names only after reading it.
 
 Desktop and phone collectors keep only fixed counters in RAM, at most 64 in-flight observations,
 with at most 32 counters per report, one pending report per channel and one flush at a time.

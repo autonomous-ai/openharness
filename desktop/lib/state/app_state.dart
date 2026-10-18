@@ -3986,10 +3986,17 @@ class AppNotifier extends ChangeNotifier {
             currentUser?.id != null
         ? (api, currentUser!.id)
         : null;
+    final client = api;
     productMeasurement.account(
       scope,
       choice: () => productUsageSettings(),
-      send: api.productUsageReport,
+      // Health names newer than this computer's CLI are counted only once
+      // it has said it forwards them (ProductHealthMeasure.vocabulary).
+      send: (report) => client.productUsageReport(
+        report,
+        onVocabulary: (vocabulary) =>
+            productMeasurement.proxyVocabulary = vocabulary,
+      ),
     );
     productRuntimeHealth?.account(
       scope == null ? null : '$_autonomousEnv:${currentUser!.id}',
