@@ -1,0 +1,120 @@
+#!/bin/sh
+# One request on http://10.42.0.1 while the disk is locked (`run`), on stdin and stdout (tcpsvd).
+#
+#   GET  /setup          {protocol, hotspot, locked: true, wait}: the phone asks for the password
+#   POST /setup/unlock   the computer's password, as the body: it answers the disk's question
+#                        (systemd's ask-password, the one the screen answers), then says whether the
+#                        disk opened: 200, 401 WRONG_PASSWORD, 429 WAIT after many wrong ones, 409 BUSY
+#
+# The password goes only to systemd-reply-password, on its stdin; it is never written or logged.
+set -u
+STATE=${HARNESS_UNLOCK_STATE:-/run/harness-unlock}
+ASK=${HARNESS_UNLOCK_ASK:-/run/systemd/ask-password}
+REPLY=${HARNESS_UNLOCK_REPLY:-/usr/lib/systemd/systemd-reply-password}
+MAPPER=${HARNESS_UNLOCK_MAPPER:-/dev/mapper}
+# How long a password may take to open the disk (argon2 takes a few seconds on purpose).
+OPENS=${HARNESS_UNLOCK_OPENS:-40}
+# Wrong ones before the page makes the phone wait, and the first wait; it doubles after each.
+FREE_TRIES=5
+FIRST_WAIT=30
+CR=$(printf '\r')
+
+reply() {
+    printf 'HTTP/1.1 %s\r\nContent-Type: application/json\r\nContent-Length: %s\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n%s' \
+        "$1" "${#2}" "$2"
+    exit 0
+}
+
+now() { cut -d. -f1 /proc/uptime 2>/dev/null || date +%s; }
+
+# Wrong passwords so far, and when the phone may try again: "count until".
+tries() { cat "$STATE/tries" 2>/dev/null || echo '0 0'; }
+
+wait_left() {
+    set -- $(tries)
+    left=$(( $2 - $(now) ))
+    [ "$left" -gt 0 ] && echo "$left" || echo 0
+}
+
+# The disk's question: the ask-password file systemd-cryptsetup wrote, and its socket.
+question() {
+    for file in "$ASK"/ask.*; do
+        [ -f "$file" ] || continue
+        grep -q '^Id=cryptsetup:' "$file" && { echo "$file"; return 0; }
+    done
+    return 1
+}
+
+opened() {
+    for device in "$MAPPER"/*; do
+        [ "${device##*/}" = control ] && continue
+        [ -e "$device" ] && return 0
+    done
+    return 1
+}
+
+read -r method target _ || exit 0
+target=${target%%\?*}
+length=0
+while read -r line; do
+    line=${line%"$CR"}
+    [ -z "$line" ] && break
+    case $line in
+        [Cc]ontent-[Ll]ength:*) length=${line#*:}; length=${length# } ;;
+    esac
+done
+case $length in ''|*[!0-9]*) length=0 ;; esac
+name=$(cat "$STATE/name" 2>/dev/null || echo Harness-Setup)
+
+case "$method $target" in
+    'GET /setup')
+        reply '200 OK' "{\"protocol\":1,\"hotspot\":\"$name\",\"locked\":true,\"wait\":$(wait_left)}"
+        ;;
+    'GET /setup/networks')
+        reply '200 OK' '{"networks":[]}'
+        ;;
+    'POST /setup/unlock')
+        ;;
+    *)
+        reply '404 Not Found' '{"error":"NOT_FOUND"}'
+        ;;
+esac
+
+[ "$length" -ge 1 ] && [ "$length" -le 512 ] || reply '400 Bad Request' '{"error":"BAD_REQUEST","message":"Enter the computer'"'"'s password."}'
+password=$(head -c "$length")
+left=$(wait_left)
+[ "$left" -gt 0 ] && reply '429 Too Many Requests' "{\"error\":\"WAIT\",\"wait\":$left,\"message\":\"Too many wrong passwords. Try again in $left seconds.\"}"
+mkdir "$STATE/busy" 2>/dev/null || reply '409 Conflict' '{"error":"BUSY","message":"Already trying a password."}'
+trap 'rmdir "$STATE/busy" 2>/dev/null' EXIT
+
+opened && reply '200 OK' '{"state":"unlocked"}'
+asked=$(question) || reply '503 Service Unavailable' '{"error":"NOT_ASKING","message":"The computer is not asking for its password yet. Try again in a moment."}'
+socket=$(sed -n 's/^Socket=//p' "$asked")
+printf '%s\n' "$password" | "$REPLY" 1 "$socket" 2>/dev/null
+password=
+
+# Opened, or asked again (a wrong one: systemd-cryptsetup asks anew, in a new file), within OPENS
+# seconds.
+result=
+for _ in $(seq "$OPENS"); do
+    opened && { result=opened; break; }
+    current=$(question) || current=
+    [ -n "$current" ] && [ "$current" != "$asked" ] && { result=wrong; break; }
+    sleep 1
+done
+if [ "$result" = opened ]; then
+    echo '0 0' > "$STATE/tries"
+    reply '200 OK' '{"state":"unlocked"}'
+fi
+[ -z "$result" ] && reply '504 Gateway Timeout' '{"error":"TIMEOUT","message":"The computer did not say whether that opened it. Try again."}'
+set -- $(tries)
+count=$(( $1 + 1 ))
+until=0
+if [ "$count" -ge "$FREE_TRIES" ]; then
+    wait=$FIRST_WAIT
+    extra=$(( count - FREE_TRIES ))
+    while [ "$extra" -gt 0 ] && [ "$wait" -lt 600 ]; do wait=$(( wait * 2 )); extra=$(( extra - 1 )); done
+    until=$(( $(now) + wait ))
+fi
+echo "$count $until" > "$STATE/tries"
+reply '401 Unauthorized' '{"error":"WRONG_PASSWORD","message":"That is not this computer'"'"'s password. It is the one set when it was installed."}'

@@ -469,10 +469,13 @@ def install_image(config, source, target, progress, resources):
         write(target, '/etc/hostname', config['hostname'] + '\n')
         write(target, '/etc/hosts', f"127.0.0.1 localhost\n::1 localhost\n127.0.1.1 {config['hostname']}\n")
         write(target, '/etc/machine-id', '')
+        # Encrypted: the setup hotspot comes up while the disk waits for its password, for a phone to
+        # send it (harness-unlock), beside the screen's own prompt.
         write(target, '/etc/mkinitcpio.conf',
               'HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole '
               + ('plymouth ' if config['encrypt'] else '')
-              + 'block sd-encrypt filesystems fsck)\nCOMPRESSION="zstd"\n')
+              + 'block ' + ('harness-unlock ' if config['encrypt'] else '')
+              + 'sd-encrypt filesystems fsck)\nCOMPRESSION="zstd"\n')
         if platform['modules']:
             write(target, '/etc/mkinitcpio.conf.d/20-harness-platform.conf',
                   'MODULES+=(' + ' '.join(platform['modules']) + ')\n')
@@ -508,7 +511,9 @@ def install_image(config, source, target, progress, resources):
             # setup delays before Plymouth can display its unlock prompt.
             kernel_args += ' console=ttyS0,115200 console=tty0 plymouth.ignore-serial-consoles'
         if luks_uuid:
-            kernel_args += f' rd.luks.name={luks_uuid}=cryptroot splash'
+            # tries=0: asked again however often it is wrong, as an open hotspot lets anyone try
+            # (the page slows them down); three wrong ones used to stop the computer starting.
+            kernel_args += f' rd.luks.name={luks_uuid}=cryptroot rd.luks.options={luks_uuid}=tries=0 splash'
         write(target, '/etc/default/grub',
               'GRUB_DEFAULT=0\nGRUB_TIMEOUT=1\nGRUB_DISTRIBUTOR="Harness"\n'
               'GRUB_DISABLE_OS_PROBER=true\n' + f'GRUB_CMDLINE_LINUX="{kernel_args}"\n')
