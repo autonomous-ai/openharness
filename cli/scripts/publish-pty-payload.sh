@@ -12,8 +12,11 @@
 # harness/staging/. Its manifest entry names the release core (0.4.18): that is the runtime\pty\<version>\ folder,
 # and install.ps1 ($HarnessPtyVersionPattern) and ptyHost/launch.ts (VERSION_DIR) take only dotted numbers there, as
 # windows-install-manifest.mjs does for a prerelease CLI.
-# The production manifest (harness/pty/metadata.json) is the owner's step, once the staging E2E passes:
-#   METADATA_PATH=harness/pty/metadata.json bash cli/scripts/publish-pty-payload.sh <version> <x64 dir> <arm64 dir>
+# release.yml publishes a release here with OBJECT_PREFIX set to its staging prefix (harness/staging, or
+# harness/staging-dry-run for a dry run), so a dry run never takes a real version's objects. The production manifest
+# (harness/pty/metadata.json) is the owner's step, once the staging E2E passes: promote-pty-payload.sh <version> points
+# it at those same objects and uploads nothing (its header gives the owner's whole production order). Running this
+# script again for production would build zips of other bytes and be refused, as their names are taken.
 # DRY_RUN=1 DRY_RUN_OUT=<dir> builds and checks the zips, writes them and the manifest into <dir>, and touches no bucket.
 set -euo pipefail
 

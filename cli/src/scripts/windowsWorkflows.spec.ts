@@ -22,6 +22,11 @@ describe('the Windows release workflows', () => {
     expect(release).toContain('uses: ./.github/workflows/windows.yml')
     expect(release).toContain('staging_prefix=')
     expect(release).toContain('METADATA_PATH="$STAGING_PREFIX/pty/metadata.json"')
+    // The zips under the staging prefix too, where promote-pty-payload.sh finds them through the staging manifest, and
+    // a dry run's under harness/staging-dry-run, so it never takes a real version's immutable harness/pty/<version>/.
+    expect(release).toContain('OBJECT_PREFIX="$STAGING_PREFIX" METADATA_PATH="$STAGING_PREFIX/pty/metadata.json" bash cli/scripts/publish-pty-payload.sh')
+    expect(release).toMatch(/staging=harness\/staging; else staging=harness\/staging-dry-run; fi/)
+    expect(release).not.toMatch(/bash cli\/scripts\/promote-pty-payload\.sh/)
     expect(release).toMatch(/windows-staging:\n\s+needs: \[version, preflight, publish, pty-build\]/)
     expect(release).toMatch(/github-release:\n\s+needs: \[version, publish\]/)
     expect(release).toMatch(/publish:\n\s+needs: \[version, preflight, process-images\]/)
