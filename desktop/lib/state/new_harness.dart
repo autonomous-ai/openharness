@@ -1588,9 +1588,16 @@ class NewHarnessController extends ChangeNotifier {
     if (app.stateOf(id)?.isLocalMachine == true) return p.context;
     // The machine model has no OS field. Its own home response (or a known
     // project path before that response) owns the syntax, never this host.
+    // A relative query carries no style evidence over the committed project.
+    final absoluteHint = hint != null &&
+            (p.posix.isAbsolute(hint) ||
+                p.windows.isAbsolute(hint) &&
+                    !p.windows.isRootRelative(hint))
+        ? hint
+        : null;
     final ownerPath =
         _homes[id] ??
-        hint ??
+        absoluteHint ??
         (id == _machineId ? _project.folder : _projectsByMachine[id]?.folder);
     return ownerPath != null &&
             p.windows.isAbsolute(ownerPath) &&

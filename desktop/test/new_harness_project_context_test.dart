@@ -802,6 +802,47 @@ void main() {
     },
   );
 
+  for (final failedHome in [false, true]) {
+    for (final query in ['../sibling', r'..\sibling']) {
+      testWidgets(
+        'remote Windows relative $query uses its project while home is ${failedHome ? 'failed' : 'pending'}',
+        (tester) async {
+          final folders = _Folders('studio')
+            ..pendingHome = Completer<Map<String, dynamic>>();
+          folders.entriesByPath[r'C:\Users\Remote'] = [
+            {'name': 'sibling', 'isDir': true},
+          ];
+          final app = createApp(connectionForTest: (_) => folders);
+          seedMixedAgents(app);
+          final box = NewHarnessController(
+            app,
+            machineId: 'studio',
+            engine: 'claude',
+            folder: r'C:\Users\Remote\work',
+            home: '/local-only-home',
+          );
+          addTearDown(box.dispose);
+          addTearDown(app.dispose);
+          await mount(tester, box);
+          if (failedHome) {
+            folders.pendingHome!.completeError(StateError('home unavailable'));
+            await tester.pump();
+          }
+          box.focusField(NewHarnessField.project);
+          box.setQuery(query);
+          expect(box.isPathQuery, isTrue);
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.pump();
+          expect(folders.paths, contains(r'C:\Users\Remote'));
+          expect(box.selected!.project!.folder, r'C:\Users\Remote\sibling');
+          expect(folders.paths, isNot(contains('sibling')));
+          await tester.pump(const Duration(milliseconds: 200));
+          await tester.pumpWidget(const SizedBox());
+        },
+      );
+    }
+  }
+
   testWidgets(
     'a late home answer does not move a project to the previous machine',
     (tester) async {
