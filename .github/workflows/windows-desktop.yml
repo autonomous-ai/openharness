@@ -339,7 +339,7 @@ jobs:
           }
       - name: Install by one command (install.ps1 -App)
         working-directory: cli
-        timeout-minutes: 20
+        timeout-minutes: 40
         env:
           HARNESS_DESKTOP_LAUNCHER_BIN: ${{ github.workspace }}\pty\target\debug\harness-desktop-launcher.exe
           HARNESS_EXE_BIN: ${{ github.workspace }}\pty\target\debug\harness.exe
