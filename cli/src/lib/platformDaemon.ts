@@ -201,7 +201,7 @@ export async function startThroughTask(
   if (!ran.ok) return { ok: false, direct: true, detail: ran.detail }
   const quick = await waitForMaster(deps, TASK_RUN_WAIT_MS)
   if (quick !== null) return { ok: true, pid: quick }
-  if (!deps.lockHeld()) return { ok: false, direct: true, detail: 'Task Scheduler did not start harnessd (it runs the task only in a signed-in Windows session)' }
+  if (!deps.lockHeld()) return { ok: false, direct: true, detail: 'Task Scheduler did not start harnessd (it runs the task only in a session at the Windows desktop, not over SSH)' }
   const pid = await waitForMaster(deps, waitMs)
   return pid !== null ? { ok: true, pid } : { ok: false, direct: false, detail: `harnessd did not come up within ${Math.round((TASK_RUN_WAIT_MS + waitMs) / 1000)}s` }
 }

@@ -47,7 +47,7 @@ describe('install.ps1, as written', () => {
 
   it('tells the task registered but not running now (exit 5, serviceCommand.ts) from a failure', () => {
     expect(SERVICE_REGISTERED_NOT_RUNNING).toBe(5)
-    expect(source).toContain('if ($exit -eq 5 -and -not $why) {')
+    expect(source).toContain('if ($exit -eq 5 -and -not $why) { return }')
   })
 
   // G8 / final review R3-6: a reinstall over a signed-in, running install still said `harness login # 1. sign in`.
@@ -589,10 +589,11 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
     expect(ps(`Write-HarnessDone -Version '1.0.1'`).stdout).toContain('harness login')
   })
 
-  it('says the task starts Harness at sign-in when `harness service install` registered it but it is not running now (exit 5)', () => {
-    const registered = fakeHarness('stopped', ['if "%1"=="service" exit /b 5'])
+  // Re-review N1: harness service install says it itself (serviceCommand.ts); the installer passes its lines on and adds none.
+  it('passes on what `harness service install` said when it registered the task but did not start it now (exit 5), and adds nothing', () => {
+    const registered = fakeHarness('stopped', ['if "%1"=="service" echo Task Scheduler will start the Harness daemon when you sign in to Windows.', 'if "%1"=="service" exit /b 5'])
     const run = ps(`Register-HarnessService -Command '${registered.command}'`)
-    expect(run.stdout, run.stderr).toContain("Harness starts when you sign in to Windows; it is not running now: run 'harness start'.")
+    expect(run.stdout.split(/\r?\n/), run.stderr).toEqual(['Task Scheduler will start the Harness daemon when you sign in to Windows.'])
     expect(run.stdout).not.toContain('could not set itself to start')
     expect(registered.calls()).toEqual(['service install'])
     const failed = fakeHarness('stopped', ['if "%1"=="service" exit /b 1'])

@@ -443,13 +443,11 @@ function Register-HarnessService {
     & $Command service install | ForEach-Object { Write-Host "  $_" }
     $exit = $LASTEXITCODE
   } catch { $why = $_.Exception.Message }
-  # 5: the task is registered, and Task Scheduler did not start harnessd now, as in a session no one signed in to
+  # 5: the task is registered, and Task Scheduler did not start harnessd now, as over SSH
   # (serviceCommand.ts SERVICE_REGISTERED_NOT_RUNNING). It said "could not set itself to start" of a task it had just
-  # registered (the Windows install job, B5.12).
-  if ($exit -eq 5 -and -not $why) {
-    Write-Host "  Harness starts when you sign in to Windows; it is not running now: run 'harness start'."
-    return
-  }
+  # registered (the Windows install job, B5.12). harness service install has said what happened and what to run; this
+  # adds nothing to it (re-review N1).
+  if ($exit -eq 5 -and -not $why) { return }
   if ($exit -ne 0) {
     if (-not $why) { $why = "harness service install exited $exit" }
     Write-Host "  Harness could not set itself to start when you sign in ($why)."

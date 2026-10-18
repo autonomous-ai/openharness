@@ -334,7 +334,7 @@ async function installTask(deps: ServiceCommandDeps): Promise<number> {
     const wait = deps.startWaitMs ?? PLATFORM_START_WAIT_MS
     up = await waitForMaster(deps, Math.min(TASK_RUN_WAIT_MS, wait))
     if (up === null && !deps.lockHeld?.()) {
-      deps.out(`Task Scheduler starts the Harness daemon when you sign in to Windows (${service.target}). It did not start it now: it runs the task only in a signed-in Windows session.`)
+      deps.out('Task Scheduler will start the Harness daemon when you sign in to Windows. It did not start it now: it runs the task only in a session at the Windows desktop (not SSH).')
       deps.out('  start it now: harness start')
       return SERVICE_REGISTERED_NOT_RUNNING
     }

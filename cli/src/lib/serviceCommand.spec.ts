@@ -523,7 +523,7 @@ describe('harness service with Task Scheduler', () => {
       expect(w.clock.now).toBeLessThanOrEqual(TASK_RUN_WAIT_MS + 1_000)
       expect(w.err).toEqual([])
       expect(w.out.slice(0, 2)).toEqual([
-        `Task Scheduler starts the Harness daemon when you sign in to Windows (${taskName('demo')}). It did not start it now: it runs the task only in a signed-in Windows session.`,
+        'Task Scheduler will start the Harness daemon when you sign in to Windows. It did not start it now: it runs the task only in a session at the Windows desktop (not SSH).',
         '  start it now: harness start',
       ])
     } finally { rmSync(w.dir, { recursive: true, force: true }) }
