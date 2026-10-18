@@ -126,9 +126,13 @@ mod windows {
         let id = uuid::Uuid::new_v4().simple().to_string();
         let world = World {
             owned: OwnedProcesses::new(dir.path()),
-            zip: profile.join("Downloads/zip"),
-            install: profile.join("AppData/Local/Programs/Harness"),
-            programs: profile.join("Start Menu/Programs"),
+            zip: profile.join("Downloads").join("zip"),
+            install: profile
+                .join("AppData")
+                .join("Local")
+                .join("Programs")
+                .join("Harness"),
+            programs: profile.join("Start Menu").join("Programs"),
             temp: profile.join("Temp"),
             registry: format!(r"Software\HarnessTest\{id}"),
             dir,
@@ -137,8 +141,8 @@ mod windows {
         };
         for path in [
             &world.temp,
-            &world.profile.join("AppData/Roaming"),
-            &world.profile.join("AppData/Local"),
+            &world.profile.join("AppData").join("Roaming"),
+            &world.profile.join("AppData").join("Local"),
         ] {
             fs::create_dir_all(path).unwrap();
         }
@@ -160,8 +164,8 @@ mod windows {
         [
             ("USERPROFILE", world.profile.clone()),
             ("HOME", world.profile.clone()),
-            ("APPDATA", world.profile.join("AppData/Roaming")),
-            ("LOCALAPPDATA", world.profile.join("AppData/Local")),
+            ("APPDATA", world.profile.join("AppData").join("Roaming")),
+            ("LOCALAPPDATA", world.profile.join("AppData").join("Local")),
             ("TEMP", world.temp.clone()),
             ("TMP", world.temp.clone()),
             ("HARNESS_DESKTOP_INSTALL_ROOT", world.install.clone()),
@@ -338,7 +342,11 @@ mod windows {
 
     fn same_version_repairs_registration_without_recopying() {
         let world = installed();
-        fs::write(world.install.join("app/1.2.3/keep"), b"keep").unwrap();
+        fs::write(
+            world.install.join("app").join("1.2.3").join("keep"),
+            b"keep",
+        )
+        .unwrap();
         fs::remove_file(world.programs.join("Harness.lnk")).unwrap();
         win::delete_key(&world.registry, r"Classes\harness").unwrap();
         win::delete_key(&world.registry, registry::UNINSTALL_KEY).unwrap();
@@ -350,7 +358,7 @@ mod windows {
         );
         assert_app(&world, &app, "1.2.3", &[]);
         assert_eq!(
-            fs::read(world.install.join("app/1.2.3/keep")).unwrap(),
+            fs::read(world.install.join("app").join("1.2.3").join("keep")).unwrap(),
             b"keep"
         );
         assert!(world.programs.join("Harness.lnk").is_file());
@@ -363,7 +371,7 @@ mod windows {
 
     fn newer_zip_replaces_current_and_keeps_previous() {
         let world = installed();
-        let newer = world.profile.join("Downloads/newer");
+        let newer = world.profile.join("Downloads").join("newer");
         zip(&newer, "1.3.0");
         let (_, app) = run(&world, &newer.join("Harness.exe"), &["--install"], "newer");
         assert_app(&world, &app, "1.3.0", &[]);
@@ -375,7 +383,7 @@ mod windows {
             fs::read_to_string(world.install.join("previous")).unwrap(),
             "1.2.3\r\n"
         );
-        assert!(!world.install.join("app/1.3.0.staging").exists());
+        assert!(!world.install.join("app").join("1.3.0.staging").exists());
         assert_eq!(
             value(&world, registry::UNINSTALL_KEY, "DisplayVersion"),
             Some("1.3.0".into())
@@ -384,7 +392,7 @@ mod windows {
 
     fn an_older_zip_opens_the_installed_harness() {
         let world = installed();
-        let older = world.profile.join("Downloads/older");
+        let older = world.profile.join("Downloads").join("older");
         zip(&older, "1.0.0");
         let (output, app) = run(&world, &older.join("Harness.exe"), &["--install"], "older");
         assert!(
@@ -392,7 +400,7 @@ mod windows {
                 .contains("version 1.0.0, older than the Harness 1.2.3")
         );
         assert_app(&world, &app, "1.2.3", &[]);
-        assert!(!world.install.join("app/1.0.0").exists());
+        assert!(!world.install.join("app").join("1.0.0").exists());
     }
 
     fn installed_heals_but_zip_does_not_take_protocol() {
@@ -643,9 +651,13 @@ mod windows {
     fn junction_source_is_rejected_before_destination_effects() {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir(dir.path().join("outside")).unwrap();
-        fs::write(dir.path().join("outside/sentinel"), b"external bytes").unwrap();
+        fs::write(
+            dir.path().join("outside").join("sentinel"),
+            b"external bytes",
+        )
+        .unwrap();
         fs::create_dir(dir.path().join("installed")).unwrap();
-        fs::write(dir.path().join("installed/current"), b"1.2.3\r\n").unwrap();
+        fs::write(dir.path().join("installed").join("current"), b"1.2.3\r\n").unwrap();
         // Relative ASCII arguments avoid cmd reparsing the owned profile's special characters.
         // Directory junctions do not require symlink privileges or Developer Mode.
         // Rust preserves the program's spelling in argv0; give cmd native separators too.
@@ -680,17 +692,17 @@ mod windows {
         assert!(
             harness_pty::desktop::install::copy_tree(
                 &junction,
-                &dir.path().join("installed/1.3.0")
+                &dir.path().join("installed").join("1.3.0")
             )
             .is_err()
         );
-        assert!(!dir.path().join("installed/1.3.0").exists());
+        assert!(!dir.path().join("installed").join("1.3.0").exists());
         assert_eq!(
-            fs::read(dir.path().join("installed/current")).unwrap(),
+            fs::read(dir.path().join("installed").join("current")).unwrap(),
             b"1.2.3\r\n"
         );
         assert_eq!(
-            fs::read(dir.path().join("outside/sentinel")).unwrap(),
+            fs::read(dir.path().join("outside").join("sentinel")).unwrap(),
             b"external bytes"
         );
         fs::remove_dir(dir.path().join("junction")).unwrap();
