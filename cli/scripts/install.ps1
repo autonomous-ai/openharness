@@ -642,6 +642,7 @@ function Install-HarnessApp {
   $ProgressPreference = 'SilentlyContinue'
   $step = 'Checking this computer'
   $staging = $null
+  $installed = $false
   try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $tar = Test-HarnessHost
@@ -674,6 +675,7 @@ function Install-HarnessApp {
     $step = 'Installing Harness'
     $code = Start-HarnessAppInstall -Launcher $launcher
     if ($code -ne 0) { throw "Harness's installer stopped (exit code $code). Its log is launch.log, in Programs\Harness under $env:LOCALAPPDATA." }
+    $installed = $true
   } catch {
     Write-Host ''
     Write-Host "Harness could not be installed. The step that failed: $step." -ForegroundColor Red
@@ -681,7 +683,15 @@ function Install-HarnessApp {
     Write-Host '  Run the installer again, or send this message to Harness support.'
     return 1
   } finally {
-    if ($staging) { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($staging) {
+      try { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction Stop }
+      catch {
+        Write-Host "Warning: Temporary files remain at $staging." -ForegroundColor Yellow
+        if ($installed) { Write-Host '  Harness was installed and can be used.' }
+        else { Write-Host '  The install failed for the reason above.' }
+        Write-Host "  Close anything using that folder, then remove it. $($_.Exception.Message)"
+      }
+    }
   }
   Write-Host ''
   Write-Host "Harness $version is installed, and it is opening now."

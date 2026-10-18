@@ -170,10 +170,31 @@ describe.runIf(windows)('install.ps1 -App runs the real launcher in an isolated 
   }
   const taskSnapshot = () => ['Harness harnessd', 'Harness harnessd at sign-in'].map((name) => task(`${name} (${process.env.USERNAME})`))
 
-  function installApp(manifest: string, env: NodeJS.ProcessEnv, args: string[] = []) {
-    return spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', installer, '-App', '-Manifest', manifest, ...args], {
+  function installApp(manifest: string, env: NodeJS.ProcessEnv, args: string[] = [], script = installer) {
+    return spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-App', '-Manifest', manifest, ...args], {
       encoding: 'utf8', env: cleanEnv(env), timeout: 240_000,
     })
+  }
+
+  function withHeldStaging(): string {
+    // The real Windows Remove-Item sees a file held by this PowerShell process. This temporary copy
+    // changes only the test's cleanup environment; the App install/download/launcher path stays real.
+    const override = String.raw`function Remove-Item {
+  [CmdletBinding()]
+  param([string]$LiteralPath, [switch]$Recurse, [switch]$Force)
+  if ($Recurse -and (Split-Path -Leaf $LiteralPath) -like '.harness-desktop-staging-*') {
+    $held = Join-Path $LiteralPath 'held-for-cleanup-test'
+    [IO.File]::WriteAllText($held, 'held by the C4.8 native test')
+    $lock = [IO.File]::Open($held, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+    try { Microsoft.PowerShell.Management\Remove-Item -LiteralPath $LiteralPath -Recurse -Force -ErrorAction Stop }
+    finally { $lock.Dispose() }
+  } else {
+    Microsoft.PowerShell.Management\Remove-Item @PSBoundParameters
+  }
+}`
+    const script = join(folder('harness-app-cleanup-control-'), 'install.ps1')
+    writeFileSync(script, readFileSync(installer, 'utf8').replace('# --- Run ---', `${override}\n# --- Run ---`))
+    return script
   }
 
   function running(app: string): number {
@@ -251,5 +272,34 @@ describe.runIf(windows)('install.ps1 -App runs the real launcher in an isolated 
     expect(result.stdout.endsWith('still here')).toBe(true)
     expect(existsSync(w.install)).toBe(false)
     expect(stagingLeft(w.temp)).toEqual([])
+  })
+
+  it('warns with the retained staging path while a successfully installed app keeps exit 0', () => {
+    const w = world()
+    const app = join(w.install, 'app', '9.8.11', 'harness-desktop.exe')
+    ownedApps.push(app)
+    const result = installApp(build('9.8.11'), w.env, [], withHeldStaging())
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+    const left = stagingLeft(w.temp)
+    expect(left).toHaveLength(1)
+    expect(result.stdout).toContain(`Temporary files remain at ${join(w.temp, left[0]!)}.`)
+    expect(result.stdout).toContain('Harness was installed and can be used.')
+    expect(result.stdout).toContain('Harness 9.8.11 is installed, and it is opening now.')
+    expect(existsSync(app)).toBe(true)
+    expect(running(app)).toBeGreaterThan(0)
+  })
+
+  it('warns with the retained staging path while preserving a failed download and exit 1', () => {
+    const w = world()
+    const result = installApp(build('9.8.12', true), w.env, [], withHeldStaging())
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1)
+    const left = stagingLeft(w.temp)
+    expect(left).toHaveLength(1)
+    expect(result.stdout).toContain(`Temporary files remain at ${join(w.temp, left[0]!)}.`)
+    expect(result.stdout).toContain('The install failed for the reason above.')
+    expect(result.stdout).toContain('The step that failed: Downloading Harness.')
+    expect(result.stdout).toContain('failed its checksum')
+    expect(result.stdout).not.toContain('is installed, and it is opening now.')
+    expect(existsSync(w.install)).toBe(false)
   })
 })
