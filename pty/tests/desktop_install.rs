@@ -21,7 +21,7 @@ mod windows {
     use harness_pty::desktop::{registry, shortcut, win};
     use serde::{Deserialize, Serialize};
     use std::collections::BTreeMap;
-    use std::ffi::OsStr;
+    use std::ffi::{OsStr, OsString};
     use std::fs;
     use std::os::windows::fs::MetadataExt;
     use std::path::{Path, PathBuf};
@@ -860,7 +860,9 @@ mod windows {
         finish_app(&bootstrap);
         let app = report(&out);
         finish_app(&app);
-        assert_eq!(bootstrap["args"], serde_json::json!([link]));
+        // The bootstrap records args_os, preserving Windows code units in Serde's OS-string form.
+        let args: Vec<OsString> = serde_json::from_value(bootstrap["args"].clone()).unwrap();
+        assert_eq!(args, [OsString::from(&link)]);
         assert_eq!(
             bootstrap["env"],
             serde_json::to_value(environment(&world, &out)).unwrap()
