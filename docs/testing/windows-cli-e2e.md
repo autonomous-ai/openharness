@@ -166,7 +166,7 @@ The fake CDN was then disabled: hosts sha256 back to `2d6bdfb3…` (byte-identic
 
 ### Scenario 5: engine hooks, and the Mac reading the VM
 
-Sign-in: `approve-qr.mts` → `result success`, `machine registered: 7e92c45ac0eb554fd870c5df68e9b6b4`
+Sign-in: `approve-qr.mts` → `result success`, `machine registered: 7e92c45a…`
 ([`s5-login.log`](../../cli/scripts/windows-cli-e2e/evidence/s5-login.log)). After `harness stop` / `harness start`:
 `● started · connecting to the backend`, then `backend connected`. The Mac's `harness machines --json` lists
 `WIN-2R12E0MUJKC` `running`; the Mac's `harness ps --machine 7e92c45a… --all --json`
@@ -355,7 +355,7 @@ Each is its own commit with a test that fails without it.
   CA in Root; `C:\ProgramData\harness-fake-cdn` gone. Winlogon restored exactly, no `DefaultPassword`. The admin
   helper folders (`C:\Users\admin\e2e`, `e2e-b514`) removed. `C:\work\e2e` untouched (its daemon not running before or
   after; nothing on 1847x).
-- Account: machine `7e92c45ac0eb554fd870c5df68e9b6b4` (the only one this run registered) deleted and gone from
+- Account: machine `7e92c45a…` (the only one this run registered) deleted and gone from
   `harness machines`. An older `WIN-2R12E0MUJKC` row (`5d96588a…`, 2026-10-15) is not this run's and was left.
 - Mac: the update server and the fake CDN stopped (8799 and 443 free); both throwaway homes removed; the scratchpad's
   password file, CA and keys, staged CDN and update builds removed. The macOS run 1 repair (G7): in the real

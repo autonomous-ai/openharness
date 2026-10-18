@@ -1,10 +1,10 @@
-# the Mac reads the VM as a remote machine: harness ps --machine 7e92c45ac0eb554fd870c5df68e9b6b4 --all --json (08:52:53)
+# the Mac reads the VM as a remote machine: harness ps --machine 7e92c45a… --all --json (08:52:53)
 {
  "machine": "WIN-2R12E0MUJKC",
  "harnesses": [
   {
    "name": "Kilo CLI",
-   "id": "29c3a0f0-8836-485c-88ed-82cd6323d573",
+   "id": "29c3a0f0…",
    "agent": "Kilo",
    "machine": "WIN-2R12E0MUJKC",
    "state": "idle",
@@ -21,7 +21,7 @@
   },
   {
    "name": "Codex harness 10-17 18:51",
-   "id": "dac87568-38e1-428e-8b01-b5588948cb9a",
+   "id": "dac87568…",
    "agent": "Codex",
    "machine": "WIN-2R12E0MUJKC",
    "state": "unknown",
@@ -34,7 +34,7 @@
   },
   {
    "name": "Claude harness 10-17 18:43",
-   "id": "47324568-1510-43d4-ad33-4da3359dc63c",
+   "id": "47324568…",
    "agent": "Claude Code",
    "machine": "WIN-2R12E0MUJKC",
    "state": "unknown",
