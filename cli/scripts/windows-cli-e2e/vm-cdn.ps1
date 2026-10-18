@@ -153,10 +153,13 @@ function Enable-FakeCdn {
   if (Test-CaPresent $cert.Thumbprint) {
     Write-Output "CA $($cert.Thumbprint) was already in LocalMachine\Root: -Disable leaves it"
   } else {
-    $store = Get-RootStore 'ReadWrite'
-    try { $store.Add($cert) } finally { $store.Close() }
+    # Intent first: the state says the CA is ours before it is added, so a run stopped between the two still has
+    # -Disable remove it. -Disable removes it only when it is there, and a CA that was there before -Enable never
+    # gets this mark.
     $state.caAdded = $true
     Write-State $state
+    $store = Get-RootStore 'ReadWrite'
+    try { $store.Add($cert) } finally { $store.Close() }
   }
   ipconfig.exe /flushdns | Out-Null
   Write-Output "hosts sha256 before $($state.hostsBefore)"
@@ -176,6 +179,7 @@ function Disable-FakeCdn {
   [byte[]]$backup = [IO.File]::ReadAllBytes($BackupPath)
   [byte[]]$block = [Convert]::FromBase64String($state.block)
   $same = $false
+  $fallback = $false
   if ((Get-Sha256Hex $current) -eq $state.hostsAfter -and (Get-Sha256Hex $backup) -eq $state.hostsBefore) {
     [IO.File]::WriteAllBytes($HostsFile, $backup)
   } elseif ((Get-Sha256Hex $current) -eq $state.hostsBefore) {
@@ -185,6 +189,7 @@ function Disable-FakeCdn {
     if ($null -eq $restored) {
       Write-Warning "$HostsFile changed after -Enable: only the marked lines are removed. The original is kept in $BackupPath."
       $restored = Remove-MarkedLines $current
+      $fallback = $true
     }
     [IO.File]::WriteAllBytes($HostsFile, [byte[]]$restored)
   }
@@ -193,7 +198,7 @@ function Disable-FakeCdn {
   Write-Output "hosts sha256 before -Enable $($state.hostsBefore)"
   Write-Output "hosts sha256 now           $now"
   Write-Output "hosts byte-identical: $same"
-  if ($state.caAdded) {
+  if ($state.caAdded -and (Test-CaPresent $state.thumbprint)) {
     $store = Get-RootStore 'ReadWrite'
     try {
       foreach ($cert in @($store.Certificates.Find('FindByThumbprint', $state.thumbprint, $false))) { $store.Remove($cert) }
@@ -208,6 +213,9 @@ function Disable-FakeCdn {
     Write-Output 'disabled'
   } else {
     Write-Output "not fully restored: the state is kept in $StateDir"
+    if ($fallback) {
+      Write-Output "Compare $HostsFile with $BackupPath and fix it by hand. Then delete $StatePath and $BackupPath, or -Enable will refuse to run."
+    }
     exit 1
   }
 }
