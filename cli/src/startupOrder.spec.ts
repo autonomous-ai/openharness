@@ -177,7 +177,8 @@ describe('the core\'s start-up order (core/main.ts)', () => {
 
   it('on Windows, claims the data folder once no daemon serves it, before reading or listening, and gives it up with the socket', () => {
     const source = code(SOURCE)
-    const claimed = source.indexOf("const dataFolderClaim = process.platform === 'win32' ? await claimDataFolder(env.ADAPTER_DATA_DIR) : null")
+    const claimed = source.indexOf("? await claimDataFolder(env.ADAPTER_DATA_DIR, ensureDaemonToken(env.ADAPTER_DATA_DIR), ")
+    expect(claimed).toBeGreaterThan(source.indexOf("const dataFolderClaim = process.platform === 'win32'"))
     expect(claimed).toBeGreaterThan(source.indexOf('await refuseServedDataFolder('))
     expect(claimed).toBeLessThan(source.indexOf('registry.load()'))
     expect(claimed).toBeLessThan(source.indexOf('await startHookServer('))

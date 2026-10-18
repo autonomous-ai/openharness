@@ -216,7 +216,7 @@ export const alreadyServing = (path: string): Error =>
  * and launchd and systemd do not start a clean exit again (lib/daemonSafeMode.ts).
  */
 export const ORPHAN_STILL_SERVING = 'ORPHAN_STILL_SERVING'
-const orphanStillServing = (path: string, corePid: number): Error =>
+export const orphanStillServing = (path: string, corePid: number): Error =>
   Object.assign(new Error(`The core (pid ${corePid}) of a master that is gone still serves ${path}`), { code: ORPHAN_STILL_SERVING })
 
 /**

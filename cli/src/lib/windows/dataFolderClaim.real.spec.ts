@@ -2,12 +2,15 @@
 // refused, one on another folder is not. Windows only:
 //   cd cli && npx vitest run src/lib/windows/dataFolderClaim.real.spec.ts
 import { execFile } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
-import { claimDataFolder } from './dataFolderClaim.js'
+import { claimDataFolder, dataFolderClaimPipe } from './dataFolderClaim.js'
+
+const TOKEN = Buffer.alloc(32, 7)
 
 const scratch = mkdtempSync(join(tmpdir(), 'hclaim-real-'))
 afterAll(() => rmSync(scratch, { recursive: true, force: true }))
@@ -17,7 +20,7 @@ const cli = fileURLToPath(new URL('../../..', import.meta.url))
 function claimElsewhere(dataDir: string): Promise<string> {
   const script = join(scratch, `claim-${Math.random().toString(16).slice(2)}.mts`)
   writeFileSync(script, `import { claimDataFolder } from ${JSON.stringify(pathToFileURL(fileURLToPath(new URL('./dataFolderClaim.ts', import.meta.url))).href)}
-try { const claim = await claimDataFolder(${JSON.stringify(dataDir)}); console.log('claimed ' + claim.path); claim.release() }
+try { const claim = await claimDataFolder(${JSON.stringify(dataDir)}, Buffer.alloc(32, 7), { askTimeoutMs: 2000 }); console.log((claim.held ? 'claimed ' : 'unheld ') + claim.path); claim.release() }
 catch (error) { console.log('refused ' + error.code + ' ' + error.message) }
 `)
   return new Promise((resolve, reject) => execFile(process.execPath, ['--import', 'tsx', script], { cwd: cli, timeout: 60_000 },
@@ -27,12 +30,25 @@ catch (error) { console.log('refused ' + error.code + ' ' + error.message) }
 ;(process.platform === 'win32' ? describe : describe.skip)('the data folder claim on real pipes', () => {
   it('refuses a second process on the same folder, lets one on another folder through, and frees the folder on release', async () => {
     const a = join(scratch, 'a'), b = join(scratch, 'b')
-    const held = await claimDataFolder(a)
+    const held = await claimDataFolder(a, TOKEN)
     expect(held.path).toMatch(/^\\\\\.\\pipe\\harness-claim-[0-9a-f]{32}$/)
     expect(await claimElsewhere(a)).toBe(`refused EADDRINUSE A Harness daemon is already serving ${a}`)
     expect(await claimElsewhere(a.toUpperCase())).toMatch(/^refused EADDRINUSE /)
     expect(await claimElsewhere(b)).toMatch(/^claimed \\\\\.\\pipe\\harness-claim-[0-9a-f]{32}$/)
     held.release()
     expect(await claimElsewhere(a)).toBe(`claimed ${held.path}`)
+  }, 120_000)
+
+  it('starts without the claim when another process that is not Harness holds its name', async () => {
+    const c = join(scratch, 'c')
+    mkdirSync(c, { recursive: true })
+    const name = dataFolderClaimPipe(realpathSync.native(c))
+    const squatter = createServer((socket) => socket.destroy())
+    await new Promise<void>((resolve) => squatter.listen(name, () => resolve()))
+    try {
+      expect(await claimElsewhere(c)).toBe(`unheld ${name}`)
+    } finally {
+      squatter.close()
+    }
   }, 120_000)
 })

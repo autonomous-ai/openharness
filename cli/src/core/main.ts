@@ -508,8 +508,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   await refuseServedDataFolder(localSocketPath(env.ADAPTER_DATA_DIR, env.PORT), 1_000, servedFolderDeps(env.ADAPTER_DATA_DIR, env.PORT))
   // Windows: each start listens on a pipe of a new name, which never meets a second core on this folder as the
   // fixed Unix socket does, and the ask above cannot see two starts at once. The fixed claim, held while this core
-  // runs, refuses the second the same way (lib/windows/dataFolderClaim.ts).
-  const dataFolderClaim = process.platform === 'win32' ? await claimDataFolder(env.ADAPTER_DATA_DIR) : null
+  // runs, refuses the second the same way (lib/windows/dataFolderClaim.ts). It proves the daemon's token to a start
+  // that finds its name taken, so a name another account took does not keep this daemon down.
+  const dataFolderClaim = process.platform === 'win32'
+    ? await claimDataFolder(env.ADAPTER_DATA_DIR, ensureDaemonToken(env.ADAPTER_DATA_DIR), { holder: { pid: coreLink.masterPid ?? process.pid, corePid: process.pid } })
+    : null
 
   // harnessd's master saw this core crash again and again: start nothing that could do it again. The
   // master's updater runs on, and a published fix still lands (`enterSafeMode`).

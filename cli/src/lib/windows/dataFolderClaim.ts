@@ -3,19 +3,33 @@
  * unlike the fixed Unix socket that listen never meets a second core on the same folder; and asking the recorded
  * pipe first (`refuseServedDataFolder`) cannot see two starts at once. So the core also holds a pipe of a FIXED
  * name per data folder for as long as it runs. libuv creates a pipe server with FILE_FLAG_FIRST_PIPE_INSTANCE, so
- * a second listen on that name fails with EADDRINUSE: that start is refused as a daemon already serving the folder.
- * The claim serves nothing; Windows removes it with the process, however that ends.
+ * a second listen on that name fails with EADDRINUSE. Windows removes the claim with the process, however that ends.
+ *
+ * `\\.\pipe\` is one namespace for the whole computer, and any account may take a name nobody holds. So a start
+ * that finds the name taken asks the holder to prove the daemon's token (pipeAuth.ts `claimProofValue`), the one
+ * thing the claim answers. A core that proves it serves the folder: refused, unless its master is gone, which is
+ * waited for as `refuseServedDataFolder` waits for one. Anything else (silent, closed, a wrong proof) is not
+ * Harness: the start goes on without the claim, and says so. Another account cannot keep this user's daemon down.
  */
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { mkdirSync, realpathSync } from 'node:fs'
-import { createServer } from 'node:net'
-import { alreadyServing } from '../localSocket.js'
+import { connect, createServer, type Server } from 'node:net'
+import { alreadyServing, ORPHAN_WAIT_MS, orphanStillServing } from '../localSocket.js'
+import { claimProofValue, claimProven } from './pipeAuth.js'
 
 export interface DataFolderClaim {
   /** The name the claim listens on. */
   path: string
+  /** Whether this core holds the claim: false when something that is not Harness holds its name. */
+  held: boolean
   /** Give the folder up: stop listening. Safe to call more than once. */
   release: () => void
+}
+
+/** Who holds a claim: the daemon's pid as everything outside knows it (its master's under one) and the core's. */
+export interface ClaimHolder {
+  pid: number
+  corePid: number
 }
 
 export interface DataFolderClaimDeps {
@@ -23,7 +37,22 @@ export interface DataFolderClaimDeps {
   realpath?: (dataDir: string) => string
   /** The fixed name for that real path. A spec puts a Unix socket here. */
   pipeFor?: (realDataDir: string) => string
+  /** What this claim answers about its holder: this core and its master, if any. */
+  holder?: ClaimHolder
+  alive?: (pid: number) => boolean
+  log?: (line: string) => void
+  /** How long the holder of a taken name has to prove the token. */
+  askTimeoutMs?: number
+  /** How long a start waits for the core of a master that is gone to give the claim up. */
+  waitMs?: number
+  pollMs?: number
 }
+
+const ASK_TIMEOUT_MS = 3_000
+const POLL_MS = 250
+const NONCE = /^[0-9a-f]{64}$/
+/** The most a request or an answer holds: a nonce and a newline, or a short line of JSON. */
+const MAX_LINE = 1_024
 
 /** `\\.\pipe\harness-claim-<first 32 hex of sha256 of the lowercased real path>`: Windows compares paths without case. */
 export function dataFolderClaimPipe(realDataDir: string): string {
@@ -35,20 +64,104 @@ function realDataFolder(dataDir: string): string {
   return realpathSync.native(dataDir)
 }
 
-/** Claim [dataDir] for this process. Rejects with `alreadyServing` when another core holds it, or with the error. */
-export function claimDataFolder(dataDir: string, deps: DataFolderClaimDeps = {}): Promise<DataFolderClaim> {
-  const path = (deps.pipeFor ?? dataFolderClaimPipe)((deps.realpath ?? realDataFolder)(dataDir))
-  // Nothing is served here: a connection is closed as it arrives.
-  const server = createServer((socket) => socket.destroy())
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' }
+}
+
+/** Listen on [path]: resolves with the server, rejects with the listen's error (EADDRINUSE when the name is taken). */
+function listenClaim(path: string, token: Buffer, holder: ClaimHolder): Promise<Server> {
+  // One request: a nonce on a line. One answer: its proof and the holder, on a line. Anything else is closed.
+  const server = createServer((socket) => {
+    let request = ''
+    socket.setTimeout(ASK_TIMEOUT_MS, () => socket.destroy())
+    socket.on('error', () => { /* the asker left */ })
+    socket.on('data', (chunk) => {
+      request += chunk.toString('latin1')
+      const end = request.indexOf('\n')
+      if (end < 0) { if (request.length > 64) socket.destroy(); return }
+      const nonce = request.slice(0, end).replace(/\r$/, '')
+      if (!NONCE.test(nonce)) { socket.destroy(); return }
+      socket.end(`${JSON.stringify({ proof: claimProofValue(token, nonce), pid: holder.pid, corePid: holder.corePid })}\n`)
+    })
+  })
   return new Promise((resolve, reject) => {
-    server.once('error', (error: NodeJS.ErrnoException) => reject(error.code === 'EADDRINUSE' ? alreadyServing(dataDir) : error))
+    server.once('error', reject)
     server.listen(path, () => {
       server.removeAllListeners('error')
       server.on('error', () => { /* a listening claim has nothing to report */ })
       // Never what keeps the core running: it lives as long as the core does.
       server.unref()
-      let released = false
-      resolve({ path, release: () => { if (!released) { released = true; server.close() } } })
+      resolve(server)
     })
   })
+}
+
+/** Ask whoever holds [path] to prove [token]: the holder it names when it does, `gone` when nobody holds it, else null. */
+function askHolder(path: string, token: Buffer, timeoutMs: number): Promise<ClaimHolder | 'gone' | null> {
+  return new Promise((resolve) => {
+    const nonce = randomBytes(32).toString('hex')
+    const socket = connect(path)
+    let answer = ''
+    let done = false
+    const finish = (result: ClaimHolder | 'gone' | null): void => {
+      if (done) return
+      done = true
+      socket.destroy()
+      resolve(result)
+    }
+    socket.setTimeout(timeoutMs, () => finish(null))
+    socket.on('connect', () => socket.write(`${nonce}\n`))
+    socket.on('error', (error: NodeJS.ErrnoException) => finish(error.code === 'ENOENT' || error.code === 'ECONNREFUSED' ? 'gone' : null))
+    socket.on('close', () => finish(null))
+    socket.on('data', (chunk) => {
+      answer += chunk.toString('utf8')
+      const end = answer.indexOf('\n')
+      if (end < 0) { if (answer.length > MAX_LINE) finish(null); return }
+      try {
+        const said = JSON.parse(answer.slice(0, end)) as { proof?: unknown; pid?: unknown; corePid?: unknown }
+        const whole = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) > 0
+        finish(claimProven(said.proof, token, nonce) && whole(said.pid) && whole(said.corePid) ? { pid: said.pid, corePid: said.corePid } : null)
+      } catch {
+        finish(null)
+      }
+    })
+  })
+}
+
+/**
+ * Claim [dataDir] for this process, proving [token] to a later start that asks. Rejects with `alreadyServing` when a
+ * core of this token holds it, with ORPHAN_STILL_SERVING when the core of a master that is gone does not give it up
+ * in time, or with the listen's error. Resolves with `held: false` when the name is taken by something else.
+ */
+export async function claimDataFolder(dataDir: string, token: Buffer, deps: DataFolderClaimDeps = {}): Promise<DataFolderClaim> {
+  const path = (deps.pipeFor ?? dataFolderClaimPipe)((deps.realpath ?? realDataFolder)(dataDir))
+  const holder = deps.holder ?? { pid: process.pid, corePid: process.pid }
+  const log = deps.log ?? ((line: string) => console.log(line))
+  const isAlive = deps.alive ?? alive
+  const deadline = performance.now() + (deps.waitMs ?? ORPHAN_WAIT_MS)
+  let orphanSeen = false
+  for (;;) {
+    try {
+      const server = await listenClaim(path, token, holder)
+      if (orphanSeen) log('[cli] the core whose master is gone has given the data folder up — starting')
+      let released = false
+      return { path, held: true, release: () => { if (!released) { released = true; server.close() } } }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error
+    }
+    const found = await askHolder(path, token, deps.askTimeoutMs ?? ASK_TIMEOUT_MS)
+    if (found === null) {
+      log(`[cli] something that is not Harness holds ${path}; starting without the data folder claim`)
+      return { path, held: false, release: () => { /* nothing held */ } }
+    }
+    if (found !== 'gone') {
+      if (found.pid === found.corePid || isAlive(found.pid)) throw alreadyServing(dataDir)
+      if (!orphanSeen) log(`[cli] this data folder is still claimed by the core (pid ${found.corePid}) of a master that is gone (pid ${found.pid}) — waiting for it to leave`)
+      orphanSeen = true
+      if (performance.now() >= deadline) throw orphanStillServing(dataDir, found.corePid)
+    } else if (performance.now() >= deadline) {
+      throw alreadyServing(dataDir)
+    }
+    await new Promise((resolve) => setTimeout(resolve, found === 'gone' ? 0 : deps.pollMs ?? POLL_MS))
+  }
 }

@@ -51,6 +51,20 @@ export function pipeProofValue(token: Buffer, nonce: string): string {
   return mac(token, 0x00, nonce)
 }
 
+/**
+ * What the data folder claim answers for [nonce] (windows/dataFolderClaim.ts), so a start that finds the claim's name
+ * taken can tell a Harness core from whatever else took it. Its own separator: that answer is never a pipe auth or
+ * a pipe proof, whatever nonce a caller sends.
+ */
+export function claimProofValue(token: Buffer, nonce: string): string {
+  return mac(token, 0x02, nonce)
+}
+
+/** Whether [proof] is the claim's answer for [token] and [nonce]. */
+export function claimProven(proof: unknown, token: Buffer, nonce: string): boolean {
+  return typeof proof === 'string' && HEX64.test(proof) && sameHex(proof, claimProofValue(token, nonce))
+}
+
 /** The nonces a daemon took most recently: an auth is accepted once. Bounded; the oldest is forgotten first. */
 export class NonceWindow {
   private readonly seen = new Set<string>()
