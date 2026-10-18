@@ -2,7 +2,7 @@
 approved: {"ok":true}
 {"type":"confirm","email":"<the account>"}
 {"type":"result","status":"success","email":"<the account>","fingerprint":"91DE·CD1F·1675·8D1C"}
-machine registered: 7e92c45ac0eb554fd870c5df68e9b6b4; remove it after the run: harness machines delete 7e92c45ac0eb554fd870c5df68e9b6b4 --yes
+machine registered: 7e92c45a…; remove it after the run: harness machines delete 7e92c45a… --yes
 ## restart on the session (08:50:06)
 machine stopped (pid 5740).
   Task Scheduler did not start harnessd (it runs the task only in a signed-in Windows session) — starting it directly
@@ -18,4 +18,4 @@ machine stopped (pid 5740).
    local api  http://127.0.0.1:18474
   running in background · stop with: harness stop
 
-{"loggedIn":true,"computerId":"e5f27bf2-84db-42f4-bacc-681587924436","machineId":"7e92c45ac0eb554fd870c5df68e9b6b4","autonomousEnv":"prod","expiresAt":1792291797056,"method":"qr","fingerprint":"91DE·CD1F·1675·8D1C"}
+{"loggedIn":true,"computerId":"e5f27bf2…","machineId":"7e92c45a…","autonomousEnv":"prod","expiresAt":1792291797056,"method":"qr","fingerprint":"91DE·CD1F·1675·8D1C"}
