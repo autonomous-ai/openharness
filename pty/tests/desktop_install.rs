@@ -23,6 +23,7 @@ mod windows {
     use std::collections::BTreeMap;
     use std::ffi::OsStr;
     use std::fs;
+    use std::os::windows::fs::MetadataExt;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output, Stdio};
     use std::time::{Duration, Instant};
@@ -647,20 +648,38 @@ mod windows {
         fs::write(dir.path().join("installed/current"), b"1.2.3\r\n").unwrap();
         // Relative ASCII arguments avoid cmd reparsing the owned profile's special characters.
         // Directory junctions do not require symlink privileges or Developer Mode.
-        let cmd = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe");
+        // Rust preserves the program's spelling in argv0; give cmd native separators too.
+        let cmd = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32")
+            .join("cmd.exe");
         let output = bounded_output(
-            Command::new(cmd)
+            Command::new(&cmd)
                 .current_dir(dir.path())
                 .args(["/d", "/v:off", "/c", "mklink", "/J", "junction", "outside"]),
         );
         assert!(
             output.status.success(),
-            "{}",
+            "mklink setup failed: program={cmd:?}, cwd={:?}, status={}, stdout={}, stderr={}",
+            dir.path(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
+        );
+        let junction = dir.path().join("junction");
+        let metadata = fs::symlink_metadata(&junction).unwrap();
+        assert_ne!(
+            metadata.file_attributes()
+                & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT,
+            0,
+            "mklink did not create a reparse point"
+        );
+        assert_eq!(
+            fs::read(junction.join("sentinel")).unwrap(),
+            b"external bytes"
         );
         assert!(
             harness_pty::desktop::install::copy_tree(
-                &dir.path().join("junction"),
+                &junction,
                 &dir.path().join("installed/1.3.0")
             )
             .is_err()
