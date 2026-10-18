@@ -34,6 +34,10 @@ fn key(path: &Path) -> io::Result<String> {
         .to_lowercase())
 }
 
+fn api_error(operation: &str, pid: u32, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("{operation} pid={pid}: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -89,6 +93,18 @@ mod tests {
             }
             assert!(!owned.handles.borrow().contains_key(&sibling.id()));
             assert!(owned.handles.borrow().values().all(|p| p.query_only));
+            let denied = owned
+                .handles
+                .borrow()
+                .get(&child.id())
+                .unwrap()
+                .confirm_exit_after_image_error(io::Error::from_raw_os_error(5))
+                .unwrap_err();
+            assert_eq!(
+                denied.raw_os_error(),
+                Some(5),
+                "a live handle must preserve the image error"
+            );
             assert_eq!(
                 owned.cleanup(Duration::from_millis(10)).unwrap_err().kind(),
                 io::ErrorKind::TimedOut
@@ -128,6 +144,20 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
+        // QueryFullProcessImageNameW may no longer work after positive exit.
+        // The exact returned Child and previously validated held identity remain.
+        let after_exit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            owned
+                .handles
+                .borrow()
+                .get(&child.id())
+                .unwrap()
+                .confirm_exit_after_image_error(io::Error::from_raw_os_error(5))
+                .unwrap();
+            owned
+                .observe_child(&child, &cmd, &[cmd.clone(), ping.clone()])
+                .unwrap();
+        }));
         if let Err(error) = owned.cleanup(Duration::from_secs(5)) {
             dir.disable_cleanup(true);
             panic!(
@@ -135,7 +165,7 @@ mod tests {
                 dir.path().display()
             );
         }
-        if let Err(panic) = result {
+        if let Err(panic) = result.and(after_exit) {
             std::panic::resume_unwind(panic);
         }
     }
@@ -157,7 +187,12 @@ impl Process {
         let mut data = vec![0u16; 32_768];
         let mut size = data.len() as u32;
         if unsafe { QueryFullProcessImageNameW(handle, 0, data.as_mut_ptr(), &mut size) } == 0 {
-            return Err(io::Error::last_os_error());
+            let error = io::Error::last_os_error();
+            return Err(api_error(
+                "QueryFullProcessImageNameW",
+                unsafe { GetProcessId(handle) },
+                error,
+            ));
         }
         Ok(PathBuf::from(OsString::from_wide(&data[..size as usize])))
     }
@@ -170,7 +205,11 @@ impl Process {
             {
                 return Ok(None);
             }
-            return Err(error);
+            return Err(api_error(
+                &format!("OpenProcess access={access:#x}"),
+                pid,
+                error,
+            ));
         }
         let mut process = Self {
             handle,
@@ -180,16 +219,38 @@ impl Process {
         };
         match Self::image(handle) {
             Ok(path) => process.image = key(&path)?,
-            Err(_error) if process.exited()? => return Ok(None),
-            Err(error) => return Err(error),
+            Err(error) => {
+                process.confirm_exit_after_image_error(error)?;
+                return Ok(None);
+            }
         }
         Ok(Some(process))
+    }
+    fn confirm_exit_after_image_error(&self, error: io::Error) -> io::Result<()> {
+        // Teardown can remove the image before signaling the process handle.
+        // Only a positive kernel wait authorizes treating it as already gone.
+        match unsafe { WaitForSingleObject(self.handle, 100) } {
+            WAIT_OBJECT_0 => Ok(()),
+            WAIT_TIMEOUT => Err(error),
+            WAIT_FAILED => Err(api_error(
+                "WaitForSingleObject(image error)",
+                self.pid,
+                io::Error::last_os_error(),
+            )),
+            other => Err(io::Error::other(format!(
+                "unexpected image-error wait {other}"
+            ))),
+        }
     }
     fn exited(&self) -> io::Result<bool> {
         match unsafe { WaitForSingleObject(self.handle, 0) } {
             WAIT_OBJECT_0 => Ok(true),
             WAIT_TIMEOUT => Ok(false),
-            WAIT_FAILED => Err(io::Error::last_os_error()),
+            WAIT_FAILED => Err(api_error(
+                "WaitForSingleObject(zero)",
+                self.pid,
+                io::Error::last_os_error(),
+            )),
             other => Err(io::Error::other(format!("unexpected fixture wait {other}"))),
         }
     }
@@ -220,7 +281,11 @@ impl Process {
                 io::ErrorKind::TimedOut,
                 format!("owned fixture process {} did not exit", self.pid),
             )),
-            WAIT_FAILED => Err(io::Error::last_os_error()),
+            WAIT_FAILED => Err(api_error(
+                "WaitForSingleObject(final)",
+                self.pid,
+                io::Error::last_os_error(),
+            )),
             other => Err(io::Error::other(format!(
                 "unexpected fixture final wait {other}"
             ))),
@@ -241,7 +306,11 @@ impl Process {
             )
         } == 0
         {
-            return Err(io::Error::last_os_error());
+            return Err(api_error(
+                "GetProcessTimes",
+                self.pid,
+                io::Error::last_os_error(),
+            ));
         }
         let ticks =
             |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
@@ -257,7 +326,11 @@ impl Process {
 fn snapshot() -> io::Result<Vec<(u32, String, u32)>> {
     let handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if handle == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
+        return Err(api_error(
+            "CreateToolhelp32Snapshot",
+            0,
+            io::Error::last_os_error(),
+        ));
     }
     let result = (|| {
         let mut rows = Vec::new();
@@ -270,7 +343,7 @@ fn snapshot() -> io::Result<Vec<(u32, String, u32)>> {
                 return if error.raw_os_error() == Some(ERROR_NO_MORE_FILES as i32) {
                     Ok(rows)
                 } else {
-                    Err(error)
+                    Err(api_error("Process32FirstW/Process32NextW", 0, error))
                 };
             }
             let end = entry
@@ -407,6 +480,33 @@ impl OwnedProcesses {
                 "direct child is not an exact fixture tool",
             ));
         }
+        let retained = self
+            .handles
+            .borrow()
+            .get(&child.id())
+            .map(|p| (p.pid, p.image.clone()));
+        if let Some((retained_pid, retained_image)) = retained {
+            let actual_pid = unsafe { GetProcessId(child.as_raw_handle() as HANDLE) };
+            if actual_pid == 0 {
+                return Err(api_error(
+                    "GetProcessId(returned Child)",
+                    child.id(),
+                    io::Error::last_os_error(),
+                ));
+            }
+            if actual_pid != child.id() || actual_pid != retained_pid || retained_image != expected
+            {
+                return Err(io::Error::other(
+                    "returned child does not match its retained identity",
+                ));
+            }
+            // Its held handle prevents PID reuse. Keep that positively checked
+            // image identity instead of querying an exited process's image again.
+            self.tools.borrow_mut().extend(tools);
+            self.capture_tools()?;
+            self.uncertain_child.set(prior_uncertainty);
+            return Ok(());
+        }
         let mut handle = std::ptr::null_mut();
         let current = unsafe { GetCurrentProcess() };
         if unsafe {
@@ -421,7 +521,11 @@ impl OwnedProcesses {
             )
         } == 0
         {
-            return Err(io::Error::last_os_error());
+            return Err(api_error(
+                "DuplicateHandle(returned Child)",
+                child.id(),
+                io::Error::last_os_error(),
+            ));
         }
         let mut process = Process {
             handle,
