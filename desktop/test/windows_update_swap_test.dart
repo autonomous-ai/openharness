@@ -101,6 +101,31 @@ void main() {
       FileSystemEntity.typeSync(p.join(root, relative), followLinks: false) !=
       FileSystemEntityType.notFound;
 
+  void createJunction(String link, String target) {
+    final parent = p.dirname(link);
+    expect(
+      FileSystemEntity.typeSync(parent, followLinks: false),
+      FileSystemEntityType.directory,
+    );
+    expect(
+      FileSystemEntity.typeSync(target, followLinks: false),
+      FileSystemEntityType.directory,
+    );
+    expect(
+      FileSystemEntity.typeSync(link, followLinks: false),
+      FileSystemEntityType.notFound,
+    );
+    final result = Process.runSync('cmd.exe', [
+      '/d',
+      '/c',
+      'mklink',
+      '/J',
+      p.basename(link),
+      p.relative(target, from: parent),
+    ], workingDirectory: parent);
+    expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+  }
+
   List<FileSystemEntity> attempts() =>
       Directory(p.join(root, 'app'))
           .listSync(followLinks: false)
@@ -599,11 +624,16 @@ void main() {
       try {
         expect(swap.commit(version: '1.3.0'), isNotNull);
         expect(swap.publicationStarted, isTrue);
-        oldInstallIntact();
+        expect(read('current'), '1.2.0\r\n');
+        expect(exists('previous'), isFalse);
+        expect(read('Harness.ico'), 'icon 1.2.0');
+        expect(read('app/1.2.0/harness-desktop.exe'), 'app 1.2.0');
         expect(exists('app/1.3.0'), isTrue);
+        expect(read('app/1.3.0/harness-desktop.exe'), 'app 1.3.0');
       } finally {
         held.close();
       }
+      oldInstallIntact();
     },
     skip: !Platform.isWindows ? 'Windows NTFS only' : null,
   );
@@ -621,11 +651,7 @@ void main() {
       final outside = Directory(p.join(dir.path, 'external'))..createSync();
       File(p.join(outside.path, 'sentinel')).writeAsStringSync('keep');
       final junction = p.join(root, 'app', '1.0.0');
-      final made = Process.runSync('cmd.exe', [
-        '/c',
-        'mklink /J "$junction" "${outside.path}"',
-      ]);
-      expect(made.exitCode, 0, reason: '${made.stdout}\n${made.stderr}');
+      createJunction(junction, outside.path);
       final cleanup = WindowsUpdateSwap(installRoot: root);
       await cleanup.cleanUp();
       expect(File(p.join(outside.path, 'sentinel')).readAsStringSync(), 'keep');
@@ -636,15 +662,7 @@ void main() {
       Directory(p.join(root, 'app', '1.2.0'))
           .renameSync(p.join(root, 'app', 'saved'));
       final currentJunction = p.join(root, 'app', '1.2.0');
-      final currentLink = Process.runSync('cmd.exe', [
-        '/c',
-        'mklink /J "$currentJunction" "${outside.path}"',
-      ]);
-      expect(
-        currentLink.exitCode,
-        0,
-        reason: '${currentLink.stdout}\n${currentLink.stderr}',
-      );
+      createJunction(currentJunction, outside.path);
       expect(
         await stage(WindowsUpdateSwap(installRoot: root), updateZip('1.3.0')),
         contains('not usable'),
@@ -660,11 +678,7 @@ void main() {
     final outside = p.join(dir.path, 'external-app');
     Directory(p.join(root, 'app')).renameSync(outside);
     File(p.join(outside, 'sentinel')).writeAsStringSync('keep');
-    final made = Process.runSync('cmd.exe', [
-      '/c',
-      'mklink /J "${p.join(root, 'app')}" "$outside"',
-    ]);
-    expect(made.exitCode, 0, reason: '${made.stdout}\n${made.stderr}');
+    createJunction(p.join(root, 'app'), outside);
     expect(swap.commit(version: '1.3.0'), contains('ordinary'));
     expect(swap.publicationStarted, isFalse);
     expect(File(p.join(outside, 'sentinel')).readAsStringSync(), 'keep');
@@ -682,11 +696,7 @@ void main() {
     final outside = p.join(dir.path, 'external-root');
     Directory(root).renameSync(outside);
     File(p.join(outside, 'sentinel')).writeAsStringSync('keep');
-    final made = Process.runSync('cmd.exe', [
-      '/c',
-      'mklink /J "$root" "$outside"',
-    ]);
-    expect(made.exitCode, 0, reason: '${made.stdout}\n${made.stderr}');
+    createJunction(root, outside);
     expect(swap.commit(version: '1.3.0'), contains('ordinary'));
     expect(swap.publicationStarted, isFalse);
     expect(File(p.join(outside, 'sentinel')).readAsStringSync(), 'keep');
