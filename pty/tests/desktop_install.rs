@@ -224,13 +224,21 @@ mod windows {
 
     /// No shell and no global test-process environment changes. Bound every fixture-owned launcher.
     fn bounded_output(command: &mut Command) -> Output {
+        bounded_output_observed(command, |_| {})
+    }
+    fn bounded_output_observed(
+        command: &mut Command,
+        observe: impl Fn(&std::process::Child),
+    ) -> Output {
         let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
+        observe(&child);
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
+            observe(&child);
             if child.try_wait().unwrap().is_some() {
                 return child.wait_with_output().unwrap();
             }
@@ -879,41 +887,18 @@ mod windows {
         assert_app(&world, &app, "1.2.3", &[&link]);
     }
 
-    /// Real tools copied into this World's allowlisted tree permit bounded cleanup
-    /// of the detached cmd as well as the apps. No global SystemRoot is changed.
-    fn uninstall_tools(world: &World) -> PathBuf {
-        use sha2::{Digest, Sha256};
+    /// Real OS tools are observed only through the owned launcher's lineage.
+    fn uninstall_tools() -> Vec<PathBuf> {
         let source = std::env::var_os("SystemRoot").expect("Windows SystemRoot");
-        let root = world.dir.path().join("OwnedWindows");
-        let bin = root.join("System32");
-        fs::create_dir_all(&bin).unwrap();
-        let mut identities = Vec::new();
-        for name in [
+        [
             "cmd.exe",
             "chcp.com",
             "tasklist.exe",
             "find.exe",
             "PING.EXE",
-        ] {
-            let original = PathBuf::from(&source).join("System32").join(name);
-            let copied = bin.join(name);
-            let bytes = fs::read(&original).unwrap();
-            fs::copy(&original, &copied).unwrap();
-            let hash = format!("{:x}", Sha256::digest(&bytes));
-            assert_eq!(
-                format!("{:x}", Sha256::digest(fs::read(&copied).unwrap())),
-                hash
-            );
-            world.owned.allow(&copied).unwrap();
-            identities
-                .push(serde_json::json!({"source": original, "copy": copied, "sha256": hash}));
-        }
-        fs::write(
-            world.dir.path().join("tool-identities.json"),
-            serde_json::to_vec(&identities).unwrap(),
-        )
-        .unwrap();
-        root
+        ]
+        .map(|name| PathBuf::from(&source).join("System32").join(name))
+        .into()
     }
 
     fn window_app(world: &World, mode: &str) -> std::process::Child {
@@ -961,7 +946,7 @@ mod windows {
         let sibling = installed();
         let mut unrelated = window_app(&sibling, "quit");
         let mut app = window_app(&world, if forced { "ignore" } else { "quit" });
-        let tools = uninstall_tools(&world);
+        let tools = uninstall_tools();
         let harness = world.profile.join(".harness");
         let sentinels = [
             harness.join("cli").join("state.json"),
@@ -979,11 +964,11 @@ mod windows {
         let launcher = world.install.join("Harness.exe");
         world.owned.allow(&launcher).unwrap();
         let started = Instant::now();
-        let output = bounded_output(
+        let output = bounded_output_observed(
             isolated_command(&launcher)
                 .arg("--uninstall")
-                .envs(environment(&world, &world.dir.path().join("unused.json")))
-                .env("SystemRoot", &tools),
+                .envs(environment(&world, &world.dir.path().join("unused.json"))),
+            |child| world.owned.observe_child(child, &launcher, &tools).unwrap(),
         );
         assert!(
             output.status.success(),
@@ -1018,6 +1003,7 @@ mod windows {
         }
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
+            world.owned.live_count().unwrap();
             let files: Vec<_> = fs::read_dir(&world.temp)
                 .unwrap()
                 .map(|e| e.unwrap().path())

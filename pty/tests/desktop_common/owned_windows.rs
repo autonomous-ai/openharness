@@ -1,23 +1,25 @@
 //! Fixture-only ownership. The World calls cleanup before TempDir drops and retains
 //! that directory on failure. Never use PID reports alone as permission to terminate.
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::os::windows::ffi::OsStringExt;
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE,
-    WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    CloseHandle, DuplicateHandle, ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, FILETIME, HANDLE,
+    INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows_sys::Win32::System::Threading::{
-    GetProcessId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
-    PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
+    GetCurrentProcess, GetProcessId, GetProcessTimes, OpenProcess,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
 };
 
 fn key(path: &Path) -> io::Result<String> {
@@ -32,10 +34,118 @@ fn key(path: &Path) -> io::Result<String> {
         .to_lowercase())
 }
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn os_tool_lineage_excludes_siblings_and_timeout_never_terminates() {
+        use super::*;
+        use std::os::windows::process::CommandExt;
+        use std::process::{Command, Stdio};
+        let mut dir = tempfile::tempdir().unwrap();
+        let owned = OwnedProcesses::new(dir.path());
+        let root = std::env::var_os("SystemRoot").expect("Windows SystemRoot");
+        let cmd = PathBuf::from(&root).join("System32").join("cmd.exe");
+        let ping = PathBuf::from(&root).join("System32").join("PING.EXE");
+        fs::write(
+            dir.path().join("lineage.cmd"),
+            b"@echo off\r\n\"%SystemRoot%\\System32\\PING.EXE\" -n 4 127.0.0.1 >nul\r\n",
+        )
+        .unwrap();
+        let start = || {
+            Command::new(&cmd)
+                .args(["/d", "/v:off", "/c", "lineage.cmd"])
+                .current_dir(dir.path())
+                .creation_flags(0x0800_0000 | 0x0000_0200)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        };
+        let mut child = start();
+        let mut sibling = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            owned
+                .observe_child(&child, &cmd, &[cmd.clone(), ping.clone()])
+                .unwrap();
+            sibling = Some(start());
+            let sibling = sibling.as_mut().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                owned.capture().unwrap();
+                if owned
+                    .handles
+                    .borrow()
+                    .values()
+                    .any(|p| p.image == key(&ping).unwrap())
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "actual cmd -> ping lineage was not observed"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(!owned.handles.borrow().contains_key(&sibling.id()));
+            assert!(owned.handles.borrow().values().all(|p| p.query_only));
+            assert_eq!(
+                owned.cleanup(Duration::from_millis(10)).unwrap_err().kind(),
+                io::ErrorKind::TimedOut
+            );
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "query-only cleanup terminated cmd"
+            );
+            assert!(
+                sibling.try_wait().unwrap().is_none(),
+                "unrelated cmd was affected"
+            );
+        }));
+        // These exact Child capabilities naturally finish their bounded ping command.
+        // Never kill an OS utility, including on an assertion unwind.
+        let deadline = Instant::now() + Duration::from_secs(8);
+        for child in std::iter::once(&mut child).chain(sibling.iter_mut()) {
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => {}
+                    Err(error) => {
+                        dir.disable_cleanup(true);
+                        panic!(
+                            "OS fixture child wait is unknown; retained {}: {error}",
+                            dir.path().display()
+                        );
+                    }
+                }
+                if Instant::now() >= deadline {
+                    dir.disable_cleanup(true);
+                    panic!(
+                        "OS fixture child stayed live; retained {}",
+                        dir.path().display()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        if let Err(error) = owned.cleanup(Duration::from_secs(5)) {
+            dir.disable_cleanup(true);
+            panic!(
+                "OS fixture descendants unconfirmed; retained {}: {error}",
+                dir.path().display()
+            );
+        }
+        if let Err(panic) = result {
+            std::panic::resume_unwind(panic);
+        }
+    }
+}
+
 struct Process {
     handle: HANDLE,
     pid: u32,
     image: String,
+    query_only: bool,
 }
 impl Drop for Process {
     fn drop(&mut self) {
@@ -56,7 +166,7 @@ impl Process {
         if handle.is_null() {
             let error = io::Error::last_os_error();
             if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32)
-                && !snapshot()?.iter().any(|(id, _)| *id == pid)
+                && !snapshot()?.iter().any(|(id, _, _)| *id == pid)
             {
                 return Ok(None);
             }
@@ -66,6 +176,7 @@ impl Process {
             handle,
             pid,
             image: String::new(),
+            query_only: access & PROCESS_TERMINATE == 0,
         };
         match Self::image(handle) {
             Ok(path) => process.image = key(&path)?,
@@ -86,6 +197,9 @@ impl Process {
         if self.exited()? {
             return Ok(());
         }
+        if self.query_only {
+            return self.wait(deadline);
+        }
         if unsafe { TerminateProcess(self.handle, 1) } == 0 {
             let error = io::Error::last_os_error();
             if self.exited()? {
@@ -93,6 +207,9 @@ impl Process {
             }
             return Err(error);
         }
+        self.wait(deadline)
+    }
+    fn wait(&self, deadline: Instant) -> io::Result<()> {
         let left = deadline
             .saturating_duration_since(Instant::now())
             .as_millis()
@@ -109,9 +226,35 @@ impl Process {
             ))),
         }
     }
+    fn lifetime(&self) -> io::Result<(u64, Option<u64>)> {
+        // GetProcessTimes' exit value is undefined while the process is live.
+        let exited = self.exited()?;
+        let [mut creation, mut exit, mut kernel, mut user]: [FILETIME; 4] =
+            unsafe { std::mem::zeroed() };
+        if unsafe {
+            GetProcessTimes(
+                self.handle,
+                &mut creation,
+                &mut exit,
+                &mut kernel,
+                &mut user,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let ticks =
+            |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+        let created = ticks(creation);
+        let exit = exited.then(|| ticks(exit));
+        if created == 0 || exit.is_some_and(|end| end < created) {
+            return Err(io::Error::other("fixture process timing is unknown"));
+        }
+        Ok((created, exit))
+    }
 }
 
-fn snapshot() -> io::Result<Vec<(u32, String)>> {
+fn snapshot() -> io::Result<Vec<(u32, String, u32)>> {
     let handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if handle == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
@@ -138,6 +281,7 @@ fn snapshot() -> io::Result<Vec<(u32, String)>> {
             rows.push((
                 entry.th32ProcessID,
                 String::from_utf16_lossy(&entry.szExeFile[..end]).to_lowercase(),
+                entry.th32ParentProcessID,
             ));
             ok = unsafe { Process32NextW(handle, &mut entry) };
         }
@@ -153,6 +297,8 @@ pub struct OwnedProcesses {
     // A successful Shell call may start later and may return neither handle nor report.
     pending: RefCell<BTreeMap<String, PathBuf>>,
     observed: RefCell<BTreeSet<String>>,
+    tools: RefCell<BTreeSet<String>>,
+    uncertain_child: Cell<bool>,
 }
 impl OwnedProcesses {
     pub fn new(root: &Path) -> Self {
@@ -162,6 +308,8 @@ impl OwnedProcesses {
             handles: RefCell::default(),
             pending: RefCell::default(),
             observed: RefCell::default(),
+            tools: RefCell::default(),
+            uncertain_child: Cell::new(false),
         }
     }
     pub fn allow(&self, image: &Path) -> io::Result<()> {
@@ -183,7 +331,7 @@ impl OwnedProcesses {
             .iter()
             .map(|p| p.rsplit('\\').next().unwrap().to_owned())
             .collect();
-        for (pid, name) in snapshot()? {
+        for (pid, name, _) in snapshot()? {
             if !names.contains(&name) || self.handles.borrow().contains_key(&pid) {
                 continue;
             }
@@ -233,12 +381,121 @@ impl OwnedProcesses {
                     "fixture report has a different executable",
                 ));
             }
-            if !snapshot()?.iter().any(|(id, _)| *id == pid) {
+            if !snapshot()?.iter().any(|(id, _, _)| *id == pid) {
                 self.observed.borrow_mut().insert(expected.clone());
                 self.pending.borrow_mut().remove(&expected);
             }
         }
+        self.capture_tools()
+    }
+    /// Seed lineage from the actual returned Child handle, never a PID report.
+    /// System tools retain QUERY/SYNCHRONIZE rights only; they are never killed.
+    pub fn observe_child(
+        &self,
+        child: &std::process::Child,
+        expected: &Path,
+        tools: &[PathBuf],
+    ) -> io::Result<()> {
+        // A returned child may already be using this World: failed validation
+        // must retain it even when no process identity could be registered.
+        let prior_uncertainty = self.uncertain_child.replace(true);
+        let expected = key(expected)?;
+        let tools: BTreeSet<_> = tools.iter().map(|p| key(p)).collect::<io::Result<_>>()?;
+        let inside = expected.starts_with(&(self.root.clone() + r"\"));
+        if !inside && !tools.contains(&expected) {
+            return Err(io::Error::other(
+                "direct child is not an exact fixture tool",
+            ));
+        }
+        let mut handle = std::ptr::null_mut();
+        let current = unsafe { GetCurrentProcess() };
+        if unsafe {
+            DuplicateHandle(
+                current,
+                child.as_raw_handle() as HANDLE,
+                current,
+                &mut handle,
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                0,
+                0,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let mut process = Process {
+            handle,
+            pid: child.id(),
+            image: String::new(),
+            query_only: true,
+        };
+        process.image = key(&Process::image(handle)?)?;
+        process.lifetime()?;
+        if process.image != expected {
+            return Err(io::Error::other(
+                "returned child has a different executable",
+            ));
+        }
+        self.tools.borrow_mut().extend(tools);
+        if inside {
+            self.allow(Path::new(&expected))?;
+            // Preserve the original inside-root termination/capture contract.
+            self.capture()?;
+            if !self.handles.borrow().contains_key(&process.pid) {
+                self.retain(process);
+            }
+        } else {
+            self.retain(process);
+        }
+        self.capture_tools()?;
+        self.uncertain_child.set(prior_uncertainty);
         Ok(())
+    }
+    fn capture_tools(&self) -> io::Result<()> {
+        let tools = self.tools.borrow().clone();
+        if tools.is_empty() {
+            return Ok(());
+        }
+        // One finite snapshot per poll: discover its parent/child rows to a fixed
+        // point without chasing an active producer beyond the cleanup deadline.
+        let rows = snapshot()?;
+        loop {
+            let mut added = false;
+            for (pid, name, parent_pid) in &rows {
+                // Do not even open unrelated same-name OS processes.
+                if self.handles.borrow().contains_key(pid)
+                    || !tools.iter().any(|p| p.rsplit('\\').next() == Some(name))
+                    || !self.handles.borrow().contains_key(parent_pid)
+                {
+                    continue;
+                }
+                let Some(child) = Process::open(
+                    *pid,
+                    PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                )?
+                else {
+                    continue;
+                };
+                if !tools.contains(&child.image) {
+                    continue;
+                }
+                let created = child.lifetime()?.0;
+                let handles = self.handles.borrow();
+                let parent = handles.get(parent_pid).unwrap();
+                let (start, end) = parent.lifetime()?;
+                if created < start || end.is_some_and(|end| created > end) {
+                    return Err(io::Error::other(
+                        "fixture descendant timing does not prove lineage",
+                    ));
+                }
+                drop(handles);
+                self.retain(child);
+                added = true;
+            }
+            if !added {
+                return Ok(());
+            }
+        }
     }
     /// Takes ownership of Shell's optional handle immediately; retains a separately
     /// opened, image-validated handle with the rights needed for cleanup.
@@ -248,6 +505,7 @@ impl OwnedProcesses {
             handle,
             pid: unsafe { GetProcessId(handle) },
             image: String::new(),
+            query_only: true,
         });
         if shell.as_ref().is_some_and(|process| process.pid == 0) {
             return Err(io::Error::last_os_error());
@@ -303,12 +561,14 @@ impl OwnedProcesses {
         loop {
             // Even a discovery error must not skip handles already positively owned.
             let capture_error = self.capture().err();
-            let mut handles: Vec<_> = std::mem::take(&mut *self.handles.borrow_mut())
-                .into_values()
-                .collect();
+            // Retain parent handles/identities until after the final descendant scan.
+            let handles = self.handles.borrow();
+            let mut ordered: Vec<_> = handles.values().collect();
             // Stop/reap every possible producer before the final stand-in enumeration.
-            handles.sort_by_key(|p| {
-                if p.image.ends_with(r"\harness-shell-bootstrap.exe") {
+            ordered.sort_by_key(|p| {
+                if p.query_only {
+                    3
+                } else if p.image.ends_with(r"\harness-shell-bootstrap.exe") {
                     0
                 } else if p.image.ends_with(r"\harness.exe") {
                     1
@@ -317,16 +577,28 @@ impl OwnedProcesses {
                 }
             });
             let mut failed = None;
-            for process in handles {
+            for process in ordered {
                 if let Err(error) = process.stop(deadline) {
                     failed = Some(error);
                 }
             }
+            drop(handles);
             if let Some(error) = failed.or(capture_error) {
                 return Err(error);
             }
+            if self.uncertain_child.get() {
+                return Err(io::Error::other(
+                    "returned child identity is uncertain; retain the fixture directory",
+                ));
+            }
             self.capture()?;
-            if self.handles.borrow().is_empty() && self.pending.borrow().is_empty() {
+            if self
+                .handles
+                .borrow()
+                .values()
+                .try_fold(true, |all, p| p.exited().map(|done| all && done))?
+                && self.pending.borrow().is_empty()
+            {
                 return Ok(());
             }
             if Instant::now() >= deadline {

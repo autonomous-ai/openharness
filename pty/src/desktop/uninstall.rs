@@ -456,8 +456,16 @@ fn removal_script(
     let mut lines = vec![
         "@echo off".into(),
         "setlocal DisableDelayedExpansion".into(),
-        format!("{chcp} 65001 >nul"),
+        // Expand the existing Unicode environment before decoding any UTF-8 path.
+        // Keep the fallback order identical to system_root(), then bind it to the
+        // tool selected during preparation after switching the private console.
+        "set \"harness_system_root=%SystemRoot%\"".into(),
+        "if not defined harness_system_root set \"harness_system_root=%windir%\"".into(),
+        "if not defined harness_system_root set \"harness_system_root=C:\\Windows\"".into(),
+        "set \"harness_chcp=%harness_system_root%\\System32\\chcp.com\"".into(),
+        "\"%harness_chcp%\" 65001 >nul".into(),
         "if errorlevel 1 goto encoding".into(),
+        format!("if /i not \"%harness_chcp%\"=={chcp} goto encoding"),
         "set problem=".into(),
         "set tries=0".into(),
         ":wait".into(),
@@ -993,6 +1001,7 @@ mod tests {
     mod native {
         use super::super::owned_windows::OwnedProcesses;
         use super::*;
+        use std::os::windows::process::CommandExt;
         use std::process::{Command, Stdio};
         use std::time::Instant;
 
@@ -1016,7 +1025,6 @@ mod tests {
         }
         impl Native {
             fn new() -> Self {
-                use sha2::{Digest, Sha256};
                 let dir = tempfile::Builder::new()
                     .prefix("Nguyễn A' & %OS% !x! (2)^")
                     .tempdir()
@@ -1025,59 +1033,48 @@ mod tests {
                     owned: OwnedProcesses::new(dir.path()),
                     install: dir.path().join("apps").join("Harness"),
                     temp: dir.path().join("Temp"),
-                    tools: dir.path().join("OwnedWindows"),
+                    tools: system_root(),
                     dir,
                 };
-                for p in [
-                    &fixture.install,
-                    &fixture.temp,
-                    &fixture.tools.join("System32"),
-                ] {
+                for p in [&fixture.install, &fixture.temp] {
                     fs::create_dir_all(p).unwrap();
                 }
                 fs::write(fixture.install.join("desktop"), b"owned").unwrap();
                 fs::write(fixture.dir.path().join("keep"), b"outside").unwrap();
-                let source = system_root();
-                let mut identities = Vec::new();
-                for name in [
+                fixture
+            }
+            fn tool_paths(&self) -> Vec<PathBuf> {
+                [
                     "cmd.exe",
                     "chcp.com",
                     "tasklist.exe",
                     "find.exe",
                     "PING.EXE",
-                ] {
-                    let original = source.join("System32").join(name);
-                    let copy = fixture.tools.join("System32").join(name);
-                    fs::copy(&original, &copy).unwrap();
-                    let hash = format!("{:x}", Sha256::digest(fs::read(&original).unwrap()));
-                    assert_eq!(
-                        format!("{:x}", Sha256::digest(fs::read(&copy).unwrap())),
-                        hash
-                    );
-                    fixture.owned.allow(&copy).unwrap();
-                    identities.push(
-                        serde_json::json!({"source": original, "copy": copy, "sha256": hash}),
-                    );
-                }
-                fs::write(
-                    fixture.dir.path().join("tool-identities.json"),
-                    serde_json::to_vec(&identities).unwrap(),
-                )
-                .unwrap();
-                fixture
+                ]
+                .map(|name| self.tools.join("System32").join(name))
+                .into()
             }
             fn command(&self) -> Command {
                 let mut command = Command::new(self.tools.join("System32").join("cmd.exe"));
                 command
                     .args(["/d", "/v:off", "/c"])
+                    .creation_flags(0x0800_0000 | 0x0000_0200)
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null());
                 command
             }
             fn wait(&self, child: &mut std::process::Child) {
+                self.owned
+                    .observe_child(
+                        child,
+                        &self.tools.join("System32").join("cmd.exe"),
+                        &self.tool_paths(),
+                    )
+                    .unwrap();
                 let deadline = Instant::now() + Duration::from_secs(30);
                 while child.try_wait().unwrap().is_none() {
+                    self.owned.live_count().unwrap();
                     assert!(Instant::now() < deadline, "owned command timed out");
                     std::thread::sleep(Duration::from_millis(20));
                 }
@@ -1099,6 +1096,9 @@ mod tests {
                 .unwrap()
             }
             fn execute(&self, text: &str) -> String {
+                self.execute_with_codepage(text, false)
+            }
+            fn execute_with_codepage(&self, text: &str, start_437: bool) -> String {
                 let script = self.temp.join("harness-desktop-uninstall-1-1.cmd");
                 let log = script.with_extension("log");
                 let scratch = script.with_extension("tasks");
@@ -1110,11 +1110,26 @@ mod tests {
                     let mut file = File::create_new(path).unwrap();
                     file.write_all(bytes).unwrap();
                 }
+                let entry = if start_437 {
+                    fs::write(
+                        self.temp.join("start-437.cmd"),
+                        concat!(
+                            "@echo off\r\n",
+                            "\"%SystemRoot%\\System32\\chcp.com\" 437 >nul\r\n",
+                            "if errorlevel 1 exit /b 1\r\n",
+                            "\"%SystemRoot%\\System32\\chcp.com\" >initial-codepage.txt\r\n",
+                            "call .\\harness-desktop-uninstall-1-1.cmd\r\n",
+                        ),
+                    )
+                    .unwrap();
+                    r".\start-437.cmd"
+                } else {
+                    r".\harness-desktop-uninstall-1-1.cmd"
+                };
                 let mut child = self
                     .command()
-                    .arg(r".\harness-desktop-uninstall-1-1.cmd")
+                    .arg(entry)
                     .current_dir(&self.temp)
-                    .env("SystemRoot", &self.tools)
                     .spawn()
                     .unwrap();
                 self.wait(&mut child);
@@ -1128,6 +1143,25 @@ mod tests {
             }
         }
 
+        #[test]
+        fn unicode_script_bootstraps_from_437_without_changing_the_parent_console() {
+            use windows_sys::Win32::System::Console::{GetConsoleCP, GetConsoleOutputCP};
+            let parent = unsafe { (GetConsoleCP(), GetConsoleOutputCP()) };
+            let fixture = Native::new();
+            let text = fixture.text(fixture.exited_pid());
+            assert!(fixture.execute_with_codepage(&text, true).is_empty());
+            let initial = fs::read(fixture.temp.join("initial-codepage.txt")).unwrap();
+            assert!(
+                String::from_utf8_lossy(&initial).contains("437"),
+                "{initial:?}"
+            );
+            assert!(!fixture.install.exists());
+            assert_eq!(unsafe { (GetConsoleCP(), GetConsoleOutputCP()) }, parent);
+            assert_eq!(
+                fs::read(fixture.dir.path().join("keep")).unwrap(),
+                b"outside"
+            );
+        }
         #[test]
         fn actual_script_removes_only_install_with_unicode_and_metacharacters() {
             let fixture = Native::new();
@@ -1150,8 +1184,14 @@ mod tests {
         fn unknown_enumeration_or_match_status_never_authorizes_removal() {
             for absent in ["tasklist.exe", "find.exe"] {
                 let fixture = Native::new();
-                fs::remove_file(fixture.tools.join("System32").join(absent)).unwrap();
-                let log = fixture.execute(&fixture.text(std::process::id()));
+                let selected =
+                    quoted(&script_safe(&fixture.tools.join("System32").join(absent)).unwrap());
+                let missing = quoted(&script_safe(&fixture.dir.path().join(absent)).unwrap());
+                let text = fixture
+                    .text(std::process::id())
+                    .replacen(&selected, &missing, 1);
+                assert!(!text.contains(&selected));
+                let log = fixture.execute(&text);
                 assert!(log.contains("could not confirm"), "{absent}: {log}");
                 assert_eq!(fs::read(fixture.install.join("desktop")).unwrap(), b"owned");
             }
@@ -1290,7 +1330,7 @@ mod tests {
     /// An installed Harness under a profile named as Review Focus 1 asks, with the CLI's `.harness` beside the app's.
     fn world() -> World {
         let dir = tempfile::tempdir().unwrap();
-        let profile = fs::canonicalize(dir.path())
+        let profile = batch_path(&fs::canonicalize(dir.path()).unwrap())
             .unwrap()
             .join("Nguyễn Văn A' & 100% !x");
         let install = profile.join("Programs").join("Harness");
@@ -1339,7 +1379,10 @@ mod tests {
             run(&paths, &place, &mut system).unwrap(),
             Vec::<String>::new()
         );
-        assert_eq!(system.quit, vec![fs::canonicalize(&paths.install).unwrap()]);
+        assert_eq!(
+            system.quit,
+            vec![batch_path(&fs::canonicalize(&paths.install).unwrap()).unwrap()]
+        );
         assert!(!paths.shortcut().exists());
         assert_eq!(
             system.deleted,
@@ -1361,6 +1404,26 @@ mod tests {
             "rmdir /s /q \"{}\"",
             paths.install.display().to_string().replace('%', "%%")
         )));
+    }
+
+    #[test]
+    fn codepage_bootstrap_is_ascii_until_the_switch_and_checks_the_selected_tool() {
+        let text = final_removal_script(
+            42,
+            Path::new(r"C:\Users\Nguyễn\Harness"),
+            Path::new(r"C:\Temp\remove.log"),
+            Path::new(r"C:\Nguyễn Windows"),
+        )
+        .unwrap();
+        let (prelude, rest) = text.split_once("65001 >nul").unwrap();
+        assert!(prelude.is_ascii(), "{prelude}");
+        assert!(prelude.contains("%SystemRoot%") && prelude.contains("%windir%"));
+        let selected = Path::new(r"C:\Nguyễn Windows")
+            .join("System32")
+            .join("chcp.com");
+        let check = rest.find(&script_safe(&selected).unwrap()).unwrap();
+        assert!(check < rest.find("tasklist.exe").unwrap());
+        assert!(rest[..check].contains("if /i not"));
     }
 
     #[test]
@@ -1459,13 +1522,11 @@ mod tests {
                 .display()
                 .to_string()
         };
-        assert!(
-            text.starts_with(&format!(
-                "@echo off\r\nsetlocal DisableDelayedExpansion\r\n\"{}\" 65001 >nul\r\n",
-                tool("chcp.com")
-            )),
-            "{text}"
-        );
+        assert!(text.starts_with("@echo off\r\nsetlocal DisableDelayedExpansion\r\n"));
+        assert!(text.contains(&format!(
+            "if /i not \"%harness_chcp%\"==\"{}\" goto encoding",
+            tool("chcp.com")
+        )));
         assert!(text.contains(&format!(
             r#""{}" /FI "PID eq 4242" /NH >"C:\T\h.tasks" 2>nul"#,
             tool("tasklist.exe")
