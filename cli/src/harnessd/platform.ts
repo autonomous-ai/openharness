@@ -599,12 +599,15 @@ export class PlatformService {
    */
   registeredFor(logFile: string): boolean {
     if (this.platform !== 'taskscheduler') return false
-    const result = this.deps.run('schtasks', ['/Query', '/TN', this.target, '/XML'])
-    if (result.error || result.status !== 0) return false
-    // Written into a pipe, schtasks's XML may come as UTF-16: the text reads the same without the NULs.
-    const text = result.stdout.replace(/\u0000/g, '')
     const plain = logFile.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    return [xml(logFile), plain].some((form) => text.includes(`Its log: ${form}</Description>`))
+    // Either task: a logon task left when the five-minute one is gone is this data folder's too (re-review N5).
+    return [this.target, this.logonTarget].some((name) => {
+      const result = this.deps.run('schtasks', ['/Query', '/TN', name, '/XML'])
+      if (result.error || result.status !== 0) return false
+      // Written into a pipe, schtasks's XML may come as UTF-16: the text reads the same without the NULs.
+      const text = result.stdout.replace(/\u0000/g, '')
+      return [xml(logFile), plain].some((form) => text.includes(`Its log: ${form}</Description>`))
+    })
   }
 
   /** The definition on disk is the one this install would write (on Windows, both tasks'). */
@@ -641,8 +644,13 @@ export class PlatformService {
       // Written into a pipe, schtasks's XML may come as UTF-16: the tags read the same without the NULs.
       const text = result.stdout.replace(/\u0000/g, '')
       const disabled = /<Settings>[\s\S]*?<Enabled>false<\/Enabled>[\s\S]*?<\/Settings>/.test(text)
+      // Registered means both tasks: with the logon task gone (deleted by hand), `harness service install` registers
+      // them again rather than finding nothing to change (re-review N5).
+      const logonArgs = ['/Query', '/TN', this.logonTarget]
+      const logon = this.deps.run('schtasks', logonArgs)
+      if (logon.error) return { ...none, unreachable: failure('schtasks', logonArgs, logon) }
       // No pid: the task starts the master and is done; the pid file names it.
-      return { ...base, registered: true, pid: null, state: disabled ? 'disabled' : 'enabled', failed: false, lastExit: null }
+      return { ...base, registered: logon.status === 0, pid: null, state: disabled ? 'disabled' : 'enabled', failed: false, lastExit: null }
     }
     if (this.platform === 'launchd') {
       const result = this.launchctl('print', this.target)
@@ -788,11 +796,13 @@ export class PlatformService {
     if (this.os) return { ok: false, detail: OS_OWNS_IT }
     if (this.platform === 'taskscheduler') {
       // The daemon keeps running: Task Scheduler only ever started it.
-      const state = this.inspect()
+      // Each task asked on its own: `inspect` counts the pair, and either may be there alone.
+      const mainArgs = ['/Query', '/TN', this.target, '/XML']
+      const main = this.deps.run('schtasks', mainArgs)
       // schtasks could not be asked (not there, or past COMMAND_TIMEOUT_MS): the task may still be registered, and
       // removing its file would leave a task that starts harnessd at every logon with nothing on disk to say so.
-      if (state.unreachable) return { ok: false, detail: state.unreachable }
-      if (state.registered) {
+      if (main.error) return { ok: false, detail: failure('schtasks', mainArgs, main) }
+      if (main.status === 0) {
         const deleted = this.checked('schtasks', ['/Delete', '/TN', this.target, '/F'])
         if (!deleted.ok) return deleted
       }

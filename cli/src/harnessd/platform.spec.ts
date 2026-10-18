@@ -698,6 +698,25 @@ describe('PlatformService over schtasks', () => {
     expect(make({ 'schtasks /Query': fail(1) }).service.preflight()).toEqual({ ok: true })
   })
 
+  // Re-review N5: registered means both tasks, so a logon task deleted by hand is registered again, and status says so.
+  it('counts the tasks as registered only when the logon task is there too', () => {
+    const main = ok('<Task><Settings><Enabled>true</Enabled></Settings></Task>')
+    const alone = make({ [`schtasks /Query /TN ${NAME} /XML`]: main, [`schtasks /Query /TN ${LOGON}`]: fail(1, 'ERROR: The system cannot find the file specified.') })
+    expect(alone.service.inspect()).toMatchObject({ registered: false, state: 'enabled', unreachable: null })
+    expect(alone.calls).toEqual([`schtasks /Query /TN ${NAME} /XML`, `schtasks /Query /TN ${LOGON}`])
+    const both = make({ [`schtasks /Query /TN ${NAME} /XML`]: main, [`schtasks /Query /TN ${LOGON}`]: ok() })
+    expect(both.service.inspect()).toMatchObject({ registered: true, state: 'enabled' })
+    const unknown = make({ [`schtasks /Query /TN ${NAME} /XML`]: main, [`schtasks /Query /TN ${LOGON}`]: { status: null, stdout: '', stderr: '', error: 'spawnSync schtasks ETIMEDOUT' } })
+    expect(unknown.service.inspect()).toMatchObject({ registered: false, unreachable: `schtasks /Query /TN ${LOGON} could not be run: spawnSync schtasks ETIMEDOUT` })
+  })
+
+  it('finds this data folder\'s logon task left alone, when the five-minute task and both files are gone', () => {
+    const description = `<Description>harnessd, the Harness daemon, at sign-in. Its log: ${task.logFile}</Description>`
+    const found = make({ [`schtasks /Query /TN ${NAME} /XML`]: fail(1), [`schtasks /Query /TN ${LOGON} /XML`]: ok(description) })
+    expect(found.service.registeredFor(task.logFile)).toBe(true)
+    expect(found.service.registeredFor('C:\\other\\harness.log')).toBe(false)
+  })
+
   it('unregisters by deleting the tasks and their files, and leaves the running daemon alone', () => {
     const { service, calls, files } = make({ 'schtasks /Query': ok('<Task/>') }, {
       [join(data, 'harnessd-task.xml')]: 'x', [join(data, 'harnessd-logon-task.xml')]: 'z', [join(data, 'harnessd-stopped.json')]: 'y',
