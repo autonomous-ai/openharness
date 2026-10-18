@@ -103,9 +103,10 @@ List<String> windowsInstallArguments(String url) => [
   windowsInstallCommand(url),
 ];
 
-/// What a person pastes into PowerShell to install by hand: B's own line.
+/// What a person pastes into PowerShell to install by hand. Quote the trusted
+/// address as in [windowsInstallCommand], so URL punctuation stays literal.
 String windowsManualInstallCommand(String url) =>
-    'iex "& { \$(irm $url) } -Desktop"';
+    'iex "& { \$(irm \'$url\') } -Desktop"';
 
 /// Windows PowerShell by its full path. A bare `powershell.exe` is looked for
 /// in the working folder before System32.

@@ -17,9 +17,9 @@ const _profileName = "Nguyễn Văn A'&%!";
 
 const _productionUrl = 'https://cdn.autonomous.ai/harness/cli/install.ps1';
 
-/// What a person pastes into PowerShell: B's own install line.
+/// What a person pastes into PowerShell, with the installer address quoted.
 const _manualCommand =
-    r'iex "& { $(irm https://cdn.autonomous.ai/harness/cli/install.ps1) } -Desktop"';
+    r'''iex "& { $(irm 'https://cdn.autonomous.ai/harness/cli/install.ps1') } -Desktop"''';
 
 /// install.ps1's failure, as it prints one.
 const _hostFailure = '''
@@ -345,6 +345,15 @@ void main() {
     );
   });
 
+  test('manual recovery quotes a trusted multi-query installer URL', () {
+    const url = 'https://example.com/install.ps1?a=1&b=2;tail=(ok)';
+    expect(isTrustedInstallScriptUrl(url), isTrue);
+    expect(
+      windowsManualInstallCommand(url),
+      r'''iex "& { $(irm 'https://example.com/install.ps1?a=1&b=2;tail=(ok)') } -Desktop"''',
+    );
+  });
+
   test('the installer address: production, staging, or a trusted override', () {
     expect(
       harnessInstallScriptUrl(override: '', staging: false),
@@ -439,9 +448,13 @@ void main() {
   });
 
   group('on a real Windows', () {
-    Future<HttpServer> serve(Map<String, String> scripts) async {
+    Future<HttpServer> serve(
+      Map<String, String> scripts, {
+      List<Uri>? requests,
+    }) async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       server.listen((request) async {
+        requests?.add(request.uri);
         final body = scripts[request.uri.path];
         request.response.statusCode = body == null ? 404 : 200;
         if (body != null) request.response.write(body);
@@ -479,6 +492,38 @@ void main() {
         ready.output,
         contains('Installing Harness into ${harnessHome.path}'),
       );
+    }, timeout: const Timeout(Duration(minutes: 2)));
+
+    test('manual recovery installs from a trusted multi-query URL', () async {
+      final requests = <Uri>[];
+      final server = await serve({
+        '/install.ps1': _fakeInstaller,
+      }, requests: requests);
+      final url =
+          'http://127.0.0.1:${server.port}/install.ps1?a=1&b=2;tail=(ok)';
+      expect(isTrustedInstallScriptUrl(url), isTrue);
+      final installed = await Process.run(
+        windowsPowerShellPath(Platform.environment),
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          '${windowsManualInstallCommand(url)}; exit \$LASTEXITCODE',
+        ],
+        environment: {
+          ...Platform.environment,
+          'USERPROFILE': profile.path,
+          'HARNESS_TEST_NODE': realWindowsNode(),
+        },
+      );
+      expect(installed.exitCode, 0, reason: '${installed.stderr}');
+      expect(requests, hasLength(1));
+      expect(requests.single.queryParameters, {'a': '1', 'b': '2;tail=(ok)'});
+      final ready = await real(url)
+          .ensureReady(onProgress: (_) {}, install: false);
+      expect(ready.isReady, isTrue, reason: '${ready.failure?.detail}');
     }, timeout: const Timeout(Duration(minutes: 2)));
 
     test("a failed install's sentence and exit code arrive intact", () async {
