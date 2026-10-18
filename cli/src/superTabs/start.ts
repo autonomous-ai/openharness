@@ -30,7 +30,7 @@ export async function inspectCapacity(target: Daemon, request: Json) {
     quotaRequired: wanted.quotaRequired === true,
   }
   const [capability, engines, usage] = await Promise.allSettled([
-    target.request('super_tabs', { action: 'capacity', cwd: request.cwd, tools: requirements.tools, devices: requirements.devices }, 20_000),
+    target.request('super_tabs', { action: 'capacity', cwd: request.cwd, worktree: request.worktree === true, tools: requirements.tools, devices: requirements.devices }, 20_000),
     target.request('engines_probe', { engines: [request.engine] }, 20_000),
     target.request('usage_read', {}, 20_000),
   ])
@@ -68,6 +68,14 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
         detail: 'This start was submitted but its machine has no receipt. Inspect the machine before creating another agent.' }
       const resources = await inspectCapacity(target, request)
       if (!resources.allowed) return { error: 'CAPACITY_UNAVAILABLE', startId, ...resources }
+      const reservation = await target.request('super_tabs', { action: 'reserveCapacity', creationId,
+        cwd: request.cwd, worktree: request.worktree === true, requirements: request.requirements }, 20_000).catch(() => null)
+      if (!reservation || (reservation.ok === true && reservation.reservationId !== creationId)) {
+        return { error: 'START_UNCERTAIN', startId, creationId,
+          detail: 'The machine did not confirm its capacity reservation. Keep this start ID and resume it; nothing was dispatched.' }
+      }
+      if (reservation.error || reservation.ok !== true) return { error: reservation.error ?? 'CAPACITY_UNAVAILABLE', startId,
+        detail: reservation.detail ?? 'Update Harness on the execution machine to reserve capacity before starting this agent.' }
       // A new invocation uses a new claim. A lost claim reply never authorizes
       // native dispatch, even if retrying the backend operation returns a receipt.
       requireSuccess(await scoped({ action: 'command', operationId: `dispatch-${randomUUID()}`,
@@ -94,6 +102,7 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
     if (native.creationId !== creationId) return { error: 'START_UNCERTAIN', startId, creationId,
       detail: 'The machine answered for a different creation receipt. Nothing further was dispatched.' }
     if (native.state === 'failed' || native.state === 'cancelled') {
+      await target.request('super_tabs', { action: 'observeCapacity', creationId }, 10_000).catch(() => {})
       const failure = object(native.failure)
       // The shared command stays byte-identical if its reply is lost and the
       // next invocation sees only the durable cancellation tombstone.
@@ -102,18 +111,31 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       return { error: 'START_FAILED', startId, detail: refusal ?? detail }
     }
     const frame = object(native.agent)
-    if (native.state !== 'created' || !identifier(frame.id)) {
+    const nativeId = native.state === 'unavailable' ? native.createdAgentId : frame.id
+    if (!['created', 'unavailable'].includes(String(native.state)) || !identifier(nativeId)) {
       return { error: 'START_PENDING', startId, creationId, state: native.state ?? 'unknown',
         detail: 'Keep this start ID. Run resume with it to check the same native creation; do not make another start request.' }
     }
+    const reservation = await target.request('super_tabs', { action: 'observeCapacity', creationId }, 10_000).catch(() => null)
+    if (reservation?.ok !== true || reservation.reservationId !== creationId || reservation.harnessId !== nativeId) {
+      return { error: 'START_UNCERTAIN', startId, creationId,
+        detail: 'The agent was created, but its capacity receipt is not confirmed. Keep this start ID and resume it before starting another agent.' }
+    }
+    if (reservation.released === true) {
+      const detail = 'The agent was created and has since stopped. Create a new start request to continue.'
+      requireSuccess(await scoped({ action: 'command', operationId: `failed-${startId}`, command: { type: 'agent.startFailed', startId, error: detail } }))
+      return { error: 'START_FAILED', startId, detail }
+    }
+    if (native.state !== 'created') return { error: 'START_UNCERTAIN', startId, creationId,
+      detail: 'The created agent is unavailable, but its stop is not confirmed. Inspect the execution machine before starting another agent.' }
     const profile = parseRuntimeProfile(frame.selectedModel)
-    const matched = profile?.sessionId === frame.id && profile.engine === frame.engine ? profile : null
+    const matched = profile && profile.sessionId === nativeId && profile.engine === frame.engine ? profile : null
     const configuration = { engine: text(frame.engine) ?? String(request.engine), model: matched?.model ?? null, effort: matched?.effort ?? null,
       contextWindow: number(frame.contextWindow), engineVersion: text(frame.engineVersion) }
     const joined = requireSuccess(await scoped({ action: 'command', operationId: `joined-${startId}`,
-      command: { type: 'agent.started', startId, harnessId: frame.id, configuration } }))
+      command: { type: 'agent.started', startId, harnessId: nativeId, configuration } }))
     await target.request('super_tabs', { action: 'wake' }).catch(() => {})
     await target.request('harness_share_rosters', {}).catch(() => {})
-    return { ok: true, startId, machineId: request.machineId, harnessId: frame.id, ...object(joined.result) }
+    return { ok: true, startId, machineId: request.machineId, harnessId: nativeId, ...object(joined.result) }
   } finally { target.close() }
 }

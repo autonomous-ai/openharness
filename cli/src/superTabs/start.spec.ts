@@ -16,11 +16,15 @@ function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?:
     if (cmd.type === 'agent.started' && lostJoin) { lostJoin = false; throw new Error('Join interrupted') }
     return { ok: true, value: { result: cmd.type === 'agent.start' ? { startId: 'start' } : { agentId: 'worker' } } }
   })
-  const request = vi.fn(async (type: string): Promise<Record<string, unknown>> => {
+  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
     if (type === 'agent_create_status') return { creationId: start.creationId, state: nativeState, ...(nativeState === 'created' ? { agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high' } } : {}) }
     if (type === 'engines_probe') return { engines: [{ engine: 'claude', installed: true }] }
     if (type === 'usage_read') return { providers: [] }
-    if (type === 'super_tabs') return { ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 100, projectDiskFreeBytes: 1000 }, tools: { git: true }, devices: {} }
+    if (type === 'super_tabs') {
+      if (payload.action === 'reserveCapacity') return { ok: true, reservationId: start.creationId }
+      if (payload.action === 'observeCapacity') return { ok: true, reservationId: start.creationId, harnessId: 'native', released: nativeState === 'cancelled' }
+      return { ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 100, projectDiskFreeBytes: 1000 }, tools: { git: true }, devices: {} }
+    }
     if (type === 'agent_create') {
       if (options.refuse) return { error: options.refuse, detail: 'This agent does not support that permission mode.' }
       nativeState = 'created'; return { creationId: start.creationId, state: 'created', agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high' } }
@@ -110,18 +114,68 @@ it.each([
   { error: 'UNSUPPORTED' },
 ])('requires the exact cancellation receipt: %j', async (answer) => {
   const f = fixture({ refuse: 'INVALID_PERMISSION_MODE' }), request = f.request.getMockImplementation()!
-  f.request.mockImplementation(async type => type === 'agent_create_cancel' ? answer : request(type))
+  f.request.mockImplementation(async (type, payload) => type === 'agent_create_cancel' ? answer : request(type, payload))
   expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_UNCERTAIN' })
   expect(f.start.error).toBeNull()
 })
 
 it.each(['pending', 'unconfirmed', 'created'])('preserves native %s evidence when cancellation does not win', async (state) => {
   const f = fixture({ refuse: 'INVALID_PERMISSION_MODE' }), request = f.request.getMockImplementation()!
-  f.request.mockImplementation(async type => type === 'agent_create_cancel'
+  f.request.mockImplementation(async (type, payload) => type === 'agent_create_cancel'
     ? { creationId: f.start.creationId, state, agent: { id: 'native', engine: 'claude' } }
-    : request(type))
+    : request(type, payload))
   const result = await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)
   expect(result).toMatchObject(state === 'created' ? { ok: true, harnessId: 'native' } : { error: 'START_PENDING', state })
   expect(f.start.error).toBeNull()
   expect(f.request.mock.calls.filter(c => c[0] === 'agent_create')).toHaveLength(1)
+})
+
+it.each([
+  { error: 'CAPACITY_UNAVAILABLE', detail: 'Memory was reserved by another start.' },
+  { error: 'UNSUPPORTED' },
+  { ok: true, reservationId: 'different-creation' },
+  null,
+])('requires an exact durable capacity reservation before claiming/dispatching a start: %j', async answer => {
+  const f = fixture(), request = f.request.getMockImplementation()!
+  f.request.mockImplementation(async (type, payload) => {
+    if (type === 'super_tabs' && payload?.action === 'reserveCapacity') {
+      if (answer === null) throw new Error('Lost reservation reply')
+      return answer
+    }
+    return request(type, payload)
+  })
+  expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toHaveProperty('error')
+  expect(f.start.dispatched).toBe(false)
+  expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
+  expect(f.close).toHaveBeenCalledOnce()
+})
+
+it('retains a created agent when recording its reservation is interrupted, then joins it once', async () => {
+  const f = fixture(), request = f.request.getMockImplementation()!
+  let interrupted = true
+  f.request.mockImplementation(async (type, payload) => {
+    if (interrupted && type === 'super_tabs' && payload?.action === 'observeCapacity') {
+      interrupted = false; throw new Error('Lost receipt reply')
+    }
+    return request(type, payload)
+  })
+  const input = { action: 'resume', tabId: 'tab', startId: 'start' }
+  expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ error: 'START_UNCERTAIN' })
+  expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ ok: true, harnessId: 'native' })
+  expect(f.request.mock.calls.filter(c => c[0] === 'agent_create')).toHaveLength(1)
+  expect(f.scoped.mock.calls.filter(c => (c[0].command as any)?.type === 'agent.started')).toHaveLength(1)
+})
+
+it.each([true, false])('reconciles a previously created but unavailable harness only with stop proof (%s)', async released => {
+  const f = fixture(), request = f.request.getMockImplementation()!
+  f.start.dispatched = true
+  f.request.mockImplementation(async (type, payload) => {
+    if (type === 'agent_create_status') return { creationId: f.start.creationId, state: 'unavailable', createdAgentId: 'native' }
+    if (type === 'super_tabs' && payload?.action === 'observeCapacity') return { ok: true, reservationId: f.start.creationId, harnessId: 'native', released }
+    return request(type, payload)
+  })
+  expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))
+    .toMatchObject({ error: released ? 'START_FAILED' : 'START_UNCERTAIN' })
+  expect(f.start.error === null).toBe(!released)
+  expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
 })

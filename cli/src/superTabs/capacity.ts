@@ -1,9 +1,10 @@
-import { access, statfs } from 'node:fs/promises'
+import { access } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { readMachineResources } from '../lib/machineResources.js'
 import { commandAvailableInInteractiveShell } from '../lib/engineLaunch.js'
 import { object } from './wire.js'
+import { readCapacityDisk } from './disk.js'
 
 type Json = Record<string, unknown>
 export interface Requirements {
@@ -12,12 +13,13 @@ export interface Requirements {
 }
 export async function readCapabilities(input: Json, deps = {
   resources: readMachineResources,
-  disk: async (cwd: string) => { const s = await statfs(cwd); return s.bavail * s.bsize },
+  disk: readCapacityDisk,
   tool: commandAvailableInInteractiveShell,
   device: async (path: string) => { await access(path, constants.R_OK | constants.W_OK); return true },
 }) {
   const cwd = input.cwd, tools = input.tools ?? [], devices = input.devices ?? []
   if (typeof cwd !== 'string' || !isAbsolute(cwd) || cwd.length > 4096 || /[\x00-\x1f\x7f]/.test(cwd)
+    || (input.worktree !== undefined && typeof input.worktree !== 'boolean')
     || !Array.isArray(tools) || tools.length > 20 || !tools.every(t => typeof t === 'string' && /^[A-Za-z0-9_.+-]{1,80}$/.test(t))
     || !Array.isArray(devices) || devices.length > 20 || !devices.every(d => typeof d === 'string' && isAbsolute(d) && d.length <= 4096 && !/[\x00-\x1f\x7f]/.test(d))) {
     return { error: 'INVALID_REQUEST', detail: 'Name an absolute project path and up to 20 tools and devices.' }
@@ -32,11 +34,12 @@ export async function readCapabilities(input: Json, deps = {
   // Requested only before admission. No new polling, command execution or shell
   // interpolation; the tool probe is the same bounded one native launches use.
   const [resources, disk, toolValues, deviceValues] = await Promise.all([
-    deps.resources().catch(() => null), deps.disk(cwd).catch(() => null),
+    deps.resources().catch(() => null), deps.disk(cwd, input.worktree === true).catch(() => null),
     probeTools(),
     Promise.all(devices.map(async d => [d, await deps.device(d).catch(() => false)] as const)),
   ])
-  return { ok: true, sampledAt: Date.now(), resources: { ...resources, projectDiskFreeBytes: disk },
+  return { ok: true, sampledAt: Date.now(), resources: { ...resources, projectDiskFreeBytes: disk?.freeBytes ?? null,
+    projectDiskVolume: disk?.volume ?? null, projectDiskPath: disk?.path ?? null },
     tools: Object.fromEntries(toolValues), devices: Object.fromEntries(deviceValues) }
 }
 

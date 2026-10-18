@@ -126,6 +126,8 @@ The contribution flow reuses **Machines → select a machine → Share**. A pers
 
 **ST-015 — Dispatch within capacity.** Match assignments to permissions, repository/tool availability, CPU, memory, disk, VM/device requirements and known account limits. Shared host and account limits apply across simultaneous work in all tabs. Missing or stale quota data is shown as unknown. Record the actual engine, model, effort, context and machine per attempt for later performance evaluation. Detailed resource information belongs in the existing resource/agent detail surfaces, not in every conversation row.
 
+Autonomous starts reserve their declared memory and disk budgets on the execution host before native dispatch. All Super Tabs on that host share the reservation ledger. Interrupted or pending starts keep the same reservation until a native cancellation, failure or confirmed stop establishes that its capacity can be released. Disk admission checks the destination filesystem; a managed worktree may use a different volume from its source repository. These are conservative admission budgets, with live CPU/memory-pressure checks, rather than OS-enforced quotas or predictions of future token use.
+
 ## Results and completion
 
 **ST-012 — Review the actual result.** The responsible agent posts the actual deliverable, how to inspect or test it, the build/revision and the evidence already collected in the conversation. Link labels describe their destinations. There is no universal Try build button and no promise that every project can run inside Harness.

@@ -179,6 +179,23 @@ it('starts either engine once, posts to its captured group and delivers shared i
   expect(closed, JSON.stringify(closed)).toMatchObject({ closed: true })
   await until('execution host to confirm the stop', () => stopReceipts.length === 1 || null, 15_000, 250)
   expect(stopReceipts[0]).toMatchObject({ assignmentId: 'worker-attempt', receipt: expect.stringContaining('native-stopped:') })
+  expect(await client.request('super_tabs', { action: 'observeCapacity', creationId: starts.get('start-claude')!.creationId }))
+    .toMatchObject({ ok: true, harnessId: worker.id, released: true })
+  // Two callers see the same free memory. Only one may reserve most of it,
+  // even though neither has started its native process yet.
+  const capacity = await client.request('super_tabs', { action: 'capacity', cwd })
+  const freeMemory = capacity.resources.memoryTotalBytes - capacity.resources.memoryUsedBytes
+  expect(Number.isFinite(freeMemory) && freeMemory > 0).toBe(true)
+  const memoryBytes = Math.floor(freeMemory * 0.7)
+  const reservations = await Promise.all([1, 2].map(n => client.request('super_tabs', {
+    action: 'reserveCapacity', creationId: `fixture-capacity-${n}`, cwd,
+    requirements: { memoryBytes, diskBytes: 0, maxCpuPercent: 100 },
+  })))
+  expect(reservations.filter(r => r.ok)).toHaveLength(1)
+  expect(reservations.filter(r => r.error)).toEqual([expect.objectContaining({ error: 'CAPACITY_UNAVAILABLE' })])
+  const reserved = reservations.find(r => r.ok)!.reservationId
+  expect(await client.request('agent_create_cancel', { creationId: reserved })).toMatchObject({ state: 'cancelled' })
+  expect(await client.request('super_tabs', { action: 'observeCapacity', creationId: reserved })).toMatchObject({ released: true })
   allowed = false
   const denied = await run(['post', 'feature', 'not allowed', 'after-removal'])
   expect(denied.code).toBe(1)

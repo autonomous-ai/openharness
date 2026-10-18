@@ -3,9 +3,9 @@ import { admission, quotaOf, readCapabilities } from './capacity.js'
 const requirements = { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: ['/dev/test'], quotaRequired: false }
 it('uses the destination filesystem and reports missing tools/devices without executing commands', async () => {
   const deps = { resources: vi.fn(async () => ({ cpuPercent: 25, memoryTotalBytes: 1000, memoryUsedBytes: 300 })),
-    disk: vi.fn(async () => 500), tool: vi.fn(async () => true), device: vi.fn(async () => true) }
+    disk: vi.fn(async () => ({ freeBytes: 500, volume: 'volume', path: '/fixture/repo' })), tool: vi.fn(async () => true), device: vi.fn(async () => true) }
   const capacity = await readCapabilities({ cwd: '/fixture/repo', tools: ['git'], devices: ['/dev/test'] }, deps)
-  expect(deps.disk).toHaveBeenCalledWith('/fixture/repo')
+  expect(deps.disk).toHaveBeenCalledWith('/fixture/repo', false)
   expect(admission(capacity, { installed: true }, quotaOf({}, 'codex', false), requirements)).toMatchObject({ allowed: true, unknown: ['Subscription allowance is unknown for this account.'] })
   deps.disk.mockRejectedValueOnce(new Error('not mounted'))
   const missing = await readCapabilities({ cwd: '/fixture/repo', tools: [], devices: [] }, deps)

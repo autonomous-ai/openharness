@@ -33,12 +33,13 @@ This is a new tab type. Existing tabs and running sessions are not converted.
 - Definitive native-start refusals are reconciled through durable cancellation receipts. Lost cancellation or backend replies resume the same identity, and unknown/storage/conflict failures never become permission to launch again.
 - Add agent uses the existing desktop picker with a focused conversation title, sharing scope and one action. A teammate's contributed agent can join another conversation without machine access or another native pane. The participants dialog hands focus over after closing; creating a new harness retains the captured conversation. Membership and archive changes update or dismiss an open picker.
 - Runtime model/effort observations follow the native profile into the shared roster. Per-agent versions fence delayed updates and re-contributions. A separate configuration history records the initial configuration and observed changes against active assignment IDs; an assignment's starting configuration stays intact. Unknown context size is not inferred from a model name.
+- Autonomous starts reserve declared memory and destination disk budgets in one durable ledger on the execution host, shared across Super Tabs and concurrent service instances. A retry retains its reservation. Pending or unknown launches keep capacity; only a native failed/cancelled receipt or a confirmed stop releases it. Worktrees sample the managed workspace's filesystem, and a retry refuses a changed destination volume. Current CPU/memory pressure and known quota checks remain in admission.
 - Experimental settings cleanup and retired PR branding, preserving compatibility fields and usage controls.
 
 The desktop surface is connected, but the complete workflow is not ready. Scoped autonomous
 agent starts and capacity checks are connected through the existing native creation protocol.
 Terminal access, native stop reconciliation and explicit uncertain-delivery recovery are connected.
-Shared recording of native interventions and simultaneous-start capacity reservation remain. The PR stays a draft until these are implemented and
+Shared recording of native interventions remains. The PR stays a draft until that is implemented and
 the complete workflow is tested and reviewed.
 
 ## Validation plan
@@ -144,7 +145,26 @@ Focused checks completed during implementation (18 October):
   exact creation ID, state and created harness ID through the existing receipt provider and service boundary;
   unavailable, malformed or older-core replies stay unknown. CLI typecheck passed. The 94 affected API, query,
   process, parser and architecture tests passed with 100% statements, branches, functions and lines for all four
-  included boundary/parser files. The new reservation caller and its real-daemon integration remain to implement.
+  included boundary/parser files. The reservation caller and its real-daemon integration are now implemented below.
+- Closed native creation identities remain observable even after their terminal is unavailable. This lets the
+  service reconcile a harness that started and stopped before it could record the launch. The generic change is
+  isolated in `032d68194f`. Its 96 launch/query/architecture checks passed with 100% statements, branches, functions
+  and lines for both changed core files. The affected backend-socket cases passed (10 selected; 216 unselected).
+- Host capacity reservations: CLI typecheck and 54 focused capacity, storage, start and service checks passed.
+  Tests cover two actual concurrent Node processes sharing the ledger, duplicate/lost replies, service restarts,
+  missing/pending/unknown native outcomes, cancellation, stopped harnesses, changed host identity, request cancellation,
+  private file permissions, lost/corrupt/replaced storage and destination-volume changes. One reservation cannot
+  be reused with different requirements. Node runtimes without builtin SQLite refuse this new feature with an
+  update instruction; they do not crash the daemon or silently skip reservation.
+  The real-daemon fixture passed in 18.50 seconds with both fake engines, concurrent host admission and release
+  after native cancellation and stop. The later destination-volume retry guard and narrowed created-ID handling
+  passed the focused regression batch and typecheck; they do not change the fixture's first-admission path.
+- Capacity admission microbenchmark: Node 22.23.1, 10 retained pending reservations, 100 admissions after 20 warm-ups.
+  Fixed in-process native/resource readers with real local SQLite writes: existing preflight averaged 0.00223 ms
+  and 2.57 µs CPU; preflight plus reservation averaged 0.671 ms and 600.6 µs CPU per admission. Observed RSS grew
+  0.5 MiB and 5.8 MiB respectively without forced collection. This measures local admission work, not retained
+  memory, cross-process/network latency, native launch, or full-daemon performance. Reservation runs on demand;
+  it adds no polling timer. Declared budgets are conservative admission allowances, not OS-enforced quotas.
 
 These establish individual boundaries, not the complete customer workflow. Full component suites,
 two-machine/two-account integration, real-engine/native desktop validation, full-app visual inspection,
@@ -161,12 +181,6 @@ Local commits and validation are preserved. The original research worktree's mer
 
 - Reflect native terminal interventions and answers in the appropriate shared conversation with reliable attribution.
   The current agent instructions explicitly require posting questions/results through the shared conversation CLI.
-- Reserve shared machine capacity across simultaneous starts.
-  Use one durable reservation book on each execution host, serialized across all callers and Super Tabs. Keep
-  pending/unknown launches reserved; release only after the native creation receipt says cancelled/failed or the
-  recorded harness has a confirmed stop. Account for requested memory and the destination filesystem's disk
-  budget. Worktrees use the managed workspace filesystem, which can differ from their source repository. Keep
-  reservation state in the Super Tab service; the core supplies only its existing native lifecycle facts.
 - Run the complete component suites, required coverage gates and isolated multi-account/machine journey, then review the final head.
 - Once the Mac is unlocked, finish native terminal, physical shortcut/IME and full-app visual acceptance on an official review build.
   Publish only after the remaining implementation and validation pass, following the normal release schedule.

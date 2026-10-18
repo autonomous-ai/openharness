@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
 import { backend, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError } from './host.js'
+import { CapacityReservations, type ReservationBook } from './reservations.js'
 
 const HELP = {
   status: 'Read the shared tab roster and work.',
@@ -25,16 +26,27 @@ const HELP = {
   ],
 }
 
-export interface SuperTabServiceOptions { capacity?: typeof readCapabilities; host?: (core: CoreApi, machineId: string) => SuperTabHost }
+export interface SuperTabServiceOptions {
+  capacity?: typeof readCapabilities
+  host?: (core: CoreApi, machineId: string) => SuperTabHost
+  reservations?: (core: CoreApi, machineId: string) => ReservationBook
+}
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
   let host: SuperTabHost | null = null
+  let book: ReservationBook | null = null, bookMachine: string | null = null
+  const reservations = () => {
+    const machine = core.daemon.machineId()
+    if (bookMachine !== machine) { book?.stop(); book = null; bookMachine = machine }
+    book ??= (options.reservations ?? ((api, id) => new CapacityReservations(api, id)))(core, machine)
+    return book
+  }
   const wake = () => {
     const machine = core.daemon.machineId()
     if (host?.machineId !== machine) { host?.stop(); host = null }
     host ??= (options.host ?? ((api, id) => new SuperTabHost(api, id)))(core, machine)
     host.start()
   }
-  const disconnect = () => { host?.stop(); host = null }
+  const disconnect = () => { host?.stop(); host = null; book?.stop(); book = null; bookMachine = null }
   const port = {
     connected: () => {
       if (identifier(core.daemon.machineId()) && existsSync(hostJournalFile(core.dataDir, core.daemon.machineId()))) wake()
@@ -43,12 +55,16 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     stop: disconnect,
   }
   const requests: ServiceRequests = {
-    super_tabs: async (payload, asker) => {
+    super_tabs: async (payload, asker, closed) => {
       try {
         // Existing machine access routes the frame. Waking reads this host's own
         // registered contributions only, and grants the caller no account access.
         if (payload.action === 'wake') { wake(); return { ok: true } }
         if (payload.action === 'capacity') return (options.capacity ?? readCapabilities)(payload)
+        // Machine access also authorizes native creation. These actions expose
+        // only that host's admission/receipt, never its account or private roster.
+        if (payload.action === 'reserveCapacity') return await reservations().reserve(payload, closed)
+        if (payload.action === 'observeCapacity') return await reservations().observe(payload.creationId, closed)
         if (!asker.owner) return { error: 'OWNER_REQUIRED' }
         if (payload.action === 'backend') {
           const { method, path } = payload

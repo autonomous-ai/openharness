@@ -47,3 +47,25 @@ it('resolves a native caller to its exact contribution and rechecks it before ev
   t.agent.machineId = 'machine-1'; vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined)
   expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
 })
+
+it('keeps host capacity separate from account authority and closes it on disconnect or identity change', async () => {
+  const core = fakeCore()
+  const reserve = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id' }))
+  const observe = vi.fn(async () => ({ ok: true, released: true }))
+  const stop = vi.fn(), factory = vi.fn(() => ({ reserve, observe, stop }))
+  const service = superTabService(core, { reservations: factory })
+  const closed = new AbortController().signal
+  expect(factory).not.toHaveBeenCalled()
+  expect(await service.requests.super_tabs({ action: 'reserveCapacity', creationId: 'native-creation-id' }, visitor, closed)).toMatchObject({ ok: true })
+  expect(reserve).toHaveBeenCalledWith({ action: 'reserveCapacity', creationId: 'native-creation-id' }, closed)
+  expect(await service.requests.super_tabs({ action: 'observeCapacity', creationId: 'native-creation-id' }, visitor)).toMatchObject({ released: true })
+  expect(factory).toHaveBeenCalledTimes(1)
+  service.port.disconnected(); expect(stop).toHaveBeenCalledTimes(1)
+  await service.requests.super_tabs({ action: 'reserveCapacity' }, visitor)
+  expect(factory).toHaveBeenCalledTimes(2)
+  core.daemon.machineId = () => 'changed-machine'
+  await service.requests.super_tabs({ action: 'reserveCapacity' }, visitor)
+  expect(stop).toHaveBeenCalledTimes(2)
+  expect(factory).toHaveBeenLastCalledWith(core, 'changed-machine')
+  service.port.stop(); expect(stop).toHaveBeenCalledTimes(3)
+})
