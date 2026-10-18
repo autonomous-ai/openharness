@@ -78,6 +78,13 @@ it('keeps unknown and malformed input context unknown', () => {
   f.turns.typed('agent', context, true)
   f.turns.ingest('agent', [start(), end()])
   expect(f.turns.read('agent', cursor)?.observations[0].inputContext).toBeNull()
+  const page = f.turns.read('agent', cursor)!
+  expect(page.observations.every(event => event.unattributedInput === true)).toBe(true)
+  expect(nativeTurnPageIn(page)).toEqual(page)
+  expect(nativeTurnPageIn({ ...page, observations: [{ ...page.observations[0], unattributedInput: 'yes' }] })).toBeNull()
+  const beforeProgrammatic = f.turns.read('agent')!.cursor
+  f.turns.submitting('agent'); f.turns.ingest('agent', [start(), end()])
+  expect(f.turns.read('agent', beforeProgrammatic)!.observations.every(event => !event.unattributedInput)).toBe(true)
   expect(inputContextIn({ id: context })).toBeNull()
 })
 

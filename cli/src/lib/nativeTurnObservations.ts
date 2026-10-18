@@ -12,6 +12,8 @@ export interface NativeTurnObservation {
   /** Opaque context supplied by the input client. It proves no identity or
    * permission; a consumer must validate it against its own authority. */
   inputContext: string | null
+  /** Accepted terminal input had no unambiguous context. Contains no identity. */
+  unattributedInput?: boolean
 }
 export interface NativeTurnPage {
   cursor: NativeTurnCursor
@@ -25,11 +27,11 @@ export interface NativeTurnBinding { sessionId: string; engine: string; runtime:
 export function nativeTurnBinding(session: { sessionId: string; engine: string; primaryRuntimeKey: string | null } | undefined): NativeTurnBinding | null {
   return session?.sessionId ? { sessionId: session.sessionId, engine: session.engine, runtime: session.primaryRuntimeKey ?? '' } : null
 }
-interface Turn { id: string; text: string; truncated: boolean; inputContext: string | null }
+interface Turn { id: string; text: string; truncated: boolean; inputContext: string | null; unattributedInput: boolean }
 interface ObservedAgent {
   binding: string; epoch: string; sequence: number; floor: number; until: number
   draftContext: string | null | undefined
-  pendingContexts: Array<string | null>
+  pendingContexts: Array<{ context: string | null; native: boolean }>
   turn: Turn | null
   observations: Map<number, NativeTurnObservation>
 }
@@ -102,7 +104,7 @@ export function createNativeTurnObservations(deps: {
     const turn = row.turn
     if (!turn) return
     append(row, { turnId: turn.id, kind: 'answer', text: turn.text, truncated: turn.truncated,
-      interrupted, inputContext: turn.inputContext })
+      interrupted, inputContext: turn.inputContext, ...(turn.unattributedInput ? { unattributedInput: true } : {}) })
     row.turn = null
   }
   return {
@@ -138,10 +140,11 @@ export function createNativeTurnObservations(deps: {
         // Engines may queue several native prompts. A context change while
         // submissions are still pending is ambiguous; do not guess which
         // person or conversation owns a later accepted prompt.
-        if (row.pendingContexts.some(value => value !== row.draftContext) || row.pendingContexts.length >= 32) {
-          row.pendingContexts.fill(null); row.draftContext = null
+        if (row.pendingContexts.some(value => value.context !== row.draftContext) || row.pendingContexts.length >= 32) {
+          for (const pending of row.pendingContexts) pending.context = null
+          row.draftContext = null
         }
-        if (row.pendingContexts.length < 32) row.pendingContexts.push(row.draftContext)
+        if (row.pendingContexts.length < 32) row.pendingContexts.push({ context: row.draftContext, native: true })
         row.draftContext = undefined
       }
     },
@@ -149,8 +152,9 @@ export function createNativeTurnObservations(deps: {
     submitting(agentId: string): void {
       const row = current(agentId)
       if (row) {
-        row.draftContext = undefined; row.pendingContexts.fill(null)
-        if (row.pendingContexts.length < 32) row.pendingContexts.push(null)
+        row.draftContext = undefined
+        for (const pending of row.pendingContexts) pending.context = null
+        if (row.pendingContexts.length < 32) row.pendingContexts.push({ context: null, native: false })
       }
     },
     ingest(agentId: string, events: readonly LiveEvent[], replay = false): void {
@@ -160,10 +164,12 @@ export function createNativeTurnObservations(deps: {
       for (const event of events) {
         if (event.type === 'turn_started') {
           finish(row, true)
-          const turnId = id(), inputContext = row.pendingContexts.shift() ?? null
-          row.turn = { id: turnId, text: '', truncated: false, inputContext }
+          const turnId = id(), pending = row.pendingContexts.shift(), inputContext = pending?.context ?? null
+          const unattributedInput = pending?.native === true && inputContext === null
+          row.turn = { id: turnId, text: '', truncated: false, inputContext, unattributedInput }
           append(row, { turnId, kind: 'prompt', text: clippedText(event.payload.userMessage, NATIVE_TURN_TEXT_LIMIT),
-            truncated: event.payload.userMessage.length > NATIVE_TURN_TEXT_LIMIT, interrupted: false, inputContext })
+            truncated: event.payload.userMessage.length > NATIVE_TURN_TEXT_LIMIT, interrupted: false, inputContext,
+            ...(unattributedInput ? { unattributedInput: true } : {}) })
         } else if (event.type === 'text_delta' && row.turn && !row.turn.truncated) {
           const room = NATIVE_TURN_TEXT_LIMIT - row.turn.text.length
           row.turn.text += clippedText(event.payload.content, room)
@@ -189,10 +195,12 @@ export function nativeTurnPageIn(value: unknown): NativeTurnPage | null {
       || !inputContextIn(event.turnId) || !['prompt', 'answer'].includes(String(event.kind))
       || typeof event.text !== 'string' || event.text.length > NATIVE_TURN_TEXT_LIMIT
       || typeof event.truncated !== 'boolean' || typeof event.interrupted !== 'boolean'
+      || (event.unattributedInput !== undefined && typeof event.unattributedInput !== 'boolean')
       || (event.inputContext !== null && !inputContextIn(event.inputContext))) return null
     previous = event.sequence as number
     observations.push({ sequence: previous, turnId: event.turnId as string, kind: event.kind as 'prompt' | 'answer',
-      text: event.text, truncated: event.truncated, interrupted: event.interrupted, inputContext: event.inputContext as string | null })
+      text: event.text, truncated: event.truncated, interrupted: event.interrupted, inputContext: event.inputContext as string | null,
+      ...(event.unattributedInput === true ? { unattributedInput: true } : {}) })
   }
   return { cursor, observations, gap: row.gap }
 }
