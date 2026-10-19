@@ -513,17 +513,14 @@ jobs:
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.pro == 'true'
-    runs-on: ubuntu-24.04
+    # macOS arm64, where the baseline is recorded: the code-drawn shapes (arcs, juggling balls) use float maths whose
+    # last bits differ between Apple arm64 and Linux x86-64, so the hashes only match on the same platform.
+    runs-on: macos-15
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.CI_SOURCE_SHA }}
-      - name: Use Clang, as the host contracts do (GCC's -Wformat-truncation fails the -Werror build)
-        run: |
-          mkdir -p "$RUNNER_TEMP/firmware-bin"
-          ln -s "$(command -v clang-18)" "$RUNNER_TEMP/firmware-bin/cc"
-          echo "$RUNNER_TEMP/firmware-bin" >> "$GITHUB_PATH"
       - name: Compare every Pets screen with the golden hashes
         working-directory: devices/harness-pro/firmware
         env:
