@@ -7,6 +7,117 @@ import 'package:harness/terminal/terminal_typography.dart';
 import 'package:xterm/xterm.dart';
 
 void main() {
+  test('pure terminal font selectors keep each platform face and fallback', () {
+    const expected = <String, ({String family, List<String> fallback})>{
+      'windows': (
+        family: 'Consolas',
+        fallback: ['Cascadia Mono', 'Courier New', 'monospace'],
+      ),
+      'macos': (
+        family: '.AppleSystemUIFontMonospaced',
+        fallback: ['Menlo', 'Monaco', 'Courier New', 'monospace'],
+      ),
+      'ios': (
+        family: '.AppleSystemUIFontMonospaced',
+        fallback: ['Menlo', 'Monaco', 'Courier New', 'monospace'],
+      ),
+      'linux': (
+        family: 'DejaVu Sans Mono',
+        fallback: [
+          'Ubuntu Sans Mono',
+          'Noto Sans Mono',
+          'Liberation Mono',
+          'monospace',
+        ],
+      ),
+      'web': (family: 'Roboto Mono', fallback: []),
+    };
+
+    for (final entry in expected.entries) {
+      expect(
+        terminalFontFamilyFor(entry.key),
+        entry.value.family,
+        reason: '${entry.key} default face',
+      );
+      expect(
+        terminalFontFallbackFor(entry.key),
+        entry.value.fallback,
+        reason: '${entry.key} fallback order',
+      );
+    }
+  });
+
+  test('pure font choices offer native presets and a reachable default', () {
+    const expected =
+        <
+          String,
+          ({
+            List<TerminalFontChoice> offered,
+            TerminalFontChoice primary,
+            String anchor,
+          })
+        >{
+          'windows': (
+            offered: [TerminalFontChoice.consolas],
+            primary: TerminalFontChoice.consolas,
+            anchor: 'Consolas',
+          ),
+          'macos': (
+            offered: [
+              TerminalFontChoice.sfMono,
+              TerminalFontChoice.menlo,
+              TerminalFontChoice.monaco,
+              TerminalFontChoice.courierNew,
+            ],
+            primary: TerminalFontChoice.sfMono,
+            anchor: 'Menlo',
+          ),
+          'ios': (
+            offered: [
+              TerminalFontChoice.sfMono,
+              TerminalFontChoice.menlo,
+              TerminalFontChoice.monaco,
+              TerminalFontChoice.courierNew,
+            ],
+            primary: TerminalFontChoice.sfMono,
+            anchor: 'Menlo',
+          ),
+          'linux': (
+            offered: [
+              TerminalFontChoice.dejaVuSansMono,
+              TerminalFontChoice.ubuntuSansMono,
+              TerminalFontChoice.ubuntuMono,
+              TerminalFontChoice.liberationMono,
+              TerminalFontChoice.notoSansMono,
+            ],
+            primary: TerminalFontChoice.dejaVuSansMono,
+            anchor: 'DejaVu Sans Mono',
+          ),
+          'web': (
+            offered: [TerminalFontChoice.robotoMono],
+            primary: TerminalFontChoice.robotoMono,
+            anchor: 'Roboto Mono',
+          ),
+        };
+
+    for (final entry in expected.entries) {
+      final offered = TerminalFontChoice.availableFor(entry.key);
+      expect(offered, entry.value.offered, reason: '${entry.key} presets');
+      expect(
+        TerminalFontChoice.defaultFor(entry.key),
+        entry.value.primary,
+        reason: '${entry.key} default preset',
+      );
+      for (final choice in offered) {
+        expect(
+          [choice.fontFamily, ...choice.fontFamilyFallback],
+          contains(entry.value.anchor),
+          reason: '${entry.key} ${choice.label} lacks a system face',
+        );
+      }
+    }
+  });
+
   test('the default terminal face is the one this platform actually has', () {
     // Not a literal: the macOS names resolve to nothing on Linux, where
     // fontconfig answers `.AppleSystemUIFontMonospaced` and `Menlo` alike with
