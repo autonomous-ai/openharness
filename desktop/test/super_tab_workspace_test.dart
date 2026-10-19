@@ -7,6 +7,104 @@ import 'package:harness/super_tabs/workspace.dart';
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 
 void main() {
+  testWidgets(
+    'group terminals show both members and closing one preserves the other',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      final state = f.connection.server.state;
+      state['agents'] = [
+        for (final id in ['a', 'b'])
+          {
+            'id': id,
+            'name': id,
+            'machineId': 'm',
+            'harnessId': 'native-$id',
+            'contributorId': 'owner',
+            'configuration': {'engine': 'codex'},
+          },
+      ];
+      (state['conversations'] as List)[1]['agentIds'] = ['a', 'b'];
+      f.app.machineStates['m']!.agents = [
+        for (final id in ['a', 'b'])
+          Agent.fromJson({
+            'id': 'native-$id',
+            'name': id,
+            'engine': 'codex',
+            'terminal': {'available': true},
+          }),
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      c.select('offline');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: f.app,
+              builder: (_, _) => SuperTabWorkspace(
+                app: f.app,
+                canvas: const Text('Native terminals'),
+                onAddAgent: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await f.app.handleMachineEventForTest('m', {
+        'type': 'commander_question',
+        'agentId': 'native-b',
+        'payload': {
+          'requestId': 'q-fixture',
+          'questions': [
+            {
+              'key': 'confirm',
+              'q': 'Use this approach?',
+              'options': ['Yes', 'No'],
+              'multi': false,
+            },
+          ],
+        },
+      });
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('b needs you').first);
+      await tester.pumpAndSettle();
+      expect(f.app.activeSwarm.panes.single.agentId, 'native-b');
+      await f.app.handleMachineEventForTest('m', {
+        'type': 'commander_question_close',
+        'agentId': 'native-b',
+        'payload': {'requestId': 'q-fixture'},
+      });
+      await tester.pumpAndSettle();
+      expect(f.app.questionFor('m', 'native-b'), isNull);
+      tester
+          .widget<SuperTabView>(find.byType(SuperTabView))
+          .onOpenGroupTerminals!();
+      await tester.pumpAndSettle();
+      expect(
+        f.app.activeSwarm.panes.map((p) => p.agentId),
+        unorderedEquals(['native-a', 'native-b']),
+      );
+      await f.app.requestClosePane(
+        f.app.activeSwarm.panes.firstWhere((p) => p.agentId == 'native-a').id,
+      );
+      await tester.pumpAndSettle();
+      expect(f.app.activeSwarm.panes.single.agentId, 'native-b');
+      expect(c.terminalAgents('offline').single.id, 'b');
+      expect(
+        f.connection.calls.where(
+          (c) => c.$1 == 'agent_close' || c.$1 == 'agent_create',
+        ),
+        isEmpty,
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
   for (final scenario in [
     (engine: 'codex', viewer: false, fail: false),
     (engine: 'claude', viewer: false, fail: false),

@@ -70,6 +70,50 @@ afterAll(async () => {
 })
 
 describe('Super Tabs on a real Mongo replica set', () => {
+  it('contributes project capacity without sharing the computer and fences host execution', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Machine pool')).id
+    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+    const contribute = { type: 'machine.contribute' as const, machineId: 'pool-host', name: 'Host laptop', cwd: '/project', engines: ['codex' as const], maxAgents: 1 }
+    await db.machine.create({ data: { machineId: 'pool-host', userId: host.sub, apiKey: 'fixture-pool-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    await expect(run(tab, contribute)).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
+    await run(tab, contribute, host)
+    expect(await db.machineShare.findUnique({ where: { machineId: 'pool-host' } })).toBeNull()
+    const pools = await store.hostPools(host, 'pool-host')
+    expect(pools).toHaveLength(1)
+    const generation = pools[0]!.machine.generation
+    const observation = { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
+      projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null }, quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] }
+    await expect(store.observeMachine(owner, tab, 'pool-host', observation)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
+    await store.observeMachine(host, tab, 'pool-host', observation)
+    const request = { conversationId: 'lead', machineId: 'pool-host', engine: 'codex', name: 'Builder', cwd: '/project', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    await expect(run(tab, { type: 'agent.start', request: { ...request, cwd: '/private' } })).rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
+    await expect(run(tab, { type: 'agent.start', request: { ...request, permissionMode: 'bypassPermissions' } })).rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
+    const starts = await Promise.allSettled([run(tab, { type: 'agent.start', request }), run(tab, { type: 'agent.start', request })])
+    expect(starts.filter(r => r.status === 'fulfilled')).toHaveLength(1)
+    expect(starts.filter(r => r.status === 'rejected')).toHaveLength(1)
+    const startId = (starts.find(r => r.status === 'fulfilled') as PromiseFulfilledResult<Awaited<ReturnType<typeof run>>>).value.result.startId as string
+    const queued = await store.start(owner, tab, startId)
+    expect(queued.poolGeneration).toBe(generation)
+    await expect(run(tab, { type: 'agent.startDispatch', startId })).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
+    await expect(store.start(peer, tab, startId, undefined, 'pool-host')).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    const hostRun = (command: Command) => store.execute(host, tab, { operationId: randomUUID(), command }, undefined, 'pool-host')
+    await expect(hostRun(message('Not a generic proxy'))).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    await run(tab, { type: 'machine.pause', machineId: 'pool-host', paused: true }, host)
+    await expect(hostRun({ type: 'agent.startDispatch', startId })).rejects.toMatchObject({ code: 'MACHINE_PAUSED' })
+    await run(tab, { type: 'machine.pause', machineId: 'pool-host', paused: false }, host)
+    await hostRun({ type: 'agent.startDispatch', startId })
+    await expect(hostRun({ type: 'agent.startDispatch', startId })).rejects.toMatchObject({ code: 'START_CLAIMED' })
+    await hostRun({ type: 'agent.started', startId, harnessId: 'pool-builder', configuration: config })
+    await hostRun({ type: 'agent.startSettled', startId, warning: null })
+    expect((await store.read(owner, tab)).state.agents[0]).toMatchObject({ contributorId: host.sub, machineOwnerId: host.sub, harnessId: 'pool-builder' })
+    await run(tab, { type: 'member.remove', userId: host.sub })
+    expect(await store.hostPools(host, 'pool-host')).toEqual([])
+    await expect(store.observeMachine(host, tab, 'pool-host', observation)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
+    await expect(store.start(host, tab, startId, undefined, 'pool-host')).rejects.toMatchObject({ code: 'FORBIDDEN' })
+  })
+
   it('resolves a reply beyond recent history without crossing conversation or membership boundaries', async () => {
     const { tab, lead } = await fixture()
     const question = (await run(tab, message('Should pending edits survive restart?'), host, lead)).result.messageId as string

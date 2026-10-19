@@ -40,6 +40,9 @@ export interface AgentStartRequest {
   requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
 }
 export interface AgentStart {
+  poolGeneration?: string
+  poolSettled?: boolean
+  routeDecisionId?: string
   id: string
   creationId: string
   actorKey: string
@@ -100,6 +103,7 @@ export interface SuperTabState {
   conversations: Conversation[]
   invitations: Invitation[]
   starts?: AgentStart[]
+  machines?: import('./machines.js').ContributedMachine[]
 }
 export type Actor =
   | { kind: 'person'; userId: string; email: string }

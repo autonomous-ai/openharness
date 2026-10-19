@@ -8,7 +8,9 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
-import '../widgets/engine_identity.dart';
+import '../state/app_state.dart';
+import 'roster.dart';
+import 'pull_requests.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
@@ -28,6 +30,9 @@ class SuperTabView extends StatefulWidget {
     required this.machineName,
     this.terminal,
     this.onCloseTerminal,
+    this.onOpenGroupTerminals,
+    this.terminalsVisible = false,
+    this.app,
   });
   final SuperTabController controller;
   final VoidCallback onInvite;
@@ -35,7 +40,9 @@ class SuperTabView extends StatefulWidget {
   final ValueChanged<SuperTabAgent> onOpenTerminal;
   final String Function(String machineId) machineName;
   final Widget? terminal;
-  final VoidCallback? onCloseTerminal;
+  final VoidCallback? onCloseTerminal, onOpenGroupTerminals;
+  final bool terminalsVisible;
+  final AppNotifier? app;
 
   @override
   State<SuperTabView> createState() => _SuperTabViewState();
@@ -53,6 +60,8 @@ class _SuperTabViewState extends State<SuperTabView> {
   int _scrollRequest = 0;
   bool _jumpingToEnd = false;
   bool _sidebarOpen = false;
+  bool _rosterOpen = false;
+  bool _showPullRequests = false;
   final _loadingOlder = <String>{};
   int _mentionIndex = 0;
   String? _dismissedMention;
@@ -168,7 +177,9 @@ class _SuperTabViewState extends State<SuperTabView> {
   void _readToEnd(String id, int sequence) {
     _following[id] = true;
     if (_newAfter.containsKey(id)) setState(() => _newAfter.remove(id));
-    c.markRead(id, through: sequence);
+    if (!_terminalsVisible && !_showPullRequests) {
+      c.markRead(id, through: sequence);
+    }
   }
 
   void _jumpToLatest() {
@@ -204,6 +215,11 @@ class _SuperTabViewState extends State<SuperTabView> {
     final id = c.selectedId;
     final result = await c.send(replyTo: _replies[id]?.id);
     if (mounted && result != null) setState(() => _replies.remove(id));
+  }
+
+  void _closeRoster() {
+    setState(() => _rosterOpen = false);
+    if (!_terminalsVisible) _focus.requestFocus();
   }
 
   void _closeSidebar() {
@@ -261,106 +277,6 @@ class _SuperTabViewState extends State<SuperTabView> {
     );
     setState(() => _mentionIndex = 0);
     _focus.requestFocus();
-  }
-
-  Future<void> _newGroup() async {
-    final c = this.c;
-    var name = '';
-    String? error;
-    bool busy = false;
-    final id = await showAppDialog<String>(
-      context: context,
-      builder: (context) => SuperTabDialogScope(
-        controller: c,
-        child: StatefulBuilder(
-          builder: (context, update) {
-            Future<void> create() async {
-              if (busy || name.trim().isEmpty) return;
-              update(() {
-                busy = true;
-                error = null;
-              });
-              final answer = c.hasPendingAction
-                  ? await c.retry()
-                  : await c.command({
-                      'type': 'conversation.create',
-                      'title': name.trim(),
-                      'brief': '',
-                      'checks': <dynamic>[],
-                    });
-              if (!context.mounted) return;
-              if (answer?['conversationId'] case final String id) {
-                Navigator.of(context).pop(id);
-              } else {
-                update(() {
-                  busy = false;
-                  error = c.operationError ?? 'Could not create the group.';
-                });
-              }
-            }
-
-            return PopScope(
-              canPop: !busy,
-              child: AlertDialog(
-                title: const Text('New group'),
-                content: SizedBox(
-                  width: 340,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      TextField(
-                        onChanged: (value) => update(() => name = value),
-                        autofocus: true,
-                        enabled: !busy && !c.hasPendingAction,
-                        maxLength: 160,
-                        decoration: const InputDecoration(
-                          labelText: 'Name',
-                          hintText: 'Offline editing',
-                          counterText: '',
-                        ),
-                        onSubmitted: (_) => unawaited(create()),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        'A shared conversation with your lead.',
-                        style: DesktopChrome.metadata(),
-                      ),
-                      if (error != null)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 12),
-                          child: Text(error!, style: DesktopChrome.control()),
-                        ),
-                    ],
-                  ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: busy ? null : () => Navigator.of(context).pop(),
-                    child: const Text('Cancel'),
-                  ),
-                  FilledButton(
-                    onPressed: busy || name.trim().isEmpty
-                        ? null
-                        : () => unawaited(create()),
-                    child: Text(
-                      busy
-                          ? 'Creating…'
-                          : c.hasPendingAction
-                          ? 'Retry'
-                          : 'Create',
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-      ),
-    );
-    if (!mounted || widget.controller != c || id == null) return;
-    c.select(id);
-    _closeSidebar();
   }
 
   Future<void> _earlier() async {
@@ -445,191 +361,6 @@ class _SuperTabViewState extends State<SuperTabView> {
       ),
     );
   }
-
-  Future<void> _participants(SuperTabConversation group) async {
-    final c = this.c;
-    var query = '';
-    var handedOff = false;
-    final addition = await showAppDialog<SuperTabConversation>(
-      context: context,
-      builder: (context) => SuperTabDialogScope(
-        controller: c,
-        requireWrite: false,
-        child: StatefulBuilder(
-          builder: (context, update) => ListenableBuilder(
-            listenable: c,
-            builder: (context, _) {
-              final state = c.snapshot;
-              if (state == null) {
-                return AlertDialog(
-                  content: const Text('This conversation is unavailable.'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Close'),
-                    ),
-                  ],
-                );
-              }
-              final currentGroup = state.conversation(group.id) ?? group;
-              final agents = state.agents
-                  .where(
-                    (a) =>
-                        currentGroup.agentIds.contains(a.id) &&
-                        '${_agentName(a)} ${a.engine} ${widget.machineName(a.machineId)}'
-                            .toLowerCase()
-                            .contains(query),
-                  )
-                  .toList();
-              final people = state.people
-                  .where((p) => p.email.toLowerCase().contains(query))
-                  .toList();
-              return Dialog(
-                backgroundColor: Colors.transparent,
-                elevation: 0,
-                shape: const RoundedRectangleBorder(),
-                child: DesktopDialogSurface(
-                  child: SizedBox(
-                    width: 400,
-                    height: 460,
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  'Participants',
-                                  style: DesktopChrome.heading(),
-                                ),
-                              ),
-                              AppIconButton(
-                                icon: AppIcons.close,
-                                tooltip: 'Close participants',
-                                onPressed: () => Navigator.of(context).pop(),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          TextField(
-                            autofocus: true,
-                            decoration: const InputDecoration(
-                              hintText: 'Find a person or agent',
-                            ),
-                            onChanged: (value) => update(
-                              () => query = value.trim().toLowerCase(),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          Expanded(
-                            child: ListView(
-                              children: [
-                                for (final agent in agents)
-                                  _participantAgent(agent, () {
-                                    Navigator.of(context).pop();
-                                    handedOff = true;
-                                    widget.onOpenTerminal(agent);
-                                  }),
-                                for (final person in people)
-                                  ListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    title: Text(
-                                      person.email,
-                                      style: DesktopChrome.control(),
-                                    ),
-                                    subtitle: Text(
-                                      person.role == 'owner'
-                                          ? 'Owner'
-                                          : person.role == 'viewer'
-                                          ? 'Viewer'
-                                          : 'Collaborator',
-                                      style: DesktopChrome.metadata(),
-                                    ),
-                                  ),
-                                if (agents.isEmpty && people.isEmpty)
-                                  const Padding(
-                                    padding: EdgeInsets.symmetric(vertical: 24),
-                                    child: Text('No matches.'),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          if (c.canWrite)
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: TextButton(
-                                onPressed: () {
-                                  Navigator.of(context).pop(currentGroup);
-                                  handedOff = true;
-                                },
-                                child: const Text('Add agent'),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ),
-    );
-    if (addition != null) {
-      // The workspace enables its picker when the modal route is gone. Wait
-      // for that dependency update before handing focus to the next surface.
-      await WidgetsBinding.instance.endOfFrame;
-      if (mounted &&
-          identical(c, this.c) &&
-          c.canWrite &&
-          c.snapshot?.conversation(addition.id) != null) {
-        widget.onAddAgent(addition);
-      }
-    }
-    if (mounted && !handedOff) _focus.requestFocus();
-  }
-
-  Widget _participantAgent(SuperTabAgent agent, VoidCallback open) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 8),
-    child: LayoutBuilder(
-      builder: (context, constraints) {
-        final identity = Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(_agentName(agent), style: DesktopChrome.control(medium: true)),
-            const SizedBox(height: 4),
-            Text(
-              '${engineIdentity(agent.engine).label} · ${widget.machineName(agent.machineId)}',
-              style: DesktopChrome.metadata(),
-            ),
-          ],
-        );
-        final action = TextButton(
-          onPressed: open,
-          child: const Text('Open terminal'),
-        );
-        if (MediaQuery.textScalerOf(context).scale(13) > 18 ||
-            constraints.maxWidth < 320) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [identity, const SizedBox(height: 8), action],
-          );
-        }
-        return Row(
-          children: [
-            Expanded(child: identity),
-            const SizedBox(width: 12),
-            action,
-          ],
-        );
-      },
-    ),
-  );
 
   Future<void> _archived() async {
     final c = this.c;
@@ -742,7 +473,18 @@ class _SuperTabViewState extends State<SuperTabView> {
                                 : null,
                           ),
                         ),
-                        trailing: c.unread(group)
+                        trailing: _needsHuman(group).isNotEmpty
+                            ? Tooltip(
+                                message: 'Needs a human',
+                                child: Text(
+                                  '? ${_needsHuman(group).length}',
+                                  style: DesktopChrome.control(
+                                    medium: true,
+                                    color: grid.AppPalette.warn,
+                                  ),
+                                ),
+                              )
+                            : c.unread(group)
                             ? Semantics(
                                 label: 'Unread messages',
                                 child: Container(
@@ -768,162 +510,151 @@ class _SuperTabViewState extends State<SuperTabView> {
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
-          child: Wrap(
-            spacing: DesktopChrome.controlGap,
-            runSpacing: DesktopChrome.controlGap,
-            children: [
-              TextButton(
-                onPressed:
-                    c.canWrite &&
-                        !c.hasPendingAction &&
-                        c.snapshot?.paused != true
-                    ? () => unawaited(_newGroup())
-                    : null,
-                child: const Text('New group'),
-              ),
-              TextButton(
-                onPressed: c.snapshot != null
-                    ? () {
-                        _closeSidebar();
-                        widget.onInvite();
-                      }
-                    : null,
-                child: Text(c.isOwner ? 'Invite' : 'People'),
-              ),
-              TextButton(
-                onPressed: c.snapshot != null
-                    ? () {
-                        _closeSidebar();
-                        unawaited(showSuperTabRouting(context, c));
-                      }
-                    : null,
-                child: const Text('Routing'),
-              ),
-            ],
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: AppIconButton(
+              icon: AppIcons.settings,
+              tooltip: 'Super Tab settings',
+              onPressed: c.snapshot == null
+                  ? null
+                  : () {
+                      _closeSidebar();
+                      unawaited(showSuperTabRouting(context, c));
+                    },
+            ),
           ),
         ),
       ],
     ),
   );
 
-  Widget _header(SuperTabConversation? group, bool narrow) => Container(
+  List<SuperTabAgent> _needsHuman(SuperTabConversation group) =>
+      c.snapshot?.agents
+          .where(
+            (agent) =>
+                group.agentIds.contains(agent.id) &&
+                (widget.app?.questionFor(agent.machineId, agent.harnessId) !=
+                        null ||
+                    (group.assignment?['status'] == 'needs_human' &&
+                        group.assignment?['agentId'] == agent.id)),
+          )
+          .toList() ??
+      const [];
+
+  void _openAgent(SuperTabAgent agent) {
+    setState(() {
+      _showPullRequests = false;
+      _rosterOpen = false;
+    });
+    widget.onOpenTerminal(agent);
+  }
+
+  bool get _terminalsVisible =>
+      widget.terminalsVisible || widget.terminal != null;
+
+  Widget _header(
+    SuperTabConversation? group,
+    bool narrow,
+    bool showRoster,
+  ) => Container(
     constraints: const BoxConstraints(minHeight: 52),
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
     decoration: BoxDecoration(
       border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
     ),
-    child: LayoutBuilder(
-      builder: (context, constraints) {
-        final people = c.snapshot?.people.length ?? 0;
-        final agents = group?.agentIds.length ?? 0;
-        final participants =
-            '$agents ${agents == 1 ? 'agent' : 'agents'} · $people ${people == 1 ? 'person' : 'people'}';
-        final compact =
-            constraints.maxWidth < MediaQuery.textScalerOf(context).scale(520);
-        return Row(
-          children: [
-            if (narrow)
-              AppIconButton(
-                icon: AppIcons.columns2,
-                tooltip: 'Conversations',
-                onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
-              ),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    group?.title ?? 'Loading conversation…',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: DesktopChrome.text(medium: true),
-                  ),
-                  if (group?.assignment?['status'] == 'needs_human')
-                    TextButton.icon(
-                      onPressed: () => showSuperTabWork(context, c, group!.id),
-                      style: TextButton.styleFrom(
-                        foregroundColor: grid.AppPalette.warn,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 6,
-                        ),
-                        minimumSize: const Size(0, 32),
-                      ),
-                      icon: const Icon(
-                        AppIcons.messageCircleQuestionMark,
-                        size: 16,
-                      ),
-                      label: const Text(
-                        'Needs a human',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            if (group != null)
-              Tooltip(
-                message: participants,
-                child: TextButton(
-                  onPressed: () => unawaited(_participants(group)),
-                  child: compact
-                      ? Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(AppIcons.users, size: 18),
-                            const SizedBox(width: 6),
-                            Text(
-                              '${agents + people}',
-                              semanticsLabel: participants,
-                              style: DesktopChrome.metadata(),
-                            ),
-                          ],
-                        )
-                      : Text(participants, style: DesktopChrome.metadata()),
+    child: Row(
+      children: [
+        if (narrow)
+          AppIconButton(
+            icon: AppIcons.columns2,
+            tooltip: 'Conversations',
+            onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
+          ),
+        Expanded(
+          child: Text(
+            group?.title ?? 'Loading conversation…',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.text(medium: true),
+          ),
+        ),
+        TextButton(
+          key: const ValueKey('super-chat'),
+          style: TextButton.styleFrom(
+            foregroundColor: !_terminalsVisible && !_showPullRequests
+                ? DesktopChrome.accent
+                : DesktopChrome.muted,
+          ),
+          onPressed: () {
+            setState(() => _showPullRequests = false);
+            widget.onCloseTerminal?.call();
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _focus.requestFocus();
+            });
+          },
+          child: const Text('Chat'),
+        ),
+        AppIconButton(
+          icon: AppIcons.terminal,
+          tooltip: 'Group terminals (${group?.agentIds.length ?? 0})',
+          color: _terminalsVisible ? DesktopChrome.accent : DesktopChrome.muted,
+          onPressed: group?.agentIds.isNotEmpty == true
+              ? () {
+                  setState(() => _showPullRequests = false);
+                  widget.onOpenGroupTerminals?.call();
+                }
+              : null,
+        ),
+        TextButton(
+          style: TextButton.styleFrom(
+            foregroundColor: _showPullRequests
+                ? DesktopChrome.accent
+                : DesktopChrome.muted,
+          ),
+          onPressed: () {
+            widget.onCloseTerminal?.call();
+            setState(() => _showPullRequests = true);
+          },
+          child: const Text('PRs'),
+        ),
+        if (!showRoster)
+          AppIconButton(
+            icon: AppIcons.users,
+            tooltip: 'Members and machines',
+            onPressed: () => setState(() => _rosterOpen = !_rosterOpen),
+          ),
+        if (group != null)
+          PopupMenuButton<String>(
+            tooltip: 'Conversation options',
+            icon: const Icon(AppIcons.ellipsis, size: 18),
+            onSelected: (action) => unawaited(_groupAction(action, group)),
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'work', child: Text('Work details')),
+              if (c.snapshot?.conversations.any((g) => g.archived) == true)
+                const PopupMenuItem(
+                  value: 'archived',
+                  child: Text('Archived conversations'),
                 ),
-              ),
-            if (group != null)
-              PopupMenuButton<String>(
-                tooltip: 'Conversation options',
-                icon: const Icon(AppIcons.ellipsis, size: 18),
-                onSelected: (action) => unawaited(_groupAction(action, group)),
-                itemBuilder: (_) => [
-                  const PopupMenuItem(
-                    value: 'work',
-                    child: Text('Work details'),
-                  ),
-                  if (c.snapshot?.conversations.any(
-                        (group) => group.archived,
-                      ) ==
-                      true)
-                    const PopupMenuItem(
-                      value: 'archived',
-                      child: Text('Archived conversations'),
+              if (c.canWrite && !c.hasPendingAction && !c.saving) ...[
+                const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                if (group.id != 'lead')
+                  PopupMenuItem(
+                    value: 'archive',
+                    enabled:
+                        group.assignment == null ||
+                        const [
+                          'done',
+                          'stopped',
+                        ].contains(group.assignment!['status']),
+                    child: Text(
+                      group.archived ? 'Reopen conversation' : 'Archive',
                     ),
-                  if (c.canWrite && !c.hasPendingAction && !c.saving) ...[
-                    const PopupMenuItem(value: 'rename', child: Text('Rename')),
-                    if (group.id != 'lead')
-                      PopupMenuItem(
-                        value: 'archive',
-                        enabled:
-                            group.assignment == null ||
-                            const [
-                              'done',
-                              'stopped',
-                            ].contains(group.assignment!['status']),
-                        child: Text(
-                          group.archived ? 'Reopen conversation' : 'Archive',
-                        ),
-                      ),
-                  ],
-                ],
-              ),
-          ],
-        );
-      },
+                  ),
+              ],
+            ],
+          ),
+      ],
     ),
   );
 
@@ -1048,6 +779,7 @@ class _SuperTabViewState extends State<SuperTabView> {
           ? 'You'
           : _authorName(message),
       agent: agent,
+      onOpenAgent: agent == null ? null : () => _openAgent(agent),
       machineName: agent == null ? null : widget.machineName(agent.machineId),
       grouped: grouped,
       reply: reply,
@@ -1121,7 +853,6 @@ class _SuperTabViewState extends State<SuperTabView> {
     final mentions = _mentionChoices;
     return Column(
       children: [
-        _header(group, narrow),
         if (c.error != null)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
@@ -1276,6 +1007,30 @@ class _SuperTabViewState extends State<SuperTabView> {
               ],
             ),
           ),
+        if (group != null)
+          for (final agent in _needsHuman(group))
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 6, 20, 0),
+              child: ListTile(
+                key: ValueKey('super-needs-human-${agent.id}'),
+                dense: true,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                tileColor: grid.AppPalette.warn.withValues(alpha: .08),
+                leading: Icon(
+                  AppIcons.messageCircleQuestionMark,
+                  color: grid.AppPalette.warn,
+                  size: 18,
+                ),
+                title: Text(
+                  '${_agentName(agent)} needs you',
+                  style: DesktopChrome.control(medium: true),
+                ),
+                trailing: const Icon(AppIcons.arrowRight, size: 16),
+                onTap: () => _openAgent(agent),
+              ),
+            ),
         if (mentions.isNotEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -1372,7 +1127,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                         key: const ValueKey('super-message-composer'),
                         controller: _composer,
                         focusNode: _focus,
-                        autofocus: widget.terminal == null,
+                        autofocus: !_terminalsVisible,
                         enabled: c.canWrite && group != null && !group.archived,
                         minLines: 1,
                         maxLines: MediaQuery.sizeOf(context).height < 600
@@ -1436,41 +1191,88 @@ class _SuperTabViewState extends State<SuperTabView> {
       grid.AppTheme.watch(context);
       final terminal = widget.terminal;
       final narrow =
-          constraints.maxWidth <
-          MediaQuery.textScalerOf(context).scale(terminal == null ? 640 : 980);
-      if (narrow && terminal != null) {
-        return Column(
-          children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: widget.onCloseTerminal,
-                icon: const Icon(AppIcons.arrowLeft, size: 16),
-                label: const Text('Back to conversation'),
-              ),
-            ),
-            Expanded(child: terminal),
-          ],
-        );
-      }
+          constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
+      final showRoster =
+          constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
+      final roster = SuperTabRoster(
+        controller: c,
+        app: widget.app,
+        onInvite: widget.onInvite,
+        onOpenAgent: _openAgent,
+        onAddAgent: (group) {
+          setState(() => _rosterOpen = false);
+          widget.onAddAgent(group);
+        },
+      );
       return Stack(
         children: [
           ExcludeFocus(
-            excluding: narrow && _sidebarOpen,
+            excluding: (narrow && _sidebarOpen) || (!showRoster && _rosterOpen),
             child: Row(
               children: [
                 if (!narrow) ...[
                   SizedBox(width: 220, child: _sidebar()),
                   VerticalDivider(width: 1, color: DesktopChrome.rim),
                 ],
-                Expanded(child: _conversation(narrow)),
-                if (terminal != null) ...[
+                Expanded(
+                  child: Column(
+                    children: [
+                      _header(c.selected, narrow, showRoster),
+                      Expanded(
+                        child: IndexedStack(
+                          index: _terminalsVisible
+                              ? 1
+                              : _showPullRequests
+                              ? 2
+                              : 0,
+                          children: [
+                            _conversation(narrow),
+                            terminal ?? const SizedBox.shrink(),
+                            _showPullRequests
+                                ? SuperTabPullRequests(
+                                    controller: c,
+                                    app: widget.app,
+                                  )
+                                : const SizedBox.shrink(),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (showRoster) ...[
                   VerticalDivider(width: 1, color: DesktopChrome.rim),
-                  Expanded(child: terminal),
+                  SizedBox(width: 288, child: roster),
                 ],
               ],
             ),
           ),
+          if (!showRoster && _rosterOpen)
+            Positioned.fill(
+              child: BlockSemantics(
+                child: FocusScope(
+                  autofocus: true,
+                  onKeyEvent: (_, event) {
+                    if (event is KeyDownEvent &&
+                        event.logicalKey == LogicalKeyboardKey.escape) {
+                      _closeRoster();
+                      return KeyEventResult.handled;
+                    }
+                    return KeyEventResult.ignored;
+                  },
+                  child: GestureDetector(
+                    onTap: _closeRoster,
+                    child: ColoredBox(
+                      color: grid.AppDesktop.veil(Theme.of(context).brightness),
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: SizedBox(width: 288, child: roster),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           if (narrow && _sidebarOpen)
             Positioned.fill(
               child: BlockSemantics(

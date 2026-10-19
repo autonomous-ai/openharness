@@ -53,6 +53,50 @@ void main() {
       f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
       final server = f.connection.server;
       server.state['name'] = 'Pilot';
+      server.state['machines'] = [
+        {
+          'machineId': 'm',
+          'name': 'Studio Mac',
+          'contributorId': 'owner',
+          'cwd': '/fixture/project',
+          'engines': ['claude', 'codex'],
+          'maxAgents': 4,
+          'paused': false,
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'resources': {
+              'deviceType': 'Mac Studio',
+              'chip': 'Apple M2 Max',
+              'os': 'macOS',
+              'cpuPercent': 14,
+              'gpuPercent': 2,
+              'memoryTotalBytes': 64000000000,
+              'memoryUsedBytes': 41600000000,
+              'diskTotalBytes': 1000000000000,
+              'diskFreeBytes': 130000000000,
+              'projectDiskTotalBytes': 1000000000000,
+              'projectDiskFreeBytes': 130000000000,
+            },
+            'quotas': [
+              for (final engine in ['claude', 'codex'])
+                {
+                  'engine': engine,
+                  'known': true,
+                  'windows': [
+                    {
+                      'name': '5-hour',
+                      'usedPercent': engine == 'claude' ? 50 : 12,
+                      'resetsAt': DateTime.now()
+                          .add(const Duration(hours: 2))
+                          .millisecondsSinceEpoch,
+                    },
+                  ],
+                },
+            ],
+            'runningHarnessIds': [f.connection.native!['id']],
+          },
+        },
+      ];
       (server.state['conversations'] as List)[0]['agentIds'] = ['lead-agent'];
       (server.state['conversations'] as List)[0]['leadId'] = 'lead-agent';
       (server.state['people'] as List).addAll(
@@ -121,10 +165,9 @@ void main() {
         const Duration(seconds: 10),
       );
       debugPrint('Super Tab fixture: conversation settled');
-      expect(find.text('1 agent · 20 people'), findsOneWidget);
+      expect(find.byTooltip('Invite people'), findsOneWidget);
       expect(find.text('CHATS'), findsNothing);
-      expect(find.text('New group'), findsOneWidget);
-      expect(find.text('Invite'), findsOneWidget);
+      expect(find.text('New group'), findsNothing);
       final folder = Platform.environment['SUPER_TAB_NATIVE_SHOTS'];
       Future<void> shot(String name) async {
         if (folder == null) return;
@@ -140,14 +183,9 @@ void main() {
       }
 
       await shot('conversation');
-      debugPrint('Super Tab fixture: open participants');
-      await tester.tap(find.text('1 agent · 20 people'));
-      debugPrint('Super Tab fixture: participants tapped');
-      await tester.pumpAndSettle();
-      debugPrint('Super Tab fixture: participants settled');
-      expect(find.text('Lead'), findsWidgets);
-      expect(find.text('Open terminal'), findsOneWidget);
-      await tester.tap(find.text('Open terminal'));
+      await tester.tap(
+        find.byKey(ValueKey('super-member-${c!.snapshot!.agents.single.id}')),
+      );
       debugPrint('Super Tab fixture: terminal requested');
       for (var i = 0; i < 30 && f.app.activeSwarm.panes.isEmpty; i++) {
         await tester.pump(const Duration(milliseconds: 50));
@@ -193,7 +231,7 @@ void main() {
       await tester.tap(find.byType(PaneCloseButton));
       await tester.pumpAndSettle();
       expect(f.app.activeSwarm.panes, isEmpty);
-      expect(c!.terminalAgent('lead'), isNull);
+      expect(c.terminalAgent('lead'), isNull);
       expect(find.byType(TerminalPanel), findsNothing);
       expect(reviews, 0);
       expect(
@@ -211,9 +249,9 @@ void main() {
         'terminal': {'available': false},
       };
       f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
-      await tester.tap(find.text('1 agent · 20 people'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Open terminal'));
+      await tester.tap(
+        find.byKey(ValueKey('super-member-${c.snapshot!.agents.single.id}')),
+      );
       for (
         var i = 0;
         i < 120 &&

@@ -67,6 +67,10 @@ class SuperTabSnapshot {
       paused = row['paused'] == true,
       people = _list(row['people'], SuperTabPerson.fromJson),
       agents = _list(row['agents'], SuperTabAgent.fromJson),
+      machines = _list(
+        row['machines'] ?? const [],
+        (m) => Map<String, dynamic>.unmodifiable(m),
+      ),
       conversations = _list(
         row['conversations'],
         SuperTabConversation.fromJson,
@@ -83,6 +87,7 @@ class SuperTabSnapshot {
   final bool paused;
   final List<SuperTabPerson> people;
   final List<SuperTabAgent> agents;
+  final List<Map<String, dynamic>> machines;
   final List<SuperTabConversation> conversations;
   final List<Map<String, dynamic>> invitations;
   SuperTabConversation? conversation(String id) =>

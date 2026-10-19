@@ -469,7 +469,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   final _newTabSources = <String, TerminalPane>{};
 
   Widget _startGuide() => WorkspaceWelcome(
-    key: ValueKey('welcome:${app.activeSwarmId}'),
+    key: ValueKey('welcome:${app.activeSwarmId}:${app.activeSwarm.isSuperTab}'),
     onCommand: _runShortcut,
     composerBuilder: newHarnessOpensInBox
         ? (recent) => _newHarnessEmbedded && _newHarness != null
@@ -503,7 +503,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         : null,
     // What to pick up, opened into this tab the way Cmd-P opens it: a harness
     // as itself, a conversation Harness did not start as a harness resuming it.
-    app: app,
+    // Super Tab creation uses the same form as Cmd-N, without recent sessions.
+    app: app.activeSwarm.isSuperTab ? null : app,
     projects: _projects.projects,
     onOpen: (row) {
       if (_newHarness?.requestDismiss() == false) return;

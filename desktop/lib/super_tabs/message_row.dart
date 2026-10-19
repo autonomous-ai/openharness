@@ -6,9 +6,10 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
-import '../widgets/workspace_account_button.dart';
+import 'identity.dart';
 import 'message_text.dart';
 import 'model.dart';
+import 'pull_requests.dart';
 
 /// Presentation only. Message identity and reply routing use backend IDs.
 class SuperTabMessageRow extends StatefulWidget {
@@ -24,6 +25,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.replyAuthor,
     this.grouped = false,
     this.onReply,
+    this.onOpenAgent,
   });
 
   final SuperTabMessage message;
@@ -33,7 +35,7 @@ class SuperTabMessageRow extends StatefulWidget {
   final SuperTabMessage? reply;
   final String? replyAuthor;
   final bool grouped;
-  final VoidCallback? onReply;
+  final VoidCallback? onReply, onOpenAgent;
   final VoidCallback onReturnToComposer;
   final List<Widget> receipts;
 
@@ -187,20 +189,16 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                               : ExcludeSemantics(
                                   child: Tooltip(
                                     message: _identityDetails,
-                                    child: message.fromAgent
-                                        ? EngineMark(
-                                            engine: widget.agent?.engine,
-                                            displayName: widget.author,
-                                            size: 28,
-                                          )
-                                        : AccountAvatar(
-                                            initial: accountInitial(
+                                    child: SuperTabAvatar(
+                                      identity:
+                                          '${message.author['kind']}:${message.authorId}',
+                                      name: message.fromAgent
+                                          ? widget.author
+                                          : superTabPersonName(
                                               message.authorName,
-                                              null,
                                             ),
-                                            diameter: 28,
-                                            accent: DesktopChrome.muted,
-                                          ),
+                                      size: 28,
+                                    ),
                                   ),
                                 ),
                         ),
@@ -218,17 +216,19 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     crossAxisAlignment:
                                         WrapCrossAlignment.center,
                                     children: [
-                                      Text(widget.author, style: authorStyle),
+                                      InkWell(
+                                        onTap: widget.onOpenAgent,
+                                        child: Text(
+                                          widget.author,
+                                          style: authorStyle,
+                                        ),
+                                      ),
                                       if (message.fromAgent)
                                         Tooltip(
                                           message: _identityDetails,
-                                          child: Text(
-                                            widget.agent == null
-                                                ? 'Agent'
-                                                : engineIdentity(
-                                                    widget.agent!.engine,
-                                                  ).label,
-                                            style: DesktopChrome.metadata(),
+                                          child: EngineMark(
+                                            engine: widget.agent?.engine,
+                                            size: 14,
                                           ),
                                         ),
                                       if (message.createdAt case final time?)
@@ -270,6 +270,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   ),
                                 ),
                               SuperTabMessageText(message.text),
+                              SuperTabPullRequestLinks(message.text),
                               ...widget.receipts,
                             ],
                           ),

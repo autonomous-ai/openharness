@@ -17460,11 +17460,12 @@ class AppNotifier extends ChangeNotifier {
     if (pane == null) return;
     if (tab.superTabId case final superTabId?) {
       final controller = superTabs.peek(superTabId);
-      final selected = controller?.terminalAgent(controller.selectedId);
-      if (selected != null &&
-          selected.machineId == pane.machineId &&
-          selected.harnessId == pane.agentId) {
-        controller!.selectTerminal(controller.selectedId, null);
+      if (pane.agentId case final agentId?) {
+        controller?.hideTerminal(
+          controller.selectedId,
+          pane.machineId,
+          agentId,
+        );
       }
     }
     if (tab.isCompanions || tab.isDevices) {

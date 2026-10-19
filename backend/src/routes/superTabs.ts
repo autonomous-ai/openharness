@@ -8,6 +8,7 @@ import { SuperTabError } from '../superTabs/model.js'
 import { SuperTabStore } from '../superTabs/store.js'
 import { routingPolicySchema } from '../superTabs/routingPolicy.js'
 import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
+import { machineObservationSchema } from '../superTabs/machines.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
@@ -23,6 +24,8 @@ const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegat
   .refine(q => [q.after, q.before, q.messageId].filter(value => value !== undefined).length <= 1, 'Choose one message cursor or exact message.')
 const decisionParams = tabParams.extend({ decisionId: id })
 const hostParams = z.object({ machineId: id })
+const hostStartParams = hostParams.extend({ tabId: id, startId: id })
+const machineParams = hostParams.extend({ tabId: id })
 const deliveryParams = tabParams.extend({ agentId: id })
 const deliveryActionParams = deliveryParams.extend({ deliveryId: id })
 const deliveryAction = z.discriminatedUnion('type', [
@@ -42,6 +45,18 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
 /** Uses the normal authenticated control API. It never accepts caller-provided host/contributor identities. */
 export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore } = {}) {
   const store = options.store ?? new SuperTabStore(prisma)
+  app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/pools', { preHandler: validateParams(hostParams) },
+    (req, reply) => respond(reply, () => store.hostPools(req.user!, req.params.machineId)))
+  app.get<{ Params: z.infer<typeof hostStartParams> }>('/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', { preHandler: validateParams(hostStartParams) },
+    (req, reply) => respond(reply, () => store.start(req.user!, req.params.tabId, req.params.startId, undefined, req.params.machineId)))
+  app.post<{ Params: z.infer<typeof hostStartParams>; Body: z.infer<typeof operationSchema> }>('/api/super-tabs/hosts/:machineId/starts/:tabId/:startId',
+    { preHandler: [validateParams(hostStartParams), validateBody(operationSchema)] }, (req, reply) => respond(reply, async () => {
+      if (!('startId' in req.body.command) || req.body.command.startId !== req.params.startId) throw new SuperTabError('FORBIDDEN', 'The host request must name this start.', 403)
+      return store.execute(req.user!, req.params.tabId, req.body, undefined, req.params.machineId)
+    }))
+  app.post<{ Params: z.infer<typeof machineParams>; Body: z.infer<typeof machineObservationSchema> }>('/api/super-tabs/:tabId/machines/:machineId',
+    { preHandler: [validateParams(machineParams), validateBody(machineObservationSchema)] },
+    (req, reply) => respond(reply, () => store.observeMachine(req.user!, req.params.tabId, req.params.machineId, req.body)))
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof openNativeSchema> }>('/api/super-tabs/:tabId/native',
     { preHandler: [validateParams(tabParams), validateBody(openNativeSchema)] },
     (req, reply) => respond(reply, () => store.native.open(req.user!, req.params.tabId, req.body)))

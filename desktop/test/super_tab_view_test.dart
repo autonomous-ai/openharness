@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/super_tabs/roster.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -115,68 +116,53 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets(
-    'large text and a short window preserve navigation and creation',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(800, 480));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final previous = grid.AppTheme.brightness.value;
-      grid.AppTheme.brightness.value = Brightness.light;
-      addTearDown(() => grid.AppTheme.brightness.value = previous);
-      final server = ConversationServer();
-      (server.state['conversations'] as List)[1]['title'] =
-          'Offline editing across mobile and desktop';
-      final controller = server.controller();
-      await controller.refresh();
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: grid.buildAppTheme(brightness: Brightness.light),
-          builder: (context, child) => MediaQuery(
-            data: MediaQuery.of(context)
-                .copyWith(textScaler: const TextScaler.linear(2)),
-            child: child!,
-          ),
-          home: Scaffold(
-            body: SuperTabView(
-              controller: controller,
-              onInvite: () {},
-              onAddAgent: (_) {},
-              onOpenTerminal: (_) {},
-              machineName: (_) => 'Test Mac',
-            ),
+  testWidgets('large text and a short window preserve group navigation', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 480));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final previous = grid.AppTheme.brightness.value;
+    grid.AppTheme.brightness.value = Brightness.light;
+    addTearDown(() => grid.AppTheme.brightness.value = previous);
+    final server = ConversationServer();
+    (server.state['conversations'] as List)[1]['title'] =
+        'Offline editing across mobile and desktop';
+    final controller = server.controller();
+    await controller.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.light),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: Scaffold(
+          body: SuperTabView(
+            controller: controller,
+            onInvite: () {},
+            onAddAgent: (_) {},
+            onOpenTerminal: (_) {},
+            machineName: (_) => 'Test Mac',
           ),
         ),
-      );
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    if (find.byTooltip('Conversations').evaluate().isNotEmpty) {
+      await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-      if (find.byTooltip('Conversations').evaluate().isNotEmpty) {
-        await tester.tap(find.byTooltip('Conversations'));
-        await tester.pumpAndSettle();
-      }
-      await tester.tap(find.text('New group'));
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-      expect(
-        tester
-            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Create'))
-            .onPressed,
-        isNull,
-      );
-      final name = find.descendant(
-        of: find.byType(Dialog),
-        matching: find.byType(TextField),
-      );
-      await tester.enterText(name, 'Device testing');
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Create'));
-      await tester.pumpAndSettle();
-      expect(controller.selected?.title, 'Device testing');
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox());
-      await controller.flush();
-      controller.dispose();
-    },
-  );
+    }
+    await tester.tap(find.byKey(const ValueKey('super-group-offline')));
+    await tester.pumpAndSettle();
+    expect(controller.selectedId, 'offline');
+    expect(find.text('New group'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await controller.flush();
+    controller.dispose();
+  });
 
   testWidgets(
     'the narrow sidebar owns keyboard focus and Escape returns to the draft',
@@ -257,25 +243,20 @@ void main() {
       expect(find.text('CHATS'), findsNothing);
       expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
       expect(find.byKey(const ValueKey('super-group-offline')), findsOneWidget);
+      expect(find.text('New group'), findsNothing);
+      expect(find.byTooltip('Super Tab settings'), findsOneWidget);
+      expect(find.byTooltip('Invite people'), findsOneWidget);
       expect(
-        tester.getCenter(find.text('New group')).dy,
-        greaterThan(
-          tester
-              .getCenter(find.byKey(const ValueKey('super-group-offline')))
-              .dy,
-        ),
+        tester.getCenter(find.byTooltip('Invite people')).dx,
+        greaterThan(800),
       );
-      final invite = tester.getCenter(find.text('Invite'));
-      final create = tester.getCenter(find.text('New group'));
-      expect(invite.dy >= create.dy, isTrue);
-      if (invite.dy == create.dy) expect(invite.dx, greaterThan(create.dx));
       await tester.pumpWidget(const SizedBox());
       await controller.flush();
       controller.dispose();
     },
   );
 
-  for (final rename in [false, true]) {
+  for (final rename in [true]) {
     testWidgets(
       '${rename ? 'Rename' : 'New group'} clears its form when account access ends',
       (tester) async {
@@ -324,7 +305,7 @@ void main() {
   }
 
   testWidgets(
-    '20 people remain a count and Add agent targets the selected group',
+    'global roster stays scrollable with 20 people and opens an agent directly',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1100, 700));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -358,36 +339,37 @@ void main() {
       final controller = server.controller();
       await controller.refresh();
       controller.select('offline');
-      SuperTabConversation? target;
+      SuperTabAgent? target;
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
             body: SuperTabView(
               controller: controller,
               onInvite: () {},
-              onAddAgent: (group) => target = group,
-              onOpenTerminal: (_) {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (agent) => target = agent,
               machineName: (_) => 'Test Mac',
             ),
           ),
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('3 agents · 20 people'), findsOneWidget);
-      expect(find.text('Worker 0'), findsNothing);
-      await tester.tap(find.text('3 agents · 20 people'));
-      await tester.pumpAndSettle();
-      final search = find.descendant(
-        of: find.byType(Dialog),
-        matching: find.byType(TextField),
+      expect(find.text('Humans · 20'), findsOneWidget);
+      final member = find.byKey(const ValueKey('super-member-agent-0'));
+      await tester.scrollUntilVisible(
+        member,
+        150,
+        scrollable: find
+            .descendant(
+              of: find.byType(SuperTabRoster),
+              matching: find.byType(Scrollable),
+            )
+            .first,
       );
-      await tester.enterText(search, 'person19');
+      await tester.tap(member);
       await tester.pumpAndSettle();
-      expect(find.text('person19@example.com'), findsOneWidget);
-      expect(find.text('person1@example.com'), findsNothing);
-      await tester.tap(find.text('Add agent'));
-      await tester.pumpAndSettle();
-      expect(target?.id, 'offline');
+      expect(target?.id, 'agent-0');
+      expect(find.byType(Dialog), findsNothing);
       expect(controller.snapshot!.conversations, hasLength(2));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
@@ -397,7 +379,7 @@ void main() {
   );
 
   testWidgets(
-    'a native terminal sits beside the conversation and uses a return action when narrow',
+    'native terminals fill the middle, preserve both sidebars, and return to chat',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1100, 700));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -421,15 +403,14 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(
-        tester.getCenter(find.text('Native terminal fixture')).dx,
-        greaterThan(tester.getCenter(find.text('Review this result.')).dx),
-      );
+      expect(find.text('Native terminal fixture'), findsOneWidget);
+      expect(find.text('Review this result.'), findsNothing);
+      expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
+      expect(find.byType(SuperTabRoster), findsOneWidget);
       await tester.binding.setSurfaceSize(const Size(800, 700));
       await tester.pumpAndSettle();
-      expect(find.text('Back to conversation'), findsOneWidget);
-      expect(find.text('Review this result.'), findsNothing);
-      await tester.tap(find.text('Back to conversation'));
+      expect(find.text('Native terminal fixture'), findsOneWidget);
+      await tester.tap(find.text('Chat'));
       expect(closed, isTrue);
       expect(
         server.posts,

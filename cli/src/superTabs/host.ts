@@ -1,4 +1,5 @@
 import { publishObservers } from './observers.js'
+import { ContributedMachines } from './machines.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
@@ -77,6 +78,7 @@ export class SuperTabHost {
   private nextConfigurationsAt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
   private native: NativeRecorder | null = null
+  private machines: ContributedMachines | null = null
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
@@ -116,12 +118,13 @@ export class SuperTabHost {
   private persist(): void { this.write(this.file, this.journal) }
   start(): void {
     if (this.stopped || this.timer) return
-    this.timer = setInterval(() => { void this.tick(); void this.reconcileStops(); void this.reconcileReceipts(); this.recordNative() }, 1_000)
+    this.timer = setInterval(() => { void this.tick(); void this.reconcileStops(); void this.reconcileReceipts(); this.recordNative(); this.pollMachines() }, 1_000)
     this.timer.unref?.()
     void this.tick()
     void this.reconcileStops()
     void this.reconcileReceipts()
     this.recordNative()
+    this.pollMachines()
   }
   stop(): void {
     this.stopped = true
@@ -129,6 +132,7 @@ export class SuperTabHost {
     this.timer = null
     this.stopHearing()
     this.native?.stop()
+    this.machines?.stop()
     this.authorized.clear()
     try { this.observers(this.core.dataDir, this.machineId, [], 0) } catch { /* The old snapshot expires. */ }
     void this.core.turns.leaseDeliveries('superTabs', {})
@@ -138,6 +142,10 @@ export class SuperTabHost {
   prepareNative(tabId: unknown, contextId: unknown, renew: boolean, closed?: AbortSignal) {
     this.native ??= new NativeRecorder(this.core, this.machineId)
     return this.native.prepare(tabId, contextId, renew, closed)
+  }
+  private pollMachines() {
+    this.machines ??= new ContributedMachines(this.core, this.machineId)
+    void this.machines.tick().catch(error => this.log(error instanceof Error ? error.message : String(error)))
   }
   private recordNative(): void {
     if (!this.native?.hasWork || this.stopped) return

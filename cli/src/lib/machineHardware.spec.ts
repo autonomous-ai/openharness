@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { parseDarwinGpus, parseDarwinMemory, parseLinuxMemory, parseNvidiaGpus,
+import { parseDarwinDevice, parseDarwinGpus, parseDarwinMemory, parseLinuxMemory, parseNvidiaGpus,
   readMachineDisk, readMachineGpus, readMachineMemory } from './machineHardware.js'
 
 const mocks = vi.hoisted(() => ({ command: vi.fn(), readFile: vi.fn(), statfs: vi.fn() }))
@@ -92,4 +92,10 @@ describe('optional hardware readings', () => {
     mocks.statfs.mockRejectedValueOnce(new Error('denied'))
     expect(await readMachineDisk()).toEqual({ diskFreeBytes: null, diskTotalBytes: null })
   })
+})
+
+it('extracts device type and chip without retaining serials or UUIDs', () => {
+  expect(parseDarwinDevice(JSON.stringify({ SPHardwareDataType: [{ machine_name: 'MacBook Pro', chip_type: 'Apple M2 Max', serial_number: 'private', platform_UUID: 'private' }] })))
+    .toEqual({ deviceType: 'MacBook Pro', chip: 'Apple M2 Max' })
+  expect(parseDarwinDevice('{}')).toEqual({ deviceType: null, chip: null })
 })

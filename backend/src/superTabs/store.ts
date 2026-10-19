@@ -1,3 +1,4 @@
+import { machineContribution, machineObservationSchema, machineSlots, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
@@ -23,7 +24,7 @@ const stateOf = (row: SuperTab): SuperTabState => {
 }
 const indexes = (state: SuperTabState) => ({
   memberIds: state.people.map(p => p.id), invitedEmails: state.invitations.map(i => i.email),
-  machineIds: [...new Set([...state.agents.map(a => a.machineId),
+  machineIds: [...new Set([...state.agents.map(a => a.machineId), ...(state.machines ?? []).map(m => m.machineId),
     ...state.conversations.filter(activeWork).map(c => c.assignment!.execution.machineId)])],
 })
 
@@ -113,11 +114,18 @@ export class SuperTabStore {
     }
   }
 
-  private async contribution(tx: Transaction, state: SuperTabState, actor: Actor, command: { machineId: string }) {
+  private async contribution(tx: Transaction, state: SuperTabState, actor: Actor, command: { machineId: string }, pooled = false) {
     const contributorId = actor.kind === 'person' ? actor.userId : agent(state, actor.agentId).contributorId
     person(state, contributorId)
     const machine = await tx.machine.findFirst({ where: { machineId: command.machineId, autonomousEnv: state.environment, ...machineAlive } })
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This machine is unavailable.', 403)
+    if (pooled) {
+      const pool = machineContribution(state, command.machineId)
+      if (pool) {
+        if (pool.contributorId !== machine.userId) fail('CONTRIBUTION_REVOKED', 'The machine owner changed.', 403)
+        return { machineOwnerId: machine.userId, contributorId: pool.contributorId, hostGrant: null }
+      }
+    }
     let hostGrant: string | null = null
     if (machine.userId !== contributorId) {
       const contributor = actor.kind === 'person' ? { email: actor.email, autonomousEnv: state.environment } :
@@ -172,14 +180,14 @@ export class SuperTabStore {
       const row = await this.row(tx, user, tabId)
       const state = stateOf(row)
       const actor = await this.actor(tx, user, state, asAgentId)
-      return { revision: row.revision, state: visibleState(state, actor) }
+      return { revision: row.revision, state: { ...visibleState(state, actor), machines: state.machines?.map(pool => ({ ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, pool)) })) } }
     })
   }
 
-  async start(user: AuthUser, tabId: string, startId: string, asAgentId?: string) {
+  async start(user: AuthUser, tabId: string, startId: string, asAgentId?: string, hostMachineId?: string) {
     return transaction(this.db, async tx => {
       const state = stateOf(await this.row(tx, user, tabId))
-      const actor = await this.actor(tx, user, state, asAgentId)
+      const actor = hostMachineId ? await this.poolHostActor(tx, user, state, hostMachineId, startId) : await this.actor(tx, user, state, asAgentId)
       author(state, actor, true)
       const start = state.starts?.find(s => s.id === startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
       if (start.actorKey !== actorKey(actor) || person(state, start.contributorId).generation !== start.membershipGeneration) {
@@ -188,8 +196,8 @@ export class SuperTabStore {
       const group = conversation(state, start.request.conversationId)
       if (actor.kind === 'agent' && group.leadId !== actor.agentId) fail('LEAD_REQUIRED', 'The coordinating lead changed.', 403)
       if (group.archived) fail('ARCHIVED', 'This conversation is archived.')
-      if (state.paused && !start.harnessId) fail('PAUSED', 'New work is paused in this Super Tab.')
-      const grant = await this.contribution(tx, state, actor, start.request)
+      if (state.paused && !start.harnessId && !start.dispatched) fail('PAUSED', 'New work is paused in this Super Tab.')
+      const grant = await this.contribution(tx, state, actor, start.request, true)
       if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
         fail('CONTRIBUTION_REVOKED', 'This start belongs to a machine grant that was revoked.', 403)
       }
@@ -197,12 +205,15 @@ export class SuperTabStore {
     })
   }
 
-  async execute(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string) {
+  async execute(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string) {
     const { operationId, command } = operationSchema.parse(input)
     return transaction(this.db, async tx => {
       const row = await this.row(tx, user, tabId)
       const original = stateOf(row)
-      const actor = await this.actor(tx, user, original, asAgentId)
+      if (hostMachineId && !['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) fail('FORBIDDEN', 'A host can only settle its queued starts.', 403)
+      const actor = hostMachineId && 'startId' in command
+        ? await this.poolHostActor(tx, user, original, hostMachineId, command.startId)
+        : await this.actor(tx, user, original, asAgentId)
       const receiptId = stableId(tabId, actorKey(actor), operationId)
       const requestHash = hash(command)
       const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })
@@ -215,6 +226,10 @@ export class SuperTabStore {
       }
       if (command.type !== 'invite.accept') author(original, actor)
       const context: CommandContext = { operationId, now: this.now() }
+      if ('startId' in command && ['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) {
+        const start = original.starts?.find(s => s.id === command.startId)
+        if (start?.poolGeneration && !hostMachineId) fail('HOST_REQUIRED', 'Only the contributed machine can confirm this start.', 403)
+      }
       if (command.type === 'delivery.resolve') {
         author(original, actor, true)
         if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person must inspect an uncertain delivery before resolving it.', 403)
@@ -234,11 +249,11 @@ export class SuperTabStore {
           // The native receipt remains intact; the operation records the person's resolution.
         } })
       }
-      if (command.type === 'agent.add') context.contribution = await this.contribution(tx, original, actor, command)
-      if (command.type === 'agent.start') context.contribution = await this.contribution(tx, original, actor, command.request)
+      if (command.type === 'machine.contribute' || command.type === 'agent.add') context.contribution = await this.contribution(tx, original, actor, command)
+      if (command.type === 'agent.start') context.contribution = await this.contribution(tx, original, actor, command.request, true)
       if (command.type === 'agent.started' || command.type === 'agent.startDispatch') {
         const start = original.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
-        context.contribution = await this.contribution(tx, original, actor, start.request)
+        context.contribution = await this.contribution(tx, original, actor, start.request, true)
       }
       if (command.type === 'message.send' && command.replyTo) {
         const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
@@ -389,6 +404,59 @@ export class SuperTabStore {
   }
 
   /** Host polling discovers only registered sessions on its own machine, never unrelated tab transcripts. */
+  /** Narrow authority: the machine owner can finish a specific queued start,
+   * never submit arbitrary commands as its initiating person or lead. */
+  private async poolHostActor(tx: Transaction, user: AuthUser, state: SuperTabState, machineId: string, startId: string): Promise<Actor> {
+    const start = state.starts?.find(s => s.id === startId) ?? fail('NOT_FOUND', 'This start is unavailable.', 404)
+    const pool = machineContribution(state, machineId)
+    if (!pool || pool.contributorId !== user.sub || pool.generation !== start.poolGeneration || start.request.machineId !== machineId || start.machineOwnerId !== user.sub) {
+      fail('FORBIDDEN', 'This start does not belong to this machine contribution.', 403)
+    }
+    const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+    if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
+    let actor: Actor
+    if (start.actorKey.startsWith('agent:')) {
+      const lead = agent(state, start.actorKey.slice(6))
+      await this.agentGrant(tx, state, lead)
+      actor = { kind: 'agent', agentId: lead.id, machineOwnerId: lead.machineOwnerId }
+    } else {
+      const member = person(state, start.actorKey.slice(7))
+      actor = { kind: 'person', userId: member.id, email: member.email }
+    }
+    author(state, actor, true)
+    return actor
+  }
+
+  async hostPools(user: AuthUser, machineId: string) {
+    return transaction(this.db, async tx => {
+      const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+      if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
+      const rows = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, take: 100 })
+      return rows.flatMap(row => {
+        const state = stateOf(row)
+        let pool
+        try { pool = machineContribution(state, machineId) } catch (error) { if (error instanceof SuperTabError) return []; throw error }
+        if (!pool || pool.contributorId !== user.sub) return []
+        const starts = (state.starts ?? []).filter(s => s.request.machineId === machineId && s.poolGeneration === pool.generation && (!s.harnessId || !s.poolSettled) && !s.error)
+        return [{ tabId: row.id, paused: state.paused, machine: pool, starts, harnessIds: [...new Set([...state.agents.filter(a => a.machineId === machineId).map(a => a.harnessId), ...(state.starts ?? []).filter(s => s.request.machineId === machineId && s.harnessId).map(s => s.harnessId!)])] }]
+      })
+    })
+  }
+
+  async observeMachine(user: AuthUser, tabId: string, machineId: string, input: MachineObservation) {
+    const observation = machineObservationSchema.parse(input)
+    return transaction(this.db, async tx => {
+      const row = await this.row(tx, user, tabId), state = structuredClone(stateOf(row))
+      const pool = machineContribution(state, machineId)
+      if (!pool || pool.contributorId !== user.sub || pool.generation !== observation.generation) fail('CONTRIBUTION_REVOKED', 'Read the current machine contribution.', 403)
+      const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+      if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
+      pool.observation = { ...observation, quotas: observation.quotas.filter(q => pool.engines.includes(q.engine)), receivedAt: this.now() }
+      await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: { state: json(state), revision: row.revision + 1 } })
+      return { revision: row.revision + 1 }
+    })
+  }
+
   async hostTabs(user: AuthUser, machineId: string) {
     return transaction(this.db, async tx => {
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })

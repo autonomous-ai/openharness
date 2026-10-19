@@ -57,6 +57,16 @@ class SuperTabController extends ChangeNotifier {
           }
         }
       }
+      final hidden = initial['hiddenTerminals'];
+      if (hidden is Map) {
+        for (final entry in hidden.entries) {
+          if (entry.key is String && entry.value is List) {
+            _hiddenTerminals[entry.key as String] = (entry.value as List)
+                .whereType<String>()
+                .toSet();
+          }
+        }
+      }
       final mentions = initial['mentions'];
       if (mentions is Map) {
         for (final group in mentions.entries) {
@@ -102,6 +112,7 @@ class SuperTabController extends ChangeNotifier {
   Map<String, dynamic>? _pending;
   final _drafts = <String, String>{};
   final _terminals = <String, String>{};
+  final _hiddenTerminals = <String, Set<String>>{};
   final _mentions = <String, Map<String, String>>{};
   final _readAt = <String, int>{};
   final _messages = <String, List<SuperTabMessage>>{};
@@ -121,11 +132,47 @@ class SuperTabController extends ChangeNotifier {
       _pending == null ? null : superTabMap(_pending!['command']);
   String draft(String id) => _drafts[id] ?? '';
   SuperTabAgent? terminalAgent(String conversationId) {
-    if (accessRevoked) return null;
+    return terminalAgents(conversationId).firstOrNull;
+  }
+
+  List<SuperTabAgent> terminalAgents(String conversationId) {
+    if (accessRevoked) return const [];
     final id = _terminals[conversationId];
     final group = snapshot?.conversation(conversationId);
-    if (id == null || group?.agentIds.contains(id) != true) return null;
-    return snapshot?.agents.where((a) => a.id == id).firstOrNull;
+    if (id == null || group == null) return const [];
+    return snapshot!.agents
+        .where(
+          (agent) =>
+              group.agentIds.contains(agent.id) &&
+              (id == '*' || id == agent.id) &&
+              !(_hiddenTerminals[conversationId]?.contains(agent.id) ?? false),
+        )
+        .toList();
+  }
+
+  void selectGroupTerminals(String conversationId) {
+    if (_disposed ||
+        accessRevoked ||
+        snapshot?.conversation(conversationId) == null) {
+      return;
+    }
+    _hiddenTerminals.remove(conversationId);
+    _terminals[conversationId] = '*';
+    _saveSoon();
+    _changed();
+  }
+
+  void hideTerminal(String conversationId, String machineId, String harnessId) {
+    final agent = terminalAgents(conversationId)
+        .where((a) => a.machineId == machineId && a.harnessId == harnessId)
+        .firstOrNull;
+    if (agent == null) return;
+    (_hiddenTerminals[conversationId] ??= {}).add(agent.id);
+    if (terminalAgents(conversationId).isEmpty) {
+      _terminals.remove(conversationId);
+    }
+    _saveSoon();
+    _changed();
   }
 
   void selectTerminal(String conversationId, String? agentId) {
@@ -135,7 +182,11 @@ class SuperTabController extends ChangeNotifier {
             true) {
       return;
     }
-    if (_terminals[conversationId] == agentId) return;
+    if (_terminals[conversationId] == agentId &&
+        _hiddenTerminals[conversationId] == null) {
+      return;
+    }
+    _hiddenTerminals.remove(conversationId);
     if (agentId == null) {
       _terminals.remove(conversationId);
     } else {
@@ -182,6 +233,10 @@ class SuperTabController extends ChangeNotifier {
     'selectedId': selectedId,
     'drafts': Map<String, String>.of(_drafts),
     'terminals': Map<String, String>.of(_terminals),
+    'hiddenTerminals': {
+      for (final entry in _hiddenTerminals.entries)
+        entry.key: entry.value.toList(),
+    },
     'mentions': {
       for (final entry in _mentions.entries)
         entry.key: Map<String, String>.of(entry.value),

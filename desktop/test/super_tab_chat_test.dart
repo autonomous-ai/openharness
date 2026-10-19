@@ -86,11 +86,14 @@ void main() {
         find.descendant(of: reply, matching: find.text('Lead')),
         findsOneWidget,
       );
-      await tester.tap(find.text('1 agent · 1 person'));
+      await tester.tap(find.byTooltip('Members and machines'));
       await tester.pumpAndSettle();
       expect(find.text('hi'), findsNothing);
       expect(find.text('Lead'), findsWidgets);
-      expect(find.text('Open terminal'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('super-member-lead-agent')),
+        findsOneWidget,
+      );
     },
   );
 
@@ -209,6 +212,17 @@ void main() {
     'a human request belongs only to its group and clears with the recorded state',
     (tester) async {
       final server = ConversationServer();
+      server.state['agents'] = [
+        {
+          'id': 'builder',
+          'name': 'Builder',
+          'machineId': 'host',
+          'harnessId': 'session',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'codex'},
+        },
+      ];
+      (server.state['conversations'] as List)[1]['agentIds'] = ['builder'];
       final group = (server.state['conversations'] as List)[1] as Map;
       group['assignment'] = {
         'id': 'attempt',
@@ -217,15 +231,15 @@ void main() {
         'result': 'Which device should I test?',
       };
       final c = await show(tester, server);
-      expect(find.text('Needs a human'), findsNothing);
+      expect(find.text('Builder needs you'), findsNothing);
       c.select('offline');
       await tester.pumpAndSettle();
-      expect(find.text('Needs a human'), findsOneWidget);
+      expect(find.text('Builder needs you'), findsOneWidget);
       group['assignment']['status'] = 'working';
       server.revision++;
       await c.refresh();
       await tester.pumpAndSettle();
-      expect(find.text('Needs a human'), findsNothing);
+      expect(find.text('Builder needs you'), findsNothing);
     },
   );
 
