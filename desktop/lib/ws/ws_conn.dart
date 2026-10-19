@@ -91,7 +91,7 @@ class WsConn {
 
   /// How the local daemon is reached (see [LocalDaemonTransport]). When it
   /// names a socket, a local connection dials [localWsUri]'s path over it and
-  /// falls back to [localWsUri] itself if the socket cannot be reached.
+  /// falls back to the port. Windows uses only the authenticated pipe.
   final LocalDaemonTransport? localTransport;
 
   /// Retained only for fixture constructor compatibility. Local transport ignores it.
@@ -200,17 +200,13 @@ class WsConn {
       : 'cloud:$wsBaseUrl:$autonomousEnv';
 
   bool _overPipe = false;
-  DateTime? _pipeAskedAt;
-  bool _askingPipe = false;
 
-  /// How often [moveToTrustedPipe] asks the pipe again.
-  static const trustedPipeRetry = Duration(seconds: 10);
-
-  /// Whether this is the trusted window connection on Windows but rides the
-  /// loopback port: the pipe was missing, unproven or broken when it
-  /// connected, so the daemon would refuse its `daemon_*` frames.
+  /// Whether the last connection attempt could not establish the private
+  /// pipe. The normal reconnect loop asks for the current pipe again.
   bool get trustedPipeMissing =>
-      trustedLocal && localTransport?.trustedPipe != null && !_overPipe;
+      trustedLocal &&
+      (localTransport?.trustedPipe?.unavailable ?? false) &&
+      !_overPipe;
 
   WsConn({
     required this.wsBaseUrl,
@@ -270,11 +266,8 @@ class WsConn {
     }
   }
 
-  /// This computer's window connection over the daemon's Windows pipe, or null
-  /// when the pipe is missing, did not prove itself, or broke: the loopback
-  /// port carries the connection then, and the trusted frames wait. The pipe is
-  /// looked up afresh on every connect, so a daemon that restarted under a new
-  /// pipe name is found, and the name it left is never dialled again.
+  /// The daemon's Windows pipe, or null when it is missing or unproven. The
+  /// pipe is looked up afresh on every reconnect, including after a restart.
   Future<WebSocketChannel?> _connectTrustedPipe(
     Uri uri,
     TrustedPipe pipe,
@@ -286,32 +279,12 @@ class WsConn {
     }
   }
 
-  /// Puts the trusted frames back on the pipe. When this connection had to take
-  /// the loopback port ([trustedPipeMissing]), asks whether a pipe proves itself
-  /// now, at most once per [trustedPipeRetry]; if one does, drops the port
-  /// connection, and the reconnect (a second, for this computer) dials the pipe.
-  /// The trusted callers call it each time they find the pipe missing.
-  Future<void> moveToTrustedPipe() async {
-    final pipe = localTransport?.trustedPipe;
-    if (pipe == null || !trustedPipeMissing || _closing || _askingPipe) return;
-    final now = DateTime.now();
-    final asked = _pipeAskedAt;
-    if (asked != null && now.difference(asked) < trustedPipeRetry) return;
-    _pipeAskedAt = now;
-    _askingPipe = true;
-    try {
-      if (!await pipe.probe()) return;
-      final channel = _channel;
-      if (_closing || channel == null || !trustedPipeMissing) return;
-      await channel.sink.close(4000, 'the trusted pipe is back');
-    } finally {
-      _askingPipe = false;
-    }
-  }
-
   /// The local WebSocket over the daemon's loopback port, showing its local
   /// credential: the port takes any OS user's process, the socket only ours.
   WebSocketChannel _connectLocalPort(Uri uri) {
+    if (Platform.isWindows) {
+      throw StateError('The local daemon pipe is unavailable');
+    }
     final transport =
         localTransport ??
         LocalDaemonTransport(
@@ -384,10 +357,13 @@ class WsConn {
           },
         );
       }
-      final pipe = isLocal && trustedLocal ? localTransport?.trustedPipe : null;
+      final pipe = isLocal ? localTransport?.trustedPipe : null;
       final overPipe = pipe == null
           ? null
           : await _connectTrustedPipe(uri, pipe);
+      if (pipe != null && overPipe == null) {
+        throw StateError('The local daemon pipe is unavailable');
+      }
       final socket = isLocal && overPipe == null ? _localSocket() : null;
       final channel =
           overPipe ??

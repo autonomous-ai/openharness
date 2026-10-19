@@ -29,15 +29,6 @@ String daemonSocketName(int port) => 'daemon-$port.sock';
 /// the app look for one.
 const _maxSocketPathBytes = 96;
 
-/// The daemon's data folder: `$ADAPTER_DATA_DIR`, by default
-/// `~/.harness/cli/data` — or null with no home to put it in.
-String? defaultDaemonDataDir({Map<String, String>? environment}) {
-  final env = environment ?? Platform.environment;
-  final home = env['HOME'] ?? env['USERPROFILE'];
-  return env['ADAPTER_DATA_DIR'] ??
-      (home == null || home.isEmpty ? null : '$home/.harness/cli/data');
-}
-
 /// Where the socket of the daemon on [port] would be —
 /// `$ADAPTER_DATA_DIR/daemon-<port>.sock`, by default
 /// `~/.harness/cli/data/daemon-<port>.sock` — or null where there is none
@@ -94,7 +85,7 @@ class LocalDaemonTransport {
 
   /// The transport to the daemon at [daemonBase] (the loopback address the app
   /// would otherwise dial): the socket named for its port, the Windows pipe
-  /// for trusted routes, and the credential for loopback TCP. Under `flutter
+  /// for all local routes, and the credential for non-Windows loopback TCP. Under `flutter
   /// test`, no real daemon transport or credential is reached.
   factory LocalDaemonTransport.detect(Uri daemonBase) => LocalDaemonTransport(
     candidate: kUnderTest ? null : defaultDaemonSocketPath(daemonBase.port),
@@ -116,13 +107,11 @@ class LocalDaemonTransport {
   final String? candidate;
 
   /// Windows: the daemon's authenticated pipe (CLI `listenAuthenticated`),
-  /// which carries the trusted routes ([trustedDaemonRoutes]) and this
-  /// computer's window connection, where the daemon takes its `daemon_*`
-  /// frames. Null elsewhere: there the socket's file mode is the trust.
+  /// which carries all local REST and WebSocket traffic. The window connection
+  /// also carries `daemon_*` frames there. Null elsewhere.
   final TrustedPipe? trustedPipe;
 
-  /// Whether the trusted routes cannot be served right now: on Windows, the
-  /// last look found no pipe that proved itself. Never true off Windows.
+  /// Whether the last Windows pipe request failed its proof or connection.
   bool get trustedRoutesUnavailable => trustedPipe?.unavailable ?? false;
 
   /// Windows: reads the loopback port the daemon actually bound from its
@@ -163,10 +152,12 @@ class LocalDaemonTransport {
   /// one (tests).
   final String? Function()? credential;
 
-  /// What a call over the loopback PORT adds: the daemon's local credential,
-  /// read each time so a daemon that made a new one is not refused. Empty when
-  /// there is none to read.
+  /// The credential for non-Windows loopback TCP. Windows never sends it to a
+  /// port, since a stale record can name a port another process now owns.
   Map<String, String> tcpHeaders() {
+    // A stale Windows daemon record can name a port another process now owns.
+    // Never show the credential to a TCP listener when a private pipe is used.
+    if (Platform.isWindows || trustedPipe != null) return const {};
     final value = credential?.call();
     return value == null ? const {} : {daemonCredentialHeader: value};
   }
@@ -202,10 +193,8 @@ bool isConnectionFailure(Object error) {
   return false;
 }
 
-/// Sends daemon REST over [transport]'s socket when there is one, and over the
-/// loopback port otherwise — including, once, when the socket cannot be
-/// reached: the request is retried on the port and the transport falls back
-/// until discovery finds the socket again.
+/// Sends Windows daemon REST over its authenticated pipe. Elsewhere it uses
+/// the Unix socket when available and falls back to the loopback port.
 class LocalDaemonHttpAdapter implements HttpClientAdapter {
   LocalDaemonHttpAdapter(this.transport, {required this.daemonBase});
 
@@ -241,9 +230,7 @@ class LocalDaemonHttpAdapter implements HttpClientAdapter {
         uri.host == daemonBase.host &&
         uri.port == daemonBase.port;
     final pipe = transport.trustedPipe;
-    if (pipe != null &&
-        toDaemon &&
-        isTrustedDaemonRoute(options.method, uri.path)) {
+    if (pipe != null && toDaemon) {
       return _overPipe(pipe, options, requestStream);
     }
     // Over the port, the daemon wants its local credential.
@@ -282,9 +269,8 @@ class LocalDaemonHttpAdapter implements HttpClientAdapter {
     );
   }
 
-  /// A trusted route on Windows: over the daemon's pipe, never the port, where
-  /// the daemon would refuse it. No proven pipe is a connection error, which
-  /// the caller already treats as an older daemon's missing route.
+  /// A local Windows request over the daemon's proven pipe. No proven pipe is
+  /// a connection error, so the caller can retry when the daemon returns.
   Future<ResponseBody> _overPipe(
     TrustedPipe pipe,
     RequestOptions options,
@@ -308,6 +294,7 @@ class LocalDaemonHttpAdapter implements HttpClientAdapter {
         uri.hasQuery ? '${uri.path}?${uri.query}' : uri.path,
         headers: headers,
         body: body.takeBytes(),
+        timeout: options.receiveTimeout,
       );
       return ResponseBody.fromBytes(
         answer.body,

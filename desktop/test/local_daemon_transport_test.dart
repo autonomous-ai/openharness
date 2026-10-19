@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/ws/daemon_pipe_record.dart' show defaultDaemonDataDir;
 import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/ws/local_daemon_transport.dart';
 import 'package:harness/ws/ws_conn.dart';
@@ -106,6 +107,16 @@ void main() {
   );
 
   group('defaultDaemonSocketPath', () {
+    test('uses USERPROFILE when a Windows shell also sets HOME', () {
+      expect(
+        defaultDaemonDataDir(
+          environment: {'USERPROFILE': r'C:\Users\me', 'HOME': '/c/Users/me'},
+          isWindows: true,
+        ),
+        r'C:\Users\me\.harness\cli\data',
+      );
+    });
+
     test('is the socket for the daemon\'s port in the CLI data directory', () {
       expect(
         defaultDaemonSocketPath(18473, environment: {'HOME': '/Users/me'}, isWindows: false),

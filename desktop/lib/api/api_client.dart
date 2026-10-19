@@ -394,7 +394,7 @@ class ApiClient {
   /// Minted by the backend against the daemon's own session, and the daemon
   /// hands it out over its owner-only socket and nowhere else — a code that
   /// signs a device in is a credential. So null is an ordinary answer: an
-  /// older daemon or backend, this app on the TCP fallback, the backend down.
+  /// older daemon or backend, a missing private transport, the backend down.
   /// The QR then goes without it and the phone falls back to the email code.
   Future<({String code, Duration ttl})?> phoneSignInCode() async {
     try {

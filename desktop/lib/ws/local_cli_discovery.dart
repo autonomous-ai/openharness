@@ -214,8 +214,8 @@ class LocalCliDiscovery {
   final Future<void> Function() _spawnCommand;
   final Future<void> Function() _stopCommand;
 
-  /// Which way the daemon is reached — its socket or the loopback port. Shared
-  /// with REST and the local WebSocket; [probe] decides it.
+  /// The daemon's local transport: a Windows pipe, Unix socket, or loopback
+  /// port. Shared with REST and the local WebSocket.
   final LocalDaemonTransport transport;
 
   LocalCliDiscovery({
@@ -534,8 +534,16 @@ class LocalCliDiscovery {
     if (base.host != '127.0.0.1' && base.host != 'localhost') {
       return const LocalCliProbe.down('the local CLI address is not loopback');
     }
-    // Windows: the port the daemon recorded. Another user's daemon on the
-    // configured port is never asked.
+    if (transport.trustedPipe != null) {
+      return _probeStatus(
+        _trustedPipeDio(base),
+        base.resolve('/api/status'),
+        base,
+        localComputerId,
+        socketPath: null,
+      );
+    }
+    // On systems without a private pipe, follow a recorded port when present.
     final tcpBase = transport.refreshTcpBase(base);
     if (tcpBase == null) {
       return const LocalCliProbe.down(
@@ -553,6 +561,15 @@ class LocalCliDiscovery {
 
   Dio? _socketProbe;
   String? _socketProbePath;
+  Dio? _trustedPipeProbe;
+
+  Dio _trustedPipeDio(Uri base) => _trustedPipeProbe ??= Dio(
+    BaseOptions(
+      connectTimeout: const Duration(milliseconds: 400),
+      receiveTimeout: const Duration(milliseconds: 400),
+      sendTimeout: const Duration(milliseconds: 400),
+    ),
+  )..httpClientAdapter = LocalDaemonHttpAdapter(transport, daemonBase: base);
 
   Dio _socketDio(String path) {
     if (_socketProbe == null || _socketProbePath != path) {

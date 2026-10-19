@@ -4,8 +4,7 @@ import 'package:harness/ws/ws_conn.dart';
 
 import 'swarm_state_test.dart' show createApp;
 
-/// This computer's socket, ready, and on the loopback port or its private pipe
-/// as [missing] says ([WsConn.trustedPipeMissing]).
+/// This computer's connection, with the private pipe available or missing.
 class _Conn extends WsConn {
   _Conn({required this.missing})
     : super(
@@ -23,16 +22,13 @@ class _Conn extends WsConn {
 
   bool missing;
   final sent = <String>[];
-  var moves = 0;
+  bool ready = true;
 
   @override
-  bool get isReady => true;
+  bool get isReady => ready;
 
   @override
   bool get trustedPipeMissing => missing;
-
-  @override
-  Future<void> moveToTrustedPipe() async => moves++;
 
   @override
   Future<bool> sendTerminalFrame(
@@ -47,8 +43,41 @@ class _Conn extends WsConn {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('the daemon_* frames go only on harnessd\'s private connection; without it none is sent and the pipe is asked again', () async {
-    final conn = _Conn(missing: true);
+  test(
+    'the daemon_* frames go only on harnessd\'s private connection',
+    () async {
+      final conn = _Conn(missing: true);
+      final app = createApp(connectionForTest: (_) => conn, connected: true);
+      addTearDown(app.dispose);
+      app.machineStates['m']!.localEndpoint = LocalCliEndpoint(
+        computerId: '0123456789abcdef0123456789abcdef',
+        wsUri: Uri.parse('ws://127.0.0.1:1/ws'),
+        protocolVersion: 1,
+        terminalProtocolVersion: 3,
+      );
+      app.adoptPoolConnectionForTest('m', conn);
+
+      expect(app.daemonTrustedConnectionMissing, isTrue);
+      expect(
+        app.sendDaemonFrame('daemon_act', {'id': 's1', 'choice': 'y'}),
+        isFalse,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(conn.sent, isEmpty);
+
+      conn.missing = false;
+      expect(app.daemonTrustedConnectionMissing, isFalse);
+      expect(
+        app.sendDaemonFrame('daemon_act', {'id': 's1', 'choice': 'y'}),
+        isTrue,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(conn.sent, ['daemon_act']);
+    },
+  );
+
+  test('a failed private-pipe connection reports why daemon frames are unavailable', () {
+    final conn = _Conn(missing: true)..ready = false;
     final app = createApp(connectionForTest: (_) => conn, connected: true);
     addTearDown(app.dispose);
     app.machineStates['m']!.localEndpoint = LocalCliEndpoint(
@@ -58,24 +87,6 @@ void main() {
       terminalProtocolVersion: 3,
     );
     app.adoptPoolConnectionForTest('m', conn);
-
     expect(app.daemonTrustedConnectionMissing, isTrue);
-    expect(
-      app.sendDaemonFrame('daemon_act', {'id': 's1', 'choice': 'y'}),
-      isFalse,
-    );
-    await Future<void>.delayed(Duration.zero);
-    expect(conn.sent, isEmpty);
-    expect(conn.moves, 1);
-
-    conn.missing = false;
-    expect(app.daemonTrustedConnectionMissing, isFalse);
-    expect(
-      app.sendDaemonFrame('daemon_act', {'id': 's1', 'choice': 'y'}),
-      isTrue,
-    );
-    await Future<void>.delayed(Duration.zero);
-    expect(conn.sent, ['daemon_act']);
-    expect(conn.moves, 1);
   });
 }

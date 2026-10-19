@@ -911,7 +911,10 @@ describe('the daemon socket', () => {
       expect(await viaSocket(socketPath, 'POST', '/api/daemon/stop')).toBe(403)
       const port = (started.server.address() as { port: number }).port
       const tcp = await fetch(`http://127.0.0.1:${port}/api/daemon/stop`, { method: 'POST', headers: local })
-      expect(tcp.status).toBe(403)
+      expect(tcp.status).toBe(401)
+      const credential = readHookCredential(env.ADAPTER_DATA_DIR) ?? ''
+      const credentialed = await fetch(`http://127.0.0.1:${port}/api/daemon/stop`, { method: 'POST', headers: { ...local, 'x-harness-local': credential } })
+      expect(credentialed.status).toBe(403)
       expect(onDaemonStop).toHaveBeenCalledTimes(1)
     } finally {
       await started.localSocket?.close()

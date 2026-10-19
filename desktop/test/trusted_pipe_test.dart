@@ -9,6 +9,7 @@ import 'package:harness/e2ee/primitives.dart' show hmacSha256;
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/ws/daemon_pipe_record.dart';
 import 'package:harness/ws/local_daemon_transport.dart';
 import 'package:harness/ws/trusted_pipe.dart';
@@ -114,7 +115,7 @@ void main() {
             (request) => proven(
               request,
               '200 OK',
-              'transfer-encoding: chunked\r\n\r\n400001\r\n',
+              'transfer-encoding: chunked\r\n\r\n1000001\r\n',
             ),
           ).request('GET', '/api/status'),
           throwsA(
@@ -126,6 +127,21 @@ void main() {
           ),
         );
       });
+
+      test(
+        'reads a proven REST answer larger than the former 4 MiB limit',
+        () async {
+          final payload = 'x' * (4 * 1024 * 1024 + 1);
+          final answer = await scripted(
+            (request) => proven(
+              request,
+              '200 OK',
+              'content-length: ${payload.length}\r\n\r\n$payload',
+            ),
+          ).request('GET', '/api/machines');
+          expect(answer.body.length, payload.length);
+        },
+      );
 
       test('rejects a complete oversized status line', () async {
         await expectLater(
@@ -228,6 +244,28 @@ void main() {
         expect((await pipe.request('GET', '/api/status')).status, 200);
         expect(daemon.refused, isEmpty);
         expect(pipe.unavailable, isFalse);
+      });
+
+      test('a long-poll request can keep its own receive deadline', () async {
+        final pipe = TrustedPipe(
+          lookup: () => DaemonPipeRecord(
+            pipePath: '/unused/harness-${'a' * 32}',
+            pipeId: 'a' * 32,
+            token: _token,
+          ),
+          dial: (_) async => _AnswerPipe(
+            (request) =>
+                proven(request, '200 OK', 'content-length: 2\r\n\r\nok'),
+            delay: const Duration(milliseconds: 80),
+          ),
+          timeout: const Duration(milliseconds: 30),
+        );
+        final answer = await pipe.request(
+          'POST',
+          '/api/pair',
+          timeout: const Duration(milliseconds: 200),
+        );
+        expect(utf8.decode(answer.body), 'ok');
       });
 
       test(
@@ -403,21 +441,178 @@ void main() {
         }
       }
 
-      test('the Add Phone code goes over the pipe, and everything else over the port', () async {
+      test('every local REST call uses the proven pipe, without exposing the credential to TCP', () async {
         final tcp = await start(PipeDaemon.tcp());
         final daemon = await start(PipeDaemon.pipe(dir, _token));
         writeDaemonRecord(dir, _port, daemon.path, _token);
         final client = api(
           tcp,
-          LocalDaemonTransport(trustedPipe: trustedPipe()),
+          LocalDaemonTransport(
+            trustedPipe: trustedPipe(),
+            credential: () => 'secret',
+          ),
         );
 
         expect((await client.phoneSignInCode())?.code, 'hnh_pipe');
         expect(client.phoneSignInUnavailable, isFalse);
         await client.me().catchError((_) => <String, dynamic>{});
-        expect(daemon.hits, ['POST /api/auth/handoff']);
-        expect(tcp.hits, ['GET /api/auth/me']);
+        expect(daemon.hits, [
+          'GET /api/status',
+          'POST /api/auth/handoff',
+          'GET /api/auth/me',
+        ]);
+        expect(tcp.hits, isEmpty);
       });
+
+      test(
+        'a missing pipe never sends REST or a local credential to stale TCP',
+        () async {
+          final tcp = await start(PipeDaemon.tcp());
+          final client = api(
+            tcp,
+            LocalDaemonTransport(
+              trustedPipe: trustedPipe(),
+              credential: () => 'secret',
+            ),
+          );
+          await expectLater(client.me(), throwsA(anything));
+          expect(tcp.hits, isEmpty);
+        },
+      );
+
+      test(
+        'discovery does not probe a stale TCP port when the pipe is missing',
+        () async {
+          final tcp = await start(PipeDaemon.tcp());
+          const computerId = '0123456789abcdef0123456789abcdef';
+          final identity = File('${dir.path}/computer-id')
+            ..writeAsStringSync(computerId);
+          final discovery = LocalCliDiscovery(
+            config: AppConfig(
+              apiBaseUrl: 'https://harness-api.autonomous.ai',
+              localCliBaseUrl: 'http://127.0.0.1:${tcp.server.port}',
+            ),
+            identity: LocalMachineIdentity(computerIdFile: identity),
+            transport: LocalDaemonTransport(
+              trustedPipe: trustedPipe(),
+              recordedPort: () => tcp.server.port,
+              credential: () => 'secret',
+            ),
+          );
+          expect((await discovery.probe()).alive, isFalse);
+          expect(tcp.hits, isEmpty);
+        },
+      );
+
+      test('discovery accepts status from the proven pipe', () async {
+        final tcp = await start(PipeDaemon.tcp());
+        const computerId = '0123456789abcdef0123456789abcdef';
+        final daemon = await start(
+          PipeDaemon.pipe(
+            dir,
+            _token,
+            status: {
+              'computerId': computerId,
+              'machineId': 'm1',
+              'localWs': {
+                'path': '/api/local-ws',
+                'protocolVersion': 1,
+                'terminalProtocolVersion': 3,
+                'e2ee': false,
+              },
+            },
+          ),
+        );
+        writeDaemonRecord(dir, _port, daemon.path, _token);
+        final identity = File('${dir.path}/computer-id')
+          ..writeAsStringSync(computerId);
+        final discovery = LocalCliDiscovery(
+          config: AppConfig(
+            apiBaseUrl: 'https://harness-api.autonomous.ai',
+            localCliBaseUrl: 'http://127.0.0.1:${tcp.server.port}',
+          ),
+          identity: LocalMachineIdentity(computerIdFile: identity),
+          transport: LocalDaemonTransport(
+            trustedPipe: trustedPipe(),
+            recordedPort: () => tcp.server.port,
+            credential: () => 'secret',
+          ),
+        );
+        expect((await discovery.probe()).ready, isTrue);
+        expect(daemon.hits, ['GET /api/status']);
+        expect(tcp.hits, isEmpty);
+      });
+
+      test(
+        'discovery abandons an accepted pipe that does not answer promptly',
+        () async {
+          final daemon = await start(
+            PipeDaemon.pipe(dir, _token, hangStatus: true),
+          );
+          writeDaemonRecord(dir, _port, daemon.path, _token);
+          const computerId = '0123456789abcdef0123456789abcdef';
+          final identity = File('${dir.path}/computer-id')
+            ..writeAsStringSync(computerId);
+          final pipe = TrustedPipe(
+            lookup: () => readDaemonPipeRecord(
+              dataDir: dir.path,
+              port: _port,
+              isWindows: false,
+            ),
+            dial: dialStandIn,
+            timeout: const Duration(seconds: 2),
+          );
+          final discovery = LocalCliDiscovery(
+            config: const AppConfig(
+              apiBaseUrl: 'https://harness-api.autonomous.ai',
+              localCliBaseUrl: 'http://127.0.0.1:28473',
+            ),
+            identity: LocalMachineIdentity(computerIdFile: identity),
+            transport: LocalDaemonTransport(trustedPipe: pipe),
+          );
+          final clock = Stopwatch()..start();
+          expect((await discovery.probe()).alive, isFalse);
+          expect(clock.elapsed, lessThan(const Duration(seconds: 1)));
+          expect(daemon.hits, ['GET /api/status']);
+        },
+      );
+
+      test('a lying pipe never receives a sign-in approval body', () async {
+        final tcp = await start(PipeDaemon.tcp());
+        final squatter = await start(PipeDaemon.pipe(dir, _token, lies: true));
+        writeDaemonRecord(dir, _port, squatter.path, _token);
+        final client = api(
+          tcp,
+          LocalDaemonTransport(trustedPipe: trustedPipe()),
+        );
+        await expectLater(
+          client.approveSignIn('SENSITIVE_CODE'),
+          throwsA(anything),
+        );
+        expect(squatter.hits, ['GET /api/status']);
+        expect(squatter.bodies.join(), isNot(contains('SENSITIVE_CODE')));
+        expect(tcp.hits, isEmpty);
+      });
+
+      test(
+        'a proven pipe accepts a request body on the same connection',
+        () async {
+          final tcp = await start(PipeDaemon.tcp());
+          final daemon = await start(PipeDaemon.pipe(dir, _token));
+          writeDaemonRecord(dir, _port, daemon.path, _token);
+          final client = api(
+            tcp,
+            LocalDaemonTransport(trustedPipe: trustedPipe()),
+          );
+          await expectLater(
+            client.approveSignIn('TEST_CODE'),
+            throwsA(anything),
+          );
+          expect(daemon.hits, ['GET /api/status', 'POST /api/auth/qr/approve']);
+          expect(daemon.bodies.last, contains('TEST_CODE'));
+          expect(tcp.hits, isEmpty);
+        },
+      );
 
       test('with no proven pipe the code is unavailable and never sent to the port', () async {
         final tcp = await start(PipeDaemon.tcp());
@@ -470,7 +665,7 @@ void main() {
         expect(await actRefusal(conn), 'UNSUPPORTED');
       });
 
-      test('a relayed machine\'s connection stays on the port', () async {
+      test('a relayed machine\'s local connection uses the pipe', () async {
         final tcp = await start(PipeDaemon.tcp());
         final daemon = await start(PipeDaemon.pipe(dir, _token));
         writeDaemonRecord(dir, _port, daemon.path, _token);
@@ -491,36 +686,25 @@ void main() {
         addTearDown(conn.close);
         await conn.connect();
         await until(() => conn.isReady);
-        expect(tcp.selects, 1);
-        expect(daemon.hits, isEmpty);
+        expect(tcp.selects, 0);
+        expect(daemon.selects, 1);
         expect(conn.trustedPipeMissing, isFalse);
       });
 
-      test('a missing pipe falls back to the port, says the trusted frames are unavailable, and moves back once the pipe proves itself', () async {
+      test('a missing pipe never falls back to a stale port', () async {
         final tcp = await start(PipeDaemon.tcp());
         final transport = LocalDaemonTransport(trustedPipe: trustedPipe());
         final conn = connFor(tcp, transport);
         addTearDown(conn.close);
         await conn.connect();
-        await until(() => conn.isReady);
-
-        expect(tcp.selects, 1);
+        expect(conn.isReady, isFalse);
+        expect(tcp.selects, 0);
         expect(conn.trustedPipeMissing, isTrue);
         expect(transport.trustedRoutesUnavailable, isTrue);
-        expect(await actRefusal(conn), 'LOCAL_SOCKET_REQUIRED');
-
-        // The daemon's pipe is there now: the next trusted ask moves the connection onto it.
-        final daemon = await start(PipeDaemon.pipe(dir, _token));
-        writeDaemonRecord(dir, _port, daemon.path, _token);
-        await conn.moveToTrustedPipe();
-        await until(() => daemon.selects > 0 && conn.isReady);
-        expect(conn.trustedPipeMissing, isFalse);
-        expect(transport.trustedRoutesUnavailable, isFalse);
-        expect(await actRefusal(conn), 'UNSUPPORTED');
       });
 
       test(
-        'a squatter is never trusted, and asking again is bounded',
+        'a squatter cannot make the local connection ready or reach TCP',
         () async {
           final tcp = await start(PipeDaemon.tcp());
           final squatter = await start(
@@ -533,17 +717,10 @@ void main() {
           );
           addTearDown(conn.close);
           await conn.connect();
-          await until(() => conn.isReady);
-
+          expect(conn.isReady, isFalse);
           expect(conn.trustedPipeMissing, isTrue);
           expect(squatter.selects, 0);
-          final asked = squatter.hits.length;
-          await conn.moveToTrustedPipe();
-          await conn.moveToTrustedPipe();
-          // One probe, not two: the second ask came within WsConn.trustedPipeRetry.
-          expect(squatter.hits.length, asked + 1);
-          expect(conn.trustedPipeMissing, isTrue);
-          expect(tcp.selects, 1);
+          expect(tcp.selects, 0);
         },
       );
 
@@ -606,8 +783,9 @@ void main() {
 
 /// A single raw HTTP answer, including malformed fixtures HttpServer cannot emit.
 class _AnswerPipe implements PipeStream {
-  _AnswerPipe(this.answer);
+  _AnswerPipe(this.answer, {this.delay = Duration.zero});
   final String Function(String request) answer;
+  final Duration delay;
   final _input = StreamController<Uint8List>();
   var _answered = false;
   @override
@@ -616,8 +794,15 @@ class _AnswerPipe implements PipeStream {
   void add(List<int> bytes) {
     if (_answered) return;
     _answered = true;
-    _input.add(Uint8List.fromList(latin1.encode(answer(utf8.decode(bytes)))));
-    unawaited(_input.close());
+    unawaited(
+      Future<void>.delayed(delay, () async {
+        if (_input.isClosed) return;
+        _input.add(
+          Uint8List.fromList(latin1.encode(answer(utf8.decode(bytes)))),
+        );
+        await _input.close();
+      }),
+    );
   }
 
   @override

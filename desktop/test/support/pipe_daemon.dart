@@ -29,7 +29,15 @@ final _auth = RegExp(r'^([0-9a-f]{64})\.([0-9a-f]{64})$');
 /// as `localWsServer.ts` does: `UNSUPPORTED` from a trusted connection,
 /// `LOCAL_SOCKET_REQUIRED` from any other.
 class PipeDaemon {
-  PipeDaemon._(this.server, this.id, this.token, this.trusted, this.lies) {
+  PipeDaemon._(
+    this.server,
+    this.id,
+    this.token,
+    this.trusted,
+    this.lies,
+    this.status,
+    this.hangStatus,
+  ) {
     server.listen(_serve);
   }
 
@@ -40,7 +48,10 @@ class PipeDaemon {
   final Uint8List token;
   final bool trusted;
   final bool lies;
+  final Map<String, dynamic>? status;
+  final bool hangStatus;
   final hits = <String>[];
+  final bodies = <String>[];
   final refused = <String>[];
   final _seen = <String>{};
   final _sockets = <WebSocket>[];
@@ -55,6 +66,8 @@ class PipeDaemon {
     Uint8List token, {
     String? id,
     bool lies = false,
+    Map<String, dynamic>? status,
+    bool hangStatus = false,
   }) async {
     final pipeId = id ?? _newId();
     return PipeDaemon._(
@@ -69,6 +82,8 @@ class PipeDaemon {
       token,
       !lies,
       lies,
+      status,
+      hangStatus,
     );
   }
 
@@ -78,6 +93,8 @@ class PipeDaemon {
     '',
     Uint8List(32),
     false,
+    false,
+    null,
     false,
   );
 
@@ -147,7 +164,8 @@ class PipeDaemon {
       });
       return;
     }
-    await utf8.decodeStream(request);
+    bodies.add(await utf8.decodeStream(request));
+    if (route == 'GET /api/status' && hangStatus) return;
     final response = request.response..headers.contentType = ContentType.json;
     switch (route) {
       case 'POST /api/auth/handoff' when !trusted && !lies:
@@ -161,7 +179,7 @@ class PipeDaemon {
           }),
         );
       case 'GET /api/status':
-        response.write(jsonEncode({'pid': pid}));
+        response.write(jsonEncode(status ?? {'pid': pid}));
       default:
         response.statusCode = 404;
         response.write(jsonEncode({'error': 'NOT_FOUND'}));

@@ -82,6 +82,15 @@ function harness(daemon: FakeDaemon, over: Partial<ClientDeps> & { others?: Reco
   return { deps, out, err, ledger: new Ledger(ledgerPath(dir)), advance: (ms: number) => { clock += ms } }
 }
 
+it('recognizes a Windows host pane from HARNESS_PANE for agent commands', async () => {
+  const d = new FakeDaemon()
+  d.frames = [frame('lead', { tmuxPane: 'p1:%3' })]
+  const h = harness(d, { env: { HARNESS_PANE: 'p1:%3' } })
+  delete h.deps.pane
+  expect(await whoamiCommand([], h.deps)).toBe(EXIT.ok)
+  expect(h.out.join('\n')).toContain('inside Harness')
+})
+
 const started = (ledger: Ledger, by: string, child: string, childMachine = 'm', at = NOW) => ledger.append({
   at, depth: 1, by: { machineId: 'm', agentId: by, name: by, engine: 'claude' }, child: { machineId: childMachine, agentId: child, name: child },
 })

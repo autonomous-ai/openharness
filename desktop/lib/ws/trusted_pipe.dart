@@ -10,14 +10,6 @@ import 'daemon_pipe_record.dart';
 import 'windows_pipe.dart';
 import 'windows_pipe_auth.dart';
 
-/// The daemon's routes that need its trust (CLI `hookServer.ts`, `isTrustedLocal`): on
-/// Windows they go over its pipe and nowhere else. Over the loopback port the daemon
-/// refuses them, so they are never sent there.
-const trustedDaemonRoutes = {'POST /api/auth/handoff'};
-
-bool isTrustedDaemonRoute(String method, String path) =>
-    trustedDaemonRoutes.contains('${method.toUpperCase()} $path');
-
 /// The daemon's answer over its pipe, its proof checked.
 class PipeHttpResponse {
   const PipeHttpResponse(this.status, this.headers, this.body);
@@ -75,19 +67,41 @@ class TrustedPipe {
     String path, {
     Map<String, String> headers = const {},
     List<int> body = const [],
-  }) => _attempt(timeout, (record, pipe) async {
-    final auth = _auth(record);
-    pipe.add(
-      _head('${method.toUpperCase()} $path', {
-        ...headers,
-        'content-length': '${body.length}',
-        'connection': 'close',
-        pipeAuthHeader: auth,
-      }),
-    );
-    if (body.isNotEmpty) pipe.add(body);
+    Duration? timeout,
+  }) => _attempt(timeout ?? this.timeout, (record, pipe) async {
     final reader = _HttpReader(pipe.input);
     try {
+      if (body.isNotEmpty) {
+        // The recorded name can be held by another process after the daemon
+        // exits. Prove this very connection before sending a sign-in code or
+        // any other request body; a separate probe would leave a rebind race.
+        final preflightAuth = _auth(record);
+        pipe.add(
+          _head('GET /api/status', {
+            'content-length': '0',
+            'connection': 'keep-alive',
+            pipeAuthHeader: preflightAuth,
+          }),
+        );
+        final preflight = await reader.head();
+        _prove(record, preflightAuth, preflight);
+        if (preflight.status != 200) {
+          throw PipeProtocolError(
+            'The Harness daemon did not answer its private-pipe probe (HTTP ${preflight.status}).',
+          );
+        }
+        await reader.body(preflight);
+      }
+      final auth = _auth(record);
+      pipe.add(
+        _head('${method.toUpperCase()} $path', {
+          ...headers,
+          'content-length': '${body.length}',
+          'connection': 'close',
+          pipeAuthHeader: auth,
+        }),
+      );
+      if (body.isNotEmpty) pipe.add(body);
       final head = await reader.head();
       _prove(record, auth, head);
       return PipeHttpResponse(
@@ -241,7 +255,7 @@ class _HttpReader {
   _HttpReader(Stream<Uint8List> input) : _chunks = StreamIterator(input);
 
   static const _maxHeadBytes = 64 * 1024;
-  static const _maxBodyBytes = 4 * 1024 * 1024;
+  static const _maxBodyBytes = 16 * 1024 * 1024;
   final StreamIterator<Uint8List> _chunks;
   Uint8List _buffer = Uint8List(0);
   int _at = 0;
