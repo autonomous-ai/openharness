@@ -14,7 +14,8 @@
 //
 // Dart decides whether and when to post. Toasts post under the AUMID
 // `Autonomous.Harness`, which the Start Menu shortcut carries (C4). Without
-// it Windows refuses, and `authorize` says `unavailable`. A toast's click is
+// it Windows refuses a post. `authorize` can answer `unknown` before the first
+// toast registers the AUMID; `show` attempts that post. A toast's click is
 // its `harness://notification/...` link (activationType="protocol"). It
 // arrives through the single instance and `harness/community_links` like any
 // other link, so no COM activator is needed.

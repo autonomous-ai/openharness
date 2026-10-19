@@ -132,9 +132,14 @@ std::string HarnessNotifications::Authorize() {
       default:
         return "unavailable";
     }
+  } catch (const winrt::hresult_error& error) {
+    // Windows can report no setting until the first toast registers this AUMID.
+    // Do not stop that first post: Show() will tell us whether it works.
+    if (error.code().value == HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) {
+      return "unknown";
+    }
+    return "unavailable";
   } catch (...) {
-    // No shortcut carries the AUMID (a copy run straight from the zip), or
-    // no notification platform at all.
     return "unavailable";
   }
 }
@@ -144,7 +149,7 @@ std::string HarnessNotifications::Show(const std::wstring& tag,
                                        const std::wstring& body,
                                        const std::wstring& launch) {
   const std::string answer = Authorize();
-  if (answer != "granted") {
+  if (answer == "denied" || answer == "unavailable") {
     return answer;
   }
   try {
