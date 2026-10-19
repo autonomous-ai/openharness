@@ -10,6 +10,7 @@ typedef enum { POD_SCENE_REST, POD_SCENE_WORK, POD_SCENE_ASK, POD_SCENE_RELAX, P
 
 // The engine's pet, or NULL when it has none (the player then shows its mark on a pale rounded box).
 const ht_pet_t *pod_pet_for(const char *engine);
+extern const ht_pet_t pod_codex_pet;   // the HD Codex (pets_codex.c, scripts/gen_pro_codex.py)
 // Whether the engine has this scene of its own: REST and ASK need a pet; WORK, RELAX, LISTEN and SEND need the
 // pet to carry that scene. pod_pet_draw falls back to REST for a scene the pet lacks.
 bool pod_pet_has(const char *engine, pod_scene_t scene);

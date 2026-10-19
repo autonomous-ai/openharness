@@ -11,9 +11,7 @@ int main(void) {
     assert(ht_pet_count >= 3);
     const char *three[] = {"claude", "codex", "muse"};
     for (unsigned k = 0; k < 3; k++) {
-        const ht_pet_t *p = NULL;
-        for (unsigned i = 0; i < ht_pet_count; i++)
-            if (!strcmp(ht_pets[i].engine, three[k])) p = &ht_pets[i];
+        const ht_pet_t *p = pod_pet_for(three[k]);   // Codex is pod_codex_pet, not an ht_pets row
         assert(p);
         assert(p->working_scene && p->listening_scene && p->sending_scene && p->cells);
     }

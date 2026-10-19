@@ -69,9 +69,7 @@ void ph_view_talk(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint
     }
     const int cx = 360, foot = PET_FOOT;
     ph_room_floor(s, cx, foot, 420);
-    // Codex's robot fills more of the glass than the other pets at 2x: 13/8 here, a fifth smaller (owner, 2026-10-15).
-    const unsigned zoom8 = !strcmp(a->engine, "codex") ? 13u : 16u;
-    ph_room_pet_z(s, m, a, nav->sending ? POD_SCENE_SEND : POD_SCENE_LISTEN, cx, foot, now_ms, nav->sending ? nav->send_started_ms : nav->talk_started_ms, zoom8);
+    ph_room_pet(s, m, a, nav->sending ? POD_SCENE_SEND : POD_SCENE_LISTEN, cx, foot, now_ms, nav->sending ? nav->send_started_ms : nav->talk_started_ms);
     if (!nav->sending) pod_hit_add(f, 0, 0, POD_W, POD_W, POD_A_TALK, 0);   // LAST: hits are scanned last to first, so nothing steals the send
 }
 
