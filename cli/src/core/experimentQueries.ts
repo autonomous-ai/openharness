@@ -147,7 +147,7 @@ export async function createForExperiment(create: BackendSocket['onCreateAgent']
 export async function creationForExperiment(read: BackendSocket['createStatusProvider'], creationId: string) {
   if (!read || !/^[A-Za-z0-9_-]{16,96}$/.test(creationId)) return null
   let reply: Record<string, unknown> | null = null
-  try { await read({ creationId }, value => { reply = value }) } catch { return null }
+  try { await read({ creationId }, { local: true }, value => { reply = value }) } catch { return null }
   const frame = reply as Record<string, unknown> | null
   const agent = frame?.agent as { id?: unknown } | undefined
   // A closed terminal is unavailable to a window, but its durable creation

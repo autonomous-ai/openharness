@@ -91,14 +91,14 @@ it.each(['linux', 'darwin'])('preserves healthy launch requests and durable rece
           : requests.create(payload, { local: true }, reply)
       await invoke()
       await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
-      await requests.createStatus({ creationId }, reply)
+      await requests.createStatus({ creationId }, { local: true }, reply)
       await invoke() // A duplicate in flight joins the same operation.
       finish()
       await vi.waitFor(() => expect(replies).toHaveLength(3))
       await invoke() // A duplicate after completion only returns the receipt.
       await vi.waitFor(() => expect(replies).toHaveLength(4))
       const recovered = createLaunchRequests({ ...deps, receipts: new AgentCreationReceipts(directory) })
-      await recovered.createStatus({ creationId }, reply)
+      await recovered.createStatus({ creationId }, { local: true }, reply)
       expect(fixture.events.filter(value => Array.isArray(value) && value[0] === 'dispatch')).toHaveLength(1)
       const key = `${platform}:${kind}`
       observations[key] = JSON.parse(JSON.stringify({ events: fixture.events, replies }).split(root).join('<root>'))
