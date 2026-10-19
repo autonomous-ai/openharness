@@ -229,8 +229,9 @@ class FactoryReset(unittest.TestCase):
             (home / path).write_text('x')
         return home
 
-    def run_reset(self, home, keep_wifi):
+    def run_reset(self, home, keep_wifi, keep_workspace=False):
         users, wifi = [], []
+        self.desk = []
         state = home / 'state'
         state.mkdir()
         (state / 'r.json').write_text('{}')
@@ -240,9 +241,39 @@ class FactoryReset(unittest.TestCase):
              patch.object(setup, 'as_user', side_effect=lambda *c, timeout=30: users.append(c) or result(output='2\n1\n')), \
              patch.object(setup.subprocess, 'run', return_value=result()), \
              patch.object(setup, 'rows', return_value=[['u-home', '802-11-wireless'], ['u-lo', 'loopback']]), \
-             patch.object(setup, 'nmcli', side_effect=lambda *a, **k: wifi.append(a) or result()):
-            setup.factory_reset(keep_wifi=keep_wifi)
+             patch.object(setup, 'nmcli', side_effect=lambda *a, **k: wifi.append(a) or result()), \
+             patch.object(setup, 'forget_desk', side_effect=lambda: users.append(('forget-desk',))):
+            setup.factory_reset(keep_wifi=keep_wifi, keep_workspace=keep_workspace)
         return users, wifi, state
+
+    def test_its_tabs_leave_the_desk_before_the_sign_out_and_hn_before_its_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            users, _, _ = self.run_reset(self.home(folder), keep_wifi=False)
+            logout = next(i for i, c in enumerate(users) if 'logout' in c)
+            self.assertLess(users.index(('forget-desk',)), logout)
+            # hn ends before the files go: it writes its tabs out as it ends.
+            kill = next(i for i, c in enumerate(users) if 'kill-server' in c and setup.HN in c)
+            self.assertLess(logout, kill)
+
+    def test_keep_workspace_keeps_hn_and_the_desk(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = self.home(folder)
+            users, _, _ = self.run_reset(home, keep_wifi=False, keep_workspace=True)
+            self.assertTrue((home / '.harness/tui/state.json').exists())
+            self.assertFalse((home / '.harness/auth/session.json').exists())
+            self.assertNotIn(('forget-desk',), users)
+            self.assertFalse([c for c in users if 'kill-window' in c])
+
+    def test_the_desk_forgets_this_computer_alone(self):
+        tabs = [{'id': 'own', 'panes': [{'machineId': 'me', 'agentId': 'a'}]},
+                {'id': 'shared', 'panes': [{'machineId': 'me', 'agentId': 'b'}, {'machineId': 'mac', 'agentId': 'c'}]},
+                {'id': 'theirs', 'panes': [{'machineId': 'mac', 'agentId': 'd'}]}]
+        written = []
+        with patch.object(setup, 'as_user', return_value=result(output='{"machineId": "me"}')), \
+             patch.object(setup, 'desk_ops', side_effect=lambda ops=None: written.append(ops) or tabs):
+            setup.forget_desk()
+        self.assertEqual(written[-1], [{'op': 'tab.close', 'id': 'own'},
+                                       {'op': 'pane.remove', 'tabId': 'shared', 'machineId': 'me', 'agentId': 'b'}])
 
     def test_it_is_as_just_flashed_but_the_same_computer(self):
         with tempfile.TemporaryDirectory() as folder:

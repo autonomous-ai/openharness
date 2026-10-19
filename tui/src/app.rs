@@ -2116,6 +2116,7 @@ impl App {
             }
             return;
         }
+        let headless = self.headless;
         let Some(pane) = self.panes.get_mut(&pane_id) else { return };
         pane.opening = false;
         let takeover_requested = std::mem::take(&mut pane.takeover_pending);
@@ -2130,8 +2131,11 @@ impl App {
                 pane.phase = if pane.read_only {
                     Phase::Watching(payload.get("heldBy").and_then(|h| h.get("name")).and_then(Value::as_str).unwrap_or("another window").to_string())
                 } else { Phase::Live };
-                // Held here again: its frames come at this side's size, so they are drawn.
-                if !pane.read_only { pane.frozen = false }
+                // Held here: its frames come at this side's size, so they are drawn. Held by another
+                // client (a phone that opened it first, its Start): its frames come at that one's
+                // size and are not drawn here — the screen's pane says who has it, at its own size,
+                // until a key takes it. hn with no terminal reads them all the same: it has no size.
+                pane.frozen = pane.read_only && !headless;
                 let retake = takeover_requested && pane.read_only;
                 let queued = if retake { Vec::new() } else { std::mem::take(&mut pane.queued) };
                 let read_only = pane.read_only;

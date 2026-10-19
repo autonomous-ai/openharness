@@ -38,6 +38,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import uuid
 
 STATE = Path('/var/lib/harness-os')
@@ -720,6 +721,8 @@ def change(request):
 
 
 HN = '/usr/lib/harness/harness-tui'
+# The account's daemon on this computer (cli hookServer), for the desk.
+DAEMON = 'http://127.0.0.1:18473'
 RESET_UNIT = 'harness-factory-reset'
 
 
@@ -749,24 +752,78 @@ def wipe(folder, keep):
             path.unlink(missing_ok=True)
 
 
-def factory_reset(keep_wifi=False):
+def desk_ops(ops=None):
+    """The account's desk through the local daemon (its /api/desk proxy, signed in as this computer):
+    read it, or with [ops] write them. The answer's tabs, or None."""
+    request = urllib.request.Request(DAEMON + ('/api/desk/ops' if ops else '/api/desk'),
+                                     data=json.dumps({'ops': ops}).encode() if ops else None,
+                                     headers={'Content-Type': 'application/json', 'X-Adapter-Local': '1'},
+                                     method='POST' if ops else 'GET')
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            body = json.loads(response.read())
+    except (OSError, ValueError):
+        return None
+    body = body.get('data', body) if isinstance(body, dict) else None
+    return body.get('tabs') if isinstance(body, dict) and isinstance(body.get('tabs'), list) else None
+
+
+def forget_desk():
+    """This computer's tabs and panes off the account's desk, which every computer shows: closing its
+    windows alone was raced by the sign-out, and they came back at the next sign-in. A tab of its own
+    goes; one shared with other computers keeps theirs."""
+    status = as_user('/usr/bin/harness', 'auth', 'status', '--json')
+    try:
+        machine = json.loads(status.stdout).get('machineId') if status else None
+    except ValueError:
+        machine = None
+    tabs = desk_ops() if machine else None
+    ops = []
+    for tab in tabs or []:
+        panes = [pane for pane in tab.get('panes') or [] if isinstance(pane, dict)]
+        mine = [pane for pane in panes if pane.get('machineId') == machine]
+        if mine and len(mine) == len(panes):
+            ops.append({'op': 'tab.close', 'id': tab.get('id')})
+        else:
+            ops += [{'op': 'pane.remove', 'tabId': tab.get('id'), 'machineId': machine,
+                     'agentId': pane.get('agentId')} for pane in mine]
+    if ops and desk_ops(ops) is None:
+        log('factory reset: the desk kept some tabs of this computer')
+
+
+def factory_reset(keep_wifi=False, keep_workspace=False):
     """This computer as it was just flashed: no account, no harnesses, the first workspace still to come,
     and (unless [keep_wifi]) no Wi-Fi, so it opens its setup hotspot for a phone. It stays the same
     computer: its id and its device key are kept, as a new key for the same computer is refused by the
     account until the old one is removed. The engines' own sign-ins and ~/projects are the person's.
+    Its workspace goes too — hn's tabs and panes, here and on the account's desk, and what hn keeps
+    (~/.harness/tui) — unless [keep_workspace].
     For the reset button and `harness factory-reset`."""
-    log('factory reset')
-    # Its windows first, while still signed in: the account keeps the tabs (the desk, the same on
-    # every computer), and one left there comes back at the next sign-in in the first workspace's place.
-    windows = as_user(HN, 'list-windows', '-F', '#{window_index}')
-    for index in sorted((int(n) for n in (windows.stdout.split() if windows else []) if n.isdigit()), reverse=True):
-        as_user(HN, 'kill-window', '-t', f':{index}')
+    log('factory reset' + (', keeping the workspace' if keep_workspace else ''))
+    if not keep_workspace:
+        # While still signed in: the account keeps the tabs (the desk, the same on every computer),
+        # and one left there comes back at the next sign-in in the first workspace's place.
+        forget_desk()
+        windows = as_user(HN, 'list-windows', '-F', '#{window_index}')
+        for index in sorted((int(n) for n in (windows.stdout.split() if windows else []) if n.isdigit()), reverse=True):
+            as_user(HN, 'kill-window', '-t', f':{index}')
     as_user('/usr/bin/harness', 'logout', timeout=60)
+    if not keep_workspace:
+        # hn before its files: it writes its tabs out as it ends, and wrote the old ones back.
+        as_user(HN, 'kill-server')
+        subprocess.run(['/usr/bin/pkill', '-u', USER, '-x', 'harness-tui'], capture_output=True)
+        try:
+            shutil.rmtree(f'/tmp/hn-{pwd.getpwnam(USER).pw_uid}', ignore_errors=True)
+        except KeyError:
+            pass
     # Every harness and terminal: the daemon, then the tmux server its panes run in.
     as_user('systemctl', '--user', 'stop', 'harness-daemon', timeout=60)
     as_user('tmux', 'kill-server')
     harness = HOME / '.harness'
-    wipe(harness, {'computer-id': True, 'cli': {'data': {'e2e': True}}})
+    keep = {'computer-id': True, 'cli': {'data': {'e2e': True}}}
+    if keep_workspace:
+        keep['tui'] = True
+    wipe(harness, keep)
     (HOME / '.local/state/harness-os/onboarded').unlink(missing_ok=True)
     for path in (RESULT, FROM_PHONE, SCREEN):
         path.unlink(missing_ok=True)
@@ -789,11 +846,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('command', nargs='?', choices=['watch', 'now', 'name', 'join', 'reset'], default='watch')
     parser.add_argument('--keep-wifi', action='store_true', help='reset: keep the saved Wi-Fi')
+    parser.add_argument('--keep-workspace', action='store_true',
+                        help="reset: keep hn's tabs and panes, here and on the account's desk")
     parser.add_argument('--here', action='store_true', help=argparse.SUPPRESS)
     arguments = parser.parse_args()
     if arguments.command == 'reset':
         if arguments.here:
-            factory_reset(keep_wifi=arguments.keep_wifi)
+            factory_reset(keep_wifi=arguments.keep_wifi, keep_workspace=arguments.keep_workspace)
             return
         # In a unit of its own: the computer leaves its Wi-Fi, and whatever asked (an SSH session, the
         # button's handler) may go with it before the reset is done. `journalctl -u harness-factory-reset`.
@@ -801,10 +860,13 @@ def main():
                    '/usr/bin/python3', str(Path(__file__).resolve()), 'reset', '--here']
         if arguments.keep_wifi:
             command.append('--keep-wifi')
+        if arguments.keep_workspace:
+            command.append('--keep-workspace')
         started = subprocess.run(command, capture_output=True, text=True)
         if started.returncode:
             raise SystemExit('Could not start the reset: ' + (started.stderr.strip() or 'systemd-run failed'))
         print('Resetting this computer. It signs out, closes every harness'
+              + ('' if arguments.keep_workspace else ', forgets its tabs')
               + ('' if arguments.keep_wifi else ', forgets its Wi-Fi')
               + ' and opens its setup hotspot for a phone in about a minute.')
         return
