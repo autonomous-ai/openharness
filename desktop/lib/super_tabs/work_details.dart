@@ -35,7 +35,7 @@ Future<void> showSuperTabWork(
                 if (assignment != null) ...[
                   const SizedBox(height: 16),
                   Text(
-                    '${c.snapshot?.agent(assignment['agentId'] as String)?.name ?? 'Agent unavailable'} · ${(assignment['status'] as String).replaceAll('_', ' ')}',
+                    '${c.snapshot?.agentName(assignment['agentId'] as String, fallback: 'Agent unavailable') ?? 'Agent unavailable'} · ${(assignment['status'] as String).replaceAll('_', ' ')}',
                   ),
                 ],
                 for (final check

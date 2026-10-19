@@ -84,7 +84,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(f.app.activeSwarm.panes.single.watchOnly, isFalse);
       // Native pane Close and the narrow Back action have the same personal state.
-      await f.app.closePane(f.app.activeSwarm.panes.single.id);
+      await f.app.requestClosePane(f.app.activeSwarm.panes.single.id);
       await tester.pumpAndSettle();
       await c.refresh();
       await tester.pumpAndSettle();

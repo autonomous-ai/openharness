@@ -24,6 +24,13 @@ the session, using the existing confirmation when it is working. A tab close
 applies this rule separately to each session. Recheck remaining views after
 any wait for inspection or confirmation, before requesting a stop.
 
+Super Tab terminals are views of shared work. Their close control says **Hide
+terminal**; it dismisses the local view without inspecting, prompting to stop,
+or stopping the agent. The close shortcut and closing the Super Tab follow the
+same rule. The agent remains in its conversation and its terminal can be reopened.
+The coordinating agent is labeled **Lead** throughout the Super Tab, including
+its terminal header; its first message is not its name.
+
 ## Keep the workspace structure
 
 Tabs remain compact and content-sized, adding one at a time until the row fills.

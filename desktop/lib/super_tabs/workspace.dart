@@ -10,6 +10,7 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
+import 'pane.dart';
 import 'view.dart';
 
 /// Keeps the app's one native canvas alive while placing it beside a shared
@@ -254,10 +255,21 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                       pane.machineId == selectedTerminal.machineId &&
                       pane.agentId == selectedTerminal.harnessId,
                 );
+            final terminal = selectedTerminal == null
+                ? canvas
+                : SuperPane(
+                    machineId: selectedTerminal.machineId,
+                    harnessId: selectedTerminal.harnessId,
+                    title:
+                        controller.snapshot?.isLead(selectedTerminal.id) == true
+                        ? 'Lead'
+                        : null,
+                    child: canvas,
+                  );
             return Stack(
               fit: StackFit.expand,
               children: [
-                if (!showTerminal) Offstage(child: canvas),
+                if (!showTerminal) Offstage(child: terminal),
                 SuperTabView(
                   key: ValueKey('${controller.accountId}:$id'),
                   controller: controller,
@@ -272,7 +284,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   machineName: (machine) =>
                       app.stateOf(machine)?.machine.displayName ??
                       'Offline machine',
-                  terminal: showTerminal ? canvas : null,
+                  terminal: showTerminal ? terminal : null,
                   onCloseTerminal: () {
                     controller.selectTerminal(controller.selectedId, null);
                   },
