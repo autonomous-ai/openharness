@@ -134,6 +134,74 @@ fn b64(data: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(data)
 }
 
+#[cfg(windows)]
+#[test]
+fn ctrl_c_interrupts_a_pane_when_the_host_starts_in_a_new_process_group() {
+    use common::Host;
+    use harness_pty::breakaway::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
+    use std::os::windows::process::CommandExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let child = host_command(home.path())
+        .arg("--no-reexec")
+        .creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS)
+        .spawn()
+        .unwrap();
+    let disc = wait_discovery(home.path());
+    let _host = Host {
+        pid: disc["pid"].as_u64().unwrap() as u32,
+        child,
+        home,
+    };
+    let (mut w, mut r) = connect(&disc);
+    let created = call(
+        &mut w,
+        &mut r,
+        &serde_json::json!({"id": 1, "op": "create", "command": ["powershell.exe", "-NoLogo", "-NoProfile"], "cols": 100, "rows": 30, "owner": "ctrl-c-test", "hold": true}).to_string(),
+    );
+    let pane = created["pane"].as_str().unwrap();
+    let write = |w: &mut common::Conn, r: &mut BufReader<common::Conn>, id: u64, text: &str| {
+        call(
+            w,
+            r,
+            &serde_json::json!({"id": id, "op": "write", "pane": pane, "data": b64(text)})
+                .to_string(),
+        )
+    };
+    assert_eq!(write(&mut w, &mut r, 2, "ping -t 127.0.0.1\r")["ok"], true);
+    let capture = |w: &mut common::Conn, r: &mut BufReader<common::Conn>| {
+        call(
+            w,
+            r,
+            &serde_json::json!({"id": 4, "op": "capture", "pane": pane, "ansi": false, "visible": true}).to_string(),
+        )["text"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let start = Instant::now();
+    while !capture(&mut w, &mut r).contains("Reply from 127.0.0.1") {
+        assert!(start.elapsed() < WAIT, "ping did not start");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(write(&mut w, &mut r, 3, "\u{3}")["ok"], true);
+    let start = Instant::now();
+    loop {
+        let screen = capture(&mut w, &mut r);
+        if screen
+            .lines()
+            .any(|line| line.starts_with("PS ") && line.trim_end().ends_with('>'))
+        {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "Ctrl+C did not return to the shell: {screen}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[test]
 fn create_capture_kill() {
     let (_h, disc) = start();

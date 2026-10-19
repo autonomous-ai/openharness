@@ -168,6 +168,17 @@ pub fn serve(home: &Path, history_limit: usize, reexec: bool) -> std::io::Result
         log::info!("a copy of this host started outside its job serves; exiting");
         return Ok(());
     }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+
+        // The daemon starts this host in a new process group. Windows then makes its
+        // Ctrl+C-ignore setting inheritable, so ConPTY children keep running after ETX.
+        // Clear it in the serving host before any pseudoconsole or pane is created.
+        if unsafe { SetConsoleCtrlHandler(None, 0) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
     #[cfg(not(windows))]
     let _ = reexec;
     let run = run_dir(home)?;
