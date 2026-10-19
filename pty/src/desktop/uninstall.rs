@@ -628,11 +628,19 @@ pub fn run(
     run_prepared(prepare(paths, place)?, system)
 }
 fn run_prepared(prepared: Prepared, system: &mut impl System) -> Result<Vec<String>, String> {
+    let (prepared, mut problems) = run_steps(prepared, system)?;
+    finish_removal(&prepared, system, &mut problems);
+    Ok(problems)
+}
+fn run_steps(
+    prepared: Prepared,
+    system: &mut impl System,
+) -> Result<(Prepared, Vec<String>), String> {
     let Prepared {
         paths,
-        place,
+        place: _,
         install_exists,
-    } = prepared;
+    } = &prepared;
     check_chain(&paths.install, !install_exists)?;
     system
         .quit_app(&paths.install, QUIT_WAIT)
@@ -663,25 +671,27 @@ fn run_prepared(prepared: Prepared, system: &mut impl System) -> Result<Vec<Stri
             .into_iter()
             .map(|p| format!("{} stayed", p.display())),
     );
-    if install_exists {
-        if let Err(e) = schedule_at(&paths.install, &place, system, |f, t| {
+    Ok((prepared, problems))
+}
+fn finish_removal(prepared: &Prepared, system: &mut impl System, problems: &mut Vec<String>) {
+    if prepared.install_exists {
+        if let Err(e) = schedule_at(&prepared.paths.install, &prepared.place, system, |f, t| {
             f.write_all(t)?;
             f.flush()
         }) {
             problems.push(format!(
                 "{e}; when this command ends, delete {} yourself",
-                paths.install.display()
+                prepared.paths.install.display()
             ));
         }
     }
-    Ok(problems)
 }
 pub fn main(paths: &Paths, system: &mut impl System) -> i32 {
     main_at(paths, &ScriptPlace::current(), system)
 }
 fn main_at(paths: &Paths, place: &ScriptPlace, system: &mut impl System) -> i32 {
-    match run(paths, place, system) {
-        Ok(problems) => {
+    match prepare(paths, place).and_then(|prepared| run_steps(prepared, system)) {
+        Ok((prepared, mut problems)) => {
             let good = problems.is_empty();
             let text = if good {
                 "The Harness desktop app will finish uninstalling after this window closes."
@@ -692,8 +702,21 @@ fn main_at(paths: &Paths, place: &ScriptPlace, system: &mut impl System) -> i32 
                     problems.join("; ")
                 )
             };
+            // MessageBox may stay open indefinitely; start the bounded launcher wait only after it closes.
             system.say(&format!("{text}\n\n{FINAL_MESSAGE}"));
-            if good { EXIT_OK } else { EXIT_FAILED }
+            let prior = problems.len();
+            finish_removal(&prepared, system, &mut problems);
+            if problems.len() > prior {
+                system.say(&format!(
+                    "The Harness desktop app could not be fully removed: {}.\n\n{FINAL_MESSAGE}",
+                    problems[prior..].join("; ")
+                ));
+            }
+            if problems.is_empty() {
+                EXIT_OK
+            } else {
+                EXIT_FAILED
+            }
         }
         Err(error) => {
             system.say(&format!(
@@ -708,6 +731,92 @@ fn main_at(paths: &Paths, place: &ScriptPlace, system: &mut impl System) -> i32 
 mod tests {
     use super::*;
     use crate::desktop::system::Fake;
+
+    struct ModalSystem {
+        fake: Fake,
+        dialog_dismissed: bool,
+        script_attempted: bool,
+    }
+
+    impl System for ModalSystem {
+        fn start_app(&mut self, _: &Path, _: &Path, _: &[OsString]) -> io::Result<(u32, u64)> {
+            unreachable!()
+        }
+        fn wait_for_exit(&mut self, _: u32, _: Duration) -> io::Result<()> {
+            unreachable!()
+        }
+        fn liveness(&mut self, _: u32, _: u64) -> crate::desktop::rollback::Liveness {
+            unreachable!()
+        }
+        fn app_processes(&mut self, _: &Path) -> Vec<u32> {
+            unreachable!()
+        }
+        fn quit_app(&mut self, root: &Path, wait: Duration) -> io::Result<usize> {
+            self.fake.quit_app(root, wait)
+        }
+        fn read_value(&mut self, _: &str, _: &str, _: &str) -> Option<OsString> {
+            unreachable!()
+        }
+        fn write_keys(&mut self, _: &str, _: &[registry::Key]) -> io::Result<()> {
+            unreachable!()
+        }
+        fn delete_key(&mut self, registry: &str, key: &str) -> io::Result<()> {
+            self.fake.delete_key(registry, key)
+        }
+        fn start_script(&mut self, script: &Path) -> io::Result<()> {
+            assert!(
+                self.dialog_dismissed,
+                "cleanup started before the final dialog closed"
+            );
+            self.script_attempted = true;
+            self.fake.start_script(script)
+        }
+        fn pid(&mut self) -> u32 {
+            self.fake.pid()
+        }
+        fn create_shortcut(&mut self, _: &Path, _: &Path, _: &Path, _: &Path) -> io::Result<()> {
+            unreachable!()
+        }
+        fn say(&mut self, text: &str) {
+            self.dialog_dismissed = true;
+            self.fake.say(text);
+        }
+        fn now_ms(&mut self) -> u64 {
+            self.fake.now_ms()
+        }
+    }
+
+    #[test]
+    fn final_removal_starts_only_after_the_modal_message_closes() {
+        let World { _dir, paths, place } = world();
+        let mut system = ModalSystem {
+            fake: Fake::default(),
+            dialog_dismissed: false,
+            script_attempted: false,
+        };
+        assert_eq!(main_at(&paths, &place, &mut system), EXIT_OK);
+        assert!(system.script_attempted);
+        assert_eq!(system.fake.said.len(), 1);
+    }
+
+    #[test]
+    fn cleanup_start_failure_after_dialog_gets_an_explicit_second_message() {
+        let World { _dir, paths, place } = world();
+        let mut system = ModalSystem {
+            fake: Fake {
+                fail_script: true,
+                ..Fake::default()
+            },
+            dialog_dismissed: false,
+            script_attempted: false,
+        };
+        assert_eq!(main_at(&paths, &place, &mut system), EXIT_FAILED);
+        assert!(system.script_attempted);
+        assert_eq!(system.fake.said.len(), 2);
+        assert!(system.fake.said[1].contains("Windows did not start the step"));
+        assert!(system.fake.said[1].contains("delete"));
+        assert!(fs::read_dir(&place.temp).unwrap().next().is_none());
+    }
 
     #[test]
     fn inspection_errors_never_become_missing_paths() {
