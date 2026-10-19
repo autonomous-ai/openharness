@@ -88,7 +88,7 @@
   <p class="lede">Every counter the Hub sends, pinned on the real pages at harness.autonomous.ai, then how to read the totals and which questions they answer. Counting has been live since <b>v1.2.86_backend</b> and <b>v1.3.56_web</b> on 2026-10-19, 03:36 UTC. The screenshots are production, taken the same day with counting switched off in the test browser.</p>
   <nav class="toc">
     <a href="#path">Where a count goes</a><a href="#explore">1 · Explore</a><a href="#harness">2 · A harness</a><a href="#phone">2b · On a phone</a>
-    <a href="#publish">3 · Publish &amp; notifications</a><a href="#all">Every counter</a><a href="#read">Reading it</a><a href="#questions">Questions</a><a href="#limits">Limits</a><a href="#optimize">To optimize</a><a href="#decided">Decided</a>
+    <a href="#publish">3 · Publish &amp; notifications</a><a href="#all">Every counter</a><a href="#read">Reading it</a><a href="#questions">Questions</a><a href="#limits">Limits</a><a href="#optimize">To optimize</a><a href="#first">First reading</a><a href="#decided">Decided</a>
   </nav>
 
   <div class="principles">
@@ -296,6 +296,24 @@ DATABASE_URL=&lt;read-only&gt; npm run usage:daily -- 14   # keep output in .har
       <tr><td><span class="tag">P2</span></td><td>From the earlier review</td><td colspan="2">A comment notification does not jump to its comment; no way to find creators; "All harnesses" loses filters and scroll; headings vary from 25 to 38 px; a few links still use the raw id (reports, fork notifications, download); unused CSS (<code>.steps</code>).</td></tr>
     </tbody>
   </table></div>
+
+  <h2 id="first">First reading · 2026-10-19</h2>
+  <p class="lede">Production totals from 03:36 UTC (release) to 08:42 UTC, about five hours. Read straight from the daily totals (<code>hub_*</code> rows), since <code>npm run usage:daily</code> currently fails on production (see below).</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Counter</th><th>Total</th><th>Reading</th></tr></thead>
+    <tbody>
+      <tr><td class="k"><code>hub_view_feed_visitor</code></td><td>8</td><td>About 3 are this review's own audits (Lighthouse, a network listing, a performance trace), run before counting was switched off in the test browser. About 5 are real.</td></tr>
+      <tr><td class="k"><code>hub_view_harness_visitor</code></td><td>5</td><td>All visitors; no member view yet.</td></tr>
+      <tr><td class="k"><code>hub_entry_direct</code></td><td>7</td><td>Every entry was direct, none from search or social yet. Includes the audits'.</td></tr>
+      <tr><td class="k"><code>hub_sign_in_prompt_shown</code></td><td>11</td><td>Mostly Explore's intro, shown on each visitor view.</td></tr>
+      <tr><td class="k"><code>hub_get_app</code></td><td>1</td><td>One click on "Get the Harness desktop app".</td></tr>
+      <tr><td class="k"><code>hub_harness_dwell_under_10s</code></td><td>5</td><td>Every harness view left in under ten seconds.</td></tr>
+      <tr><td class="k">everything else</td><td>0</td><td>No card open, like, comment, share, fork, search or sort.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note"><b>Too few to decide anything.</b> The one signal to watch: all five harness views ended under ten seconds with no action. If that holds over the first full week, start from "Do people stay?" above: how fast the output appears, and whether the first screen says what the harness is and what Fork does.<br>
+    <b>To fix:</b> <code>npm run usage:daily</code> exits with "Could not read aggregate product usage" against production. The Hub rows read fine with a direct query, so the failure is elsewhere in the report and its catch hides the cause.<br>
+    <b>Next readings:</b> daily from 2026-10-20, the first clean day; the first complete week (2026-10-20 to 10-26) on 2026-10-27.</p>
 
   <h2 id="decided">Decided</h2>
   <p class="note" style="font-size:15px;line-height:1.7">
