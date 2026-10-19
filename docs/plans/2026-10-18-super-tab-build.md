@@ -366,3 +366,36 @@ Publish the corrected head once, keep it stable through automatic CI, and run th
 required branch CLI end-to-end workflow. Rebuild the official internal Desktop
 artifact from the corrected inputs. Coordinated backend/daemon rollout remains
 necessary before the signed app can provide the full shared workflow.
+
+### Internal review installation and end-to-end follow-up, 18 October
+
+- Automatic PR CI passed for `0c135930bf`, including `ci/required`:
+  https://github.com/autonomous-ai/openharness/actions/runs/39182958100.
+  The corrected signed internal Desktop build also passed:
+  https://github.com/autonomous-ai/openharness/actions/runs/39182985112.
+  Its downloaded Apple Silicon ZIP matched the published checksum; local signature
+  and Gatekeeper checks passed. The internal 1.2.91 app and checked
+  `0.4.19-dev.0c135930bf` daemon were installed for review, with previous artifacts
+  retained. No public Desktop or CLI release was made.
+- The full branch CLI E2E run completed with failures:
+  https://github.com/autonomous-ai/openharness/actions/runs/39184795010.
+  The Mac full-disk checks passed. One new collaboration test raced edge-service
+  startup; it now waits on a read before making the sharing mutation. The old PR
+  attribution test now verifies that delegation instructions survive while removed
+  attribution stays absent, including after restart. A settings assertion now
+  includes the existing summary-visibility field.
+- The targeted follow-up used the same checked bundle, disposable homes and private
+  tmux servers: five cases passed, two Pi recovery cases failed, 40 were unselected
+  (109.17 seconds). All three corrected scenarios passed, as did both held-history
+  Close cases. The two Pi failures are identical to existing main-branch failures:
+  https://github.com/autonomous-ai/openharness/actions/runs/39104876562.
+  That existing main run also records the same queued-Close registry transaction
+  failure and stale settings assertion. The original full run remains failed;
+  these follow-ups do not relabel it as green.
+- This follow-up changes tests and this record only. Backend, daemon and Desktop
+  build inputs are unchanged; their prior validation and internal artifacts remain
+  applicable. Native keyboard automation still does not verify the hidden chord or
+  IME. Shared conversations need the matching backend before user review.
+- For this rollout the user accepted deploying the matching backend while the
+  feature stays behind its shortcut. Future feature review should use an isolated
+  internal setup before a public release.

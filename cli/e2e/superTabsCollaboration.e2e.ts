@@ -121,6 +121,12 @@ it('lets one person’s lead use a teammate’s shared machine while preserving 
   await until('both accounts connected', () => relay.nodeUp(starter.machineId) && relay.nodeUp(member.machineId), 30_000)
   const onA = await LocalClient.connect(a, { machineId: starter.machineId }), onB = await LocalClient.connect(b, { machineId: member.machineId })
   clients.push(onA, onB)
+  // The gateway connects before all edge services finish starting. Observe
+  // readiness with a read; never replay the sharing mutation to warm the host.
+  await Promise.all([onA, onB].map(client => until('shared machines service ready', async () => {
+    const policy = await client.request('shared_machines', { action: 'get' }, 30_000)
+    return policy.error === 'SERVICE_UNAVAILABLE' ? null : policy
+  }, 30_000)))
   expect(await onB.request('shared_machines', { action: 'set', emails: [starter.email], sameDomain: false }, 30_000)).toMatchObject({ emails: [starter.email] })
   expect(await onA.request('shared_machines', { action: 'add', machineId: member.machineId }, 30_000)).toMatchObject({ ok: true })
   await until('shared machine pinned', () => {
