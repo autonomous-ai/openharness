@@ -5,9 +5,11 @@
 
 Pod plays only each pet's idle and asking small loops and its work (both: working_alt too), relax, listen and send
 scenes (pod_pet.c). So:
+  * the "codex" row goes (pod_pet_for returns the HD pod_codex_pet, pets_codex.c) with everything only it reaches, and
+    ht_pet_count follows;
   * alert_scene becomes NULL; whatever only it reached (scenes, overlays, frame arrays) goes; relaxing_scene and
     working_alt (Claude's builder) stay;
-  * the small frames only the WORKING / DONE loops use go (codex), the kept frames are renumbered, and the
+  * the small frames only the WORKING / DONE loops use go, the kept frames are renumbered, and the
     WORKING / DONE rows (never read) become {0,0}.
 The file is one C statement per line. Anything else unexpected stops the run before the file is touched.
 """
@@ -42,8 +44,12 @@ def main(path):
         elif i != pets[0] and not (l.startswith(("//", "#include ", "_Static_assert(", "const unsigned ht_pet_count = "))):
             fail(f"line {i + 1}: unexpected: {l[:80]}")
 
-    # 1. ht_pets: the alert scene becomes NULL (the relax scene stays), and each pet's small frames shrink to what idle/asking play.
-    row = lines[pets[0]]
+    # 1. ht_pets: codex is gone, the alert scene becomes NULL (the relax scene stays), and each pet's small frames shrink to what idle/asking play.
+    row = re.sub(r'\{"codex",[^{}]*\},?', "", lines[pets[0]]).replace("},};", "}};")
+    left = row.count('{"')
+    for i, l in enumerate(lines):
+        if l.startswith("const unsigned ht_pet_count = "):
+            lines[i] = f"const unsigned ht_pet_count = {left};"
     ent = re.findall(r'\{"(\w+)",\d+,\d+,NULL,(\w+)_loops,(\w+)_step_ms,&\w+,&\w+,&\w+,(\w+),(&\w+|NULL),(\d+),(&\w+|NULL),(&\w+|NULL)\}', row)
     if len(ent) != row.count('{"'):
         fail("ht_pets row has an unexpected shape")

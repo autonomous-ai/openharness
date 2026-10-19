@@ -41,6 +41,24 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
 describe('the event funnel', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('offers native observation after client dispatch without letting an observer break the turn', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const ingest = vi.fn()
+    const { funnel, calls } = setup('claude', { nativeTurns: { ingest } })
+    const events = [started(), text(), ended()]
+    funnel('s1', events)
+    expect(ingest).toHaveBeenLastCalledWith('a1', events, false)
+    funnel('s1', events, { replay: true })
+    expect(ingest).toHaveBeenLastCalledWith('a1', events, true)
+    funnel('s1', events, { resumed: true })
+    expect(ingest).toHaveBeenLastCalledWith('a1', events, true)
+    calls.length = 0
+    ingest.mockImplementationOnce(() => { expect(calls).toContain('send turn_ended'); throw new Error('Observer failed') })
+    funnel('s1', events)
+    expect(calls.slice(-2)).toEqual(['mirror', 'device stream'])
+  })
+
   it('sends the clients a shell result without its outputTail, and still feeds the commander mirror with it', () => {
     const sent: Array<{ payload: object }> = []
     const { funnel, deps } = setup('claude', { clients: { send: vi.fn((f: { payload: object }) => { sent.push(f) }) } as never })

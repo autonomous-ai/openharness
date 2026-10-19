@@ -89,7 +89,7 @@ class FontTests(unittest.TestCase):
 
     def test_codepoints_have_ink(self):
         fonts = parse(self.out)
-        for size in (24, 32):   # 42 and 56 are sparse: see test_sparse_sizes_have_empty_masks
+        for size in (24,):   # 32, 42 and 56 are sparse: see test_sparse_sizes_have_empty_masks
             for cp in [ord('A'), ord('g'), 0xB7] + VIET:
                 self.assertTrue(ink(fonts[size], cp), 'U+%04X at %d' % (cp, size))
 
@@ -116,16 +116,18 @@ class FontTests(unittest.TestCase):
 
     def test_sparse_sizes_have_empty_masks(self):
         fonts = parse(self.out)
-        for size in (42, 56):
+        sys.path.insert(0, str(PRO / 'scripts'))
+        import gen_fonts
+        for size in (32, 42, 56):
             for cp in CODEPOINTS:
-                self.assertEqual(ink(fonts[size], cp), cp in map(ord, '#>_?'), 'U+%04X at %d' % (cp, size))
+                self.assertEqual(ink(fonts[size], cp), cp in map(ord, gen_fonts.SPARSE[size]), 'U+%04X at %d' % (cp, size))
 
     def test_sparse_sizes_keep_metrics(self):
         sys.path.insert(0, str(PRO / 'scripts'))
         import gen_fonts
         saved, gen_fonts.SPARSE = getattr(gen_fonts, 'SPARSE', {}), {}
         try:
-            full = {size: gen_fonts.bake(LIBERATION, size) for size in (42, 56)}
+            full = {size: gen_fonts.bake(LIBERATION, size) for size in (32, 42, 56)}
         finally:
             gen_fonts.SPARSE = saved
         fonts = parse(self.out)
@@ -134,19 +136,19 @@ class FontTests(unittest.TestCase):
             self.assertEqual([g[1:3] for g in glyphs], [g[1:] for g in fonts[size]['glyphs']], size)
 
     def test_only_sparse_chars_drawn(self):
-        use = re.compile(r'ht_pro_(42|56)\b')
+        use = re.compile(r'ht_pro_(32|42|56)\b')
         for path in sorted((PRO / 'main').rglob('*.c')):
             for n, line in enumerate(path.read_text().splitlines(), 1):
                 if not use.search(line) or line.lstrip().startswith(('//', '/*', '*')):
                     continue
                 where = '%s:%d' % (path.relative_to(PRO), n)
                 if path.name == 'pod_pet.c' and re.search(r'fonts\[\]\s*=\s*\{[^}]*&ht_pro_56', line):
-                    continue  # the font table in mark_default_big; its only text is ">_"
+                    continue  # the font table in pod_mark_default_big; its only text is ">_"
                 if 'ht_pro_text' not in line and 'ht_pro_width' not in line and 'centered(' not in line:
-                    self.fail('%s: cannot judge use of ht_pro_42/56: %s' % (where, line.strip()))
+                    self.fail('%s: cannot judge use of ht_pro_32/42/56: %s' % (where, line.strip()))
                 lits = re.findall(r'"((?:[^"\\]|\\.)*)"', line)
                 self.assertTrue(lits and all(set(l) <= set('#>_?') for l in lits),
-                                '%s: non-sparse text at 42/56: %s' % (where, line.strip()))
+                                '%s: non-sparse text at 32/42/56: %s' % (where, line.strip()))
 
 
 CS = {'ph_sb_48': ('Inter-SemiBold', 48), 'ph_sb_34': ('Inter-SemiBold', 34), 'ph_sb_26': ('Inter-SemiBold', 26),

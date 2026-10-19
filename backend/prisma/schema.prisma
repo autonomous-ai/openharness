@@ -817,6 +817,8 @@ model HarnessReview {
 /// Discovery metadata for one account-bound, view-only invitation. Content remains on the owner
 /// daemon, which independently authorizes every observer against its durable local grant list.
 model HarnessShare {
+  /// A session view derived from this Super Tab; membership is rechecked at admission.
+  superTabId     String?
   id             String    @id @map("_id")
   ownerId        String
   machineId      String
@@ -852,6 +854,9 @@ model MachineShare {
   /// The owner's email domain while "Everyone at @domain" is on; null when off. Written by the backend
   /// from the owner's verified address, never taken from the client, and never a public domain.
   domain        String?
+  /// Stable while an email/domain grant continues; a removed and restored grant
+  /// gets a new version so old Super Tab contributions cannot resume silently.
+  grantVersions Json?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -975,6 +980,171 @@ model AgentMessageMember {
 }
 
 /// Explicit account opt-ins; missing choices stay off. Each write changes one feature.
+// Super Tabs own their roster and history independently of desktop pane layout. Revision writes
+// serialize membership changes, commands and delivery claims inside Mongo transactions.
+model SuperTab {
+  id             String   @id @map("_id")
+  ownerId        String
+  autonomousEnv  String
+  memberIds      String[]
+  invitedEmails  String[]
+  machineIds     String[]
+  revision       Int      @default(0)
+  state          Json
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([autonomousEnv, memberIds])
+  @@index([autonomousEnv, invitedEmails])
+  @@index([autonomousEnv, machineIds])
+}
+
+model SuperTabMessage {
+  id              String   @id @map("_id")
+  tabId           String
+  conversationId  String
+  sequence        Int
+  author          Json
+  source          Json?
+  text            String
+  replyTo         String?
+  recipientIds    String[]
+  createdAt       DateTime @default(now())
+
+  @@index([tabId, conversationId, sequence])
+}
+
+model SuperTabOperation {
+  id           String   @id @map("_id")
+  tabId        String
+  actorKey     String
+  requestHash  String
+  revision     Int
+  result       Json
+  createdAt    DateTime @default(now())
+
+  @@index([tabId])
+}
+
+// A conversation-scoped provenance receipt. It grants no terminal access.
+// Only the recorded execution host can append observations, and every append
+// rechecks the person's membership and both machine grants.
+model SuperTabNativeContext {
+  id              String   @id @map("_id")
+  tabId           String
+  conversationId  String
+  agentId         String
+  userId          String
+  binding         Json
+  lastEventId     String?
+  revoked         Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@index([tabId, revoked])
+}
+
+model SuperTabDelivery {
+  id                    String   @id @map("_id")
+  tabId                 String
+  conversationId        String
+  messageId             String
+  nativeContextId       String?
+  assignmentId          String?
+  agentId               String
+  machineId             String
+  machineOwnerId        String?
+  membershipGeneration  String
+  authorKind            String
+  authorId              String
+  authorGeneration      String
+  status                String   @default("queued")
+  claimId               String?
+  receipt               String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([tabId, agentId, status, createdAt])
+  @@index([machineId, status])
+}
+
+// One independent harness owns at most one active assignment across all Super Tabs.
+model SuperTabRun {
+  id            String   @id @map("_id")
+  tabId         String
+  assignmentId  String   @unique
+  machineId     String
+  harnessId     String
+  createdAt     DateTime @default(now())
+}
+
+// One routing policy document per account and environment (superTabs/routingPolicy.ts).
+model RoutingPolicy {
+  id            String   @id @map("_id")
+  userId        String
+  autonomousEnv String
+  revision      Int      @default(0)
+  policy        Json
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, autonomousEnv])
+}
+
+model SuperTabAttempt {
+  id              String   @id @map("_id")
+  tabId           String
+  conversationId  String
+  snapshot        Json
+  createdAt       DateTime @default(now())
+
+  @@index([tabId, conversationId, createdAt])
+}
+
+/// One `harness super-tab route` decision (superTabs/routeRecord.ts). Pruned after 90 days on write.
+model SuperTabRouteDecision {
+  id             String    @id @map("_id")
+  tabId          String
+  conversationId String
+  record         Json
+  final          Json?
+  override       Json?
+  assignmentId   String?
+  outcome        String?
+  outcomeAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([tabId, createdAt])
+  @@index([tabId, conversationId, outcome])
+  @@index([tabId, assignmentId])
+}
+
+model SuperTabStopReceipt {
+  id              String   @id @map("_id")
+  tabId           String
+  assignmentId    String
+  machineId       String
+  harnessId       String
+  machineOwnerId  String
+  receipt         String
+  createdAt       DateTime @default(now())
+
+  @@unique([tabId, assignmentId])
+}
+
+// Configuration observations stay outside the tab snapshot so a long-running
+// assignment keeps its complete history without making every tab read grow.
+model SuperTabConfiguration {
+  id             String   @id @map("_id")
+  tabId          String
+  agentId        String
+  revision       Int
+  configuration  Json
+  assignmentIds  String[]
+  actorKey       String
+  observedAt     DateTime
+
+  @@index([tabId, agentId, revision])
+}
+
 model ExperimentalSettings {
   id               String  @id @map("_id") @db.ObjectId
   userId           String

@@ -15,10 +15,11 @@
 #include "freertos/task.h"
 #include "hal/efuse_hal.h"
 #include "mbedtls/sha256.h"
+#include "last_words.h"
 
 static const char *TAG = "fw";
 
-// Read-back buffer for the hash. Small and static on purpose: this runs on the cable task (6 KB stack, whose
+// Read-back buffer for the hash. Small and static on purpose: this runs on the cable task (12 KB stack, whose
 // frames are capped at compile time), which also carries esp_ota_write().
 #define VERIFY_CHUNK 1024
 // No slice for this long ends the transfer. The daemon's keepalives prove the host is alive, not that an
@@ -100,32 +101,30 @@ void fw_mark_valid(void)
 }
 
 // ---- when a fresh image is confirmed ---------------------------------------------------------------------------
-// Never before the first frame is painted, then at the first cable session (the welcome: parsed, the roster asked
-// for) or, failing that, once the uptime reaches CONFIRM_MS. An image whose cable path crashes would otherwise be
-// confirmed and then reboot-loop with no rollback, and the cable is the only way to fix it.
+// Late, so the rollback protects against what actually went wrong in the field (resets 9 to 37 s after boot): the
+// image must have been up for CONFIRM_MS with a cable session that has stayed up for SESSION_MS, or, with no cable
+// at all, for IDLE_MS. Never before the first frame is painted. A reset before that rolls back to the previous image.
 #define CONFIRM_MS 60000u
-static atomic_bool s_painted, s_session_seen, s_confirmed;
+#define SESSION_MS 30000u
+#define IDLE_MS 180000u
+static atomic_bool s_painted, s_confirmed;
+static atomic_uint s_session_since;   // uptime ms of the current session's welcome (0: no session)
 
-static bool confirm_now(void)
+bool fw_confirm_due(uint32_t uptime_ms, uint32_t session_since_ms)
 {
+    if (uptime_ms >= IDLE_MS) return true;
+    return session_since_ms && uptime_ms >= CONFIRM_MS && (uint32_t)(uptime_ms - session_since_ms) >= SESSION_MS;
+}
+
+void fw_confirm_frame_painted(void) { atomic_store(&s_painted, true); }
+void fw_confirm_session_up(uint32_t uptime_ms) { atomic_store(&s_session_since, uptime_ms ? uptime_ms : 1); }
+void fw_confirm_session_down(void) { atomic_store(&s_session_since, 0); }   // "continuously": a drop restarts the 30 s
+bool fw_confirm_tick(uint32_t uptime_ms)
+{
+    if (!atomic_load(&s_painted) || !fw_confirm_due(uptime_ms, atomic_load(&s_session_since))) return false;
     if (atomic_exchange(&s_confirmed, true)) return false;
     fw_mark_valid();
     return true;
-}
-// Each side stores its own flag, then reads the other's: whichever comes second confirms (once).
-bool fw_confirm_frame_painted(void)
-{
-    atomic_store(&s_painted, true);
-    return atomic_load(&s_session_seen) && confirm_now();
-}
-bool fw_confirm_session_up(void)
-{
-    atomic_store(&s_session_seen, true);
-    return atomic_load(&s_painted) && confirm_now();
-}
-bool fw_confirm_tick(uint32_t uptime_ms)
-{
-    return atomic_load(&s_painted) && uptime_ms >= CONFIRM_MS && confirm_now();
 }
 bool fw_confirm_pending(void) { return !atomic_load(&s_confirmed); }
 
@@ -142,7 +141,7 @@ void fw_no_frame(void)
 #ifdef FW_UPDATE_HOST_TEST
 void fw_confirm_test_reset(void)
 {
-    atomic_store(&s_painted, false); atomic_store(&s_session_seen, false); atomic_store(&s_confirmed, false);
+    atomic_store(&s_painted, false); atomic_store(&s_session_since, 0); atomic_store(&s_confirmed, false);
 }
 #endif
 
@@ -220,13 +219,14 @@ bool fw_update_offer(const char *version, int size, const char *sha256_hex, bool
     s_sha_hex[64] = 0;
     snprintf(s_version, sizeof s_version, "%s", version);
 
-    // esp_ota_begin ERASES the slot, which takes seconds; the screen goes up first so the device does not look
-    // frozen at exactly the moment a user must not pull the cable.
+    // The slot is erased as the writes reach it (OTA_WITH_SEQUENTIAL_WRITES), a sector or two per slice: erasing the
+    // whole image up front blocked this task for seconds, long enough to starve the task watchdog it is now under.
     const esp_app_desc_t *me = esp_app_get_description();
+    last_words_phase(LW_CABLE, "ota.accept");
     ESP_LOGI(TAG, "accepting %s (%d B) into %s", version, size, target->label);
     fw_update_ui_begin(me ? me->version : "", version);
     s_handle = 0;
-    if (esp_ota_begin(target, (size_t)size, &s_handle) != ESP_OK) {
+    if (esp_ota_begin(target, OTA_WITH_SEQUENTIAL_WRITES, &s_handle) != ESP_OK) {
         if (s_handle) esp_ota_abort(s_handle);
         reset_state();
         fw_update_send_error("could not start the update");
@@ -299,6 +299,7 @@ void fw_update_slice(const uint8_t *payload, size_t plen)
     }
 
     if (len > s_expected - s_written) { fail("more bytes than the offer promised"); return; }
+    last_words_phase(LW_CABLE, "ota.write");
     if (esp_ota_write(s_handle, data, len) != ESP_OK) { fail("flash write failed"); return; }
     s_written += (uint32_t)len;
     s_last_slice_ms = now_ms();
@@ -310,7 +311,9 @@ void fw_update_slice(const uint8_t *payload, size_t plen)
     if (s_written < s_expected) return;
 
     // ---- the image is complete: five checks, in order, ALL before esp_ota_set_boot_partition ------------
+    last_words_phase(LW_CABLE, "ota.end");
     if (esp_ota_end(s_handle) != ESP_OK) { fail("image rejected by esp_ota_end"); return; }        // 1
+    last_words_phase(LW_CABLE, "ota.verify");
     if (!written_hash_matches()) { fail("sha256 mismatch"); return; }                              // 2
     const char *why = image_refusal();                                                            // 3, 4, 5
     if (why) { fail(why); return; }

@@ -17,7 +17,7 @@ import { emailDomain, isPublicEmailDomain } from './publicEmailDomains.js'
 const pub = (n: number) => Buffer.alloc(32, n).toString('base64')
 const kim = { sub: 'kim', email: ' Kim@Acme.io ', role: 'user', autonomousEnv: 'prod' as const }
 const share = (patch: Record<string, unknown> = {}) => ({ id: 's1', machineId: 'm1', ownerId: 'owner', autonomousEnv: 'prod',
-  emails: [] as string[], domain: null as string | null, createdAt: new Date(), updatedAt: new Date(), ...patch })
+  emails: [] as string[], domain: null as string | null, grantVersions: null, createdAt: new Date(), updatedAt: new Date(), ...patch })
 const machine = (patch: Record<string, unknown> = {}) => ({ machineId: 'm1', userId: 'owner', autonomousEnv: 'prod', name: 'Studio',
   hostname: 'studio.local', billingStatus: 'not_required', ...patch })
 

@@ -24,19 +24,13 @@ static int tab_list(const pod_model_t *m, int tab, const pod_agent_t *out[], int
     return n;
 }
 
-// Home pages: the TABS frame's scroll is the tab index, or -1 for the Notices card, which exists only while there are notices (so it
-// is a position that does not move when notices come or go: the tab under the person stays the tab under the person). Lowest valid scroll.
-static int home_lo(const pod_model_t *m) { return pod_notice_count(m) > 0 ? -1 : 0; }
-// The valid range of Home's scroll: lo (-1 with notices, else 0) .. the last tab (or lo with no tabs).
-static int16_t home_clamp(const pod_model_t *m, int s)
-{
-    const int lo = home_lo(m), hi = m->tab_count - 1 > lo ? m->tab_count - 1 : lo;
-    return (int16_t)(s < lo ? lo : s > hi ? hi : s);
-}
-// Leaving a room for Home lands on that room's tab card, never on the Notices card.
+// Home pages: the TABS frame's scroll is a page of pod_home_pages: the tab index, or POD_HOME_NOTICES / POD_HOME_WORKING, which exist only while there
+// are notices / working agents, so they are positions that do not move when they come or go: the tab under the person stays the tab under the person.
+// Leaving a room for Home lands on that room's tab card, never on the Notices or Working card.
 static void land_on_tab(pod_nav_t *n, const pod_model_t *m, const pod_frame_t *from)
 {
     if (n->depth != 1 || n->stack[0].view != POD_V_TABS) return;
+    if (n->stack[0].scroll == POD_HOME_WORKING) return;   // a room opened from the Working card: Home stays on that card
     int idx = -1;
     if (from->tab_id[0]) {
         for (int t = 0; t < m->tab_count; t++) if (!strcmp(m->tabs[t].id, from->tab_id)) { idx = t; break; }
@@ -160,7 +154,8 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
         pod_frame_t t; memset(&t, 0, sizeof t);
         t.view = POD_V_INBOX;
         t.tab = POD_TAB_RECENT;   // the agents opened from here step through Recent
-        push(n, &t);
+        if (n->depth >= 4) { n->stack[1] = t; n->depth = 2; }   // the stack is full: the Inbox sits right over Home, as OPEN_NOTIF does
+        else push(n, &t);
         break;
     }
     case POD_A_OPEN_NOTIF: {
@@ -190,8 +185,12 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
         if (is_agent_view(f->view)) return step(n, m, a == POD_A_NEXT ? 1 : -1);
         break;
     case POD_A_FOLLOW:
-        if (arg >= 0 && arg < m->agent_count && pod_nav_follow(n, m, m->agents[arg].id, now_ms))
+        if (arg >= 0 && arg < m->agent_count) {
+            const bool card = n->depth == 1 && f->view == POD_V_TABS && f->scroll == POD_HOME_WORKING;
+            if (!pod_nav_follow(n, m, m->agents[arg].id, now_ms)) break;
+            if (card) { n->stack[1] = n->stack[2]; n->depth = 2; }   // a pet on the Working card: the room sits right over Home, so Back lands on the card, not a tab
             return out_fx(POD_FX_AGENT_OPEN, m->agents[arg].id);
+        }
         break;
     case POD_A_TALK:
         if (f->view == POD_V_AGENT || f->view == POD_V_RECAP) {
@@ -242,8 +241,8 @@ static pod_out_t nav_act(pod_nav_t *n, pod_model_t *m, pod_action_t a, int arg, 
         break;
     case POD_A_SCROLL: {
         long s = (long)f->scroll + arg;
-        const long lo = f->view == POD_V_TABS ? home_lo(m) : 0;   // Home: -1 is the Notices card
-        f->scroll = (int16_t)(s < lo ? lo : s > 32767 ? 32767 : s);
+        if (f->view == POD_V_TABS) { f->scroll = (int16_t)pod_home_clamp(m, s < -32768 ? -32768 : s > 32767 ? 32767 : (int)s); n->work_page = 0; break; }
+        f->scroll = (int16_t)(s < 0 ? 0 : s > 32767 ? 32767 : s);
         break;
     }
     case POD_A_NONE:
@@ -311,7 +310,10 @@ void pod_nav_flip_recaps(pod_nav_t *n, pod_model_t *m) {
 pod_out_t pod_nav_sync(pod_nav_t *n, pod_model_t *m) {
     if (!n->depth) { pod_nav_init(n); return out_none(); }
     if (n->stack[0].view == POD_V_TABS) {   // tabs that went away take their pages with them
-        n->stack[0].scroll = home_clamp(m, n->stack[0].scroll);   // Home: the scroll is the tab index (-1: the Notices card, while there are notices)
+        n->stack[0].scroll = (int16_t)pod_home_clamp(m, n->stack[0].scroll);   // Home: the scroll is a page of the list
+        const int pages = (pod_home_working(m) + 2) / 3;   // the Working card's pet pages: the stored page follows the working set down
+        if (n->depth != 1 || n->stack[0].scroll != POD_HOME_WORKING) n->work_page = 0;
+        else if (n->work_page >= pages) n->work_page = (uint8_t)(pages > 0 ? pages - 1 : 0);
     }
     uint8_t keep = n->depth;
     for (uint8_t i = 1; i < n->depth; i++) {
@@ -381,6 +383,7 @@ bool pod_nav_follow(pod_nav_t *n, pod_model_t *m, const char *agent_id, uint32_t
     n->stack[0] = tabs; n->stack[1] = tf; n->stack[2] = af;
     n->depth = 3;
     n->sending = false;
+    n->work_page = 0;
     opened(n, m, a->id);
     pod_nav_flip_recaps(n, m);
     return true;
@@ -397,10 +400,11 @@ bool pod_nav_follow_tab(pod_nav_t *n, pod_model_t *m) {
     if (cur->view == POD_V_TABS && n->depth == 1) {
         if (cur->scroll == sel) return false;
         cur->scroll = (int16_t)sel;
+        n->work_page = 0;
         return true;
     }
     if (cur->view != POD_V_AGENT && cur->view != POD_V_RECAP) return false;
-    if (cur->tab < 0 || n->depth < 3) return false;   // Recent (an agent no tab holds): its own list
+    if (cur->tab < 0 || n->depth < 2) return false;   // Recent (an agent no tab holds): its own list
     if (!strcmp(cur->tab_id, m->tabs[sel].id)) return false;
     if (index_in(m, sel, cur->agent) >= 0) {
         for (int i = 1; i < n->depth; i++) {
@@ -408,7 +412,7 @@ bool pod_nav_follow_tab(pod_nav_t *n, pod_model_t *m) {
             n->stack[i].tab = (int8_t)sel;
             set_id(n->stack[i].tab_id, m->tabs[sel].id);
         }
-        n->stack[0].scroll = (int16_t)sel;
+        if (n->stack[0].scroll != POD_HOME_WORKING) n->stack[0].scroll = (int16_t)sel;   // a room opened from the Working card keeps Home on it
         return true;
     }
     const pod_agent_t *l[POD_AGENTS_MAX];

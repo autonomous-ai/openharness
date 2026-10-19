@@ -23,9 +23,10 @@ import type { AgentFrame } from '../../lib/agentFrame.js'
 import { engineLabel } from '../../lib/agentNames.js'
 import {
   AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves,
-  permissionModeFlags, supportsFirstPrompt, supportsNamedAgent,
+  permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag,
 } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunchWire.js'
+import { parseLaunchModel } from '../../lib/launchModel.js'
 import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError, type ProjectFolder } from '../../lib/projectFolder.js'
 import type { ScmLaunchRecord } from '../../scm/types.js'
@@ -33,6 +34,7 @@ import { parentAgentIdOf, type RegisteredSession } from '../../lib/registry.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPreparation.js'
 import { createPendingLaunches } from './pendingLaunches.js'
+import type { GuestCreate } from './guestCreate.js'
 
 /** Creates an agent (core/agents/create.ts). The orchestrator creates through the same one. */
 export type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
@@ -69,12 +71,14 @@ export interface LaunchRequestDeps {
    *  machine (core/api.ts `ModelsPort.launchTarget`). Null or a rejection holds a durable model request;
    *  resolving the semantic choice may renew service-owned credentials, but never dispatches a launch. */
   modelTarget: (selection: NewAgentModel) => Promise<GridLaunchOverride | null>
+  /** A guest's New Harness, as the guest's own OS user (core/agents/guestCreate.ts); null where there is none. */
+  guestCreate?: () => GuestCreate | null
 }
 
 type Reply = (result: Record<string, unknown>) => void
 type CreateInput = Parameters<CreateAgent>[0]
 
-export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget }: LaunchRequestDeps) {
+export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget, guestCreate }: LaunchRequestDeps) {
   const validateInstalled = async (input: CreateInput, known?: ReturnType<typeof installedDsh>): Promise<{ error: string; detail: string } | null> => {
     if (input.dsh) {
       const installed = known ?? installedDsh(input.dsh)
@@ -107,7 +111,9 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       }
       catch (error) {
         return { state: 'failed', error: error instanceof ProjectFolderError ? error.code : 'PROJECT_PREPARATION_FAILED',
-          detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.' }
+          detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.',
+          // The folder a typed name found already there: the apps offer to start in it, and `harness new` names it.
+          ...(error instanceof ProjectFolderError && error.folder ? { existingFolder: error.folder } : {}) }
       }
       // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
       // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
@@ -234,12 +240,13 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       const session = byAgent(status.agentId)
       return session
         ? { state: 'created', agent: await toProject(session), ...(status.level ? { level: status.level } : {}), ...(status.resumed !== undefined ? { resumed: status.resumed } : {}) }
-        : { state: 'unavailable' }
+        : { state: 'unavailable', createdAgentId: status.agentId }
     }
     // A recorded refusal is a completed outcome. Keep it separate from transport/dispatch errors
     // so clients can distinguish "safe to correct the choices" from "outcome still unknown".
     if (status.state === 'failed') {
-      return { state: 'failed', ...(status.preparedFolder ? { preparedFolder: status.preparedFolder } : {}), failure: { code: status.error, ...(status.detail ? { detail: status.detail } : {}) } }
+      return { state: 'failed', ...(status.preparedFolder ? { preparedFolder: status.preparedFolder } : {}), failure: { code: status.error,
+        ...(status.detail ? { detail: status.detail } : {}), ...(status.existingFolder ? { existingFolder: status.existingFolder } : {}) } }
     }
     return status
   }
@@ -255,8 +262,36 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     }
   }
 
-  /** Answers `agent_create`. `asker.local` says the frame came from this machine. */
-  const create = async (payload: Record<string, unknown>, asker: { local: boolean }, reply: Reply): Promise<void> => {
+  /** A guest's `agent_create`: its own launch, never the owner's (core/agents/guestCreate.ts). A `creationId` keeps a
+   *  receipt as the owner's launches do, so a status check or a retry finds the same harness. */
+  const createForGuest = async (payload: Record<string, unknown>, guest: string, reply: Reply): Promise<void> => {
+    const launch = guestCreate?.()
+    if (!launch) { reply({ error: 'GUEST_NOT_ALLOWED' }); return }
+    const creationId = payload.creationId
+    if (creationId !== undefined && !validCreationId(creationId)) { reply({ error: 'INVALID_CREATION_ID' }); return }
+    if (creationId === undefined) {
+      const result = await launch(payload, guest)
+      reply(result.ok ? { agent: await toProject(result.session) } : { error: result.error, ...(result.detail ? { detail: result.detail } : {}) })
+      return
+    }
+    try {
+      const fingerprint = creationFingerprint({ guest, engine: payload.engine, name: payload.name })
+      void receipts.run(creationId, fingerprint, async () => {
+        const result = await launch(payload, guest)
+        return result.ok ? { state: 'created', agentId: result.session.agentId }
+          : { state: 'failed', error: result.error, ...(result.detail ? { detail: result.detail } : {}) }
+      }).then(async (status) => {
+        reply({ creationId, ...await creationStatusPayload(status) })
+      }).catch(() => reply({ error: 'INTERNAL' }))
+    } catch (error) {
+      reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
+    }
+  }
+
+  /** Answers `agent_create`. `asker.local` says the frame came from this machine; `asker.guest`, that a guest
+   *  of a machine shared with them asks (core/guestPolicy.ts). */
+  const create = async (payload: Record<string, unknown>, asker: { local: boolean; guest?: string }, reply: Reply): Promise<void> => {
+    if (asker.guest !== undefined) { await createForGuest(payload, asker.guest, reply); return }
     const engine = payload.engine as AgentEngine | undefined
     const cwd = payload.cwd
     if (typeof engine !== 'string' || !ENGINES.includes(engine)) { reply({ error: 'INVALID_ENGINE' }); return }
@@ -289,6 +324,21 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     const grid = parseGridLaunchOverride(payload.grid)
     if (grid.state === 'invalid') { reply({ error: 'INVALID_GRID', detail: grid.reason }); return }
     if (terminal && grid.state === 'ok') { reply({ error: 'INVALID_GRID', detail: 'a terminal has no engine to point at a grid' }); return }
+    // A model and effort for this session alone, as flags (lib/launchModel.ts). Refused, never ignored: a daemon that
+    // dropped them would start the agent on the engine's own model and look like it worked, so a caller that gets
+    // LAUNCH_MODEL_UNSUPPORTED switches the model after the start instead. A grid picks its own model.
+    const launchModel = parseLaunchModel(engine, payload)
+    if (launchModel.state === 'invalid') { reply({ error: 'INVALID_LAUNCH_MODEL', detail: launchModel.detail }); return }
+    if (launchModel.state === 'unsupported') { reply({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: launchModel.detail }); return }
+    if (launchModel.state === 'ok' && (grid.state === 'ok' || model.state === 'ok')) {
+      reply({ error: 'INVALID_LAUNCH_MODEL', detail: 'a grid chooses its own model' }); return
+    }
+    // A Claude Code too old for the flags would print its help in the new pane. Refused here, before any receipt, so the
+    // caller creates the agent without them and switches the model afterwards, as it did before the flags.
+    if (launchModel.state === 'ok') {
+      const missing = await unsupportedLaunchModelFlag(engine, launchModel.launchModel)
+      if (missing) { reply({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: `The ${engine} on this machine does not support ${missing}; update ${engine} to launch it with a model.` }); return }
+    }
     // Same validation the desktop app already applies client-side (`Agent._safeCodexHome`) —
     // repeated here because a client's own check is not a guarantee about what actually
     // arrives on the wire.
@@ -362,7 +412,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       if (typeof payload.resumeSessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(payload.resumeSessionId)) {
         reply({ error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }); return
       }
-      if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || dsh || prompt || agent) {
+      if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || launchModel.state === 'ok' || dsh || prompt || agent) {
         reply({ error: 'INVALID_SESSION', detail: 'a resumed conversation takes no new folder, grid, harness, prompt or agent' }); return
       }
       resumeSessionId = payload.resumeSessionId
@@ -404,6 +454,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       takeOver,
       // Only when set: a person's create keeps the fingerprint its receipt was recorded with before the field.
       ...(payload.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
+      ...(launchModel.state === 'ok' ? { launchModel: launchModel.launchModel } : {}),
       ...(parentAgentId ? { parentAgentId } : {}),
     }
     const fingerprintInput = model.state === 'ok' ? { ...input, modelSelection: model.selection } : input

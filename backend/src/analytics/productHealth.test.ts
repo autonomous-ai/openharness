@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
 import { cleanUsageContext, HEALTH_MEASURES, HEALTH_FLOWS } from '../types/productHealthContract.js'
+import { PRODUCT_USAGE_ADD_PHONE_OPENINGS, PRODUCT_USAGE_DESKTOP_FLOWS } from '../types/productUsage.js'
 import { dailyProductHealth, healthBreakdowns } from './productHealth.js'
 
 const context = { surface: 'desktop', release: '1.2.73', platform: 'macos', channel: 'production' } as const
@@ -10,6 +11,12 @@ it('keeps the CLI contract identical and every Desktop enum in the server vocabu
   for (const metric of HEALTH_MEASURES) expect(dart).toContain(`'${metric}'`)
   const flows = readFileSync('../desktop/lib/measurement/product_measurement.dart', 'utf8')
   for (const flow of HEALTH_FLOWS) expect(flows).toContain(`'${flow}'`)
+})
+it('names the Desktop\'s Add Phone card and every way into Add Phone as the Desktop does', () => {
+  const dart = readFileSync('../desktop/lib/measurement/product_measurement.dart', 'utf8')
+  for (const flow of PRODUCT_USAGE_DESKTOP_FLOWS) expect(dart).toContain(`'${flow}'`)
+  const openings = dart.split('enum AddPhoneOpening')[1].split('const AddPhoneOpening(')[0]
+  expect([...openings.matchAll(/\w+\('([a-z_]+)'\)/g)].map(match => match[1])).toEqual([...PRODUCT_USAGE_ADD_PHONE_OPENINGS])
 })
 it('shows hn\'s session milestones beside the Desktop\'s', () => {
   const row = (metric: string, value: number) => ({ dayUtc: new Date('2026-10-01'), metric, value })

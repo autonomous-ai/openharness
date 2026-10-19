@@ -228,7 +228,11 @@ void main() {
           expect(tester.takeException(), isNull);
           expect(find.text('Shop'), findsOneWidget);
           if (!empty) {
-            expect(find.text('Harness Pro'), findsNWidgets(3));
+            // Five known devices, four plugged in: the unplugged Travel Pro
+            // has no card, and the count is of the plugged-in ones.
+            expect(find.text('4 devices'), findsOneWidget);
+            expect(find.text('Travel'), findsNothing);
+            expect(find.text('Harness Pro'), findsNWidgets(2));
             expect(find.text('Faces'), findsOneWidget);
           }
           await capture(
@@ -443,7 +447,7 @@ void main() {
   });
 
   testWidgets(
-    'selected device owns changes through reorder and disconnect; Faces is a single choice',
+    'selected device owns changes through reorder; Faces is a single choice; unplugged it leaves the page',
     (tester) async {
       final dial = DialState();
       final sent = <(String, Map<String, Object?>)>[];
@@ -475,9 +479,6 @@ void main() {
       report(dial, [deviceStatus('b', muted: false)]);
       await tester.pumpAndSettle();
       expect(tester.widget<Switch>(sound).value, isTrue);
-      report(dial, []);
-      await tester.pumpAndSettle();
-      expect(tester.widget<Switch>(sound).onChanged, isNull);
       final faces = find.byKey(const Key('devices-faces'));
       await tester.ensureVisible(faces);
       await tester.tap(faces);
@@ -491,6 +492,13 @@ void main() {
         hasLength(1),
         reason: 'Inspecting the current face never writes',
       );
+      // Unplugged, the device leaves the page: no card, no settings to change.
+      report(dial, []);
+      await tester.pumpAndSettle();
+      expect(find.byKey(ValueKey('device-card-$key')), findsNothing);
+      expect(find.byType(DeviceSettingsPanel), findsNothing);
+      expect(find.text('No devices connected'), findsOneWidget);
+      expect(sent, hasLength(1));
       await tester.pumpWidget(const SizedBox());
       controller.dispose();
       dial.dispose();

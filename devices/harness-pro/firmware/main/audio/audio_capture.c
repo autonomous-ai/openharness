@@ -7,6 +7,7 @@
 
 #include "board/board_i2c.h"
 #include "board_pins.h"
+#include "task_stacks.h"
 #include "driver/i2s_std.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
@@ -188,7 +189,7 @@ void audio_beep_init(void)
     esp_codec_dev_cfg_t dev_cfg = { .dev_type = ESP_CODEC_DEV_TYPE_OUT, .codec_if = s_es8311, .data_if = s_data_if };
     s_spk = esp_codec_dev_new(&dev_cfg);
     if (!s_spk) { speaker_init_failed("device allocation"); return; }
-    if (xTaskCreate(beep_task, "beep", 4096, NULL, 5, &s_beep_task) != pdPASS) {
+    if (xTaskCreate(beep_task, "beep", STACK_BEEP, NULL, 5, &s_beep_task) != pdPASS) {
         s_beep_task = NULL;
         speaker_init_failed("task allocation");
         return;

@@ -316,7 +316,7 @@ describe('restore ownership across asynchronous work', () => {
     h.deps.probeProcess = () => probe.promise
     await restoreAgents(h.deps)
     const swap = createPaneSwap({ restartJobs, byAgent: h.deps.registry.byAgent,
-      prepareSessionResume: () => {}, keepAbandonedConversation: () => {} })
+      prepareSessionResume: () => {}, keepAbandonedConversation: () => {}, stopNative: async () => {} })
     expect(swap.restartJobs).toBe(restartJobs)
     probe.resolve(identity(8))
     await settled(h, 1, 1)
@@ -705,6 +705,13 @@ describe('restoreAgents — which agents get a pane back', () => {
     expect(summary.restored).toEqual([])
     expect(summary.skipped.map((s) => s.agentId)).toEqual(['paneless', 'broken'])
     expect(h.paneCreates).toBe(0)
+  })
+
+  it('leaves a guest\'s harness stopped: rebuilt here it would run as the owner, with the owner\'s keys', async () => {
+    const h = harness([row({ agentId: 'guests', guest: 'kim@acme.io' })])
+    const summary = await restoreAgents(h.deps)
+    expect(summary.skipped).toEqual([{ agentId: 'guests', reason: 'a guest\'s harness' }])
+    expect(h.paneCreates).toBe(0); expect(h.respawns).toBe(0)
   })
 
   it('puts a grid agent back on its grid, key and all, when the row kept its launch', async () => {

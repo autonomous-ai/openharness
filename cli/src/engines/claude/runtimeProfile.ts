@@ -33,7 +33,7 @@ function normalizeClaudeDisplay(value: string): string | null {
   return null
 }
 
-function claudeAliasForModel(model: string): string | null {
+export function claudeAliasForModel(model: string): string | null {
   const normalized = model.toLowerCase()
   if ((CLAUDE_ALIASES as readonly string[]).includes(normalized)) return normalized
   return /^claude-(opus|fable|sonnet|haiku)(?:-|$)/.exec(normalized)?.[1] ?? null

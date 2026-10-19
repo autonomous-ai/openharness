@@ -28,6 +28,9 @@ enum ProductFlow {
   connectUser('connect_user'),
   connectAuto('connect_auto'),
   resumeRecovery('resume_recovery'),
+  // The Add Phone card (widgets/phone_offer_card.dart), offered once per computer: begun when it is on
+  // screen, ok by its Add Phone, cancelled by its ×, unknown when it goes another way.
+  phoneOffer('phone_offer'),
   // The phone's own flows, listed so this enum names every flow the phone's copy does; the desktop
   // never begins them.
   signInScan('sign_in_scan'),
@@ -42,9 +45,49 @@ enum ProductFlow {
   const ProductFlow(this.wire);
   final String wire;
   bool get beforeSignIn => index <= ProductFlow.signIn.index;
+
+  /// The revision of the local CLI's report proxy that knows this flow's
+  /// names, as [ProductHealthMeasure.vocabulary] — but its counts wait in the
+  /// queue for that answer instead of being skipped ([ProductMeasurement]).
+  int get vocabulary => this == phoneOffer ? 3 : 1;
+
+  /// Ended only by what the person does, never by the 15-minute observation
+  /// bound: the card waits beside the work until it is used or put away, and
+  /// an Add Phone pressed after 15 minutes would otherwise be lost to unknown.
+  bool get unbounded => this == phoneOffer;
 }
 
 enum ProductOutcome { ok, failed, cancelled, unknown }
+
+/// Where Add Phone was opened from, counted each time it opens
+/// (`ui_desktop_add_phone_<wire>`): which way in, nothing else.
+enum AddPhoneOpening {
+  /// The Add Phone card's own button ([ProductFlow.phoneOffer]).
+  offer('offer'),
+
+  /// The title bar's phone: the native one on macOS, the tab row's elsewhere.
+  titlebar('titlebar'),
+
+  /// Harness ▸ Add Phone… in the macOS app menu, or a key bound to it there.
+  menu('menu'),
+
+  /// The account menu's Add Phone.
+  account('account'),
+
+  /// The Machines picker's Add Phone.
+  machines('machines'),
+
+  /// The `app.add_phone` command: `> add phone` in the palette, a key bound
+  /// to it outside the macOS menu, the start guide's phone row (shown only
+  /// without the New Harness box).
+  command('command');
+
+  const AddPhoneOpening(this.wire);
+  final String wire;
+
+  /// As [ProductFlow.phoneOffer]'s ([ProductFlow.vocabulary]).
+  static const vocabulary = 3;
+}
 
 typedef ProductReportRequest = Future<Map<String, dynamic>> Function(
   Map<String, dynamic> report,
@@ -77,7 +120,16 @@ class ProductMeasurement extends ChangeNotifier {
   final String surface;
   ProductUsageContext? context;
   bool get healthEnabled => surface == 'desktop' && context != null;
+
+  /// The counter vocabulary the local CLI's report proxy announced on its
+  /// latest answer (`x-harness-usage-vocabulary`): 1, the names every proxy
+  /// knows, until one says more. A health measure newer than it is not
+  /// counted ([ProductHealthMeasure.vocabulary]).
+  int proxyVocabulary = 1;
   String? _coverageDay;
+  // The day each once-a-day measure was last counted; cleared with
+  // collector_days' own day so the two stay comparable.
+  final _countedOn = <ProductHealthMeasure, String>{};
   final _funnelSeen = <String, Set<ProductHealthMeasure>>{};
   final _funnelStarted = <String, DateTime>{};
   final _expires = <Object, DateTime>{};
@@ -270,7 +322,10 @@ class ProductMeasurement extends ChangeNotifier {
     }
     _funnelSeen.remove(channel);
     _funnelStarted.remove(channel);
-    if (channel == 'ui') _coverageDay = null;
+    if (channel == 'ui') {
+      _coverageDay = null;
+      _countedOn.clear();
+    }
   }
 
   void _coverage() {
@@ -284,12 +339,26 @@ class ProductMeasurement extends ChangeNotifier {
   /// Only fixed enum scalars enter the queue. Called after checking the account choice.
   void health(ProductHealthMeasure measure) {
     if (!healthEnabled || !sharing || _disposed) return;
+    // A proxy older than this name would refuse every report carrying it.
+    if (measure.vocabulary > proxyVocabulary) return;
     _coverage();
     _count(
       'ui',
       _now().toUtc().toIso8601String().substring(0, 10),
       'health_desktop_${measure.wire}',
     );
+  }
+
+  /// [measure] at most once per UTC day of this collector, like
+  /// collector_days, so its total reads against collector_days: how many
+  /// collector days had one, not how many there were.
+  void healthOncePerDay(ProductHealthMeasure measure) {
+    if (!healthEnabled || !sharing || _disposed) return;
+    if (measure.vocabulary > proxyVocabulary) return;
+    final day = _now().toUtc().toIso8601String().substring(0, 10);
+    if (_countedOn[measure] == day) return;
+    _countedOn[measure] = day;
+    health(measure);
   }
 
   /// Observed readiness since process launch; only its coarse duration is kept.
@@ -409,12 +478,36 @@ class ProductMeasurement extends ChangeNotifier {
       );
     }
 
-    if (healthEnabled) {
+    if (healthEnabled && !flow.unbounded) {
       _expires[ticket] = started.add(const Duration(minutes: 15));
       _expire[ticket] = finish;
     }
     return finish;
   }
+
+  /// Add Phone opened, and from where ([AddPhoneOpening]): one fixed name per
+  /// way in, nothing about the dialog or what follows. A signed-in, sharing
+  /// Desktop only; the browser has no such names.
+  void addPhoneOpened(AddPhoneOpening from) {
+    if (!healthEnabled || !sharing || _disposed) return;
+    _coverage();
+    _count(
+      'ui',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'ui_desktop_add_phone_${from.wire}',
+    );
+  }
+
+  /// The proxy revision ([proxyVocabulary]) that forwards [metric]: the Add
+  /// Phone card's flow and the ways Add Phone opened are 3, everything else
+  /// this queue holds is 1 (a health measure newer than 1 is never queued
+  /// before the proxy has named it, [health]).
+  static int _vocabularyOf(String metric) =>
+      metric.startsWith('ui_desktop_${ProductFlow.phoneOffer.wire}_')
+      ? ProductFlow.phoneOffer.vocabulary
+      : metric.startsWith('ui_desktop_add_phone_')
+      ? AddPhoneOpening.vocabulary
+      : 1;
 
   /// A widget's delayed callback cannot count after sign-out or a choice revision.
   VoidCallback observer(ProductHealthMeasure measure) {
@@ -581,11 +674,24 @@ class ProductMeasurement extends ChangeNotifier {
       final epoch = channel == 'setup' ? _guestEpoch : _accountEpoch;
       var report = _pending[channel];
       if (report == null) {
-        final keys = _days.keys.where((k) => k.startsWith('$channel:')).toList()
-          ..sort();
+        // A name newer than the proxy is known to forward waits here for an
+        // answer that says it does, rather than being skipped as a health
+        // measure is: the Add Phone card shows once per computer, often before
+        // the first answer. Each minute's runtime sample sends a report, so
+        // an answer comes; an older CLI's never does, and the day expires.
+        bool ready(String metric) => _vocabularyOf(metric) <= proxyVocabulary;
+        final keys =
+            _days.keys
+                .where(
+                  (k) => k.startsWith('$channel:') && _days[k]!.keys.any(ready),
+                )
+                .toList()
+              ..sort();
         if (keys.isEmpty) continue;
         final key = keys.first, counts = _days[key]!;
-        final batch = Map<String, int>.fromEntries(counts.entries.take(32));
+        final batch = Map<String, int>.fromEntries(
+          counts.entries.where((entry) => ready(entry.key)).take(32),
+        );
         for (final metric in batch.keys) {
           counts.remove(metric);
         }

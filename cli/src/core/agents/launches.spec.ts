@@ -10,7 +10,7 @@ import type { NativeLaunchResult } from '../../engines/nativeLaunch.js'
 import { createNativeLaunchPreparer } from '../../engines/prepareNativeLaunch.js'
 import { AgentCreationReceiptError, AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
-import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from '../../lib/engineLaunch.js'
+import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseNewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from '../../lib/projectFolder.js'
@@ -50,6 +50,8 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   ...await real<object>(),
   supportsFirstPrompt: vi.fn(() => true), supportsNamedAgent: vi.fn(() => true),
   permissionModeFlags: vi.fn(() => ['--flag']), permissionModeApproves: vi.fn(() => false),
+  // The engine's own --help is never run by a spec.
+  unsupportedLaunchModelFlag: vi.fn(async () => null),
 }))
 vi.mock('../../lib/projectFolder.js', async (real) => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -351,6 +353,46 @@ describe('agent_create, launched', () => {
     expect(Object.keys(byPerson!)).not.toContain('startedBy')
   })
 
+  it('hands a Claude launch its model and effort, and nothing for default, so older receipts\' fingerprints stay as they were', async () => {
+    const { ask, create } = setup()
+    await ask({ engine: 'claude', cwd: '/w', model: 'opus', effort: 'high' })
+    await ask({ engine: 'claude', cwd: '/w', model: 'default', effort: 'default' })
+    await ask({ engine: 'claude', cwd: '/w' })
+    const [routed, byDefault, plain] = vi.mocked(create!).mock.calls.map(([input]) => input)
+    expect(routed).toMatchObject({ engine: 'claude', launchModel: { model: 'opus', effort: 'high' } })
+    expect(Object.keys(byDefault!)).not.toContain('launchModel')
+    expect(Object.keys(plain!)).not.toContain('launchModel')
+  })
+
+  it('refuses a launch model before any receipt when the installed engine lacks a flag, and proceeds when it has them', async () => {
+    const { ask, create, deps } = setup()
+    vi.mocked(unsupportedLaunchModelFlag).mockResolvedValueOnce('--effort')
+    expect(await ask({ engine: 'claude', cwd: '/w', creationId: CREATION, model: 'opus', effort: 'high' }))
+      .toMatchObject({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: expect.stringContaining('--effort') })
+    expect(unsupportedLaunchModelFlag).toHaveBeenCalledWith('claude', { model: 'opus', effort: 'high' })
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.receipts.has(CREATION, 'any')).toBe(false)
+    expect(deps.receipts.pendingIntent(CREATION)).toBeFalsy()
+    // The same creation id is then free to start the agent without them.
+    vi.mocked(unsupportedLaunchModelFlag).mockResolvedValueOnce(null)
+    await ask({ engine: 'claude', cwd: '/w', creationId: CREATION, model: 'opus', effort: 'high' })
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce())
+    expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ launchModel: { model: 'opus', effort: 'high' } })
+  })
+
+  it('refuses a launch model its engine cannot take, a malformed one, and one beside a grid or a resumed conversation', async () => {
+    const { ask, create } = setup()
+    expect(await ask({ engine: 'codex', cwd: '/w', model: 'gpt-5', effort: 'high' })).toMatchObject({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: expect.stringContaining('codex') })
+    expect(await ask({ engine: 'claude', cwd: '/w', model: 'opus; ls' })).toMatchObject({ error: 'INVALID_LAUNCH_MODEL' })
+    expect(await ask({ engine: 'claude', cwd: '/w', effort: 'enormous' })).toMatchObject({ error: 'INVALID_LAUNCH_MODEL' })
+    vi.mocked(parseGridLaunchOverride).mockReturnValueOnce({ state: 'ok', override: { networkName: 'g' } } as never)
+    expect(await ask({ engine: 'claude', cwd: '/w', model: 'opus' })).toMatchObject({ error: 'INVALID_LAUNCH_MODEL', detail: expect.stringContaining('grid') })
+    vi.mocked(parseNewAgentModel).mockReturnValueOnce({ state: 'ok', selection: { model: 'm', grid: 'g' } })
+    expect(await ask({ engine: 'claude', cwd: '/w', model: 'opus' })).toMatchObject({ error: 'INVALID_LAUNCH_MODEL' })
+    expect(await ask({ engine: 'claude', cwd: '/w', resumeSessionId: 'abc12345', model: 'opus' })).toMatchObject({ error: 'INVALID_SESSION' })
+    expect(create).not.toHaveBeenCalled()
+  })
+
   it('hands on which harness here started it, and leaves out one this machine does not know', async () => {
     const { ask, create } = setup()
     await ask({ engine: 'claude', cwd: '/w', startedBy: 'agent', parentAgentId: 'a1' })
@@ -530,6 +572,17 @@ describe('agent_create with a receipt', () => {
     expect(replies.map((r) => r.failure)).toEqual([
       { code: 'CLONE_FAILED', detail: 'Could not clone it.' }, { code: 'PROJECT_PREPARATION_FAILED', detail: 'Could not prepare the project folder.' },
     ])
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('records the folder a typed name found already there, so the apps can offer to start in it', async () => {
+    const { ask, status, create, replies } = setup()
+    vi.mocked(prepareProjectFolder).mockRejectedValueOnce(new ProjectFolderError('PROJECT_EXISTS', '“payments” already exists.', '/projects/payments'))
+    await ask({ engine: 'claude', projectSource: 'new', projectName: 'payments', creationId: CREATION })
+    const refused = { creationId: CREATION, state: 'failed', failure: { code: 'PROJECT_EXISTS', detail: '“payments” already exists.', existingFolder: '/projects/payments' } }
+    await vi.waitFor(() => expect(replies).toStrictEqual([refused]))
+    // Kept with the receipt: asked again, the answer is the same.
+    expect(await status({ creationId: CREATION })).toStrictEqual(refused)
     expect(create).not.toHaveBeenCalled()
   })
 
@@ -840,7 +893,7 @@ describe('agent_create_status', () => {
     expect(created).toStrictEqual({ creationId: CREATION, state: 'created', agent: { id: 'forked' }, level: 'handoff', resumed: true })
     expect(Object.keys(created!)).toEqual(['creationId', 'state', 'agent', 'level', 'resumed'])
     outcome({ state: 'created', agentId: 'deleted-since' })
-    expect(await status({ creationId: CREATION })).toStrictEqual({ creationId: CREATION, state: 'unavailable' })
+    expect(await status({ creationId: CREATION })).toStrictEqual({ creationId: CREATION, state: 'unavailable', createdAgentId: 'deleted-since' })
     outcome({ state: 'failed', error: 'ENGINE_MISSING', detail: 'claude is not installed', preparedFolder: '/projects/prepared' })
     expect(await status({ creationId: CREATION })).toStrictEqual({ creationId: CREATION, state: 'failed', preparedFolder: '/projects/prepared', failure: { code: 'ENGINE_MISSING', detail: 'claude is not installed' } })
     outcome({ state: 'unconfirmed' })
@@ -971,5 +1024,71 @@ describe('agent_fork', () => {
     await frameless.forkAsk({ agentId: 'a1', creationId: CREATION })
     await settle()
     await vi.waitFor(() => expect(frameless.replies).toStrictEqual([{ error: 'INTERNAL' }]))
+  })
+})
+
+describe('agent_create, from a guest', () => {
+  // A guest's New Harness never reaches the owner's launch: it is built as the guest's own OS user
+  // (core/agents/guestCreate.ts, docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+  const guestAsk = async (run: ReturnType<typeof setup>, payload: Record<string, unknown>, guest = 'kim@acme.io') => {
+    await run.requests.create(payload, { local: false, guest }, (result) => { run.replies.push(result) })
+    return run.replies.at(-1)
+  }
+
+  it('is the guest\'s own launch, never the owner\'s, answered as the owner\'s are', async () => {
+    const guestCreate = vi.fn(async () => ({ ok: true as const, session: session('guest-agent', { guest: 'kim@acme.io' }) }))
+    const run = setup({ guestCreate: () => guestCreate })
+    expect(await guestAsk(run, { engine: 'claude', cwd: '/Users/owner' })).toEqual({ agent: { id: 'guest-agent' } })
+    expect(guestCreate).toHaveBeenCalledWith({ engine: 'claude', cwd: '/Users/owner' }, 'kim@acme.io')
+    expect(run.create).not.toHaveBeenCalled()
+    guestCreate.mockResolvedValueOnce({ ok: false, error: 'GUEST_HELPER_REQUIRED', detail: 'Turn it on.' } as never)
+    expect(await guestAsk(run, { engine: 'claude' })).toEqual({ error: 'GUEST_HELPER_REQUIRED', detail: 'Turn it on.' })
+    guestCreate.mockResolvedValueOnce({ ok: false, error: 'TMUX_UNAVAILABLE' } as never)
+    expect(await guestAsk(run, { engine: 'claude' })).toEqual({ error: 'TMUX_UNAVAILABLE' })
+  })
+
+  it('keeps a receipt under its creationId, so a retry finds the same harness and a status check what became of it', async () => {
+    const guestCreate = vi.fn(async () => ({ ok: true as const, session: session('guest-agent', { guest: 'kim@acme.io' }) }))
+    const run = setup({ guestCreate: () => guestCreate, byAgent: (id) => id === 'guest-agent' ? session('guest-agent') : undefined })
+    await guestAsk(run, { creationId: CREATION, engine: 'claude' })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ creationId: CREATION, state: 'created', agent: { id: 'guest-agent' } }))
+    await guestAsk(run, { creationId: CREATION, engine: 'claude' })
+    await vi.waitFor(() => expect(run.replies).toHaveLength(2))
+    expect(guestCreate).toHaveBeenCalledTimes(1)
+    // The same id for another launch is a conflict, not a second harness.
+    await guestAsk(run, { creationId: CREATION, engine: 'codex' })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ error: 'CREATION_CONFLICT' }))
+  })
+
+  it('records a refusal as the outcome, with its words', async () => {
+    const guestCreate = vi.fn(async () => ({ ok: false as const, error: 'GUEST_UNSUPPORTED', detail: 'On a computer shared with you, start a new conversation.' }))
+    const run = setup({ guestCreate: () => guestCreate })
+    await guestAsk(run, { creationId: CREATION, engine: 'claude' })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ creationId: CREATION, state: 'failed', failure: { code: 'GUEST_UNSUPPORTED', detail: 'On a computer shared with you, start a new conversation.' } }))
+    guestCreate.mockResolvedValueOnce({ ok: false, error: 'TMUX_UNAVAILABLE' } as never)
+    await guestAsk(run, { creationId: 'creation-fedcba9876543210', engine: 'claude' })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ creationId: 'creation-fedcba9876543210', state: 'failed', failure: { code: 'TMUX_UNAVAILABLE' } }))
+  })
+
+  it('starts nothing on a machine that cannot start a guest\'s harness, or for an id that is not one', async () => {
+    expect(await guestAsk(setup(), { engine: 'claude' })).toEqual({ error: 'GUEST_NOT_ALLOWED' })
+    expect(await guestAsk(setup({ guestCreate: () => null }), { engine: 'claude' })).toEqual({ error: 'GUEST_NOT_ALLOWED' })
+    const guestCreate = vi.fn()
+    expect(await guestAsk(setup({ guestCreate: () => guestCreate }), { creationId: 'short', engine: 'claude' })).toEqual({ error: 'INVALID_CREATION_ID' })
+    expect(guestCreate).not.toHaveBeenCalled()
+  })
+
+  it('answers INTERNAL when its receipt cannot be kept or its answer cannot be built', async () => {
+    const guestCreate = vi.fn(async () => ({ ok: true as const, session: session('guest-agent') }))
+    const broken = setup({ guestCreate: () => guestCreate })
+    vi.spyOn(broken.deps.receipts, 'run').mockImplementation(() => { throw new Error('disk full') })
+    expect(await guestAsk(broken, { creationId: CREATION, engine: 'claude' })).toEqual({ error: 'INTERNAL' })
+    const conflict = setup({ guestCreate: () => guestCreate })
+    vi.spyOn(conflict.deps.receipts, 'run').mockImplementation(() => { throw new AgentCreationReceiptError('CREATION_CONFLICT') })
+    expect(await guestAsk(conflict, { creationId: CREATION, engine: 'claude' })).toEqual({ error: 'CREATION_CONFLICT' })
+    const unbuilt = setup({ guestCreate: () => guestCreate, toProject: async () => { throw new Error('gone') }, byAgent: () => session('guest-agent') })
+    vi.spyOn(unbuilt.deps.receipts, 'run').mockResolvedValue({ state: 'created', agentId: 'guest-agent' })
+    await guestAsk(unbuilt, { creationId: CREATION, engine: 'claude' })
+    await vi.waitFor(() => expect(unbuilt.replies.at(-1)).toEqual({ error: 'INTERNAL' }))
   })
 })

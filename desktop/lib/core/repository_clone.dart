@@ -54,17 +54,58 @@ class RepositoryCloneException implements Exception {
   String toString() => message;
 }
 
+/// One repository however git spells its address: `github.com/owner/repo`
+/// for `https://github.com/Owner/Repo.git/`, `git@github.com:owner/repo`,
+/// `ssh://git@github.com:22/owner/repo.git` and `git://…`, credentials and
+/// ports left out. Lowercased: host names are case-insensitive, and so are
+/// GitHub's owner and repository names, the only host a clone is asked for.
+/// Null for a local path or anything else that names no host. Mirrors
+/// `repositoryIdentity` in cli/src/lib/projectFolder.ts.
+String? repositoryIdentity(String address) {
+  final raw = address.trim();
+  String host, path;
+  // scp-like `[user@]host:path`: no scheme, and no slash before its colon.
+  final scp = raw.contains('://')
+      ? null
+      : RegExp(r'^(?:[^@/\s]+@)?([^:/\s]+):(\S+)$').firstMatch(raw);
+  if (scp != null) {
+    host = scp.group(1)!;
+    path = scp.group(2)!;
+  } else {
+    final uri = Uri.tryParse(raw);
+    const schemes = {'https', 'http', 'ssh', 'git', 'git+ssh', 'ssh+git'};
+    if (uri == null || !schemes.contains(uri.scheme.toLowerCase())) {
+      return null;
+    }
+    host = uri.host;
+    path = uri.path;
+  }
+  path = path
+      .replaceFirst(RegExp(r'^/+'), '')
+      .replaceFirst(RegExp(r'/+$'), '')
+      .replaceFirst(RegExp(r'\.git$', caseSensitive: false), '');
+  return host.isEmpty || path.isEmpty ? null : '$host/$path'.toLowerCase();
+}
+
 typedef GitCloneProcess = Future<Process> Function(
   List<String> arguments,
   Map<String, String> environment,
 );
 
+/// The `origin` of the checkout at a folder, or null when the folder is not
+/// itself one or git cannot say.
+typedef GitOriginReader = Future<String?> Function(String folder);
+
 /// Clones into a private staging directory. Existing working folders are never
-/// reused or removed, and a failed/cancelled clone leaves no partial project.
+/// removed, and a failed/cancelled clone leaves no partial project. One that
+/// is already a checkout of the same repository is that project, and is used
+/// rather than refused.
 class RepositoryClone {
-  RepositoryClone({GitCloneProcess? startProcess})
-    : _startProcess = startProcess ?? _startGit;
+  RepositoryClone({GitCloneProcess? startProcess, GitOriginReader? readOrigin})
+    : _startProcess = startProcess ?? _startGit,
+      _readOrigin = readOrigin ?? readCheckoutOrigin;
   final GitCloneProcess _startProcess;
+  final GitOriginReader _readOrigin;
   Process? _process;
   bool _cancelled = false;
   bool _started = false;
@@ -73,6 +114,68 @@ class RepositoryClone {
     List<String> arguments,
     Map<String, String> environment,
   ) => Process.start('git', arguments, environment: environment);
+
+  /// `git remote get-url origin` in [folder], bounded: `.git` is looked for
+  /// before git runs (on a Mac without the Command Line Tools `git` is Apple's
+  /// stub, which opens an install dialog), git may not look above [folder]
+  /// (GIT_CEILING_DIRECTORIES), and it gets four seconds, as the CLI's do.
+  static Future<String?> readCheckoutOrigin(String folder) async {
+    if (await FileSystemEntity.type(
+          p.join(folder, '.git'),
+          followLinks: false,
+        ) ==
+        FileSystemEntityType.notFound) {
+      return null;
+    }
+    final Process process;
+    try {
+      process = await Process.start(
+        'git',
+        [
+          '-c',
+          'core.fsmonitor=false',
+          '-C',
+          folder,
+          'remote',
+          'get-url',
+          'origin',
+        ],
+        environment: {
+          'GIT_TERMINAL_PROMPT': '0',
+          'GCM_INTERACTIVE': 'Never',
+          'GIT_OPTIONAL_LOCKS': '0',
+          'GIT_CEILING_DIRECTORIES': p.dirname(folder),
+        },
+      );
+    } on ProcessException {
+      return null;
+    }
+    unawaited(process.stdin.close());
+    final output = process.stdout
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .join();
+    unawaited(process.stderr.drain<void>());
+    try {
+      final code = await process.exitCode.timeout(const Duration(seconds: 4));
+      final origin = (await output).trim();
+      return code == 0 && origin.isNotEmpty ? origin : null;
+    } on TimeoutException {
+      process.kill(ProcessSignal.sigkill);
+      return null;
+    }
+  }
+
+  /// Whether [folder] is a checkout of [repository]: anything else there
+  /// (another repository, a folder of files) stays the person's, refused.
+  Future<bool> _holds(String folder, GitHubRepository repository) async {
+    try {
+      final origin = await _readOrigin(folder);
+      return origin != null &&
+          repositoryIdentity(origin) == repositoryIdentity(repository.url);
+    } catch (_) {
+      return false;
+    }
+  }
 
   void cancel() {
     _cancelled = true;
@@ -94,6 +197,11 @@ class RepositoryClone {
       final destination = p.join(parent, repository.name);
       if (await FileSystemEntity.type(destination, followLinks: false) !=
           FileSystemEntityType.notFound) {
+        // The repository asked for, already checked out there: started in,
+        // never cloned again, as a machine's own clone now is
+        // (cli/src/lib/projectFolder.ts). Refusing it failed the start for
+        // asking twice; PROJECT_EXISTS was 4 of 7 failed starts on Oct 18.
+        if (await _holds(destination, repository)) return destination;
         throw RepositoryCloneException(
           '“${repository.name}” already exists here. Choose another destination, or open that folder.',
         );
@@ -154,6 +262,9 @@ class RepositoryClone {
       }
       if (await FileSystemEntity.type(destination, followLinks: false) !=
           FileSystemEntityType.notFound) {
+        // Another start cloned the same repository meanwhile: that one is
+        // kept and this staging goes (below).
+        if (await _holds(destination, repository)) return destination;
         throw RepositoryCloneException(
           '“${repository.name}” was created while cloning. Choose another destination.',
         );

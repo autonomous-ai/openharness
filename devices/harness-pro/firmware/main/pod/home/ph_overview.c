@@ -7,9 +7,12 @@
 // Notices card (the owner's mockup, option B): while there are notices (pod_notice_count: the list the Notices screen shows) one more card comes FIRST,
 // before every tab card, in the orange gradient #FF9A52 -> #9C3F10: "Notices", the count in ph_num_230 with "new" beside it and up to three rows (a 44 px engine
 // logo and the notice's text, one line cut with an ellipsis). One POD_A_INBOX hit over it. It peeks beside the first tab card like any neighbour.
-// Paging: the TABS frame's scroll is the tab index, and -1 is the Notices card (valid only while notices exist). Page = scroll + 1 with notices, scroll
-// without, so a notice coming or going never moves the person to another tab: it only adds or drops the page before tab 0 (and when the Notices card is
-// what is shown and the last notice goes, Home settles on tab 0).
+// Working card (the owner's mockup, option D): while an agent works one more card comes after Notices, before tab 0, in Codex's blue
+// (the owner's pick): "Working" and the count in ph_bd_84, then up to three pets (their work scene, ink at most 128 px, feet on y 384) with the name and the
+// elapsed time under each; the working agents newest first, three to a page (nav->work_page). One POD_A_FOLLOW hit over each pet.
+// Paging: the TABS frame's scroll is the tab index, POD_HOME_NOTICES the Notices card (only while notices exist) and POD_HOME_WORKING the Working card (only
+// while an agent works): the page list is pod_home_pages, so a card coming or going never moves the person to another tab: it only adds or drops a page before
+// tab 0 (and when the card shown goes, Home settles on the next page to its right).
 // Also here: the small helpers the other Pets screens share (the pet / logo art).
 #include <stdio.h>
 #include <string.h>
@@ -48,16 +51,14 @@ void ph_card_art(ht_scene_t *s, int cx, int cy, int side, const pod_model_t *m, 
 }
 
 
-// What Home shows: the top frame's scroll (a TAB frame, which Pets never reaches, shows its own tab), clamped to the tabs: the tab index, HOME_NOTICES
-// for the Notices card (only while there are notices), HOME_NONE with neither a tab nor a notice.
-enum { HOME_NONE = -2, HOME_NOTICES = -1 };
+// What Home shows: the top frame's scroll (a TAB frame, which Pets never reaches, shows its own tab), clamped to the page list (pod_home_pages): the tab
+// index, POD_HOME_NOTICES / POD_HOME_WORKING for those cards, HOME_NONE with no page at all.
+enum { HOME_NONE = -3 };
 static int home_at(const pod_nav_t *nav, const pod_model_t *m)
 {
-    const bool notices = pod_notice_count(m) > 0;
-    if (m->tab_count < 1) return notices ? HOME_NOTICES : HOME_NONE;
+    if (pod_home_pages(m, NULL, 0) < 1) return HOME_NONE;
     const pod_frame_t *f = nav->depth ? &nav->stack[nav->depth - 1] : NULL;
-    int at = !f ? 0 : f->view == POD_V_TAB ? f->tab : f->scroll;
-    return at < (notices ? HOME_NOTICES : 0) ? (notices ? HOME_NOTICES : 0) : at > m->tab_count - 1 ? m->tab_count - 1 : at;
+    return pod_home_clamp(m, !f ? 0 : f->view == POD_V_TAB ? f->tab : f->scroll);
 }
 
 // The agents of tab t (panes that name a rostered agent) and how many of them work.
@@ -91,6 +92,7 @@ bool ph_home_moves(const pod_nav_t *nav, const pod_model_t *m)
 {
     int t = home_at(nav, m), working = 0;
     if (t == HOME_NONE) return true;   // the first screen's shimmer and bar
+    if (t == POD_HOME_WORKING) return true;   // the pets
     if (t < 0) return false;   // the Notices card is still
     tab_agents(m, t, &working);
     return working > 0 || tab_asking(m, t) > 0;
@@ -99,6 +101,35 @@ bool ph_home_moves(const pod_nav_t *nav, const pod_model_t *m)
 uint32_t ph_home_next_ms(const pod_nav_t *nav, const pod_model_t *m, uint32_t now_ms)
 {
     return ph_home_moves(nav, m) ? POD_PH_ANIM_MS - now_ms % POD_PH_ANIM_MS : 1000;
+}
+
+// An engine's card colours.
+void ph_engine_tint(const char *best, unsigned *c1, unsigned *c2)
+{
+    if (best && !strcmp(best, "codex")) { *c1 = PH_TINT_CODEX1; *c2 = PH_TINT_CODEX2; }
+    else if (best && !strcmp(best, "claude")) { *c1 = PH_TINT_CLAUDE1; *c2 = PH_TINT_CLAUDE2; }
+    else if (best && !strcmp(best, "muse")) { *c1 = PH_TINT_MUSE1; *c2 = PH_TINT_MUSE2; }
+    else if (best && !strcmp(best, "kilo")) { *c1 = PH_TINT_KILO1; *c2 = PH_TINT_KILO2; }
+    else { *c1 = PH_TINT_OTHER1; *c2 = PH_TINT_OTHER2; }
+}
+
+int ph_working_list(const pod_model_t *m, const pod_agent_t **out, int cap, uint32_t now_ms)
+{
+    int n = 0;
+    for (int i = 0; i < m->agent_count && n < cap; i++) {
+        const pod_agent_t *a = &m->agents[i];
+        if (pod_model_eff(m, a) != POD_WORKING) continue;
+        int k = n++;
+        while (k > 0 && pod_agent_secs(a, now_ms) < pod_agent_secs(out[k - 1], now_ms)) { out[k] = out[k - 1]; k--; }   // insertion: newest turn (the least elapsed) first, a tie stays after (model order)
+        out[k] = a;
+    }
+    return n;
+}
+
+void ph_working_tint(const pod_model_t *m, unsigned *c1, unsigned *c2)
+{
+    (void)m;   // the owner's pick: Codex's blue, whoever works
+    ph_engine_tint("codex", c1, c2);
 }
 
 // The card's two colours by its main engine (the one with the most agents in the tab, a tie to the first in pane order).
@@ -133,13 +164,13 @@ static bool name_fits_48(const char *t)
     return true;
 }
 
-// The name on one line: control characters as spaces, "Untitled" when empty, cut with an ellipsis to fit `w`. Returns the face (small: always ph_sb_34).
-static const ht_pro_font_t *shown_name(char *out, size_t n, const char *name, int w, bool small)
+// The name on one line: control characters as spaces, "Untitled" when empty, cut with an ellipsis to fit `w`. Returns the face (`face`, else ph_sb_48 or ph_sb_34).
+static const ht_pro_font_t *shown_name(char *out, size_t n, const char *name, int w, const ht_pro_font_t *face)
 {
     snprintf(out, n, "%s", name);
     for (char *p = out; *p; p++) if (*p == '\n' || *p == '\r' || *p == '\t') *p = ' ';
     if (!out[strspn(out, " ")]) snprintf(out, n, "Untitled");
-    const ht_pro_font_t *font = !small && name_fits_48(out) ? &ph_sb_48 : &ph_sb_34;
+    const ht_pro_font_t *font = face ? face : name_fits_48(out) ? &ph_sb_48 : &ph_sb_34;
     if (ht_pro_width(font, out) > w) {
         size_t len = strlen(out);
         do {
@@ -261,7 +292,7 @@ static void notices_card(pod_out_frame_t *f, const pod_model_t *m, int x, int y,
         paper = ph_mix(paper, PH_HOME_BG, (unsigned)fade);
         ht_pro_rect_aa(s, x, y, w, h, r, C(paper));
         char name[CABLE_NAME_MAX + 4];
-        const ht_pro_font_t *nf = shown_name(name, sizeof name, "Notices", NAME_W * PEEK_PCT / 100, true);
+        const ht_pro_font_t *nf = shown_name(name, sizeof name, "Notices", NAME_W * PEEK_PCT / 100, &ph_sb_34);
         const int nx = x + NAME_X * PEEK_PCT / 100, nw = ht_pro_width(nf, name);
         if (nx < POD_W && nx + nw > 0) ht_pro_text(s, nx, y + 40 * PEEK_PCT / 100, nw + 2, nf, C(ph_mix(PH_LETTER_INK, paper, 70)), name);
         return;
@@ -312,7 +343,7 @@ static void card(pod_out_frame_t *f, const pod_model_t *m, int t, int x, int y, 
     if (fade) { c1 = ph_mix(c1, PH_HOME_BG, (unsigned)fade); c2 = ph_mix(c2, PH_HOME_BG, (unsigned)fade); }
     pod_grad_aa_dither(s, x, y, w, h, r, C(c1), C(c2));   // Pets only: no banding on the card
     char name[CABLE_NAME_MAX + 4];
-    const ht_pro_font_t *nf = shown_name(name, sizeof name, m->tabs[t].name, full ? NAME_W : NAME_W * PEEK_PCT / 100, !full);
+    const ht_pro_font_t *nf = shown_name(name, sizeof name, m->tabs[t].name, full ? NAME_W : NAME_W * PEEK_PCT / 100, full ? NULL : &ph_sb_34);
     const int nx = x + (full ? NAME_X : NAME_X * PEEK_PCT / 100), nw = ht_pro_width(nf, name);
     if (!full) {   // a neighbour: the name only, faded (most of it is off the glass)
         if (nx < POD_W && nx + nw > 0) ht_pro_text(s, nx, y + 40 * PEEK_PCT / 100, nw + 2, nf, C(ph_mix(PH_CARD_INK, c1, 80)), name);
@@ -364,6 +395,57 @@ static void card(pod_out_frame_t *f, const pod_model_t *m, int t, int x, int y, 
     }
 }
 
+// The Working card (see the header). A neighbour (full false) is the faded gradient and "Working", like a tab's.
+enum { WK_TITLE_Y = 80, WK_SLOT_PITCH = 165, WK_FEET = 384, WK_INK = 128, WK_SIDE = WK_INK + 6, WK_NAME_Y = 422 - 7, WK_TIME_Y = 456 - 7,   // the mockup's tops are the glyphs' ink; a text run starts 7 px above that
+       WK_NAME_W = 158, WK_PER_PAGE = 3, WK_SHADOW_H = 14, WK_HIT_Y = 200, WK_HIT_W = 150, WK_HIT_H = 280 };
+static void working_card(pod_out_frame_t *f, const pod_nav_t *nav, const pod_model_t *m, int x, int y, int w, int h, int r, int fade, bool full, uint32_t now_ms)
+{
+    ht_scene_t *s = f->scene;
+    unsigned c1, c2;
+    ph_working_tint(m, &c1, &c2);
+    if (fade) { c1 = ph_mix(c1, PH_HOME_BG, (unsigned)fade); c2 = ph_mix(c2, PH_HOME_BG, (unsigned)fade); }
+    pod_grad_aa_dither(s, x, y, w, h, r, C(c1), C(c2));
+    if (!full) {
+        const int nx = x + NAME_X * PEEK_PCT / 100, nw = ht_pro_width(&ph_sb_34, "Working");
+        if (nx < POD_W && nx + nw > 0) ht_pro_text(s, nx, y + 40 * PEEK_PCT / 100, nw + 2, &ph_sb_34, C(ph_mix(PH_CARD_INK, c1, 80)), "Working");
+        return;
+    }
+    const pod_agent_t *list[POD_AGENTS_MAX];
+    const int n = ph_working_list(m, list, POD_AGENTS_MAX, now_ms), pages = (n + WK_PER_PAGE - 1) / WK_PER_PAGE;
+    const int page = nav->work_page < pages ? nav->work_page : pages > 0 ? pages - 1 : 0;   // the working set may have shrunk since the person swiped
+    char txt[CABLE_NAME_MAX + 4];
+    ph_text(s, x + NAME_X, y + WK_TITLE_Y, 260, &ph_sb_48, PH_CARD_INK, "Working");
+    snprintf(txt, sizeof txt, "%d", n);
+    ph_text(s, x + 496 - ht_pro_width(&ph_bd_84, txt), y + WK_TITLE_Y, ht_pro_width(&ph_bd_84, txt) + 2, &ph_bd_84, PH_CARD_INK, txt);   // the count in the bold face (its digits are baked)
+    for (int k = 0; k < WK_PER_PAGE && page * WK_PER_PAGE + k < n; k++) {
+        const pod_agent_t *a = list[page * WK_PER_PAGE + k];
+        // The page's pets centred on the card (one or two sit in the middle, not in the first slots); Claude's work scenes are wide and draw
+        // small in a WK_SIDE square, so its square is twice as big (the owner's pick)
+        const int shown = n - page * WK_PER_PAGE < WK_PER_PAGE ? n - page * WK_PER_PAGE : WK_PER_PAGE;
+        const int side = !strcmp(a->engine, "claude") ? 2 * WK_SIDE : WK_SIDE;
+        const int cx = x + w / 2 + (2 * k - (shown - 1)) * WK_SLOT_PITCH / 2, ink = pod_pet_ink_h(a->engine, ph_card_scene(m, a), side, 8);
+        const int sw = (ink ? ink : LOGO) * 4 / 5;   // ponytail: the shadow follows the ink's height (the pets are about as wide as tall); a measured width if one ever looks off
+        ht_pro_rect_aa(s, cx - sw / 2, y + WK_FEET - 6, sw, WK_SHADOW_H, WK_SHADOW_H / 2, C(ph_mix(0x000000, c2, 35)));
+        const int cy = y + WK_FEET - (ink ? ink : LOGO) / 2;   // a pet-less engine: its logo, feet on the same line
+        if (pod_pet_for(a->engine))   // the gradient is slow: its colour at the pet's centre is the ground, so each frame is resampled once (baked) and then copied
+            pod_pet_draw_flat(s, cx - side / 2, cy - side / 2, side, a->engine, ph_card_scene(m, a), now_ms, 0, ph_mix(c1, c2, (unsigned)((cy - y) * 100 / h)), 8);
+        else ph_card_art(s, cx, cy, WK_SIDE, m, a, ph_mix(c1, c2, 60), now_ms);
+        shown_name(txt, sizeof txt, a->name, WK_NAME_W, &ph_sb_22);
+        ht_pro_text(s, cx - ht_pro_width(&ph_sb_22, txt) / 2, y + WK_NAME_Y, ht_pro_width(&ph_sb_22, txt) + 2, &ph_sb_22, C(PH_CARD_INK), txt);
+        pod_fmt_elapsed(txt, sizeof txt, pod_agent_secs(a, now_ms));
+        ht_pro_text(s, cx - ht_pro_width(&ph_sb_22, txt) / 2, y + WK_TIME_Y, ht_pro_width(&ph_sb_22, txt) + 2, &ph_sb_22, C(PH_PILL_WORK), txt);
+        pod_hit_add_id(f, cx - WK_HIT_W / 2, y + WK_HIT_Y, WK_HIT_W, WK_HIT_H, POD_A_FOLLOW, (int)(a - m->agents), a->id);
+    }
+}
+
+// A neighbour page of Home: the faded card of page p.
+static void peek(pod_out_frame_t *f, const pod_nav_t *nav, const pod_model_t *m, int p, int x, int y, int w, int h, int r, uint32_t now_ms)
+{
+    if (p == POD_HOME_NOTICES) notices_card(f, m, x, y, w, h, r, PEEK_FADE, false);
+    else if (p == POD_HOME_WORKING) working_card(f, nav, m, x, y, w, h, r, PEEK_FADE, false, now_ms);
+    else if (p >= 0) card(f, m, p, x, y, w, h, r, PEEK_FADE, false, now_ms);
+}
+
 void ph_view_home(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint32_t now_ms)
 {
     ht_scene_t *s = f->scene;
@@ -372,13 +454,19 @@ void ph_view_home(pod_out_frame_t *f, const pod_nav_t *nav, pod_model_t *m, uint
     if (t == HOME_NONE) { wordmark(s, now_ms); return; }
     const int pw = CARD_W * PEEK_PCT / 100, ph = CARD_H * PEEK_PCT / 100, py = CARD_Y + CARD_H / 2 - ph / 2;
     const int lx = CARD_X + CARD_W / 2 - PEEK_DX - pw / 2, rx = CARD_X + CARD_W / 2 + PEEK_DX - pw / 2, pr = CARD_R * PEEK_PCT / 100;
-    // The tab t's neighbours in the page order: the Notices card (HOME_NOTICES) comes before tab 0.
-    const int prev = t == HOME_NOTICES ? HOME_NONE : t > 0 ? t - 1 : pod_notice_count(m) > 0 ? HOME_NOTICES : HOME_NONE;
-    const int next = t + 1 < m->tab_count ? t + 1 : HOME_NONE;
-    if (prev == HOME_NOTICES) notices_card(f, m, lx, py, pw, ph, pr, PEEK_FADE, false);
-    else if (prev >= 0) card(f, m, prev, lx, py, pw, ph, pr, PEEK_FADE, false, now_ms);
-    if (next >= 0) card(f, m, next, rx, py, pw, ph, pr, PEEK_FADE, false, now_ms);
-    if (t == HOME_NOTICES) {
+    // The page t's neighbours are the adjacent entries of the page list.
+    int16_t pg[POD_TABS_MAX + 2];
+    const int n = pod_home_pages(m, pg, POD_TABS_MAX + 2);
+    int at = 0;
+    while (at < n - 1 && pg[at] < t) at++;
+    const int prev = at > 0 ? pg[at - 1] : HOME_NONE, next = at + 1 < n ? pg[at + 1] : HOME_NONE;
+    peek(f, nav, m, prev, lx, py, pw, ph, pr, now_ms);
+    peek(f, nav, m, next, rx, py, pw, ph, pr, now_ms);
+    if (t == POD_HOME_WORKING) {
+        working_card(f, nav, m, CARD_X, CARD_Y, CARD_W, CARD_H, CARD_R, 0, true, now_ms);
+        return;
+    }
+    if (t == POD_HOME_NOTICES) {
         notices_card(f, m, CARD_X, CARD_Y, CARD_W, CARD_H, CARD_R, 0, true);
         pod_hit_add(f, CARD_X, CARD_Y, CARD_W, CARD_H, POD_A_INBOX, 0);
         return;

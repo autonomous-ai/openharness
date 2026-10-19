@@ -1692,8 +1692,11 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           'Shared by ${share.owner}',
       ].join(' · '),
       '',
+      // A guest's harnesses run as their own account there, on the owner's plans
+      // (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
       if (machine.machine.machineShare case final share?) ...[
-        'You use it as your own. Only ${share.owner} can rename, remove or share it.',
+        'You have your own space on it and use ${share.owner}’s Claude and ChatGPT plans. '
+            'You see only the harnesses you start there.',
         '',
       ],
       if (resources?.cpuPercent case final cpu?) 'CPU ${cpu.round()}%',
@@ -2078,6 +2081,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                         onClose: _closeMachineForm,
                         onFocusChanged: widget.search.setManaging,
                         onSwitchPane: _switchPane,
+                        onModalChanged: widget.onModalChanged,
                       )
                     : _editingMachine
                     ? MachinePickerForm(

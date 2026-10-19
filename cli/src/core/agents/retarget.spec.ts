@@ -13,6 +13,7 @@ import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { createAgentRetargeter, type RetargetDeps } from './retarget.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
+import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 vi.mock('../../engines/launchControl.js', async (real) => ({
   ...await real<object>(),
@@ -252,6 +253,8 @@ describe('retargeting an agent', () => {
       // A pty host machine's own code (Windows).
       expect(await setup(agent(), { noBackendCode: 'PTY_HOST_UNAVAILABLE', terminals: { backendFor: () => undefined, instances: () => [] } }).retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'PTY_HOST_UNAVAILABLE' })
       expect(await setup(null).retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'AGENT_NOT_FOUND' })
+      // A guest's harness: re-exec'd here it would run as the owner, on the owner's keys.
+      expect(await setup(agent({ guest: 'kim@acme.io' })).retarget({ agentId: 'a1', grid })).toEqual(GUEST_HARNESS_REFUSAL)
       expect(await setup(agent({ runtimes: [] } as Partial<RegisteredSession>)).retarget({ agentId: 'a1', grid })).toMatchObject({ error: 'RETARGET_UNSUPPORTED_BACKEND' })
       expect(await setup(agent({ processIdentity: undefined } as Partial<RegisteredSession>)).retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'NO_ACTIVE_PROCESS' })
     })

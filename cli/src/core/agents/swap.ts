@@ -19,6 +19,8 @@ import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
 import { bypassPermissionActive } from '../../lib/processTable.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
 import { signalAgentProcess } from '../../lib/processSignals.js'
+import type { StopAgentServiceDeps } from '../../lib/stopAgentService.js'
+import { paneReadIdentity } from '../transcripts/readIdentity.js'
 
 export interface PaneSwapDeps {
   restartJobs?: AgentRestartCoordinator
@@ -26,12 +28,14 @@ export interface PaneSwapDeps {
   prepareSessionResume: (session: RegisteredSession) => void
   /** Keeps a conversation a swap had to leave for a new one as a stopped harness (lib/keepAbandonedConversation.ts). */
   keepAbandonedConversation: (left: RegisteredSession) => void
+  /** Release the conversation on its engine's server before replacing the terminal client. */
+  stopNative: StopAgentServiceDeps['stopNative']
 }
 
 /** How long a relaunched engine must stay running before a restart counts it as come up (`waitForProcess`). */
 export const SWAP_SETTLE_MS = 500
 
-export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedConversation, restartJobs = new AgentRestartCoordinator() }: PaneSwapDeps) {
+export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedConversation, stopNative, restartJobs = new AgentRestartCoordinator() }: PaneSwapDeps) {
   /**
    * The dependencies a pane-process swap needs, for both callers that do one.
    *
@@ -60,6 +64,10 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
     permissionMode: string | null = session.permissionMode ?? null,
     current?: () => boolean,
   ): RestartAgentDeps => {
+    const target = { ...session, processIdentity: session.processIdentity && { ...session.processIdentity } }
+    const identity = paneReadIdentity(target)
+    const ownsOriginal = () => current?.() !== false && sameRestartTarget(target)
+      && paneReadIdentity(byAgent(target.agentId)) === identity
     const relaunchOptions = (opts: { bypassPermission: boolean; resumeSessionId?: string }) => ({
       ...opts,
       ...(launch.native ? { native: launch.native } : {}),
@@ -93,13 +101,20 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
           ? { ok: true }
           : { ok: false, reason: 'reason' in result ? result.reason : 'could not re-arm remain-on-exit' }
       },
-      terminate: (checkAfterMs) => terminateDeletedAgent(session, {
-        checkRuntime: checkPidRuntime,
-        kill: signalAgentProcess,
-        sleep: (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.() }),
-        log: (message) => console.log(message),
-        ...(current ? { current } : {}),
-      }, checkAfterMs),
+      terminate: async (checkAfterMs) => {
+        if (!ownsOriginal()) return 'not-ours'
+        // A failed native turn can leave the shared app-server holding its writer lock.
+        // Release that conversation before stopping its terminal client.
+        await stopNative(target, ownsOriginal)
+        if (!ownsOriginal()) return 'not-ours'
+        return terminateDeletedAgent(target, {
+          checkRuntime: checkPidRuntime,
+          kill: signalAgentProcess,
+          sleep: (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.() }),
+          log: (message) => console.log(message),
+          current: ownsOriginal,
+        }, checkAfterMs)
+      },
       respawn: async (argv) => {
         // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
         const env = mergedLaunchEnv(launch.env, engineLaunchEnv(session.engine, launch.native))

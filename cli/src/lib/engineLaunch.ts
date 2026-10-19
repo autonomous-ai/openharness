@@ -19,6 +19,7 @@ import { windowsEngineArgv } from './windows/launch.js'
 import { nativeLaunchConfirmed, windowsHeldPaneArgv, windowsStartupArgs } from './windows/engineStart.js'
 import { defaultWindowsShell } from './windows/shell.js'
 import { engineBin } from './engineBin.js'
+import { launchModelArgs, type LaunchModel } from './launchModel.js'
 import { engineInstallPaths, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
 import { engineLabel } from './agentNames.js'
 import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath } from './gridBinary.js'
@@ -224,6 +225,11 @@ export interface LaunchCommandOptions {
    */
   firstPrompt?: string
   /**
+   * The model and effort this session runs on, as flags of that session alone (lib/launchModel.ts). A launch option
+   * like `firstPrompt`: never written to the registry row, so a relaunch is the engine's own again.
+   */
+  launchModel?: LaunchModel
+  /**
    * Terminal only: print the tile's banner before the first prompt — the wordmark, where this pane
    * is, that an agent typed here becomes the tile, and `harness remote`. Every NEW terminal tile
    * gets it (`agent_create`); a pane rebuilt by restore or restart is not a new tile and names
@@ -382,6 +388,7 @@ export function buildEngineCommandArgv(engine: AgentEngine, opts: LaunchCommandO
   // Ahead of the extra arguments, so a grid's or a harness's own value for the same key is the one that holds.
   argv.push(...screenArgs(launchContract(engine)))
   if (opts.extraArgs?.length) argv.push(...opts.extraArgs)
+  if (opts.launchModel) argv.push(...launchModelArgs(engine, opts.launchModel))
   if (opts.firstPrompt) argv.push(...firstPromptArgs(engine, opts.firstPrompt))
   // Windows: the engine's .exe, or the node script its npm shim runs; never the .ps1 PowerShell would pick, and never
   // a batch file cmd.exe would read the first message through (lib/windows/launch.ts).
@@ -1009,9 +1016,14 @@ function installFirstScript(install: string): string {
  * otherwise prepend the managed runtime's bin directory for this pane only. This is portable across
  * macOS and Linux and avoids an interactive/root package-manager install in an agent launch.
  */
+/** Harness's own Node folders. An npm engine run through them (`npm install -g` without a prefix) lands here. */
+export function npmRuntimeBins(runtimeNode: string = managedNodePath()): string[] {
+  return [...new Set([dirname(runtimeNode), dirname(baseNode(process.execPath))])]
+}
+
 function npmRuntimePrelude(recipe: EngineInstallRecipe, runtimeNode: string): string {
   if (!recipe.executable.npmGlobal) return ''
-  const bins = [...new Set([dirname(runtimeNode), dirname(baseNode(process.execPath))])]
+  const bins = npmRuntimeBins(runtimeNode)
     .map(shellSingleQuote)
     .join(' ')
   return [
@@ -1496,6 +1508,18 @@ async function unsupportedPermissionFlag(
   if (!flag) return null
   const support = await commandSupportsFlagInInteractiveShell(engineBin(engine), flag, shell)
   return support === 'unsupported' ? flag : null
+}
+
+/**
+ * The first flag of a launch model (lib/launchModel.ts) that the engine on disk does not list in its `--help`, or null.
+ * It reads the help the way the permission gate does, through the same probe and cache, so a Claude Code too old for
+ * `--model` or `--effort` is refused before a pane exists instead of printing its help in one. `unknown` never refuses.
+ */
+export async function unsupportedLaunchModelFlag(engine: AgentEngine, launchModel: LaunchModel, shell: string | undefined = undefined): Promise<string | null> {
+  for (const flag of launchModelArgs(engine, launchModel).filter((arg) => arg.startsWith('--'))) {
+    if (await commandSupportsFlagInInteractiveShell(engineBin(engine), flag, shell) === 'unsupported') return flag
+  }
+  return null
 }
 
 /**

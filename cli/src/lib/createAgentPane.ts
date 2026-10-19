@@ -48,6 +48,7 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
     externalResume?: ExternalResumeIntent
     startedBy?: StartedBy | null
     parentAgentId?: string | null
+    guest?: string | null
   }) => RegisteredSession | null }
   nativeToken?: string
   engine: AgentEngine
@@ -91,6 +92,8 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   /** The harness here whose agent started it (registry.ts `parentAgentId`), recorded on the row; null otherwise. */
   parentAgentId?: string | null
   externalResume?: ExternalResumeIntent
+  /** The guest (an email) whose harness this is: it runs as their own OS user (core/agents/guestCreate.ts). */
+  guest?: string | null
   /** Rechecked by the backend after its gates and immediately before process dispatch. */
   current?: () => boolean
   onDispatch?: () => void
@@ -146,6 +149,7 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       ...(deps.externalResume ? { externalResume: deps.externalResume } : {}),
       ...(deps.startedBy ? { startedBy: deps.startedBy } : {}),
       ...(deps.startedBy && deps.parentAgentId ? { parentAgentId: deps.parentAgentId } : {}),
+      ...(deps.guest ? { guest: deps.guest } : {}),
     })
     if (pending) return { ok: true, spawned, pending }
     console.warn(`[agent] create ${deps.engine} registration failed · pane ${spawned.runtime.paneId} · `

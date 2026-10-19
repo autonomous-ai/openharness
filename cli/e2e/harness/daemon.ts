@@ -257,6 +257,13 @@ export class IsolatedDaemon {
     }
     // A daemon never finds the developer's own gh (shared tabs' tasks run it): a stub that refuses, until a test writes its own.
     await writeFile(join(dirs.bin, 'gh'), GH_FORBIDDEN_STUB, { mode: 0o755 })
+    // Engine probes and usage readers must not consult the person's macOS
+    // Keychain merely because the fixture itself runs on a Mac.
+    await writeFile(join(dirs.bin, 'security'), '#!/bin/sh\nexit 44\n', { mode: 0o755 })
+    // Nor does it run anything as root or as another account: a guest's harness goes through `sudo -n` and the guest
+    // helper (lib/guestAccounts.ts), which may be installed on the Mac the tests run on. Refused, as for an owner who
+    // never turned guest access on.
+    await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
     const env = daemonEnvironment(tmux.env, {
       NODE_ENV: 'test',
       HOME: dirs.home,

@@ -15,14 +15,17 @@ automatically proven improvement. Changes still need review, tests and a deliber
 | Do installations return to work? | D1/D7/D28 working-day cohorts, consecutive complete-week and calendar-month returns, return after a seven-day gap | Any working day can be a cohort; not new-signup retention. Local date flags produce unlinked totals. Opt-outs, reinstallations, resets and missing uploads affect results. |
 | Was the task useful? | Optional Completed / Partly completed / Not completed plus five fixed reason choices from clients that offer feedback; current Desktop Settings no longer exposes feedback controls | Voluntary and self-selected; not representative success or satisfaction. There is no free-text input. |
 | Is there usage at all? | Active and working computer counts; app opens; older-client relay totals | Background windows can count as active. An open is a surface going from no attached window to one, not each connection (the desktop holds one per machine and redials). Relay events are not distinct people; the populations must not be added together. |
+| Why are Desktop frames long, and on how many computers? | One in 60 rendered frames by duration; a sample of 50 ms or more also by its longest phase (`frame_slow_wait`, `frame_slow_build`, `frame_slow_raster`); once per collector day, the first sample over 250 ms (`frame_long_collector`) | Wait is the UI thread busy before the frame could start (on macOS and Linux the platform's main thread: timers, channel and native callbacks, synchronous IO, AppKit or GTK); build is the framework's build, layout and paint; raster is drawing. The phases add up to the samples of 50 ms or more counted beside them. `frame_long_collector` over `collector_days` is the share of collector days with a long sample: many long samples on few such days are a few computers, not a broad problem. Counted only once the computer's CLI has announced them (below), so not before a run's first report answer or behind an older CLI; compare releases separately. |
 
 | Which features get tried and used again? | First measured installations and daily first/repeat feature reach | Locally deduplicated installation-days, not unique accounts. Reads the apps make on their own (history, history paging, Store list, model list; `PRODUCT_USAGE_AUTOMATIC_ACTIONS`) count reliability only. The Store and model lists get reach only from the request an app marks `userAction` when a person opens them (`<action>_user_*`, `PRODUCT_USAGE_USER_OPENED_ACTIONS`); history has none. |
 | Where do app flows break? | Setup, Harness/tmux/clipboard steps, sign-in, workspace/remote connections, computer linking, viewer-pane opening and manual update checking/staging; a setup step whose tool was missing at a check (`setup_desktop_setup_<step>_missing`); the agents a new computer downloads beside setup (`setup_desktop_agent_download_<opencode\|codex\|claude>_started`, `_ok`, `_failed`, with under 1 min, 1–5 min and over 5 min) | Fixed started/ok/failed/cancelled/unknown counts and coarse duration buckets. Opening a viewer pane is not rendering its content; staging an update is not a successful relaunch. A setup step stays open from the first check until its tool is in place, so a tool that was missing and then installed is one ok step and one `_missing` mark; only a setup that ends failed fails its step. Earlier Desktop releases counted every check that found a tool missing as a failed step (on 2026-10-16 the Harness step read 72 failed of 221 while 0 setups failed): compare releases separately. `_missing` is any tool a check found absent or out of date (a Harness CLI older than this Desktop needs, on a computer already in use, counts too), not only new computers. A step left waiting (the review, a Linux Terminal handoff, manual mode, someone who walks away) now ends `unknown` at the 15-minute observation bound instead of `failed`, so expect `setup_*_unknown` to rise, mostly on Linux. `_missing` and the download counts are anonymous setup counts only. A download whose prerequisite (curl, Harness's Node) never arrived counts as started and failed; `ok` means the agent's program is in place, judged per engine. |
 | Where does the phone's onboarding stall? | After sign-in: waiting for the first computer, opening its session, the first message, the notification prompt. A sign-in that went through, by button, counted again under the account's sharing. Waits past a minute split into 1–5 min, 5–15 min, 15 min–1 h and over 1 h for the computer and the first message. Once per step per sign-in: `resumed` (reopened in a run that did not sign in), "Not you? Sign out", the address sent from the share sheet, a joining computer that wants its password or is offline | Stage totals per day, not a linked funnel. Subtract `resumed` from starts for fresh starts; an unmatched start is a closed app or a step still waiting. A resumed step's duration starts at the reopening. Signed-in sign-in counts are successes only; failures and cancels before an account remain the signed-out counts', but a success is marked `retried` (a failed or cancelled try came first in that app run) or `switched` (another button was tried first). Phone reports carry release and iOS/Android, so every phone count also splits by those two margins (above 20 collector days); debug builds are not kept. A chosen sign-out sends what is queued first (up to 2 s), so "Not you? Sign out" reaches the totals. |
 | How fast does the phone get back to work? | A launch that came back signed in, to its first computer answering (`app_start`); a dial the person asked for ("Try again", `connect_user`) apart from the app's own (`connect_auto`), beside the unchanged `remote_connect`; a stopped harness resumed from the phone, to its first live turn (`resume_recovery`) | A launch that signs in is the onboarding's and is not counted; one that leaves the screen before a computer answers is `unknown`, one whose computers never answer stays started. An asked-for dial fails at 12 s, as Desktop Connect does. A phone dial is `failed` only when the phone knows why (locked or offline), `unknown` otherwise; the reasons (`connect_error_*`) are Desktop health counters. |
 | Are the phone's side pages used? | Find and Computers opens, by a sideways swipe on the terminal or by a button (Computers' row in Settings, its link on a long wait at home) | Which page and which way, nothing more. Find's key and screen-reader actions are not counted; a swipe that lets Find go back opened nothing. |
+| Does Desktop's Add Phone card get used, and where else is Add Phone opened? | The card's flow (`ui_desktop_phone_offer_*`): started once it is on screen, `ok` by its Add Phone, `cancelled` by its ×, `unknown` when it went another way (Add Phone opened from elsewhere, a sign-out); every Add Phone opening by its way in (`ui_desktop_add_phone_<offer\|titlebar\|menu\|account\|machines\|command>`) | The card is offered once per computer, so its starts are computers, not people, and it has no 15-minute bound: started minus outcomes is an app closed with the card still up. An opening is the dialog shown, not a phone paired. `menu` includes a key bound to Harness ▸ Add Phone… on macOS; `command` is `> add phone` or a key bound to it elsewhere. The browser counts none. Vocabulary 3: counted from the start, but sent only once the local CLI has answered that it forwards them, so a Desktop on an older CLI sends none. |
 | Is measurement losing coverage? | Updated collector installation-days, pruned queues, full observation maps, unmatched app starts | Loss signals warrant caution. No signal does not prove complete collection. |
 | How many people use Harness, and do they come back? | People active / working / new per day and per app, and D1/D2/D3/D7 returns (backend rollup of 10-day pseudonymous marks) | Sharing accounts only, staff excluded; an app open across midnight counts on both days, so prefer working returns. Not available before `PRODUCT_USAGE_SUBJECT_KEY` is set. |
+| What do people do on the Hub? | Page views by page and signed-out/signed-in reader, the first page of a tab's visit by where it came from (direct, search, social, internal, other; classified in the browser, the referrer is never sent), clicks and submits (search, sort, like, comment, share, fork, follow, report, sign-in prompt, publish), and how long a harness page stayed visible (under 10 s, 10 s–1 min, over 1 min) | Unlinked daily totals of views, entries, clicks and dwell buckets: not people, not a funnel. Public counts that can be fabricated; directional only. Browsers sending Global Privacy Control or Do Not Track, and signed-in readers who turned sharing off, are not counted. The website's server strips cookies and auth before forwarding. |
 
 Desktop setup and sign-in counts are enabled by default, with no onboarding checkbox. Desktop has
 one “Share product usage data” switch in Experimental, with no separate Privacy page or feedback
@@ -40,13 +43,17 @@ account at the next sign-in before phone sharing resumes; an unreadable choice i
 account preference is remembered for the next signed-out launch. With nowhere to keep the opt-out
 (tests, the sample) it starts off. Neither native setup transport sends credentials/cookies or replays earlier actions.
 Setup state already visible when sharing becomes enabled can start an observation; duration then
-begins at that observation, not necessarily at installation start. Web pre-sign-in collection stays
-disabled because that transport cannot guarantee omitted cookies. These untrusted setup counts are
+begins at that observation, not necessarily at installation start. The web app's pre-sign-in setup
+collection stays disabled because a browser request to the backend cannot guarantee omitted cookies.
+The Hub's counters are the one web exception: the browser sends them to the website's own server,
+which forwards them to the backend without cookies or auth, so the backend never sees a browser
+credential (see the Hub endpoint below). These untrusted setup counts are
 a separate population from signed-in app/daemon reports; older clients and opt-outs affect coverage. They
 show observed friction at each step, **not** unique signup conversion or a linked user funnel.
 Reproduce those paths with test accounts and synthetic inputs. No screen recordings,
 click trails, stable analytics identifiers, locations, content or arbitrary properties are added.
-The exact counter vocabulary is in [productUsage.ts](../backend/src/types/productUsage.ts).
+The exact counter vocabulary is in [productUsage.ts](../backend/src/types/productUsage.ts); the Hub's is in
+[hubMetricsContract.ts](../backend/src/lib/hubMetricsContract.ts).
 
 Daemon reports combine participating signed-in installations, including staff and both environments.
 App reports are surface-specific operation totals; never add them to daemon or relay counts.
@@ -70,7 +77,10 @@ excluded from release/platform margins so a return's release cannot be mistaken 
 
 `health` in `usage:daily` reports consented setup/workspace/first-work/first-response milestones,
 coarse waits, request-source reconciliation, explicit composer-work D1/D7/D28 cohorts, weekly work-day
-bins, process health, and collector loss/rejection/late-report signals. Milestones describe local
+bins, process health, and collector loss/rejection/late-report signals. `hub` reports the Hub's
+daily views by page and reader, entries, clicks and dwell buckets, with fork clicks per harness view
+and sign-in prompt clicks per prompt shown as numerator, denominator and ratio; a day without Hub
+reports is null, not zero. These are visits and clicks, not people. Milestones describe local
 app episodes, can cross UTC days, and do not establish a joined signup conversion rate. First-work
 cohorts use explicit composer messages; terminal keystrokes and automatic work remain unclassified.
 Weekly bins cover completed weeks from installations that report again, so non-returners can be missing.
@@ -86,7 +96,15 @@ The startup bucket measures launch to the first consented observation of a conne
 including preference/sign-in delay. One in 60 rendered frames supplies a coarse duration bucket;
 it cannot reliably detect an idle freeze. Frames of a hidden, minimised or occluded window, and the
 first frame after it is shown again, are not sampled (the OS throttles them), nor is each launch's
-first frame, which `app_start` already times; earlier releases sampled both. Error hooks pass only framework/async categories.
+first frame, which `app_start` already times; earlier releases sampled both. A sample of 50 ms or more
+also counts its longest phase: `frame_slow_wait` (vsync to build start, the UI thread busy with
+something else first), `frame_slow_build` or `frame_slow_raster`, a tie going to the earlier one; the
+wait for a raster thread still busy with an earlier frame is no phase of its own. The first sample over
+250 ms of each collector day also counts `frame_long_collector`, so long frames can be told broad or
+concentrated against `collector_days`. These four are counted only while the latest report answer
+from the local CLI named counter vocabulary 2 or later (`x-harness-usage-vocabulary`), because an
+older proxy refused a whole report for one name it did not know; samples before a run's first answer
+count only their duration. Error hooks pass only framework/async categories.
 Desktop RSS samples once per minute and gateway RSS/CPU once per report tick (45 to 75 seconds, a
 minute on average); they describe those processes, not the whole machine or agents. Sampling adds
 no core timer, process enumeration, or subprocess.
@@ -146,6 +164,12 @@ or oversized packet is discarded so it cannot block newer reports; transient err
 same receipt. Delayed errors after a choice or account change are discarded.
 The local app proxy accepts only bounded UI counts, or Desktop health/UI counts with the exact
 public release, OS and channel context. It does not accept daemon counters or arbitrary context.
+Like the backend, it keeps a report whose only problem is a counter name this CLI does not know yet:
+the name is dropped, never forwarded or logged, and a Desktop report counts
+`health_desktop_report_unknown_metric` once. Earlier CLIs refused the whole report, and the Desktop
+discards a refused packet. A known name an app may not send, a bad value, or a report with no known
+counter left is still refused. Every answer of that route carries `x-harness-usage-vocabulary`, the
+revision of the names it forwards (2: the frame phases; 3: the Add Phone card and openings); a Desktop sends newer names only after reading it. The frame phases are not counted until then; the Add Phone counts wait in the queue for it, because the card shows once per computer, often before the first answer.
 
 Desktop and phone collectors keep only fixed counters in RAM, at most 64 in-flight observations,
 with at most 32 counters per report, one pending report per channel and one flush at a time.
@@ -178,6 +202,17 @@ headers, limits bodies to 4 KiB and values to 1,000, and admits at most 120 writ
 concurrent writes per server process. No IP-based analytics or new rate-limit identity is stored.
 Exhaustion drops measurement rather than affecting sign-in. Public counts remain susceptible to
 fabrication; they are directional diagnostics, not trusted account acquisition metrics.
+
+`POST /api/product-usage/hub` takes only the Hub vocabulary: no setup, app or daemon counter, and
+no Hub counter through those routes. It carries a random receipt, the UTC day (today or yesterday)
+and at most 48 counters of 1–1,000 each, nothing else: no URL, page id, referrer, harness, creator,
+search text or identifier. The website's server forwards it with cookies and auth stripped; the
+backend rejects auth/cookie headers, limits bodies to 4 KiB and admits at most 240 writes/minute and
+four concurrent writes per server process, a budget of its own so Hub traffic cannot starve setup
+or sign-in measurement. The browser skips counting under Global Privacy Control or Do Not Track; the
+website's server drops a signed-in reader's counts when that account's sharing is off. A view is a
+page drawn, once per navigation; an entry is the first Hub page of a tab's visit; dwell is counted
+once per harness view. The same totals can come from one visitor or many.
 
 Both ingestion paths atomically add only UTC-day/metric totals plus an unlinked random retry receipt.
 Fast database write conflicts retry that complete transaction up to three times with short jitter,
@@ -256,9 +291,14 @@ Deploy backend schema and the singleton worker first, including unique indexes a
 Use synthetic data to verify duplicate receipts, transaction rollback/retry, off/on revision fencing
 and expiry. Then release CLI, desktop and phone together. An older backend refuses a whole report
 carrying a counter it does not know (a phone page opening, a `request_phone_*` count, a phone
-`sharing: "default"` setup report, a launch code or a first launch's engine), so the backend always goes first. Check that the switch saves and that reports
+`sharing: "default"` setup report, a launch code, a first launch's engine, Desktop's Add Phone card or opening), so the backend always goes first. Check that the switch saves and that reports
 stop when it is off. Old clients stop contributing individual daily histories when the backend changes;
 the historical reporting command will no longer be a current-usage source.
+
+Hub counters roll out backend first, then website: an older backend has no `/api/product-usage/hub`
+route and loses whatever the website sends it, and a backend that does not know a Hub counter
+refuses the whole report, so a new Hub counter also ships backend first. Then check that a browser
+with Global Privacy Control and a signed-in reader with sharing off send nothing.
 
 People counts roll out in this order: deploy the backend without `PRODUCT_USAGE_SUBJECT_KEY` (no marks
 are written); release desktop, phone and CLI with the updated "See what's shared" text; then set the key

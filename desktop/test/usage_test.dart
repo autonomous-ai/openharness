@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -8,6 +9,7 @@ import 'package:harness/usage/usage_credentials.dart';
 import 'package:harness/usage/usage_controller.dart';
 import 'package:harness/usage/usage_source.dart';
 import 'package:harness/usage/usage_window.dart';
+import 'package:harness/usage/usage_account_key.dart';
 
 /// A Dio that answers every request with one canned payload, so a source can be
 /// exercised without a socket or a credential.
@@ -42,7 +44,11 @@ Dio _dioAnswering(Object? body, {int status = 200}) {
 /// The keychain stub stays, and always fails, for the opposite reason: without
 /// it a macOS run would shell out to the real `security` and read whoever is
 /// signed in on the machine.
-UsageCredentials _creds({String? claudeJson, String? codexJson}) {
+UsageCredentials _creds({
+  String? claudeJson,
+  String? claudeProfile,
+  String? codexJson,
+}) {
   final dir = Directory.systemTemp.createTempSync('harness-usage-test');
   addTearDown(() => dir.deleteSync(recursive: true));
   void write(String folder, String file, String body) {
@@ -51,6 +57,8 @@ UsageCredentials _creds({String? claudeJson, String? codexJson}) {
   }
 
   if (claudeJson != null) write('.claude', '.credentials.json', claudeJson);
+  if (claudeProfile != null)
+    File('${dir.path}/.claude.json').writeAsStringSync(claudeProfile);
   if (codexJson != null) write('.codex', 'auth.json', codexJson);
   return UsageCredentials(
     home: dir.path,
@@ -140,8 +148,6 @@ void main() {
     expect(reading.tightest?.label, 'Weekly');
   });
 
-
-
   group('Claude source', () {
     test('maps the three windows the CLI itself shows', () async {
       final source = ClaudeUsageSource(
@@ -152,11 +158,17 @@ void main() {
         }),
         credentials: _creds(
           claudeJson: '{"claudeAiOauth":{"accessToken":"t"}}',
+          claudeProfile: '{"oauthAccount":{"accountUuid":"acct-123","emailAddress":"dev@example.com"}}',
         ),
       );
       final reading = await source.read();
 
       expect(reading.status, UsageStatus.ok);
+      expect(reading.email, 'dev@example.com');
+      expect(
+        reading.account,
+        usageAccountKey(UsageProvider.claude, 'acct-123'),
+      );
       expect(
         reading.windows.map((w) => '${w.label} ${w.usedPercent.round()}'),
         ['Session 2', 'Weekly 16', 'Fable 0'],
@@ -248,12 +260,21 @@ void main() {
           },
         }),
         credentials: _creds(
-          codexJson: '{"tokens":{"access_token":"t","account_id":"acct"}}',
+          codexJson: jsonEncode({
+            'tokens': {
+              'access_token': 't',
+              'account_id': 'acct',
+              'id_token':
+                  'e30.${base64Url.encode(utf8.encode(jsonEncode({'email': 'codex@example.com'}))).replaceAll('=', '')}.signature',
+            },
+          }),
         ),
       );
       final reading = await source.read();
 
       expect(reading.status, UsageStatus.ok);
+      expect(reading.email, 'codex@example.com');
+      expect(reading.account, usageAccountKey(UsageProvider.codex, 'acct'));
       // 18000s is 5h; 604800s is the week, which earns the name rather than
       // the arithmetic "7d".
       expect(reading.windows.map((w) => w.label), ['5h', 'Weekly']);

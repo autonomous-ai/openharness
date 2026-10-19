@@ -28,6 +28,7 @@ void main() {
           {
             'provider': 'claude',
             'account': 'k1',
+            'email': 'remote@example.com',
             'outcome': 'answered',
             'httpStatus': 200,
             'body': {
@@ -41,6 +42,7 @@ void main() {
       final claude = readings.single;
       expect(claude.status, UsageStatus.ok);
       expect(claude.account, 'k1');
+      expect(claude.email, 'remote@example.com');
       // Claude's `seven_day` is the Weekly window here exactly as it is for
       // this computer's own reading — one mapper, two sources.
       final weekly = claude.windows.singleWhere(
@@ -63,6 +65,30 @@ void main() {
       });
 
       expect(readings.single.status, UsageStatus.signedOut);
+    });
+
+    test('older and malformed email metadata leave usage readable', () {
+      for (final email in [null, '', '  ', 42, <String>[]]) {
+        final reading = parseUsageReadResult({
+          'providers': [
+            {
+              'provider': 'codex',
+              'account': 'k2',
+              'email': email,
+              'outcome': 'answered',
+              'httpStatus': 200,
+              'body': {
+                'rate_limit': {
+                  'primary_window': {'used_percent': 12},
+                },
+              },
+            },
+          ],
+        }).single;
+        expect(reading.hasFigures, isTrue);
+        expect(reading.account, 'k2');
+        expect(reading.email, isNull);
+      }
     });
 
     test("the machine's own sentence survives a sign-out", () {

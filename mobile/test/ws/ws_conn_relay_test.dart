@@ -395,12 +395,14 @@ void main() {
         conn.request(type, payload: payload).then((_) {}, onError: (_) {}),
       );
       ask('agent_create', {'engine': 'claude'});
+      ask('agent_close', {'agentId': 'a', 'mode': 'now'});
       ask('agents_list', {'scope': 'all'});
       conn.sendRaw('message', {'content': 'hi', 'agentId': 'a'});
       conn.sendRaw('app_presence', {'focused': true});
       await eventually(
         () => [
           'agent_create',
+          'agent_close',
           'agents_list',
           'message',
           'app_presence',
@@ -412,6 +414,7 @@ void main() {
         '__e2e',
       ], reason: 'the relay sees no more than before');
       expect(link.opened('agent_create').single['usageSurface'], 'phone');
+      expect(link.opened('agent_close').single['usageSurface'], 'phone');
       expect(link.opened('message').single['usageSurface'], 'phone');
       expect(
         link.opened('agents_list').single.containsKey('usageSurface'),

@@ -3,8 +3,10 @@ import '../measurement/product_measurement.dart';
 import '../measurement/product_runtime_health.dart';
 import '../measurement/product_connections.dart';
 import '../core/crash_log.dart';
+import '../core/guest_folders.dart';
 import '../measurement/desktop_setup_report.dart';
 import 'attached_task_delivery.dart';
+import 'harness_attachments.dart';
 import 'task_route.dart';
 import '../core/permission_modes.dart';
 
@@ -89,6 +91,9 @@ import '../autonomous_device/autonomous_device_cli.dart';
 import '../settings/config_store.dart';
 import '../settings/experimental_features.dart';
 import '../core/local_key_value_store.dart';
+import '../core/harness_file_store.dart';
+import '../super_tabs/client.dart';
+import '../super_tabs/controller.dart';
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
 import '../stats/harness_stats.dart';
@@ -278,12 +283,15 @@ class AgentCreationAttempt {
     this.background = false,
     String? creationId,
     this.holdWait,
+    this.beforeSubmit,
   }) : _id = creationId ?? _newCreationId();
 
   /// How long a request the machine holds is waited for before the create
   /// answers ([AppNotifier._createFollowingHold]). Null answers at once with
   /// what it waits for, as a form wants: the person reads it and may cancel.
   final Duration? holdWait;
+  final Future<void> Function(String machineId, String creationId)?
+  beforeSubmit;
   String _id;
   String? _machineId, _targetId;
   Map<String, dynamic>? _choices;
@@ -325,6 +333,13 @@ class AgentCreationAttempt {
   /// A completed folder survives a refused agent launch, so correcting the
   /// agent choice does not clone or create the same project again.
   String? get preparedFolder => _preparedFolder;
+
+  /// On `PROJECT_EXISTS` for a new project's name the person typed: the
+  /// folder already there, when it is one to start in. Unlike
+  /// [preparedFolder] it is only offered ("Use the existing folder"), never
+  /// used until the person chooses it.
+  String? _existingFolder;
+  String? get existingFolder => _existingFolder;
 
   String? _complete(String? error) {
     _finished = true;
@@ -374,8 +389,7 @@ class MachineState {
   /// another account shares (`isShared`) or a whole machine another account
   /// shares (`isSharedMachine`). Its daemon answers as its owner, so shared
   /// tabs never ask it, and a harness on it is never this account's own.
-  bool get belongsToOtherAccount =>
-      machine.isShared || machine.isSharedMachine;
+  bool get belongsToOtherAccount => machine.isShared || machine.isSharedMachine;
   int _agentRevision = 0;
   final _agentRemovals = <String, int>{};
   final _agentStopRevisions = <String, int>{};
@@ -992,6 +1006,8 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || (_pool == null && connectionForTest == null)) return false;
     final machine = machineStates[key.machineId];
     return machine != null &&
+        // A guest is read no conversation there (`agent_recent` is the owner's).
+        !machine.machine.isSharedMachine &&
         machine.nodeOnline != false &&
         !machine.needsLink &&
         (machine.connectionStatus == ConnectionStatus.connected ||
@@ -1126,6 +1142,9 @@ class AppNotifier extends ChangeNotifier {
       !_disposed && revision == _authRevision;
 
   int _invalidateAuthWork() {
+    _closeAttachmentSessions();
+    // A card a sign-out or another sign-in takes away went neither way.
+    _endPhoneOffer(ProductOutcome.unknown);
     _phoneOffer = false;
     _closeOwnerMemories();
     _stopMachineRecovery();
@@ -1387,12 +1406,14 @@ class AppNotifier extends ChangeNotifier {
   CurrentUserProfile? get currentUser => _currentUser;
   set currentUser(CurrentUserProfile? profile) {
     if (_currentUser?.id != profile?.id) {
+      _closeAttachmentSessions();
       _closeOwnerMemories();
       deviceHosts.clear();
       _deviceReads.clear();
     }
     _currentUser = profile;
     final id = profile?.id;
+    superTabs.bind(id);
     experimentalFeatures.bind(
       id,
       transport: id == null ? null : _experimentTransport,
@@ -1661,6 +1682,147 @@ class AppNotifier extends ChangeNotifier {
     return best;
   }
 
+  late final superTabs = SuperTabClient(
+    storage: localStore ?? HarnessFileStore.shared,
+    onSnapshot: (controller) {
+      if (_disposed || controller.accountId != currentUser?.id) return;
+      var shown = false;
+      for (final tab in swarms.where((s) => s.superTabId == controller.tabId)) {
+        if (tab.name != controller.snapshot!.name || !tab.nameIsCustom) {
+          tab.name = controller.snapshot!.name;
+          tab.nameIsCustom = true;
+          shown = true;
+        }
+      }
+      if (shown) _persistLayout();
+      notifyListeners();
+    },
+    transport: (method, path, {body}) async {
+      final target = sharedTabsTarget;
+      if (target == null) {
+        throw const SuperTabFailure(
+          'MACHINE_UNAVAILABLE',
+          'Connect one of your machines to open Super Tab.',
+        );
+      }
+      final result = await superTabMachineRequest(target.machine.machineId, {
+        'action': 'backend',
+        'method': method,
+        'path': path,
+        'body': ?body,
+      });
+      return result['value'];
+    },
+  );
+
+  Future<Map<String, dynamic>> superTabMachineRequest(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) async {
+    final revision = _authRevision;
+    final result = await _conn(machineId).request(
+      'super_tabs',
+      payload: payload,
+      timeout: const Duration(seconds: 30),
+    );
+    if (!_authWorkCurrent(revision)) {
+      throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    }
+    if (result['error'] != null) {
+      throw SuperTabFailure(
+        result['error'].toString(),
+        result['detail'] as String? ?? 'Could not reach this Super Tab.',
+        statusCode: (result['status'] as num?)?.toInt() ?? 0,
+      );
+    }
+    return result;
+  }
+
+  Future<void> wakeSuperTabHost(String machineId) async {
+    await superTabMachineRequest(machineId, {'action': 'wake'});
+    // Share derives only the session views authorized by the tab. Its existing
+    // observer protocol never exposes this machine's general command surface.
+    await _conn(machineId).request('harness_share_rosters');
+  }
+
+  void bindSuperTab(String swarmId, String tabId, String name) {
+    final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
+    if (swarm == null) return;
+    swarm.kind = 'superTab';
+    swarm.superTabId = tabId;
+    swarm.name = name;
+    swarm.nameIsCustom = true;
+    swarm.isNewTabPage = false;
+    _persistLayout();
+    notifyListeners();
+  }
+
+  void openSuperTab(String tabId, String name) {
+    final existing = swarms.where((s) => s.superTabId == tabId).firstOrNull;
+    if (existing != null) {
+      selectSwarm(existing.id);
+      return;
+    }
+    newSwarm(newTabPage: true);
+    bindSuperTab(activeSwarmId, tabId, name);
+  }
+
+  void markSuperTabDraft(String swarmId) {
+    final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
+    if (swarm == null) return;
+    swarm.kind = 'superTab';
+    _persistLayout();
+    notifyListeners();
+  }
+
+  /// Opening a recent harness uses the welcome page as an ordinary workspace.
+  /// Consume only a successful open; a missing result leaves creation available.
+  void finishSuperTabDraftNavigation(String swarmId) {
+    final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
+    if (swarm == null ||
+        !swarm.isSuperTab ||
+        swarm.superTabId != null ||
+        swarm.panes.isEmpty) {
+      return;
+    }
+    swarm.kind = 'harness';
+    _persistLayout();
+    notifyListeners();
+  }
+
+  Future<Agent> recoverSuperTabCreation(
+    String machineId,
+    String creationId,
+  ) async {
+    final revision = _authRevision;
+    final result = await _conn(machineId).request(
+      'agent_create_status',
+      payload: {'creationId': creationId},
+      timeout: const Duration(seconds: 10),
+    );
+    if (!_authWorkCurrent(revision)) {
+      throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    }
+    if (result['creationId'] == creationId && result['state'] == 'failed') {
+      final failure = result['failure'] is Map
+          ? result['failure'] as Map
+          : const {};
+      throw SuperTabFailure(
+        'CREATION_FAILED',
+        failure['detail'] as String? ?? result['error'] as String? ?? 'The machine could not start this harness. You can change its settings and try again.',
+      );
+    }
+    if (result['creationId'] != creationId ||
+        result['state'] != 'created' ||
+        result['agent'] is! Map) {
+      throw const SuperTabFailure(
+        'CREATION_PENDING',
+        'The machine has not confirmed this launch. Check status before starting another agent.',
+      );
+    }
+    return Agent.fromJson(Map<String, dynamic>.from(result['agent'] as Map));
+  }
+
   /// Where this computer keeps, per shared tab, the other accounts'
   /// harnesses it has seen in the roster (R2): `{sharedTabId: [paneKey]}`,
   /// one record per account, so one person's record on a shared computer
@@ -1852,7 +2014,10 @@ class AppNotifier extends ChangeNotifier {
       swarm.panes.where((p) => p.agentId != null).length >=
           PaneLayoutStore.maxPanes;
 
-  static bool _sameSeen(Map<String, Set<String>> a, Map<String, Set<String>> b) {
+  static bool _sameSeen(
+    Map<String, Set<String>> a,
+    Map<String, Set<String>> b,
+  ) {
     if (a.length != b.length) return false;
     for (final MapEntry(:key, :value) in a.entries) {
       final other = b[key];
@@ -2925,8 +3090,8 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// Close removes these views. A session stops only when this removes its
-  /// last view across all tabs; shared views keep their live terminal.
+  /// Close removes these views. Super Tabs own work independently of their
+  /// views; ordinary tabs stop a session only when its last view closes.
   Future<void> requestCloseSwarm(String id) {
     final tab = swarms.where((s) => s.id == id).firstOrNull;
     if (tab == null) return Future.value();
@@ -2978,6 +3143,10 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed) return Future.value();
     if (_viewCloseRequests[key] case final pending?) return pending;
     bool canStop(String machineId, String agentId) {
+      // A Super Tab pane is only a view into shared work. This guard also covers
+      // the close shortcut, native menu and whole-tab dismissal, including a
+      // regular tab becoming a Super Tab while a close review is pending.
+      if (tab.isSuperTab) return false;
       if (!swarms.contains(tab) ||
           (wholeTab &&
               (tab.panes.length != closing.length ||
@@ -3247,6 +3416,7 @@ class AppNotifier extends ChangeNotifier {
           ..titleAgentId = saved.titleAgentId
           ..orchestratorId = saved.orchestratorId
           ..orchestratorMachineId = saved.orchestratorMachineId
+          ..superTabId = saved.superTabId
           ..gridColumns = saved.gridColumns
           ..presets.addAll(saved.presets)
           ..paneSizes.addAll(saved.paneSizes);
@@ -3863,10 +4033,17 @@ class AppNotifier extends ChangeNotifier {
             currentUser?.id != null
         ? (api, currentUser!.id)
         : null;
+    final client = api;
     productMeasurement.account(
       scope,
       choice: () => productUsageSettings(),
-      send: api.productUsageReport,
+      // Health names newer than this computer's CLI are counted only once
+      // it has said it forwards them (ProductHealthMeasure.vocabulary).
+      send: (report) => client.productUsageReport(
+        report,
+        onVocabulary: (vocabulary) =>
+            productMeasurement.proxyVocabulary = vocabulary,
+      ),
     );
     productRuntimeHealth?.account(
       scope == null ? null : '$_autonomousEnv:${currentUser!.id}',
@@ -6939,10 +7116,45 @@ class AppNotifier extends ChangeNotifier {
   bool get phoneOfferShowing => _phoneOffer;
   bool _phoneOffer = false;
 
+  /// The card's observation ([ProductFlow.phoneOffer]): begun once it is on screen
+  /// ([phoneOfferShown]), ended once — ok by its Add Phone, cancelled by its ×, unknown when the
+  /// card goes another way (Add Phone opened from elsewhere, a sign-out).
+  void Function(ProductOutcome)? _phoneOfferMeasure;
+
+  /// The card is on screen. Its observation starts here, not at [_phoneOffer]: a new computer's
+  /// first agents keep it off the screen while they open (`state/first_arrival.dart`). Once per
+  /// offer, however often the card is built again.
+  void phoneOfferShown() {
+    if (!_phoneOffer || _phoneOfferMeasure != null) return;
+    _phoneOfferMeasure = productMeasurement.begin(ProductFlow.phoneOffer);
+  }
+
+  void _endPhoneOffer(ProductOutcome outcome) {
+    final finish = _phoneOfferMeasure;
+    _phoneOfferMeasure = null;
+    finish?.call(outcome);
+  }
+
+  /// Add Phone is opening, from [from]: counted by its way in, and this computer's offer spent
+  /// ([dropPhoneOffer]) — ok for the card when it was the card's own button.
+  void addPhoneOpened(AddPhoneOpening from) {
+    productMeasurement.addPhoneOpened(from);
+    if (from == AddPhoneOpening.offer) _endPhoneOffer(ProductOutcome.ok);
+    dropPhoneOffer();
+  }
+
+  /// The card's ×: put away for good ([dropPhoneOffer]).
+  void dismissPhoneOffer() {
+    _endPhoneOffer(ProductOutcome.cancelled);
+    dropPhoneOffer();
+  }
+
   /// Add Phone was opened — from the card or by hand — or the card was put away: nothing is left to
   /// offer, now or on a later launch or sign-in. Also how a sign-in made from inside Add Phone (its
   /// "Sign in…") does not bring the card back.
   void dropPhoneOffer() {
+    // Not by the card's own buttons ([addPhoneOpened], [dismissPhoneOffer]), which end it first.
+    _endPhoneOffer(ProductOutcome.unknown);
     final showing = _phoneOffer;
     _phoneOffer = false;
     _markPhoneOfferDone();
@@ -7689,6 +7901,44 @@ class AppNotifier extends ChangeNotifier {
     'sameDomain': sameDomain,
   });
 
+  /// Turn guest access on at [machineId]: the helper that runs each guest's harnesses as their own
+  /// account there (CLI lib/guestHelperInstall.ts), installed behind one admin prompt on that
+  /// computer. Waits for the person at the prompt. `{ok, guestAccess}`, or `{error, message}`
+  /// (`CANCELLED` when the prompt was dismissed).
+  Future<Map<String, dynamic>> enableMachineGuests(String machineId) =>
+      _sharedMachines(machineId, {
+        'action': 'enable_guests',
+      }, timeout: const Duration(minutes: 11));
+
+  /// The folders guests may work in on [machineId], read only or editable (CLI services/sharedMachines.ts
+  /// `set_folders`). The view as it is now, or `{error, message}`.
+  Future<Map<String, dynamic>> setMachineGuestFolders(
+    String machineId,
+    List<GuestFolder> folders,
+  ) => _sharedMachines(machineId, {
+    'action': 'set_folders',
+    'folders': [
+      for (final folder in folders)
+        {'path': folder.path, 'write': folder.write},
+    ],
+  });
+
+  /// Where this account, a guest on [machineId], may start a harness: its workspace and the folders
+  /// the machine's owner shares (`guest_folders`). Null when the machine cannot say (an older CLI).
+  Future<GuestFolders?> guestFolders(String machineId) async {
+    try {
+      return GuestFolders.fromJson(
+        await _conn(machineId).request(
+          'guest_folders',
+          payload: const {},
+          timeout: const Duration(seconds: 15),
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Add a machine shared with this account's domain to its machines, or take one back out
   /// ([remove]). Asked of this computer's daemon, which pins the machine's key; null when done, else
   /// what went wrong.
@@ -7722,14 +7972,12 @@ class AppNotifier extends ChangeNotifier {
   /// never got one is "could not reach".
   Future<Map<String, dynamic>> _sharedMachines(
     String machineId,
-    Map<String, dynamic> payload,
-  ) async {
+    Map<String, dynamic> payload, {
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
     try {
-      return await _conn(machineId).request(
-        'shared_machines',
-        payload: payload,
-        timeout: const Duration(seconds: 30),
-      );
+      return await _conn(machineId)
+          .request('shared_machines', payload: payload, timeout: timeout);
     } on WsRequestFailure catch (failure) {
       return {...failure.payload, 'error': failure.code};
     }
@@ -10512,10 +10760,7 @@ class AppNotifier extends ChangeNotifier {
   /// scheduling turn to the socket's incoming queue. Matching frames enter the
   /// session's ordered renderer queue synchronously, regardless of tab order.
   Future<void> _handleTerminalBinary(String machineId, Uint8List raw) async {
-    final targets = panesFor(machineId)
-        .map((pane) => pane.session)
-        .whereType<TerminalSession>()
-        .toList();
+    final targets = _terminalSessionsFor(machineId).toList();
     if (targets.isEmpty) return;
     final clear = decodeTerminalLocal(raw);
     if (clear == null) {
@@ -13198,8 +13443,31 @@ class AppNotifier extends ChangeNotifier {
     // fix is the same one the other UNSUPPORTED codes ask for.
     'INVALID_ENGINE' =>
       'Update the harness CLI on $machine to open this kind of pane.',
+    // A guest's harness: its owner turns guest access on, and only Claude Code or Codex start.
+    'GUEST_NOT_ALLOWED' =>
+      'You can only start Claude Code or Codex on $machine.',
+    'GUEST_UNSUPPORTED' ||
+    'GUEST_HELPER_REQUIRED' ||
+    'GUEST_UNAVAILABLE' ||
+    'GUEST_ENGINE_UNSUPPORTED' ||
+    'GUEST_INVALID' ||
+    'GUEST_HELPER_MISSING' ||
+    'GUEST_HELPER_NOT_AUTHORIZED' ||
+    'GUEST_RELAY_FAILED' => detail ?? 'Could not start a harness on $machine.',
     _ => 'Could not start harness: ${detail ?? code}',
   };
+
+  /// A typed new project's name that [folder] on [machine] already has. The
+  /// machine's own words ("Select that folder from your projects") left
+  /// nothing to press: PROJECT_EXISTS was 4 of 7 failed starts on Oct 18, all
+  /// from the apps. The form offers "Use the existing folder" beside this.
+  String _projectExistsMessage(String folder, String machine) {
+    final name = folder
+        .split('/')
+        .lastWhere((part) => part.isNotEmpty, orElse: () => folder);
+    return '“$name” already exists on $machine. '
+        'Choose another name, or use the existing folder.';
+  }
 
   /// A confirmed name collision happens before any process starts. Only then
   /// may an automatic suggestion advance to another name with a fresh receipt.
@@ -13252,6 +13520,7 @@ class AppNotifier extends ChangeNotifier {
     // Only this answer says whether it is starting; one that never reaches
     // the machine (it went offline) must not be followed as if it were.
     creation._starting = false;
+    creation._existingFolder = null;
     final machineId = creation._machineId!;
     var targetId = creation._targetId!;
     final split = creation._split;
@@ -13335,6 +13604,15 @@ class AppNotifier extends ChangeNotifier {
                     engineIdentity(dshId).label)
               : engineIdentity(choices['engine'] as String?).label,
         );
+      } on ProjectExistsException catch (error) {
+        // This computer's own folder refuses a typed name as the machine
+        // does, so the form offers the folder the same way.
+        creation._refusal = 'PROJECT_EXISTS';
+        if (error.folder case final folder?) {
+          creation._existingFolder = folder;
+          return creation._complete(_projectExistsMessage(folder, machineName));
+        }
+        return creation._complete(error.message);
       } on RepositoryCloneException catch (error) {
         return creation._complete(error.message);
       } catch (_) {
@@ -13413,6 +13691,17 @@ class AppNotifier extends ChangeNotifier {
         );
         if (result['creationId'] != creation._id) return unconfirmed;
       } else {
+        if (creation.beforeSubmit case final prepare?) {
+          try {
+            await prepare(machineId, creation._id);
+          } catch (failure) {
+            // The native request has not been sent. A failed local journal write
+            // must leave the form editable instead of waiting on a nonexistent receipt.
+            return creation._complete(
+              'Could not save the launch request: $failure',
+            );
+          }
+        }
         result = await connection.request(
           operation,
           payload: {...launchChoices, 'creationId': creation._id},
@@ -13470,6 +13759,17 @@ class AppNotifier extends ChangeNotifier {
         'SESSION_BUSY_IN_TERMINAL',
         'SESSION_STOP_FAILED',
         'INVALID_SESSION',
+        // A guest on a machine shared with this account, refused before anything starts
+        // (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+        'GUEST_NOT_ALLOWED',
+        'GUEST_UNSUPPORTED',
+        'GUEST_HELPER_REQUIRED',
+        'GUEST_UNAVAILABLE',
+        'GUEST_ENGINE_UNSUPPORTED',
+        'GUEST_INVALID',
+        'GUEST_HELPER_MISSING',
+        'GUEST_HELPER_NOT_AUTHORIZED',
+        'GUEST_RELAY_FAILED',
       };
       // A cloud agent's service refuses in words a person reads ("Add your
       // Devin API key…"), and a retry of the same New Harness gets the same
@@ -13556,6 +13856,14 @@ class AppNotifier extends ChangeNotifier {
           creation._preparedFolder = folder;
         }
         creation._refusal = failure['code'] as String;
+        // A typed name the machine found already there, as a folder it can
+        // open (CLI `existingFolder`): said so, and offered to the person.
+        if (failure['existingFolder'] case final String folder
+            when failure['code'] == 'PROJECT_EXISTS' &&
+                folder.startsWith('/')) {
+          creation._existingFolder = folder;
+          return creation._complete(_projectExistsMessage(folder, machineName));
+        }
         return creation._complete(
           _creationFailureMessage(
             failure['code'] as String,
@@ -14295,6 +14603,14 @@ class AppNotifier extends ChangeNotifier {
 
   /// Attach to a running harness or resume its saved conversation immediately.
   Future<RestartAgentResult> resumeAgent(String machineId, String agentId) {
+    if (stateOf(machineId)?.machine.isSharedMachine == true) {
+      return Future.value(
+        const RestartAgentResult(
+          error: 'On a computer shared with you, harnesses can’t be restarted, resumed or forked. Start a new one.',
+          retryable: false,
+        ),
+      );
+    }
     if (pendingAgentPause(machineId, agentId) != null) {
       return Future.value(
         const RestartAgentResult(
@@ -14362,6 +14678,13 @@ class AppNotifier extends ChangeNotifier {
     if (machine.machine.isShared) {
       return const RestartAgentResult(
         error: 'Shared harnesses are view-only.',
+        retryable: false,
+      );
+    }
+    // Relaunched, a guest's harness would run the owner's way, as the owner: the daemon refuses it.
+    if (machine.machine.isSharedMachine) {
+      return const RestartAgentResult(
+        error: 'On a computer shared with you, harnesses can’t be restarted, resumed or forked. Start a new one.',
         retryable: false,
       );
     }
@@ -14765,6 +15088,11 @@ class AppNotifier extends ChangeNotifier {
     if (stateOf(machineId)?.machine.isShared != false) {
       return Future.value('Shared harnesses are view-only.');
     }
+    if (stateOf(machineId)?.machine.isSharedMachine == true) {
+      return Future.value(
+        'On a computer shared with you, a harness keeps the agent it started with. Start a new one.',
+      );
+    }
     if (!agentSwitchEngines(machineId, source).contains(engine)) {
       return Future.value(
         'This agent is not supported by the installed harness.',
@@ -15154,6 +15482,11 @@ class AppNotifier extends ChangeNotifier {
     }
     if (machine.machine.isShared) {
       return const ForkAgentResult(error: 'Shared harnesses are view-only.');
+    }
+    if (machine.machine.isSharedMachine) {
+      return const ForkAgentResult(
+        error: 'On a computer shared with you, harnesses can’t be restarted, resumed or forked. Start a new one.',
+      );
     }
     if (!attempt.awaitingConfirmation) {
       if (!_forkSourceCurrent(attempt)) {
@@ -16044,8 +16377,9 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  static bool _listedIn(SharedTab tab, String machineId, String agentId) =>
-      tab.harnesses.any((h) => h.machineId == machineId && h.agentId == agentId);
+  static bool _listedIn(SharedTab tab, String machineId, String agentId) => tab
+      .harnesses
+      .any((h) => h.machineId == machineId && h.agentId == agentId);
 
   /// Listed in [tab], or still `Joining…`: an add this computer's daemon holds
   /// for the owner's computer. Withdrawn then, it must be taken back too, or
@@ -16084,12 +16418,19 @@ class AppNotifier extends ChangeNotifier {
 
   /// Make [machineId]'s [agentId] the leader of [deskTabId]. A refusal keeps the
   /// old leader and is told in the transient notice.
-  Future<void> setTabLeader(String deskTabId, String machineId, String agentId) =>
-      _writeLeader(deskTabId, AgentMessageLeader(machineId, agentId));
+  Future<void> setTabLeader(
+    String deskTabId,
+    String machineId,
+    String agentId,
+  ) => _writeLeader(deskTabId, AgentMessageLeader(machineId, agentId));
 
-  Future<void> clearTabLeader(String deskTabId) => _writeLeader(deskTabId, null);
+  Future<void> clearTabLeader(String deskTabId) =>
+      _writeLeader(deskTabId, null);
 
-  Future<void> _writeLeader(String deskTabId, AgentMessageLeader? leader) async {
+  Future<void> _writeLeader(
+    String deskTabId,
+    AgentMessageLeader? leader,
+  ) async {
     final auth = _authRevision;
     try {
       final answer = await api.setAgentMessageTab(
@@ -16199,11 +16540,10 @@ class AppNotifier extends ChangeNotifier {
   /// desk as an ordinary pane.
   Future<void> removeFromSharedTab(String machineId, String agentId) async {
     if (!canRemoveFromSharedTab(machineId, agentId)) return;
-    await _shareAction(
-      sharedTabHolding(machineId, agentId)!,
-      'share_remove',
-      {'machineId': machineId, 'agentId': agentId},
-    );
+    await _shareAction(sharedTabHolding(machineId, agentId)!, 'share_remove', {
+      'machineId': machineId,
+      'agentId': agentId,
+    });
   }
 
   /// The `share_add` for a person's pane in a shared tab; null when none is
@@ -16217,7 +16557,8 @@ class AppNotifier extends ChangeNotifier {
   }) {
     final tab = sharedTabs.tabForDesk(deskTabId);
     final state = machineStates[machineId];
-    if (tab == null || state == null || state.belongsToOtherAccount) return null;
+    if (tab == null || state == null || state.belongsToOtherAccount)
+      return null;
     // The owner's harnesses join by being in its desk tab.
     if (_ownsSharedTab(tab) || _listedIn(tab, machineId, agentId)) return null;
     final agent = state.agents.where((a) => a.id == agentId).firstOrNull;
@@ -16231,7 +16572,11 @@ class AppNotifier extends ChangeNotifier {
     }, onFailure: onFailure);
   }
 
-  void _shareRemoveIfShared(String deskTabId, String machineId, String agentId) {
+  void _shareRemoveIfShared(
+    String deskTabId,
+    String machineId,
+    String agentId,
+  ) {
     final tab = sharedTabs.tabForDesk(deskTabId);
     if (tab == null ||
         _ownsSharedTab(tab) ||
@@ -16265,7 +16610,9 @@ class AppNotifier extends ChangeNotifier {
       if (_disposed) return;
       // The computer that is away is the one holding the harness, named when it
       // is one of the person's own.
-      final holder = machineStates[body['machineId'] ?? (body['harness'] as Map?)?['machineId']];
+      final holder =
+          machineStates[body['machineId'] ??
+              (body['harness'] as Map?)?['machineId']];
       _lastError = sharedTabErrorText(
         e,
         machine: holder != null && !holder.belongsToOtherAccount
@@ -16287,6 +16634,8 @@ class AppNotifier extends ChangeNotifier {
     PaneSplitRequest? split,
     bool autoTile = false,
     bool focus = true,
+    String? inputContext,
+    bool watchOnly = false,
 
     /// A rail click, a drag, a picker — a person. The device's own doors pass
     /// [AttachIntent.automatic]: they put an agent on screen without anybody
@@ -16333,6 +16682,12 @@ class AppNotifier extends ChangeNotifier {
         .where((p) => p.machineId == machineId && p.agentId == agentId)
         .firstOrNull;
     if (paneId == null && existing != null) {
+      existing.inputContext = inputContext;
+      existing.watchOnly = watchOnly;
+      await existing.session?.setInputContext(
+        inputContext,
+        watchOnly: watchOnly,
+      );
       if (focus && target == activeSwarm) focusPane(existing.id);
       // A pane a refused share_add left unshared: a person's retry shares it.
       if (intent == AttachIntent.person) {
@@ -16354,6 +16709,9 @@ class AppNotifier extends ChangeNotifier {
     }
     final replaced = targetPanes.where((p) => p.id == paneId).firstOrNull;
     if (replaced == shared && shared != null) {
+      shared.inputContext = inputContext;
+      shared.watchOnly = watchOnly;
+      await shared.session?.setInputContext(inputContext, watchOnly: watchOnly);
       if (focus && target == activeSwarm) focusPane(shared.id);
       return;
     }
@@ -16369,9 +16727,7 @@ class AppNotifier extends ChangeNotifier {
     // A shared desk tab holds the desk's 9 harnesses: a 10th would never
     // reach the desk ([deskTabFull]). Placement asks quietly and tries again
     // later; a person is told.
-    if (existing == null &&
-        replaced?.agentId == null &&
-        deskTabFull(target)) {
+    if (existing == null && replaced?.agentId == null && deskTabFull(target)) {
       if (intent == AttachIntent.person) {
         _lastError =
             'This tab holds ${PaneLayoutStore.maxPanes} harnesses. Close one, then try again.';
@@ -16408,6 +16764,9 @@ class AppNotifier extends ChangeNotifier {
     final pane =
         shared ??
         TerminalPane(id: _nextPaneId++, machineId: machineId, agentId: agentId);
+    pane.inputContext = inputContext;
+    pane.watchOnly = watchOnly;
+    pane.session?.stageInputContext(inputContext, watchOnly: watchOnly);
     final firstAgent = targetPanes.every((pane) => pane.agentId == null);
     if (machine.machine.isShared) {
       pane.sharedHarness = machine.machine.sharedHarnesses
@@ -16532,6 +16891,9 @@ class AppNotifier extends ChangeNotifier {
     _stopOfflineRetry(machineId);
     notifyListeners();
     if (target == activeSwarm || pane.session != null) {
+      if (pane.session case final session?) {
+        await session.setInputContext(inputContext, watchOnly: watchOnly);
+      }
       await _attachSession(pane, intent: intent);
     }
   }
@@ -16596,6 +16958,8 @@ class AppNotifier extends ChangeNotifier {
       agentName: agent.displayName,
       engineId: agent.engine,
       client: localClientDescriptor(),
+      inputContext: pane.inputContext,
+      watchOnly: pane.watchOnly,
       // Only a person at this window may take the terminal from whoever holds
       // it; everything else opens as a watcher. See [AttachIntent].
       takeover: intent == AttachIntent.person,
@@ -16622,6 +16986,99 @@ class AppNotifier extends ChangeNotifier {
     // two of the panel mounting; `waitForViewportSize`'s own 2s timeout falls back to 80x24 only if
     // the pane genuinely never gets laid out.
     await terminal.open(waitForViewportSize: true);
+  }
+
+  // File delivery for a new background harness uses the same native terminal
+  // protocol, without manufacturing a pane or changing the selected group.
+  final _attachmentSessions = <TerminalSession>{};
+
+  Iterable<TerminalSession> _terminalSessionsFor(String machineId) sync* {
+    yield* panesFor(machineId).map((p) => p.session).nonNulls;
+    yield* _attachmentSessions.where((s) => s.machineId == machineId);
+  }
+
+  void _closeAttachmentSessions() {
+    final sessions = _attachmentSessions.toList();
+    _attachmentSessions.clear();
+    for (final session in sessions) {
+      unawaited(session.close().whenComplete(session.dispose));
+    }
+  }
+
+  Future<String?> deliverBackgroundAttachments({
+    required String machineId,
+    required String agentId,
+    required List<HarnessAttachment> files,
+    required String task,
+  }) async {
+    final machine = machineStates[machineId];
+    final revision = _authRevision, account = currentUser?.id;
+    bool current() =>
+        currentUser?.id == account &&
+        machine != null &&
+        _machineWorkCurrent(machine, revision);
+    if (!current() || machine!.machine.isShared) {
+      return 'This machine is no longer available for file delivery.';
+    }
+    if (!machine.agents.any((a) => a.id == agentId)) {
+      await _loadMachineData(machine, force: true);
+    }
+    if (!current()) return 'The account changed. No files were sent.';
+    final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+    if (agent == null) {
+      return 'The new harness is not available on its machine.';
+    }
+    final existing = panesFor(machineId)
+        .where((p) => p.agentId == agentId)
+        .map((p) => p.session)
+        .nonNulls
+        .firstOrNull;
+    final connection = _conn(machineId);
+    final session =
+        existing ??
+        TerminalSession(
+          machineId: machineId,
+          agentId: agentId,
+          agentName: agent.displayName,
+          engineId: agent.engine,
+          client: localClientDescriptor(),
+          takeover: true,
+          send: (type, payload) => current() || type == 'terminal_close'
+              ? connection.sendTerminalFrame(type, payload)
+              : Future.value(false),
+          sendBinary: (frame) {
+            if (!current()) return Future.value(false);
+            final bytes = encodeTerminalLocal(frame);
+            return bytes == null
+                ? Future.value(false)
+                : connection.sendTerminalBinary(bytes);
+          },
+          onOpenStalled: () async {
+            if (current()) await _forceRedial(machineId);
+          },
+          resyncTimeout: const Duration(seconds: 15),
+        );
+    if (existing == null) _attachmentSessions.add(session);
+    try {
+      if (existing == null) await session.open();
+      return await deliverAttachedTask(
+        this,
+        machineId: machineId,
+        agentId: agentId,
+        files: files,
+        task: task,
+        terminal: session,
+        stillWanted: current,
+      );
+    } finally {
+      if (_attachmentSessions.remove(session)) {
+        try {
+          await session.close();
+        } finally {
+          session.dispose();
+        }
+      }
+    }
   }
 
   Future<void> _detachSession(
@@ -17117,6 +17574,15 @@ class AppNotifier extends ChangeNotifier {
     if (tab == null) return;
     final pane = tab.panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return;
+    if (tab.superTabId case final superTabId?) {
+      final controller = superTabs.peek(superTabId);
+      final selected = controller?.terminalAgent(controller.selectedId);
+      if (selected != null &&
+          selected.machineId == pane.machineId &&
+          selected.harnessId == pane.agentId) {
+        controller!.selectTerminal(controller.selectedId, null);
+      }
+    }
     if (tab.isCompanions || tab.isDevices) {
       await closeSwarm(tab.id, persist: persist);
       return;
@@ -17982,10 +18448,18 @@ class AppNotifier extends ChangeNotifier {
                     ? 'devices'
                     : isCompanions
                     ? 'companions'
+                    : raw['kind'] == 'superTab'
+                    ? 'superTab'
                     : raw['kind'] == 'orchestrator'
                     ? 'orchestrator'
                     : 'harness',
               )
+              ..superTabId =
+                  raw['superTabId'] is String &&
+                      RegExp(r'^[a-f0-9]{24}$')
+                          .hasMatch(raw['superTabId'] as String)
+                  ? raw['superTabId'] as String
+                  : null
               ..orchestratorId =
                   raw['orchestratorId'] is String &&
                       RegExp(r'^[a-f0-9]{32}$')
@@ -18807,8 +19281,8 @@ class AppNotifier extends ChangeNotifier {
     // Each session still sees terminal frames: ready replies match their own
     // request/agent, while transport errors must reach the whole machine.
     if (type.startsWith('terminal_')) {
-      for (final pane in panesFor(machineId).toList()) {
-        await pane.session?.handleFrame(type, payload);
+      for (final session in _terminalSessionsFor(machineId).toList()) {
+        await session.handleFrame(type, payload);
       }
       return;
     }
@@ -19672,6 +20146,7 @@ class AppNotifier extends ChangeNotifier {
     agentMessagesRemote.dispose();
     agentMessages.dispose();
     sharedTabs.dispose();
+    superTabs.dispose();
     for (final project in _orchestratorProjects.values) {
       project.dispose();
     }
@@ -19691,6 +20166,7 @@ class AppNotifier extends ChangeNotifier {
     agentAlerts.dispose();
     agentUnread.dispose();
     _disposed = true;
+    _closeAttachmentSessions();
     _sharingDiscoveryTimer?.cancel();
     _deafMachineListTimer?.cancel();
     _stopMachineRecovery();

@@ -145,9 +145,15 @@ export class RelayGateway implements GatewayPort {
       isConnectionAvailable: connId => this.directDeviceSinks.has(connId) || this.connected(),
       onIdentityPaired: (connId, pub) => { if (this.directDeviceSinks.has(connId)) this.directDevicePins.set(connId, pub) },
       onIdentityRevoked: identity => { this.deviceUnpaired(identity); this.onDirectDeviceRevoked?.(fingerprint(b64d(identity))) },
-      onSessionOpened: (connId, role, identity) => this.core.client(connId, {
-        role, label: this.e2ee.sessionLabel(connId), identity, direct: this.directDeviceSinks.has(connId),
-      }),
+      onSessionOpened: (connId, role, identity) => {
+        const peer = this.e2ee.pairedPeers().find(p => p.identityPub === identity)
+        this.core.client(connId, {
+          role, label: this.e2ee.sessionLabel(connId), identity, direct: this.directDeviceSinks.has(connId),
+          accountOwner: role === 'web' && !!peer && !peer.shared,
+          // Trusted only because this machine is shared: that account's guest, never the owner.
+          ...(peer?.shared ? { guest: peer.sharedWith ?? '' } : {}),
+        })
+      },
       onSessionDropped: (connId) => this.core.client(connId, null),
       onPeerLinked: (peer) => {
         // The mutual half of a password link: a machine that proved this one's password is pinned back,
@@ -242,8 +248,11 @@ export class RelayGateway implements GatewayPort {
 
   // ── out, to remote clients ───────────────────────────────────────────────────────────────────────
 
-  /** User-content events are group-encrypted (E2EE) here; system frames pass through as plaintext. */
-  broadcast(frame: Frame): void {
+  /** User-content events are group-encrypted (E2EE) here; system frames pass through as plaintext.
+   *  [guest]: the guest whose harness the frame is about (the core reads it from the registry). The group
+   *  never reaches a guest (manager.ts `groupKeyFor`, backend/src/lib/hub.ts), so its sessions are sent
+   *  the frame sealed for each of them. */
+  broadcast(frame: Frame, guest?: string): void {
     if ((frame.type === 'turn_started' || frame.type === 'turn_ended' || frame.type === 'text_delta' || frame.type === 'error') && typeof frame.agentId === 'string') {
       const interrupted = frame.type === 'turn_ended' && (frame.payload as { aborted?: unknown } | undefined)?.aborted === true
       try { this.productUsage?.observe(frame.type, frame.agentId, frame.replay === true, interrupted) } catch { /* Work continues without metrics. */ }
@@ -263,6 +272,21 @@ export class RelayGateway implements GatewayPort {
     }
     if (this.link.servesThisComputerOnly()) return
     this.link.enqueue({ t: 'up', frame: this.e2ee.wrapUp(frame) })
+    if (guest) {
+      for (const connId of this.e2ee.guestSessions(guest)) {
+        const sealed = this.e2ee.wrapFor(connId, frame)
+        if (sealed) this.link.enqueue({ t: 'up', targetConnId: connId, frame: sealed })
+      }
+    }
+  }
+
+  /** The guest a remote connection's session is (gateway/sharedTrust.ts), '' when its store did not
+   *  record the account; undefined for everyone else. */
+  private guestOf(connId: string): string | undefined {
+    const identity = this.e2ee.sessionIdentity(connId)
+    if (!identity) return undefined
+    const peer = this.e2ee.pairedPeers().find((p) => p.identityPub === identity)
+    return peer?.shared ? (peer.sharedWith ?? '') : undefined
   }
 
   /** A DEVICE-audience frame (commanderEligible, not web). User/data frames are group-encrypted (E2EE)
@@ -523,6 +547,13 @@ export class RelayGateway implements GatewayPort {
       return
     }
     const payload = (opened.payload ?? {}) as Record<string, unknown>
+    // A guest manages none of this machine's pairings and is no member of its trust group
+    // (docs/plans/2026-10-19-guest-machine-sharing-plan.md): the rest it asks, the core decides.
+    if ((type === 'group_sync' || GATEWAY_REQUEST_TYPES.has(type)) && this.guestOf(connId) !== undefined) {
+      this.logRequest(connId, opened)
+      this.reply(connId, type, payload.requestId, { error: 'GUEST_NOT_ALLOWED' })
+      return
+    }
     // Trust-group roster exchange: only over an E2EE session, from the identity that session proved —
     // the roster carries the keys this machine trusts, and the peer's own entry must be that identity.
     if (type === 'group_sync') {

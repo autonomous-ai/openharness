@@ -34,6 +34,7 @@ import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPrepara
 import type { LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 import type { AgentEngine } from '../../engines/types.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
+import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 type ForkAgent = NonNullable<BackendSocket['onForkAgent']>
 
@@ -73,6 +74,7 @@ export function createAgentForker({
     if (!createBackend) return { ok: false, error: noBackendCode }
     const observed = registry.byAgent(agentId)
     if (!observed) return { ok: false, error: 'AGENT_NOT_FOUND' }
+    if (observed.guest) return GUEST_HARNESS_REFUSAL
     const source = structuredClone(observed)
     const sourceName = projectDisplayName(source)
     if (!source.cwd) return { ok: false, error: 'CWD_NOT_FOUND', detail: `${sourceName} has no working folder on record.` }

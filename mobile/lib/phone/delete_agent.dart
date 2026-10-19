@@ -60,3 +60,39 @@ Future<void> confirmDeleteAgent(
   ScaffoldMessenger.maybeOf(context)
       ?.showSnackBar(SnackBar(content: Text(error)));
 }
+
+/// Delete Harness: a harness and its saved conversation, gone for good ([AppNotifier.purgeAgent]) —
+/// the desktop's `confirmDeleteHarness`, in its words. Stop keeps the conversation to reopen; this
+/// is how a harness leaves for good. Opened from the same places as Stop, beside it.
+///
+/// Like Stop, nothing here takes anything off the screen: [AppNotifier.purgeAgent] drops the agent
+/// and detaches its pane, and the page showing it leaves on its own.
+Future<void> confirmPurgeAgent(
+  BuildContext context,
+  AppNotifier notifier,
+  String machineId,
+  String agentId,
+  String agentName,
+) async {
+  final machine = notifier.stateOf(machineId);
+  final agent = machine?.agents.where((a) => a.id == agentId).firstOrNull;
+  final confirmed = await confirmPhoneAction(
+    context,
+    icon: LucideIcons.trash300,
+    title: 'Delete $agentName?',
+    detail: [
+      ?machine?.machine.displayName,
+      ?agent?.project?.label,
+    ].where((part) => part.isNotEmpty).join(' · '),
+    message:
+        'Delete this harness and its saved conversation? It stops if running, '
+        'and it cannot be opened again. Project files are kept. To keep the '
+        'conversation to reopen later, use Stop Harness instead.',
+    confirmLabel: 'Delete',
+  );
+  if (!confirmed || !context.mounted) return;
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final error = await notifier.purgeAgent(machineId, agentId);
+  if (error == null) return;
+  messenger?.showSnackBar(SnackBar(content: Text(error)));
+}

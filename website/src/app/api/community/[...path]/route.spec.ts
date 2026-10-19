@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DELETE, GET, POST } from './route';
+import { DELETE, GET, HEAD, POST } from './route';
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 describe('community API boundary', () => {
@@ -63,6 +63,13 @@ describe('community API boundary', () => {
     expect(response.status).toBe(200);
     expect(fetcher.mock.calls[0][1].headers.has('content-type')).toBe(false);
     expect(fetcher.mock.calls[0][1].body).toBeUndefined();
+  });
+  it('answers a link preview’s HEAD for a cover as the image it is', async () => {
+    const id = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Uint8Array([137, 80]), { headers: { 'Content-Type': 'image/png' } })));
+    const response = await HEAD(new Request(`https://harness.example/api/community/harnesses/${id}/cover`, { method: 'HEAD' }), { params: Promise.resolve({ path: ['harnesses', id, 'cover'] }) });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/png');
   });
   it('serves a cover as a cacheable image, and only an image', async () => {
     const id = '0f8fad5b-d9cb-469f-a165-70867728950e', context = { params: Promise.resolve({ path: ['harnesses', id, 'cover'] }) };

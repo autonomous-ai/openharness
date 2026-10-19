@@ -3,7 +3,8 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { legacyDaemonStatus, localDaemonStatus, saveDaemonPort, savedDaemonPort } from './daemonEndpoint.js'
+import { loadOrCreateHookCredential } from './hookAuth.js'
+import { legacyDaemonStatus, localDaemonCall, localDaemonStatus, saveDaemonPort, savedDaemonPort } from './daemonEndpoint.js'
 import { readDaemonRecord } from './daemonRecord.js'
 import { listenLocalSocket, localSocketPath } from './localSocket.js'
 
@@ -112,5 +113,39 @@ describe('per-user daemon discovery', () => {
     expect(await legacyDaemonStatus(port, 43211, 'this-user')).toBeNull()
     expect(await legacyDaemonStatus(port, 43210, 'other-user')).toBeNull()
     expect(await legacyDaemonStatus(port, 43210, 'this-user')).toEqual(status)
+  })
+
+  it('shows legacy status this OS user\'s local credential when it is given the data dir', async () => {
+    const status = { pid: 43210, computerId: 'this-user' }
+    const seen: Array<string | undefined> = []
+    const server = createServer((req, res) => { seen.push(req.headers['x-harness-local'] as string | undefined); res.end(JSON.stringify(status)) })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    cleanup.push(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) }))
+    const port = (server.address() as { port: number }).port
+    const dataDir = directory()
+    const credential = loadOrCreateHookCredential(dataDir)
+    expect(await legacyDaemonStatus(port, 43210, 'this-user', dataDir)).toEqual(status)
+    expect(await legacyDaemonStatus(port, 43210, 'this-user')).toEqual(status)
+    expect(seen).toEqual([credential, undefined])
+  })
+
+  it("shows this user's credential when a Windows control call falls back to TCP", async () => {
+    const dataDir = directory()
+    const credential = loadOrCreateHookCredential(dataDir)
+    let seen: string | null = null
+    const response = await localDaemonCall(dataDir, 19418, 'POST', '/api/pair', { code: 'one-use' }, {
+      platform: 'win32',
+      pipe: async () => null,
+      tcpPort: 24567,
+      fetch: async (url, init) => {
+        expect(String(url)).toBe('http://127.0.0.1:24567/api/pair')
+        const headers = new Headers(init?.headers)
+        expect(headers.get('x-adapter-local')).toBe('1')
+        seen = headers.get('x-harness-local')
+        return new Response('{}', { status: 200 })
+      },
+    })
+    expect(response.ok).toBe(true)
+    expect(seen).toBe(credential)
   })
 })

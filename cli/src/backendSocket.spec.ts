@@ -417,8 +417,8 @@ describe('viewer forwarding authentication', () => {
     role.mockReturnValue('web')
     await dispatchDown(socket, sealed, 'remote')
     expect(routed).toEqual([
-      { type: 'memory_snapshot', asker: { local: false, owner: false, connection: 'remote', requestId: 'one' } },
-      { type: 'memory_snapshot', asker: { local: false, owner: true, connection: 'remote', requestId: 'one' } },
+      { type: 'memory_snapshot', asker: { local: false, owner: false, accountOwner: false, connection: 'remote', requestId: 'one' } },
+      { type: 'memory_snapshot', asker: { local: false, owner: true, accountOwner: false, connection: 'remote', requestId: 'one' } },
     ])
     expect(ownerCommands).not.toHaveBeenCalled()
     expect(sealedReply).toHaveBeenCalledWith('remote', 'memory_snapshot_result', 'one', { memories: [] })
@@ -1067,13 +1067,13 @@ describe('BackendSocket outbound queue', () => {
     await vi.waitFor(() => {
       expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-1', { hits: [], indexed: 3, pending: 0, ready: true, tookMs: 1 })
     })
-    expect(routed[0]).toEqual({ type: 'session_search', payload: { requestId: 's-1', query: 'dial scroll', limit: 12 }, asker: { local: false, owner: true, connection: 'web-1', requestId: 's-1' } })
+    expect(routed[0]).toEqual({ type: 'session_search', payload: { requestId: 's-1', query: 'dial scroll', limit: 12 }, asker: { local: false, owner: true, accountOwner: false, connection: 'web-1', requestId: 's-1' } })
 
     // A device's session may not act as the owner, and the service is told so.
     role.mockReturnValue('device')
     ask('session_search', { requestId: 's-2', query: 'dial' })
     await vi.waitFor(() => expect(routed).toHaveLength(2))
-    expect(routed[1].asker).toEqual({ local: false, owner: false, connection: 'web-1', requestId: 's-2' })
+    expect(routed[1].asker).toEqual({ local: false, owner: false, accountOwner: false, connection: 'web-1', requestId: 's-2' })
 
     // A type no service declared is the socket's own: an unknown one is refused at once, in the clear,
     // as a reply that carries nothing is.
@@ -2755,7 +2755,7 @@ describe('agent_fork RPC', () => {
       lookup.mockReturnValue(undefined)
       ask('agent_fork', 'deleted')
       await vi.waitFor(() => expect(frames).toContainEqual({
-        type: 'agent_fork_result', payload: { requestId: 'deleted', creationId, state: 'unavailable' },
+        type: 'agent_fork_result', payload: { requestId: 'deleted', creationId, state: 'unavailable', createdAgentId: FORK.agentId },
       }))
       expect(fork).toHaveBeenCalledTimes(1)
     } finally {
@@ -4098,7 +4098,7 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     const serviceRouter = vi.fn(() => true)
     socket.serviceRouter = serviceRouter
     await dispatch(sealedDown(socket, 'web-1', 'dsh_install', { requestId: 'r', id: 'acme/some-dsh' }).frame, 'web-1')
-    expect(serviceRouter).toHaveBeenCalledWith('dsh_install', expect.objectContaining({ id: 'acme/some-dsh' }), { local: false, owner: expect.any(Boolean), connection: 'web-1', requestId: 'r' }, expect.any(Function))
+    expect(serviceRouter).toHaveBeenCalledWith('dsh_install', expect.objectContaining({ id: 'acme/some-dsh' }), { local: false, owner: expect.any(Boolean), accountOwner: false, connection: 'web-1', requestId: 'r' }, expect.any(Function))
   })
 
   it('refuses a plaintext RPC even from the backend itself (connId \'\'), which would read the reply', async () => {

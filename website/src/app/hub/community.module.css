@@ -6,13 +6,13 @@
 .wrap{width:84%;max-width:1712px;margin:0 auto}
 .bar{display:flex;align-items:center;gap:26px;min-height:80px;padding:22px 0}
 .brand{font-weight:600;font-size:25px;letter-spacing:-1px;margin-right:22px}
-.hubWord{font-weight:400;color:#999;letter-spacing:-.7px}
-.feedIntro{margin-bottom:40px;color:#777}.feedIntro h1{font-size:28px;font-weight:400;color:#242424;margin-bottom:8px}
-.cardSocial{display:flex;gap:18px;margin-top:12px;color:#888;font-size:12px}.cardSocial button,.cardSocial a{display:inline-flex;align-items:center;gap:6px}.cardSocial svg{height:14px;width:14px}
-.creator{font-style:normal;font-size:10px;color:#777;background:#f4f4f2;padding:2px 5px}
-.reply{padding-left:20px}.replyContext{display:block;color:#999;font-size:11px;margin-bottom:5px}
-.page .replyButton{font-size:11px;color:#888;margin-top:8px;text-decoration:underline;text-underline-offset:3px}
-.nav,.barActions{display:flex;align-items:center;gap:26px;color:#777;font-size:15px}
+.hubWord{font-weight:400;color:#707070;letter-spacing:-.7px}
+.feedIntro{margin-bottom:40px;color:#666}.feedIntro h1{font-size:28px;font-weight:400;color:#242424;margin-bottom:8px}
+.cardSocial{display:flex;gap:18px;margin-top:12px;color:#6b6b6b;font-size:12px}.cardSocial button,.cardSocial a{display:inline-flex;align-items:center;gap:6px}.cardSocial svg{height:14px;width:14px}
+.creator{font-style:normal;font-size:10px;color:#666;background:#f4f4f2;padding:2px 5px}
+.reply{padding-left:20px}.replyContext{display:block;color:#707070;font-size:11px;margin-bottom:5px}
+.page .replyButton{font-size:11px;color:#6b6b6b;margin-top:8px;text-decoration:underline;text-underline-offset:3px}
+.nav,.barActions{display:flex;align-items:center;gap:26px;color:#666;font-size:15px}
 .barActions{gap:22px;margin-left:auto}
 .nav a,.barActions a,.barActions button{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 .nav [aria-current=page]{color:#242424}
@@ -22,9 +22,9 @@
 .searchField{display:flex;align-items:center;gap:8px;width:min(280px,52vw);height:36px;padding:0 6px 0 12px;border:1px solid #e4e4e1;background:#fafaf9;transition:border-color .15s,background-color .15s;animation:searchOpen .18s ease-out}
 .searchField:focus-within{border-color:#242424;background:#fff}
 .searchField input{flex:1;min-width:0;height:100%;border:0;background:transparent;outline:0;color:#242424;font-size:14px}
-.searchField input::placeholder{color:#999}
+.searchField input::placeholder{color:#707070}
 .searchField input::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none}
-.page .searchField button{padding:4px;color:#999}
+.page .searchField button{padding:4px;color:#707070}
 .page .searchField button:hover{color:#242424}
 .searchField svg{width:16px;height:16px;flex-shrink:0}
 @keyframes searchOpen{from{width:36px;opacity:.5}}
@@ -35,29 +35,29 @@
 .cover{display:block;aspect-ratio:3/2;width:100%;height:auto;object-fit:cover;background:#ece9e2}
 .blankCover{aspect-ratio:3/2;background:#e9e4dc;display:flex;align-items:center;justify-content:center;padding:12%;font:400 clamp(25px,3vw,45px)/1.06 Georgia,serif;letter-spacing:-1px;color:#685449;overflow-wrap:anywhere}
 .card h2{font-size:16px;line-height:1.35;font-weight:400;margin-top:9px}
-.card p{font-size:15px;line-height:1.4;color:#777;margin-top:2px}
-.card small{display:block;color:#888;font-size:13px;margin-top:9px}
+.card p{font-size:15px;line-height:1.4;color:#666;margin-top:2px}
+.card small{display:block;color:#6b6b6b;font-size:13px;margin-top:9px}
 .card:hover h2{color:#6c6c6c}
 .icon{display:inline-flex;align-items:center;justify-content:center;padding:8px;min-width:32px;min-height:32px}
 .icon svg{width:17px;height:17px}
-.notice{font-size:13px;color:#777;margin:0 0 30px;line-height:1.6}
+.notice{font-size:13px;color:#666;margin:0 0 30px;line-height:1.6}
 .notice button,.notice a{text-decoration:underline;text-underline-offset:3px;margin-left:8px}
-.empty{padding:60px 0;max-width:430px;color:#777}
+.empty{padding:60px 0;max-width:430px;color:#666}
 .empty h1,.empty h2{font-size:26px;color:#242424;font-weight:400;margin-bottom:12px}
 .more{display:block;margin:60px auto 0;font-size:14px;padding:12px 20px}
 .detail{padding-top:27px;padding-bottom:70px}
-.back{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:#777!important;margin-bottom:27px}
+.back{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:#666!important;margin-bottom:27px}
 .back svg{width:14px;height:14px}
 .detailHead{display:flex;align-items:center;gap:28px;margin-bottom:31px}
 .identity{min-width:0}
 .identity h1{font-size:25px;font-weight:400;line-height:1.2;letter-spacing:-.5px;margin-bottom:9px}
-.byline{display:flex;align-items:center;gap:15px;flex-wrap:wrap;font-size:13px;color:#777}
+.byline{display:flex;align-items:center;gap:15px;flex-wrap:wrap;font-size:13px;color:#666}
 .follow{text-decoration:underline;text-underline-offset:3px}
 /* The reader's actions: one row of quiet 36px buttons that tint on hover and stay tinted while their panel is open, ending in Fork. */
 .actions{display:flex;align-items:center;gap:4px;margin-left:auto;flex-shrink:0}
 .actions>button,.actions>a,.actions .actionButton{display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 11px;border-radius:8px;white-space:nowrap;font-size:13px;color:#555;transition:background-color .15s,color .15s}
 .actions>button:hover:not(:disabled),.actions>a:hover,.actions .actionButton:hover{background:#f4f4f2;color:#242424}
-.actions>button[aria-pressed=true],.actions .actionButton[aria-pressed=true]{background:#efefec;color:#242424}
+.actions>button[aria-pressed=true],.actions .actionButton[aria-expanded=true]{background:#efefec;color:#242424}
 .actions>button:focus-visible,.actions>a:focus-visible,.actions .actionButton:focus-visible,.actions .primary:focus-visible{outline:2px solid #242424;outline-offset:2px}
 .actions svg{width:16px;height:16px}
 .actions .handoff{margin-left:8px}
@@ -73,25 +73,25 @@
 .chat{min-width:0;padding-left:29px}
 .chatHead{display:flex;justify-content:space-between;align-items:center;gap:14px;margin:0 0 30px;font-size:12px}
 .chatHead h2{font-size:13px;font-weight:600}
-.chatHead span{color:#888;font-size:11px}
+.chatHead span{color:#6b6b6b;font-size:11px}
 .transcript{font:12px/1.85 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
 .turn{margin-bottom:27px}
-.turn small{display:block;color:#888;font:12px/1.5 Arial,Helvetica,sans-serif;margin-bottom:9px}
+.turn small{display:block;color:#6b6b6b;font:12px/1.5 Arial,Helvetica,sans-serif;margin-bottom:9px}
 .turn p{white-space:pre-wrap}
-.tool{color:#777;margin:0 0 22px;font-size:11px}
+.tool{color:#666;margin:0 0 22px;font-size:11px}
 .tool summary{cursor:pointer}
 .tool p{padding-top:10px;white-space:pre-wrap}
-.contextNote{font:11px/1.6 Arial,sans-serif;color:#888;margin-bottom:27px}
+.contextNote{font:11px/1.6 Arial,sans-serif;color:#6b6b6b;margin-bottom:27px}
 .comment{padding-bottom:26px;overflow-wrap:anywhere}
 .commentBy{display:flex;gap:8px;align-items:center;font-size:12px;margin-bottom:9px}
-.commentBy small{color:#999;margin-left:auto;font-size:11px}
+.commentBy small{color:#707070;margin-left:auto;font-size:11px}
 .comment p{font-size:13px;line-height:1.7;white-space:pre-wrap}
-.commentBy button{font-size:11px;color:#888;text-decoration:underline}
+.commentBy button{font-size:11px;color:#6b6b6b;text-decoration:underline}
 .commentForm{margin-top:20px}
 .commentForm label{display:block;font-size:13px;margin-bottom:10px}
 .page textarea{background:#f5f5f5;border:0;border-radius:0;padding:13px;width:100%;min-height:110px;line-height:1.6;resize:vertical}
 .commentForm button{margin-top:10px;float:right}
-.signin{font-size:13px;line-height:1.7;color:#777;margin:15px 0}
+.signin{font-size:13px;line-height:1.7;color:#666;margin:15px 0}
 .signin a{text-decoration:underline;text-underline-offset:3px;color:#242424}
 .error{font-size:13px;line-height:1.6;color:#a4483f;margin:15px 0}
 .submitRow{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
@@ -101,49 +101,51 @@
 .textLink{text-decoration:underline!important;text-underline-offset:3px}
 .fork{max-width:1050px;padding:45px 0 100px}
 .fork h1,.publish h1{font-size:38px;font-weight:400;letter-spacing:-1px;line-height:1.1;margin-bottom:15px}
-.forkIntro{max-width:600px;color:#777;line-height:1.7;margin-bottom:40px}
+.forkIntro{max-width:600px;color:#666;line-height:1.7;margin-bottom:40px}
 .forkColumns{display:grid;grid-template-columns:1fr 1fr;gap:50px}
 .forkColumns img{width:100%;height:auto;aspect-ratio:3/2;object-fit:cover}
 .fork h2{font-size:17px;font-weight:400;margin:28px 0 12px}
-.fork p,.fork li{font-size:14px;line-height:1.75;color:#777}
+.fork p,.fork li{font-size:14px;line-height:1.75;color:#666}
 .fork ul{padding-left:18px;margin-bottom:20px}
 .fork code{display:block;padding:18px;background:#f5f5f5;margin:15px 0;font-size:12px;overflow-wrap:anywhere;white-space:pre-wrap}
 .steps{list-style:none;counter-reset:steps}
 .steps li{counter-increment:steps;margin-bottom:30px;position:relative;padding-left:32px}
-.steps li:before{content:counter(steps)'.';position:absolute;left:0;color:#999}
+.steps li:before{content:counter(steps)'.';position:absolute;left:0;color:#707070}
 .steps strong{display:block;color:#242424;font-size:16px;font-weight:400;margin-bottom:9px}
 .publish{padding:40px 0 100px;max-width:1120px}
 .publishForm{display:grid;grid-template-columns:1fr 1fr;gap:30px 45px;margin-top:36px}
 .field{display:flex;flex-direction:column;gap:9px;font-size:13px}
 .field input,.field select{border:0;background:#f5f5f5;padding:13px;min-width:0;width:100%;border-radius:0}
-.field small{color:#888;font-size:11px;line-height:1.6}
+.field small{color:#6b6b6b;font-size:11px;line-height:1.6}
 .wide{grid-column:1/-1}
 .publish textarea{min-height:170px;font:12px/1.7 ui-monospace,monospace}
 .publishPreview{margin:35px 0}
 .publishPreview h2{font-size:16px;font-weight:400;margin-bottom:15px}
 .publishPreview iframe{width:100%;height:440px;border:0;background:#f5f5f5}
-.check{display:flex;gap:11px;align-items:flex-start;color:#777;font-size:13px;line-height:1.7;margin:25px 0}
+.check{display:flex;gap:11px;align-items:flex-start;color:#666;font-size:13px;line-height:1.7;margin:25px 0}
 .check input{margin-top:5px;accent-color:#242424}
-.loading{padding:70px 0;color:#777}
+.loading{padding:70px 0;color:#666}
 @media(min-width:1900px){.viewer iframe{height:780px}}
 @media(max-width:1100px){.wrap{width:90%}.nav{gap:20px}.barActions{gap:18px}.chat{padding-left:22px}.identity h1{font-size:22px}.viewer iframe{height:640px}}
 @media(max-width:760px){.wrap{width:92%}.feed{padding-top:22px}.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:44px 14px}.split{grid-template-columns:1fr;gap:28px;min-height:0}.chat{padding:0}.detail{padding-top:16px;padding-bottom:50px}.back{margin-bottom:14px}.detailHead{flex-wrap:wrap;gap:16px;margin-bottom:22px}.actions{margin-left:auto}.viewer iframe{height:590px}.forkColumns,.publishForm{grid-template-columns:1fr;gap:25px}.fork h1,.publish h1{font-size:32px}.page input,.page textarea,.page select{font-size:16px}}
 @media(max-width:480px){.grid{grid-template-columns:1fr;gap:36px}.actions{width:100%;margin-left:0}.actions>:last-child{margin-left:auto}.identity h1{font-size:23px}.viewer iframe{height:510px;height:min(560px,68svh)}.fork{padding-top:20px}.publish{padding-top:24px}.fork h1,.publish h1{font-size:28px}.publishForm{gap:25px}}
 .tags{display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center}
-.tags>span{display:inline-block;background:#f3f3f1;color:#747471;font:10px/1.5 Arial,Helvetica,sans-serif;padding:3px 7px;border-radius:3px;white-space:nowrap}
+.tags>span{display:inline-block;background:#f3f3f1;color:#5f5f5c;font:10px/1.5 Arial,Helvetica,sans-serif;padding:3px 7px;border-radius:3px;white-space:nowrap}
 .cardMeta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}
 .cardMeta small{margin:0}
 /* Its help floats under the button, so opening the app never moves the row it sits in. */
 .handoff{position:relative;display:inline-flex}
-.filesReview{margin:30px 0}.filesReview summary{cursor:pointer;font-size:14px}.fileRow{display:flex;align-items:center;gap:12px;margin:10px 0;font-size:12px}.fileRow code{flex:1;overflow-wrap:anywhere}.fileRow button{text-decoration:underline;color:#777}.importActions{margin:24px 0;background:#f7f7f5;padding:22px}.importActions p{color:#777;font-size:13px;margin-top:8px}
+.filesReview{margin:30px 0}.filesReview summary{cursor:pointer;font-size:14px}.fileRow{display:flex;align-items:center;gap:12px;margin:10px 0;font-size:12px}.fileRow code{flex:1;overflow-wrap:anywhere}.fileRow button{text-decoration:underline;color:#666}.importActions{margin:24px 0;background:#f7f7f5;padding:22px}.importActions p{color:#666;font-size:13px;margin-top:8px}
 /* Phones: one sticky glass bar. Brand and actions on the first row, the tabs under them, and an open search across its own row. */
-@media(max-width:760px){.topbar{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.82);-webkit-backdrop-filter:saturate(180%) blur(18px);backdrop-filter:saturate(180%) blur(18px);box-shadow:0 1px 0 rgba(36,36,36,.07)}.bar{flex-wrap:wrap;gap:0 16px;min-height:0;padding:4px 0 0}.bar .brand{font-size:21px;margin-right:auto}.barActions{display:contents;font-size:14px}.barActions>a,.barActions>button{order:1}.page .barActions .primary{min-height:34px;padding:6px 14px}.barActions .openApp{display:none}.nav{order:2;width:100%;gap:24px;font-size:14px}.nav a{position:relative;min-height:42px}.nav [aria-current=page]:after{content:'';position:absolute;left:0;right:0;bottom:0;height:2px;background:#242424}.barActions>.searchField{order:3;width:100%;margin:4px 0 10px;animation:none}}
+@media(max-width:760px){.topbar{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.82);-webkit-backdrop-filter:saturate(180%) blur(18px);backdrop-filter:saturate(180%) blur(18px);box-shadow:0 1px 0 rgba(36,36,36,.07)}.bar{flex-wrap:wrap;gap:0 16px;min-height:0;padding:4px 0 0}.bar .brand{font-size:21px;margin-right:auto}.barActions{display:contents;font-size:14px}.barActions>a,.barActions>button{order:1}.page .barActions .primary{min-height:34px;padding:6px 14px}.nav{order:2;width:100%;gap:24px;font-size:14px}.nav a{position:relative;min-height:42px}.nav [aria-current=page]:after{content:'';position:absolute;left:0;right:0;bottom:0;height:2px;background:#242424}.barActions>.searchField{order:3;width:100%;margin:4px 0 10px;animation:none}}
+/* The narrowest phones (320px): brand, search, Publish and Sign in still share the first row. */
+@media(max-width:360px){.bar{gap:0 10px}.bar .brand{font-size:19px}.page .barActions .primary{padding:6px 12px}}
 .handoffHelp{position:absolute;top:calc(100% + 8px);left:0;z-index:5;white-space:nowrap;font-size:12px;line-height:1.5;color:#666;padding:8px 12px;border-radius:10px;background:rgba(255,255,255,.78);-webkit-backdrop-filter:saturate(180%) blur(18px);backdrop-filter:saturate(180%) blur(18px);border:1px solid rgba(36,36,36,.08);box-shadow:0 8px 24px rgba(36,36,36,.1);animation:handoffIn .18s ease-out}
 .actions .handoffHelp{left:auto;right:0}
 @keyframes handoffIn{from{opacity:0;transform:translateY(-4px)}}
 @media(prefers-reduced-motion:reduce){.handoffHelp{animation:none}}
 .handoffHelp a{margin-left:4px;color:#242424!important;text-decoration:underline;text-underline-offset:3px}
-.fork details{margin-top:32px;color:#777;font-size:13px}
+.fork details{margin-top:32px;color:#666;font-size:13px}
 .fork summary{cursor:pointer}
 
 .recording{display:block;width:100%;height:720px;object-fit:contain;background:#191b1b}
@@ -167,7 +169,7 @@
 /* A finger swipes the row; the fades are enough there, and the arrows would take a narrow row's room. */
 @media(hover:none){.page .chipArrow{display:none}}
 .chips::-webkit-scrollbar{display:none}
-.page .chips button,.page .sort button{display:inline-flex;align-items:center;padding:0;flex-shrink:0;color:#777;white-space:nowrap}
+.page .chips button,.page .sort button{display:inline-flex;align-items:center;padding:0;flex-shrink:0;color:#666;white-space:nowrap}
 .chips span,.sort span{display:block;padding:6px 12px;font-size:13px;line-height:1.5;border-radius:999px;transition:background-color .15s,color .15s,box-shadow .15s}
 .page .chips button{scroll-snap-align:start}
 .page .chips button:last-child{margin-right:36px}
@@ -187,7 +189,7 @@
 @media(prefers-reduced-motion:reduce){.skeleton .cover,.skeleton span{animation:none}}
 /* The output's full-screen control, on a slim bar under it. */
 .viewerBar{display:flex;justify-content:flex-end;background:#fff}
-.page .viewerBar button{display:inline-flex;align-items:center;gap:6px;padding:8px 0 0;font-size:12px;color:#777}
+.page .viewerBar button{display:inline-flex;align-items:center;gap:6px;padding:8px 0 0;font-size:12px;color:#666}
 .page .viewerBar button:hover{color:#242424}
 .viewerBar svg{width:14px;height:14px}
 .viewer:fullscreen{background:#fff}
@@ -198,7 +200,7 @@
 .sourceFile{border-bottom:1px solid #efefed;font-size:12px}
 .sourceFile summary{display:flex;align-items:center;gap:12px;padding:10px 0;cursor:pointer}
 .sourceFile summary code{flex:1;min-width:0;overflow-wrap:anywhere}
-.sourceFile summary small{color:#999;font-size:11px}
+.sourceFile summary small{color:#707070;font-size:11px}
 .sourceFile pre{margin-bottom:12px}
 .forks{margin-top:70px}
 .forks h2{font-size:17px;font-weight:400;margin-bottom:26px}
@@ -209,7 +211,7 @@
 .byline a,.byline button{display:inline-flex;align-items:center}
 @media(max-width:760px){.chat{scroll-margin-top:104px}}
 .authorLink:hover{text-decoration:underline}
-.reportForm{display:flex;flex-direction:column;gap:2px;margin:0 0 30px;padding:18px 20px;background:#f7f7f5;font-size:13px}.reportForm .check{margin:6px 0}.reportForm small{color:#777;margin:8px 0 4px}.reportForm .submitRow{margin:8px 0 0}
-.review{border-bottom:1px solid #efefed;padding:16px 0;font-size:13px;display:flex;flex-direction:column;gap:6px}.review p{color:#777}.review .submitRow{margin:4px 0 0}
+.reportForm{display:flex;flex-direction:column;gap:2px;margin:0 0 30px;padding:18px 20px;background:#f7f7f5;font-size:13px}.reportForm .check{margin:6px 0}.reportForm small{color:#666;margin:8px 0 4px}.reportForm .submitRow{margin:8px 0 0}
+.review{border-bottom:1px solid #efefed;padding:16px 0;font-size:13px;display:flex;flex-direction:column;gap:6px}.review p{color:#666}.review .submitRow{margin:4px 0 0}
 .bell{position:relative;display:inline-flex}.bell svg{width:19px;height:19px}.badge{position:absolute;top:-7px;right:-9px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#a4483f;color:#fff;font-size:10px;line-height:16px;text-align:center}
-.notification{display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-bottom:1px solid #efefed;font-size:14px}.notification small{color:#999;flex-shrink:0}.notification.unread{font-weight:500}
+.notification{display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-bottom:1px solid #efefed;font-size:14px}.notification small{color:#707070;flex-shrink:0}.notification.unread{font-weight:500}

@@ -11,6 +11,7 @@
  *   is (lib/machineAccess.ts), so these change no one's access.
  */
 import type { FastifyInstance } from 'fastify'
+import { nextMachineShareGrants } from '../lib/machineSharePolicy.js'
 import type { MachineShare } from '@prisma/client'
 import { z } from 'zod'
 import { prisma, machineAlive } from '../lib/prisma.js'
@@ -48,6 +49,31 @@ async function policyView(share: MachineShare | null, user: AuthUser) {
     emails: share?.emails ?? [], sameDomain: !!share?.domain,
     domain: isPublicEmailDomain(domain) ? null : domain,
     members: share ? await shareMembers(share) : [],
+  }
+}
+
+/** A concurrent share edit must reread the current grant versions. Reusing a
+ * stale policy after a revocation could otherwise revive an old contribution. */
+async function writePolicy(machineId: string, user: AuthUser, emails: string[], domain: string | null) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await prisma.$transaction(async tx => {
+        const before = await tx.machineShare.findUnique({ where: { machineId } })
+        let after: MachineShare | null = null
+        if (!emails.length && !domain) {
+          await tx.machineShare.deleteMany({ where: { machineId } })
+          await tx.machineShareAdd.deleteMany({ where: { machineId } })
+        } else {
+          const data = { ownerId: user.sub, autonomousEnv: user.autonomousEnv, emails, domain,
+            grantVersions: nextMachineShareGrants(before, emails, domain) }
+          after = await tx.machineShare.upsert({ where: { machineId }, create: { machineId, ...data }, update: data })
+        }
+        return { before, after }
+      })
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : null
+      if (attempt >= 4 || (code !== 'P2034' && code !== 'P2002')) throw error
+    }
   }
 }
 
@@ -98,16 +124,7 @@ export async function machineShareRoutes(app: FastifyInstance): Promise<void> {
           return sendError(reply, `Everyone at @${domain ?? 'your domain'} is not offered: it is a public email domain.`, 'PUBLIC_DOMAIN', 400)
         }
       }
-      const before = await prisma.machineShare.findUnique({ where: { machineId } })
-      let after: MachineShare | null = null
-      if (!emails.length && !domain) {
-        // Shared with no one: the row goes, and with it every colleague's add.
-        await prisma.machineShare.deleteMany({ where: { machineId } })
-        await prisma.machineShareAdd.deleteMany({ where: { machineId } })
-      } else {
-        const data = { ownerId: user.sub, autonomousEnv: user.autonomousEnv, emails, domain }
-        after = await prisma.machineShare.upsert({ where: { machineId }, create: { machineId, ...data }, update: data })
-      }
+      const { before, after } = await writePolicy(machineId, user, emails, domain)
       await publishMachineShareChanged(machineId).catch(() => 0)
       await tellAffected(machineId, user.sub, before, after)
       sendSuccess(reply, await policyView(after, user))

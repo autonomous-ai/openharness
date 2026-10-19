@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/harness_file_store.dart';
+import 'package:harness/core/posix_file_mode.dart';
 import 'package:harness/settings/config_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -229,6 +230,72 @@ void main() {
       }
     },
     skip: Platform.isWindows,
+  );
+
+  test(
+    'writes and repairs start no process, and leave every file private',
+    () async {
+      // Each write used to run /bin/chmod for its temporary file, and a
+      // process starts synchronously on the calling isolate: the UI one.
+      final started = <String>[];
+      final runProcess = HarnessFileStore.runProcess;
+      HarnessFileStore.runProcess = (executable, args) {
+        started.add(executable);
+        return runProcess(executable, args);
+      };
+      addTearDown(() => HarnessFileStore.runProcess = runProcess);
+      final store = HarnessFileStore(directory: dataDirectory);
+      await store.write('credential', 'synthetic-secret');
+      await store.write('credential', 'rotated');
+      final lock = File(
+        '${dataDirectory.path}/${HarnessFileStore.lockFileName}',
+      );
+      // Another program loosened them; the next write repairs all three.
+      for (final (mode, path) in [
+        ('755', dataDirectory.path),
+        ('644', lock.path),
+        ('644', store.stateFile.path),
+      ]) {
+        expect((await Process.run('/bin/chmod', [mode, path])).exitCode, 0);
+      }
+      await store.write('preference', 'kept');
+      expect(started, isEmpty);
+      expect(await store.read('credential'), 'rotated');
+      expect((await dataDirectory.stat()).mode & 0xfff, 0x1c0);
+      final files = (await dataDirectory.list().toList()).whereType<File>();
+      expect(files.map((f) => f.uri.pathSegments.last).toSet(), {
+        HarnessFileStore.fileName,
+        HarnessFileStore.lockFileName,
+      });
+      for (final file in files) {
+        expect((await file.stat()).mode & 0xfff, 0x180, reason: file.path);
+      }
+    },
+    skip: !PosixFileMode.supported,
+  );
+
+  test(
+    'libc modes: an exact new file, a refused existing one, a changed mode',
+    () async {
+      await dataDirectory.create(recursive: true);
+      final path = '${dataDirectory.path}/private';
+      PosixFileMode.createExclusive(path, 0x180);
+      expect((await File(path).stat()).mode & 0xfff, 0x180);
+      expect(await File(path).length(), 0);
+      await File(path).writeAsString('kept');
+      expect(
+        () => PosixFileMode.createExclusive(path, 0x180),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(await File(path).readAsString(), 'kept');
+      PosixFileMode.chmod(dataDirectory.path, 0x1c0);
+      expect((await dataDirectory.stat()).mode & 0xfff, 0x1c0);
+      expect(
+        () => PosixFileMode.chmod('$path-missing', 0x180),
+        throwsA(isA<FileSystemException>()),
+      );
+    },
+    skip: !PosixFileMode.supported,
   );
 
   test(

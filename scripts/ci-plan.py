@@ -15,9 +15,10 @@ import subprocess
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
 EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty"}
-SUITES = CORE | EXTRA
+SUITES = CORE | EXTRA | {"pro"}
 JOBS = {
     "cli": {"cli-typecheck", "cli-tests"},
+    "pro": {"pro-firmware-build", "pro-golden"},
     "desktop": {"desktop-tests"},
     "tui": {"tui-test"}, "backend": {"backend-desk"}, "companions": {"companion-subsystems"},
     **{name: {name + "-checks"} for name in EXTRA},
@@ -35,6 +36,8 @@ COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", 
 ALSO = {"cli/src/lib/ptyHost/": "pty", "cli/src/lib/ptyHostBackend": "pty",
         "cli/src/lib/terminalBackend.contract.ts": "pty", "tui/vendor/": "pty", "term/": "tui",
         "cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json": "desktop"}
+# Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
+SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
 
 def git(root, *args):
@@ -55,6 +58,7 @@ def select(paths):
         suite = COMPONENTS.get(path.split("/", 1)[0])
         scopes = {suite} if suite else set()
         scopes |= {also for prefix, also in ALSO.items() if path.startswith(prefix)}
+        scopes |= {extra for prefix, extra in SUBCOMPONENTS.items() if path.startswith(prefix)}
         selected |= scopes
         reasons[path] = sorted(scopes)
     return selected, reasons

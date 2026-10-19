@@ -5,6 +5,7 @@ const methods = vi.hoisted(() => ({ ingestProductUsage: vi.fn(), ingestSetupUsag
 vi.mock('../lib/productUsage.js', () => methods)
 import { productUsageRoutes } from './productUsage.js'
 import { PRODUCT_USAGE_METRICS, PRODUCT_USAGE_MAX_COUNT } from '../types/productUsage.js'
+import { HUB_METRICS, HUB_REPORT_MAX_COUNTERS, HUB_REPORT_MAX_VALUE } from '../lib/hubMetricsContract.js'
 let app: ReturnType<typeof Fastify>
 beforeEach(async () => {
   vi.resetAllMocks()
@@ -151,6 +152,18 @@ it('takes how the phone opened Find or Computers, and the phone\'s own requests,
   }
 })
 
+it('takes the Desktop\'s Add Phone card and each way into Add Phone, and no other name like them', async () => {
+  const context = { surface: 'desktop', release: '1.2.73', platform: 'macos', channel: 'production' }
+  const counters = { ui_desktop_phone_offer_started: 2, ui_desktop_phone_offer_ok: 1, ui_desktop_phone_offer_cancelled: 1,
+    ui_desktop_phone_offer_unknown: 1, ui_desktop_phone_offer_over_1m: 1, ui_desktop_add_phone_offer: 1,
+    ui_desktop_add_phone_titlebar: 2, ui_desktop_add_phone_menu: 1, ui_desktop_add_phone_account: 1,
+    ui_desktop_add_phone_machines: 1, ui_desktop_add_phone_command: 1 }
+  expect((await submit({ ...good, context, counters })).statusCode).toBe(200)
+  for (const name of ['ui_desktop_add_phone_welcome', 'ui_desktop_add_phone_qr', 'ui_phone_add_phone_offer', 'ui_web_add_phone_command']) {
+    expect((await submit({ ...good, context, counters: { [name]: 1 } })).statusCode).toBe(400)
+  }
+})
+
 it('rejects extra context, custom versions and device fingerprints without echoing them', async () => {
   const context = { surface: 'desktop', release: '1.2.73', platform: 'macos', channel: 'production' }
   for (const c of [{ ...context, path: 'PRIVATE_CANARY' }, { ...context, release: 'PRIVATE_CANARY' },
@@ -215,6 +228,70 @@ it('bounds untrusted setup writes independently of signed-in reports', async () 
   expect((await submit(good)).statusCode).toBe(200)
   finish({ accepted: true })
   expect(await Promise.all(pending)).toEqual([200, 200, 200, 200])
+})
+
+const hub = { schemaVersion: 1, id: good.id, day: good.day, counters: { hub_view_harness_visitor: 3, hub_entry_search: 1, hub_fork: 1, hub_harness_dwell_over_1m: 2 } }
+const sendHub = (payload: unknown = hub, headers = {}) => app.inject({ method: 'POST', url: '/api/product-usage/hub', payload: payload as Record<string, unknown>, headers })
+it('accepts anonymous Hub totals through the setup receipt path without an account lookup', async () => {
+  expect((await sendHub()).statusCode).toBe(200)
+  expect(methods.ingestSetupUsage).toHaveBeenCalledExactlyOnceWith(hub)
+  expect(methods.productUsageChoice).not.toHaveBeenCalled()
+  expect(methods.ingestProductUsage).not.toHaveBeenCalled()
+  // The whole vocabulary fits one report under the key cap and body limit at the largest values,
+  // so the cap cannot be exceeded with valid names until the vocabulary outgrows it.
+  const all = { ...hub, counters: Object.fromEntries(HUB_METRICS.map(k => [k, HUB_REPORT_MAX_VALUE])) }
+  expect(HUB_METRICS.length).toBeLessThanOrEqual(HUB_REPORT_MAX_COUNTERS)
+  expect(Buffer.byteLength(JSON.stringify(all))).toBeLessThan(4096)
+  expect((await sendHub(all)).statusCode).toBe(200)
+})
+it('refuses Hub reports with credentials, foreign or malformed counters, or extra fields, without echoing them', async () => {
+  for (const headers of [{ authorization: 'fixture' }, { cookie: 'PRIVATE_CANARY' }]) expect((await sendHub(hub, headers)).statusCode).toBe(400)
+  for (const payload of [{ ...hub, counters: {} },
+    { ...hub, counters: { PRIVATE_CANARY: 1 } }, { ...hub, counters: { hub_view_harness_PRIVATE_CANARY: 1 } },
+    // Signed-in and setup counters have their own routes; they never arrive as anonymous Hub totals.
+    { ...hub, counters: { turns_started: 1 } }, { ...hub, counters: { setup_desktop_sign_in_started: 1 } },
+    { ...hub, counters: { hub_fork: 0 } }, { ...hub, counters: { hub_fork: HUB_REPORT_MAX_VALUE + 1 } }, { ...hub, counters: { hub_fork: 1.5 } },
+    { ...hub, day: '2026-10-1' }, { ...hub, day: 'PRIVATE_CANARY' }, { ...hub, id: 'PRIVATE_CANARY' }, { ...hub, schemaVersion: 2 },
+    { ...hub, url: 'https://PRIVATE_CANARY' }, { ...hub, referrer: 'PRIVATE_CANARY' }, { ...hub, consent: true }]) {
+    const response = await sendHub(payload)
+    expect(response.statusCode).toBe(400)
+    expect(response.body).not.toContain('PRIVATE_CANARY')
+  }
+  expect(methods.ingestSetupUsage).not.toHaveBeenCalled()
+  // Nor do Hub counters ride the signed-in or setup reports.
+  expect((await submit({ ...good, counters: { hub_fork: 1 } })).statusCode).toBe(400)
+  expect((await sendSetup({ ...setup, counters: { hub_fork: 1 } })).statusCode).toBe(400)
+})
+it('does not reflect a Hub storage error', async () => {
+  methods.ingestSetupUsage.mockRejectedValue(new Error('PRIVATE_CANARY'))
+  const response = await sendHub()
+  expect(response.statusCode).toBe(503)
+  expect(response.body).not.toContain('PRIVATE_CANARY')
+})
+it('bounds Hub writes with a budget of their own, so they never starve setup measurement', async () => {
+  let finish!: (value: unknown) => void
+  const done = new Promise(resolve => { finish = resolve })
+  methods.ingestSetupUsage.mockReturnValue(done)
+  const pending = Array.from({ length: 4 }, () => sendHub().then((r: { statusCode: number }) => r.statusCode))
+  await vi.waitFor(() => expect(methods.ingestSetupUsage).toHaveBeenCalledTimes(4))
+  const busy = await sendHub()
+  expect(busy.statusCode).toBe(429)
+  expect(busy.json().error.code).toBe('USAGE_UNAVAILABLE')
+  const setupWhileHubBusy = sendSetup()
+  await vi.waitFor(() => expect(methods.ingestSetupUsage).toHaveBeenCalledTimes(5))
+  finish({ accepted: true })
+  expect(await Promise.all(pending)).toEqual([200, 200, 200, 200])
+  expect((await setupWhileHubBusy).statusCode).toBe(200)
+})
+it('caps Hub writes per minute', async () => {
+  vi.useFakeTimers({ now: new Date('2026-10-13T12:00:00Z'), toFake: ['Date'] })
+  try {
+    for (let i = 0; i < 240; i++) expect((await sendHub()).statusCode).toBe(200)
+    expect((await sendHub()).statusCode).toBe(429)
+    expect((await sendSetup()).statusCode).toBe(200)
+    vi.setSystemTime(new Date('2026-10-13T12:01:00Z'))
+    expect((await sendHub()).statusCode).toBe(200)
+  } finally { vi.useRealTimers() }
 })
 
 it('feedback reduces a voluntary fixed choice to one unlinked, retry-safe count', async () => {

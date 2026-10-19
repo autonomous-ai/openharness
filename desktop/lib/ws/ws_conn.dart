@@ -8,6 +8,7 @@ import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../core/sleep_aware.dart';
+import '../core/test_run.dart';
 import '../logging/app_log.dart';
 import '../logging/redact.dart';
 import '../core/models.dart';
@@ -308,6 +309,17 @@ class WsConn {
     }
   }
 
+  /// The local WebSocket over the daemon's loopback port, showing its local
+  /// credential: the port takes any OS user's process, the socket only ours.
+  WebSocketChannel _connectLocalPort(Uri uri) {
+    final transport =
+        localTransport ??
+        LocalDaemonTransport(
+          credential: kUnderTest ? null : readDaemonCredential,
+        );
+    return IOWebSocketChannel.connect(uri, headers: transport.tcpHeaders());
+  }
+
   Future<void> connect() async {
     if (_closing || _connecting) return;
     _connecting = true;
@@ -385,9 +397,8 @@ class WsConn {
                   protocols: token == null || token.isEmpty ? null : [token],
                 )
               : socket != null
-              ? await _connectLocalSocket(uri, socket) ??
-                    WebSocketChannel.connect(uri)
-              : WebSocketChannel.connect(uri));
+              ? await _connectLocalSocket(uri, socket) ?? _connectLocalPort(uri)
+              : _connectLocalPort(uri));
       _overPipe = overPipe != null;
       if (_closing) {
         await channel.sink.close();
@@ -701,6 +712,7 @@ class WsConn {
       !type.startsWith('api_connections') &&
       !type.startsWith('connectors') &&
       !type.startsWith('orchestrator') &&
+      !type.startsWith('super_tabs') &&
       !type.startsWith('route_') &&
       !type.startsWith('harness_share_') &&
       // Pair responses can contain retained memory quotations and one-use

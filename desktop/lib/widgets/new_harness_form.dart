@@ -132,7 +132,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               !_advancedRows.contains(row) ||
               box.advancedOpen) &&
           (row != _Row.profile || box.usesProfile) &&
-          (row != _Row.model || !box.isTerminal) &&
+          (row != _Row.model || (!box.isTerminal && !box.asGuest)) &&
           (row != _Row.approvals || box.hasModes))
         row,
   ];
@@ -382,7 +382,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _Row.worktree => 'Worktree',
     _Row.approvals => 'Approvals',
     _Row.profile => widget.desktop ? 'Account' : 'Profile',
-    _Row.start => 'New Harness',
+    _Row.start => box.actionLabel,
   };
 
   /// What the row currently answers — or, while its list is open, what the
@@ -399,7 +399,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _Row.approvals => box.modeLabel,
     _Row.profile =>
       box.profileLabel ?? (widget.desktop ? 'Default account' : 'Default'),
-    _Row.start => box.checking ? 'Check status' : _label(row),
+    _Row.start => box.checking ? box.pendingActionLabel : _label(row),
   };
 
   // These leave this form for a native sheet, account flow or another route.
@@ -897,8 +897,38 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   bool _checkingLaunch = false;
 
-  Future<void> _start() async {
+  /// [existingFolder]: "Use the existing folder" was pressed, so the harness
+  /// starts in the folder the typed project name found
+  /// ([NewHarnessController.useExistingFolder]).
+  Future<void> _start({bool existingFolder = false}) async {
     if (box.busy) return;
+    bool? resendAttachments;
+    if (box.needsAttachmentReview) {
+      resendAttachments = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Check file delivery'),
+          content: const Text(
+            'The files and first message may already have reached the harness. Open it from Recent harnesses to check. Before sending again, clear any unfinished text in its terminal.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Already sent'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Send again'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || resendAttachments == null) return;
+    }
     _restoreChoiceFocus = false;
     if (box.requiredChoice case final choice?) {
       box.focusField(choice.field);
@@ -909,7 +939,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       return;
     }
     _checkingLaunch = box.checking;
-    final outcome = await box.create();
+    final outcome = existingFolder
+        ? await box.useExistingFolder(resendAttachments: resendAttachments)
+        : await box.create(resendAttachments: resendAttachments);
     if (!mounted) return;
     switch (outcome) {
       case NewHarnessOutcome.created:
@@ -1745,11 +1777,17 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   Widget _desktopHeader() {
     final folder = box.project.folder;
-    final projectName =
-        box.project.name ??
-        folder?.split(RegExp(r'[/\\]')).where((p) => p.isNotEmpty).lastOrNull ??
-        box.project.repository?.name ??
-        'Choose repo';
+    final lastPart = folder
+        ?.split(RegExp(r'[/\\]'))
+        .where((p) => p.isNotEmpty)
+        .lastOrNull;
+    // A guest starts in its workspace or a folder the owner shares (NewHarnessController.asGuest).
+    final projectName = box.asGuest
+        ? lastPart ?? 'My workspace'
+        : box.project.name ??
+              lastPart ??
+              box.project.repository?.name ??
+              'Choose repo';
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1816,7 +1854,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 ),
               // Fo takes no repository; a cloud coding agent works on the chosen
               // repository's GitHub copy, never on this computer's folder.
-              if (!box.isCloud || cloudAgentTakesRepository(box.engine))
+              if ((!box.isCloud || cloudAgentTakesRepository(box.engine)) &&
+                  (!box.asGuest ||
+                      box.fields.contains(NewHarnessField.projectMenu)))
                 _desktopField(
                   order: 3,
                   anchor: _desktopAnchors[_Row.project]!,
@@ -2016,7 +2056,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         mainAxisSize: MainAxisSize.min,
         spacing: 2,
         children: [
-          if (!box.isTerminal && !box.isCloud)
+          // A guest's harness runs on the owner's subscription: no model or
+          // account of its own to pick.
+          if (!box.isTerminal && !box.isCloud && !box.asGuest)
             _desktopField(
               order: 5,
               anchor: _desktopAnchors[_Row.model]!,
@@ -2186,11 +2228,20 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     child: const Text('Cancel request'),
   );
 
+  /// Offered beside the refusal of a typed project name whose folder is
+  /// already there: starts in that folder, only once pressed.
+  Widget _useExistingFolderButton() => TextButton(
+    key: const ValueKey('use-existing-folder'),
+    onPressed: box.busy ? null : () => unawaited(_start(existingFolder: true)),
+    child: const Text('Use the existing folder'),
+  );
+
   Widget _desktopLaunchActions() => Wrap(
     spacing: 8,
     crossAxisAlignment: WrapCrossAlignment.center,
     children: [
       if (box.canCancelPending) _cancelPendingButton(),
+      if (box.existingFolder != null) _useExistingFolderButton(),
       _desktopStartButton(),
     ],
   );
@@ -2201,8 +2252,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       final label = box.busy
           ? (_checkingLaunch ? 'Checking…' : 'Starting…')
           : box.checking
-          ? 'Check status'
-          : 'New Harness';
+          ? box.pendingActionLabel
+          : box.actionLabel;
       return FocusTraversalOrder(
         order: const NumericFocusOrder(10),
         child: FilledButton(
@@ -2960,6 +3011,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             _buildButton(),
             if (box.canCancelPending) _cancelPendingButton(),
+            if (box.existingFolder != null) _useExistingFolderButton(),
             if (!_picking && box.requiredChoice != null) ...[
               SizedBox(height: _rowHeight),
               Padding(

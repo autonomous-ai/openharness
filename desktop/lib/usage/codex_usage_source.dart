@@ -35,6 +35,7 @@ class CodexUsageSource implements UsageSource {
     final token = await _credentials.codex();
     if (token == null) return signedOut(provider);
     final accountId = await _credentials.codexAccountId();
+    final email = await _credentials.codexAccountEmail();
     try {
       final response = await _dio.getUri<Object?>(
         Uri.parse(_url),
@@ -48,6 +49,7 @@ class CodexUsageSource implements UsageSource {
       return codexUsageFromAnswer(
         statusCode: response.statusCode,
         body: response.data,
+        email: email,
         account: accountId == null
             ? null
             : usageAccountKey(provider, accountId),
@@ -60,6 +62,7 @@ class CodexUsageSource implements UsageSource {
   static ProviderUsage _mapWindows(
     Map<Object?, Object?> data, {
     String? account,
+    String? email,
   }) {
     final limits = data['rate_limit'];
     final windows = limits is Map
@@ -81,6 +84,7 @@ class CodexUsageSource implements UsageSource {
       windows: windows,
       fetchedAt: DateTime.now(),
       account: account,
+      email: email,
     );
   }
 
@@ -120,6 +124,7 @@ ProviderUsage codexUsageFromAnswer({
   required int? statusCode,
   required Object? body,
   String? account,
+  String? email,
 }) {
   final failure = usageFailureFor(UsageProvider.codex, statusCode);
   if (failure != null) return failure;
@@ -130,5 +135,5 @@ ProviderUsage codexUsageFromAnswer({
       message: 'Codex answered in a shape this build cannot read',
     );
   }
-  return CodexUsageSource._mapWindows(body, account: account);
+  return CodexUsageSource._mapWindows(body, account: account, email: email);
 }

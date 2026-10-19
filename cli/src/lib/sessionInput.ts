@@ -73,6 +73,7 @@ export interface SessionInputDelivery {
 
 interface QueuedInput {
   deliveryId?: string
+  inputContext?: string
   content: string
   bytes: number
   expiresAt: number
@@ -111,7 +112,7 @@ export interface SessionInputDeps {
   getSession: (sessionId: string) => RegisteredSession | undefined
   validateRuntime: (session: RegisteredSession) => Promise<boolean>
   /** Boolean is retained for direct controller tests and legacy embedders. Production returns dispatch evidence. */
-  inject: (terminalTarget: string, content: string) => Promise<boolean | TerminalActionResult>
+  inject: (terminalTarget: string, content: string, inputContext?: string) => Promise<boolean | TerminalActionResult>
   /** Host serializes the preflight and paste with other terminal writers. */
   injectTeam?: (terminalTarget: string, content: string, deliveryId: string) => Promise<boolean | TerminalActionResult>
   sendKey: (terminalTarget: string, key: string) => Promise<boolean | TerminalActionResult>
@@ -257,7 +258,7 @@ export class SessionInputController {
     return false
   }
 
-  submit(sessionId: string, content: string, deliveryId?: string): void {
+  submit(sessionId: string, content: string, deliveryId?: string, inputContext?: string): void {
     const session = this.controlSession(sessionId)
     if (!session) {
       this.delivery(sessionId, deliveryId, 'rejected', 'agent_gone')
@@ -270,7 +271,7 @@ export class SessionInputController {
       || (deliveryId && (state.deliveryId || state.dispatching || state.turnOpen || state.awaitingFingerprint || state.settling))
       || (!this.typesWhileBusy(session.engine) && (state.turnOpen || state.awaitingFingerprint || state.settling))) {
       console.log(`[inject] ${sid(sessionId)} queued · engine=${session.engine} · depth=${state.queue.length + 1}`)
-      this.enqueue(sessionId, state, content, deliveryId)
+      this.enqueue(sessionId, state, content, deliveryId, inputContext)
       return
     }
     this.delivery(sessionId, deliveryId, 'queued')
@@ -282,7 +283,7 @@ export class SessionInputController {
     // agent as it is by then, which a restart in between may have changed.
     // With nothing in flight the write starts at once, so a cancel or a control request that follows
     // the submit sees it, as before.
-    const write = (): Promise<void> => this.inject(sessionId, this.controlSession(sessionId) ?? session, content, deliveryId)
+    const write = (): Promise<void> => this.inject(sessionId, this.controlSession(sessionId) ?? session, content, deliveryId, inputContext)
     const running = state.writes ? state.writes.then(write, write) : write()
     const settled: Promise<void> = running.catch(() => {}).then(() => { if (state.writes === settled) state.writes = undefined })
     state.writes = settled
@@ -474,7 +475,7 @@ export class SessionInputController {
   }
 
   /** Preserve the established injection path for every caller that opts out of receipts. */
-  private async injectLegacy(sessionId: string, session: RegisteredSession, content: string): Promise<void> {
+  private async injectLegacy(sessionId: string, session: RegisteredSession, content: string, inputContext?: string): Promise<void> {
     const state = this.state(sessionId)
     if (!(await this.deps.validateRuntime(session))) {
       console.warn(`[inject] ${sid(sessionId)} abort · engine=${session.engine} · process not running`)
@@ -498,7 +499,7 @@ export class SessionInputController {
       // would corrupt it into a run-on prompt anyway, which is worse and harder to notice.
       await this.deps.sendKey(session.agentId, 'C-u')
     }
-    const delivery = await this.injectWhenLeased(() => this.deps.inject(session.agentId, content),
+    const delivery = await this.injectWhenLeased(() => this.write(session.agentId, content, inputContext),
       () => this.controlSession(session.agentId) !== undefined)
     const accepted = typeof delivery === 'boolean'
       ? delivery
@@ -531,13 +532,17 @@ export class SessionInputController {
     this.armSubmitCheck(sessionId, session, state)
   }
 
-  private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string): Promise<void> {
+  private write(id: string, content: string, inputContext?: string) {
+    return inputContext ? this.deps.inject(id, content, inputContext) : this.deps.inject(id, content)
+  }
+
+  private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, inputContext?: string): Promise<void> {
     const state = this.state(sessionId)
     if (!deliveryId) {
       // A local submission keeps its original scheduling. Overlap removes our ability
       // to attribute a later terminal turn to the lamp; it must not block local input.
       this.finishDelivery(sessionId, state, 'unknown', 'prompt_mismatch')
-      return this.injectLegacy(sessionId, session, content)
+      return this.injectLegacy(sessionId, session, content, inputContext)
     }
     state.deliveryId = deliveryId
     state.deliveryFingerprint = undefined
@@ -576,7 +581,7 @@ export class SessionInputController {
       if (state.cancelled || this.states.get(sessionId) !== state) return
       state.writing = true
       const delivery = await this.injectWhenLeased(() => (deliveryId.startsWith('team:') && this.deps.injectTeam
-        ? this.deps.injectTeam(session.agentId, content, deliveryId) : this.deps.inject(session.agentId, content)),
+        ? this.deps.injectTeam(session.agentId, content, deliveryId) : this.write(session.agentId, content, inputContext)),
       () => !state.cancelled && this.states.get(sessionId) === state)
       state.writing = false
       if (state.cancelled || this.states.get(sessionId) !== state) return
@@ -869,10 +874,10 @@ export class SessionInputController {
       if (!next.deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is no longer available.')
       return
     }
-    void this.inject(sessionId, session, next.content, next.deliveryId)
+    void this.inject(sessionId, session, next.content, next.deliveryId, next.inputContext)
   }
 
-  private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string): void {
+  private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, inputContext?: string): void {
     const bytes = Buffer.byteLength(content, 'utf8')
     const queuedBytes = state.queue.reduce((sum, item) => sum + item.bytes, 0)
     if (state.queue.length >= MAX_QUEUE_ITEMS || queuedBytes + bytes > MAX_QUEUE_BYTES) {
@@ -880,7 +885,7 @@ export class SessionInputController {
       if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This agent already has too many queued messages. Try again after the current operation finishes.')
       return
     }
-    state.queue.push({ content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId })
+    state.queue.push({ content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId, inputContext })
     this.delivery(sessionId, deliveryId, 'queued')
   }
 

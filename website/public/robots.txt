@@ -1,4 +1,11 @@
 User-agent: *
 Allow: /
+# Built for one reader on request, not pages to keep: a project's ZIP, its fork snapshot, and the API —
+# except a harness's cover, the image its link preview shows (X and LinkedIn will not fetch a disallowed one).
+Allow: /api/community/harnesses/*/cover
+Disallow: /api/
+Disallow: /hub/*/download
+Disallow: /hub/*/snapshot
 
 Sitemap: https://harness.autonomous.ai/sitemap.xml
+Sitemap: https://harness.autonomous.ai/hub/sitemap.xml

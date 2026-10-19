@@ -68,6 +68,7 @@ import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
 import { gridSetupCommand } from './lib/gridSetupCommand.js'
+import { localCredentialHeaders } from './lib/localCredential.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import { describeMasterStatus, readStatusFile } from './harnessd/master.js'
 import { namedNode } from './harnessd/processName.js'
@@ -118,6 +119,9 @@ Machine:
   harness login --google       sign in with Google in your browser, without asking
   harness login --apple        sign in with Apple in your browser, without asking
   harness login --qr           sign in by scanning a QR with Harness on your phone, without asking
+  harness login --code         for a device with no screen: say a short code the person types into Harness
+                               (phone: Settings ▸ Sign in a computer ▸ Type a code instead; desktop or web:
+                               Machines ▸ Approve a device); with --json the code is an event
   harness login --force        stop the daemon and sign in with a different account
   harness login --json         emit machine-readable NDJSON instead of opening a browser (for GUI clients)
   harness login --entry-point=desktop   record which surface started the sign-in (GUI clients; default cli)
@@ -393,6 +397,8 @@ interface SignInHooks {
   onStarted?: (cancel: () => Promise<void>) => void
   /** The person said yes / the browser came back: finish the sign-in, do not abandon it. */
   onCommitted?: () => void
+  /** `--code`: say a short code instead of showing the QR (a device with no screen, #1410). */
+  spoken?: boolean
 }
 
 /**
@@ -500,8 +506,8 @@ async function loginCommand(
   }
   const signIn = async (): Promise<SignInOutcome> => {
     try {
-      return method === 'qr'
-        ? await qrSignInCommand(json, emit, (email) => succeed(false, email), { driver, onStarted: (cancel) => { takeBack = cancel }, onCommitted: () => setWaiting(false) })
+      return method === 'qr' || method === 'code'
+        ? await qrSignInCommand(json, emit, (email) => succeed(false, email), { driver, spoken: method === 'code', onStarted: (cancel) => { takeBack = cancel }, onCommitted: () => setWaiting(false) })
         : await browserSignIn(json, emit, () => succeed(false), { entryPoint, provider: method }, { onCommitted: () => setWaiting(false) })
     } finally {
       setWaiting(false)
@@ -622,6 +628,10 @@ function askLine(question: string): Promise<string> {
  * ask the person here whether to sign in as the account that approved, then save the session.
  * Under --json the QR is an event (`{"type":"qr"}`) and the question is one too
  * (`{"type":"confirm","email"}`), answered with a `yes` or `no` line on standard input.
+ *
+ * [SignInHooks.spoken] (`--code`): a device with no screen says a short code instead of the QR —
+ * `{"type":"code","code","expiresIn"}` under --json, sent again whenever the code is kept alive — and
+ * the person types it into Harness on their phone. The confirm question stays, to be asked aloud.
  */
 async function qrSignInCommand(
   json: boolean,
@@ -636,6 +646,15 @@ async function qrSignInCommand(
     ...(hooks.onStarted ? { onStarted: hooks.onStarted } : {}),
     label: hostname().slice(0, 80),
     computerId: computerId(),
+    ...(hooks.spoken ? {
+      showCode: (code: string, expiresIn: number) => {
+        if (json) { emit({ type: 'code', code, expiresIn }); return }
+        if (shown) return
+        shown = true
+        console.log(`\n  On your phone, open Harness ▸ Settings ▸ Sign in a computer ▸ Type a code instead (or Machines ▸ Approve a device on a computer), and enter:\n\n    ${code.slice(0, 4)} ${code.slice(4)}\n`)
+        console.log('  Waiting for your phone…')
+      },
+    } : {}),
     show: (link, expiresIn) => {
       if (json) { emit({ type: 'qr', url: link, expiresIn }); return }
       if (shown) return
@@ -1368,7 +1387,7 @@ async function runningDaemonStatus(): Promise<{
 } | null> {
   try {
     const body = await localDaemonStatus(env.ADAPTER_DATA_DIR, env.PORT)
-      ?? await legacyDaemonStatus(daemonPort(), readPid(), computerId())
+      ?? await legacyDaemonStatus(daemonPort(), readPid(), computerId(), env.ADAPTER_DATA_DIR)
     if (!body) return null
     const status = body as {
       version?: unknown; sessions?: unknown; machineId?: unknown; connected?: unknown
@@ -2605,6 +2624,7 @@ async function logsExportCommand(json: boolean): Promise<void> {
 }
 
 import { orchestratorCommand } from './orchestrator/command.js'
+import { superTabCommand } from './superTabs/command.js'
 import { paneOwner, sendCommand } from './messages/command.js'
 import { agentOrigin, closeCommand, psCommand, showCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
@@ -2676,6 +2696,9 @@ switch (cmd) {
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
+  case 'super-tab':
+    superTabCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
   case 'login':
     // The result line goes out FIRST (loginCommand prints it), then the daemon is swapped onto the
     // account: the desktop app reads that line and does not wait for a restart it observes anyway.
@@ -2726,7 +2749,7 @@ switch (cmd) {
     runDevicesCommand(rest, {
       port: daemonPort(),
       machineId: async () => (await runningDaemonStatus())?.machineId ?? null,
-      connect: (url) => new NewCommandSocket(url),
+      connect: (url, headers) => new NewCommandSocket(url, { headers }),
     }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'pair':
@@ -2748,7 +2771,7 @@ switch (cmd) {
         port: daemonPort(),
         localMachineId: wantedDaemonIdentity(),
         daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
-        connect: (url) => new NewCommandSocket(url),
+        connect: (url) => new NewCommandSocket(url, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }),
         output: (line) => console.log(line),
         error: (line) => console.error(line),
       }).then((code) => { process.exitCode = code }).catch(onError)
@@ -2783,7 +2806,7 @@ switch (cmd) {
       localMachineId: wantedDaemonIdentity(),
       daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
       listMachines: usableMachines,
-      connect: (url) => new NewCommandSocket(url),
+      connect: (url) => new NewCommandSocket(url, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }),
       output: (line) => console.log(line),
       error: (line) => console.error(line),
       origin: () => agentOrigin(),

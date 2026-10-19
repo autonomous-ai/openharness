@@ -37,7 +37,9 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
   @override
   Widget build(BuildContext context) {
     final preferences = widget.store ?? _fallbackStore;
-    final features = ExperimentalFeature.values.where((f) => f.available);
+    final features = ExperimentalFeature.values.where(
+      (f) => f.available && f.visibleInSettings,
+    );
     return SectionScaffold(
       title: 'Experimental',
       subtitle: 'Try features that are still taking shape. Account experiments sync across your devices.',
@@ -115,16 +117,9 @@ class _ExperimentalSectionState extends State<ExperimentalSection> {
                         )
                       : null,
                 ),
-                // Product usage sharing is the account's, as the experiments are, and sits among them as one more row,
-                // after the agents' own pull request line (owner, 2026-10-17).
-                if (feature == ExperimentalFeature.agentPullRequestLine &&
-                    !kIsWeb &&
-                    widget.notifier != null)
-                  ProductUsageSetting(
-                    notifier: widget.notifier!,
-                    compact: true,
-                  ),
               ],
+              if (!kIsWeb && widget.notifier != null)
+                ProductUsageSetting(notifier: widget.notifier!, compact: true),
             ],
           ),
         ),

@@ -118,10 +118,27 @@ class ApiClient {
     return dio;
   }
 
+  /// The header the local CLI's report proxy answers with: the revision of
+  /// the counter names it forwards (cli/src/lib/appProductUsageReport.ts).
+  static const usageVocabularyHeader = 'x-harness-usage-vocabulary';
+
+  /// [usageVocabularyHeader]'s value, or 1 — the names every proxy knows —
+  /// from a CLI that predates it (or the backend, which never sends it).
+  static int usageVocabulary(Headers headers) {
+    final values = headers[usageVocabularyHeader];
+    final value = int.tryParse(
+      values == null || values.isEmpty ? '' : values.first,
+    );
+    return value != null && value > 1 ? value : 1;
+  }
+
   // -- auth (proxied by the local CLI — no credential on this leg) --
+  /// [onVocabulary] hears [usageVocabulary] from every answer, a refusal
+  /// included; a request that got no answer says nothing.
   Future<Map<String, dynamic>> productUsageReport(
-    Map<String, dynamic> report,
-  ) async {
+    Map<String, dynamic> report, {
+    void Function(int vocabulary)? onVocabulary,
+  }) async {
     try {
       final response = await _dio.post(
         '/api/product-usage/report',
@@ -132,6 +149,7 @@ class ApiClient {
           sendTimeout: const Duration(seconds: 5),
         ),
       );
+      onVocabulary?.call(usageVocabulary(response.headers));
       final body = response.data;
       if (response.statusCode != 200 ||
           body is! Map ||
@@ -182,6 +200,40 @@ class ApiClient {
             options: Options(headers: {'x-adapter-local': '1'}),
           );
     return Map<String, dynamic>.from(unwrapApiResponse(response) as Map);
+  }
+
+  // -- the phone half of a sign-in (backend routes/qrSignIn.ts): approving a device that says its code aloud
+  //    (a lamp, #1410). Natively the daemon passes these through with this computer's session; a viewer
+  //    sends them with its own. --
+
+  /// What is asking to sign in with [code]: its name, kind, network and status.
+  Future<Map<String, dynamic>> signInLookup(String code) async {
+    final res = await _dio.post(
+      '/api/auth/qr/lookup',
+      data: {'code': code},
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    return Map<String, dynamic>.from(unwrapApiResponse(res) as Map);
+  }
+
+  Future<void> approveSignIn(String code) async {
+    unwrapApiResponse(
+      await _dio.post(
+        '/api/auth/qr/approve',
+        data: {'code': code},
+        options: Options(headers: {'x-adapter-local': '1'}),
+      ),
+    );
+  }
+
+  Future<void> denySignIn(String code) async {
+    unwrapApiResponse(
+      await _dio.post(
+        '/api/auth/qr/deny',
+        data: {'code': code},
+        options: Options(headers: {'x-adapter-local': '1'}),
+      ),
+    );
   }
 
   Future<Map<String, dynamic>?> me() async {

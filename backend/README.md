@@ -311,7 +311,10 @@ mix, completion rate, runtime, or token cost.
 The expanded measurement contract adds fixed app-flow and feature-use counts, D28 and calendar-month
 installation returns, and voluntary task outcomes. Native signed-out setup is a separate explicit
 session opt-in at `POST /api/product-usage/setup`; it rejects credentials and arbitrary fields and
-has a process-wide admission budget without storing IP addresses. Web signed-out reporting is disabled.
+has a process-wide admission budget without storing IP addresses. Web app signed-out setup reporting
+is disabled. Anonymous Hub totals arrive at `POST /api/product-usage/hub`, forwarded by the website's
+server without cookies or auth; the route accepts only the Hub vocabulary (`src/lib/hubMetricsContract.ts`)
+and has its own admission budget.
 Daily reports keep these populations separate, show unmatched outcomes and measurement loss, and
 compare only mature periods. See [measurement definitions and runtime bounds](../docs/product-measurement.md).
 Deploy this additive allowlist before releasing the new clients. This change does not add identity

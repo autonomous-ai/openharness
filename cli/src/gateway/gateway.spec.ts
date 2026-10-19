@@ -64,12 +64,12 @@ const queuedFor = (socket: BackendSocket, connId: string): Frame[] =>
 
 /** A paired client with a live session on `connId`: it proves its identity with a hello and reads the
  *  welcome, as the phone app does, so what it seals opens under the gateway's real session. */
-async function pairedClient(socket: BackendSocket, connId: string, opts: { role?: 'web' | 'device'; label?: string } = {}) {
+async function pairedClient(socket: BackendSocket, connId: string, opts: { role?: 'web' | 'device'; label?: string; shared?: boolean } = {}) {
   const gateway = gatewayOf(socket)
   const identity = C.newIdentity()
   const pub = C.b64e(identity.pub)
-  const store = (gateway.e2ee as unknown as { store: { addPaired(pub: string, label: string, at: number, role: string): void } }).store
-  store.addPaired(pub, opts.label ?? 'Dee’s phone', Date.now(), opts.role ?? 'web')
+  const store = (gateway.e2ee as unknown as { store: { addPaired(pub: string, label: string, at: number, role: string, peer?: { shared?: boolean }): void } }).store
+  store.addPaired(pub, opts.label ?? 'Dee’s phone', Date.now(), opts.role ?? 'web', { shared: opts.shared })
   const eph = C.newEphemeral()
   await dispatchDown(socket, { type: 'e2e_hello', payload: { identityPub: pub, ephPub: C.b64e(eph.pub), sig: C.b64e(C.helloSig(identity.priv, MACHINE, eph.pub)) } }, connId)
   const welcome = queuedFor(socket, connId).find((frame) => frame.type === 'e2e_welcome')!
@@ -88,7 +88,7 @@ describe('a remote client, as the core hears it', () => {
     const socket = relaySocket(MACHINE)
     expect(socket.remoteClient('phone-1')).toBeNull()
     const phone = await pairedClient(socket, 'phone-1', { label: 'Dee’s phone' })
-    expect(socket.remoteClient('phone-1')).toEqual({ role: 'web', label: 'Dee’s phone', identity: phone.pub, direct: false })
+    expect(socket.remoteClient('phone-1')).toEqual({ role: 'web', label: 'Dee’s phone', identity: phone.pub, direct: false, accountOwner: true })
     await dispatchDown(socket, { type: '__client_disconnected', payload: {} }, 'phone-1')
     expect(socket.remoteClient('phone-1')).toBeNull()
     await socket.stop()
@@ -100,13 +100,19 @@ describe('a remote client, as the core hears it', () => {
     socket.serviceRouter = (type, _payload, asker, reply) => { asked.push({ type, asker }); reply({ ok: true }); return true }
     const phone = await pairedClient(socket, 'phone-1', { role: 'web' })
     const dial = await pairedClient(socket, 'dial-1', { role: 'device', label: 'Desk dial' })
+    const colleague = await pairedClient(socket, 'colleague', { shared: true })
     // A field in the payload claiming the owner's role is the sender's word; the session is the gateway's.
     await dispatchDown(socket, phone.seal('dsh_list', { requestId: 'p', owner: false }), 'phone-1')
-    await dispatchDown(socket, dial.seal('dsh_list', { requestId: 'd', owner: true, local: true, role: 'web' }), 'dial-1')
+    await dispatchDown(socket, dial.seal('dsh_list', { requestId: 'd', owner: true, local: true, role: 'web', accountOwner: true }), 'dial-1')
+    // A colleague the machine is shared with is a guest (core/guestPolicy.ts): never the owner, whatever it says. Its
+    // `dsh_list` is refused before any service hears it; what a guest may ask is asked as that guest.
+    await dispatchDown(socket, colleague.seal('dsh_list', { requestId: 'c', owner: true, local: true, accountOwner: true }), 'colleague')
+    await dispatchDown(socket, colleague.seal('usage_read', { requestId: 'u', owner: true, local: true, accountOwner: true }), 'colleague')
     // With the connection and the request id it asked under, which a service keys a connection's own work by.
     expect(asked).toEqual([
-      { type: 'dsh_list', asker: { local: false, owner: true, connection: 'phone-1', requestId: 'p' } },
-      { type: 'dsh_list', asker: { local: false, owner: false, connection: 'dial-1', requestId: 'd' } },
+      { type: 'dsh_list', asker: { local: false, owner: true, accountOwner: true, connection: 'phone-1', requestId: 'p' } },
+      { type: 'dsh_list', asker: { local: false, owner: false, accountOwner: false, connection: 'dial-1', requestId: 'd' } },
+      { type: 'usage_read', asker: expect.objectContaining({ local: false, owner: false, accountOwner: false, connection: 'colleague', requestId: 'u' }) },
     ])
     await socket.stop()
   })

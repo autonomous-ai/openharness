@@ -9,12 +9,12 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 
-import '../clipboard/native_clipboard.dart';
 import '../logging/typing_trace.dart';
 import '../state/app_state.dart';
 
 import '../terminal/terminal_snapshot.dart';
 import '../terminal/terminal_binary.dart';
+import '../terminal/terminal_find.dart';
 import '../terminal/terminal_font_store.dart';
 import '../terminal/terminal_link_opener.dart';
 import '../terminal/remote_media_download.dart';
@@ -22,6 +22,8 @@ import '../terminal/remote_scroll_physics.dart';
 import '../terminal/terminal_links.dart';
 import '../terminal/output_blocks.dart';
 import '../terminal/terminal_prompt_zone.dart';
+import '../terminal/terminal_search.dart';
+import '../phone/media_preview_page.dart';
 import '../phone/tty.dart';
 import '../terminal/terminal_session.dart';
 import '../terminal/terminal_theme.dart';
@@ -118,13 +120,22 @@ class TerminalPanel extends StatefulWidget {
   /// [onLineTap], and whether or not [onInputTap] is set: a band is drawn to be pressed.
   final void Function(TerminalLineBand band)? onBandTap;
 
-  /// Pastes the phone's clipboard into the session — the Paste of a long press on the prompt
-  /// (see `_TerminalPanelState._openPromptMenu`). Null offers no Paste there.
+  /// Pastes the phone's clipboard into the session — every paste the pane itself is asked for: the
+  /// Paste of a long press on the prompt (see `_TerminalPanelState._openPromptMenu`), a hardware
+  /// keyboard's ⌘V (Ctrl+V on Android), and a right- or middle-click with nothing selected (see
+  /// `_TerminalPanelState._paste`). Only called while the session takes input.
+  ///
+  /// Null offers no Paste on the prompt, and leaves the keys and clicks a paste of the clipboard's
+  /// text alone — see `_TerminalPanelState._pasteTextOnly` for why only the text.
   final VoidCallback? onPaste;
 
   /// Test seam for OS actions; normal panes use the platform launcher.
   final TerminalLinkOpener? linkOpener;
   final RemoteMediaDownloader? mediaDownloader;
+
+  /// Find in terminal, while the page's bar is up — see [TerminalFindController]. The panel searches
+  /// what it shows, lights the match and scrolls to it; null puts the reader back where they were.
+  final TerminalFindController? find;
 
   const TerminalPanel({
     super.key,
@@ -143,6 +154,7 @@ class TerminalPanel extends StatefulWidget {
     this.onPaste,
     this.linkOpener,
     this.mediaDownloader,
+    this.find,
   });
 
   @override
@@ -151,7 +163,7 @@ class TerminalPanel extends StatefulWidget {
 
 class _TerminalPanelState extends State<TerminalPanel>
     with WidgetsBindingObserver
-    implements TerminalViewport {
+    implements TerminalViewport, TerminalFindTarget {
   static const _dialScale = 2.5;
   static const _dialStopVelocity = 40.0;
   static const _dialDecayPerSecond = 0.002;
@@ -229,6 +241,20 @@ class _TerminalPanelState extends State<TerminalPanel>
   bool _openingLink = false;
   bool _linkRefreshPending = false;
   bool _followTail = true;
+
+  /// Find in terminal — the desktop panel's, field for field ([TerminalPanel.find]). [_find] searches
+  /// the terminal on show; [_findHighlight] lights its match, painted for [_findPaintedRange] in
+  /// [_findPaintedBuffer]; a reveal is owed while [_findRevealPending]. Where the reader was when
+  /// Find opened is kept in [_findOriginLine] and its neighbours, for closing to go back to.
+  TerminalSearch? _find;
+  TerminalHighlight? _findHighlight;
+  Buffer? _findPaintedBuffer;
+  BufferRangeLine? _findPaintedRange;
+  bool _findRevealPending = false;
+  Buffer? _findOriginBuffer;
+  CellAnchor? _findOriginLine;
+  double _findOriginFraction = 0;
+  bool _findOriginAtEnd = true;
   TerminalStyle _terminalFont = terminalFontStore.value;
   bool _observingLinkModifiers = false;
   late final RemoteMediaDownloader _mediaDownloader;
@@ -255,6 +281,12 @@ class _TerminalPanelState extends State<TerminalPanel>
     // directly rather than through a builder.
     terminalThemeStore.addListener(_onFontChanged);
     _afterTerminalMounted();
+    // After the first layout: where the reader is is read off the laid-out view.
+    if (widget.find != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _openFind();
+      });
+    }
   }
 
   @override
@@ -294,6 +326,21 @@ class _TerminalPanelState extends State<TerminalPanel>
   void didUpdateWidget(TerminalPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.jumpToEndRequest != widget.jumpToEndRequest) _jumpToEnd();
+    // Another controller, or none: the search it was running belongs to the bar that went.
+    if (!identical(oldWidget.find, widget.find)) {
+      oldWidget.find?.detach(this);
+      if (widget.find == null) {
+        _closeFind();
+      } else {
+        _closeFind(restore: false);
+        _openFind();
+      }
+    }
+    // A search runs over one terminal; another session is another terminal, searched afresh once
+    // it has laid out.
+    final refind =
+        !identical(oldWidget.session, widget.session) && _find != null;
+    if (refind) _closeFind(restore: false, detach: false);
     if (!identical(oldWidget.session, widget.session)) {
       _previewCancellation?.cancel();
       _previewProgress.value = null;
@@ -326,6 +373,11 @@ class _TerminalPanelState extends State<TerminalPanel>
       _cursorBlinkVisible = true;
       widget.session.setCursorBlinkPhase(true);
       _afterTerminalMounted();
+      if (refind) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _openFind();
+        });
+      }
     }
     if (oldWidget.visible && !widget.visible) {
       _promptMenuCell = null;
@@ -358,6 +410,8 @@ class _TerminalPanelState extends State<TerminalPanel>
 
   @override
   void dispose() {
+    widget.find?.detach(this);
+    _closeFind(restore: false, detach: false);
     WidgetsBinding.instance.removeObserver(this);
     _tickerMode?.removeListener(_syncCursorBlink);
     _previewCancellation?.cancel();
@@ -482,16 +536,30 @@ class _TerminalPanelState extends State<TerminalPanel>
         ? position.pixels / lineHeight - viewportRow!
         : 0.0;
     final atEnd = _followTail || position == null;
+    // Find's place in the old screen, carried to the new one — the desktop's rule. A keyframe
+    // replaces the terminal on every keyboard raised or lowered, and the search field's own
+    // keyboard is one: without this, the first letter typed would end the search it started.
+    final originRow = _findOriginLine?.attached == true
+        ? _findOriginLine!.y
+        : null;
+    final originFraction = _findOriginFraction;
+    final originAtEnd = _findOriginAtEnd;
+    final match = _find?.match?.begin;
     final selection = _controller.selection;
     final selectedText = selection == null ? null : previous.getText(selection);
     final locations = remapTerminalRows(previous, next, [
       if (!atEnd) ?viewportRow,
+      ?originRow,
+      ?match?.y,
       ?selection?.begin.y,
       ?selection?.end.y,
     ]);
     int row(int old) => locations[old] ?? old.clamp(0, next.lines.length - 1);
     CellOffset location(CellOffset old) =>
         CellOffset(old.x.clamp(0, terminal.viewWidth - 1), row(old.y));
+    final wasFinding = _find != null;
+    // Rebuilt below over the new terminal; the bar stays attached and keeps its words.
+    _closeFind(restore: false, detach: false);
     // Selection anchors belong to a specific circular buffer. Detach them
     // before the TerminalView starts laying out the replacement terminal.
     _controller.clearSelection();
@@ -529,6 +597,20 @@ class _TerminalPanelState extends State<TerminalPanel>
           next.createAnchorFromOffset(range.end),
         );
       }
+    }
+    if (wasFinding) {
+      _findOriginBuffer = next;
+      _findOriginAtEnd = originAtEnd;
+      _findOriginFraction = originFraction;
+      if (originRow != null) {
+        _findOriginLine = next.createAnchor(0, row(originRow));
+      }
+      _findRevealPending = true;
+      _find = TerminalSearch(
+        terminal,
+        origin: match == null ? null : location(match),
+      )..addListener(_onFindChanged);
+      _find!.setQuery(widget.find?.query ?? '');
     }
     _followTail = atEnd;
     // ⚠️ **The keyboard is claimed only by a view that does not hold the focus.** One that does kept
@@ -744,8 +826,146 @@ class _TerminalPanelState extends State<TerminalPanel>
       }
       if (scrollToEnd && _followTail) view.scrollToBottom();
       if (claimFocus) _claimFocus(view);
+      if (_find != null) _onFindChanged();
       if (_linkPointerPosition != null) _hoverLink(_linkPointerPosition);
     });
+  }
+
+  /// Starts Find over the terminal on show, from the row at the top of the view — the desktop's
+  /// origin, so the first match is the first one at or below where the reader is looking.
+  void _openFind() {
+    final find = widget.find;
+    if (!mounted || find == null || _find != null) return;
+    CellOffset? origin;
+    final view = _laidOutTerminalView();
+    if (view != null && _scrollController.hasClients) {
+      final position = _scrollController.position;
+      final height = view.renderTerminal.lineHeight;
+      if (height > 0 && position.hasPixels && position.hasContentDimensions) {
+        final row = (position.pixels / height).floor().clamp(
+          0,
+          _viewTerminal.buffer.lines.length - 1,
+        );
+        _findOriginBuffer = _viewTerminal.buffer;
+        _findOriginLine = _findOriginBuffer!.createAnchor(0, row);
+        _findOriginFraction = position.pixels / height - row;
+        _findOriginAtEnd = position.maxScrollExtent - position.pixels < 1;
+        origin = CellOffset(0, row);
+      }
+    }
+    _find = TerminalSearch(_viewTerminal, origin: origin)
+      ..addListener(_onFindChanged);
+    _findRevealPending = true;
+    find.attach(this);
+  }
+
+  @override
+  void findQuery(String query) {
+    _findRevealPending = true;
+    _find?.setQuery(query);
+  }
+
+  @override
+  void findStep(int delta) {
+    _findRevealPending = true;
+    _find?.step(delta);
+  }
+
+  /// The search moved: say so to the bar, light the match, and bring it into view.
+  ///
+  /// The reveal is the desktop's — scroll only as far as the match needs — with a taller margin at
+  /// the top: the phone's title lies over the terminal's first rows, and a match revealed under it
+  /// would be found and not seen.
+  void _onFindChanged() {
+    final search = _find;
+    if (!mounted || search == null) return;
+    widget.find?.report(
+      count: search.count,
+      selected: search.selected,
+      searching: search.searching,
+      hasSnapshot: search.hasSnapshot,
+    );
+    if (!widget.visible) return;
+    final range = search.match;
+    if (range != _findPaintedRange ||
+        !identical(_findPaintedBuffer, _viewTerminal.buffer)) {
+      _clearFindHighlight();
+      if (range != null) {
+        _findPaintedBuffer = _viewTerminal.buffer;
+        _findPaintedRange = range;
+        _findHighlight = _controller.highlight(
+          p1: _viewTerminal.buffer.createAnchorFromOffset(range.begin),
+          p2: _viewTerminal.buffer.createAnchorFromOffset(range.end),
+          color: const Color(0x99cf8e25),
+        );
+      }
+    }
+    if (_findRevealPending && search.hasSnapshot && range != null) {
+      final render = _laidOutTerminalView()?.renderTerminal;
+      if (render == null || !_scrollController.hasClients) return;
+      final position = _scrollController.position;
+      if (!position.hasPixels || !position.hasContentDimensions) return;
+      _findRevealPending = false;
+      final line = render.lineHeight;
+      final top = range.begin.y * line;
+      final bottom = (range.end.y + 1) * line;
+      final above = line * 3;
+      final safeTop = position.pixels + above;
+      final safeBottom = position.pixels + position.viewportDimension - 10;
+      final offset = top < safeTop
+          ? top - above
+          : bottom > safeBottom
+          ? bottom - position.viewportDimension + 10
+          : position.pixels;
+      final target = offset.clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
+      );
+      if (target != position.pixels) position.jumpTo(target);
+    }
+  }
+
+  void _clearFindHighlight() {
+    final highlight = _findHighlight;
+    _findHighlight = null;
+    _findPaintedBuffer = null;
+    _findPaintedRange = null;
+    if (highlight == null) return;
+    highlight.dispose();
+    highlight.p1.dispose();
+    highlight.p2.dispose();
+  }
+
+  /// Ends the search: the highlight goes, and with [restore] the reader goes back to where they
+  /// were when Find opened — the end of the output, if that is where they were. [detach] lets the
+  /// bar go too; a search rebuilt over a new terminal keeps it.
+  void _closeFind({bool restore = true, bool detach = true}) {
+    final search = _find;
+    if (search == null) return;
+    _find = null;
+    search.removeListener(_onFindChanged);
+    search.dispose();
+    _clearFindHighlight();
+    if (detach) widget.find?.detach(this);
+    if (restore &&
+        identical(_findOriginBuffer, _viewTerminal.buffer) &&
+        _scrollController.hasClients) {
+      final height = _laidOutTerminalView()?.renderTerminal.lineHeight;
+      final position = _scrollController.position;
+      if (height != null && position.hasContentDimensions) {
+        final offset = _findOriginAtEnd
+            ? position.maxScrollExtent
+            : _findOriginLine?.attached == true
+            ? (_findOriginLine!.y + _findOriginFraction) * height
+            : 0.0;
+        position.jumpTo(
+          offset.clamp(position.minScrollExtent, position.maxScrollExtent),
+        );
+      }
+    }
+    _findOriginLine?.dispose();
+    _findOriginLine = null;
+    _findOriginBuffer = null;
   }
 
   @override
@@ -868,9 +1088,9 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// Paste while the session takes input.
   ///
   /// ⚠️ **Paste is the page's, not the panel's.** What it reads and how it sends lives in
-  /// `phone/terminal_paste.dart`, behind [TerminalPanel.onPaste]: the panel's own [_paste] is the
-  /// desktop's ⌘V, whose last resort is a Ctrl+V for the engine to read ITS clipboard — on a
-  /// phone that is the far machine's clipboard, not the one the person just copied to.
+  /// `phone/terminal_paste.dart`, behind [TerminalPanel.onPaste] — the same path a hardware ⌘V and
+  /// a right-click take (see [_paste]), so every way into a paste reads THIS phone's clipboard,
+  /// never the far machine's, and tells the person when there was nothing to send.
   bool _openPromptMenu(CellOffset cell) {
     final buffer = _viewTerminal.buffer;
     if (!_canPasteHere &&
@@ -1171,6 +1391,9 @@ class _TerminalPanelState extends State<TerminalPanel>
     _scheduleMenu();
   }
 
+  /// A right-click — or a middle-click, which xterm's gesture handler routes to this same callback
+  /// — on a mouse or trackpad: copies the selection when there is one, and otherwise pastes exactly
+  /// as a hardware ⌘V does ([_paste]).
   Future<void> _copyOrPaste() async {
     final terminal = widget.session.terminal;
     final selection = _controller.selection;
@@ -1183,28 +1406,13 @@ class _TerminalPanelState extends State<TerminalPanel>
     await _paste();
   }
 
-  /// Paste — including the kinds of clipboard this app cannot fully read.
-  ///
-  /// ⚠️ FLUTTER'S OWN `Clipboard` API ONLY SEES `text/plain`. A screenshot has no
-  /// text at all, so a naive body finds `null` and returns, silently: the single
-  /// most common thing anyone pastes into a coding agent did nothing, with no
-  /// error and nothing in a log. [NativeClipboard] closes that gap with a native
-  /// platform-channel read for an actual image (all but Windows; see its doc).
-  ///
-  /// The engines running in these panes read the system clipboard THEMSELVES —
-  /// Claude Code attaches an image on Ctrl+V — so on a LOCAL pane that is already
-  /// true with zero help from us: a bare Ctrl+V is all that ever ran here, before
-  /// native image paste existed, and it still works because the engine and this
-  /// app share the exact same OS clipboard. The wire-based `pasteImage` (chunked
-  /// upload, daemon writes the far side's OS clipboard, daemon replays Ctrl+V) is
-  /// reserved for a genuinely REMOTE pane, whose engine reads a DIFFERENT
-  /// clipboard than this one — which, on a phone, is every pane.
   /// An image handed over by the software keyboard's own clipboard.
   ///
   /// Flutter's [Clipboard] reads `text/plain` and nothing else, and Gboard hands
   /// the bytes over directly, so there is no clipboard to read at all. (The
-  /// actions sheet's Paste reads the system clipboard's image instead, through
-  /// [NativeClipboard]: see `phone/terminal_paste.dart`.)
+  /// actions sheet's Paste — and a hardware ⌘V, see [_paste] — reads the system
+  /// clipboard's image instead, through `NativeClipboard`: see
+  /// `phone/terminal_paste.dart`.)
   ///
   /// ⚠️ A pane on a phone is ALWAYS remote — the agent runs on another machine,
   /// whose engine reads a different OS clipboard — so unlike the desktop there is
@@ -1219,39 +1427,86 @@ class _TerminalPanelState extends State<TerminalPanel>
     unawaited(widget.session.pasteImage(bytes));
   }
 
+  /// The paste of a hardware keyboard's ⌘V (Ctrl+V on Android) and of a right- or middle-click:
+  /// the host's [TerminalPanel.onPaste] — on the phone the page's paste, `phone/terminal_paste.dart`,
+  /// the one the prompt's long-press Paste, the key bar's paste and the actions sheet's Paste run.
+  /// So a key does exactly what the on-screen Paste does: the text pasted, an image scaled under
+  /// the upload's ceiling and sent, and a word to the person when there was nothing to send.
+  ///
+  /// ⚠️ **Never a Ctrl+V for the engine to read its own clipboard.** That was this method's last
+  /// resort while it was the desktop's ⌘V, where the engine and the app share one OS clipboard. A
+  /// pane on a phone is ALWAYS remote, so the Ctrl+V reached the far machine and its engine pasted
+  /// THAT machine's clipboard — something the person never copied on this phone, with nothing on
+  /// screen to say why. The desktop's paste also sent the clipboard's image as it came, unscaled,
+  /// and iOS hands it over at full size: a photo from the library easily went over the upload's
+  /// ceiling and fell through to that same Ctrl+V.
+  ///
+  /// ⚠️ **Not asked while the pane cannot take input** — a watcher, a stream taken over or closed.
+  /// The host's paste reads the clipboard first and checks only after, so asked here it would raise
+  /// iOS's "Allow Paste" prompt for a paste that could only be refused, and then say the terminal
+  /// changed when it did not. The prompt's Paste is held to the same rule by [_canPasteHere].
   Future<void> _paste() async {
-    if (!widget.session.acceptsInput) return;
-    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-    if (text != null && text.isNotEmpty) {
-      // A binary TerminalBinaryKind.paste frame rides the same AEAD channel as every other terminal
-      // byte, so this works identically for a local or a relayed machine — see pasteText's doc. Only
-      // the CLI's own version gates it: an older daemon never advertises the capability.
-      final machine = widget.notifier.stateOf(widget.session.machineId);
-      if (machine != null && machine.terminalPasteRawAvailable) {
-        await widget.session.pasteText(text);
-      } else {
-        widget.session.terminal.paste(text);
-      }
+    final session = widget.session;
+    if (!session.acceptsInput) return;
+    final paste = widget.onPaste;
+    if (paste != null) {
+      paste();
       return;
     }
-    final machine = widget.notifier.stateOf(widget.session.machineId);
-    if (machine != null && machine.terminalImagePasteAvailable) {
-      final imageBytes = await NativeClipboard.readImagePng();
-      if (imageBytes != null &&
-          imageBytes.isNotEmpty &&
-          imageBytes.length <= terminalLocalImagePasteMaxPayloadBytes) {
-        await widget.session.pasteImage(imageBytes);
-        return;
-      }
-    }
-    widget.session.terminal.keyInput(TerminalKey.keyV, ctrl: true);
+    await _pasteTextOnly(session);
   }
 
-  /// ⌘V (Ctrl+V off Apple) — taken from xterm so the fallthrough above applies.
+  /// The paste of a pane whose host gave it no [TerminalPanel.onPaste]: the clipboard's TEXT, as
+  /// one paste, and nothing else. The phone's own page always gives one; this is for any other
+  /// host of the panel — today, only tests.
   ///
-  /// xterm binds paste itself, but only ever to its text-only action. `onKeyEvent`
-  /// is the one hook that runs BEFORE its shortcut map (terminal_view.dart), so
-  /// this is where the binding has to be replaced rather than added.
+  /// ⚠️ **Text only, and that is the safe half, not a shortcut.** An image needs what only a host
+  /// has: the transcode that scales a photo under the upload's ceiling, a place to tell the person
+  /// why nothing went, and its own word on whether it still shows this terminal. Without them a
+  /// clipboard with no text on it pastes nothing — never the Ctrl+V that pasted the far machine's
+  /// clipboard instead (see [_paste]).
+  ///
+  /// Text is asked about first with [Clipboard.hasStrings], which iOS answers without its "Allow
+  /// Paste" prompt, so a clipboard holding only an image is never read at all. And the text lands
+  /// only where the key was pressed: the read can wait on that prompt, and in that time the pane can
+  /// have been handed another session, or its stream reconnected or taken over — the same rule
+  /// `phone/terminal_paste.dart` holds the page's paste to.
+  Future<void> _pasteTextOnly(TerminalSession session) async {
+    final streamId = session.streamId;
+    final String? text;
+    try {
+      if (!await Clipboard.hasStrings()) return;
+      text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+    } on PlatformException {
+      // Nothing was sent and there is nobody to tell: the same as an empty clipboard.
+      return;
+    }
+    if (text == null || text.isEmpty) return;
+    if (!mounted ||
+        !identical(widget.session, session) ||
+        !session.acceptsInput ||
+        session.streamId != streamId) {
+      return;
+    }
+    // A binary TerminalBinaryKind.paste frame rides the same AEAD channel as every other terminal
+    // byte, so this works identically for a local or a relayed machine — see pasteText's doc. Only
+    // the CLI's own version gates it: an older daemon never advertises the capability.
+    final machine = widget.notifier.stateOf(session.machineId);
+    if (machine != null && machine.terminalPasteRawAvailable) {
+      await session.pasteText(text);
+    } else {
+      session.terminal.paste(text);
+    }
+  }
+
+  /// ⌘V (Ctrl+V on Android) from a hardware keyboard — taken from xterm so it pastes what [_paste]
+  /// pastes: the phone's clipboard, through the host's paste.
+  ///
+  /// xterm binds paste itself, but only ever to its text-only action, which reads no image and says
+  /// nothing when there is nothing to paste. `onKeyEvent` is the one hook that runs BEFORE its
+  /// shortcut map (terminal_view.dart), so this is where the binding has to be replaced rather than
+  /// added. Only this chord is taken: ⇧⌘V, iOS's ⌃V (a keystroke for the far program, like any
+  /// other control key) and every other key go on to xterm as they always did.
   KeyEventResult _onTerminalKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     if (event.logicalKey != LogicalKeyboardKey.keyV) {
@@ -1585,6 +1840,10 @@ class _TerminalPanelState extends State<TerminalPanel>
             },
           );
         },
+        // Over this pane's own page, on its navigator, so Back lands on the terminal again. The
+        // opener has already checked [isCancelled], so the pane is still mounted and on this agent.
+        showLocal: (localPath) =>
+            unawaited(openMediaPreview(context, localPath)),
       );
       if (!mounted || !identical(session, widget.session) || message == null) {
         return;

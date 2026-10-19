@@ -792,7 +792,7 @@ static void draw_test_cell_flat_equals_resample(void)
     for (int j = 0; j < W * H; j++) a[j] = 0;
     ht_pro_raster(&s.runs[s.count - 1], clip, a);
     CHECK(pod_cell_bakes() == expect_bakes + 3);
-    // A full table is not an error: the frame is resampled each time as before, the picture the same. (64 entries; the 65th and later are not kept.)
+    // A full table starts over: the 65th entry clears the 64 and is baked in their place, the picture the same either way. (A screen re-bakes what it draws.)
     pod_cell_bake_reset();
     for (int n = 0; n < 70; n++) {
         const uint16_t ground = (uint16_t)(0x0100 + n);
@@ -803,7 +803,7 @@ static void draw_test_cell_flat_equals_resample(void)
         ht_pro_raster(&plain.runs[0], clip, b);
         CHECK(!memcmp(a, b, sizeof a));
     }
-    CHECK(pod_cell_bakes() == 64);
+    CHECK(pod_cell_bakes() == 70 && pod_cell_bake_px() == 6u * 16u);   // all 70 baked; the 6 since the restart hold 4 x 4 px each (6 x 6 at 5/8)
     pod_cell_bake_reset();
     CHECK(pod_cell_bakes() == 0 && pod_cell_bake_px() == 0);
 }
@@ -841,8 +841,79 @@ static void draw_test_grad_aa_spans_equal_pixels(void)
     }
 }
 
+// A frame taller than 255 rows: rows 0 and 299 inked, the rest empty (4 cols, packed, 1 px cells).
+static void draw_test_tall_frame(void)
+{
+    enum { TC = 4, TR = 300 };
+    static const uint16_t pal[] = {0, 0xe0ff};
+    static uint8_t cells[TR * 2 + 8];
+    static uint16_t at[TR];
+    size_t n = 0;
+    for (int r = 0; r < TR; r++) {
+        at[r] = (uint16_t)n;
+        if (r == 0) { cells[n++] = 0; cells[n++] = 1; cells[n++] = 1; cells[n++] = 3; cells[n++] = 0; }
+        else if (r == TR - 1) { cells[n++] = 3; cells[n++] = 1; cells[n++] = 1; }
+        else { cells[n++] = TC; cells[n++] = 0; }
+    }
+    ht_cell_frame_t f = {TC, TR, 1, pal, cells, at};
+    CHECK(f.rows == TR);
+    CHECK(ht_cell_at(&f, 0, 0) == 1 && ht_cell_at(&f, 3, TR - 1) == 1 && ht_cell_at(&f, 0, TR - 1) == 0 && ht_cell_at(&f, 0, 150) == 0);
+    ht_scene_t s; ht_scene_clear(&s, 0);
+    CHECK(pod_cell(&s, 0, 0, &f, 8));
+    CHECK(s.runs[0].pro_height == TR);
+    static uint16_t out[TC * TR];
+    ht_rect_t c = {0, 0, TC, TR};
+    ht_pro_raster(&s.runs[0], c, out);
+    int first = -1, last = -1, inked = 0;
+    for (int y = 0; y < TR; y++)
+        for (int x = 0; x < TC; x++)
+            if (out[y * TC + x]) { if (first < 0) first = y; last = y; inked++; }
+    CHECK(first == 0 && last == TR - 1 && inked == 2);
+}
+
+// pod_cell16: a zoom below 1x in sixteenths. 16x16 solid at 5/16 is a 5x5 run (ceil(16 * 5 / 16)), every glass pixel fully covered;
+// a 16x16 frame whose left half is red and right half blue averages to the weighted mean of the two at the seam pixel; an even
+// count is the eighths' picture exactly; over the ground the bake (pod_cell_flat16) is the very resample.
+static void draw_test_cell16(void)
+{
+    static const uint16_t pal[] = {0, 0xe0ff, 0x1f00};
+    static uint8_t cells[256], half[256];
+    memset(cells, 1, sizeof cells);
+    for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) half[y * 16 + x] = x < 8 ? 1 : 2;
+    ht_cell_frame_t f = {16, 16, 1, pal, cells, NULL}, h = {16, 16, 1, pal, half, NULL};
+    ht_scene_t s; ht_scene_clear(&s, 0);
+    CHECK(pod_cell16(&s, 20, 20, &f, 5));
+    CHECK(s.runs[0].w == 5 && s.runs[0].pro_height == 5);
+    draw(&s);
+    for (int y = 19; y < 26; y++) for (int x = 19; x < 26; x++)
+        CHECK(px(x, y) == (x >= 20 && x < 25 && y >= 20 && y < 25 ? ht_rgb(0xffff00) : 0));
+    // 5/16 of 16 px = 5 glass px; the pixel at 2 spans frame px 6.4 .. 9.6: 1.6 red + 1.6 blue of 3.2 -> red 31, blue 31 halves
+    ht_scene_clear(&s, 0);
+    CHECK(pod_cell16(&s, 20, 20, &h, 5));
+    draw(&s);
+    CHECK(px(22, 22) != 0 && (px(22, 22) >> 11) >= 14 && (px(22, 22) >> 11) <= 16 && (px(22, 22) & 31) >= 14 && (px(22, 22) & 31) <= 16);
+    CHECK(px(20, 22) == ht_rgb(0xffff00) && px(24, 22) != 0 && (px(24, 22) >> 11) < 4);
+    // even sixteenths are eighths; 16..31 are 1x, 32 is 2x
+    ht_scene_t a, b; ht_scene_clear(&a, 0); ht_scene_clear(&b, 0);
+    CHECK(pod_cell16(&a, 3, 3, &h, 10) && pod_cell(&b, 3, 3, &h, 5) && !memcmp(&a.runs[0], &b.runs[0], sizeof a.runs[0]));
+    ht_scene_clear(&a, 0);
+    CHECK(pod_cell16(&a, 3, 3, &h, 32) && a.runs[0].w == 32 && pod_cell16(&a, 3, 3, &h, 17) && a.runs[1].w == 16);
+    CHECK(!pod_cell16(&a, 3, 3, &h, 0));
+    // the bake: another zoom (5/16 against 5/8), the same one twice, and the pixels are the resample's
+    ht_scene_t fl, pl; ht_scene_clear(&fl, 0); ht_scene_clear(&pl, 0);
+    pod_cell_bake_reset();
+    CHECK(pod_cell_flat16(&fl, 4, 4, &h, 5, 0x1234) && pod_cell16(&pl, 4, 4, &h, 5));
+    draw_over(&fl, 0x1234); uint16_t keep[W * H]; memcpy(keep, buf, sizeof buf);
+    draw_over(&pl, 0x1234);
+    CHECK(!memcmp(keep, buf, sizeof buf) && pod_cell_bakes() == 1);
+    CHECK(pod_cell_flat16(&fl, 4, 4, &h, 5, 0x1234) && pod_cell_flat(&fl, 4, 4, &h, 5, 0x1234));
+    draw_over(&fl, 0x1234);
+    CHECK(pod_cell_bakes() == 2);
+}
+
 int main(void)
 {
+    draw_test_tall_frame();
     draw_test_corner_cover_fast_path();
     draw_test_rect_aa_stroke();
     draw_test_rect_aa();
@@ -857,6 +928,7 @@ int main(void)
     draw_test_arc_rows_equal_box();
     draw_test_cell_2x_matches_definition();
     draw_test_cell_flat_equals_resample();
+    draw_test_cell16();
     draw_test_grad_aa_spans_equal_pixels();
     draw_test_damage();
     draw_test_grad();

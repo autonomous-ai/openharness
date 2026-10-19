@@ -6,6 +6,7 @@ import { emptyPorts } from '../core/api.js'
 import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { retainContributions } from '../superTabs/retention.js'
 import { ASK_AGAIN_MS, CASCADE_RETRY_MS, CASCADE_TRIES, createAgentCleanup, IDLE_CLOSE_MS, JOINED_MAX, joinedPath, LOOK_EVERY_MS, startAgentCleanup, type AgentCleanupDeps } from './agentCleanup.js'
 
 const NOW = Date.parse('2026-10-12T12:00:00Z')
@@ -51,6 +52,51 @@ function setup(sessions: RegisteredSession[], quietFor: Record<string, number | 
 
 /** Lets the closes a notice started finish. */
 const settle = () => new Promise((done) => setTimeout(done, 0))
+
+it('keeps idle Super Tab members through host restarts and starter closure, until their contribution is removed', async () => {
+  const sessions = [kid('member'), kid('ordinary')]
+  const t = setup(sessions, { member: 2 * IDLE_CLOSE_MS, ordinary: 2 * IDLE_CLOSE_MS })
+  retainContributions(dir, 'machine-1', [{ tabId: 'tab', agent: { harnessId: 'member', machineId: 'machine-1' } }])
+  await t.cleanup.look()
+  t.advance(IDLE_CLOSE_MS)
+  await t.cleanup.look()
+  expect(t.closeStarted.mock.calls).toEqual([['ordinary', 'idle']])
+  await t.cleanup.closeStartedBy('lead')
+  expect(sessions.map(s => s.agentId)).toEqual(['member'])
+  t.cleanup.port.stop()
+  const restarted = setup(sessions, { member: 2 * IDLE_CLOSE_MS })
+  await restarted.cleanup.look()
+  restarted.advance(IDLE_CLOSE_MS)
+  await restarted.cleanup.look()
+  expect(restarted.closeStarted).not.toHaveBeenCalled()
+  retainContributions(dir, 'machine-1', [])
+  await restarted.cleanup.look()
+  expect(restarted.closeStarted.mock.calls).toEqual([['member', 'idle']])
+  restarted.cleanup.port.stop()
+})
+
+it('rechecks retention after waiting on activity or another orphan close', async () => {
+  const t = setup([kid('member')], { member: 2 * IDLE_CLOSE_MS })
+  await t.cleanup.look()
+  t.advance(IDLE_CLOSE_MS)
+  t.lastActivity.mockImplementationOnce(async () => {
+    retainContributions(dir, 'machine', [{ tabId: 'tab', agent: { harnessId: 'member', machineId: 'machine' } }])
+    return NOW - IDLE_CLOSE_MS
+  })
+  await t.cleanup.look()
+  expect(t.closeStarted).not.toHaveBeenCalled()
+  expect(t.log).not.toHaveBeenCalled()
+  retainContributions(dir, 'machine', [])
+  const cascade = setup([kid('first'), kid('member')])
+  cascade.closeStarted.mockImplementationOnce(async () => {
+    retainContributions(dir, 'machine', [{ tabId: 'tab', agent: { harnessId: 'member', machineId: 'machine' } }])
+    return { closed: true }
+  })
+  await cascade.cleanup.closeStartedBy('lead')
+  expect(cascade.closeStarted.mock.calls).toEqual([['first', 'now']])
+  t.cleanup.port.stop()
+  cascade.cleanup.port.stop()
+})
 
 describe('closing the harnesses a closed harness started', () => {
   it('closes them now, working or not, with one line each, and only those another agent started there', async () => {

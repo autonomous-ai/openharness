@@ -260,6 +260,16 @@ Future<void> showAgentActions(
         confirmDeleteAgent(context, notifier, machineId, agent.id, agent.name),
       ),
     ),
+    // The conversation too, for good — not for a terminal, which keeps none.
+    if (agent.engine != 'terminal')
+      PhoneSheetAction(
+        icon: LucideIcons.trash300,
+        label: 'Delete Harness…',
+        destructive: true,
+        onTap: () => unawaited(
+          confirmPurgeAgent(context, notifier, machineId, agent.id, agent.name),
+        ),
+      ),
   ],
 );
 

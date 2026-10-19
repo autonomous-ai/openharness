@@ -1,11 +1,22 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
+import { CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
 describe('the core API services stand on', () => {
+  it('exposes an optional native-turn observer without importing feature state', () => {
+    const nativeTurns = vi.fn(async () => null)
+    expect(createCoreApi({ ...coreDeps(), nativeTurns }).transcripts.nativeTurns).toBe(nativeTurns)
+    expect(createCoreApi(coreDeps()).transcripts.nativeTurns).toBeUndefined()
+  })
+  it('carries the existing native creation-status provider without inventing one for an older core', async () => {
+    const creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'cancelled' as const }))
+    const core = createCoreApi({ ...coreDeps(), creationStatus })
+    expect(await core.agents.creationStatus!('creation-fixture-1234')).toEqual({ creationId: 'creation-fixture-1234', state: 'cancelled' })
+    expect(createCoreApi(coreDeps()).agents.creationStatus).toBeUndefined()
+  })
   it('gives a service with no lane of the core\'s nothing to seal with, and never its frame back in the clear', async () => {
     await expect(LANE_OFF.hello('m', 'pub')).rejects.toThrow(/no E2EE identity/)
     expect(await LANE_OFF.welcome('m', {})).toBe(false)
@@ -40,6 +51,7 @@ describe('the core API services stand on', () => {
     expect(DELIVERIES_OFF.deliver('a', 'hello', 'd1')).toBeUndefined()
     expect(DELIVERIES_OFF.cancelDelivery('d1')).toBe(false)
     expect(DELIVERIES_OFF.onDelivery(() => {})()).toBeUndefined()
+    expect(await DELIVERIES_OFF.leaseDeliveries('test', {})).toBe(false)
   })
 
   it('resolves an agent in a service\'s own copy as the registry does: by agent id, then session id', () => {
@@ -88,7 +100,7 @@ describe('the core API services stand on', () => {
       tabRelay: TAB_RELAY_OFF,
       connectorVault: CONNECTOR_VAULT_OFF,
       observer: vi.fn(() => true),
-      turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []), deliver: vi.fn(), cancelDelivery: vi.fn(() => true), onDelivery: vi.fn(() => () => {}) },
+      turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []), deliver: vi.fn(), cancelDelivery: vi.fn(() => true), onDelivery: vi.fn(() => () => {}), leaseDeliveries: vi.fn(async () => false) },
       questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => true) },
       machine: { id: vi.fn(() => 'machine-1'), computerId: vi.fn(() => 'computer-1'), name: vi.fn(() => 'Studio') },
       activityText: vi.fn(async () => 'Reading 3 files'),
@@ -125,6 +137,9 @@ describe('the core API services stand on', () => {
     const terminals = { ...TERMINALS_OFF, open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })), watch: TERMINALS_OFF.watch }
     expect(createCoreApi({ ...deps, terminals }).terminals).toBe(terminals)
     expect(core.agents.all().map((s) => s.agentId)).toEqual(['live', 'stopped'])
+    expect(await core.agents.stopped!('live')).toBe(false)
+    expect(await core.agents.stopped!('unknown')).toBe(false)
+    expect(await core.agents.stopped!('stopped')).toBe(true)
     expect(core.agents.live().map((s) => s.agentId)).toEqual(['live'])
     expect(core.agents.displayName).toBe(projectDisplayName)
     expect(core.transcripts.databaseHistory).toBe(deps.databaseHistory)
@@ -320,7 +335,7 @@ describe('the core API services stand on', () => {
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null })
+    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null, sharedMachines: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 
@@ -406,5 +421,13 @@ describe('the core API services stand on', () => {
   it('answers the monitor\'s fallbacks while it is off: no readings, nothing measured to forget', async () => {
     await expect(MONITOR_OFF.resources()).rejects.toThrow('the monitor service is unavailable')
     expect(await MONITOR_OFF.storage([], true)).toEqual(new Map())
+  })
+
+  it('answers a guest\'s New Harness while shared machines is off: guest access unavailable, in words, and nothing to stop', async () => {
+    expect(await SHARED_MACHINES_OFF.guestLaunch({ email: 'kim@acme.io', engine: 'claude', bypassPermission: true }))
+      .toEqual({ ok: false, error: 'GUEST_UNAVAILABLE', detail: expect.stringMatching(/Sharing isn't running/) })
+    expect(SHARED_MACHINES_OFF.stop()).toBeUndefined()
+    expect(SHARED_MACHINES_FALLBACKS.stop).toBeUndefined()
+    expect(LONG_ANSWERS.sharedMachines).toEqual({ guestLaunch: 2 * 60_000, shared_machines: 11 * 60_000 })
   })
 })

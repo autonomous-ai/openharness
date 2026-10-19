@@ -24,6 +24,7 @@ typedef struct {
     uint8_t depth;
     uint32_t talk_started_ms, send_started_ms;
     char sent_agent[ID_MAX];
+    uint8_t work_page;     // Home's Working card: the page of three pets shown (0-based; reset when the card is not shown)
     pod_view_t talk_prev;  // AGENT or RECAP: the screen TALK was opened from (talk_over goes back to it)
     bool sending;          // TALK after the stop tap: the voice screen shows SEND until the agent's real turn begins (or POD_SENT_WAIT_MS)
     bool sent_seen;        // the model has marked sent_agent's optimistic Working (pod_model_sent) since the stop tap

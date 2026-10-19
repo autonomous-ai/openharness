@@ -19,3 +19,12 @@ talk:fw:send 110
 inbox 210
 agent:fw:toast@2500 300
 recap:desk:toast@2500 237
+# 2026-10-19 Codex scene screens added, base values from 6acbd7a05 (measured 441, 418, 360 host us there; each number is 1.25 x that, as above).
+agent:be 551
+talk:be 523
+talk:be:send 450
+# 2026-10-19 Working card (three pets in their work scene, WK_SIDE 134): drawn through the bake path over the gradient's colour at the pet's centre (one resample per frame, then row copies).
+# Measured 125 and 119 host us (tabs:working has a Claude, a Codex and a Muse, :codex a Codex, a Muse and a Codex), down from 798 with the pets resampled every frame; each number is 1.25 x that, as above.
+# 2026-10-19 baked frames copy only their own pixels (no box on the gradient) and Claude draws at 2x on the card: measured 138 and 140.
+tabs:working 173
+tabs:working:codex 175

@@ -289,6 +289,94 @@ void main() {
   );
 
   testWidgets(
+    'a slow sample counts its longest phase, and a long one once a day, '
+    'only once the CLI forwards the names',
+    (tester) async {
+      final runtime = ProductRuntimeHealth(
+        usage,
+        readState: () async => {},
+        writeState: (_) async {},
+        readVersion: () async => '1.2.73',
+        lifecycle: () => AppLifecycleState.resumed,
+      );
+      runtime.account('PRIVATE_ACCOUNT');
+      await usage.flush();
+      await tester.pump();
+      // Milliseconds from vsync: waiting for the UI thread, building, the
+      // raster thread's queue, rastering.
+      FrameTiming frame({
+        int wait = 0,
+        int build = 0,
+        int queue = 0,
+        int raster = 0,
+      }) {
+        final buildStart = wait * 1000;
+        final buildFinish = buildStart + build * 1000;
+        final rasterStart = buildFinish + queue * 1000;
+        final rasterFinish = rasterStart + raster * 1000;
+        return FrameTiming(
+          vsyncStart: 0,
+          buildStart: buildStart,
+          buildFinish: buildFinish,
+          rasterStart: rasterStart,
+          rasterFinish: rasterFinish,
+          rasterFinishWallTime: rasterFinish,
+        );
+      }
+
+      // The 60th frame is the sample.
+      void sample(FrameTiming timing) => runtime.framesForTest([
+        for (var i = 0; i < 59; i++) frame(build: 1),
+        timing,
+      ]);
+      Iterable<String> newNames() => totals().keys.where(
+        (key) => key.contains('_slow_') || key.contains('_long_'),
+      );
+      // A CLI that has not said it forwards them would refuse the report.
+      sample(frame(wait: 300));
+      await usage.flush();
+      expect(totals()['health_desktop_frame_over_250ms'], 1);
+      expect(newNames(), isEmpty);
+      usage.proxyVocabulary = 2;
+      for (final timing in [
+        frame(wait: 40, build: 10, raster: 5),
+        frame(wait: 20, build: 20, raster: 20), // a tie: the earlier phase
+        frame(wait: 5, build: 60, raster: 20),
+        frame(wait: 10, build: 300), // the day's first long sample
+        frame(wait: 5, build: 10, queue: 30, raster: 20),
+        frame(raster: 400), // long again: the day is counted already
+        frame(wait: 10, build: 30), // 40 ms is not slow
+      ]) {
+        sample(timing);
+      }
+      await usage.flush();
+      expect(totals()['health_desktop_frame_slow_wait'], 2);
+      expect(totals()['health_desktop_frame_slow_build'], 2);
+      expect(totals()['health_desktop_frame_slow_raster'], 2);
+      expect(totals()['health_desktop_frame_long_collector'], 1);
+      // Every slow sample since has one phase.
+      expect(
+        totals()['health_desktop_frame_50ms_to_250ms']! +
+            totals()['health_desktop_frame_over_250ms']! -
+            1,
+        6,
+      );
+      // The next UTC day's first long sample counts again, once.
+      now = now.add(const Duration(days: 1));
+      sample(frame(wait: 260));
+      sample(frame(wait: 260));
+      // One report a flush: yesterday's expired workspace observation first.
+      await usage.flush();
+      await usage.flush();
+      expect(totals()['health_desktop_frame_long_collector'], 2);
+      expect(totals()['health_desktop_collector_days'], 2);
+      expect(jsonEncode(reports), isNot(contains('PRIVATE')));
+      runtime.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
     'relaunch confirms only the expected public version and sharing revision',
     (tester) async {
       Map<String, dynamic> saved = {};
@@ -320,4 +408,160 @@ void main() {
       await tester.pump();
     },
   );
+
+  group('Add Phone', () {
+    Iterable<String> addPhoneNames() => totals().keys.where(
+      (key) =>
+          key.startsWith('ui_desktop_phone_offer_') ||
+          key.startsWith('ui_desktop_add_phone_'),
+    );
+
+    test(
+      'the card and its openings wait for a CLI that forwards them, then go',
+      () async {
+        await usage.flush();
+        // Counted from the start: the card shows once per computer, often
+        // before the CLI's first answer has said which names it forwards.
+        usage.begin(ProductFlow.phoneOffer)(ProductOutcome.ok);
+        usage.addPhoneOpened(AddPhoneOpening.offer);
+        await usage.flush();
+        // The day's coverage goes; the names wait.
+        expect(totals()['health_desktop_collector_days'], 1);
+        expect(addPhoneNames(), isEmpty);
+        final sent = reports.length;
+        await usage.flush();
+        // Only waiting names are left, and a report of none is not sent.
+        expect(reports, hasLength(sent));
+        for (final vocabulary in [1, 2]) {
+          usage.proxyVocabulary = vocabulary;
+          usage.health(ProductHealthMeasure.asyncError);
+          await usage.flush();
+          expect(totals()['health_desktop_async_error'], vocabulary);
+          expect(addPhoneNames(), isEmpty, reason: 'vocabulary $vocabulary');
+        }
+        usage.proxyVocabulary = 3;
+        await usage.flush();
+        expect(
+          {for (final name in addPhoneNames()) name: totals()[name]},
+          {
+            'ui_desktop_phone_offer_started': 1,
+            'ui_desktop_phone_offer_ok': 1,
+            'ui_desktop_phone_offer_under_1s': 1,
+            'ui_desktop_add_phone_offer': 1,
+          },
+        );
+        expect(reports.last['context'], isNotNull);
+      },
+    );
+
+    test(
+      'waiting names do not hold back a later day or other counts',
+      () async {
+        await usage.flush();
+        usage.health(ProductHealthMeasure.asyncError);
+        await usage.flush();
+        // The day's coverage is counted already: the day holds only a
+        // waiting name now.
+        usage.addPhoneOpened(AddPhoneOpening.menu);
+        now = now.add(const Duration(days: 1));
+        usage.health(ProductHealthMeasure.asyncError);
+        await usage.flush();
+        expect(reports.last['day'], '2026-10-15');
+        expect(totals()['health_desktop_async_error'], 2);
+        expect(addPhoneNames(), isEmpty);
+        usage.proxyVocabulary = 3;
+        await usage.flush();
+        expect(reports.last['day'], '2026-10-14');
+        expect(totals()['ui_desktop_add_phone_menu'], 1);
+      },
+    );
+
+    test('the card is not ended by the 15-minute observation bound', () async {
+      await usage.flush();
+      usage.proxyVocabulary = 3;
+      final card = usage.begin(ProductFlow.phoneOffer);
+      // A bounded flow begun beside it is ended unknown, as before.
+      usage.begin(ProductFlow.connectUser);
+      now = now.add(const Duration(minutes: 40));
+      await usage.flush();
+      await usage.flush();
+      expect(totals()['ui_desktop_connect_user_unknown'], 1);
+      expect(totals()['ui_desktop_phone_offer_unknown'], isNull);
+      // Put away 40 minutes later, and counted as that.
+      card(ProductOutcome.cancelled);
+      card(ProductOutcome.ok);
+      await usage.flush();
+      expect(totals()['ui_desktop_phone_offer_started'], 1);
+      expect(totals()['ui_desktop_phone_offer_cancelled'], 1);
+      expect(totals()['ui_desktop_phone_offer_ok'], isNull);
+    });
+
+    test('every way in has its own name, and nothing else is sent', () async {
+      await usage.flush();
+      usage.proxyVocabulary = 3;
+      for (final from in AddPhoneOpening.values) {
+        usage.addPhoneOpened(from);
+      }
+      usage.addPhoneOpened(AddPhoneOpening.titlebar);
+      await usage.flush();
+      expect(
+        {for (final name in addPhoneNames()) name: totals()[name]},
+        {
+          'ui_desktop_add_phone_offer': 1,
+          'ui_desktop_add_phone_titlebar': 2,
+          'ui_desktop_add_phone_menu': 1,
+          'ui_desktop_add_phone_account': 1,
+          'ui_desktop_add_phone_machines': 1,
+          'ui_desktop_add_phone_command': 1,
+        },
+      );
+    });
+
+    test(
+      'nothing is counted without sharing, an account or a Desktop',
+      () async {
+        await usage.flush();
+        usage.proxyVocabulary = 3;
+        usage.savedChoice({'enabled': false, 'revision': 1});
+        usage.begin(ProductFlow.phoneOffer)(ProductOutcome.ok);
+        usage.addPhoneOpened(AddPhoneOpening.offer);
+        choice = {'enabled': true, 'revision': 2};
+        await usage.flush();
+        expect(addPhoneNames(), isEmpty);
+
+        // Signed out: no account to count it under, and no signed-out name.
+        usage.account(null);
+        usage.begin(ProductFlow.phoneOffer)(ProductOutcome.ok);
+        usage.addPhoneOpened(AddPhoneOpening.offer);
+        await usage.flush();
+        expect(addPhoneNames(), isEmpty);
+        expect(jsonEncode(setup), isNot(contains('phone_offer')));
+        expect(jsonEncode(setup), isNot(contains('add_phone')));
+
+        // The browser has no health context, and no names for these.
+        final web = ProductMeasurement(
+          surface: 'web',
+          automatic: false,
+          now: () => now,
+          sendSetup: (report) async => {'accepted': true},
+        );
+        addTearDown(web.dispose);
+        final sentByWeb = <Map<String, dynamic>>[];
+        web.account(
+          'PRIVATE_ACCOUNT',
+          choice: () async => choice,
+          send: (report) async {
+            sentByWeb.add(report);
+            return {'accepted': true};
+          },
+        );
+        await web.flush();
+        web.proxyVocabulary = 3;
+        web.begin(ProductFlow.phoneOffer)(ProductOutcome.ok);
+        web.addPhoneOpened(AddPhoneOpening.command);
+        await web.flush();
+        expect(sentByWeb, isEmpty);
+      },
+    );
+  });
 }

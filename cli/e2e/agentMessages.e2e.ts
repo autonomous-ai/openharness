@@ -168,7 +168,7 @@ describe('Agent Messages, end to end', () => {
     await new Promise((settle) => setTimeout(settle, 17_000))
     expect(reads(relay), 'off for the account, the tabs are never read').toBe(0)
     const on = await settings(d, { agentMessages: true })
-    expect(await on.json()).toEqual({ agentsStartAgents: false, pullRequestLine: true, agentMessages: true, signedIn: true })
+    expect(await on.json()).toEqual({ agentsStartAgents: false, pullRequestLine: true, agentMessages: true, agentMessagesHideSummary: false, signedIn: true })
     expect(relay.experiments).toEqual({ agent_pull_request_line: true, agent_messages: true })
     await until('Agent Messages to wake for the setting turned on', () => reads(relay) >= 1 || null, 30_000, 200)
     const notes = await notesFor(d, 2)

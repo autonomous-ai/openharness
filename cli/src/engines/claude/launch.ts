@@ -14,6 +14,9 @@ const permissionModes = {
 export const launch: EngineLaunch = {
   permissionModes, bypassPermission: permissionModes.auto,
   firstPromptArgs: [], resumeArgs: ['--resume'], forkArgs: { lead: ['--resume'], after: ['--fork-session'] },
+  // `claude --help` (2.1.303): `--model` and `--effort` are "for the current session". `/model` and `/effort` typed into the
+  // pane are saved as the person's default instead, which a routed start must not do.
+  modelArgs: { model: ['--model', '{value}'], effort: ['--effort', '{value}'], efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
   instructionFiles: ['CLAUDE.md'],
   contextArgs: { args: ['--append-system-prompt', 'Read the harness context at {file} before working.'], quote: 'json' },
   // Claude Code reads CLAUDE.md, and AGENTS.md only through an import line in it.

@@ -104,8 +104,9 @@ bool sameMachineId(String a, String b) =>
 
 /// A whole machine another account shares with this one (backend lib/machineAccess.ts): its owner
 /// named this account's address ([via] `email`), or shared it with everyone at their domain and this
-/// account added it ([via] `domain`, [added]). Used with the owner's own rights, unlike [Machine.isShared],
-/// one harness shared to watch.
+/// account added it ([via] `domain`, [added]). This account is a guest there: a space of its own, its
+/// own harnesses on the owner's plans, nothing of the owner's (docs/plans/2026-10-19-guest-machine-sharing-plan.md);
+/// unlike [Machine.isShared], one harness shared to watch.
 class MachineShare {
   final String ownerName;
   final String ownerEmail;
@@ -165,8 +166,8 @@ class Machine {
     this.machineShare,
   });
 
-  /// Another account's machine, shared whole with this one: used as the account's own, managed (renamed,
-  /// removed, shared on) by its owner alone.
+  /// Another account's machine, shared with this one: this account is a guest there, with its own space and
+  /// harnesses; the machine is managed (renamed, removed, shared on) by its owner alone.
   bool get isSharedMachine => machineShare != null;
 
   String get displayName => (name != null && name!.isNotEmpty)

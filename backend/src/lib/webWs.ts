@@ -359,7 +359,8 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     // selecting a deliberately stopped machine wakes it before the readiness ack.
     if (client && machineId === currentAgentId) { currentBinding = binding; ack(machineId); return }
     client?.detach()
-    client = attachHubClient(ws, machineId, 'web')
+    // A guest never hears the machine's broadcasts, only what the machine addresses to it (lib/hub.ts).
+    client = attachHubClient(ws, machineId, 'web', { guest: !!shared })
     currentAgentId = machineId
     currentBinding = binding
     watchShare(shared ? machineId : null)

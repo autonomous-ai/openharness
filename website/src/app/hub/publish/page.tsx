@@ -18,6 +18,8 @@ import { PublishTarget } from './components/PublishTarget';
 import { UnpublishAction } from './components/UnpublishAction';
 import { originalOutput, readCover, readProjectFolder } from './projectFiles';
 import { harnessPath } from '@/lib/community/slug';
+import { countHub } from '@/lib/community/hubMeasure';
+import { useHubView } from '../components/useHubView';
 import { submitPublication, unpublishPublication } from './publication';
 import { usePublishDraft, type PublishDraft } from './usePublishDraft';
 import { useEnglishDraft } from './useEnglishDraft';
@@ -27,6 +29,7 @@ const reviewInputs = ['confirmation', 'secrets'];
 
 export default function PublishPage() {
   const router = useRouter(), signedIn = useSignedIn();
+  useHubView('publish');
   const { draft, update, applyBundle, saveError, loadError, publishOnce } = usePublishDraft();
   const english = useEnglishDraft(draft, update, signedIn);
   const [confirmed, setConfirmed] = useState(false), [checkedSecrets, setCheckedSecrets] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -66,9 +69,12 @@ export default function PublishPage() {
   function publish(event: FormEvent) {
     event.preventDefault();
     if (!ready || busy) return;
-    setBusy(true); setError('');
-    void publishOnce(async clientId => { router.push(harnessPath({ id: await submitPublication(draft, clientId), title: draft.title })); })
-      .catch(e => setError(e instanceof Error ? e.message : 'Publication failed. Your draft is still here.')).finally(() => setBusy(false));
+    setBusy(true); setError(''); countHub('hub_publish_started');
+    void publishOnce(async clientId => {
+      const id = await submitPublication(draft, clientId);
+      countHub('hub_publish_ok');
+      router.push(harnessPath({ id, title: draft.title }));
+    }).catch(e => { countHub('hub_publish_failed'); setError(e instanceof Error ? e.message : 'Publication failed. Your draft is still here.'); }).finally(() => setBusy(false));
   }
   function unpublish() {
     if (!draft.updateId || busy) return;

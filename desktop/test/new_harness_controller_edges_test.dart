@@ -792,6 +792,25 @@ void main() {
       expect((await open(fixture)).engine, 'codex');
     });
 
+    test('a suggested project is renamed for that agent', () async {
+      final fixture = _Fixture();
+      fixture.connection.replies['engines_probe'] = (_) => probe();
+      final box = NewHarnessController(
+        fixture.app,
+        machineId: 'm',
+        autoProject: true,
+        now: () => DateTime(2026, 9, 25, 9, 10, 11),
+      );
+      addTearDown(box.dispose);
+      // Named after the product default until the machine says otherwise.
+      expect(box.engine, 'opencode');
+      expect(box.project.name, 'opencode-2026-09-25-09-10');
+      await _settle();
+      expect(box.engine, 'claude');
+      expect(box.project.name, 'claude-2026-09-25-09-10');
+      expect(box.projectFolderRequest!.isGenerated, isTrue);
+    });
+
     test('a remembered choice still wins', () async {
       final fixture = _Fixture();
       fixture.connection.replies['engines_probe'] = (_) => probe();

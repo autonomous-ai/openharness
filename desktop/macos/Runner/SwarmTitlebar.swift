@@ -2506,6 +2506,7 @@ private final class SwarmTabStrip: NSView {
       tab.activity = HarnessNativeActivity(row["activity"] as? [String: Any])
       tab.canShowAgentMessages = row["canShowAgentMessages"] as? Bool == true
       tab.canInvitePeople = row["canInvitePeople"] as? Bool == true
+      tab.superTabPaused = row["superTabPaused"] as? Bool
       tab.applyShared(row["shared"] as? [String: Any])
       tab.emit = { [weak self, weak tab] method, args in
         guard let self, let tab, self.actionsEnabled,
@@ -2822,7 +2823,9 @@ private final class SwarmTabStrip: NSView {
     if actionsEnabled && searchButton.isEnabled { emit?("sessions", nil) }
   }
   @objc private func openAddPhone() {
-    if actionsEnabled && phoneButton.isEnabled { emit?("addPhone", nil) }
+    // Named, so Add Phone is counted as the title bar's rather than Harness ▸ Add Phone…'s,
+    // which sends the same action with no arguments (`AddPhoneOpening` in product_measurement.dart).
+    if actionsEnabled && phoneButton.isEnabled { emit?("addPhone", ["from": "titlebar"]) }
   }
   @objc private func openStore() {
     if actionsEnabled && storeButton.isEnabled { emit?("store", nil) }
@@ -2922,6 +2925,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var canInvitePeople = false {
     didSet { if canInvitePeople != oldValue { updateMessagesItems() } }
   }
+  var superTabPaused: Bool? { didSet { updateMessagesItems() } }
+  private var pauseSuperTabItem: NSMenuItem?
   func applyShared(_ shared: [String: Any]?) {
     let count = shared?["count"] as? Int
     let role = count == nil ? nil : shared?["role"] as? String
@@ -3085,6 +3090,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       return item
     }
     _ = item("Rename Tab…", #selector(renameSwarm))
+    pauseSuperTabItem = item("Pause new work", #selector(pauseSuperTab))
     let separator = NSMenuItem.separator()
     menu.addItem(separator)
     messagesSeparator = separator
@@ -3154,6 +3160,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   /// The menu's Show Agent Messages (only where the tab has a log), its sharing rows, and their separator when any
   /// of them shows.
   private func updateMessagesItems() {
+    pauseSuperTabItem?.isHidden = superTabPaused == nil
+    pauseSuperTabItem?.title = superTabPaused == true ? "Resume new work" : "Pause new work"
     for item in messagesItems { item.isHidden = !canShowAgentMessages }
     for (action, item) in shareItems { item.isHidden = !offers(action) }
     messagesSeparator?.isHidden = (messagesItems + Array(shareItems.values)).allSatisfy(\.isHidden)
@@ -3369,6 +3377,9 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   @objc private func selectSwarm() { if actionsEnabled { emit?("select", ["id": swarmId]) } }
   @objc private func closeSwarm() { if actionsEnabled { emit?("close", ["id": swarmId]) } }
   @objc private func renameSwarm() { if actionsEnabled { emit?("rename", ["id": swarmId]) } }
+  @objc private func pauseSuperTab() {
+    if actionsEnabled && superTabPaused != nil { emit?("pauseSuperTab", ["id": swarmId]) }
+  }
   @objc private func showMessages() {
     if actionsEnabled && canShowAgentMessages { emit?("showAgentMessages", ["id": swarmId]) }
   }

@@ -29,6 +29,7 @@ import { ENGINES, type AgentEngine } from './engines/types.js'
 import { gridCliPresence } from './lib/gridBinary.js'
 import { GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS } from './lib/gridFleetProtocol.js'
 import { isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunchWire.js'
+import type { LaunchModel } from './lib/launchModel.js'
 import type { ScmLaunchRecord } from './scm/types.js'
 import type { StartedBy } from './lib/agentAttribution.js'
 import { probeEngines } from './lib/engineProbe.js'
@@ -42,6 +43,7 @@ import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { encodeTerminalLocal, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType, type DownTransport } from './lib/relayFrames.js'
 import { sid, logFrame } from './lib/log.js'
+import { eventAgentId, GUEST_REFUSALS, guestVerdict } from './core/guestPolicy.js'
 
 export { isLocalClientId, type DownTransport }
 
@@ -155,6 +157,9 @@ export class BackendSocket {
     /** A mode from `PERMISSION_MODES` for this engine; null when the client sent only
      *  `bypassPermission`, which then decides. Validated here (`INVALID_PERMISSION_MODE`). */
     permissionMode: string | null
+    /** The model and effort to launch the engine with, for that session only (lib/launchModel.ts); absent when the
+     *  engine should open on its own. Validated here, and only for an engine that declares the flags. */
+    launchModel?: LaunchModel | null
     /** A conversation Harness did not start, to open this harness ON: the engine resumes it, in its own
      *  folder (lib/sessionSearch/external.ts). Null for a new conversation. Shape-checked here; cli.ts
      *  checks it is one it found, not open elsewhere, and not already a harness. */
@@ -260,7 +265,10 @@ export class BackendSocket {
    *  asked for (cli.ts binds core/agents/list.ts). The second argument reads the asker's paired role.
    *  Null answers UNSUPPORTED. */
   agentsProvider: ((payload: Record<string, unknown>, sessionRole: () => string | null,
-    reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
+    reply: (result: Record<string, unknown>) => void, guest?: string) => Promise<void>) | null = null
+  /** The guest (email) an agent was started for, or null for the owner's own (registry `guest`): what a
+   *  guest session may act on (core/guestPolicy.ts). Null treats every agent as the owner's. */
+  agentGuest: ((agentId: string) => string | null) | null = null
   /** Answers `session_get` with the whole reply: a conversation's history, a page at a time (cli.ts binds
    *  core/transcripts/history.ts). Null answers UNSUPPORTED. */
   historyProvider: ((payload: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null
@@ -516,7 +524,17 @@ export class BackendSocket {
     for (const [connId, sink] of this.localClients) {
       if (!sink.sendFrame(frame)) void this.unregisterLocalClient(connId)
     }
-    if (!this.thisComputerOnly) this.toGateway('web', (gateway) => gateway.broadcast(frame))
+    if (!this.thisComputerOnly) {
+      const guest = this.frameGuest(frame)
+      this.toGateway('web', (gateway) => gateway.broadcast(frame, guest ?? undefined))
+    }
+  }
+
+  /** The guest whose harness a frame is about (registry `guest`, through `agentGuest`), or null for the
+   *  owner's own and for a frame about no harness. Its sessions are sent it sealed for each (gateway.ts). */
+  private frameGuest(frame: Frame): string | null {
+    const id = this.agentGuest ? eventAgentId(frame) : null
+    return id ? this.agentGuest!(id) : null
   }
 
   /** Signed out: the cloud link is never dialed in this process's life (a sign-in restarts it), so nothing
@@ -807,6 +825,8 @@ export class BackendSocket {
     // sending and being dispatched used to leave `localClients.has()` false, and its already-queued
     // frames were then read as the BACKEND's. The transport half closes that, because it is stamped
     // at enqueue by the caller that had just verified membership. Either one being true is local.
+    // A local client is this OS user's: the Unix socket is 0600, and a TCP one showed the daemon's local
+    // credential at the door (lib/localCredential.ts, hookServer.ts and localWsServer.ts).
     const local = transport === 'local' || this.localClients.has(connId)
     if (local) {
       // ⚠️ The backend's own instructions, refused from anywhere else. See BACKEND_ONLY_DOWN_TYPES.
@@ -851,9 +871,11 @@ export class BackendSocket {
       }
       this.emitReply(connId, t, rid, p)
     }
+    // A guest: a session trusted only because this machine is shared with its account (gateway/gateway.ts).
+    const guest = local ? undefined : this.remoteClient(connId)?.guest
     // Who may act as this machine's owner: a process here, or the owner's own paired app or browser, whose
-    // session the gateway says is a `web` one. A device or an observer may not.
-    const owner = local || role === 'web'
+    // session the gateway says is a `web` one. A device, an observer or a guest may not.
+    const owner = local || (role === 'web' && guest === undefined)
     const lifecycleTarget = (frame.payload as { agentId?: unknown } | undefined)?.agentId
     if (typeof lifecycleTarget === 'string' && this.purgeAgentService?.busy(lifecycleTarget)
       && ['agent_close', 'agent_delete', 'agent_resume', 'agent_restart', 'agent_retarget', 'agent_update'].includes(type)) {
@@ -862,6 +884,17 @@ export class BackendSocket {
     const payload = (frame.payload ?? {}) as Record<string, unknown>
     const requestId = payload.requestId
     const answer = (result: Record<string, unknown>): void => reply(type, requestId, result)
+
+    // A guest gets its own space and nothing of the owner's: default-deny (core/guestPolicy.ts), before
+    // anything else answers it — the services and the terminal streams included.
+    if (guest !== undefined) {
+      const verdict = guestVerdict(type, payload, guest, (agentId) => this.agentGuest?.(agentId) ?? null)
+      if (!verdict.allow) {
+        console.warn(`[guest] refused ${logSafeType(type)} from conn:${sid(connId)} — ${verdict.error}`)
+        if (requestId !== undefined) reply(type, requestId, { error: verdict.error, message: GUEST_REFUSALS[verdict.error] })
+        return
+      }
+    }
 
     // A paired owner can run the machine's orchestrator; observers and device sessions cannot.
     // Both requests and replies are encrypted, including project artifacts.
@@ -914,7 +947,9 @@ export class BackendSocket {
     // A request a service answers, in its own process or in this one: routed to it, or answered
     // SERVICE_UNAVAILABLE while it is off. Never waited on in line: the next frame is not held for it.
     // Who asked is established here, after the gates above, and the service trusts only that.
-    const asker: Asker = { local, owner, connection: connId, ...(typeof requestId === 'string' ? { requestId } : {}) }
+    const asker: Asker = { local, owner, ...(!local ? { accountOwner: this.remoteClient(connId)?.accountOwner === true } : {}),
+      ...(guest !== undefined ? { guest } : {}),
+      connection: connId, ...(typeof requestId === 'string' ? { requestId } : {}) }
     // A window that draws row state asks for the models list with `rowState`, and the list's changes are
     // pushed to it in that form (`pushGridModels`). Noted here, by connection: the models service answers
     // the list, and a request reaches it without its connection.
@@ -943,7 +978,7 @@ export class BackendSocket {
 
         // The agents on this machine, live and, when asked, stopped (core/agents/list.ts, bound by cli.ts).
         case 'agents_list':
-          if (this.agentsProvider) await this.agentsProvider(payload, () => (local ? null : role), answer)
+          if (this.agentsProvider) await this.agentsProvider(payload, () => (local ? null : role), answer, guest)
           else reply(type, requestId, { error: 'UNSUPPORTED' })
           return
 

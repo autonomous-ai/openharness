@@ -262,6 +262,22 @@ it('setup ingestion never reads an account and expires after yesterday', async (
   expect(await ingestSetupUsage({ ...setup, day: '2026-10-12' }, now)).toMatchObject({ accepted: true })
 })
 
+it('Hub totals share the setup path: unlinked receipt, atomic totals, a retried receipt counts once', async () => {
+  const hub = { id: report.id, day: report.day, counters: { hub_view_harness_visitor: 3, hub_fork: 1 } }
+  expect(await ingestSetupUsage(hub, now)).toEqual({ accepted: true })
+  expect(db.productUsagePreference.findUnique).not.toHaveBeenCalled()
+  expect(db.$runCommandRaw.mock.calls[0][0].updates).toEqual([
+    { q: { dayUtc: { $date: '2026-10-13T00:00:00.000Z' }, metric: 'hub_view_harness_visitor' }, u: { $inc: { value: 3 } }, upsert: true },
+    { q: { dayUtc: { $date: '2026-10-13T00:00:00.000Z' }, metric: 'hub_fork' }, u: { $inc: { value: 1 } }, upsert: true },
+  ])
+  db.$runCommandRaw.mockClear()
+  db.productUsageReceipt.create.mockRejectedValue({ code: 'P2002' })
+  db.productUsageReceipt.findUnique.mockResolvedValue({ id: report.id })
+  expect(await ingestSetupUsage(hub, now)).toEqual({ accepted: true })
+  expect(db.$runCommandRaw).not.toHaveBeenCalled()
+  expect(await ingestSetupUsage({ ...hub, day: '2026-10-11' }, now)).toMatchObject({ reason: 'EXPIRED' })
+})
+
 it('keeps anonymous transport and the phone opt-in unchanged while Desktop evolves independently', () => {
   expect(readFileSync(new URL('../../../desktop/lib/measurement/setup_transport.dart', import.meta.url), 'utf8'))
     .toBe(readFileSync(new URL('../../../mobile/lib/measurement/setup_transport.dart', import.meta.url), 'utf8'))

@@ -3,12 +3,18 @@ import { claimTicket, qrSignIn, qrSignInLink, type QrSignInDeps } from './qrSign
 import { terminalQr } from './terminalQr.js'
 
 /** A backend that answers the QR sign-in routes from a script of poll answers. */
-function backend(polls: Array<{ status: string; email?: string }>, opts: { extend?: 'ok' | 'fail'; claim?: 'ok' | 'fail' } = {}) {
+function backend(polls: Array<{ status: string; email?: string }>, opts: { extend?: 'ok' | 'fail'; claim?: 'ok' | 'fail'; spoken?: 'unsupported' | 'rejected' } = {}) {
   const calls: Array<{ path: string; body: unknown }> = []
   let clock = 0
   const post = vi.fn(async (path: string, body: unknown) => {
     calls.push({ path, body })
-    if (path === '/api/auth/qr/start') return { code: 'hnq_code', pollToken: 'hnp_poll', expiresIn: 120 }
+    if (path === '/api/auth/qr/start') {
+      if ((body as { spokenCode?: boolean }).spokenCode && opts.spoken === 'rejected') {
+        throw Object.assign(new Error('Unrecognized key(s) in object: \'spokenCode\''), { status: 400 })
+      }
+      const spoken = (body as { spokenCode?: boolean }).spokenCode && opts.spoken !== 'unsupported'
+      return { code: 'hnq_code', pollToken: 'hnp_poll', expiresIn: 120, ...(spoken ? { spokenCode: '12345678' } : {}) }
+    }
     if (path === '/api/auth/qr/poll') return polls.shift() ?? { status: 'pending' }
     if (path === '/api/auth/qr/extend') {
       if (opts.extend === 'fail') throw new Error('This code has expired.')
@@ -94,6 +100,55 @@ describe('qrSignIn', () => {
   it('reports a backend that cannot start one', async () => {
     const r = await qrSignIn({ ...backend([]).deps(), post: async () => { throw new Error('HTTP 404') } })
     expect(r).toMatchObject({ ok: false, code: 'BACKEND_ERROR', message: 'HTTP 404' })
+  })
+})
+
+// A device with no screen (lampOS's lamp, #1410): it says a short code aloud instead of showing a QR,
+// and still asks its person "Sign in as <email>?" before any session exists.
+describe('qrSignIn with a spoken code', () => {
+  const spokenDeps = (b: ReturnType<typeof backend>, confirm = true) => {
+    const said: Array<[string, number]> = []
+    const d = { ...b.deps(confirm), showCode: (code: string, expiresIn: number) => { said.push([code, expiresIn]) } }
+    return { d, said }
+  }
+
+  it('asks for a spoken code, says it instead of the QR, and confirms before claiming', async () => {
+    const b = backend([{ status: 'approved', email: 'dee@example.com' }])
+    const { d, said } = spokenDeps(b)
+    const r = await qrSignIn(d)
+    expect(r).toMatchObject({ ok: true })
+    expect(b.calls[0].body).toEqual({ label: 'MacBook Pro', kind: 'computer', computerId: 'c-1', spokenCode: true })
+    expect(said).toEqual([['12345678', 120]])
+    expect(d.shown).toEqual([])
+    expect(d.confirm).toHaveBeenCalledWith('dee@example.com')
+  })
+
+  it('says the same code again each time it is kept alive', async () => {
+    const polls: Array<{ status: string; email?: string }> = Array.from({ length: 50 }, () => ({ status: 'pending' }))
+    const b = backend([...polls, { status: 'approved', email: 'dee@example.com' }])
+    const { d, said } = spokenDeps(b)
+    await qrSignIn(d)
+    expect(said.length).toBeGreaterThan(1)
+    expect(new Set(said.map(([code]) => code))).toEqual(new Set(['12345678']))
+  })
+
+  it('says plainly that an older backend, which refuses the field, has no spoken codes', async () => {
+    const b = backend([], { spoken: 'rejected' })
+    const { d } = spokenDeps(b)
+    expect(await qrSignIn(d)).toEqual({ ok: false, code: 'BACKEND_ERROR', message: 'This Harness backend cannot give a spoken code yet.' })
+  })
+
+  it('names the way back that gives a new spoken code when this one runs out', async () => {
+    const b = backend(Array.from({ length: 60 }, () => ({ status: 'pending' })), { extend: 'fail' })
+    const { d } = spokenDeps(b)
+    expect(await qrSignIn(d)).toMatchObject({ ok: false, code: 'EXPIRED', message: 'The code expired. Run `harness login --code` again.' })
+  })
+
+  it('stops at once, and takes the sign-in back, when the backend gives no spoken code', async () => {
+    const b = backend([], { spoken: 'unsupported' })
+    const { d } = spokenDeps(b)
+    expect(await qrSignIn(d)).toMatchObject({ ok: false, code: 'BACKEND_ERROR' })
+    expect(b.paths()).toEqual(['/api/auth/qr/start', '/api/auth/qr/cancel'])
   })
 })
 

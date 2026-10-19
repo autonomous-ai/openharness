@@ -1,5 +1,6 @@
 import { request } from 'node:http'
 import { lstatSync } from 'node:fs'
+import { localCredentialHeaders } from './localCredential.js'
 import { localSocketPath } from './localSocket.js'
 import { readDaemonRecord, writeDaemonRecord, type DaemonPipeRecord } from './daemonRecord.js'
 import { daemonPipe, type LocalDaemonOptions } from './windows/daemonPipe.js'
@@ -94,16 +95,22 @@ export async function localDaemonCall(
       }
     }
   }
-  return (options.fetch ?? fetch)(`http://127.0.0.1:${options.tcpPort}${path}`, { method, headers, body: text })
+  return (options.fetch ?? fetch)(`http://127.0.0.1:${options.tcpPort}${path}`, {
+    method,
+    headers: { ...headers, ...localCredentialHeaders(dataDir) },
+    body: text,
+  })
 }
 
 /** Read-only compatibility for CLI status with daemons that have neither a Unix socket nor a Windows pipe.
  * Native hn connections must use localDaemonStatus instead. Never accept another daemon's status.
  */
-export async function legacyDaemonStatus(port: number, pid: number | null, computerId: string): Promise<Record<string, unknown> | null> {
+export async function legacyDaemonStatus(port: number, pid: number | null, computerId: string, dataDir?: string): Promise<Record<string, unknown> | null> {
   if (!pid || !computerId) return null
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(1_500) })
+    // With the daemon's local credential, the whole status; without it, only who the daemon is.
+    const headers = dataDir ? localCredentialHeaders(dataDir) : {}
+    const response = await fetch(`http://127.0.0.1:${port}/api/status`, { headers, signal: AbortSignal.timeout(1_500) })
     if (!response.ok) return null
     const value: unknown = await response.json()
     if (value === null || typeof value !== 'object' || Array.isArray(value)) return null

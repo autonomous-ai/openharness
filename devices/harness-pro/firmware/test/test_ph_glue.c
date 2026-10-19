@@ -439,6 +439,7 @@ static void recent_swipe_steps_tabs(void) {
 static void overview_pages(void) {   // Home pages by tab: the frame's scroll is the tab index
     fresh6();
     pod_model_question_close(&U.model, "a4");   // no notice, so no Notices card: the pages are the tabs (home_notices_pages has the card)
+    calm(); pod_model_turn(&U.model, "a4", "done", NULL, 0, 31);   // and nobody works: no Working card either
     render(1000);
     CHECK(top()->view == POD_V_TABS && U.nav.depth == 1 && pod_tabs_pages_of(&U.nav, &U.model) == 6 && top()->scroll == 0);
     swipe(600, 300, 200, 310, 1000);
@@ -461,6 +462,7 @@ static void overview_pages(void) {   // Home pages by tab: the frame's scroll is
 static void home_pages(void) {
     fresh();
     pod_model_question_close(&U.model, "a4");   // no notice: no Notices card
+    calm(); pod_model_turn(&U.model, "a4", "done", NULL, 0, 31);   // and nobody works: no Working card either
     static const char *x[] = {"a1", "a2", "a3"};
     const char *const *ids[3] = {x, x, x};
     uint8_t cnt[3] = {3, 3, 3};
@@ -1113,15 +1115,15 @@ static void toast_not_here(void) {
 
 // ---- Home's Notices card: paging, tap, and a position that survives notices coming and going ----
 static void home_notices_pages(void) {
-    fresh();   // a4 asks: one notice, so the card exists: Notices, Build, Docs
+    fresh(); calm();   // a4 asks: one notice, so the card exists: Notices, Build, Docs
     render(1000);
     CHECK(pod_tabs_pages_of(&U.nav, &U.model) == 3 && top()->scroll == 0);
     swipe(200, 300, 600, 310, 1000);   // right: the page before tab 0
-    CHECK(top()->scroll == -1);
+    CHECK(top()->scroll == -2);
     render(1200);
     CHECK(find(POD_A_INBOX) && !find(POD_A_ENTER_TAB));
     swipe(200, 300, 600, 310, 2000);   // the first page: stays
-    CHECK(top()->scroll == -1);
+    CHECK(top()->scroll == -2);
     swipe(600, 300, 200, 310, 3000);
     CHECK(top()->scroll == 0);
     swipe(600, 300, 200, 310, 4000);
@@ -1130,12 +1132,12 @@ static void home_notices_pages(void) {
     CHECK(top()->scroll == 1 && U.nav.depth == 1);
     // a tap on the Notices card opens Notices, and Back returns to the card
     swipe(200, 300, 600, 310, 6000); swipe(200, 300, 600, 310, 7000);
-    CHECK(top()->scroll == -1);
+    CHECK(top()->scroll == -2);
     render(8000);
     pod_out_t o = tap_(360, 300, 8100);
     CHECK(o.fx == POD_FX_NONE && U.nav.depth == 2 && top()->view == POD_V_INBOX);
     act(POD_A_BACK, 1);
-    CHECK(U.nav.depth == 1 && top()->scroll == -1);
+    CHECK(U.nav.depth == 1 && top()->scroll == -2);
     // a tap on a tab card still enters the tab
     swipe(600, 300, 200, 310, 9000);
     render(9500);
@@ -1144,11 +1146,11 @@ static void home_notices_pages(void) {
 }
 static void home_notices_come_and_go(void) {
     // on tab 1 with a notice: the notice goes, the page under the person is still tab 1; a notice comes, still tab 1
-    fresh();
+    fresh(); calm();
     act(POD_A_SCROLL, 1);
     render(1000);
     CHECK(top()->scroll == 1 && pod_tabs_pages_of(&U.nav, &U.model) == 3);
-    pod_ui_question_close(&U, "a4");
+    pod_ui_question_close(&U, "a4"); pod_model_turn(&U.model, "a4", "done", NULL, 0, 31);   // back to work, then done: no Working card
     CHECK(top()->scroll == 1 && pod_tabs_pages_of(&U.nav, &U.model) == 2);
     render(1100);
     CHECK(find(POD_A_ENTER_TAB) && !strcmp(find(POD_A_ENTER_TAB)->id, "s2"));
@@ -1157,10 +1159,11 @@ static void home_notices_come_and_go(void) {
     render(1300);
     CHECK(find(POD_A_ENTER_TAB) && !strcmp(find(POD_A_ENTER_TAB)->id, "s2"));
     // on the Notices card the last notice goes: Home settles on tab 0
-    fresh();
-    act(POD_A_SCROLL, -1);
-    CHECK(top()->scroll == -1);
-    pod_ui_question_close(&U, "a4");
+    fresh(); calm();
+    act(POD_A_SCROLL, -2);
+    CHECK(top()->scroll == -2);
+    pod_ui_question_close(&U, "a4"); pod_model_turn(&U.model, "a4", "done", NULL, 0, 31);   // back to work, then done: no Working card
+    pod_nav_sync(&U.nav, &U.model);
     CHECK(top()->scroll == 0 && U.nav.depth == 1);
     render(1000);
     CHECK(find(POD_A_ENTER_TAB) && !strcmp(find(POD_A_ENTER_TAB)->id, "s1") && !find(POD_A_INBOX));
@@ -1169,10 +1172,10 @@ static void home_notices_come_and_go(void) {
     CHECK(top()->scroll == 0);
 }
 static void home_swipe_up_lands_on_room_tab(void) {
-    fresh();
-    act(POD_A_SCROLL, -1);       // Home was left on the Notices card
+    fresh(); calm();
+    act(POD_A_SCROLL, -2);       // Home was left on the Notices card
     to_agent(1, 0);              // a room of Docs, opened another way
-    CHECK(U.nav.depth == 3 && U.nav.stack[0].scroll == -1);
+    CHECK(U.nav.depth == 3 && U.nav.stack[0].scroll == -2);
     render(1000);
     swipe(360, 660, 360, 520, 1000);   // up from the bottom zone
     CHECK(U.nav.depth == 1 && top()->scroll == 1);
@@ -1226,6 +1229,7 @@ static void overview_down_opens_inbox(void) {
 static void fresh8(void) {
     fresh();
     pod_model_question_close(&U.model, "a4");   // no notice, so no Notices card: the pages are the tabs
+    calm(); pod_model_turn(&U.model, "a4", "done", NULL, 0, 31);   // and nobody works: no Working card either
     static const char *x[] = {"a1", "a2", "a3"};
     const char *const *ids[8] = {x, x, x, x, x, x, x, x};
     uint8_t cnt[8] = {3, 3, 3, 3, 3, 3, 3, 3};
@@ -1377,6 +1381,7 @@ static void wake_rates(void) {
         fresh();
         calm();
         pod_model_question_close(&U.model, "a4");
+        calm(); pod_model_turn(&U.model, "a4", "done", NULL, 0, 31);   // and nobody works: no Working card either
         pod_model_turn(&U.model, "a4", "done", NULL, 0, 30);
         if (k == 1) act(POD_A_INBOX, 0);
         render(1000);
@@ -1454,6 +1459,111 @@ static void notify_while_looking(void) {
     CHECK(pod_model_unread_find(&U.model, "a3") != NULL);
 }
 
+// One swipe is one page, in the list's order: Notices, Working, Build, Docs.
+static void home_pages_one_swipe_each(void) {
+    fresh();   // a1 works, a4 asks
+    render(1000);
+    CHECK(pod_tabs_pages_of(&U.nav, &U.model) == 4);
+    swipe(200, 300, 600, 310, 1000); CHECK(top()->scroll == -1);
+    swipe(200, 300, 600, 310, 2000); CHECK(top()->scroll == -2);
+    swipe(200, 300, 600, 310, 3000); CHECK(top()->scroll == -2);
+    for (int i = 0; i < 4; i++) swipe(600, 300, 200, 310, 4000 + i * 1000);
+    CHECK(top()->scroll == 1);
+    swipe(200, 300, 600, 310, 9000); swipe(200, 300, 600, 310, 10000);
+    CHECK(top()->scroll == -1);
+    pod_ui_question_close(&U, "a4");   // Notices goes: Working is still the page shown
+    CHECK(top()->scroll == -1);
+    swipe(200, 300, 600, 310, 11000);  // the first page now
+    CHECK(top()->scroll == -1);
+}
+
+// Home's Working card: a swipe starting on the pet band pages the pets, any other swipe pages cards, a tap opens a pet, Back returns to the card.
+static void working_card(int n) {
+    fresh();
+    static const char *const id[6] = {"w1", "w2", "w3", "w4", "w5", "w6"};
+    static const uint32_t since[6] = {10000, 50000, 30000, 40000, 20000, 5000};   // turn starts, ms: the newest (w2) first
+    static const char *x[] = {"w1", "w2", "w3", "w4", "w5", "w6"};
+    pod_model_reset(&U.model);
+    pod_model_agents_begin(&U.model);
+    for (int i = 0; i < n; i++) pod_model_agent(&U.model, id[i], id[i], "claude", "mac");
+    pod_model_agents_end(&U.model);
+    const char *const *ids[1] = {x};
+    uint8_t cnt[1] = {(uint8_t)n};
+    cable_swarm_t it[1] = {{"s1", "Build", (uint8_t)n, (uint8_t)n}};
+    pod_model_swarms(&U.model, it, ids, cnt, 1, "s1", NULL, 0);
+    for (int i = 0; i < n; i++) pod_model_turn(&U.model, id[i], "started", NULL, 0, since[i]);
+    pod_model_clock(&U.model, 100000u);
+    U.model.linked = true;
+    U.nav.stack[0].scroll = POD_HOME_WORKING;
+    render(100000);
+}
+static void working_card_swipes(void) {
+    working_card(5);
+    CHECK(top()->scroll == POD_HOME_WORKING && U.nav.work_page == 0);
+    swipe(600, 430, 200, 440, 1000);
+    CHECK(U.nav.work_page == 1 && top()->scroll == POD_HOME_WORKING);
+    swipe(600, 256, 200, 440, 1300);   // the band's first row (where the pet hits start): still the pets; already the last page
+    CHECK(U.nav.work_page == 1 && top()->scroll == POD_HOME_WORKING);
+    swipe(200, 536, 600, 440, 1600);
+    CHECK(U.nav.work_page == 0 && top()->scroll == POD_HOME_WORKING);
+    swipe(200, 430, 600, 440, 1900);   // before the first pet page: stays, and the cards do not page
+    CHECK(U.nav.work_page == 0 && top()->scroll == POD_HOME_WORKING);
+    swipe(600, 430, 200, 440, 2200);
+    swipe(600, 150, 200, 160, 2500);   // the title area: the next card, and the pets go back to page 0
+    CHECK(top()->scroll == 0 && U.nav.work_page == 0);
+    swipe(200, 150, 600, 160, 2800);
+    CHECK(top()->scroll == POD_HOME_WORKING);
+    swipe(600, 255, 200, 160, 3100);   // just above the band: cards
+    CHECK(top()->scroll == 0);
+    swipe(200, 150, 600, 160, 3400);
+    swipe(600, 537, 200, 440, 3700);   // just below the band: cards
+    CHECK(top()->scroll == 0 && U.nav.work_page == 0);
+    working_card(6);   // a multiple of 3: two pages, no empty third
+    swipe(600, 430, 200, 440, 1000);
+    swipe(600, 430, 200, 440, 1300);
+    CHECK(U.nav.work_page == 1 && top()->scroll == POD_HOME_WORKING);
+    working_card(3);   // exactly 3: nothing to page, so the band swipe pages cards like any other (work_page stays 0)
+    swipe(600, 430, 200, 440, 1000);
+    CHECK(U.nav.work_page == 0 && top()->scroll == 0);
+}
+static void working_card_shrinks(void) {
+    working_card(5);
+    swipe(600, 430, 200, 440, 1000);
+    CHECK(U.nav.work_page == 1);
+    pod_model_turn(&U.model, "w1", "done", NULL, 0, 60000);   // 4 left: still 2 pages
+    pod_nav_sync(&U.nav, &U.model);
+    CHECK(U.nav.work_page == 1);
+    pod_model_turn(&U.model, "w5", "done", NULL, 0, 61000);   // 3 left: one page
+    pod_nav_sync(&U.nav, &U.model);
+    CHECK(U.nav.work_page == 0 && top()->scroll == POD_HOME_WORKING);
+}
+static void working_card_tap_and_back(void) {
+    working_card(5);
+    const pod_hit_t *h = &U.frame.hits[0];
+    int x = h->x + h->w / 2, y = h->y + h->h / 2;
+    pod_out_t o = tap_(x, y, 2000);   // slot 0: the newest, w2
+    CHECK(o.fx == POD_FX_AGENT_OPEN && !strcmp(o.agent, "w2") && top()->view != POD_V_TABS && !strcmp(top()->agent, "w2"));
+    act(POD_A_BACK, 1);
+    CHECK(U.nav.depth == 1 && top()->view == POD_V_TABS && top()->scroll == POD_HOME_WORKING);
+    render(103000);
+    o = tap_(x, y, 4000);
+    CHECK(o.fx == POD_FX_AGENT_OPEN);
+    swipe(360, 690, 360, 500, 5000);   // the swipe up home
+    CHECK(U.nav.depth == 1 && top()->scroll == POD_HOME_WORKING);
+    // the agent leaves the model between draw and tap: nothing opens, and the screen is redrawn
+    render(106000);
+    pod_model_agents_begin(&U.model);
+    pod_model_agent(&U.model, "w1", "w1", "claude", "mac");
+    pod_model_agent(&U.model, "w3", "w3", "claude", "mac");
+    pod_model_agent(&U.model, "w4", "w4", "claude", "mac");
+    pod_model_agent(&U.model, "w5", "w5", "claude", "mac");
+    pod_model_agents_end(&U.model);
+    bool changed = false;
+    t_(true, x, y, 7000);
+    o = pod_ui_touch(&U, false, x, y, 7050, &changed);
+    CHECK(o.fx == POD_FX_NONE && changed && U.nav.depth == 1);
+}
+
 int main(void) {
     notify_while_looking();
     overview_pages();
@@ -1472,6 +1582,7 @@ int main(void) {
     home_notices_pages();
     home_notices_come_and_go();
     home_swipe_up_lands_on_room_tab();
+    home_pages_one_swipe_each();
     selected_tab_follows();
     start_enters_first_tab();
     start_then_focus();
@@ -1509,6 +1620,9 @@ int main(void) {
     asking_agents_do_not_talk();
     talk_stays_with_its_target();
     refused_talk_stays_on_the_agent();
+    working_card_swipes();
+    working_card_shrinks();
+    working_card_tap_and_back();
     printf("test_ph_glue: %d checks ok\n", checks);
     return 0;
 }

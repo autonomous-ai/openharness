@@ -1901,9 +1901,8 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                 ],
                 Expanded(
                   child: subscriptionAccount != null
-                      // A subscription names its provider, and the account after it in the quieter
-                      // colour: "Anthropic  315df1", not one run of text where the account reads
-                      // as part of the name.
+                      // Keep the provider distinct from its email. Both must fit the available
+                      // width: an email can be much longer than the old short account key.
                       ? Row(
                           children: [
                             Flexible(
@@ -1916,11 +1915,14 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                               ),
                             ),
                             const SizedBox(width: 8),
-                            SearchResultText(
-                              subscriptionAccount.account,
-                              key: ValueKey('model-row-account:${row.id}'),
-                              matches: matches.where((match) => match.title),
-                              style: DesktopChrome.text(color: muted),
+                            Flexible(
+                              flex: 2,
+                              child: SearchResultText(
+                                subscriptionAccount.account,
+                                key: ValueKey('model-row-account:${row.id}'),
+                                matches: matches.where((match) => match.title),
+                                style: DesktopChrome.text(color: muted),
+                              ),
                             ),
                           ],
                         )

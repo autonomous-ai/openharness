@@ -177,8 +177,8 @@ real('a stopped engine in a real pane', () => {
       const p = await open(shell, engine, f, 'extra' in launch ? launch.extra : {})
       const up = await until('the engine to start', () => f.lines().find((line) => line.startsWith('up ')))
       const pid = Number(up.split(' ')[1])
-      // Codex is given its writer flag, then the arguments as they were.
-      if (engine === 'codex') expect(JSON.parse(up.slice(up.indexOf('[')))).toEqual(['--no-daemon'])
+      // Keep the native writer and inline transcript settings through the wrapper.
+      if (engine === 'codex') expect(JSON.parse(up.slice(up.indexOf('[')))).toEqual(['--no-daemon', '-c', 'tui.fullscreen_transcript=false'])
 
       // Ctrl+Z: the whole group stops, the shell continues it, and the engine takes the terminal again.
       await p.keys('C-z')

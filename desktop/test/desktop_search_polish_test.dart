@@ -161,17 +161,19 @@ class _ReviewSubscriptions extends ModelsMenuController {
   @override
   List<Map<String, Object?>> get rows => const [
     {
-      'engine': 'codex',
-      'title': 'OpenAI',
-      'status': '71% remaining',
-      'remainingPercent': 71.0,
-      'details': ['Weekly usage · resets Friday'],
-    },
-    {
       'engine': 'claude',
       'title': 'Anthropic',
+      'account': 'developer.with.a.long.email@example.com',
+      'accountKey': 'aabbccddeeff0011',
+      'status': '8% remaining',
+      'remainingPercent': 8.0,
+      'details': ['Limiting window: Session', 'Session — 8% remaining · resets in 30m', 'Weekly — 58% remaining · resets in 5d 10h'],
+    },
+    {
+      'engine': 'codex',
+      'title': 'OpenAI',
       'status': 'Not signed in',
-      'details': ['Sign in to Claude on this computer.'],
+      'details': ['Sign in to Codex on this computer.'],
     },
   ];
 }
@@ -728,6 +730,14 @@ void main() {
           );
           if (name == 'models') {
             final preview = find.byType(SwarmResourcePreview);
+            expect(
+              find.descendant(
+                of: preview,
+                matching: find.text('Anthropic · developer.with.a.long.email@example.com'),
+              ),
+              findsOneWidget,
+            );
+            expect(find.textContaining('aabbcc'), findsNothing);
             expect(
               find.descendant(of: preview, matching: find.text('Machine')),
               findsNothing,

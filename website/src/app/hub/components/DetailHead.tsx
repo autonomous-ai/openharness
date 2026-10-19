@@ -21,18 +21,19 @@ export function DetailHead({ harness, social, ready, busy, panel, onFollow, onLi
   return <header className={styles.detailHead}>
     <div className={styles.identity}><h1>{harness.title}</h1><div className={styles.byline}>
       <Link className={styles.authorLink} href={`/hub/creators/${harness.authorId}`}>{harness.authorName}</Link>
-      {!social.mine && <button className={styles.follow} disabled={busy} aria-pressed={social.following} onClick={onFollow}>{social.following ? 'Following' : 'Follow'}</button>}
+      {/* Shown once the reader is known: an author must not see Follow on their own harness, even for a moment. */}
+      {ready && !social.mine && <button className={styles.follow} disabled={busy} aria-pressed={social.following} onClick={onFollow}>{social.following ? 'Following' : 'Follow'}</button>}
       <ForkedFrom harness={harness} />
       {!!social.forks && <a className={styles.textLink} href="#forks">{social.forks === 1 ? '1 fork' : `${social.forks} forks`}</a>}
     </div></div>
     <div className={styles.actions}>
-      <button className={social.liked ? styles.liked : ''} disabled={busy} aria-label={social.liked ? 'Unlike harness' : 'Like harness'} aria-pressed={social.liked} onClick={onLike}><Heart /><span>{ready ? social.likes : 'Like'}</span></button>
-      <button aria-label="Comments" aria-pressed={panel === 'comments'} onClick={() => onPanel('comments')}><MessageCircle /><span>{ready ? commentTotal(social) : 'Comments'}</span></button>
+      <button className={social.liked ? styles.liked : ''} disabled={busy || !ready} aria-label={social.liked ? 'Unlike harness' : 'Like harness'} aria-pressed={social.liked} onClick={onLike}><Heart /><span>{ready ? social.likes : '–'}</span></button>
+      <button aria-label="Comments" aria-pressed={panel === 'comments'} onClick={() => onPanel('comments')}><MessageCircle /><span>{ready ? commentTotal(social) : '–'}</span></button>
       <button aria-label="Source files" aria-pressed={panel === 'files'} onClick={() => onPanel('files')}><FileCode2 /><span className={styles.actionLabel}>Files</span></button>
       <ShareMenu harness={harness} />
       {social.mine && <Link href={`/hub/publish?edit=${harness.id}`}><Pencil /><span>Edit</span></Link>}
       {/* Not your own, and not a starter: those are the Hub's. */}
-      {!social.mine && !harness.example && <button aria-label="Report harness" onClick={onReport}><Flag /><span className={styles.actionLabel}>Report</span></button>}
+      {ready && !social.mine && !harness.example && <button aria-label="Report harness" onClick={onReport}><Flag /><span className={styles.actionLabel}>Report</span></button>}
       <ForkButton harness={harness}><GitFork /> Fork</ForkButton>
     </div>
   </header>;

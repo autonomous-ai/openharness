@@ -265,6 +265,42 @@ describe('owner authority and read-only observation', () => {
       owner.receive(id, 'observer_open', { shareId: grant.id, email: grant.recipientEmail, ephemeral: b64e(newEphemeral().pub) })
     const carolOf = () => store.all().find(g => g.recipientEmail === 'carol@example.com')!
 
+    it('preserves unread legacy rosters while replacing only the current Super Tab grants', async () => {
+      await owner.stop()
+      const grant = (email: string, tab: string) => ({ agentId: 'agent', email, tab, name: 'api', engine: 'codex', ownerPublicKey: KEY })
+      const expiry = new Date(Date.now() + 10 * DAY).toISOString()
+      store.derive('machine', [grant('legacy@example.com', TAB), grant('removed@example.com', TAB), grant('old@example.com', 'super:old')], expiry, 0)
+      store.derive('machine', [grant('legacy@example.com', TAB), grant('old@example.com', 'super:old')], expiry, 0)
+      store.derive('other-machine', [grant('elsewhere@example.com', TAB)], expiry, 0)
+      store.invite({ machineId: 'machine', agentId: 'agent', recipientEmail: 'manual@example.com', name: 'Manual', engine: 'codex', ownerPublicKey: KEY, expiresAt: expiry })
+      rosters.mockResolvedValue(null)
+      let wanted = [grant('current@example.com', 'super:current')]
+      owner = new HarnessShareOwner({ machineId: () => machineId, identity, grants: store, rosters,
+        derivedGrants: () => wanted, resolveAgent: id => agents.get(id), send, publish, terminals: {} as TerminalBackendCoordinator })
+      await derive()
+      const active = () => store.all().filter(g => !g.revoked).map(g => g.recipientEmail).sort()
+      expect(active()).toEqual(['current@example.com', 'elsewhere@example.com', 'legacy@example.com', 'manual@example.com'])
+      expect(publish.mock.calls.some(call => (call[2] as any)?.superTabId === 'current')).toBe(true)
+      wanted = []
+      await vi.advanceTimersByTimeAsync(1000); await owner.sync()
+      expect(active()).toEqual(['elsewhere@example.com', 'legacy@example.com', 'manual@example.com'])
+    })
+
+    it('refuses and closes an observer immediately when its external grant authority expires', async () => {
+      await owner.stop()
+      let allowed = true
+      owner = new HarnessShareOwner({ machineId: () => machineId, identity, grants: store,
+        derivedGrants: () => [{ agentId: 'agent', email: 'carol@example.com', tab: 'super:tab', name: 'api', engine: 'codex' }],
+        allowsGrant: () => allowed, resolveAgent: id => agents.get(id), send, publish, terminals: {} as TerminalBackendCoordinator })
+      await derive(); await open(carolOf())
+      expect(frames.at(-1)?.type).toBe('observer_welcome')
+      allowed = false
+      await owner.receive('observer:carol', 'observer_frame', {})
+      expect(frames.at(-1)?.type).toBe('observer_closed')
+      await open(carolOf(), 'observer:new')
+      expect(frames.at(-1)).toMatchObject({ id: 'observer:new', type: 'observer_closed' })
+    })
+
     it('derives a grant for every other account in the tab, publishes it, and lets that observer watch', async () => {
       holding(tab())
       expect(await derive()).toEqual({ invited: 2, revoked: 0 })

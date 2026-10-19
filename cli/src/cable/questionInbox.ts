@@ -53,6 +53,11 @@ export class QuestionInbox {
     this.entries.set(agentId, { agentId, id, token: randomUUID(), signature, questions, drafts: new Map() })
   }
 
+  /** Every question still open, for a resync. */
+  open(): Array<{ agentId: string; id: string; questions: ReviewQuestion[] }> {
+    return [...this.entries.values()].map(({ agentId, id, questions }) => ({ agentId, id, questions }))
+  }
+
   close(agentId: string, id: string): boolean {
     const current = this.latestIds.get(agentId)
     if (current !== undefined && current !== id) return false

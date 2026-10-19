@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 const mocks = vi.hoisted(() => ({
   prisma: {
+    $transaction: vi.fn(),
     machine: { findFirst: vi.fn() },
     machineShare: { findUnique: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() },
     machineShareAdd: { findMany: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() },
@@ -31,6 +32,7 @@ describe('sharing a machine', () => {
   const auth = { authorization: 'Bearer fixture' }
   beforeEach(async () => {
     vi.resetAllMocks()
+    mocks.prisma.$transaction.mockImplementation(async work => work(mocks.prisma))
     mocks.auth.mockResolvedValue(dee)
     mocks.prisma.machine.findFirst.mockResolvedValue(machine)
     mocks.prisma.machineShare.findUnique.mockResolvedValue(null)
@@ -88,13 +90,21 @@ describe('sharing a machine', () => {
     const res = await put({ emails: [' Ann@Gmail.com ', 'ann@gmail.com', 'DEE@acme.io', 'ghost@x.invalid'], sameDomain: true })
     expect(res.statusCode).toBe(200)
     expect(mocks.prisma.machineShare.upsert).toHaveBeenCalledWith({ where: { machineId: M1 },
-      create: { machineId: M1, ownerId: 'dee', autonomousEnv: 'prod', emails: ['ann@gmail.com'], domain: 'acme.io' },
-      update: { ownerId: 'dee', autonomousEnv: 'prod', emails: ['ann@gmail.com'], domain: 'acme.io' } })
+      create: { machineId: M1, ownerId: 'dee', autonomousEnv: 'prod', emails: ['ann@gmail.com'], domain: 'acme.io', grantVersions: expect.any(Object) },
+      update: { ownerId: 'dee', autonomousEnv: 'prod', emails: ['ann@gmail.com'], domain: 'acme.io', grantVersions: expect.any(Object) } })
     expect(res.json().data).toEqual({ emails: ['ann@gmail.com'], sameDomain: true, domain: 'acme.io', members })
     expect(mocks.shareChanged).toHaveBeenCalledWith(M1)
     expect(mocks.prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { OR: [
       { email: { in: ['old@acme.io', 'ann@gmail.com'] } }, { email: { endsWith: '@acme.io' } }] } }))
     expect(mocks.listChanged.mock.calls.map(c => c[0]).sort()).toEqual(['ann', 'kim', 'lee'])
+  })
+
+  it('retries a concurrent policy update before choosing versions for the resulting grants', async () => {
+    mocks.prisma.$transaction.mockRejectedValueOnce({ code: 'P2034' })
+    const res = await put({ emails: ['ann@gmail.com'], sameDomain: false })
+    expect(res.statusCode).toBe(200)
+    expect(mocks.prisma.$transaction).toHaveBeenCalledTimes(2)
+    expect(mocks.prisma.machineShare.upsert).toHaveBeenCalledOnce()
   })
 
   it('refuses everyone at a public domain', async () => {

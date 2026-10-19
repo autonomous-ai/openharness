@@ -1,7 +1,7 @@
-// Dev helper (not run by run.sh): rasters every scene of every pet over a strongly coloured ground and reports
+// Dev helper (not run by run.sh): rasters every scene of every pet (ht_pets and Codex) over a strongly coloured ground and reports
 // opaque near-white pixels connected (4-way) to the outside of the art -- background baked into the frames.
 // Also scans the source frames: near-white palette cells reachable from a frame's transparent border.
-//   cc -std=c11 -O1 -DHT_FACE_PX=720 -I $h -I main -I test/host_stubs \
+//   cc -std=c11 -O1 -DHT_FACE_PX=720 -I $h -I main \
 //      -o out test/pod_pet_ground.c $p/{engine_logos,pets,pod_draw,pod_pet}.c $h/{pro_canvas,terminal}.c $g
 //   out <ground-rgb-hex> <dir>      writes <dir>/pet-ground-<engine>.ppm (convert to PNG separately)
 #include <stdio.h>
@@ -21,8 +21,8 @@ int main(int argc, char **argv)
     uint16_t ground = ht_rgb(rgb);
     static const uint32_t at[COLS] = {0, 400, 900, 1700};
     static const char *const names[] = {"rest", "work", "ask", "relax", "listen", "send"};
-    for (unsigned e = 0; e < ht_pet_count; e++) {
-        const ht_pet_t *pet = &ht_pets[e];
+    for (unsigned e = 0; e <= ht_pet_count; e++) {   // ht_pets, then Codex (pod_codex_pet, not in ht_pets)
+        const char *engine = e < ht_pet_count ? ht_pets[e].engine : "codex";
         int W = S * COLS, H = S * SCENES;
         uint16_t *img = malloc((size_t)W * H * 2);
         for (int i = 0; i < W * H; i++) img[i] = ground;
@@ -30,7 +30,7 @@ int main(int argc, char **argv)
             long bg_total = 0;
             for (int c = 0; c < COLS; c++) {
                 ht_scene_t s; ht_scene_clear(&s, 0);
-                pod_pet_draw(&s, 0, 0, S, pet->engine, (pod_scene_t)k, at[c], 0, 8);
+                pod_pet_draw(&s, 0, 0, S, engine, (pod_scene_t)k, at[c], 0, 8);
                 static uint16_t tile[S * S];
                 for (int i = 0; i < S * S; i++) tile[i] = ground;
                 ht_rect_t clip = {0, 0, S, S};
@@ -56,7 +56,7 @@ int main(int argc, char **argv)
                 bg_total += bg;
                 for (int y = 0; y < S; y++) memcpy(img + (size_t)(k * S + y) * W + c * S, tile + y * S, S * 2);
             }
-            if (bg_total) printf("%s %s: %ld near-white pixels connected to the outside\n", pet->engine, names[k], bg_total);
+            if (bg_total) printf("%s %s: %ld near-white pixels connected to the outside\n", engine, names[k], bg_total);
         }
         // source frames: near-white palette cells reachable from the transparent border of each frame
         long src_bad = 0, frames = 0;
@@ -65,7 +65,7 @@ int main(int argc, char **argv)
             break;
         }
         char path[512];
-        snprintf(path, sizeof path, "%s/pet-ground-%s.ppm", dir, pet->engine);
+        snprintf(path, sizeof path, "%s/pet-ground-%s.ppm", dir, engine);
         FILE *fp = fopen(path, "wb");
         fprintf(fp, "P6\n%d %d\n255\n", W, H);
         for (size_t i = 0; i < (size_t)W * H; i++) {
@@ -76,7 +76,7 @@ int main(int argc, char **argv)
         fclose(fp);
         free(img);
         (void)src_bad; (void)frames;
-        printf("%s done\n", pet->engine);
+        printf("%s done\n", engine);
     }
     return 0;
 }

@@ -154,7 +154,10 @@ void main() {
           await tester.ensureVisible(code);
           await tester.pumpAndSettle();
           expect(code.hitTestable(), findsOneWidget);
-          expect(find.text('Scan with the Harness app.'), findsOneWidget);
+          expect(
+            find.text('Scan with the Harness mobile app.'),
+            findsOneWidget,
+          );
           final close = find.byKey(const ValueKey('add-phone-close'));
           await tester.ensureVisible(close);
           await tester.pumpAndSettle();

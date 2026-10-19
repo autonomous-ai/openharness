@@ -18,22 +18,14 @@ import { activeMachineKeys } from './deviceKeyLog.js'
 import { emailDomain, isPublicEmailDomain } from './publicEmailDomains.js'
 import { storedAutonomousEnvironment } from './autonomousEnvironment.js'
 import type { AuthUser } from './ssoAuth.js'
+import { sharedVia, type ShareVia } from './machineSharePolicy.js'
 
-export type ShareVia = 'email' | 'domain'
+export { sharedVia, type ShareVia } from './machineSharePolicy.js'
 
 /** The most machines one account is shown as shared with it, and the most a machine lists as using it. */
 export const SHARED_LIST_MAX = 200
 
 const normalized = (email: string): string => email.trim().toLowerCase()
-
-/** How `share` reaches `email`: named, at the owner's domain, or not at all. */
-export function sharedVia(share: Pick<MachineShare, 'emails' | 'domain'>, email: string): ShareVia | null {
-  const address = normalized(email)
-  if (share.emails.includes(address)) return 'email'
-  const domain = emailDomain(address)
-  if (share.domain && domain === share.domain && !isPublicEmailDomain(domain)) return 'domain'
-  return null
-}
 
 /** Whether `user` may use `machine`, which another account owns: how it was shared with them, or null. */
 export async function sharedMachineAccess(user: AuthUser, machine: Pick<Machine, 'machineId' | 'userId' | 'autonomousEnv'>): Promise<ShareVia | null> {

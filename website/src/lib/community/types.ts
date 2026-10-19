@@ -29,6 +29,8 @@ export type HarnessSummary = {
   example?: boolean;
   recording?: string;
   forkedFrom?: string;
+  /** When its author last edited it; a feed from an older backend leaves it out. */
+  updatedAt?: string | null;
 };
 /**
  * `updatedAt`: when its author last edited it. `origin`: the publication it was forked from, by name,

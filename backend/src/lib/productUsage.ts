@@ -46,7 +46,7 @@ export async function ingestProductUsage(userId: string, report: ProductUsageRep
 }
 
 export interface SetupUsageReport { id: string; day: string; counters: Record<string, number> }
-/** Only the dedicated route's narrow schema may call this. No account/authentication lookup. */
+/** Only the dedicated signed-out routes' narrow schemas (setup, Hub) may call this. No account/authentication lookup. */
 export async function ingestSetupUsage(report: SetupUsageReport, now = new Date()) {
   const age = Math.floor(now.getTime() / DAY) * DAY - Date.parse(report.day + 'T00:00:00Z')
   if (!validDay(report.day, now) || age > DAY) return { accepted: false, reason: 'EXPIRED' }

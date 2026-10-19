@@ -34,6 +34,10 @@ ProviderUsage? _readingFrom(Map<Object?, Object?> entry) {
   if (provider == null) return null;
   final account = entry['account'];
   final accountKey = account is String && account.isNotEmpty ? account : null;
+  final rawEmail = entry['email'];
+  final email = rawEmail is String && rawEmail.trim().isNotEmpty
+      ? rawEmail.trim()
+      : null;
   switch (entry['outcome']) {
     case 'answered':
       final status = entry['httpStatus'];
@@ -44,11 +48,13 @@ ProviderUsage? _readingFrom(Map<Object?, Object?> entry) {
           statusCode: statusCode,
           body: body,
           account: accountKey,
+          email: email,
         ),
         UsageProvider.codex => codexUsageFromAnswer(
           statusCode: statusCode,
           body: body,
           account: accountKey,
+          email: email,
         ),
       };
     case 'signedOut':

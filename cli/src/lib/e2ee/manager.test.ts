@@ -807,3 +807,56 @@ describe('terminal bytes sealed for a session this process never had', () => {
     expect(h.mgr.terminalSessionGone('live', await keystrokes(4))).toBeNull()
   })
 })
+
+// A guest: a key trusted only because this machine is shared with its account (gateway/sharedTrust.ts). It
+// must not open the owner's broadcasts; what concerns its own harnesses is sealed for its session alone
+// (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+describe('E2eeManager guests', () => {
+  type Wrapped = import('./core.js').WrappedPayload
+  it('welcomes a guest without the machine\'s group key, seals its events for its session alone, and keeps it out of a rekey', () => {
+    const h = machine()
+    const adapterPub = (h.mgr as unknown as { store: { getIdentity(): { pub: Uint8Array } } }).store.getIdentity().pub
+    const owner = new WebPeer(); const guest = new WebPeer(); const other = new WebPeer()
+    h.mgr.trustPeer({ pub: C.b64e(owner.identity.pub), label: 'own' })
+    h.mgr.trustPeer({ pub: C.b64e(guest.identity.pub), label: 'Mac · kim', kind: 'machine', machineId: 'a'.repeat(32), shared: true, sharedWith: 'kim@acme.io' })
+    h.mgr.trustPeer({ pub: C.b64e(other.identity.pub), label: 'Mac · lee', kind: 'machine', machineId: 'b'.repeat(32), shared: true, sharedWith: 'lee@acme.io' })
+    for (const [conn, peer] of [['o', owner], ['g', guest], ['l', other]] as const) {
+      h.mgr.handleFrame(conn, peer.hello())
+      peer.onWelcome(h.lastFor(conn, 'e2e_welcome')!, adapterPub)
+    }
+    const opens = (peer: WebPeer, frame: Frame) => C.unwrapPayload(peer.session!.groupKey, (frame.payload as Wrapped).__e2e, 'text_delta', 's')
+    const up = h.mgr.wrapUp({ type: 'text_delta', dbSessionId: 's', payload: { content: 'the owner\'s' } })
+    expect(opens(owner, up)).toEqual({ content: 'the owner\'s' })
+    expect(opens(guest, up)).toBeNull()
+
+    expect(h.mgr.guestSessions('kim@acme.io')).toEqual(['g'])
+    expect(h.mgr.guestSessions('')).toEqual([])
+    const mine = h.mgr.wrapFor('g', { type: 'text_delta', dbSessionId: 's', payload: { content: 'yours' } })!
+    const env = (mine.payload as Wrapped).__e2e
+    expect(env.k).toBe('p')
+    expect(C.unwrapPayload(guest.session!.s2c, env, 'text_delta', 's')).toEqual({ content: 'yours' })
+    expect(C.unwrapPayload(other.session!.s2c, env, 'text_delta', 's')).toBeNull()
+    expect(h.mgr.wrapFor('gone', { type: 'text_delta', payload: {} })).toBeNull()
+    // Nothing to seal: as wrapUp passes it.
+    expect(h.mgr.wrapFor('g', { type: 'node_status', payload: { online: true } })).toEqual({ type: 'node_status', payload: { online: true } })
+
+    // Sharing with lee ends: the key turns over, and the guest that stays is still handed a throwaway one.
+    h.mgr.untrustPeer(C.b64e(other.identity.pub))
+    owner.onRekey(h.lastFor('o', 'e2e_rekey')!)
+    guest.onRekey(h.lastFor('g', 'e2e_rekey')!)
+    const later = h.mgr.wrapUp({ type: 'text_delta', dbSessionId: 's', payload: { content: 'later' } })
+    expect(opens(owner, later)).toEqual({ content: 'later' })
+    expect(opens(guest, later)).toBeNull()
+  })
+
+  it('records whom a shared key is shared with, and a change of it', () => {
+    const h = machine()
+    const peer = new WebPeer()
+    const pub = C.b64e(peer.identity.pub)
+    h.mgr.trustPeer({ pub, label: 'Mac', kind: 'machine', machineId: 'c'.repeat(32), shared: true, sharedWith: 'kim@acme.io' })
+    expect(h.mgr.pairedPeers().find((p) => p.identityPub === pub)?.sharedWith).toBe('kim@acme.io')
+    h.mgr.trustPeer({ pub, label: 'Mac', kind: 'machine', machineId: 'c'.repeat(32), shared: true, sharedWith: 'kim@acme.io' })
+    h.mgr.trustPeer({ pub, label: 'Mac', kind: 'machine', machineId: 'c'.repeat(32), shared: true, sharedWith: 'kim.n@acme.io' })
+    expect(h.mgr.pairedPeers().find((p) => p.identityPub === pub)?.sharedWith).toBe('kim.n@acme.io')
+  })
+})

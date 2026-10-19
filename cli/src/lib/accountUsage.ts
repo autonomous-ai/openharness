@@ -8,8 +8,8 @@
  * answer to `usage_read`.
  *
  * **The credential never leaves this machine.** The vendor is called from here, and what goes back
- * over the relay is the vendor's answer — its HTTP status and body — plus an opaque account key.
- * Never the token, never the account's email or id.
+ * over the encrypted relay is the vendor's answer, an opaque account key and an optional email
+ * for display. Never the token or raw account id. Clients redact email metadata from logs.
  *
  * **Deliberately a thin proxy, not a parser.** The body is returned as the vendor sent it, and the
  * client interprets it with the SAME code that interprets its own local reading
@@ -24,13 +24,17 @@
  * Every failure here is an `outcome`, never a throw — the reply must go back either way.
  */
 import { createHash } from 'node:crypto'
-import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
-import { promisify } from 'node:util'
-
-const execFileAsync = promisify(execFile)
+import {
+  asRecord,
+  claudeProfilePath,
+  codexAuthPath,
+  jwtClaims,
+  parseJson,
+  readClaudeStored,
+  readText,
+  stringField,
+} from './agentCredentials.js'
 
 export type UsageProviderId = 'claude' | 'codex'
 
@@ -48,6 +52,8 @@ export interface AccountUsageReading {
    * as. The client compares these to show one figure per ACCOUNT rather than one per machine.
    */
   account: string | null
+  /** Display label only; account identity and deduplication still use `account`. */
+  email?: string
   outcome: UsageOutcome
   httpStatus?: number
   body?: unknown
@@ -65,8 +71,8 @@ const FETCH_TIMEOUT_MS = 8_000
  * An account, as the wire names it: the first 16 hex characters of sha256(`<provider>:<id>`).
  *
  * Hashed rather than sent raw because the reply is LOGGED — the desktop writes every RPC answer to
- * `~/.harness/logs` — and an account id or email has no business there. Equality survives hashing,
- * which is all the client needs.
+ * `~/.harness/logs` — and a raw account id has no business there. Email display metadata is separate
+ * and redacted by clients; equality uses this stable key rather than a display label.
  *
  * ⚠️ **A cross-language contract.** The desktop computes the same key for its own account
  * (`lib/usage/usage_account_key.dart`) and the two must agree byte for byte, or every remote reading
@@ -93,16 +99,15 @@ export async function readAccountUsage(deps: AccountUsageDeps = {}): Promise<Acc
 
 async function readClaude(deps: AccountUsageDeps): Promise<AccountUsageReading> {
   const home = deps.home ?? homedir()
-  // The Keychain first and the file second, as the desktop reads its own: macOS keeps the token in
-  // the login Keychain and Linux in a file, and a Keychain that will not answer is a state, not the
-  // end of the road.
-  const stored = (await readKeychain(deps)) ?? (await readText(join(home, '.claude', '.credentials.json')))
+  // The Keychain first and the file second (`agentCredentials.ts`).
+  const stored = (await readClaudeStored(deps))?.raw ?? null
   const oauth = asRecord(asRecord(parseJson(stored))?.claudeAiOauth)
   const token = stringField(oauth?.accessToken)
   // The account lives beside the token rather than in it: `~/.claude.json` is where Claude Code
   // records who it is signed in as, on every platform.
-  const profile = asRecord(asRecord(parseJson(await readText(join(home, '.claude.json'))))?.oauthAccount)
+  const profile = asRecord(asRecord(parseJson(await readText(claudeProfilePath(home))))?.oauthAccount)
   const accountId = stringField(profile?.accountUuid)
+  const email = emailField(profile?.emailAddress)
   const account = accountId ? accountKey('claude', accountId) : null
   if (!token) return { provider: 'claude', account, outcome: 'signedOut' }
 
@@ -121,20 +126,21 @@ async function readClaude(deps: AccountUsageDeps): Promise<AccountUsageReading> 
     Authorization: `Bearer ${token}`,
     'anthropic-beta': 'oauth-2025-04-20',
     'User-Agent': 'claude-code/2.1.0',
-  }, deps)
+  }, deps, email)
 }
 
 async function readCodex(deps: AccountUsageDeps): Promise<AccountUsageReading> {
   const home = deps.home ?? homedir()
-  const tokens = asRecord(asRecord(parseJson(await readText(join(home, '.codex', 'auth.json'))))?.tokens)
+  const tokens = asRecord(asRecord(parseJson(await readText(codexAuthPath(home))))?.tokens)
   const token = stringField(tokens?.access_token)
   const accountId = stringField(tokens?.account_id)
   const account = accountId ? accountKey('codex', accountId) : null
+  const email = tokenEmail(tokens?.id_token)
   if (!token) return { provider: 'codex', account, outcome: 'signedOut' }
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` }
   // The account the backend scopes the reading to — the same id the key above is made from.
   if (accountId) headers['ChatGPT-Account-Id'] = accountId
-  return ask('codex', account, CODEX_USAGE_URL, headers, deps)
+  return ask('codex', account, CODEX_USAGE_URL, headers, deps, email)
 }
 
 async function ask(
@@ -143,12 +149,13 @@ async function ask(
   url: string,
   headers: Record<string, string>,
   deps: AccountUsageDeps,
+  email: string | null,
 ): Promise<AccountUsageReading> {
   const fetchImpl = deps.fetchImpl ?? fetch
   try {
     const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
     const text = await response.text()
-    return { provider, account, outcome: 'answered', httpStatus: response.status, body: parseJson(text) }
+    return { provider, account, ...(email ? { email } : {}), outcome: 'answered', httpStatus: response.status, body: parseJson(text) }
   } catch {
     // No detail on purpose: a network error's message can carry the URL, and the client already
     // knows which vendor it asked.
@@ -156,49 +163,11 @@ async function ask(
   }
 }
 
-/** The macOS Keychain item Claude Code writes — `security` rather than a native module, for one
- *  read of one generic password. */
-async function readKeychain(deps: AccountUsageDeps): Promise<string | null> {
-  if (deps.readKeychain) return deps.readKeychain()
-  if ((deps.platform ?? process.platform) !== 'darwin') return null
-  try {
-    const { stdout } = await execFileAsync(
-      'security',
-      ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
-      { timeout: 5_000 },
-    )
-    const out = stdout.trim()
-    return out.length > 0 ? out : null
-  } catch {
-    return null
-  }
+function emailField(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
 }
 
-async function readText(path: string): Promise<string | null> {
-  try {
-    return await readFile(path, 'utf8')
-  } catch {
-    return null
-  }
-}
-
-/** A half-written credentials file is not news — the CLI that owns it is mid-refresh, and the next
- *  poll a minute from now reads it whole. */
-function parseJson(raw: string | null): unknown {
-  if (raw === null) return null
-  try {
-    return JSON.parse(raw) as unknown
-  } catch {
-    return null
-  }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
-}
-
-function stringField(value: unknown): string | null {
-  return typeof value === 'string' && value.length > 0 ? value : null
+/** ID-token claims supply a display label only, never an authentication decision. */
+function tokenEmail(value: unknown): string | null {
+  return emailField(jwtClaims(value)?.email)
 }

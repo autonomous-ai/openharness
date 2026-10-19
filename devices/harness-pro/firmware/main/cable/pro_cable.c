@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "board/board.h"
+#include "cJSON.h"
 #include "cable_features.h"
 #include "cable_frame.h"
 #include "cable_json_guard.h"
@@ -27,6 +28,8 @@
 #include "sys/device_mac.h"
 #include "sys/fw_update.h"
 #include "sys/last_words.h"
+#include "esp_task_wdt.h"
+#include "task_stacks.h"
 
 static const char *TAG = "pro_cable";
 
@@ -40,7 +43,7 @@ static const char *TAG = "pro_cable";
 #define SILENCE_MS       15000
 #define NOTIF_ROWS       16   // notif.replace items kept (the daemon sends at most 8)
 
-// Everything below runs on the cable_link task (6 KB stack) unless the comment says otherwise. Parsing therefore
+// Everything below runs on the cable_link task (12 KB stack) unless the comment says otherwise. Parsing therefore
 // goes into static scratch, never into a stack local over 1 KB (the host test caps every frame at 1024 B).
 _Static_assert(POD_RECAP_BYTES == PRO_RECAP_BYTES, "the recap buffers of pro_cable and Pod must agree");
 
@@ -53,6 +56,11 @@ static uint32_t    s_bad, s_unknown;
 static char        s_machine_name[CABLE_NAME_MAX];
 static char        s_machine_id[MACHINE_ID_MAX];
 static cable_machines_t s_machines;
+// The daemon numbers every JSON frame it sends us (`seq`, reset by each welcome); a hole means a frame was lost on the way in.
+static int64_t     s_seq_last = -1;   // -1: none seen this session
+static uint32_t    s_seq_gaps;
+static bool        s_resync_pending;
+static bool        s_seq_on;          // the welcome carried a seq
 
 // The id of the recording in flight: written by the voice task, read by the cable_link task to match a reply.
 static SemaphoreHandle_t s_upload_lock;
@@ -348,6 +356,21 @@ void pro_cable_counters(uint32_t *bad, uint32_t *unknown)
 {
     if (bad) *bad = s_bad;
     if (unknown) *unknown = s_unknown;
+}
+
+uint32_t pro_cable_seq_gaps(void) { return s_seq_gaps; }
+
+// A frame with a `seq` that does not follow the last one means frames in between never arrived (the USB path drops
+// whole packets, and a small frame vanishes without a trace). Count it and ask for a snapshot (link_resync).
+static void track_seq(const cJSON *root, bool welcome)
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(root, "seq");
+    const bool ok = cJSON_IsNumber(v) && v->valuedouble >= 0 && v->valuedouble < 4294967296.0;
+    if (welcome) s_seq_on = ok;   // a daemon that does not number its frames is not checked at all
+    if (!s_seq_on || !ok) return;
+    const int64_t seq = (int64_t)v->valuedouble;
+    if (!welcome && s_seq_last >= 0 && seq != s_seq_last + 1) { s_seq_gaps++; s_resync_pending = true; }
+    s_seq_last = seq;   // a welcome restarts the count
 }
 
 // ── the agent list ──────────────────────────────────────────────────────────────────────────────────
@@ -771,8 +794,7 @@ static void session_up(const cJSON *p)
         // console and `idf.py monitor` behaves as it always has.
         cable_link_set_log_framing(true);
         ESP_LOGI(TAG, "session up: %s", s_machine_name);
-        // The welcome parsed: this image's cable path works, so a fresh install may be confirmed now (fw_update.h).
-        if (fw_confirm_session_up()) pro_app_note_update();
+        fw_confirm_session_up((uint32_t)(esp_timer_get_time() / 1000));   // starts the clock a fresh image is confirmed on (fw_update.h)
     }
     if (was && !moved) return;
     // Anything held belonged to another host. Drop a half-streamed roster before its end can make it current.
@@ -800,8 +822,13 @@ static void session_down(const char *why)
     s_agent_count = 0;
     s_machine_name[0] = 0;
     s_machine_id[0] = 0;
+    s_seq_last = -1;
+    s_seq_on = false;
+    s_resync_pending = false;
+    cable_link_reset_decoder();   // runs on the tick: whatever is half-received belonged to the session that ended
     cable_link_set_log_framing(false);   // first: what follows should be readable on a plain monitor
     ESP_LOGI(TAG, "session down (%s)", why);
+    fw_confirm_session_down();
     fw_update_abort("session down");
     pro_app_machines(s_machines.rows, 0, "");
     pro_app_link(false, NULL);
@@ -892,7 +919,7 @@ void pro_cable_on_frame(uint8_t version, uint8_t type, const uint8_t *payload, s
         s_unknown++;
         return;
     }
-    // Parse straight from the bounded frame; the guard caps depth and token count so cJSON fits the 6 KB stack.
+    // Parse straight from the bounded frame; the guard caps depth and token count so cJSON fits the cable_link stack.
     if (!cable_json_guard(payload, payload_len)) { s_bad++; ESP_LOGW(TAG, "frame refused by the guard: %u B", (unsigned)payload_len); return; }
     const char *end = NULL;
     cJSON *root = cJSON_ParseWithLengthOpts((const char *)payload, payload_len, &end, false);
@@ -903,31 +930,46 @@ void pro_cable_on_frame(uint8_t version, uint8_t type, const uint8_t *payload, s
     }
     if (!root) { s_bad++; ESP_LOGW(TAG, "frame did not parse: %u B", (unsigned)payload_len); return; }
     s_last_rx_us = esp_timer_get_time();
+    const char *kind = str_of(root, "t");
+    track_seq(root, kind && !strcmp(kind, "welcome"));
     handle_message(root);
     cJSON_Delete(root);
 }
 
-// A frame lost on the way in may have been a roster push; the daemon answers these requests with a forced push. During a
-// transfer the resend logic covers it (the loss is consumed, not replayed after). At most once per 5 s.
+// A frame lost on the way in (a bad CRC or a seq gap) may have been a roster push; `resync` (when the welcome advertises it, else the
+// old swarms.list + agents.list) asks the daemon for the whole snapshot: machines, swarms, agents, notices and open questions. During a transfer the resend logic covers it (the loss
+// is consumed, not replayed after). At most once per 2 s.
 static void link_resync(void)
 {
     static uint32_t seen;
-    static int64_t last_us = -5000000;
+    static int64_t last_us = -2000000;
     uint32_t corrupt = 0, discarded = 0;
     cable_link_counters(&corrupt, &discarded);
-    if (corrupt == seen || !atomic_load(&s_session)) return;
+    if ((corrupt == seen && !s_resync_pending) || !atomic_load(&s_session)) return;
     const int64_t now = esp_timer_get_time();
-    if (fw_update_active()) { seen = corrupt; return; }
-    if (now - last_us < 5000000) return;   // keep it pending; the next tick after the window answers
+    if (fw_update_active()) { seen = corrupt; s_resync_pending = false; return; }
+    if (now - last_us < 2000000) return;   // keep it pending; the next tick after the window answers
     seen = corrupt;
+    s_resync_pending = false;
     last_us = now;
-    send_json(msg("swarms.list"));
-    send_json(msg("agents.list"));
+    if (atomic_load(&s_features) & CABLE_FEATURE_RESYNC) {
+        send_json(msg("resync"));
+    } else {   // a daemon that predates `resync`: the old refresh
+        send_json(msg("swarms.list"));
+        send_json(msg("agents.list"));
+    }
 }
 
 void pro_cable_tick(void *ctx)
 {
     (void)ctx;
+    // Under the task watchdog like the render task, so a hang here is a TASK_WDT panic with a backtrace, not a silent
+    // hardware reset. Joined on the first tick (this runs on the link's reader task, which this file does not create).
+    static bool watched;
+    if (!watched) { watched = esp_task_wdt_add(NULL) == ESP_OK; }
+    else esp_task_wdt_reset();
+    last_words_phase(LW_CABLE, fw_update_active() ? "ota" : "cable.read");
+    last_words_rx((uint32_t)(s_last_rx_us / 1000));
     fw_update_tick((uint32_t)(esp_timer_get_time() / 1000));
     link_resync();
     if (atomic_load(&s_session) && esp_timer_get_time() - s_last_rx_us > (int64_t)SILENCE_MS * 1000)
@@ -958,7 +1000,7 @@ void pro_cable_start(void)
     s_upload_lock = xSemaphoreCreateMutex();
     if (!s_upload_lock) { ESP_LOGE(TAG, "no memory for the upload lock - link disabled"); return; }
     s_last_rx_us = esp_timer_get_time();
-    if (xTaskCreate(hello_task, "cable_hello", 4096, NULL, 4, &hello) != pdPASS) {
+    if (xTaskCreate(hello_task, "cable_hello", STACK_CABLE_HELLO, NULL, 4, &hello) != pdPASS) {
         ESP_LOGE(TAG, "hello task create failed - no handshake");
         return;
     }

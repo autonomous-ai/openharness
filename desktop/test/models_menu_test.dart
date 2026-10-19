@@ -130,10 +130,12 @@ void main() {
     DateTime? reset,
     DateTime? fetched,
     String? account = 'aabbccddeeff0011',
+    String? email = 'dev@example.com',
   }) => ProviderUsage(
     provider: UsageProvider.claude,
     status: UsageStatus.ok,
     account: account,
+    email: email,
     fetchedAt: fetched ?? instant,
     windows: [
       UsageWindow(label: 'Session', usedPercent: session, resetsAt: reset),
@@ -152,7 +154,13 @@ void main() {
           MachineUsage(machineName: 'Shared Mac', readings: [reading()]),
           MachineUsage(
             machineName: 'Other Mac',
-            readings: [reading(account: '1122334455667788', session: 50)],
+            readings: [
+              reading(
+                account: '1122334455667788',
+                email: 'work@example.com',
+                session: 50,
+              ),
+            ],
           ),
         ],
       );
@@ -164,11 +172,11 @@ void main() {
       expect(menu.rows.first['title'], 'Anthropic');
       expect(menu.rows.first['status'], '15% remaining');
       expect(menu.rows.first['details'], contains('Weekly — 70% remaining'));
-      expect(menu.rows.first['account'], 'aabbcc');
+      expect(menu.rows.first['account'], 'dev@example.com');
       expect(menu.rows.first['machines'], ['Shared Mac']);
       expect(menu.rows.first['accountKey'], 'aabbccddeeff0011');
       expect(menu.rows.last['title'], 'Anthropic');
-      expect(menu.rows.last['account'], '112233');
+      expect(menu.rows.last['account'], 'work@example.com');
       expect(menu.rows.last['status'], '50% remaining');
       expect(
         menu.rows.map((row) => row['details']).toString(),
@@ -204,19 +212,23 @@ void main() {
     },
   );
 
-  test('unidentified accounts do not invent an account label', () async {
-    final source = _Source(
-      UsageProvider.claude,
-      () async => reading(account: null),
-    );
-    final usage = UsageController(sources: [source], autoStart: false);
-    final menu = ModelsMenuController(usage: usage, now: () => instant);
-    addTearDown(usage.dispose);
-    addTearDown(menu.dispose);
-    await menu.refresh();
-    expect(menu.rows.single['title'], 'Anthropic');
-    expect(menu.rows.single['account'], '');
-  });
+  test(
+    'readings without email do not expose their internal account key',
+    () async {
+      final source = _Source(
+        UsageProvider.claude,
+        () async => reading(email: null),
+      );
+      final usage = UsageController(sources: [source], autoStart: false);
+      final menu = ModelsMenuController(usage: usage, now: () => instant);
+      addTearDown(usage.dispose);
+      addTearDown(menu.dispose);
+      await menu.refresh();
+      expect(menu.rows.single['title'], 'Anthropic');
+      expect(menu.rows.single['account'], '');
+      expect(menu.rows.single['accountKey'], 'aabbccddeeff0011');
+    },
+  );
 
   test(
     'unknown, expired and invalid readings never become made-up percentages',
