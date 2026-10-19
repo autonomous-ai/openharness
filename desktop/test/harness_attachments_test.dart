@@ -18,6 +18,28 @@ const _codexComposer =
     '\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do anything\u001b[0m\r\n'
     '\r\n  GPT-6-Astra · /tmp/work\r\n  ? for shortcuts';
 
+/// A ready Codex 0.154 as captured in its pane (2026-10-18): the update box
+/// is only news, and the footer is a status line with no shortcut hint.
+const _codex154Ready =
+    '╭─────────────────────────────────────────╮\r\n'
+    '│ ✨ Update available! 0.154.0 -> 0.163.0 │\r\n'
+    '╰─────────────────────────────────────────╯\r\n'
+    '╭─────────────────────────────────────╮\r\n'
+    '│ >_ OpenAI Codex (v0.154.0)          │\r\n'
+    '╰─────────────────────────────────────╯\r\n'
+    '\r\n⚠ 1 MCP startup issue · ctrl + t for details\r\n'
+    '\r\n\u001b[1m›\u001b[0m \u001b[2mAsk Codex to do anything\u001b[0m\r\n'
+    '\r\n  gpt-5.5 default · ~/harnesses/worktrees/autonomous-harness/fix';
+
+/// Codex 0.154's question about hooks it has not seen, before any chat.
+const _codexHooksReview =
+    '  Hooks need review\r\n'
+    '  3 hooks are new or changed.\r\n'
+    '\r\n› 1. Review hooks\r\n'
+    '  2. Trust all and continue\r\n'
+    '  3. Continue without trusting (hooks won\'t run)\r\n'
+    '\r\n  Press enter to confirm or esc to go back';
+
 /// Records what a harness's terminal was handed, in order.
 class _RecordingSession extends TerminalSession {
   _RecordingSession()
@@ -223,6 +245,54 @@ void main() {
         expect(session.calls, hasLength(3));
       },
     );
+
+    testWidgets('hands a ready Codex 0.154 its picture and task', (
+      tester,
+    ) async {
+      final app = _app(engine: 'codex');
+      addTearDown(app.dispose);
+      final session = _RecordingSession();
+      session.terminal.write(_codex154Ready);
+      app.adoptSessionForTest(session);
+      String? problem = 'pending';
+      unawaited(
+        deliverAttachedTask(
+          app,
+          machineId: 'box',
+          agentId: 'a1',
+          files: [_file('pasted-image.png')],
+          task: 'hi',
+        ).then((value) => problem = value),
+      );
+      await tester.pump(kAttachedTaskSettle + const Duration(milliseconds: 10));
+      await tester.pump();
+      expect(problem, isNull);
+      expect(session.calls, ['file:pasted-image.png', 'paste: ', 'send:hi']);
+    });
+
+    testWidgets('pastes nothing into a Codex question and gives up in time', (
+      tester,
+    ) async {
+      final app = _app(engine: 'codex');
+      addTearDown(app.dispose);
+      final session = _RecordingSession();
+      session.terminal.write(_codexHooksReview);
+      app.adoptSessionForTest(session);
+      String? problem = 'pending';
+      unawaited(
+        deliverAttachedTask(
+          app,
+          machineId: 'box',
+          agentId: 'a1',
+          files: [_file('pasted-image.png')],
+          task: 'hi',
+        ).then((value) => problem = value),
+      );
+      await tester.pump(kAttachedTaskOpenTimeout + const Duration(seconds: 1));
+      await tester.pump();
+      expect(session.calls, isEmpty);
+      expect(problem, contains('did not open in time'));
+    });
 
     test('files first, each followed by a space, then the task', () async {
       final app = _app();
