@@ -19,7 +19,7 @@ it('keeps unknown quota distinct from unused quota and honors all limiting windo
   const input = { providers: [{ provider: 'codex', account: 'opaque', email: 'private@example.com', outcome: 'answered', httpStatus: 200,
     body: { rate_limit: { primary_window: { used_percent: 10, reset_at: 1000 }, secondary_window: { used_percent: 100, reset_at: 2000 } } } }] }
   const quota = quotaOf(input, 'codex', false)
-  expect(quota).toEqual({ known: true, account: 'opaque', windows: [{ usedPercent: 10, resetsAt: 1000 }, { usedPercent: 100, resetsAt: 2000 }] })
+  expect(quota).toEqual({ known: true, account: 'opaque', windows: [{ usedPercent: 10, resetsAt: 1000, name: '5-hour' }, { usedPercent: 100, resetsAt: 2000, name: 'weekly' }] })
   expect(quotaOf(input, 'codex', true)).toMatchObject({ known: false, account: null })
   const capacity = { resources: { cpuPercent: 95, memoryTotalBytes: 1000, memoryUsedBytes: 950, projectDiskFreeBytes: 10 }, tools: {}, devices: {} }
   const result = admission(capacity, { installed: true }, quota, requirements)

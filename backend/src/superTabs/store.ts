@@ -8,7 +8,7 @@ import { applyCommand, operationSchema, type Command, type CommandContext } from
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import {
   activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState,
-  SuperTabError, type Actor, type Agent, type Author, type MessageDraft, type SuperTabState,
+  SuperTabError, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 import { closeAssignment, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
@@ -349,6 +349,24 @@ export class SuperTabStore {
       const deliveries = page.length ? await tx.superTabDelivery.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
         select: { id: true, messageId: true, agentId: true, status: true, receipt: true } }) : []
       return { messages: page.map(m => ({ ...m, deliveries: deliveries.filter(d => d.messageId === m.id) })), next, revision: row.revision }
+    })
+  }
+
+  /**
+   * Every earlier attempt of one group. `work.define` takes a stopped assignment out of the state, so this is the
+   * only place a reader (the Lead choosing an agent for a retry) can still see who tried and how it ended
+   * (manual run 2026-10-19). The snapshot also holds the host grant and configuration; none of it leaves here.
+   */
+  async attempts(user: AuthUser, tabId: string, conversationId: string, asAgentId?: string) {
+    return transaction(this.db, async tx => {
+      const state = stateOf(await this.row(tx, user, tabId))
+      author(state, await this.actor(tx, user, state, asAgentId))
+      conversation(state, conversationId)
+      const rows = await tx.superTabAttempt.findMany({ where: { tabId, conversationId }, orderBy: { createdAt: 'desc' }, take: 50 })
+      return rows.map(row => {
+        const assignment = (row.snapshot as unknown as { assignment: Assignment }).assignment
+        return { id: row.id, agentId: assignment.agentId, status: assignment.status, result: assignment.result?.slice(0, 500) ?? null, createdAt: row.createdAt }
+      })
     })
   }
 

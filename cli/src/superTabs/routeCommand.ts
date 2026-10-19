@@ -5,8 +5,10 @@ import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
-import { object } from './wire.js'
-import { choose, decide, jevQuestion, parseAssessment, quotaOf2, rateFor, recordOf, type Assessment, type Policy, type Probe } from './route.js'
+import { object, within } from './wire.js'
+import { choose, contextSize, decide, jevQuestion, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Attempt, type MemberFrame, type Policy, type Probe, type TaskFolder } from './route.js'
+import { stat } from 'node:fs/promises'
+import { describeScmProject } from '../scm/scmProjects.js'
 import type { JevChoiceAnswer } from '../lib/jev/jevClient.js'
 
 type Json = Record<string, unknown>
@@ -17,11 +19,81 @@ const TRANSPORT = new Set(['AGENT_UNAVAILABLE', 'SUPER_TAB_UNAVAILABLE', 'BACKEN
 const MACHINES_UNREADABLE = "The account's machine list could not be read; only known machines were considered."
 const OFFLINE = 'Machine is offline or unreachable.'
 const UNKNOWN_QUOTA: Probe['quota'] = { known: false, leftPercent: null, resetsAt: null }
+const UNKNOWN_LOAD: NonNullable<Probe['load']> = { agents: null, freeMemoryBytes: null, hasFolder: null }
 const active = (assignment: unknown) => { const a = object(assignment); return !!a.id && !['done', 'stopped'].includes(String(a.status)) }
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
+/** The Lead's machine, for the task's folder; replaced in tests. */
+interface FolderReader { describe: typeof describeScmProject; isDirectory: (path: string) => Promise<boolean> }
+const FOLDER_READER: FolderReader = { describe: describeScmProject, isDirectory: path => stat(path).then(s => s.isDirectory(), (error: NodeJS.ErrnoException) => {
+    // Only an absent folder is "not on this machine"; a refusal or a broken path says nothing, so the read fails and the folder is unknown.
+    if (error.code === 'ENOENT') return false
+    throw error
+  }) }
+async function readFolder(cwd: string, reader: FolderReader): Promise<TaskFolder> {
+  const folder = { cwd, name: null, root: null, remote: null }
+  // The SCM description only checks the path's form, so a folder this machine lacks must be found out first.
+  if (!await reader.isDirectory(cwd)) return { ...folder, kind: 'missing' }
+  const described = await reader.describe(cwd)
+  if (!described) return { ...folder, kind: 'unknown' }
+  return { cwd, kind: described.kind, name: described.kind === 'git' ? described.name : null, root: described.root, remote: described.remote }
+}
+const text = (value: unknown) => typeof value === 'string' ? value : null
+/** A member started by `start` was launched with `--effort`, which Claude never reports back, so its configuration says
+ * `auto` (manual run 2026-10-19). The tab's start record still holds what it was launched with; an effort the member
+ * does report is kept. */
+function withLaunchEffort(member: Json, starts: Json[]): Json {
+  const configuration = object(member.configuration)
+  if (configuration.effort && configuration.effort !== 'auto') return member
+  const launched = object(starts.find(s => s.harnessId === member.harnessId)?.request).effort
+  return typeof launched === 'string' && launched !== 'default' ? { ...member, configuration: { ...configuration, effort: launched } } : member
+}
+const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+
+/** Work that ended in this Super Tab, oldest first: the log's decisions, the group's attempts and each group's last
+ * assignment, joined by assignment id. The log knows which agent a decision started; the attempts are every earlier
+ * assignment of this group, also those `work.define` took out of the state (a person's assignment has no decision);
+ * the state knows the agent and the result of each group's last one. */
+interface Ended { assignmentId: string; groupId: string; group: string; agentId: string | null; agent: string; outcome: string; result?: string }
+function endedWork(conversations: Json[], agents: Json[], decisions: Json[] | null, attempts: Json[] | null, attemptsGroup: string): Ended[] {
+  const titleOf = (id: unknown) => String(conversations.find(c => c.id === id)?.title ?? 'another group')
+  const nameOf = (id: unknown) => text(agents.find(a => a.id === id)?.name)
+  const ended: Ended[] = [...(decisions ?? [])].reverse().flatMap(d => {
+    const final = object(d.final)
+    return typeof d.assignmentId === 'string' && ['done', 'stopped'].includes(String(d.outcome)) && final.kind
+      ? [{ assignmentId: d.assignmentId, groupId: String(d.conversationId), group: titleOf(d.conversationId), outcome: String(d.outcome),
+          agentId: final.kind === 'member' ? String(final.agentId) : null,
+          agent: final.kind === 'member' ? nameOf(final.agentId) ?? 'An agent' : `New agent (${String(final.engine)} ${String(final.model)})` }]
+      : []
+  })
+  // The assignment's own record wins on agent and outcome; a started agent the tab no longer has keeps the log's name.
+  const join = (assignment: Json, groupId: string) => {
+    const result = text(assignment.result) ?? undefined, known = ended.find(e => e.assignmentId === assignment.id)
+    if (known) return Object.assign(known, { agentId: String(assignment.agentId), agent: nameOf(assignment.agentId) ?? known.agent, result })
+    const added: Ended = { assignmentId: String(assignment.id), groupId, group: titleOf(groupId), agentId: String(assignment.agentId), agent: nameOf(assignment.agentId) ?? 'An agent', outcome: String(assignment.status), result }
+    ended.push(added)
+    return added
+  }
+  // With the attempts read the group's own work is ordered by it: oldest first, then the current assignment. The log's
+  // order alone puts a routed attempt before an earlier one a person assigned (it has no decision). Without the read
+  // the log's order stays.
+  const last = (e: Ended) => { if (attempts) ended.push(...ended.splice(ended.indexOf(e), 1)) }
+  const time = (a: Json) => Date.parse(String(a.createdAt)) || 0
+  for (const attempt of [...(attempts ?? [])].reverse().sort((x, y) => time(x) - time(y))) if (attempt.id) last(join(attempt, attemptsGroup))
+  for (const c of conversations) {
+    const current = object(c.assignment)
+    if (current.id && !active(current)) last(join(current, String(c.id)))
+  }
+  return ended
+}
+/** The fields of a frame that say what the agent works on; an absent or malformed one says nothing. */
+function frameOf(frame: Json): MemberFrame {
+  const project = object(frame.project), updatedAt = Date.parse(String(frame.updatedAt))
+  return { title: text(frame.title), project: text(project.name), cwd: text(project.cwd), root: text(project.root), remote: text(project.remote),
+    branch: text(object(object(frame.gitContext).current).branch) ?? text(project.branch), updatedAt: Number.isFinite(updatedAt) ? updatedAt : null }
+}
 
 export async function routeTask(input: { tabId: string; conversationId: string; assessment: unknown }, request: ScopedRequest, where: Where,
-  open: typeof openDaemon = openDaemon, newId: () => string = randomUUID): Promise<Json> {
+  open: typeof openDaemon = openDaemon, newId: () => string = randomUUID, reader: FolderReader = FOLDER_READER): Promise<Json> {
   // A lost connection is an answer here, never a throw: the Lead must still get a decision or a reason.
   const scoped: ScopedRequest = async payload => {
     try { return await request(payload) } catch (error) {
@@ -30,6 +102,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   }
   const assessment = parseAssessment(input.assessment)
   if (typeof assessment === 'string') return { error: 'INVALID_REQUEST', detail: assessment }
+  const cwd = assessment.needs.cwd
   const context = await scoped({ action: 'routeContext' })
   if (context.error || context.ok !== true) return context
   const value = object(context.value), state = object(object(value.tab).state), effective = object(value.policy)
@@ -41,7 +114,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // The group's Lead and the tab Lead coordinate; neither is a worker candidate even when idle.
   const busy = new Set([String(group.leadId), String(conversations.find(c => c.id === 'lead')?.leadId),
     ...conversations.filter(c => active(c.assignment)).map(c => String(object(c.assignment).agentId))])
-  const members = agents.filter(a => !busy.has(String(a.id)) && ENGINES.includes(String(object(a.configuration).engine)))
+  const members = agents.filter(a => !busy.has(String(a.id)) && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
   // The account's machines can start a new agent. A member may run on a machine only its collaborator can
   // open; the Lead tries that machine too, but a member there is unknown, never offline.
   const machines = new Map<string, { name: string; status: string; account: boolean }>()
@@ -51,20 +124,37 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   for (const m of members) if (!machines.has(String(m.machineId))) machines.set(String(m.machineId), { name: String(m.machineId), status: 'unknown', account: false })
   const enabled = policy.models.filter(m => m.enabled)
 
-  const probes = (await Promise.all([...machines].map(([machineId, machine]) =>
-    probeMachine(machineId, machine, members.filter(m => m.machineId === machineId), enabled, policy, assessment, where, open)))).flat()
+  // The probes do not wait for the context reads: the machines, the task's folder and the group's talk and log are read
+  // together, and each read that is only context gives up after three seconds. What needs several of them (whether a
+  // member is in the task's repository, what it did before) is joined afterwards.
+  const [probed, read, history] = await Promise.all([
+    Promise.all([...machines].map(([machineId, machine]) =>
+      probeMachine(machineId, machine, members.filter(m => m.machineId === machineId), enabled, policy, assessment, where, open))),
+    cwd ? within(readFolder(cwd, reader)) : null,
+    within(scoped({ action: 'routeHistory', conversationId: input.conversationId })),
+  ])
+  const folder: TaskFolder | null = !cwd ? null : read ?? { cwd, kind: 'unknown', name: null, root: null, remote: null }
+  const past = object(history?.ok === true ? history.value : {})
+  const decisions = Array.isArray(past.decisions) ? list(past.decisions) : null
+  const messages = Array.isArray(past.messages) ? list(past.messages).map(m => ({ from: String(m.from), text: String(m.text) })) : null
+  const attempts = Array.isArray(past.attempts) ? list(past.attempts) : null
+  const ended = endedWork(conversations, agents, decisions, attempts, input.conversationId)
+  const probes = probed.flat().map(p => p.kind === 'member' ? { ...p, repo: repoMatch(folder, p.frame ?? null, p.machineId === where.machineId),
+    earlier: ended.filter(e => e.agentId === p.agentId).reverse().slice(0, 3).map(e => ({ group: e.group, outcome: e.outcome })) } : p)
   const choice = choose(probes, policy, assessment, Date.now())
   if ('error' in choice) return choice
+  // What Jev could not be told, for the decision log: pick quality can later be compared with how complete this was.
+  const missing = [...(messages ? [] : ['messages']), ...(decisions ? [] : ['route log']), ...(attempts ? [] : ['attempts']), ...(folder && ['unknown', 'missing'].includes(folder.kind) ? ['task folder'] : []),
+    ...(choice.shown.some(s => s.kind === 'member' && !s.frame) ? ['member activity'] : []),
+    ...(choice.shown.some(s => s.kind === 'new' && (s.load!.agents === null || s.load!.freeMemoryBytes === null)) ? ['machine load'] : [])]
 
-  let answer: JevChoiceAnswer | undefined, unavailable: string | null = null
+  let answer: JevChoiceAnswer | undefined, unavailable: string | null = null, question: ReturnType<typeof jevQuestion> | undefined
   if (choice.shown.length > 1) {
     const checks = list(group.checks).map(c => String(c.description ?? ''))
-    // The group's last attempt, when it ended: a worker that stopped on this task is a worse choice.
-    const last = object(group.assignment)
-    const history = last.id && !active(last)
-      ? [`${String(agents.find(a => a.id === last.agentId)?.name ?? 'An agent')}: ${String(last.status)}${typeof last.result === 'string' ? ` — ${last.result.slice(0, 300)}` : ''}`]
-      : []
-    const question = jevQuestion({ title: String(group.title ?? ''), brief: String(group.brief ?? ''), checks, history }, assessment, policy, choice)
+    // Every attempt in this group that ended: a worker that stopped on this task is a worse choice.
+    const attempts: Attempt[] = ended.filter(e => e.groupId === input.conversationId).map(e => ({ agent: e.agent, outcome: e.outcome, ...(e.result ? { result: e.result } : {}) }))
+    const recent = decisions?.slice(0, 5).map(d => ({ title: String(d.title), ...(typeof d.via === 'string' ? { via: d.via } : {}), outcome: text(d.outcome) })) ?? null
+    question = jevQuestion({ title: String(group.title ?? ''), brief: String(group.brief ?? ''), checks, messages, noneInLatest: past.noneInLatest === true, folder, attempts, recent }, assessment, policy, choice)
     const reply = await scoped({ action: 'routeJev', conversationId: input.conversationId, ...question })
     if (typeof reply.error === 'string' && !TRANSPORT.has(reply.error)) return reply
     const jev = object(reply.value)
@@ -73,7 +163,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   }
   const verdict = decide(choice, answer, unavailable)
   const recorded = await scoped({ action: 'command', operationId: `route-${newId()}`,
-    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, policy) } })
+    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, policy, question && { chars: contextSize(question), missing }) } })
   if (typeof recorded.error === 'string' && !TRANSPORT.has(recorded.error)) return recorded
   const routeDecisionId = recorded.ok === true ? object(object(recorded.value).result).routeDecisionId : undefined
   const decision = typeof routeDecisionId === 'string' ? `,"routeDecisionId":"${routeDecisionId}"` : ''
@@ -96,16 +186,16 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
   members: Json[], allModels: Policy['models'], policy: Policy, a: Assessment, where: Where, open: typeof openDaemon): Promise<Probe[]> {
   const models = account ? allModels : []
   const engines = [...new Set([...models.map(m => m.engine), ...members.map(m => String(object(m.configuration).engine) as 'claude' | 'codex')])]
-  const memberProbe = (m: Json, refusals: string[] = [], quota = UNKNOWN_QUOTA): Probe => {
+  const memberProbe = (m: Json, refusals: string[] = [], quota = UNKNOWN_QUOTA, frame: MemberFrame | null = null): Probe => {
     const c = object(m.configuration), engine = String(c.engine) as 'claude' | 'codex'
     const model = typeof c.model === 'string' ? c.model : null, effort = typeof c.effort === 'string' ? c.effort : null
     return { kind: 'member', agentId: String(m.id), name: String(m.name ?? 'Member'), machineId, machineName, engine,
       model: model ?? 'default', effort: effort ?? 'default', ...rateFor(policy, engine, model, effort),
-      quota, activity: 'idle', known: quota.known, refusals }
+      quota, activity: 'idle', known: quota.known, refusals, frame }
   }
-  const newProbe = (m: Policy['models'][number], refusals: string[], quota: Probe['quota'], known: boolean): Probe => ({
+  const newProbe = (m: Policy['models'][number], refusals: string[], quota: Probe['quota'], known: boolean, load: Probe['load'] = UNKNOWN_LOAD): Probe => ({
     kind: 'new', machineId, machineName, engine: m.engine, model: m.model, effort: m.effort, quality: m.quality, cost: m.cost,
-    quota, activity: 'new agent', known, refusals })
+    quota, activity: 'new agent', known, refusals, load })
   const offline = () => models.map(m => newProbe(m, [OFFLINE], UNKNOWN_QUOTA, false))
   // The account says this machine is off, so nothing there can run or be asked.
   if (account && status === 'offline') return [...members.map(m => memberProbe(m, [OFFLINE])), ...offline()]
@@ -116,7 +206,8 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
   }
   try {
     const listed = object(await target.request('agents_list', {}, 10_000).catch(() => ({})))
-    const live = new Set(list(listed.agents).filter(f => object(f.terminal).available !== false).map(f => String(f.id)))
+    const frames = list(listed.agents)
+    const live = new Set(frames.filter(f => object(f.terminal).available !== false).map(f => String(f.id)))
     // Quota is not required to route: an unknown allowance only ranks a candidate lower. The start's own
     // requirements are (the hint suggests exactly these), and so is an exhausted usage window.
     const byEngine = new Map<string, Awaited<ReturnType<typeof inspectCapacity>>>()
@@ -132,11 +223,17 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
         // A running member already has its engine, memory and sign-in; only these three can still rule it out.
         ...inspected.reasons.filter(r => /usage window|Required tool|Required device/.test(r)),
       ]
-      probes.push(memberProbe(m, refusals, quotaOf2(inspected.quota)))
+      const frame = frames.find(f => f.id === m.harnessId)
+      probes.push(memberProbe(m, refusals, quotaOf2(inspected.quota), frame ? frameOf(frame) : null))
     }
     for (const m of models) {
       const inspected = byEngine.get(m.engine)!
-      probes.push(newProbe(m, inspected.allowed ? [] : inspected.reasons, quotaOf2(inspected.quota), inspected.unknown.length === 0 && inspected.quota.known))
+      const resources = object(inspected.capacity.resources)
+      // The capacity probe already measured the task's folder (its disk), so the answer is reused, not asked again.
+      const load = { agents: Array.isArray(listed.agents) ? frames.length : null,
+        freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
+        hasFolder: a.needs.cwd ? finite(resources.projectDiskFreeBytes) : null }
+      probes.push(newProbe(m, inspected.allowed ? [] : inspected.reasons, quotaOf2(inspected.quota), inspected.unknown.length === 0 && inspected.quota.known, load))
     }
     return probes
   } finally { target.close() }

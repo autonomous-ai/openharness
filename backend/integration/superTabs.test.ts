@@ -393,6 +393,50 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await db.superTabAttempt.findUnique({ where: { id: assignmentId } }))!.snapshot).toMatchObject({ assignment: { status: 'stopped', configuration: config } })
   })
 
+  it('lists the attempts of one group, newest first, after a stop and a new definition', async () => {
+    const { tab, lead } = await fixture()
+    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Builder', configuration: config, lead: false })).result.agentId as string
+    const define = (brief: string): Command => ({ type: 'work.define', conversationId: 'lead', brief, checks: [{ description: 'Test passes.', independent: false }] })
+    const attempt = async (brief: string) => {
+      await run(tab, define(brief))
+      const id = (await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: worker })).result.assignmentId as string
+      await store.stopped(host, tab, id, 'native-stop-receipt')
+      return id
+    }
+    const first = await attempt('Build it.')
+    const second = await attempt('Build it again.')
+    await run(tab, define('Build it a third time.'))
+    // A host-confirmed stop sets its own result, so a long one is seeded: the server cuts it.
+    const long = randomUUID()
+    await db.superTabAttempt.create({ data: { id: long, tabId: tab, conversationId: 'lead', createdAt: new Date(0), snapshot: { assignment: {
+      id: long, agentId: worker, status: 'done', result: 'x'.repeat(900), execution: { machineId: 'test-host', harnessId: 'secret-harness', machineOwnerId: host.sub } } } } })
+    const url = `/api/super-tabs/${tab}/conversations/lead/attempts`
+    const read = (user: AuthUser, query = '') => app.inject({ url: `${url}${query}`, headers: { authorization: `Bearer ${user.sub}` } })
+    const listed = (await read(owner)).json().data
+    expect(listed.map((a: { id: string }) => a.id)).toEqual([second, first, long])
+    expect(listed[1]).toMatchObject({ id: first, agentId: worker, status: 'stopped', createdAt: expect.any(String) })
+    expect(listed[2]).toMatchObject({ id: long, status: 'done', result: 'x'.repeat(500) })
+    // Only what a reader of the group needs: no host grant, configuration or brief.
+    expect(Object.keys(listed[2]).sort()).toEqual(['agentId', 'createdAt', 'id', 'result', 'status'])
+    expect((await read(host, `?asAgentId=${lead}`)).json().data).toHaveLength(3)
+    await invite(tab, 'viewer')
+    expect((await read(peer)).statusCode).toBe(200)
+    expect((await app.inject({ url, headers: { authorization: `Bearer ${randomUUID()}` } })).statusCode).toBe(401)
+  })
+
+  it('refuses the attempts of a group to a non-member and never crosses tabs', async () => {
+    const one = await fixture()
+    const two = await fixture()
+    const group = (await run(two.tab, { type: 'conversation.create', title: 'Other work', brief: '', checks: [] })).result.conversationId as string
+    const read = (tab: string, conversation: string, user: AuthUser, query = '') =>
+      app.inject({ url: `/api/super-tabs/${tab}/conversations/${conversation}/attempts${query}`, headers: { authorization: `Bearer ${user.sub}` } })
+    expect((await read(one.tab, 'lead', peer)).statusCode).toBe(403)
+    expect((await read(one.tab, group, owner)).statusCode).toBe(404)
+    expect((await read(two.tab, group, owner)).statusCode).toBe(200)
+    expect((await read(one.tab, 'lead', host, `?asAgentId=${two.lead}`)).statusCode).not.toBe(200)
+  })
+
   it('tells the lead once when the host confirms its worker stopped', async () => {
     const { tab, lead } = await fixture()
     const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),

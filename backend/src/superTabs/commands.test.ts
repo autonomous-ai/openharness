@@ -267,6 +267,17 @@ describe('route.record and route.override', () => {
       source: { kind: 'route', decisionId: effects.result.routeDecisionId, via: 'jev', p: 0.82, belowFloor: false,
         pick: { id: 'c0', title: 'Title c0' }, alternatives: [{ id: 'c1', title: 'Title c1' }] } })
   })
+  it('keeps the context Jev was given with the record, bounded, and still takes a record without it', () => {
+    const f = routed()
+    const run = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, { recentRoutes: 0 })
+    expect(run(record({ context: { chars: 9000, missing: ['messages', 'activity'] } })).routeDecisions[0]).toMatchObject({ record: { context: { chars: 9000, missing: ['messages', 'activity'] } } })
+    expect(run(record()).routeDecisions[0]).toMatchObject({ record: { pick: 'c0' } })
+    for (const context of [{ chars: -1, missing: [] }, { chars: 1.5, missing: [] }, { chars: 40_000, missing: [] }, { chars: 10 },
+      { chars: 10, missing: Array.from({ length: 11 }, (_, i) => `s${i}`) }, { chars: 10, missing: ['x'.repeat(41)] }, { chars: 10, missing: [''] },
+      { chars: 10, missing: [], extra: 1 }]) {
+      expect(() => run(record({ context }))).toThrow()
+    }
+  })
   it('refuses a pick outside the candidates, a non-lead agent and a busy hour', () => {
     const f = routed()
     const route = (decision: unknown, actor: Actor, context: Partial<CommandContext>) =>

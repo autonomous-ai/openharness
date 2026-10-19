@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import { superTabService } from './service.js'
 import type { SuperTabHost } from './host.js'
@@ -112,6 +112,111 @@ it('returns the routing context to a verified contribution', async () => {
     agentId: t.agentId, tab: { state: { agents: [t.agent] } }, policy: { policy: { version: 1 }, warnings: [], overridden: [] },
     machines: [{ machineId: 'm1', name: 'remote-1', status: 'online' }, { machineId: 'm2', name: 'shared', status: 'online' }] } })
   expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/routing-policy?asAgentId=${t.agentId}`, undefined)
+})
+describe('routeHistory for Jev', () => {
+  const contextOf = (t: ReturnType<typeof setup>, read: (path: string) => Promise<unknown>, lead?: string) => {
+    const state = { agents: [{ ...t.agent, name: 'Boss' }, { id: 'a2', name: 'Multiply' }, { id: 'a3', name: 'Reader' }], conversations: [{ id: 'g1', leadId: lead ?? t.agentId }] }
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => {
+      if (path.includes('/messages') || path.includes('/route-decisions') || path.includes('/attempts')) return await read(path) as never
+      return { status: 200, body: { success: true, data: path.includes('/routing-policy') ? { policy: { version: 1 }, warnings: [] } : { state } } }
+    })
+    t.core.account.machines = vi.fn(async () => ({ status: 200, body: { data: { machines: [] } } }))
+    return t.ask({ action: 'routeHistory', tabId: 'tab', harnessId: 'native', conversationId: 'g1' }, owner) as Promise<{ value: Record<string, unknown> }>
+  }
+  const ok = (data: unknown) => ({ status: 200, body: { success: true, data } })
+  it('gives the last ten group messages with a role instead of an author, and never an agent transcript or a routing note', async () => {
+    const t = setup()
+    const person = (text: string) => ({ author: { kind: 'person', id: 'u1', name: 'minh@example.com' }, text })
+    const rows = [
+      ...Array.from({ length: 8 }, (_, i) => person(`early ${i}`)),
+      { author: { kind: 'agent', id: t.agentId, name: 'Boss' }, text: 'Lead says' },
+      { author: { kind: 'agent', id: 'a2', name: 'Multiply' }, text: 'Worker says', source: null },
+      { author: { kind: 'agent', id: 'a2', name: 'Multiply' }, text: 'TRANSCRIPT', source: { kind: 'native', phase: 'answer' } },
+      { author: { kind: 'agent', id: t.agentId, name: 'Boss' }, text: 'Routed to X', source: { kind: 'route', decisionId: 'd' } },
+      { author: { kind: 'agent', id: 'gone', name: 'Gone' }, text: 'x'.repeat(1500) },
+      { author: { kind: 'agent', id: 'a3', name: 'Reader' }, text: 'last' },
+    ]
+    const { value } = await contextOf(t, async path => path.includes('/messages') ? ok({ messages: rows }) : ok([]))
+    const messages = value.messages as Array<{ from: string; text: string }>
+    expect(messages.map(m => m.from)).toEqual([...Array(6).fill('person'), 'Lead', 'Multiply', 'agent', 'Reader'])
+    expect(messages[0].text).toBe('early 2')
+    expect(messages[8].text).toBe('x'.repeat(1000))
+    expect(JSON.stringify(value.messages)).not.toMatch(/@|TRANSCRIPT|Routed to/)
+    expect(value).not.toHaveProperty('messagesUnreadable')
+    expect(vi.mocked(t.core.account.backend)).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/conversations/g1/messages?asAgentId=${t.agentId}`, undefined)
+  })
+  it('says the latest page held only log rows, instead of saying nothing was said', async () => {
+    const only = [{ author: { kind: 'agent', id: 'a2', name: 'Multiply' }, text: 'T', source: { kind: 'native' } }]
+    const { value } = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: only }) : ok([]))
+    expect(value).toMatchObject({ messages: [], noneInLatest: true })
+    const empty = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] }) : ok([]))
+    expect(empty.value).toEqual({ messages: [], decisions: [], attempts: [] })
+  })
+  it('is for the Lead of the group only, like the route', async () => {
+    const t = setup()
+    expect(await contextOf(t, async () => ok([]), 'someone-else')).toMatchObject({ error: 'LEAD_REQUIRED', status: 403 })
+    expect(vi.mocked(t.core.account.backend)).not.toHaveBeenCalledWith('GET', expect.stringContaining('/messages'), undefined)
+  })
+  it('gives the latest routing decisions in brief, newest first, without their records', async () => {
+    const t = setup()
+    const decision = (i: number) => ({ id: `d${i}`, conversationId: 'g1', record: { pick: 'c1', via: i === 2 ? undefined : 'jev', candidates: [{ id: 'c0', title: 'Other' }, { id: 'c1', title: `Pick ${i}`, label: 'big'.repeat(100) }] },
+      final: i % 2 ? { kind: 'member', agentId: 'a2', machineId: 'm1' } : { kind: 'new', startId: 's', machineId: 'm1', engine: 'claude', model: 'opus', effort: 'high' },
+      outcome: i % 3 ? 'done' : null, assignmentId: `as${i}`, createdAt: '2026-10-19T10:00:00Z', outcomeAt: null })
+    const unfinished = { id: 'dx', conversationId: 'g1', record: { pick: 'c9', via: 'order', candidates: [] }, final: null, outcome: 'superseded', assignmentId: null, createdAt: '2026-10-19T09:00:00Z' }
+    const { value } = await contextOf(t, async path => path.includes('/messages') ? ok({ messages: [] }) : ok([...Array.from({ length: 60 }, (_, i) => decision(i)), unfinished]))
+    const decisions = value.decisions as Array<Record<string, unknown>>
+    expect(decisions).toHaveLength(50)
+    expect(decisions[0]).toEqual({ id: 'd0', conversationId: 'g1', title: 'Pick 0', via: 'jev', outcome: null, assignmentId: 'as0', createdAt: '2026-10-19T10:00:00Z',
+      final: { kind: 'new', engine: 'claude', model: 'opus' } })
+    expect(decisions[1]).toMatchObject({ final: { kind: 'member', agentId: 'a2' }, outcome: 'done' })
+    expect(decisions[2]).not.toHaveProperty('via')
+    expect(JSON.stringify(decisions)).not.toContain('bigbig')
+    const last = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] }) : ok([unfinished]))
+    expect(last.value.decisions).toEqual([{ id: 'dx', conversationId: 'g1', title: 'unknown pick', via: 'order', outcome: 'superseded', assignmentId: null, createdAt: '2026-10-19T09:00:00Z', final: null }])
+  })
+  it('gives every attempt of the group, newest first, with only what Jev needs and no more than fifty', async () => {
+    const t = setup()
+    const row = (i: number) => ({ id: `as${i}`, agentId: i % 2 ? 'a2' : 'gone', status: 'stopped', result: i === 0 ? 'Tests failed.' : i === 2 ? 'y'.repeat(900) : null, createdAt: '2026-10-19T10:00:00Z',
+      conversationId: 'g1', execution: { harnessId: 'secret' } })
+    const { value } = await contextOf(t, async path => path.includes('/attempts') ? ok(Array.from({ length: 60 }, (_, i) => row(i))) : ok(path.includes('/messages') ? { messages: [] } : []))
+    const attempts = value.attempts as Array<Record<string, unknown>>
+    expect(attempts).toHaveLength(50)
+    expect(attempts[0]).toEqual({ id: 'as0', agentId: 'gone', status: 'stopped', result: 'Tests failed.', createdAt: '2026-10-19T10:00:00Z' })
+    expect(attempts[1]).toEqual({ id: 'as1', agentId: 'a2', status: 'stopped', result: null, createdAt: '2026-10-19T10:00:00Z' })
+    expect(attempts[2].result).toBe('y'.repeat(500))
+    expect(JSON.stringify(attempts)).not.toContain('secret')
+    expect(value).not.toHaveProperty('attemptsUnreadable')
+    expect(vi.mocked(t.core.account.backend)).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/conversations/g1/attempts?asAgentId=${t.agentId}`, undefined)
+  })
+  it('marks the attempts unreadable when an older backend answers 404 or the read fails or hangs', async () => {
+    const without = (path: string) => path.includes('/messages') ? ok({ messages: [] }) : ok([])
+    const old = await contextOf(setup(), async path => path.includes('/attempts') ? { status: 404, body: { success: false, error: { code: 'NOT_FOUND' } } } : without(path))
+    expect(old.value).toMatchObject({ messages: [], decisions: [], attemptsUnreadable: true })
+    expect(old.value).not.toHaveProperty('attempts')
+    const failed = await contextOf(setup(), async path => path.includes('/attempts') ? Promise.reject(new Error('down')) : without(path))
+    expect(failed.value).toMatchObject({ attemptsUnreadable: true, messages: [] })
+    const odd = await contextOf(setup(), async path => path.includes('/attempts') ? ok({ attempts: 'no' }) : without(path))
+    expect(odd.value).toMatchObject({ attemptsUnreadable: true })
+    vi.useFakeTimers()
+    try {
+      const slow = contextOf(setup(), async path => path.includes('/attempts') ? new Promise(() => {}) : without(path))
+      await vi.advanceTimersByTimeAsync(3000)
+      expect((await slow).value).toMatchObject({ messages: [], decisions: [], attemptsUnreadable: true })
+    } finally { vi.useRealTimers() }
+  })
+  it('marks each source it could not read on its own, and never waits longer than three seconds for one', async () => {
+    const failed = await contextOf(setup(), async path => path.includes('/messages') ? Promise.reject(new Error('down')) : ok([]))
+    expect(failed.value).toMatchObject({ messagesUnreadable: true, decisions: [] })
+    expect(failed.value).not.toHaveProperty('decisionsUnreadable')
+    const odd = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: 'no' }) : { status: 503, body: { error: 'SERVICE_UNAVAILABLE' } })
+    expect(odd.value).toMatchObject({ messagesUnreadable: true, decisionsUnreadable: true })
+    vi.useFakeTimers()
+    try {
+      const slow = contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] }) : new Promise(() => {}))
+      await vi.advanceTimersByTimeAsync(3000)
+      expect((await slow).value).toMatchObject({ messages: [], decisionsUnreadable: true })
+    } finally { vi.useRealTimers() }
+  })
 })
 it('says the machine list could not be read, instead of offering none', async () => {
   const t = setup()

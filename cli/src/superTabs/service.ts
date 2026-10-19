@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
 import { backend, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError } from './host.js'
+import { within } from './wire.js'
 import { createJevDecide, type JevDecide } from '../lib/jev/jevClient.js'
 import { machineChoices } from '../lib/newCommand.js'
 import { START_REQUIREMENTS } from './capacity.js'
@@ -31,6 +32,8 @@ const HELP = {
     { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'done', result: 'Exact revision, evidence and deliverable links' },
   ],
 }
+
+const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 
 export interface SuperTabServiceOptions {
   capacity?: typeof readCapabilities
@@ -117,6 +120,37 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return { ok: true, value: { tab: answer, policy, agentId,
             machines: readable ? machineChoices(object(object(machines.body).data), null).filter(m => !m.toAdd).map(m => ({ machineId: m.machineId, name: m.label, status: m.status })) : [],
             ...(readable ? {} : { machinesUnreadable: true }) } }
+        }
+        // What Jev reads besides the candidates. Apart from `routeContext` so the Lead reads it while it probes the
+        // machines; the group's Lead only, like the route itself.
+        if (payload.action === 'routeHistory') {
+          const group = list(state.conversations).find(c => c.id === payload.conversationId)
+          if (!group || group.leadId !== agentId) return { error: 'LEAD_REQUIRED', detail: 'The coordinating Lead of this group owns routing.', status: 403 }
+          const [written, logged, tried] = await Promise.all([
+            within(backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}`)),
+            within(backend(core, 'GET', `${path}/route-decisions?${identity}`)),
+            // An older backend has no such route: its 404 is unreadable like any other failure.
+            within(backend(core, 'GET', `${path}/conversations/${payload.conversationId}/attempts?${identity}`)),
+          ])
+          // Jev reads the group's talk as roles: an email is a person's name here, so it never leaves this step.
+          // Native rows are an agent's own transcript and route rows are the log's, so only the talk is kept.
+          const rows = Array.isArray(object(written).messages) ? list(object(written).messages) : null
+          const messages = rows?.filter(m => !m.source).slice(-10).map(m => {
+            const by = object(m.author)
+            return { from: by.kind === 'person' ? 'person' : by.id === group.leadId ? 'Lead' : String(list(state.agents).find(a => a.id === by.id)?.name ?? 'agent'),
+              text: String(m.text ?? '').slice(0, 1000) }
+          })
+          // The log's records carry every candidate's line; Jev needs only who was picked and how it went.
+          const decisions = Array.isArray(logged) ? logged.slice(0, 50).map(object).map(d => {
+            const record = object(d.record), final = object(d.final)
+            return { id: d.id, conversationId: d.conversationId, title: String(list(record.candidates).find(c => c.id === record.pick)?.title ?? 'unknown pick'),
+              ...(typeof record.via === 'string' ? { via: record.via } : {}), outcome: d.outcome ?? null, assignmentId: d.assignmentId ?? null, createdAt: d.createdAt,
+              final: final.kind === 'member' ? { kind: 'member', agentId: final.agentId } : final.kind === 'new' ? { kind: 'new', engine: final.engine, model: final.model } : null }
+          }) : null
+          // Every attempt the group had, also the ones `work.define` took out of the state; the server already cut the results.
+          const attempts = Array.isArray(tried) ? tried.slice(0, 50).map(object).map(a => ({ id: a.id, agentId: a.agentId, status: a.status, result: typeof a.result === 'string' ? a.result.slice(0, 500) : null, createdAt: a.createdAt ?? null })) : null
+          return { ok: true, value: { ...(messages ? { messages, ...(rows!.length && !messages.length ? { noneInLatest: true } : {}) } : { messagesUnreadable: true }),
+            ...(decisions ? { decisions } : { decisionsUnreadable: true }), ...(attempts ? { attempts } : { attemptsUnreadable: true }) } }
         }
         if (payload.action === 'routeJev') {
           // Jev costs money and the decision is the Lead's, so both rules are checked before it is asked.

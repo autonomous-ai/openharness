@@ -135,23 +135,84 @@ The policy order (D) is fixed in code and is not configurable:
 
 ### What Jev is given
 
-One choice question, "Which candidate should do this task?", with one criterion line per candidate.
+Jev decides, so it is given enough to decide on: what the task is, what each candidate is doing now and
+has done, what the machines have, every quota window, and what was tried before. One choice question,
+"Which candidate should do this task?", with one criterion line per candidate.
+
+The hosted route allows 4 string keys and 17,000 characters of `state`, criteria of at most 640
+characters, instructions of at most 1,500 and 48 criteria. The state keeps four keys, each with its own
+budget, so that a long brief cannot push out the messages or the history. A part is cut at its own budget
+and the cut is marked with "…". For the two logs (messages and attempts) the **newest** lines are kept and
+a leading "…" says older ones were dropped.
 
 ```
 state:
-  task:    group title, brief (cut at 2000 characters), check titles
-  lead:    difficulty, risk, why (at most 300 characters), needs (tools, devices)
-  policy:  the floor that applies, notes
-  history: earlier assignments in this group (agent, outcome)
-criteria:
-  c0: "Member Multiply · Claude Opus high · quality 3, cost 3 · remote-1 · idle, last did
-       'API tests' · Claude quota 62% left, resets in 2h"
-  c1: "New agent · Codex gpt-5 medium · quality 2, cost 1 · Mac · Codex quota 90% left,
-       resets in 5 days"
+  task (7,000):    group title (160); brief (2,000); checks (1,000);
+                   the last 10 messages of the group, newest last (3,500), tagged "person", "Lead"
+                   or the agent's name: "person: Please add the endpoint." / "Lead: On it."
+  lead (1,000):    difficulty, risk, why (300); the task folder as a basename and, when it is a git
+                   repository on the Lead's machine, the repository name; needs (tools, devices)
+  policy (1,000):  why the floor is what it is (the difficulty's quality, plus one for high risk, at
+                   most 3); the cost scale ("cost is relative: cost 3 is about 3 times cost 1"); notes
+  history (6,000): every ended attempt in this group (agent, outcome, result cut at 200 characters);
+                   the Super Tab's last 5 routing decisions (pick, via, outcome)
+criteria (640 each, most telling parts first, the end is what a cut removes):
+  c0: "Member Multiply · Claude opus high · quality 3, cost 3 · remote-1 · idle · same repo ·
+       on "Fix auth" · in api, branch feat/auth · last active 2h ago ·
+       quota 5-hour 60% left (resets in 2h), weekly 90% left (resets in 5 days) ·
+       earlier here: API done; Docs stopped"
+  c1: "New agent · Codex gpt-5 medium · quality 2, cost 1 · Mac · new agent · has the task folder ·
+       3 agents running · 6.5 GB memory free · quota 5-hour 90% left (resets in 4h), weekly 70% left
+       (resets in 5 days)"
 ```
 
-Jev is never given people's emails, tokens, credentials or transcripts. This is the same exposure
-as the voice router: the task text goes to OpenRouter, or through the backend with the hosted key.
+A member's effort in the label is the one its configuration reports. When that is missing or `auto` (Claude never
+reports the effort it was launched with), it comes from the tab's start record (`request.effort` of the `starts`
+entry with the member's `harnessId`), unless that is `default`. The value feeds both the label and the quality/cost
+rating.
+
+Where each piece comes from, all read by the Lead's `route` (the attempts read, below, is the one backend endpoint this adds):
+
+| Piece | Source |
+|---|---|
+| Messages | `GET /api/super-tabs/:tab/conversations/:group/messages` as the Lead, in the service action `routeHistory` (the group's Lead only, like `routeJev`), read alongside the machine probes. Only plain group talk is kept: rows with a `source` (a native agent transcript, a route note) are dropped. Authors become roles in the service; a person's name is their email and never leaves it. |
+| Task folder | `needs.cwd`. The Lead's machine first checks that the folder exists; if not, Jev is told "not on the Lead's machine" and `task folder` is logged as missing. Otherwise the SCM description gives the repository's name, remote and root. |
+| Member activity | The member's `agents_list` frame on its machine: session `title`, `project` (name, remote, root, cwd), the git branch and `updatedAt`, shown as "last active 2h ago". |
+| Same repo | The strongest member signal. The same remote is the same repository wherever the checkout is; a member standing exactly in `needs.cwd` (its root or cwd) is in it on any machine, since the path is the one that will run the task; otherwise the same root counts only on the Lead's own machine. A member whose frame names no checkout, or whose machine cannot be compared, is "repo unknown", not "different repo". Shown only when the Lead named a folder. |
+| Earlier work | The member's ended assignments in this Super Tab (group and outcome, newest first, three at most), from the group's attempts read, the decision log and the tab state. The group's own entries are ordered oldest first by the attempts read, the current assignment last; without that read the log's order stays. |
+| New agents | The capacity probe's answer for the task folder (`has the task folder`), the number of agents in the machine's `agents_list`, and free memory from the capacity resources. |
+| Quota | Every window the reader reports, by name (`5-hour`, `weekly`), each with the percentage left and a relative reset. The tightest window still orders the candidates. |
+| Attempts | Every earlier attempt of the group, from `GET /api/super-tabs/:tab/conversations/:group/attempts?asAgentId=`, read by `routeHistory` in parallel with the messages and the log. `work.define` takes a stopped assignment out of the tab state, so without this read a retried group looked untried (manual run 2026-10-19). The log's ended decisions and the group's current assignment are joined to it by assignment id, so an attempt shows once; the log still names the agent that a decision started. Each shows the agent, the outcome and the result, scrubbed and cut at 200 characters. The same attempts feed the member's "earlier here". |
+| Recent decisions | The first 5 of the same log, newest first. A decision without a recorded `via` shows without it. |
+
+A source that cannot be read (an offline machine, a failed read, a missing frame) is left out and
+replaced by one phrase: "Recent messages: unknown", "activity unknown", "repo unknown", "agents running
+unknown", "free memory unknown", "repository unknown", "Recent routing in this Super Tab: unknown". An older backend that answers 404 to the attempts read is a failed read: the history falls back to the log and the current assignment, and `attempts` is logged as missing. Routing
+never waits on or fails because of context: once `routeContext` has named the machines and members, the probes,
+the task folder read and `routeHistory` (messages, decisions and attempts) start together, and each context read gives up
+after three seconds. What needs several of them (whether a member is in the task's repository, its earlier
+work) is joined afterwards. When the latest 100 messages hold only log rows, Jev is told "none in the latest 100
+messages".
+
+**What Jev never receives:** emails, tokens, credentials, or an agent's transcript. Session titles are short
+summaries and are allowed. Group messages carry the same exposure as the brief, which is the same exposure as
+the voice router: the task text goes to OpenRouter, or through the backend with the hosted key.
+
+**Scrubbing.** Every piece of free text (messages, results, titles, branches, notes, names) is scrubbed
+before it is cut, so a cut cannot leave half a key behind. Email-like strings become "[email]". Token-like
+strings become "[secret]": `sk-…`, `ghp_…` and the other GitHub prefixes, `xox…-`, AWS `AKIA…`,
+`Bearer <20+ characters>`, a JWT, and runs of 32 or more hex characters. A base64 or base64url key of 32 or
+more characters is recognised by having upper case, lower case and digits and no words joined by hyphens;
+`/` and `.` end a run, so paths, URLs, branch names, UUIDs and file names are kept. A commit id is replaced:
+a lost id costs less than a leaked key.
+
+**Decision log.** The record carries `context: { chars, missing }`: how many characters Jev was given in all
+(state, criteria and instructions) and which sources could not be read (`messages`, `route log`,
+`attempts`, `task folder`, `member activity`, `machine load`). It is optional, absent when Jev was not asked, and lets
+pick quality be compared with how complete the context was.
+
+Instructions tell Jev to prefer a member marked "same repo" over an equal candidate, to treat a candidate that
+already failed or stopped on this task as worse, and not to read "unknown" as a bad sign.
 
 ### Reading the answer
 
@@ -186,6 +247,7 @@ small. Each record holds:
 - the candidates shown to Jev (id and criterion line), and the filtered-out ones with their reasons;
 - the effective policy's floor and whether `notes` were set;
 - `pick`, `via`, `p`, `belowFloor`;
+- `context`: the size of what Jev was given and the sources it lacked (see "What Jev is given");
 - `final`: who was actually started or assigned. For a started agent whose routed model switch failed, `model`
   and `effort` are what actually runs and `requested` keeps the routed pair;
 - `override`: by whom (the Lead or a person) and the reason;
@@ -267,6 +329,11 @@ Writes and links:
 - Records are kept 90 days and read through `GET /api/super-tabs/:id/route-decisions` for analysis. A single decision is read
   through `GET /api/super-tabs/:tabId/route-decisions/:decisionId`, which expanding a route row uses. Both return
   `createdAt` and `outcomeAt` beside the record.
+- The attempts of one group are read through `GET /api/super-tabs/:tabId/conversations/:conversationId/attempts`,
+  authorized like the messages read (a member of the tab, or an agent through `asAgentId` with the same checks;
+  never across tabs). It returns at most 50, newest first, each with `id`, `agentId`, `status`, `result` (cut at
+  500 characters) and `createdAt` (when the assignment was replaced). Execution grants, receipts and the
+  configuration stay on the server.
   v1 has no analysis screen.
 
 ### Timing: the Lead is never blocked
@@ -313,6 +380,7 @@ Limits:
 
 - at most 12 candidates shown to Jev;
 - `why` at most 300 characters, the brief cut at 2000, `notes` at most 500;
+- the state parts within their budgets (7,000, 1,000, 1,000 and 6,000 characters), each criterion within 640;
 - one open decision per group;
 - at most 30 `route` calls per tab per hour, so a looping Lead cannot spend the Jev budget.
 
@@ -324,13 +392,18 @@ Limits:
   - `belowFloor` and the quota reserve;
   - the hard filter, one test per exclusion reason;
   - reading Jev's answer: the p threshold, a clear lead, an unknown choice, a timeout, `only`;
-  - the context respects every limit and contains no email or token.
+  - the context respects every limit, at the worst case, and contains no email or token (each token shape is scrubbed);
+  - every new label, the same-repo marking, both quota windows, and a phrase for each missing source;
+  - each context source failing on its own still routes, and is listed in the record's `context.missing`.
+  - a stopped attempt stays in the history after a new definition, shows once when the log also knows it, and has its result scrubbed;
+  - the Lead's reason ends in exactly one period.
 - **Backend integration (in-memory Mongo, `test:super-tabs`):**
   - the account policy and the tab override, merged field by field, owner-only;
   - `route.record`, `final`, `route.modelResult`, and `OVERRIDE_REASON_REQUIRED`;
   - automatic outcomes on `done` and `stopped`, and `superseded`;
   - a person's override posts the Lead its handover message;
   - viewers are refused, and the rate limit holds.
+  - the attempts read lists a stopped attempt after a new `work.define`, lets a viewer read, refuses a non-member and never crosses tabs.
 - **CLI end to end** (isolated daemon, `FakeBackend`, a fake Jev):
   - the Lead routes, then starts the pick;
   - Jev failing falls back to the policy order;
