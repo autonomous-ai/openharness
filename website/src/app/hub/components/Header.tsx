@@ -1,6 +1,8 @@
 'use client';
+import { useEffect } from 'react';
 import Link from 'next/link';
 import { ArrowUpRight, Bell } from 'lucide-react';
+import { countHub } from '@/lib/community/hubMeasure';
 import { rememberHubReturn } from '@/lib/community/session';
 import { webAppPath } from '@/lib/webApp';
 import { SearchField, type SearchFieldProps } from './SearchField';
@@ -42,6 +44,8 @@ export function Header({ tab, search }: { tab?: HubTab; search?: SearchFieldProp
   </div></header>;
 }
 
+/** Asks a visitor to sign in where an action needs an account; each time it is drawn and each click are counted. */
 export function SignIn({ action = 'join the conversation' }: { action?: string }) {
-  return <p className={styles.signin}><a href={webAppPath} onClick={rememberHubReturn}>Sign in to Harness</a> to {action}. You’ll return here afterward.</p>;
+  useEffect(() => { countHub('hub_sign_in_prompt_shown'); }, []);
+  return <p className={styles.signin}><a href={webAppPath} onClick={() => { countHub('hub_sign_in_prompt_click'); rememberHubReturn(); }}>Sign in to Harness</a> to {action}. You’ll return here afterward.</p>;
 }

@@ -397,6 +397,35 @@ describe('account Experimental settings proxy', () => {
     expect((await post(body)).status).toBe(200)
     expect(send).toHaveBeenCalledExactlyOnceWith(body)
   })
+  it('forwards a newer Desktop report without the names it does not know, and says which it knows', async () => {
+    // Refused whole before: the Desktop drops a refused packet for good, so one new name lost all of it.
+    const body = JSON.parse(readFileSync(new URL('../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8'))
+    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { accepted: true } } }))
+    const { base } = await start({ onProductUsageReport: send })
+    const headers = { 'content-type': 'application/json', 'x-adapter-local': '1' }
+    const post = (value: unknown, h: Record<string, string> = headers) =>
+      fetch(`${base}/api/product-usage/report`, { method: 'POST', headers: h, body: JSON.stringify(value) })
+    const newer = { ...body, counters: { ...body.counters, health_desktop_frame_slow_wait: 2, health_desktop_PRIVATE_CANARY: 1 } }
+    const kept = await post(newer)
+    expect(kept.status).toBe(200)
+    expect(kept.headers.get('x-harness-usage-vocabulary')).toBe('2')
+    expect(send).toHaveBeenCalledExactlyOnceWith({ ...body,
+      counters: { ...body.counters, health_desktop_frame_slow_wait: 2, health_desktop_report_unknown_metric: 1 } })
+    expect(JSON.stringify(send.mock.calls)).not.toContain('PRIVATE_CANARY')
+    // Everything else is refused as before, and every answer names the vocabulary.
+    for (const [refused, h] of [
+      [{ ...body, counters: { health_desktop_PRIVATE_CANARY: 1 } }, headers],
+      [{ ...newer, counters: { ...newer.counters, turns_started: 1 } }, headers],
+      [{ ...newer, prompt: 'PRIVATE_CANARY' }, headers],
+      [newer, { 'content-type': 'application/json' }],
+    ] as const) {
+      const response = await post(refused, h)
+      expect(response.status).toBe('x-adapter-local' in h ? 400 : 403)
+      expect(response.headers.get('x-harness-usage-vocabulary')).toBe('2')
+      expect(await response.text()).not.toContain('PRIVATE_CANARY')
+    }
+    expect(send).toHaveBeenCalledOnce()
+  })
   it('serves the Privacy switch and rejects cross-origin, extra-field and malformed writes', async () => {
     const write = vi.fn(async () => ({ status: 200, body: { success: true, data: { enabled: false, revision: 1 } } }))
     const { base } = await start({ onProductUsageRead: async () => ({ status: 200, body: { success: true, data: { enabled: true, revision: 0 } } }), onProductUsageWrite: write })

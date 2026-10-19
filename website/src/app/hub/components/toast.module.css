@@ -1,0 +1,8 @@
+/* A glass note pinned to the bottom of the screen, above the page, clear of a phone's home bar. */
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));z-index:30;translate:-50% 0;display:flex;align-items:center;gap:10px;max-width:min(520px,calc(100vw - 32px));padding:10px 10px 10px 18px;border-radius:14px;background:rgba(255,255,255,.9);-webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);border:1px solid rgba(36,36,36,.08);box-shadow:0 12px 32px rgba(36,36,36,.14);font-size:13px;color:#333;animation:toastIn .2s ease-out}
+.toast p{margin:0;line-height:1.5}
+.toast button{flex-shrink:0;display:inline-flex;padding:6px;border-radius:8px;color:#666}
+.toast button:hover{background:rgba(36,36,36,.06);color:#242424}
+.toast svg{width:16px;height:16px}
+@keyframes toastIn{from{opacity:0;transform:translateY(8px)}}
+@media(prefers-reduced-motion:reduce){.toast{animation:none}}

@@ -263,7 +263,34 @@ class ProductRuntimeHealth {
             ? ProductHealthMeasure.frame50msTo250ms
             : ProductHealthMeasure.frameOver250ms,
       );
+      // The buckets alone could not say why Linux's sampled frames were long
+      // (Oct 17: 6.7% of Linux samples over 250 ms, macOS 0.25%), nor whether
+      // a few computers or many had them.
+      if (ms >= 50) measurement.health(_slowPhase(frame));
+      if (ms >= 250) {
+        measurement.healthOncePerDay(ProductHealthMeasure.frameLongCollector);
+      }
     }
+  }
+
+  /// The longest of a slow frame's phases; a tie goes to the earlier one.
+  ///
+  /// Wait is vsync to build start: the UI thread was busy before the frame
+  /// could start. On macOS and Linux that thread is the platform's main thread
+  /// (Flutter 3.47), so timers, channel and native callbacks, synchronous IO
+  /// and AppKit or GTK work all land there. Build is the framework's build,
+  /// layout and paint; raster is the raster thread drawing it. The gap between
+  /// build finish and raster start (a raster thread still busy with an
+  /// earlier frame) is not a phase of its own.
+  static ProductHealthMeasure _slowPhase(FrameTiming frame) {
+    final wait = frame.vsyncOverhead, build = frame.buildDuration;
+    final raster = frame.rasterDuration;
+    if (wait >= build && wait >= raster) {
+      return ProductHealthMeasure.frameSlowWait;
+    }
+    return build >= raster
+        ? ProductHealthMeasure.frameSlowBuild
+        : ProductHealthMeasure.frameSlowRaster;
   }
 
   void expectUpdate(String version) {

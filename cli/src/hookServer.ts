@@ -1,5 +1,5 @@
 import { PRODUCT_FEEDBACK } from './lib/productUsageContract.js'
-import { isAppProductUsageReport } from './lib/appProductUsageReport.js'
+import { appProductUsageReport, APP_USAGE_VOCABULARY, APP_USAGE_VOCABULARY_HEADER } from './lib/appProductUsageReport.js'
 /**
  * Tiny localhost HTTP server for the Claude Code hook callbacks. `hook/notify.mjs` POSTs here on
  * SessionStart/SessionEnd (127.0.0.1:<PORT>). This replaces the old Fastify routes — the browser
@@ -1031,6 +1031,9 @@ export function startHookServer(
         await proxied(handlers.onExperimentalRead); return
       }
       if (req.method === 'POST' && url === '/api/product-usage/report') {
+        // On every answer, a refusal too: the Desktop counts names newer than revision 1 only after
+        // reading it here, because a proxy that predates a name refused the whole report.
+        res.setHeader(APP_USAGE_VOCABULARY_HEADER, String(APP_USAGE_VOCABULARY))
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onProductUsageReport) { json(503, { error: 'UNAVAILABLE' }); return }
         let body: unknown
@@ -1038,11 +1041,13 @@ export function startHookServer(
           const raw = await readBody(req, 8192)
           body = JSON.parse(raw)
         } catch { json(400, { error: 'BAD_REQUEST' }); return }
-        if (!isAppProductUsageReport(body)) {
+        // Without the names this contract does not know yet; see lib/appProductUsageReport.ts.
+        const report = appProductUsageReport(body)
+        if (!report) {
           json(400, { error: 'BAD_REQUEST' }); return
         }
         try {
-          const result = await handlers.onProductUsageReport(body)
+          const result = await handlers.onProductUsageReport(report)
           json(result.status, result.body)
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return

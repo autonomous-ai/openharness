@@ -1,0 +1,5 @@
+/* A quiet last line, the header's width (`.wrap`). */
+.footer{border-top:1px solid #efefed;margin-top:40px}
+.inner{padding:22px 0 calc(28px + env(safe-area-inset-bottom));display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 24px;font-size:12px;color:#666}
+.inner nav{display:flex;flex-wrap:wrap;gap:8px 22px}
+.inner a:hover{color:#242424}

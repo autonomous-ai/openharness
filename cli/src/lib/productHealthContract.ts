@@ -25,6 +25,10 @@ export const HEALTH_MEASURES = [
   'interactive_turns_started', 'tool_turns_started', 'unclassified_turns_started',
   'interactive_work_days', 'first_interactive_work', 'first_work_d1_return', 'first_work_d7_return', 'first_work_d28_return',
   'week_worked_1day', 'week_worked_2to3days', 'week_worked_4to5days', 'week_worked_6to7days',
+  // Vocabulary 2 (`x-harness-usage-vocabulary`, cli/src/lib/appProductUsageReport.ts): a sampled Desktop frame of
+  // 50 ms or more by its longest phase, and one per collector day whose sampled frames included one over 250 ms.
+  // The Desktop counts them only once its CLI's report proxy has said it knows them.
+  'frame_slow_wait', 'frame_slow_build', 'frame_slow_raster', 'frame_long_collector',
 ] as const
 // Delivery attempts, including retries; separate from the cross-surface app measures.
 export const CLI_REPORT_FAILURES = ['invalid', 'too_large', 'auth', 'rate_limited', 'timeout', 'unreachable',

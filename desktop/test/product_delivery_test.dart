@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dio/dio.dart' show Headers;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -16,13 +17,14 @@ void main() {
   late ProductMeasurement usage;
   late List<Map<String, dynamic>> attempts, accepted;
   var status = 200;
-  String? code;
+  String? code, vocabulary;
   Completer<void>? hold;
   setUp(() async {
     attempts = [];
     accepted = [];
     status = 200;
     code = null;
+    vocabulary = null;
     hold = null;
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     listener = server.listen((request) async {
@@ -33,8 +35,15 @@ void main() {
       expect(request.headers.value('x-adapter-local'), '1');
       attempts.add(report);
       final responseStatus = status, responseCode = code;
+      final responseVocabulary = vocabulary;
       await hold?.future;
       if (responseStatus == 200) accepted.add(report);
+      if (responseVocabulary != null) {
+        request.response.headers.set(
+          ApiClient.usageVocabularyHeader,
+          responseVocabulary,
+        );
+      }
       request.response
         ..statusCode = responseStatus
         ..headers.contentType = ContentType.json
@@ -162,6 +171,66 @@ void main() {
       expect(totals()['health_desktop_report_failure_invalid'], isNull);
     },
   );
+
+  test(
+    'frame-phase names are counted only after the CLI says it forwards them',
+    () async {
+      // An older CLI refused a whole report for one name it did not know,
+      // and this app drops a refused packet for good.
+      usage.account(
+        'PRIVATE_ACCOUNT_CANARY_WIRED',
+        choice: () async => {'enabled': true, 'revision': 0},
+        send: (report) => api.productUsageReport(
+          report,
+          onVocabulary: (value) => usage.proxyVocabulary = value,
+        ),
+      );
+      await usage.flush();
+      void slowFrame() {
+        usage.health(ProductHealthMeasure.frame50msTo250ms);
+        usage.health(ProductHealthMeasure.frameSlowWait);
+      }
+
+      slowFrame();
+      await usage.flush(); // an older CLI: no header
+      expect(usage.proxyVocabulary, 1);
+      slowFrame();
+      vocabulary = '2';
+      await usage.flush();
+      expect(usage.proxyVocabulary, 2);
+      slowFrame();
+      await usage.flush();
+      expect(totals()['health_desktop_frame_50ms_to_250ms'], 3);
+      expect(totals()['health_desktop_frame_slow_wait'], 1);
+      expect(
+        attempts.take(2).map((r) => r['counters'] as Map),
+        everyElement(isNot(contains('health_desktop_frame_slow_wait'))),
+      );
+      // Replaced by an older CLI: after an answer that says nothing, the
+      // names stop until one says so again, which a refusal does too.
+      vocabulary = null;
+      usage.health(ProductHealthMeasure.frame50msTo250ms);
+      await usage.flush();
+      expect(usage.proxyVocabulary, 1);
+      slowFrame();
+      (status, vocabulary) = (400, '2');
+      await usage.flush();
+      expect(usage.proxyVocabulary, 2);
+      expect(totals()['health_desktop_frame_slow_wait'], 1);
+    },
+  );
+
+  test('the vocabulary header reads as 1 unless it names a later one', () {
+    int read(List<String>? value) => ApiClient.usageVocabulary(
+      Headers.fromMap({'x-harness-usage-vocabulary': ?value}),
+    );
+    expect(read(null), 1);
+    expect(read(['2']), 2);
+    expect(read(['3']), 3);
+    for (final junk in ['0', '-2', '', 'PRIVATE', '2.5']) {
+      expect(read([junk]), 1, reason: junk);
+    }
+  });
 
   for (final (http, errorCode, measure) in [
     (401, 'PRIVATE_CODE', ProductHealthMeasure.reportFailureAuth),

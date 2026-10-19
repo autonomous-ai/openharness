@@ -2,7 +2,8 @@
 // is somewhere else. When it is posted, what replaces what, what takes it down, what a click does,
 // and how each platform's notifier is driven.
 import 'dart:async';
-import 'dart:io' show ProcessException, ProcessResult;
+import 'dart:io' show Platform, ProcessException, ProcessResult;
+import 'dart:isolate';
 import 'dart:ui' show SemanticsAction, Tristate;
 
 import 'package:flutter/material.dart';
@@ -708,6 +709,48 @@ void main() {
       // A daemon that was down is not a notify-send without the flags.
       expect(ran.last, contains('--print-id'));
     });
+
+    test(
+      'notify-send starts on an isolate of its own, not the UI one',
+      () async {
+        // A process starts synchronously on the calling isolate, which on Linux
+        // is GTK's main thread: it used to, for every notification.
+        final run = offUiIsolate(
+          (exe, args) async =>
+              ProcessResult(0, 0, Isolate.current.debugName, args.join(' ')),
+        );
+        final result = await run('notify-send', ['--version']);
+        expect(result.stdout, 'notify-send');
+        expect(result.stderr, '--version');
+        expect(Isolate.current.debugName, isNot('notify-send'));
+        // Its answers reach the notifier as they are, a missing tool included.
+        final posted = LinuxSystemNotifier(
+          run: offUiIsolate((_, _) async => ProcessResult(0, 0, '42\n', '')),
+        );
+        expect(await post(posted), NotificationPermission.granted);
+        final missing = LinuxSystemNotifier(
+          run: offUiIsolate(
+            (_, _) async => throw const ProcessException('notify-send', []),
+          ),
+        );
+        expect(await missing.authorize(), NotificationPermission.unavailable);
+        expect(await post(missing), NotificationPermission.unavailable);
+      },
+    );
+
+    test(
+      'off the UI isolate a real process still answers, or is missing',
+      () async {
+        final run = offUiIsolate();
+        final result = await run('/bin/sh', ['-c', 'printf ok; exit 3']);
+        expect((result.exitCode, result.stdout), (3, 'ok'));
+        await expectLater(
+          run('harness-test-no-such-notify-send', []),
+          throwsA(isA<ProcessException>()),
+        );
+      },
+      skip: Platform.isWindows,
+    );
 
     test(
       'a desktop without notify-send is unavailable, not an error',

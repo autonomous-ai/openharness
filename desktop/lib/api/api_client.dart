@@ -118,10 +118,27 @@ class ApiClient {
     return dio;
   }
 
+  /// The header the local CLI's report proxy answers with: the revision of
+  /// the counter names it forwards (cli/src/lib/appProductUsageReport.ts).
+  static const usageVocabularyHeader = 'x-harness-usage-vocabulary';
+
+  /// [usageVocabularyHeader]'s value, or 1 — the names every proxy knows —
+  /// from a CLI that predates it (or the backend, which never sends it).
+  static int usageVocabulary(Headers headers) {
+    final values = headers[usageVocabularyHeader];
+    final value = int.tryParse(
+      values == null || values.isEmpty ? '' : values.first,
+    );
+    return value != null && value > 1 ? value : 1;
+  }
+
   // -- auth (proxied by the local CLI — no credential on this leg) --
+  /// [onVocabulary] hears [usageVocabulary] from every answer, a refusal
+  /// included; a request that got no answer says nothing.
   Future<Map<String, dynamic>> productUsageReport(
-    Map<String, dynamic> report,
-  ) async {
+    Map<String, dynamic> report, {
+    void Function(int vocabulary)? onVocabulary,
+  }) async {
     try {
       final response = await _dio.post(
         '/api/product-usage/report',
@@ -132,6 +149,7 @@ class ApiClient {
           sendTimeout: const Duration(seconds: 5),
         ),
       );
+      onVocabulary?.call(usageVocabulary(response.headers));
       final body = response.data;
       if (response.statusCode != 200 ||
           body is! Map ||

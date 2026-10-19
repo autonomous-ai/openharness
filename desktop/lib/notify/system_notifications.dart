@@ -2,6 +2,7 @@ library;
 
 import 'dart:async';
 import 'dart:io' show Platform, Process, ProcessException, ProcessResult;
+import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -214,11 +215,25 @@ typedef ProcessRunner = Future<ProcessResult> Function(
   List<String> arguments,
 );
 
+/// [run] on a short-lived isolate of its own, named for the executable.
+///
+/// Dart starts a process synchronously on the calling isolate: it forks and
+/// waits for the child to exec before `Process.run` returns. On Linux the UI
+/// isolate runs on GTK's main thread (Flutter 3.47), so `notify-send` started
+/// there for every notification held up the frame and the window's events
+/// until the child had been scheduled — 0.22 ms median and up to 18–43 ms on a
+/// loaded Mac (posix_file_mode.dart; Linux not measured). The isolate takes
+/// that wait instead. Its result, and a [ProcessException], come back as they
+/// are.
+ProcessRunner offUiIsolate([ProcessRunner run = Process.run]) =>
+    (executable, arguments) =>
+        Isolate.run(() => run(executable, arguments), debugName: executable);
+
 /// Linux: `notify-send`, which talks to whatever notification daemon the
 /// desktop already runs. No native dependency, and no click action — the tool
 /// has none, so a click does what the desktop's own default is.
 class LinuxSystemNotifier implements SystemNotifier {
-  LinuxSystemNotifier({ProcessRunner? run}) : _run = run ?? Process.run;
+  LinuxSystemNotifier({ProcessRunner? run}) : _run = run ?? offUiIsolate();
 
   final ProcessRunner _run;
 
