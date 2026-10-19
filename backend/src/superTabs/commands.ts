@@ -165,7 +165,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const contributor = person(state, actor.userId)
       state.machines ??= []
       if (!state.machines.some(m => m.machineId === command.machineId) && state.machines.length >= 32) fail('MACHINES_FULL', 'A Super Tab can have up to 32 contributed machines.')
-      if (state.starts?.some(s => s.request.machineId === command.machineId && !s.harnessId && !s.error)) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
+      if (state.starts?.some(s => s.request.machineId === command.machineId && (!s.harnessId || (s.poolGeneration && !s.poolSettled)) && !s.error)) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
       state.machines.push({ machineId: command.machineId, name: command.name, cwd: command.cwd, engines: [...new Set(command.engines)], maxAgents: command.maxAgents,
         contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused: false })
@@ -299,7 +299,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (command.type === 'agent.startSettled') {
         if (!start.poolGeneration || !start.harnessId || start.error) fail('START_PENDING', 'This contributed start is not ready to settle.')
-        if (!start.poolSettled && command.warning) message(start.request.conversationId, `${start.request.name}: ${command.warning}`)
+        if (!start.poolSettled) message(start.request.conversationId, command.warning
+          ? `${start.request.name}: ${command.warning}`
+          : `${start.request.name} is ready for an assignment.`)
         start.poolSettled = true
         break
       }
@@ -323,7 +325,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       group.agentIds.push(agentId)
       start.harnessId = command.harnessId
       result.agentId = agentId
-      message(group.id, `${start.request.name} joined. Ready for an assignment.`)
+      message(group.id, start.poolGeneration
+        ? `${start.request.name} joined. Preparing its model.`
+        : `${start.request.name} joined. Ready for an assignment.`)
       break
     }
     case 'agent.configuration': {

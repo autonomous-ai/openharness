@@ -32,3 +32,18 @@ Source scope: Desktop Super Tab UI/state and native macOS integration; CLI machi
 Use the official signed internal Desktop workflow, not a public feature-test release. New machine contribution requires the matching CLI and backend as well as Desktop. A Desktop-only artifact does not by itself deploy those changes. Existing remote terminal control permissions still apply: a collaborator allowed only to observe a terminal cannot type into it.
 
 Implementation, validation, merge, build/publication and waiting are distinct phases. No merge or production publication is claimed by this document.
+
+## Completed local checks
+
+- 86 affected Desktop widget tests passed, including native-question notice → exact terminal → cleared question, multi-agent panes, hiding and reopening, dark/light and narrow/large-text layouts.
+- Native macOS fixture passed with real terminal rendering and realistic CPU/GPU/RAM/disk/quota cards; screenshots saved locally under `/private/tmp/super-tab-review-final`.
+- 265 CLI tests across 16 files passed; both TypeScript typechecks passed.
+- Backend replica-set suite: 33 tests passed, including the final guard against changing a contribution during model settlement.
+- Two-daemon contribution E2E passed again after integrating main's creator-scoped creation receipts (`1fb7c4fc08`). No real user harnesses were used for testing.
+- Shared icon catalogue audit passed. Whole-tree Flutter analysis reported pre-existing third-party/deprecated and unrelated device-test warnings; it is not recorded as a clean whole-tree check.
+
+Review PR: https://github.com/autonomous-ai/openharness/pull/1436
+
+Official internal Desktop build: https://github.com/autonomous-ai/openharness/actions/runs/39294760131 (Desktop source `da0a3f9dacbd70e31cc78905f2208f77affa84b8`; the follow-up settlement fix changes backend files only).
+
+Validation/build timing for this final review phase: required CI and internal build started around 17:30 UTC; native macOS and final local integration checks completed by 17:35 UTC. Earlier implementation time is not represented as build time. Publication and merge remain separate, and their final status is reported with the review handoff.

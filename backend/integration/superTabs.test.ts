@@ -106,7 +106,12 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await hostRun({ type: 'agent.startDispatch', startId })
     await expect(hostRun({ type: 'agent.startDispatch', startId })).rejects.toMatchObject({ code: 'START_CLAIMED' })
     await hostRun({ type: 'agent.started', startId, harnessId: 'pool-builder', configuration: config })
+    const pendingAgent = (await store.read(owner, tab)).state.agents[0]!
+    await expect(run(tab, { type: 'work.assign', conversationId: 'lead', agentId: pendingAgent.id })).rejects.toMatchObject({ code: 'START_PENDING' })
+    await expect(run(tab, contribute, host)).rejects.toMatchObject({ code: 'STARTS_PENDING' })
+    await expect(run(tab, { type: 'agent.startSettled', startId, warning: null })).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
     await hostRun({ type: 'agent.startSettled', startId, warning: null })
+    expect((await store.start(owner, tab, startId)).poolSettled).toBe(true)
     expect((await store.read(owner, tab)).state.agents[0]).toMatchObject({ contributorId: host.sub, machineOwnerId: host.sub, harnessId: 'pool-builder' })
     await run(tab, { type: 'member.remove', userId: host.sub })
     expect(await store.hostPools(host, 'pool-host')).toEqual([])
