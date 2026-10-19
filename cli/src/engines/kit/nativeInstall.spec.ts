@@ -334,6 +334,15 @@ it('keeps its history when a reboot renumbers the disk', async () => {
   expect(restarted.dispatch).not.toHaveBeenCalled()
 })
 
+it('logs why a failed check holds, which the person never sees', async () => {
+  await controller().ensure('opencode', recipe, environment, 'request', () => true)
+  complete()
+  unlinkSync(`${directory}.00000000.dispatch`)
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  expect(await controller().status('codex', 'other', () => true)).toEqual({ complete: false, detail: 'Waiting to confirm durable engine installation ownership.' })
+  expect(warn).toHaveBeenCalledWith('[native-install] codex held:', 'Missing installation dispatch witness')
+})
+
 it('confirms a readable result durably before crediting it or dispatching its successor', async () => {
   await controller().ensure('opencode', recipe, environment, 'request', () => true)
   complete()

@@ -339,7 +339,12 @@ export function createNativeInstallations({ directory, node = managedNodePath, d
       if (!dispatchCurrent()) return hold('Waiting to confirm the installer claim.')
       dispatch(runtime, file, hash)
       return running('Installing the required engine. The saved launch continues after installation is confirmed.')
-    } catch { return hold('Waiting to confirm durable engine installation ownership.') }
+    } catch (error) {
+      // Any failed check lands here, and the person sees only this line. Without the reason in the log, a hold
+      // that never cleared could only be traced by hand over many round trips with the user (2026-10-19).
+      console.warn(`[native-install] ${engine} held:`, error instanceof Error ? error.message : error)
+      return hold('Waiting to confirm durable engine installation ownership.')
+    }
   }
   const ensure = async (engine: AgentEngine, recipe: EngineInstallRecipe, environment: Record<string, string>, request: string, current: () => boolean): Promise<NativeInstallation> =>
     (await examine(engine, recipe, environment, request, current))!
