@@ -278,7 +278,8 @@ try {
           .invokeMethod<String>('authorize')
           .timeout(_channelTimeout);
       // CI normally lacks the installed Start Menu shortcut carrying the AUMID.
-      expect(['granted', 'denied', 'unavailable'], contains(answer));
+      // Windows may not know its setting until the first toast registers it.
+      expect(['granted', 'denied', 'unavailable', 'unknown'], contains(answer));
       addTearDown(
         () => const MethodChannel('harness/status_menu')
             .invokeMethod<void>('update', {
