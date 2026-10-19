@@ -1,10 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { backend, hostJournalFile, SuperTabHost } from './host.js'
+import { retainedHarnesses, retentionFile } from './retention.js'
 
 const roots: string[] = []
 const hosts: SuperTabHost[] = []
@@ -43,6 +44,29 @@ function setup(messageFields: Record<string, unknown> = {}) {
 }
 
 describe('Super Tab native delivery handoff', () => {
+  it('keeps roster members through host failure and restart, releasing only a confirmed removal', async () => {
+    const t = setup(), first = t.open()
+    await first.tick()
+    expect(retainedHarnesses(t.dir).has('harness')).toBe(true)
+    first.stop()
+    expect(retainedHarnesses(t.dir).has('harness')).toBe(true)
+    const next = t.open()
+    vi.mocked(t.call).mockRejectedValueOnce(new Error('Host offline'))
+    await next.tick()
+    expect(retainedHarnesses(t.dir).has('harness')).toBe(true)
+    t.remove()
+    await next.tick()
+    expect(retainedHarnesses(t.dir).size).toBe(0)
+  })
+  it('keeps delivering when retention cannot be saved, and says so once', async () => {
+    const t = setup(), log = vi.fn()
+    mkdirSync(`${retentionFile(t.dir)}.next`, { recursive: true })
+    const host = new SuperTabHost(t.core, 'machine-1', { log }); hosts.push(host)
+    await host.tick(); await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.core.turns.leaseDeliveries).toHaveBeenCalled()
+    expect(log).toHaveBeenCalledTimes(1)
+  })
   it('preserves the exact reply reference when a short human answer reaches an agent', async () => {
     const t = setup({ replyTo: 'question-2', text: 'Yes, keep them.' })
     await t.open().tick()

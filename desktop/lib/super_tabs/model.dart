@@ -89,6 +89,16 @@ class SuperTabSnapshot {
       conversations.where((c) => c.id == id).firstOrNull;
   SuperTabAgent? agent(String id) =>
       agents.where((a) => a.id == id).firstOrNull;
+
+  bool isLead(String agentId) => conversation('lead')?.leadId == agentId;
+
+  String agentName(String id, {String fallback = 'Agent'}) =>
+      isLead(id) ? 'Lead' : agent(id)?.name ?? fallback;
+
+  String authorName(SuperTabMessage message) =>
+      message.fromAgent && isLead(message.authorId)
+      ? 'Lead'
+      : message.authorName;
 }
 
 class SuperTabMessage {

@@ -12,6 +12,8 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/super_tabs/workspace.dart';
 import 'package:harness/widgets/pane_grid.dart';
+import 'package:harness/widgets/agent_drag.dart';
+import 'package:harness/widgets/terminal_panel.dart';
 
 import '../test/super_tab_launch_test.dart'
     show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
@@ -36,6 +38,7 @@ void main() {
       await windowManager.focus().timeout(const Duration(seconds: 10));
       debugPrint('Super Tab fixture: create lead');
       final f = SuperTabLaunchFixture();
+      f.connection.nativeName = 'hi';
       f.connection.nativeSurface = true;
       f.app.machineStates['m']!.terminalCapabilityAvailable = true;
       await tester.runAsync(() async {
@@ -176,8 +179,79 @@ void main() {
       debugPrint('Super Tab fixture: terminal ready');
       await shot('terminal');
       expect(find.byType(PaneGrid), findsOneWidget);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('terminal-pane-title')))
+            .data,
+        'Lead',
+      );
+      var reviews = 0;
+      f.app.reviewSessionClose = (_, {tabName, canStop}) async {
+        reviews++;
+        return false;
+      };
+      await tester.tap(find.byType(PaneCloseButton));
+      await tester.pumpAndSettle();
+      expect(f.app.activeSwarm.panes, isEmpty);
+      expect(c!.terminalAgent('lead'), isNull);
+      expect(find.byType(TerminalPanel), findsNothing);
+      expect(reviews, 0);
+      expect(
+        f.connection.calls.where((call) => call.$1 == 'agent_close'),
+        isEmpty,
+      );
+      expect(c.snapshot!.agents, hasLength(1));
+      await shot('hidden-terminal');
+      // An earlier app/daemon may already have cleaned up this member. Reopening
+      // must resume its exact saved conversation before preparing recording.
+      f.connection.native = {
+        ...f.connection.native!,
+        'status': 'stopped',
+        'sessionId': 'saved-native-conversation',
+        'terminal': {'available': false},
+      };
+      f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
+      await tester.tap(find.text('1 agent · 20 people'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Open terminal'));
+      for (
+        var i = 0;
+        i < 120 &&
+            (f.app.activeSwarm.panes.isEmpty ||
+                f.app.activeSwarm.panes.single.session?.streamId == null);
+        i++
+      ) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(
+        f.app.activeSwarm.panes,
+        hasLength(1),
+        reason:
+            'Reopen failed: ${f.connection.calls}\n'
+            '${tester.widgetList<Text>(find.byType(Text)).map((text) => text.data).whereType<String>().join("\n")}',
+      );
+      expect(f.app.activeSwarm.panes.single.agentId, 'native-lead');
+      expect(
+        f.app.activeSwarm.panes.single.session?.streamId,
+        SuperTabFixtureConnection.streamId,
+      );
+      expect(
+        f.connection.calls.where((call) => call.$1 == 'agent_create'),
+        hasLength(1),
+      );
+      expect(
+        f.connection.calls.where((call) => call.$1 == 'agent_resume'),
+        hasLength(1),
+      );
+      expect(
+        f.app.stateOf('m')!.agents.single.sessionId,
+        'saved-native-conversation',
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.byType(TerminalPanel), findsOneWidget);
+      await shot('resumed-terminal');
       await tester.pumpWidget(const SizedBox());
-      await c!.flush();
+      await c.flush();
       f.app.superTabs.dispose();
       await tester.pump();
     },

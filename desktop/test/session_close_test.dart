@@ -99,6 +99,37 @@ void main() {
   tearDown(() => app.dispose());
   List<Object?> modes() => connection.closes.map((r) => r['mode']).toList();
 
+  for (final wholeTab in [false, true]) {
+    test(
+      'closing a Super Tab ${wholeTab ? 'tab' : 'pane'} hides working agents without a stop review',
+      () async {
+        final tab = app.activeSwarm;
+        app.bindSuperTab(tab.id, 'shared-tab', 'Pilot');
+        final pane = app.adoptSessionForTest(terminal('a0', []));
+        connection.activities['a0'] = 'working';
+        var reviews = 0;
+        app.reviewSessionClose = (_, {tabName, canStop}) async {
+          reviews++;
+          return false;
+        };
+        if (wholeTab) {
+          await app.requestCloseSwarm(tab.id);
+          expect(app.swarms, isNot(contains(tab)));
+        } else {
+          await app.requestClosePane(pane.id);
+          expect(app.swarms, contains(tab));
+          expect(tab.panes, isEmpty);
+        }
+        expect(reviews, 0);
+        expect(connection.closes, isEmpty);
+        expect(
+          app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a0').isStopped,
+          isFalse,
+        );
+      },
+    );
+  }
+
   test(
     'without a close presenter an unsupported decision keeps its pane intact',
     () async {

@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
+import { retainedHarnesses } from '../src/superTabs/retention.js'
 
 const HARNESS_INSTRUCTIONS = 'You are running in Harness, and the person can watch you. You can hand work to other agents (Claude Code, Codex) that run in their own harnesses: `harness new`, `harness wait`, `harness show`, `harness close` (see `harness --help`). Start one only for work that can run in parallel, needs another model, or takes long; do quick work yourself, and close each one once you have its answer. Only use or close harnesses you started.'
 const ME: FakeMachine = { machineId: 'b8'.repeat(16), computerId: 'e2e-computer-0000-0000-0000000000b8', name: 'studio', token: 'e2e-token-agent-client' }
@@ -201,7 +202,7 @@ describe('Harness for agents, end to end', () => {
     // Owner, October 12: "we need to be very careful about when to start a new agent so we don't waste user token and we
     // need to properly clean up after too". The cleanup runs in its own process here, as it does by default (the edge
     // host): what the core tells it and what it asks back cross the link.
-    const { d } = await signedIn({ agents_start_agents: true })
+    const { d, relay } = await signedIn({ agents_start_agents: true })
     const client = await LocalClient.connect(d, { machineId: ME.machineId })
     const list = async (includeStopped = false) => (await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped }, 30_000)).agents
     const lead = async (name: string) => {
@@ -248,6 +249,15 @@ describe('Harness for agents, end to end', () => {
     const second = await lead('lead2')
     const joined = await start(second, 'joined')
     const left = await start(second, 'left')
+    const shared = await start(second, 'shared')
+    relay.superTabs = async (_method, raw) => {
+      const path = new URL(raw, relay.httpUrl).pathname
+      return { data: path === `/api/super-tabs/hosts/${ME.machineId}`
+        ? [{ tabId: 'retained-team', agent: { id: 'shared-member', harnessId: shared.id, machineId: ME.machineId }, observers: [] }]
+        : [] }
+    }
+    expect(await client.request('super_tabs', { action: 'wake' })).toMatchObject({ ok: true })
+    await until('the team host to retain its member', () => retainedHarnesses(d.dataDir).has(shared.id) || null, 10_000, 100)
     client.send('message', { agentId: joined.id, content: 'hello from the person' })
 
     // The app closes lead, as a pane's close does (`agent_close`): kid closes with it.
@@ -263,10 +273,12 @@ describe('Harness for agents, end to end', () => {
     expect(byPerson.code, byPerson.out + byPerson.err).toBe(0)
     await until('left to close with lead2', async () => (await stateOf(left)) === 'stopped' || null, 60_000, 500)
     expect(await stateOf(joined)).toBe('active')
+    expect(await stateOf(shared)).toBe('active')
     // One line for each close.
     expect(d.log()).toMatch(/\[agent-cleanup\] closed kid \(\w+\): the harness that started it was closed\. Its conversation is kept\./)
     expect(d.log()).toMatch(/\[agent-cleanup\] closed left \(\w+\): the harness that started it was closed\./)
     expect(d.log()).not.toMatch(/\[agent-cleanup\] closed joined/)
+    expect(d.log()).not.toMatch(/\[agent-cleanup\] closed shared/)
     client.close()
   })
 

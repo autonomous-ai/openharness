@@ -38,6 +38,63 @@ void main() {
   }
 
   testWidgets(
+    'an existing lead named after a greeting is Lead in messages, replies and participants',
+    (tester) async {
+      final server = ConversationServer();
+      (server.state['agents'] as List).add({
+        'id': 'lead-agent',
+        'name': 'hi',
+        'machineId': 'm',
+        'harnessId': 'native-lead',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'codex'},
+      });
+      (server.state['conversations'] as List)[0]
+        ..['leadId'] = 'lead-agent'
+        ..['agentIds'] = ['lead-agent'];
+      server.append('What should we build?');
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'lead-agent',
+        'name': 'hi',
+      };
+      final c = await show(tester, server);
+      final row = find.byKey(const ValueKey('super-message-message-1'));
+      expect(
+        find.descendant(of: row, matching: find.text('Lead')),
+        findsOneWidget,
+      );
+      expect(find.text('hi'), findsNothing);
+      tester
+          .widget<Focus>(
+            find.descendant(of: row, matching: find.byType(Focus)).first,
+          )
+          .focusNode!
+          .requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyR);
+      await tester.pump();
+      expect(find.text('Replying to Lead'), findsOneWidget);
+      final composer = find.byKey(const ValueKey('super-message-composer'));
+      await tester.enterText(composer, 'Let’s discuss the plan.');
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      await c.refresh();
+      await tester.pumpAndSettle();
+      final reply = find.byKey(const ValueKey('super-message-message-2'));
+      expect(
+        find.descendant(of: reply, matching: find.text('Lead')),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('1 agent · 1 person'));
+      await tester.pumpAndSettle();
+      expect(find.text('hi'), findsNothing);
+      expect(find.text('Lead'), findsWidgets);
+      expect(find.text('Open terminal'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
     'a keyboard reply keeps its quoted context after sending and refreshing',
     (tester) async {
       final server = ConversationServer()

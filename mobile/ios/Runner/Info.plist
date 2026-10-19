@@ -57,6 +57,12 @@
 	     OS, so there is no Speech Recognition permission to ask for. -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Talk to an agent in a terminal instead of typing.</string>
+	<!-- Save Image and Save Video in the share sheet of a terminal's media
+	     preview (`phone/media_preview_page.dart`). Adding to the library is all
+	     it does, and iOS ends the app at that button when this string is
+	     missing. Reading the library still needs none — see the camera's note. -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save pictures and videos from an agent to your photo library.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

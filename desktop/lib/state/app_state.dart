@@ -3055,8 +3055,8 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// Close removes these views. A session stops only when this removes its
-  /// last view across all tabs; shared views keep their live terminal.
+  /// Close removes these views. Super Tabs own work independently of their
+  /// views; ordinary tabs stop a session only when its last view closes.
   Future<void> requestCloseSwarm(String id) {
     final tab = swarms.where((s) => s.id == id).firstOrNull;
     if (tab == null) return Future.value();
@@ -3108,6 +3108,10 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed) return Future.value();
     if (_viewCloseRequests[key] case final pending?) return pending;
     bool canStop(String machineId, String agentId) {
+      // A Super Tab pane is only a view into shared work. This guard also covers
+      // the close shortcut, native menu and whole-tab dismissal, including a
+      // regular tab becoming a Super Tab while a close review is pending.
+      if (tab.isSuperTab) return false;
       if (!swarms.contains(tab) ||
           (wholeTab &&
               (tab.panes.length != closing.length ||

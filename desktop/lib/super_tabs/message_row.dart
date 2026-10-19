@@ -21,6 +21,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.agent,
     this.machineName,
     this.reply,
+    this.replyAuthor,
     this.grouped = false,
     this.onReply,
   });
@@ -30,6 +31,7 @@ class SuperTabMessageRow extends StatefulWidget {
   final SuperTabAgent? agent;
   final String? machineName;
   final SuperTabMessage? reply;
+  final String? replyAuthor;
   final bool grouped;
   final VoidCallback? onReply;
   final VoidCallback onReturnToComposer;
@@ -188,7 +190,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     child: message.fromAgent
                                         ? EngineMark(
                                             engine: widget.agent?.engine,
-                                            displayName: message.authorName,
+                                            displayName: widget.author,
                                             size: 28,
                                           )
                                         : AccountAvatar(
@@ -251,6 +253,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   padding: const EdgeInsets.only(bottom: 8),
                                   child: SuperTabReplyPreview(
                                     author:
+                                        widget.replyAuthor ??
                                         widget.reply?.authorName ??
                                         'Earlier message',
                                     text:

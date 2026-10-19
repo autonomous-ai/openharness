@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../theme/app_theme.dart';
@@ -105,6 +106,28 @@ const _engines = <String, EngineIdentity>{
   ),
 };
 
+/// The daemon's engine id for a plain shell, the desktop's `kTerminalEngine`: what New Harness
+/// offers after every agent, and what a harness started as one is listed with.
+///
+/// ⚠️ **Deliberately NOT in [_engines]**, as it is not in the desktop's. [allEngines] is what
+/// `engines_probe` asks a machine about, and [isCodeEngine] reads that table: a terminal is neither
+/// installable nor absent (every machine has a shell), and it writes no code. New lists it on its
+/// own, last; [engineIdentity] still gives it a face, since a harness running one shows a mark.
+const String kTerminalEngine = 'terminal';
+
+/// The desktop's `_terminal`: its name, and the pale steel its mark is drawn in on a dark palette.
+const EngineIdentity _terminal = EngineIdentity(
+  id: kTerminalEngine,
+  label: 'Terminal',
+  color: Color(0xffa8b0b8),
+);
+
+/// The terminal's face, for the one list that offers it: New Harness.
+EngineIdentity get terminalIdentity => _terminal;
+
+/// Whether [engine] is the shell rather than an agent.
+bool isTerminalEngine(String? engine) => engine == kTerminalEngine;
+
 /// All known engines, in declaration order — for the New Agent engine picker.
 List<EngineIdentity> get allEngines => _engines.values.toList(growable: false);
 
@@ -142,7 +165,7 @@ String canonicalHarnessId(String id) => _retiredHarnessIds[id] ?? id;
 
 EngineIdentity engineIdentity(String? engine, {String? displayName}) {
   final id = engine?.trim().toLowerCase() ?? '';
-  final known = _engines[id];
+  final known = _engines[id] ?? (id == kTerminalEngine ? _terminal : null);
   if (known != null) return known;
   final raw = displayName?.trim().isNotEmpty == true
       ? displayName!.trim()
@@ -198,6 +221,16 @@ class EngineMark extends StatelessWidget {
             painter: _ClaudeMarkPainter(
               dark ? identity.color : const Color(0xffc2633f),
             ),
+          )
+        // The desktop's terminal mark: a prompt glyph, not the initial a "T" would read as.
+        : identity.id == kTerminalEngine
+        ? Icon(
+            LucideIcons.terminal400,
+            key: const ValueKey('engine-icon-terminal'),
+            size: size,
+            // The shell's pale steel is 1.8:1 on a light workspace; there it takes the secondary
+            // ink, as on the desktop.
+            color: dark ? identity.color : AppColors.mutedStrong,
           )
         : _InitialMark(
             key: ValueKey('engine-fallback-${identity.id}'),

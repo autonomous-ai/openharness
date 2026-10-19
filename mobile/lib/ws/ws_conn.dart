@@ -903,6 +903,7 @@ class WsConn {
     'agent_retarget',
     'agent_recent',
     'agent_fork',
+    'agent_close',
     'agent_delete',
     'session_search',
     'session_tail',

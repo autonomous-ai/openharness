@@ -31,6 +31,7 @@ import 'phone_name_store.dart';
 import 'phone_sheet.dart';
 import 'settings_row.dart';
 import 'privacy_page.dart';
+import 'privacy_policy.dart';
 import 'welcome/how_it_works.dart';
 import 'welcome/focus_hints.dart';
 import 'tty_controls.dart';
@@ -295,7 +296,17 @@ class _Body extends StatelessWidget {
         ],
       ),
       const SettingsCaption('About'),
-      SettingsGroup(children: const [_VersionRow(), _BuildRow()]),
+      SettingsGroup(
+        children: [
+          const _VersionRow(),
+          const _BuildRow(),
+          // The stores want the policy reachable from inside the app — see [kPrivacyPolicyUrl].
+          SettingsRow(
+            title: 'Privacy Policy',
+            onTap: () => unawaited(openPrivacyPolicy(context)),
+          ),
+        ],
+      ),
     ],
   );
 

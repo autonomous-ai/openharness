@@ -4,6 +4,7 @@ import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/demo/sample_mode.dart';
 import 'package:harness_mobile/measurement/product_measurement.dart';
 import 'package:harness_mobile/phone/machines_tab.dart';
+import 'package:harness_mobile/phone/privacy_policy.dart';
 import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/phone/welcome/how_it_works.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -106,6 +107,54 @@ void main() {
     );
     expect(find.text('1.2.3'), findsOneWidget);
     await close(tester, app);
+  });
+
+  group('About ▸ Privacy Policy', () {
+    /// The policy's opener, recording what it is asked to open and answering [opens].
+    List<Uri> opening({Future<bool> Function()? opens}) {
+      final asked = <Uri>[];
+      final before = openPrivacyPolicyUrl;
+      addTearDown(() => openPrivacyPolicyUrl = before);
+      openPrivacyPolicyUrl = (url) {
+        asked.add(url);
+        return opens?.call() ?? Future.value(true);
+      };
+      return asked;
+    }
+
+    Future<void> tapPolicy(WidgetTester tester) async {
+      await tapInView(tester, find.text('Privacy Policy'));
+      await frames(tester);
+    }
+
+    // App Store 5.1.1(i): the policy reachable from inside the app, not only beside its listing.
+    testWidgets('opens Autonomous\'s policy, the address every listing names', (
+      tester,
+    ) async {
+      final asked = opening();
+      final app = await openSettings(tester);
+
+      await tapPolicy(tester);
+
+      expect(asked, [Uri.parse('https://www.autonomous.ai/privacy')]);
+      expect(find.text('Could not open the browser.'), findsNothing);
+      await close(tester, app);
+    });
+
+    for (final (name, opens) in <(String, Future<bool> Function())>[
+      ('declines', () => Future.value(false)),
+      ('throws', () => Future<bool>.error(StateError('no browser'))),
+    ]) {
+      testWidgets('a browser that $name is said', (tester) async {
+        opening(opens: opens);
+        final app = await openSettings(tester);
+
+        await tapPolicy(tester);
+
+        expect(find.text('Could not open the browser.'), findsOneWidget);
+        await close(tester, app);
+      });
+    }
   });
 
   testWidgets('Computers and How Harness works open their pages', (

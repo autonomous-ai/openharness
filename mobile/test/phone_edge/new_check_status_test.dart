@@ -36,6 +36,16 @@ void main() {
   Map<String, dynamic> lost(Map<String, dynamic> _) =>
       throw const WsRequestTimeout('agent_create');
 
+  /// Held before anything started, as a machine installing the engine answers.
+  Map<String, dynamic> held(Map<String, dynamic> payload) => {
+    'creationId': payload['creationId'],
+    'state': 'pending',
+    'held': {
+      'service': 'engine',
+      'detail': 'Installing Kilo. The harness starts once it is installed.',
+    },
+  };
+
   /// New on `m`, whose agent's folder is the project, answering from [script] — which a test
   /// changes between presses, as the machine's answers change.
   Future<({AppNotifier app, EdgeConn conn})> openNew(
@@ -243,6 +253,85 @@ void main() {
     expect(second['engine'], 'codex');
     expect(second['creationId'], isNot(first['creationId']));
     expect(sent(conn, 'agent_create_status'), isEmpty);
+    await close(tester, app);
+  });
+
+  testWidgets('held while the engine installs: says on what, and Cancel '
+      'request calls it off under the same id', (tester) async {
+    final script = <String, _Answer>{
+      'agent_create': held,
+      'agent_create_cancel': (payload) => {
+        'creationId': payload['creationId'],
+        'state': 'cancelled',
+      },
+    };
+    final (:app, :conn) = await openNew(tester, script);
+
+    await press(tester, 'Start');
+    expect(
+      find.textContaining('Installing Kilo. The harness starts once'),
+      findsOneWidget,
+    );
+    expect(find.text('Check status'), findsOneWidget);
+    expect(find.text('Cancel request'), findsOneWidget);
+
+    await press(tester, 'Cancel request');
+
+    final [first] = sent(conn, 'agent_create');
+    final [cancel] = sent(conn, 'agent_create_cancel');
+    expect(cancel, {'creationId': first['creationId']});
+    expect(find.text('Creation cancelled.'), findsOneWidget);
+    expect(find.text('Cancel request'), findsNothing);
+    expect(find.text('Check status'), findsNothing);
+    expect(find.text('Start'), findsOneWidget, reason: 'free for a new one');
+    expect(
+      find.textContaining('Installing Kilo'),
+      findsNothing,
+      reason: 'the hold is over',
+    );
+    await close(tester, app);
+  });
+
+  testWidgets('a harness already starting has nothing to cancel', (
+    tester,
+  ) async {
+    final script = <String, _Answer>{'agent_create': pending};
+    final (:app, :conn) = await openNew(tester, script);
+
+    await press(tester, 'Start');
+
+    expect(find.text('Check status'), findsOneWidget);
+    expect(find.text('Cancel request'), findsNothing);
+    await close(tester, app);
+  });
+
+  testWidgets('a cancel the machine does not confirm keeps the request to '
+      'check', (tester) async {
+    final script = <String, _Answer>{
+      'agent_create': held,
+      'agent_create_cancel': (_) =>
+          throw const WsRequestTimeout('agent_create_cancel'),
+    };
+    final (:app, :conn) = await openNew(tester, script);
+
+    await press(tester, 'Start');
+    await press(tester, 'Cancel request');
+
+    expect(
+      find.textContaining('Cancellation is not confirmed'),
+      findsOneWidget,
+    );
+    expect(find.text('Check status'), findsOneWidget);
+
+    script['agent_create_status'] = created;
+    await press(tester, 'Check status');
+    await opened(tester);
+    final [first] = sent(conn, 'agent_create');
+    expect(
+      sent(conn, 'agent_create_status').single['creationId'],
+      first['creationId'],
+    );
+    expect(find.byType(AgentSwipeHost), findsOneWidget);
     await close(tester, app);
   });
 }

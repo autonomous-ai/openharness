@@ -178,7 +178,7 @@ class SuperTabLaunch {
       'conversationId': saved['conversationId'],
       'machineId': machine,
       'harnessId': harnessId,
-      'name': native.displayName,
+      'name': saved['lead'] == true ? 'Lead' : native.displayName,
       'lead': saved['lead'],
       'configuration': {
         'engine': native.engine ?? '',

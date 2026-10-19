@@ -36,6 +36,7 @@ class SuperTabFixtureConnection extends WsConn {
   final joins = <Map<String, dynamic>>[];
   bool loseCreate = false, loseJoin = false;
   bool failNative = false;
+  bool failResume = false;
   bool nativeSurface = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
   late AppNotifier app;
@@ -43,6 +44,7 @@ class SuperTabFixtureConnection extends WsConn {
   final terminalCalls = <(String, Map<String, dynamic>)>[];
   static const streamId = '00112233-4455-6677-8899-aabbccddeeff';
   Map<String, dynamic>? native;
+  String nativeName = 'Lead';
 
   Future<void> event(String type, Map<String, dynamic> payload) =>
       app.handleMachineEventForTest('m', {'type': type, 'payload': payload});
@@ -123,6 +125,12 @@ class SuperTabFixtureConnection extends WsConn {
       if (payload['action'] == 'wake') return {'ok': true};
       if (payload['action'] == 'prepareNative' ||
           payload['action'] == 'renewNative') {
+        if (native?['status'] == 'stopped') {
+          return {
+            'error': 'SUPER_TAB_UNAVAILABLE',
+            'detail': 'The exact contributed terminal is unavailable on this machine.',
+          };
+        }
         return failNative
             ? {
                 'error': 'NATIVE_UNAVAILABLE',
@@ -152,10 +160,15 @@ class SuperTabFixtureConnection extends WsConn {
             'id': 'lead-agent',
             'machineId': 'm',
             'harnessId': command['harnessId'],
-            'name': 'Lead',
+            'name': command['name'],
             'contributorId': 'owner',
             'configuration': command['configuration'],
           });
+          final group = (server.state['conversations'] as List)
+              .cast<Map>()
+              .firstWhere((g) => g['id'] == command['conversationId']);
+          (group['agentIds'] as List).add('lead-agent');
+          if (command['lead'] == true) group['leadId'] = 'lead-agent';
           if (command['initialMessage'] is String) {
             server.append(command['initialMessage'] as String);
           }
@@ -174,6 +187,22 @@ class SuperTabFixtureConnection extends WsConn {
       }
       return {'ok': true, 'value': value};
     }
+    if (type == 'agent_resume') {
+      // The real native test completes this request during a frame pump.
+      expectSync(payload['agentId'], native!['id']);
+      if (failResume) return {'error': 'RESUME_FAILED'};
+      native = {
+        ...native!,
+        'status': 'active',
+        'terminal': {'available': true},
+      };
+      return {
+        'creationId': payload['creationId'],
+        'state': 'created',
+        'resumed': true,
+        'agent': native,
+      };
+    }
     if (type == 'agent_create') {
       final records = store.values.entries.where(
         (e) => e.key.startsWith('super_tab.launch.'),
@@ -184,8 +213,9 @@ class SuperTabFixtureConnection extends WsConn {
       expect(saved['creationId'], payload['creationId']);
       native = {
         'id': 'native-lead',
-        'name': 'Lead',
+        'name': nativeName,
         'engine': payload['engine'],
+        'closeSupported': true,
         'terminal': {'available': true},
         'project': {'cwd': '/work/project', 'label': 'Project'},
       };
@@ -429,7 +459,8 @@ void main() {
     test(
       '$engine lead uses the native form and joins without opening a terminal or another tab',
       () async {
-        final f = SuperTabLaunchFixture(), initialTab = f.app.activeSwarmId;
+        final f = SuperTabLaunchFixture()..connection.nativeName = 'hi';
+        final initialTab = f.app.activeSwarmId;
         final box = await f.box(engine: engine);
         expect(box.actionLabel, 'New Super Tab');
         expect(
@@ -440,6 +471,7 @@ void main() {
         final creates = f.connection.calls.where((c) => c.$1 == 'agent_create');
         expect(creates, hasLength(1));
         expect(creates.single.$2['engine'], engine);
+        expect(f.connection.joins.single['command']['name'], 'Lead');
         expect(
           creates.single.$2['prompt'],
           contains('Discuss the architecture.'),

@@ -470,6 +470,18 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.hostTabs(host, 'test-host')).find(t => t.tabId === tab)?.observers).not.toContainEqual({ email: peer.email, userId: peer.sub })
   })
 
+  it('marks members of only archived groups inactive for host retention', async () => {
+    const { tab, lead } = await fixture()
+    const group = (await run(tab, { type: 'conversation.create', title: 'Done work', brief: '', checks: [] })).result.conversationId as string
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Builder', configuration: config, lead: false })).result.agentId as string
+    const active = async () => Object.fromEntries((await store.hostTabs(host, 'test-host'))
+      .filter(t => t.tabId === tab).map(t => [t.agent.id, t.active]))
+    expect(await active()).toEqual({ [lead]: true, [worker]: true })
+    await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })
+    expect(await active()).toEqual({ [lead]: true, [worker]: false })
+  })
+
   it('serializes native start claims and fences a restored target-machine grant', async () => {
     const { tab } = await fixture()
     const request = { conversationId: 'lead', machineId: 'test-host', engine: 'claude', name: 'Builder', cwd: '/fixture/repo', worktree: true,

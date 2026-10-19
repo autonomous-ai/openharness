@@ -36,6 +36,7 @@ class TerminalInputDock extends StatefulWidget {
     this.onPaste,
     this.onPickImage,
     this.onTakePhoto,
+    this.onPickFile,
     this.questionOpen = false,
     this.hints = const [],
   });
@@ -61,6 +62,9 @@ class TerminalInputDock extends StatefulWidget {
   final VoidCallback? onPaste;
   final VoidCallback? onPickImage;
   final VoidCallback? onTakePhoto;
+
+  /// Any other file — see [TerminalKeyBar.onPickFile].
+  final VoidCallback? onPickFile;
 
   /// How long the row takes to open or close, matched to the software
   /// keyboard's own slide: iOS animates its keyboard over 250ms and Android
@@ -132,6 +136,7 @@ class _TerminalInputDockState extends State<TerminalInputDock>
         onPaste: widget.onPaste,
         onPickImage: widget.onPickImage,
         onTakePhoto: widget.onTakePhoto,
+        onPickFile: widget.onPickFile,
         questionOpen: widget.questionOpen,
         // An agent's prompt takes `↵`; a plain shell does not — see
         // [TerminalKeyBar.enginePrompt].
