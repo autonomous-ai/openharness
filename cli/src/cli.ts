@@ -115,6 +115,9 @@ Machine:
   harness login --google       sign in with Google in your browser, without asking
   harness login --apple        sign in with Apple in your browser, without asking
   harness login --qr           sign in by scanning a QR with Harness on your phone, without asking
+  harness login --code         for a device with no screen: say a short code the person types into Harness
+                               (phone: Settings ▸ Sign in a computer ▸ Type a code instead; desktop or web:
+                               Machines ▸ Approve a device); with --json the code is an event
   harness login --force        stop the daemon and sign in with a different account
   harness login --json         emit machine-readable NDJSON instead of opening a browser (for GUI clients)
   harness login --entry-point=desktop   record which surface started the sign-in (GUI clients; default cli)
@@ -381,6 +384,8 @@ interface SignInHooks {
   onStarted?: (cancel: () => Promise<void>) => void
   /** The person said yes / the browser came back: finish the sign-in, do not abandon it. */
   onCommitted?: () => void
+  /** `--code`: say a short code instead of showing the QR (a device with no screen, #1410). */
+  spoken?: boolean
 }
 
 /**
@@ -488,8 +493,8 @@ async function loginCommand(
   }
   const signIn = async (): Promise<SignInOutcome> => {
     try {
-      return method === 'qr'
-        ? await qrSignInCommand(json, emit, (email) => succeed(false, email), { driver, onStarted: (cancel) => { takeBack = cancel }, onCommitted: () => setWaiting(false) })
+      return method === 'qr' || method === 'code'
+        ? await qrSignInCommand(json, emit, (email) => succeed(false, email), { driver, spoken: method === 'code', onStarted: (cancel) => { takeBack = cancel }, onCommitted: () => setWaiting(false) })
         : await browserSignIn(json, emit, () => succeed(false), { entryPoint, provider: method }, { onCommitted: () => setWaiting(false) })
     } finally {
       setWaiting(false)
@@ -600,6 +605,10 @@ function askLine(question: string): Promise<string> {
  * ask the person here whether to sign in as the account that approved, then save the session.
  * Under --json the QR is an event (`{"type":"qr"}`) and the question is one too
  * (`{"type":"confirm","email"}`), answered with a `yes` or `no` line on standard input.
+ *
+ * [SignInHooks.spoken] (`--code`): a device with no screen says a short code instead of the QR —
+ * `{"type":"code","code","expiresIn"}` under --json, sent again whenever the code is kept alive — and
+ * the person types it into Harness on their phone. The confirm question stays, to be asked aloud.
  */
 async function qrSignInCommand(
   json: boolean,
@@ -614,6 +623,15 @@ async function qrSignInCommand(
     ...(hooks.onStarted ? { onStarted: hooks.onStarted } : {}),
     label: hostname().slice(0, 80),
     computerId: computerId(),
+    ...(hooks.spoken ? {
+      showCode: (code: string, expiresIn: number) => {
+        if (json) { emit({ type: 'code', code, expiresIn }); return }
+        if (shown) return
+        shown = true
+        console.log(`\n  On your phone, open Harness ▸ Settings ▸ Sign in a computer ▸ Type a code instead (or Machines ▸ Approve a device on a computer), and enter:\n\n    ${code.slice(0, 4)} ${code.slice(4)}\n`)
+        console.log('  Waiting for your phone…')
+      },
+    } : {}),
     show: (link, expiresIn) => {
       if (json) { emit({ type: 'qr', url: link, expiresIn }); return }
       if (shown) return

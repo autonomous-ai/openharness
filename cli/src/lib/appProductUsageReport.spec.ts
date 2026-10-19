@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
 import { appProductUsageReport, APP_USAGE_VOCABULARY, isAppProductUsageReport } from './appProductUsageReport.js'
 import { HEALTH_MEASURES, CLI_REPORT_FAILURES } from './productHealthContract.js'
-import { PRODUCT_USAGE_UI_METRICS } from './productUsageContract.js'
+import { PRODUCT_USAGE_ADD_PHONE_METRICS, PRODUCT_USAGE_UI_METRICS } from './productUsageContract.js'
 
 const native = JSON.parse(readFileSync(new URL('../../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8'))
 const { context: _context, ...legacy } = native
@@ -84,9 +84,18 @@ it('drops names this contract does not know yet, says so once, and refuses every
   ]) expect(appProductUsageReport(refused), JSON.stringify(refused)).toBeUndefined()
 })
 
-it('announces vocabulary 2, the revision whose frame-phase names a Desktop waits for', () => {
-  expect(APP_USAGE_VOCABULARY).toBe(2)
+it('announces vocabulary 3, the revision whose frame-phase and Add Phone names a Desktop waits for', () => {
+  expect(APP_USAGE_VOCABULARY).toBe(3)
   for (const measure of ['frame_slow_wait', 'frame_slow_build', 'frame_slow_raster', 'frame_long_collector']) {
     expect(appProductUsageReport({ ...native, counters: { [`health_desktop_${measure}`]: 1 } })).toBeDefined()
   }
+  // The Add Phone card's flow and each way into Add Phone, from a Desktop, forwarded as they are.
+  const addPhone = { ...native, counters: { ui_desktop_phone_offer_started: 1, ui_desktop_phone_offer_ok: 1,
+    ui_desktop_phone_offer_cancelled: 1, ui_desktop_phone_offer_over_1m: 1,
+    ...Object.fromEntries(PRODUCT_USAGE_ADD_PHONE_METRICS.map(metric => [metric, 1])) } }
+  expect(appProductUsageReport(addPhone)).toBe(addPhone)
+  expect(PRODUCT_USAGE_ADD_PHONE_METRICS).toEqual(['ui_desktop_add_phone_offer', 'ui_desktop_add_phone_titlebar',
+    'ui_desktop_add_phone_menu', 'ui_desktop_add_phone_account', 'ui_desktop_add_phone_machines', 'ui_desktop_add_phone_command'])
+  // Only a Desktop report with its context files them: not the legacy UI-only form.
+  expect(appProductUsageReport({ ...old, counters: { ui_desktop_add_phone_menu: 1 } })).toBeUndefined()
 })

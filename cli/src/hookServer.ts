@@ -185,6 +185,9 @@ export interface HookServerHandlers {
   onExperimentalRead?: () => Promise<PairOutcome>
   onExperimentalWrite?: (body: unknown) => Promise<PairOutcome>
   onProductFeedback?: (body: unknown) => Promise<PairOutcome>
+  /** The phone half of a sign-in (backend routes/qrSignIn.ts) for the desktop and web apps: approve a device
+   *  that says its code aloud (a lamp, #1410) with this computer's own session, as the phone does. */
+  onSignInAnswer?: (action: 'lookup' | 'approve' | 'deny', body: { code: string }) => Promise<PairOutcome>
   onProductUsageReport?: (body: unknown) => Promise<PairOutcome>
   onProductUsageRead?: () => Promise<PairOutcome>
   onProductUsageWrite?: (body: unknown) => Promise<PairOutcome>
@@ -1079,6 +1082,21 @@ export function startHookServer(
           json(result.status, result.body)
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return
+      }
+      const signInAnswer = req.method === 'POST' ? /^\/api\/auth\/qr\/(lookup|approve|deny)$/.exec(url) : null
+      if (signInAnswer) {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onSignInAnswer) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: unknown
+        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: 'BAD_REQUEST' }); return }
+        // The code and nothing else: whose account approves is this computer's session, never the caller's.
+        const code = (body as { code?: unknown } | null)?.code
+        if (!body || typeof body !== 'object' || Object.keys(body).length !== 1
+            || typeof code !== 'string' || code.length < 1 || code.length > 128) {
+          json(400, { error: 'BAD_REQUEST' }); return
+        }
+        const action = signInAnswer[1] as 'lookup' | 'approve' | 'deny'
+        await proxied(() => handlers.onSignInAnswer!(action, { code })); return
       }
       if (req.method === 'POST' && url === '/api/product-usage/feedback') {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }

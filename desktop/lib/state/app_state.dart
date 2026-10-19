@@ -1113,6 +1113,8 @@ class AppNotifier extends ChangeNotifier {
 
   int _invalidateAuthWork() {
     _closeAttachmentSessions();
+    // A card a sign-out or another sign-in takes away went neither way.
+    _endPhoneOffer(ProductOutcome.unknown);
     _phoneOffer = false;
     _closeOwnerMemories();
     _stopMachineRecovery();
@@ -7031,10 +7033,45 @@ class AppNotifier extends ChangeNotifier {
   bool get phoneOfferShowing => _phoneOffer;
   bool _phoneOffer = false;
 
+  /// The card's observation ([ProductFlow.phoneOffer]): begun once it is on screen
+  /// ([phoneOfferShown]), ended once — ok by its Add Phone, cancelled by its ×, unknown when the
+  /// card goes another way (Add Phone opened from elsewhere, a sign-out).
+  void Function(ProductOutcome)? _phoneOfferMeasure;
+
+  /// The card is on screen. Its observation starts here, not at [_phoneOffer]: a new computer's
+  /// first agents keep it off the screen while they open (`state/first_arrival.dart`). Once per
+  /// offer, however often the card is built again.
+  void phoneOfferShown() {
+    if (!_phoneOffer || _phoneOfferMeasure != null) return;
+    _phoneOfferMeasure = productMeasurement.begin(ProductFlow.phoneOffer);
+  }
+
+  void _endPhoneOffer(ProductOutcome outcome) {
+    final finish = _phoneOfferMeasure;
+    _phoneOfferMeasure = null;
+    finish?.call(outcome);
+  }
+
+  /// Add Phone is opening, from [from]: counted by its way in, and this computer's offer spent
+  /// ([dropPhoneOffer]) — ok for the card when it was the card's own button.
+  void addPhoneOpened(AddPhoneOpening from) {
+    productMeasurement.addPhoneOpened(from);
+    if (from == AddPhoneOpening.offer) _endPhoneOffer(ProductOutcome.ok);
+    dropPhoneOffer();
+  }
+
+  /// The card's ×: put away for good ([dropPhoneOffer]).
+  void dismissPhoneOffer() {
+    _endPhoneOffer(ProductOutcome.cancelled);
+    dropPhoneOffer();
+  }
+
   /// Add Phone was opened — from the card or by hand — or the card was put away: nothing is left to
   /// offer, now or on a later launch or sign-in. Also how a sign-in made from inside Add Phone (its
   /// "Sign in…") does not bring the card back.
   void dropPhoneOffer() {
+    // Not by the card's own buttons ([addPhoneOpened], [dismissPhoneOffer]), which end it first.
+    _endPhoneOffer(ProductOutcome.unknown);
     final showing = _phoneOffer;
     _phoneOffer = false;
     _markPhoneOfferDone();

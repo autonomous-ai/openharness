@@ -1,17 +1,20 @@
 import { cleanUsageContext, HEALTH_MEASURES, CLI_REPORT_FAILURES } from './productHealthContract.js'
-import { PRODUCT_USAGE_METRICS, PRODUCT_USAGE_UI_METRICS, type ProductUsageReport } from './productUsageContract.js'
+import { PRODUCT_USAGE_ADD_PHONE_METRICS, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_UI_METRICS,
+  type ProductUsageReport } from './productUsageContract.js'
 
 /** The contract revision this proxy forwards, sent on each of its answers as `x-harness-usage-vocabulary`.
- * 2: the Desktop's frame-phase counters (`frame_slow_*`, `frame_long_collector`). The Desktop counts a name
- * newer than revision 1 only once a proxy has announced it, so an older CLI never sees one. Raise it with
- * each name the Desktop gates on it (`ProductHealthMeasure.vocabulary`). */
-export const APP_USAGE_VOCABULARY = 2
+ * 2: the Desktop's frame-phase counters (`frame_slow_*`, `frame_long_collector`). 3: its Add Phone card
+ * (`ui_desktop_phone_offer_*`) and the ways Add Phone opened (`ui_desktop_add_phone_*`). The Desktop sends a
+ * name newer than revision 1 only once a proxy has announced it, so an older CLI never sees one. Raise it with
+ * each name the Desktop gates on it (`ProductHealthMeasure.vocabulary`, `ProductFlow.vocabulary`). */
+export const APP_USAGE_VOCABULARY = 3
 export const APP_USAGE_VOCABULARY_HEADER = 'x-harness-usage-vocabulary'
 
 // hn's counts reach the daemon's own queue only through hn's `product_observe`; no app can file them.
 const uiMetrics = new Set<string>(PRODUCT_USAGE_UI_METRICS.filter(metric => !metric.startsWith('ui_tui_')))
 const desktopMetrics = new Set<string>([
   ...PRODUCT_USAGE_UI_METRICS.filter(metric => metric.startsWith('ui_desktop_')),
+  ...PRODUCT_USAGE_ADD_PHONE_METRICS,
   ...HEALTH_MEASURES.map(measure => `health_desktop_${measure}`),
   ...CLI_REPORT_FAILURES.map(reason => `health_desktop_report_failure_${reason}`),
 ])

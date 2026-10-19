@@ -450,12 +450,20 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
         if (iabs(dx) >= POD_SW_MIN_PX && wide(dx, dy) && fast) {
             u->sw_ok = u->sw_on = false;
             *changed = true;
-            if (top(u)->view == POD_V_TABS) {   // Home: a page a swipe, clamped. A page is the scroll (the tab index) + 1 while the Notices card exists (scroll -1), else the scroll
-                const int lead = pod_tabs_pages_of(&u->nav, &u->model) - u->model.tab_count;   // 1 with the Notices card, else 0
-                int last = pod_tabs_pages_of(&u->nav, &u->model) - 1, at = top(u)->scroll + lead;
-                at = at < 0 ? 0 : at > last ? last : at;
-                int want = at + (dx < 0 ? 1 : -1);
-                if (want >= 0 && want <= last) pod_nav_act(&u->nav, &u->model, POD_A_SCROLL, want - lead - top(u)->scroll, now_ms);   // to the page itself, whatever the frame's scroll holds
+            if (top(u)->view == POD_V_TABS) {   // Home: a page a swipe, clamped, in the order of the page list
+                // A swipe that starts on the Working card's pet band (more than 3 working) pages the pets, never the cards, even at either end.
+                const int wp = (pod_home_working(&u->model) + 2) / 3;
+                if (u->nav.depth == 1 && top(u)->scroll == POD_HOME_WORKING && wp > 1 && u->start_y >= 256 && u->start_y <= 536) {
+                    const int to = (int)u->nav.work_page + (dx < 0 ? 1 : -1);
+                    if (to >= 0 && to < wp) u->nav.work_page = (uint8_t)to;
+                    return none;
+                }
+                int16_t pg[POD_TABS_MAX + 2];
+                const int n = pod_home_pages(&u->model, pg, POD_TABS_MAX + 2), cur = pod_home_clamp(&u->model, top(u)->scroll);
+                int at = 0;
+                while (at < n - 1 && pg[at] < cur) at++;
+                const int want = at + (dx < 0 ? 1 : -1);
+                if (want >= 0 && want < n) pod_nav_act(&u->nav, &u->model, POD_A_SCROLL, pg[want] - top(u)->scroll, now_ms);   // to the page itself, whatever the frame's scroll holds
                 return none;
             }
             if (top(u)->view == POD_V_INBOX)   // the Inbox: either way goes back to where it was opened

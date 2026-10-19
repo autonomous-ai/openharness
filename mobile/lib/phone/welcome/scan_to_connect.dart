@@ -480,7 +480,11 @@ Future<ConnectCode?> scanForCode(
 ///
 /// The steps name the terminal's way only: the desktop app signs in on its own page and no longer
 /// shows a QR, so this is for a server or a computer without the app, `harness login --qr`.
-Future<SignInCode?> scanForSignIn(BuildContext context, {Widget? camera}) async {
+///
+/// [onTypeCode], when given, takes the button under the camera: "Type a code instead", for a device
+/// with no screen that says its code aloud (`harness login --code`). It is called once the page is
+/// gone; back still leaves.
+Future<SignInCode?> scanForSignIn(BuildContext context, {Widget? camera, VoidCallback? onTypeCode}) async {
   SignInCode? scanned;
   await Navigator.of(context).push(
     phoneRoute(
@@ -491,14 +495,17 @@ Future<SignInCode?> scanForSignIn(BuildContext context, {Widget? camera}) async 
             camera: camera,
             title: 'Scan the code in the terminal',
             step: 'On a server, run harness login --qr',
-            fallbackLabel: 'Not now',
+            fallbackLabel: onTypeCode == null ? 'Not now' : 'Type a code instead',
             acceptConnectCodes: false,
             onCode: (_) {},
             onSignInCode: (code) {
               scanned = code;
               Navigator.of(page).pop();
             },
-            onUseEmail: () => Navigator.of(page).pop(),
+            onUseEmail: () {
+              Navigator.of(page).pop();
+              onTypeCode?.call();
+            },
             onBack: () => Navigator.of(page).pop(),
           ),
         ),

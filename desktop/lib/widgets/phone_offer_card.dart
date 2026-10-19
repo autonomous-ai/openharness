@@ -22,11 +22,12 @@ import '../theme/app_theme.dart';
 /// go"), which a new computer has just shown. The button is named as the phone
 /// names it — "Open Add Phone on your computer" (mobile `set_up_computer.dart`)
 /// — so somebody the phone sent here finds the thing it told them about.
-class PhoneOfferCard extends StatelessWidget {
+class PhoneOfferCard extends StatefulWidget {
   const PhoneOfferCard({
     super.key,
     required this.onAdd,
     required this.onDismiss,
+    this.onShown,
   });
 
   /// Add Phone: the code a phone scans — or, for a guest, the sign-in first.
@@ -35,6 +36,23 @@ class PhoneOfferCard extends StatelessWidget {
   /// Put away for good on this computer; Add Phone stays in the menu and the
   /// command palette.
   final VoidCallback onDismiss;
+
+  /// After the card's first frame on screen ([AppNotifier.phoneOfferShown]),
+  /// again each time it is built anew; the app counts one per offer.
+  final VoidCallback? onShown;
+
+  @override
+  State<PhoneOfferCard> createState() => _PhoneOfferCardState();
+}
+
+class _PhoneOfferCardState extends State<PhoneOfferCard> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onShown?.call();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -82,7 +100,7 @@ class PhoneOfferCard extends StatelessWidget {
                 const SizedBox(height: 10),
                 FilledButton(
                   key: const Key('phone-offer-add'),
-                  onPressed: onAdd,
+                  onPressed: widget.onAdd,
                   child: const Text('Add Phone'),
                 ),
               ],
@@ -95,7 +113,7 @@ class PhoneOfferCard extends StatelessWidget {
             splashRadius: 14,
             visualDensity: VisualDensity.compact,
             tooltip: 'Dismiss',
-            onPressed: onDismiss,
+            onPressed: widget.onDismiss,
           ),
         ],
       ),

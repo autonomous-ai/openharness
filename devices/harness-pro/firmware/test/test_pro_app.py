@@ -1948,7 +1948,7 @@ static void notify_replace_seen_and_read(void) {
     pro_app_notif_replace(rows, 3);
     // Notices: Home's card before the first tab opens it; a row opens the agent. A recap on screen reads its entry and sends
     // notif.read with the token; a working agent's room has no recap to show, so its entry waits.
-    pod_nav_act(&U.nav, &U.model, POD_A_SCROLL, -1, now);
+    pod_nav_act(&U.nav, &U.model, POD_A_SCROLL, POD_HOME_NOTICES, now);
     render();
     expect(tap(POD_A_INBOX, 0), POD_FX_NONE, NULL);
     CHECK(top() == POD_V_INBOX);

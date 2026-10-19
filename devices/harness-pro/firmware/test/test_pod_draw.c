@@ -792,7 +792,7 @@ static void draw_test_cell_flat_equals_resample(void)
     for (int j = 0; j < W * H; j++) a[j] = 0;
     ht_pro_raster(&s.runs[s.count - 1], clip, a);
     CHECK(pod_cell_bakes() == expect_bakes + 3);
-    // A full table is not an error: the frame is resampled each time as before, the picture the same. (64 entries; the 65th and later are not kept.)
+    // A full table starts over: the 65th entry clears the 64 and is baked in their place, the picture the same either way. (A screen re-bakes what it draws.)
     pod_cell_bake_reset();
     for (int n = 0; n < 70; n++) {
         const uint16_t ground = (uint16_t)(0x0100 + n);
@@ -803,7 +803,7 @@ static void draw_test_cell_flat_equals_resample(void)
         ht_pro_raster(&plain.runs[0], clip, b);
         CHECK(!memcmp(a, b, sizeof a));
     }
-    CHECK(pod_cell_bakes() == 64);
+    CHECK(pod_cell_bakes() == 70 && pod_cell_bake_px() == 6u * 16u);   // all 70 baked; the 6 since the restart hold 4 x 4 px each (6 x 6 at 5/8)
     pod_cell_bake_reset();
     CHECK(pod_cell_bakes() == 0 && pod_cell_bake_px() == 0);
 }

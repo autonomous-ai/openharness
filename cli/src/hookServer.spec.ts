@@ -355,6 +355,34 @@ describe('the Agent Messages proxy', () => {
   })
 })
 
+// The desktop and web apps approve a device that says its code aloud (a lamp, #1410), as the phone does:
+// the daemon passes the phone half of a sign-in through with its own session, and nothing else.
+describe('sign-in approval proxy', () => {
+  it('passes lookup, approve and deny through with the code only, guarded from cross-origin requests', async () => {
+    const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { ok: true } } }))
+    const { base } = await start({ onSignInAnswer: send })
+    const headers = { 'x-adapter-local': '1', 'content-type': 'application/json' }
+    for (const h of [{}, { ...headers, origin: 'https://untrusted.example' }]) {
+      expect((await fetch(`${base}/api/auth/qr/approve`, { method: 'POST', headers: h, body: JSON.stringify({ code: '12345678' }) })).status).toBe(403)
+    }
+    for (const invalid of [{}, { code: '' }, { code: 5 }, { code: 'x'.repeat(129) }, { code: '12345678', userId: 'u2' }]) {
+      expect((await fetch(`${base}/api/auth/qr/approve`, { method: 'POST', headers, body: JSON.stringify(invalid) })).status).toBe(400)
+    }
+    expect((await fetch(`${base}/api/auth/qr/claim`, { method: 'POST', headers, body: JSON.stringify({ code: '12345678' }) })).status).toBe(404)
+    expect(send).not.toHaveBeenCalled()
+    for (const action of ['lookup', 'approve', 'deny'] as const) {
+      expect((await fetch(`${base}/api/auth/qr/${action}`, { method: 'POST', headers, body: JSON.stringify({ code: '1234 5678' }) })).status).toBe(200)
+      expect(send).toHaveBeenLastCalledWith(action, { code: '1234 5678' })
+    }
+  })
+
+  it('is unavailable on a daemon that cannot reach the backend for it', async () => {
+    const { base } = await start({})
+    const r = await fetch(`${base}/api/auth/qr/lookup`, { method: 'POST', headers: { 'x-adapter-local': '1', 'content-type': 'application/json' }, body: JSON.stringify({ code: '12345678' }) })
+    expect(r.status).toBe(503)
+  })
+})
+
 describe('account Experimental settings proxy', () => {
   it('proxies only voluntary fixed-choice feedback and guards it from cross-origin requests', async () => {
     const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { accepted: true } } }))
@@ -422,7 +450,7 @@ describe('account Experimental settings proxy', () => {
     const newer = { ...body, counters: { ...body.counters, health_desktop_frame_slow_wait: 2, health_desktop_PRIVATE_CANARY: 1 } }
     const kept = await post(newer)
     expect(kept.status).toBe(200)
-    expect(kept.headers.get('x-harness-usage-vocabulary')).toBe('2')
+    expect(kept.headers.get('x-harness-usage-vocabulary')).toBe('3')
     expect(send).toHaveBeenCalledExactlyOnceWith({ ...body,
       counters: { ...body.counters, health_desktop_frame_slow_wait: 2, health_desktop_report_unknown_metric: 1 } })
     expect(JSON.stringify(send.mock.calls)).not.toContain('PRIVATE_CANARY')
@@ -435,7 +463,7 @@ describe('account Experimental settings proxy', () => {
     ] as const) {
       const response = await post(refused, h)
       expect(response.status).toBe('x-adapter-local' in h ? 400 : 403)
-      expect(response.headers.get('x-harness-usage-vocabulary')).toBe('2')
+      expect(response.headers.get('x-harness-usage-vocabulary')).toBe('3')
       expect(await response.text()).not.toContain('PRIVATE_CANARY')
     }
     expect(send).toHaveBeenCalledOnce()

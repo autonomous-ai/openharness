@@ -36,6 +36,7 @@ import '../widgets/resting_section.dart'
 import '../widgets/session_close_dialog.dart';
 import '../notify/system_notifications.dart';
 import '../widgets/account_device_detail.dart';
+import '../widgets/approve_device_code.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
 import 'login_screen.dart' show showSignInSheet;
@@ -119,6 +120,7 @@ import '../widgets/delete_agent_dialog.dart';
 import '../widgets/delete_harness_dialog.dart';
 import '../widgets/fork_agent_dialog.dart';
 import '../widgets/restart_agent_action.dart';
+import '../measurement/product_measurement.dart' show AddPhoneOpening;
 import '../measurement/task_feedback.dart';
 import '../widgets/new_agent_dialog.dart';
 import '../widgets/box_chrome.dart';
@@ -2653,7 +2655,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       case 'settings':
         await _settings();
       case 'addPhone':
-        await _addPhone();
+        await _addPhone(
+          from: args['from'] == 'titlebar'
+              ? AddPhoneOpening.titlebar
+              : AddPhoneOpening.menu,
+        );
       case 'customize':
         await _customize();
     }
@@ -3206,7 +3212,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (!mounted) return;
     switch (choice) {
       case AccountMenuChoice.addPhone:
-        await _addPhone();
+        await _addPhone(from: AddPhoneOpening.account);
       case AccountMenuChoice.customize:
         await _customize();
       case AccountMenuChoice.notifications:
@@ -3234,15 +3240,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   /// Harness ▸ Add Phone… and `> add phone`: the QR a phone scans to sign in
   /// and pair with this computer. See `widgets/add_phone_dialog.dart`.
-  Future<void> _addPhone() async {
+  /// [from] is the way in it is counted under ([AddPhoneOpening]).
+  Future<void> _addPhone({required AddPhoneOpening from}) async {
     // Open, from its card or by hand, it is this computer's offer
     // ([_phoneOfferCard]) spent for good — and a sign-in made from inside it
     // (its Continue with…) must not bring the card back once it closes, so
     // the offer is dropped on the way out too.
-    app.dropPhoneOffer();
     try {
-      await _dialog(
-        () => showAddPhoneDialog(
+      await _dialog(() {
+        // Counted, and the offer spent, once it opens: [_dialog] refuses one
+        // while another dialog is up.
+        app.addPhoneOpened(from);
+        return showAddPhoneDialog(
           context,
           app,
           keymap: _keymap,
@@ -3253,8 +3262,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
           // picker refused to open — the link did nothing. The request waits
           // for the route ([_maybeOpenMachinesRequest]).
           onManageDevices: () => app.requestMachines(phones: true),
-        ),
-      );
+        );
+      });
     } finally {
       app.dropPhoneOffer();
     }
@@ -3422,8 +3431,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
         ? null
         : () {
             _closeSearch(restoreFocus: false);
-            unawaited(_addPhone());
+            unawaited(_addPhone(from: AddPhoneOpening.machines));
           },
+    onApproveDevice: () async {
+      _pickerModalChanged(true);
+      try {
+        await approveDeviceByCode(context, app);
+      } finally {
+        _pickerModalChanged(false);
+        if (mounted && _search != null) _focusSearch();
+      }
+    },
   );
 
   void _openResourcePicker(String prefix) {
@@ -7036,8 +7054,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (kIsWeb || !app.phoneOfferShowing) return null;
     if (app.firstArrival.pending || app.firstArrival.running) return null;
     return PhoneOfferCard(
-      onAdd: () => unawaited(_addPhone()),
-      onDismiss: app.dropPhoneOffer,
+      onAdd: () => unawaited(_addPhone(from: AddPhoneOpening.offer)),
+      onDismiss: app.dismissPhoneOffer,
+      onShown: app.phoneOfferShown,
     );
   }
 
@@ -7241,7 +7260,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         !appearancePrefsStore.value.shadeInactivePanes,
       ),
     ),
-    'app.add_phone': () => unawaited(_addPhone()),
+    'app.add_phone': () => unawaited(_addPhone(from: AddPhoneOpening.command)),
     'app.product_feedback': () => unawaited(
       showTaskFeedback(
         context,
@@ -8800,7 +8819,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     key: const ValueKey('swarm-add-phone-button'),
     label: 'Add Phone',
     tooltip: _addPhoneTooltip,
-    onPressed: _shortcutsEnabled ? () => unawaited(_addPhone()) : null,
+    onPressed: _shortcutsEnabled
+        ? () => unawaited(_addPhone(from: AddPhoneOpening.titlebar))
+        : null,
     builder: (context, emphasized) => SizedBox(
       width: workspaceBarCellSizeOf(context).width * 4,
       height: workspaceBarControlHeight(context),
