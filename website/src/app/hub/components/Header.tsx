@@ -1,7 +1,7 @@
 'use client';
 import { useEffect } from 'react';
 import Link from 'next/link';
-import { ArrowUpRight, Bell } from 'lucide-react';
+import { Bell } from 'lucide-react';
 import { countHub } from '@/lib/community/hubMeasure';
 import { rememberHubReturn } from '@/lib/community/session';
 import { webAppPath } from '@/lib/webApp';
@@ -10,11 +10,10 @@ import { useSignedIn } from './useSignedIn';
 import { useUnread } from './useUnread';
 import styles from '../community.module.css';
 
-/** One way out to the app: sign in (and come back) while signed out, open it once signed in. */
+/** Sign in (and come back) while signed out; once signed in, the bar needs no way out of the Hub. */
 function AccountLink({ signedIn }: { signedIn: boolean | null }) {
-  if (signedIn === null) return null;
-  if (!signedIn) return <a href={webAppPath} onClick={rememberHubReturn}>Sign in</a>;
-  return <a href={webAppPath} className={styles.openApp}>Open Harness <ArrowUpRight /></a>;
+  if (signedIn !== false) return null;
+  return <a href={webAppPath} onClick={rememberHubReturn}>Sign in</a>;
 }
 
 /** The reader's notifications, with how many are unread. */
