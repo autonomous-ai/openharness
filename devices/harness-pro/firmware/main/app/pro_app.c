@@ -2,7 +2,7 @@
 // contacts become Pod gestures, and the render task draws Pod's frame. The rules here are the ones the Pod build of
 // the round dial's ui_habitat.c followed (docs/port-inventory.md; row ids R* and P* below name its entries).
 //
-// THREADS: three tasks meet here. The cable_link task (6 KB stack) calls the pro_app_* callbacks; the touch task
+// THREADS: three tasks meet here. The cable_link task (STACK_CABLE_LINK, 12 KB) calls the pro_app_* callbacks; the touch task
 // calls pro_app_touch; the render task ticks, draws and paints. One recursive mutex guards the Pod object, the
 // busy/question/machine tables and the dirty flag. Nothing that leaves the device is sent under it: effects and
 // requests are queued while the mutex is held and sent by leave() after it is released.
@@ -17,13 +17,16 @@
 #include "app/pro_voice.h"
 #include "audio/audio_capture.h"
 #include "audio/pro_recorder.h"
+#include "cable/cable_link.h"
 #include "cable/pro_cable.h"
 #include "pro_app_api.h"
 #include "pro_display.h"
 #include "pro_frame.h"
 #include "sys/config_store.h"
 #include "sys/fw_update.h"
+#include "sys/last_words.h"
 #include "sys/ram_telemetry.h"
+#include "task_stacks.h"
 #include "theme.h"
 
 #include "esp_attr.h"
@@ -41,7 +44,6 @@
 
 static const char *TAG = "pro";
 
-#define RENDER_STACK 24576          // the ROM inflater and the 24-row strips want room (SRC's Pro render task)
 #define IDLE_SLEEP_MS 300000u       // no touch for this long and the screen sleeps (R / P25)
 #define HEARTBEAT_MS 60000u
 #define FX_MAX 4                    // effects queued under the lock until leave()
@@ -52,7 +54,7 @@ static const char *TAG = "pro";
 // Pod's model, scenes and tables. All in PSRAM: the model alone is ~130 KB, two scenes of 192 runs ~80 KB (R18).
 static EXT_RAM_BSS_ATTR pod_ui_t s_pod;
 static EXT_RAM_BSS_ATTR ht_scene_t s_scene[2];
-static EXT_RAM_BSS_ATTR pod_roster_row_t s_rows[POD_AGENTS_MAX];   // not on the 6 KB cable_link stack (P9)
+static EXT_RAM_BSS_ATTR pod_roster_row_t s_rows[POD_AGENTS_MAX];   // not on the cable_link stack (P9)
 static EXT_RAM_BSS_ATTR struct { char id[ID_MAX], machine_id[ID_MAX]; } s_info[POD_AGENTS_MAX];   // the roster's machine ids
 static EXT_RAM_BSS_ATTR char s_busy[POD_AGENTS_MAX][ID_MAX];       // agents in a live turn ("" = free slot)
 static EXT_RAM_BSS_ATTR char s_quest[POD_AGENTS_MAX][ID_MAX];      // agents with an open question
@@ -295,14 +297,6 @@ void pro_app_link(bool up, const char *machine)
     }
     change();
     leave();
-}
-
-bool pro_app_linked(void)
-{
-    pro_app_lock();
-    const bool linked = s_linked;
-    pro_app_unlock();
-    return linked;
 }
 
 // ---- roster, tabs, library ------------------------------------------------------------------------------
@@ -848,13 +842,20 @@ static void heartbeat(uint32_t frames, uint32_t raster_max_us, uint32_t frame_ma
     last = now;
     pro_touch_stats_t touch;
     pro_touch_stats(&touch);
+    const cable_link_stats_t link = cable_link_stats();
+    uint32_t bad = 0, unknown = 0;
+    pro_cable_counters(&bad, &unknown);
     // The host watches this line while the renderer is alive, including while asleep.
-    ESP_LOGI(TAG, "alive up=%lus heap=%u/%u psram=%u touches=%lu read_fails=%lu frames=%lu raster_max_us=%lu frame_max_us=%lu stack_free=%u muted=%d%s%s",
+    ESP_LOGI(TAG, "alive up=%lus heap=%u/%u psram=%u touches=%lu read_fails=%lu frames=%lu raster_max_us=%lu frame_max_us=%lu stack_free=%u muted=%d isr_rx=%lu ring_drop=%lu seq_gaps=%lu link_rx=%lu link_frames=%lu link_corrupt=%lu link_discarded=%lu link_dropped_logs=%lu msg_bad=%lu msg_unknown=%lu%s%s",
              (unsigned long)(now / 1000), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
              (unsigned long)touch.presses, (unsigned long)touch.read_failures, (unsigned long)frames,
              (unsigned long)raster_max_us, (unsigned long)frame_max_us,
-             (unsigned)uxTaskGetStackHighWaterMark(NULL), (int)pro_settings_muted(), touch.controller_ok ? "" : " TOUCH-DEAD", pro_app_asleep() ? " asleep" : "");
+             (unsigned)uxTaskGetStackHighWaterMark(NULL), (int)pro_settings_muted(),
+             (unsigned long)link.isr_rx, (unsigned long)link.ring_drop, (unsigned long)pro_cable_seq_gaps(),
+             (unsigned long)link.rx_bytes, (unsigned long)link.frames_ok, (unsigned long)link.corrupt_frames,
+             (unsigned long)link.discarded_bytes, (unsigned long)link.dropped_logs, (unsigned long)bad, (unsigned long)unknown,
+             touch.controller_ok ? "" : " TOUCH-DEAD", pro_app_asleep() ? " asleep" : "");
     ram_telemetry_periodic("alive");   // the heap checkpoint, and every tenth time the long-lived tasks' stack marks
 }
 
@@ -869,6 +870,7 @@ static void render_task(void *arg)
     uint32_t frames = 0, raster_max_us = 0, frame_max_us = 0;
     for (;;) {
         ESP_ERROR_CHECK(esp_task_wdt_reset());
+        last_words_phase(LW_RENDER, "render");
         pro_app_tick();
         const bool fresh = pro_app_take_scene(&s_scene[front ^ 1]);
         uint32_t wake_ms = pro_app_next_wake_ms();
@@ -927,10 +929,10 @@ void pro_app_start(void)
     pro_frame_init();
     pro_display_set_brightness(config_load_brightness());
     pro_app_bump_activity();
-    BaseType_t ok = xTaskCreatePinnedToCore(render_task, "pro_render", RENDER_STACK, NULL, 5, &s_renderer, 1);
+    BaseType_t ok = xTaskCreatePinnedToCore(render_task, "pro_render", STACK_RENDER, NULL, 5, &s_renderer, 1);
     assert(ok == pdPASS);
     (void)ok;
-    ESP_LOGI(TAG, "app up: Pod, render stack %d B", RENDER_STACK);
+    ESP_LOGI(TAG, "app up: Pod, render stack %d B", STACK_RENDER);
 }
 
 // ---- firmware update (sys/fw_update.c calls these, from the cable task) -----------------------------------------
@@ -1027,8 +1029,6 @@ bool pro_app_test_take_dirty(void)
     pro_app_unlock();
     return dirty;
 }
-
-bool pro_app_test_take_force_frame(void) { return atomic_exchange(&s_force_frame, false); }
 
 void pro_app_test_reset(void)
 {

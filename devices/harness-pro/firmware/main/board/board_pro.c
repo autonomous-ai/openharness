@@ -41,13 +41,3 @@ const char *board_describe(void)
 {
     return "board=harness-pro touch=gt911 pmic=ip5306 lcd=st7703/720x720";
 }
-
-/*
- * Never. There is no button this could read.
- *
- * The Pro's only switch is its power button, and pressing it is how the board got here — at the moment
- * app_main asks this question the button is, by construction, still down. Reading it would factory-reset
- * the device on every single power-on. A reset gesture for this board has to be something else (a touch
- * held through boot, say) and is not invented here.
- */
-bool board_factory_reset_requested(void) { return false; }

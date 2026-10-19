@@ -26,8 +26,8 @@ if [[ -n "${PRO_FONT:-}" ]]; then
     case "$PRO_FONT" in /*) ;; *) PRO_FONT="$fw/$PRO_FONT" ;; esac
     font_args=(--font "$PRO_FONT")
 fi
-/usr/local/bin/python3 "$fw/scripts/gen_fonts.py" ${font_args[@]+"${font_args[@]}"} --out "$out/pro_fonts.c"
-cc -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O1 -g -DHT_FACE_PX=720 -I"$disp" -I"$fw/main" -I"$here/host_stubs" \
+python3 "$fw/scripts/gen_fonts.py" ${font_args[@]+"${font_args[@]}"} --out "$out/pro_fonts.c"
+cc -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O1 -g -DHT_FACE_PX=720 -I"$disp" -I"$fw/main" \
    -o "$out/pod_render" "$here/pod_render.c" "$fw"/main/pod/*.c "$fw"/main/pod/home/*.c "$disp/pro_canvas.c" "$disp/terminal.c" "$out/pro_fonts.c"
 
 screens=(tabs tabs:bell tabs:mock tabs:0+2 tabs:2+2 tabs:long tabs:9 tabs:linkdown tabs:1 tabs:3 tabs:5 tabs:seven tabs:single tabs:notices tabs:none

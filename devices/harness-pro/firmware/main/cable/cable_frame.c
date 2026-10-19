@@ -190,3 +190,19 @@ void cable_decoder_feed(cable_decoder_t *d, const uint8_t *data, size_t n,
         }
     }
 }
+
+bool cable_decoder_expire(cable_decoder_t *d, cable_frame_cb cb, void *ctx)
+{
+    if (!d->len) return false;
+    const bool partial = d->len >= 2 && d->buf[0] == CABLE_MAGIC_0 && d->buf[1] == CABLE_MAGIC_1;
+    if (partial) {
+        // Step over the magic, not the whole buffer: a whole frame may sit behind a lost tail, and the scan finds it.
+        d->corrupt_frames++;
+        discard(d, 1);
+    }
+    while (take_front(d, cb, ctx)) {
+    }
+    // A lone trailing A5 can no longer be the start of anything.
+    if (d->len) discard(d, d->len);
+    return partial;
+}

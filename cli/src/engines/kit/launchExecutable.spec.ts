@@ -74,6 +74,19 @@ it('gives an npm engine Harness\'s Node, after the PATH, when the launch PATH ha
   const result = await captureLaunchExecutable('opencode', '')
   expect(result).toMatchObject({ state: 'ready', environment: { PATH: `${bin}:${dirname(managedNodePath())}` } })
 })
+it('finds an npm engine beside Harness\'s Node, where its installer finds it', async () => {
+  // A Codex there was "missing" to the daemon only: each launch dispatched an installer that exited 0 (2026-10-19).
+  await fixture()
+  const runtime = join(root, 'runtime'), nodeBin = join(runtime, 'node-fixture', 'bin'); mkdirSync(nodeBin, { recursive: true })
+  writeFileSync(join(nodeBin, 'node'), '', { mode: 0o700 })
+  writeFileSync(join(runtime, 'current-node'), join(nodeBin, 'node'))
+  vi.stubEnv('ADAPTER_RUNTIME_DIR', runtime); vi.stubEnv('CODEX_PATH', '')
+  vi.resetModules()
+  const { captureLaunchExecutable } = await import('./launchExecutable.js')
+  expect(await captureLaunchExecutable('codex', '')).toMatchObject({ state: 'install' })
+  writeFileSync(join(nodeBin, 'codex'), '#!/usr/bin/env node\n', { mode: 0o700 })
+  expect(await captureLaunchExecutable('codex', '')).toMatchObject({ state: 'ready', executable: { command: join(nodeBin, 'codex') } })
+})
 it('leaves the launch PATH alone for a Node the person has, and for an engine that is not a Node script', async () => {
   const { bin, withNodeForScript } = await fixture()
   const script = join(bin, 'codex'), node = join(root, 'harness-node', 'bin', 'node')

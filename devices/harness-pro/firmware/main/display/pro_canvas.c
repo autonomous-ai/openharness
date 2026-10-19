@@ -143,66 +143,6 @@ bool ht_pro_text(ht_scene_t *s, int x, int y, int width, const ht_pro_font_t *fo
     r->w = ink_width > 0 ? ink_width : 1;
     return true;
 }
-/* Return a bounded UTF-8 line and advance past one word-wrap boundary. */
-static void line(const char **cursor, const ht_pro_font_t *font, int width, char out[HT_TEXT_BYTES])
-{
-    const char *begin = *cursor, *p, *last_space = NULL, *end;
-    while (*begin == ' ') begin++;
-    p = end = begin;
-    int advance = 0, extent = 0;
-    while (*p && *p != '\n') {
-        const char *start = p;
-        unsigned cp = code(font, ht_utf8_next(&p));
-        const ht_pro_glyph_t *g = &font->glyphs[cp - font->first];
-        int next_extent = max_(extent, advance + g->width);
-        if (max_(next_extent, advance + g->advance) > width || p - begin >= HT_TEXT_BYTES) {
-            p = start;
-            if (last_space) p = last_space;
-            break;
-        }
-        advance += g->advance; extent = next_extent; end = p;
-        if (cp == ' ') last_space = start;
-    }
-    if (!*p || *p == '\n') end = p;
-    else if (p > begin) end = p;
-    if (end == begin && *p && *p != '\n') { ht_utf8_next(&p); end = p; }
-    size_t bytes = (size_t)(end - begin);
-    if (bytes >= HT_TEXT_BYTES) bytes = HT_TEXT_BYTES - 1;
-    memcpy(out, begin, bytes); out[bytes] = 0;
-    while (bytes && out[bytes-1] == ' ') out[--bytes] = 0;
-    p = end;
-    if (*p == '\n') p++; else while (*p == ' ') p++;
-    *cursor = p;
-}
-int ht_pro_text_rows(const char *text, const ht_pro_font_t *font, int width)
-{
-    if (!font || width <= 0 || !text || !*text) return 0;
-    char visible[4096], row[HT_TEXT_BYTES];
-    ht_display_text_ex(visible, sizeof visible, text, font);
-    const char *p = visible; int count = 0;
-    while (*p) { line(&p, font, width, row); count++; }
-    return count;
-}
-int ht_pro_wrap(ht_scene_t *s, int x, int y, int width, int rows, int skip,
-                const ht_pro_font_t *font, uint16_t ink, const char *text)
-{
-    if (!font || width <= 0 || rows <= 0 || !text) return 0;
-    char visible[4096], row[HT_TEXT_BYTES];
-    ht_display_text_ex(visible, sizeof visible, text, font);
-    const char *p = visible; int shown = 0;
-    while (*p && skip-- > 0) line(&p, font, width, row);
-    while (*p && shown < rows) {
-        line(&p, font, width, row);
-        ht_pro_text(s, x, y + shown * font->height, width, font, ink, row);
-        shown++;
-    }
-    return shown;
-}
-void ht_pro_center(ht_scene_t *s, int y, const ht_pro_font_t *f, uint16_t ink, const char *text)
-{
-    int width = min_(ht_pro_width(f, text), HT_WIDTH - 80);
-    ht_pro_text(s, (HT_WIDTH-width)/2, y, width, f, ink, text);
-}
 bool ht_pro_rect(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t ink)
 {
     ht_run_t *r = run(s, PRO_RECT, x, y, w, h);

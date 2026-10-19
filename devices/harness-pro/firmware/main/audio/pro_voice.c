@@ -23,6 +23,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sys/config_store.h"
+#include "sys/last_words.h"
 
 #define CAP_MS 600000u         // the 600 s duration cap (UH:5265)
 #define REPLY_WAIT_MS 65000u   // how long a sent clip waits for the daemon's reply
@@ -66,6 +67,7 @@ void pro_voice_begin(const char *agent_id)
 {
     bool expected = false;
     if (!atomic_compare_exchange_strong(&s_starting, &expected, true)) return;   // another begin is mid-flight
+    last_words_phase(LW_VOICE, "voice.begin");
     TEST_STEP(1);
     expected = false;
     // Open at once so the Talk frame is never judged "no recording behind it"; STARTING keeps the tick away.
@@ -111,6 +113,7 @@ static void discard(void)
 void pro_voice_end(bool send)
 {
     if (!atomic_load(&s_open)) return;
+    last_words_phase(LW_VOICE, send ? "voice.send" : "voice.end");
     if (send) {
         if (atomic_load(&s_waiting)) return;   // the clip already went; its reply is awaited
         if (!pro_voice_start_pending() && pro_rec_recording()) {

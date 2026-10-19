@@ -25,7 +25,7 @@ export const INSTRUCTIONS = `Harness runs coding agents (Claude Code, Codex) in 
 
 Every harness spends the person's tokens. Start one (harness_start) only for work that can run in parallel with yours, needs another model's view (a review, a second opinion from Codex), takes long, or belongs in its own folder. Do quick work yourself. For scratch or new work give it a project name (project), not a folder of your own: Claude Code and Codex ask the person to trust a folder Harness did not make.
 
-Call harness_whoami first: it says whether you may start harnesses now. Then list (harness_list). Put everything in the task: starting a harness does not let you message it. A follow-up goes by harness_send only to a teammate in your tab, while Agent Messages are on; otherwise start a new harness with the fuller task. Never give work to, or close, a harness you did not start: those are the person's.
+Call harness_whoami first: it says whether you may start harnesses now. Then list (harness_list), search what was already said or decided (harness_search), and see the machines you may run on (harness_machines). Put everything in the task: starting a harness does not let you message it. A follow-up goes by harness_send only to a teammate in your tab, while Agent Messages are on; otherwise start a new harness with the fuller task. Never give work to, or close, a harness you did not start: those are the person's.
 
 Name every harness. Then wait for it (harness_wait), read its answer (harness_read), and close it once you have its answer (harness_close). At most 4 of yours at once, and a harness another agent started may not start harnesses itself. Never ask a harness to publish, deploy, delete or push.
 
@@ -63,6 +63,20 @@ export const TOOLS: Tool[] = [
     inputSchema: schema({ all: { type: 'boolean', description: 'Also the ones stopped in the last week.' } }),
     annotations: { readOnlyHint: true },
     argv: (a) => ['ps', ...(a.all === true ? ['--all'] : [])],
+  },
+  {
+    name: 'harness_search',
+    description: 'Search the conversations on this computer for the words that say them: every turn of every harness, live or stopped. It finds where something was already said or decided, before starting new work.',
+    inputSchema: schema({ words: { type: 'string', description: 'The words to find, as you would say them.' }, limit: { type: 'number', minimum: 1, description: 'How many results (10 by default).' }, when: { type: 'string', description: 'Limit to a time range, as the CLI words it: "last week", "yesterday", "3 days ago", "on monday".' } }, ['words']),
+    annotations: { readOnlyHint: true },
+    argv: (a) => ['search', str(a.words), ...(str(a.when) ? [str(a.when)] : []), ...(typeof a.limit === 'number' && a.limit > 0 ? ['--limit', String(Math.floor(a.limit))] : [])],
+  },
+  {
+    name: 'harness_machines',
+    description: 'The machines on this account: name, status (running or offline), and which is this one. Use the name for harness_start machine to run a harness on another of the person\'s machines.',
+    inputSchema: schema({}),
+    annotations: { readOnlyHint: true },
+    argv: () => ['machines'],
   },
   {
     name: 'harness_start',

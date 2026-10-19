@@ -57,9 +57,8 @@ int pod_logo_cover_size(int side);
 // logo; nothing is added then. The chip draws POD_LOGO_CHIP; covers draw pod_logo_cover_size(side).
 bool pod_logo_draw(ht_scene_t *s, int x, int y, int size, const char *engine);
 bool pod_logo_draw_faded(ht_scene_t *s, int x, int y, int size, const char *engine, unsigned opacity);   // 1..254 of 255
-// The mark for an engine that has none (an unknown engine, an agent the roster has not named): a 34 x 34 rounded
-// outline square with ">_" in it (ht_pro_24 does not fit a 27 px one), on `ground` inside; it fits the 36 px chip slot.
+// The mark for an engine that has none (an unknown engine, an agent the roster has not named): a rounded outline
+// square with ">_" in it, on `ground` inside; at the 34 px minimum it fits the 36 px chip slot.
 // POD_DEFAULT_MARK_RUNS runs.
 enum { POD_DEFAULT_MARK_RUNS = 3, POD_DEFAULT_MARK_SIDE = 34 };
-void pod_mark_default(ht_scene_t *s, int x, int y, uint16_t ground);
 void pod_mark_default_big(ht_scene_t *s, int x, int y, int size, uint16_t ground);   // the same at any size (the update screen's)

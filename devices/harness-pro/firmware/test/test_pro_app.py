@@ -36,12 +36,14 @@ code = r'''
 #include "app/pro_app.h"
 #include "app/pro_touch.h"
 #include "app/pro_voice.h"
+#include "cable/cable_link.h"
 #include "cable/pro_cable.h"
 #include "pro_app_api.h"
 #include "pro_canvas.h"
 #include "sys/config_store.h"
 #include "sys/fw_update.h"
 #include "sys/ram_telemetry.h"
+#include "sys/last_words.h"
 #include "pro_display.h"
 #include "pro_frame.h"
 
@@ -83,6 +85,8 @@ void vTaskDelay(TickType_t t) { (void)t; }
 uint32_t uxTaskGetStackHighWaterMark(TaskHandle_t t) { (void)t; return 0; }
 esp_err_t esp_task_wdt_add(void *t) { (void)t; return ESP_OK; }
 esp_err_t esp_task_wdt_reset(void) { return ESP_OK; }
+void last_words_phase(lw_task_t t, const char *p) { (void)t; (void)p; }
+void last_words_rx(uint32_t ms) { (void)ms; }
 size_t heap_caps_get_free_size(unsigned c) { (void)c; return 0; }
 size_t heap_caps_get_largest_free_block(unsigned c) { (void)c; return 0; }
 uint8_t config_load_brightness(void) { return 220; }
@@ -123,6 +127,8 @@ bool pro_cable_request_library(int offset, uint32_t request) {
     return LIB.ok;
 }
 bool pro_cable_library_supported(void) { return LIB.supported; }
+cable_link_stats_t cable_link_stats(void) { return (cable_link_stats_t){0}; }
+void pro_cable_counters(uint32_t *bad, uint32_t *unknown) { *bad = 0; *unknown = 0; }
 static bool GATE_IN_BEGIN;   // the race: an offer's gate lands while a voice start is between its gate check and its begin
 void pro_voice_begin(const char *agent) {
     CHECK(LOCK_DEPTH == 0);
@@ -858,7 +864,7 @@ static void notice_shows_three_seconds(void) {
     CHECK(S.count <= HT_RUNS);
 }
 
-// Every pro_app callback runs on the device's cable_link task: a 6 KB stack. The render task has 24 KB. This runs the
+// Every pro_app callback runs on the device's cable_link task: a 12 KB stack. The render task has 24 KB. This runs the
 // exact on-device sequence (link up, empty roster, empty swarms, library pages, then populated feeds) through the real
 // callbacks on a small painted stack with a guard below it, and fails if they touch more than the budget (a ~10 KB local
 // also faults on the guard, as the device did: "Stack protection fault"). The draw then runs on the main stack, as the
@@ -914,7 +920,7 @@ static void *cable_task(void *arg) {
 }
 
 #define STACK_BYTES 16384   // the smallest stack pthreads accept everywhere (macOS refuses less)
-#define CABLE_STACK_BUDGET 3584   // of the device's 6 KB: the rest is the cable_link task's own parse and dispatch frames
+#define CABLE_STACK_BUDGET 3584   // of the device's 12 KB: kept at its old, tighter figure (the parser alone is ~7 KB of the rest)
 static void *idle_task(void *arg) { (void)arg; return NULL; }
 // Run fn on a fresh STACK_BYTES stack painted with 0xA5; return the bytes it touched (the high-water mark).
 // The stack is mmap'd with a PROT_NONE page below it, so running past the 16 KB faults like the device's guard does.
@@ -2284,7 +2290,7 @@ test_no_turn()
 
 cc = os.environ.get("CC", "cc")
 sanitize = "-fsanitize=" + os.environ.get("SANITIZERS", "undefined,bounds")
-include = ["-I", str(APP), "-I", str(MAIN), "-I", str(DISP), "-I", str(HERE / "host_esp"), "-I", str(HERE / "host_stubs"),
+include = ["-I", str(APP), "-I", str(MAIN), "-I", str(DISP), "-I", str(HERE / "host_esp"),
            "-I", str(POD)]
 failures = []
 with tempfile.TemporaryDirectory(prefix="harness-pro-app-") as directory:
@@ -2300,7 +2306,7 @@ with tempfile.TemporaryDirectory(prefix="harness-pro-app-") as directory:
     modules = sorted(POD.glob("*.c")) + sorted(POD.glob("*/*.c")) + [APP / "pod_glue.c", APP / "pro_app.c", APP / "pro_touch.c", DISP / "scroll.c",
                                          DISP / "pro_canvas.c", DISP / "terminal.c", fonts]
     for label, extra in (("upright", []),):
-        # The callbacks run on the cable_link task's 6 KB stack, the touch task's contact path on 10 KB: no frame of
+        # The callbacks run on the cable_link task's 12 KB stack, the touch task's contact path on 10 KB: no frame of
         # pro_app.c, pro_touch.c or the glue may pass 1 KB.
         for guarded in (APP / "pod_glue.c", APP / "pro_app.c", APP / "pro_touch.c"):
             subprocess.run([cc, "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror", "-Wframe-larger-than=1024", "-O1", "-DHT_FACE_PX=720",

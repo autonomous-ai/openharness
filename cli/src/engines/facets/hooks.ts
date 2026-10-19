@@ -89,7 +89,7 @@ export interface HookSettings {
  * sandboxed try first. `harness settings` is not one of them: it changes what agents may do, so it still asks.
  */
 export const HARNESS_AGENT_TOOLS = {
-  whoami: 'harness_whoami', ps: 'harness_list', show: 'harness_read', wait: 'harness_wait', new: 'harness_start', close: 'harness_close', send: 'harness_send',
+  whoami: 'harness_whoami', ps: 'harness_list', search: 'harness_search', machines: 'harness_machines', show: 'harness_read', wait: 'harness_wait', new: 'harness_start', close: 'harness_close', send: 'harness_send',
 } as const
 export type HarnessAgentVerb = keyof typeof HARNESS_AGENT_TOOLS
 export const HARNESS_AGENT_VERBS = Object.keys(HARNESS_AGENT_TOOLS) as HarnessAgentVerb[]

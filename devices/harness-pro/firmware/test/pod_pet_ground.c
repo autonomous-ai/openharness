@@ -1,7 +1,7 @@
 // Dev helper (not run by run.sh): rasters every scene of every pet (ht_pets and Codex) over a strongly coloured ground and reports
 // opaque near-white pixels connected (4-way) to the outside of the art -- background baked into the frames.
 // Also scans the source frames: near-white palette cells reachable from a frame's transparent border.
-//   cc -std=c11 -O1 -DHT_FACE_PX=720 -I $h -I main -I test/host_stubs \
+//   cc -std=c11 -O1 -DHT_FACE_PX=720 -I $h -I main \
 //      -o out test/pod_pet_ground.c $p/{engine_logos,pets,pod_draw,pod_pet}.c $h/{pro_canvas,terminal}.c $g
 //   out <ground-rgb-hex> <dir>      writes <dir>/pet-ground-<engine>.ppm (convert to PNG separately)
 #include <stdio.h>

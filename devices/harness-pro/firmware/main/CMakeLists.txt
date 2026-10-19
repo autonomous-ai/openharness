@@ -54,6 +54,7 @@ idf_component_register(
         "pod/pod_shared.c"
         "pod/pod_view.c"
         "sys/config_store.c"
+        "sys/crash_record.c"
         "sys/device_mac.c"
         "sys/fw_update.c"
         "sys/last_words.c"

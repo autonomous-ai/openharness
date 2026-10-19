@@ -14,9 +14,6 @@ void ram_telemetry_checkpoint(const char *tag);
 // stack high-water marks.
 void ram_telemetry_periodic(const char *tag);
 
-// PSRAM-only application allocations. They never silently consume internal RAM
-// and record failures in the telemetry counters.
+// A PSRAM-only application allocation. It never silently consumes internal RAM
+// and records a failure in the telemetry counters.
 void *ram_psram_alloc(size_t bytes, const char *owner);
-void *ram_psram_calloc(size_t count, size_t size, const char *owner);
-void *ram_psram_realloc(void *ptr, size_t bytes, const char *owner);
-char *ram_psram_strdup(const char *src, const char *owner);

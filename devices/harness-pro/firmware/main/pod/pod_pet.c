@@ -347,15 +347,6 @@ bool pod_logo_draw_faded(ht_scene_t *s, int x, int y, int size, const char *engi
 }
 bool pod_logo_draw(ht_scene_t *s, int x, int y, int size, const char *engine) { return pod_logo_draw_faded(s, x, y, size, engine, 255); }
 
-void pod_mark_default(ht_scene_t *s, int x, int y, uint16_t ground)
-{
-    const int side = POD_DEFAULT_MARK_SIDE;
-    ht_pro_rect(s, x, y, side, side, 7, ht_rgb(0x9aa09a));
-    ht_pro_rect(s, x + 2, y + 2, side - 4, side - 4, 5, ground);
-    int w = ht_pro_width(&ht_pro_24, ">_");
-    ht_pro_text(s, x + (side - w) / 2, y + (side - ht_pro_24.height) / 2 - 2, w, &ht_pro_24, ht_rgb(0x6f746f), ">_");
-}
-
 // The default mark at any size: the outline box, its inside and ">_" in the largest font that fits.
 void pod_mark_default_big(ht_scene_t *s, int x, int y, int size, uint16_t ground)
 {

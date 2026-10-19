@@ -18,12 +18,11 @@
 #include "freertos/task.h"
 #include "sys/config_store.h"
 #include "sys/ram_telemetry.h"
+#include "task_stacks.h"
 
 #define CAPTURE_SAMPLES 160       // 10 ms at 16 kHz
 #define BUFFER_BYTES 32768        // the same ring as the round firmware: a power of two, in PSRAM
 #define VOICE_CHUNK 1024          // one cable frame of PCM
-#define CAPTURE_STACK 5120        // as the round firmware
-#define SENDER_STACK 5120
 
 static const char *TAG = "pro_rec";
 static TaskHandle_t s_capture_task, s_sender_task;
@@ -155,8 +154,8 @@ bool pro_rec_init(void)
         return false;
     }
     voice_buffer_init(&s_buffer, s_storage, BUFFER_BYTES);
-    const BaseType_t a = xTaskCreatePinnedToCore(capture, "voice_capture", CAPTURE_STACK, NULL, 6, &s_capture_task, 0);
-    const BaseType_t b = xTaskCreatePinnedToCore(sender, "voice_send", SENDER_STACK, NULL, 4, &s_sender_task, 0);
+    const BaseType_t a = xTaskCreatePinnedToCore(capture, "voice_capture", STACK_VOICE, NULL, 6, &s_capture_task, 0);
+    const BaseType_t b = xTaskCreatePinnedToCore(sender, "voice_send", STACK_VOICE, NULL, 4, &s_sender_task, 0);
     if (a != pdPASS || b != pdPASS) {
         if (s_capture_task) vTaskDelete(s_capture_task);
         if (s_sender_task) vTaskDelete(s_sender_task);

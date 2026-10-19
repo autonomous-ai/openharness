@@ -14,6 +14,7 @@ const esp_partition_t *esp_ota_get_next_update_partition(const esp_partition_t *
 esp_err_t esp_ota_get_state_partition(const esp_partition_t *p, esp_ota_img_states_t *s);
 esp_err_t esp_ota_mark_app_valid_cancel_rollback(void);
 esp_err_t esp_ota_mark_app_invalid_rollback_and_reboot(void);
+#define OTA_WITH_SEQUENTIAL_WRITES 0xfffffffe
 esp_err_t esp_ota_begin(const esp_partition_t *p, size_t image_size, esp_ota_handle_t *h);
 esp_err_t esp_ota_write(esp_ota_handle_t h, const void *data, size_t n);
 esp_err_t esp_ota_end(esp_ota_handle_t h);

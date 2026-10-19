@@ -16,7 +16,7 @@ on:
       scope:
         description: 'Affected component; full for core suites, all for every component'
         type: choice
-        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, mobile, daemons]
+        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons]
         default: full
   workflow_call:
     inputs:
@@ -62,6 +62,7 @@ jobs:
       os: ${{ steps.select.outputs.os }}
       provider: ${{ steps.select.outputs.provider }}
       firmware: ${{ steps.select.outputs.firmware }}
+      pro: ${{ steps.select.outputs.pro }}
       mobile: ${{ steps.select.outputs.mobile }}
       daemons: ${{ steps.select.outputs.daemons }}
     steps:
@@ -469,6 +470,65 @@ jobs:
           python3 devices/harness-pro/firmware/test/test_tree_isolation.py
           python3 devices/harness-pro/firmware/test/test_fonts.py
 
+  pro-firmware-build:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-pro-firmware-build
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.pro == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # The ESP-IDF release the Harness Pro is built and flashed with (README: ~/esp/esp-idf-5.5.4).
+    container: espressif/idf:v5.5.4
+    defaults:
+      run:
+        shell: bash
+        working-directory: devices/harness-pro/firmware
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - name: Build the ESP32-P4 firmware
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          # The font generator needs Pillow; the image's system python3 has no pip, so it goes in the IDF environment.
+          python -m pip install pillow==12.1.1
+          idf.py -B build -DPROJECT_VER=0.0.99-ci build
+      - name: Fit the app in its OTA partition
+        run: |
+          python3 - <<'PY'
+          import csv
+          from pathlib import Path
+          rows = csv.reader(line for line in Path('partitions.csv').read_text().splitlines() if line.strip() and not line.startswith('#'))
+          limit = int(next(row[4] for row in rows if row[0].strip() == 'ota_0').strip(), 0)
+          size = Path('build/harness_pro.bin').stat().st_size
+          print(f'harness_pro.bin: {size} bytes of {limit} in ota_0 ({100 * size / limit:.1f}%)')
+          if size > limit:
+              raise SystemExit('harness_pro.bin does not fit the ota_0 partition')
+          PY
+
+  pro-golden:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-pro-golden
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.pro == 'true'
+    # macOS arm64, where the baseline is recorded: the code-drawn shapes (arcs, juggling balls) use float maths whose
+    # last bits differ between Apple arm64 and Linux x86-64, so the hashes only match on the same platform.
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - name: Compare every Pets screen with the golden hashes
+        working-directory: devices/harness-pro/firmware
+        env:
+          PRO_FONT: fonts/LiberationSans-Regular.ttf
+        run: |
+          python3 -m pip install --user --break-system-packages pillow==12.1.1
+          bash test/golden.sh --check
+
   mobile-checks:
     concurrency:
       group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-mobile-checks
@@ -516,7 +576,8 @@ jobs:
   required:
     name: ci/required
     needs: [plan, process-checks, desktop-tests, companion-subsystems, cli-typecheck, cli-tests, tui-test,
-            backend-desk, website-checks, os-checks, provider-checks, firmware-checks, mobile-checks, daemons-checks]
+            backend-desk, website-checks, os-checks, provider-checks, firmware-checks, pro-firmware-build, pro-golden,
+            mobile-checks, daemons-checks]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 3

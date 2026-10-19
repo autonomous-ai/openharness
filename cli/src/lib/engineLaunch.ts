@@ -973,9 +973,14 @@ function installFirstScript(install: string): string {
  * otherwise prepend the managed runtime's bin directory for this pane only. This is portable across
  * macOS and Linux and avoids an interactive/root package-manager install in an agent launch.
  */
+/** Harness's own Node folders. An npm engine run through them (`npm install -g` without a prefix) lands here. */
+export function npmRuntimeBins(runtimeNode: string = managedNodePath()): string[] {
+  return [...new Set([dirname(runtimeNode), dirname(baseNode(process.execPath))])]
+}
+
 function npmRuntimePrelude(recipe: EngineInstallRecipe, runtimeNode: string): string {
   if (!recipe.executable.npmGlobal) return ''
-  const bins = [...new Set([dirname(runtimeNode), dirname(baseNode(process.execPath))])]
+  const bins = npmRuntimeBins(runtimeNode)
     .map(shellSingleQuote)
     .join(' ')
   return [

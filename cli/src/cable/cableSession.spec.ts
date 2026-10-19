@@ -22,6 +22,8 @@ class LoopbackPort implements CablePort {
   isOpen = true
   /** Everything the daemon wrote, decoded back into messages. */
   readonly sent: Array<Record<string, unknown>> = []
+  /** The `seq` of each frame in `sent` (taken off the message, so exact-match specs need not know it); undefined = none. */
+  readonly seqs: Array<number | undefined> = []
   /** The raw bytes of every frame written, so a test can assert the 8 KB cap holds. */
   readonly frames: Uint8Array[] = []
   /** Payloads of every pet slice (CableType.Pet) the daemon wrote. */
@@ -39,7 +41,9 @@ class LoopbackPort implements CablePort {
     this.frames.push(bytes)
     this.decoder.feed(Buffer.from(bytes), (frame) => {
       if (frame.type === CableType.Json) {
-        this.sent.push(JSON.parse(Buffer.from(frame.payload).toString('utf8')) as Record<string, unknown>)
+        const { seq, ...message } = JSON.parse(Buffer.from(frame.payload).toString('utf8')) as Record<string, unknown>
+        this.sent.push(message)
+        this.seqs.push(seq as number | undefined)
       }
       if (frame.type === CableType.Pet) this.petSlices.push(Buffer.from(frame.payload))
     })
@@ -57,6 +61,9 @@ class LoopbackPort implements CablePort {
   say(msg: Record<string, unknown>): void {
     this.onData(Buffer.from(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(msg), 'utf8'))))
   }
+
+  /** Bytes that are not (all) a frame, as the dial's boot ROM or panic handler writes them. */
+  raw(bytes: Buffer): void { this.onData(bytes) }
 
   pcm(bytes: Buffer): void {
     this.onData(Buffer.from(encodeCableFrame(CableType.Pcm, bytes)))
@@ -3040,6 +3047,59 @@ describe('hello capabilities', () => {
     })
   }
 
+  it('numbers every frame to a Pro with seq, restarting at each welcome; a round dial gets none', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ ...PRO_HELLO })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.turnDone('a1')
+      expect(port.sent[0].t).toBe('welcome')
+      expect(port.seqs).toEqual(port.seqs.map((_, i) => i))   // 0 on the welcome, then 1, 2, ... with no hole
+      port.say({ ...PRO_HELLO })   // the keepalive hello: a new welcome, the count starts over
+      await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'welcome')).toHaveLength(2))
+      expect(port.seqs[port.sent.findLastIndex((m) => m.t === 'welcome')]).toBe(0)
+      port.sent.length = 0
+      port.seqs.length = 0
+      port.say({ t: 'hello', product: 'harness', mac: 'cc:dd', hw: 'round' })   // another device, no board
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      expect(port.seqs.every((q) => q === undefined)).toBe(true)
+    } finally { await session.stop() }
+  })
+
+  it('advertises resync in the welcome of a Pro only', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ ...PRO_HELLO })
+      await vi.waitFor(() => expect(ofType(port, 'welcome')).toHaveLength(1))
+      expect(ofType(port, 'welcome')[0].features).toContain('resync')
+      port.sent.length = 0
+      port.say({ t: 'hello', product: 'harness', mac: 'cc:dd', hw: 'round' })
+      await vi.waitFor(() => expect(ofType(port, 'welcome')).toHaveLength(1))
+      expect(ofType(port, 'welcome')[0].features).not.toContain('resync')
+    } finally { await session.stop() }
+  })
+
+  it('answers resync with machines, swarms, agents, notices and open questions, at most once per 2 s', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ ...PRO_HELLO })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      await session.question('a2', 'q2', [{ key: 'k', q: 'Closed?', options: ['yes'] }])
+      await session.questionClose('a2', 'q2')
+      port.sent.length = 0
+      port.say({ t: 'resync' })
+      await vi.waitFor(() => expect(port.types()).toContain('question'))
+      const types = port.types()
+      for (const t of ['machines.begin', 'swarms', 'agents.begin', 'agents.end', 'notif.replace']) expect(types).toContain(t)
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'q1' }])   // the closed one is not resent
+      port.sent.length = 0
+      port.say({ t: 'resync' })
+      await settle()
+      expect(port.sent).toEqual([])   // inside the window
+    } finally { await session.stop() }
+  })
+
   it('sends turn.stats only to a stats: turn-v1 device, and only when there is something to say', async () => {
     const { session, port } = await connect(richHost())
     try {
@@ -3480,5 +3540,47 @@ describe('hello capabilities', () => {
       expect(port.sent[0].features).not.toContain('player.library')
       expect(port.types()).not.toContain('player.library')
     } finally { await session.stop() }
+  })
+
+  describe('link counters in the dial log', () => {
+    const linkLines = (log: DialLog) => readFileSync(log.currentPath, 'utf8').split('\n').filter((l) => l.includes('[daemon] link'))
+
+    it('logs bytes and frames both ways at close, and keeps the printable text of non-frame bytes', async () => {
+      const log = tmpLog()
+      const { session, port } = await connect(makeHost(), log)
+      try {
+        port.say({ t: 'hello', product: 'harness', fw: '0.1.0', proto: 1, mac: 'aa:bb' })
+        await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+        port.raw(Buffer.concat([Buffer.from('Guru Meditation Error: Core 0 panic\x00\x01ab\x02'), Buffer.from([0xa5])]))
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })   // a frame after the noise still decodes
+        await settle()
+        await port.close('unplugged')
+        await log.flush()
+      } finally { await session.stop() }
+      const [line] = linkLines(log)
+      const sentBytes = port.frames.reduce((n, f) => n + f.length, 0)
+      expect(line).toContain('link at close')
+      expect(line).toContain(`tx ${sentBytes} B in ${port.frames.length} frames`)
+      expect(line).toMatch(/rx \d+ B in 2 frames/)
+      expect(line).toMatch(/discarded \d+ B/)
+      expect(line).toContain('non-frame text: Guru Meditation Error: Core 0 panic')
+      expect(line).not.toContain('ab')   // a two-character run is not text worth keeping
+    })
+
+    it('logs once a minute while connected, and caps the text at 200 characters', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      const log = tmpLog()
+      const { session, port } = await connect(makeHost(), log)
+      try {
+        port.say({ t: 'hello', product: 'harness', fw: '0.1.0', proto: 1, mac: 'aa:bb' })
+        await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+        port.raw(Buffer.from('x'.repeat(500) + '\n'))
+        vi.setSystemTime(Date.now() + 61_000)
+        await vi.waitFor(async () => { await log.flush(); expect(linkLines(log).length).toBeGreaterThan(0) }, NEXT_TICKS)
+      } finally { vi.useRealTimers(); await session.stop() }
+      const [line] = linkLines(log)
+      expect(line).toMatch(/\] link · tx \d+ B in \d+ frames · rx \d+ B in 1 frames/)
+      expect(line.split('non-frame text: ')[1]).toHaveLength(200)
+    })
   })
 })

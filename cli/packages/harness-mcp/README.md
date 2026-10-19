@@ -10,6 +10,8 @@ harnesses, wait for them, read their answers and close them:
 |---|---|
 | `harness_whoami` | who you are to Harness, and whether you may start harnesses now: call it first |
 | `harness_list` | the harnesses here: state, who started each, what each is about |
+| `harness_search` | search every past and live conversation on this computer for the words that say them |
+| `harness_machines` | the machines on this account, for running a harness on another one |
 | `harness_start` | start an agent on a task in a folder or a new project, by name |
 | `harness_wait` | wait until harnesses stop working |
 | `harness_read` | a harness's last ask and its answer |
