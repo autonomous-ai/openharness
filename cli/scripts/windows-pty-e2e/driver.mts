@@ -1,10 +1,12 @@
 // Windows PTY E2E driver (docs/testing/windows-pty-e2e.md): runs ON the Windows machine against its daemon's
-// loopback WebSocket, so no account is needed. Bundled by build.sh into one .mjs; uses Node's global WebSocket.
+// loopback WebSocket, so no account is needed. Bundled by build.sh into one .mjs.
 import { randomUUID } from 'node:crypto'
 import { inflateSync } from 'node:zlib'
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { WebSocket } from 'ws'
+import { localCredentialHeaders } from '../../src/lib/localCredential.ts'
 import { encodeTerminalLocal, decodeTerminalLocal, TerminalBinaryKind } from '../../src/lib/terminalBinary.ts'
 
 export const ts = () => new Date().toISOString().slice(11, 23)
@@ -24,7 +26,7 @@ export function machineId(): string {
     const signedIn = JSON.parse(readFileSync(join(auth, 'session.json'), 'utf8')).machineId
     if (typeof signedIn === 'string' && signedIn) return signedIn
   } catch { /* not signed in: the computer id below */ }
-  return readFileSync(process.env.ADAPTER_COMPUTER_ID_FILE ?? 'C:\\work\\e2e\\computer-id', 'utf8').trim()
+  return readFileSync(process.env.ADAPTER_COMPUTER_ID_FILE ?? join(homedir(), '.harness', 'computer-id'), 'utf8').trim()
 }
 
 /** Keyframe → plain screen text: each row's `ESC[n;1H` becomes a newline, every other escape goes. */
@@ -55,7 +57,8 @@ export class Client {
   timer?: NodeJS.Timeout
 
   async connect(url = `ws://127.0.0.1:${process.env.E2E_PORT ?? '18473'}/api/local-ws`): Promise<this> {
-    this.ws = new WebSocket(url)
+    const dataDir = process.env.ADAPTER_DATA_DIR?.trim() || join(homedir(), '.harness', 'cli', 'data')
+    this.ws = new WebSocket(url, { headers: localCredentialHeaders(dataDir) })
     this.ws.binaryType = 'arraybuffer'
     this.ws.onclose = (e) => { this.closed = true; if (process.env.E2E_VERBOSE) log(`ws closed ${e.code} ${e.reason}`) }
     this.ws.onmessage = (e) => {
