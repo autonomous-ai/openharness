@@ -2,8 +2,12 @@
 
 #include <string.h>
 
+#include "crash_record.h"
 #include "esp_attr.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_private/panic_internal.h"
+#include "esp_timer.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 
@@ -24,6 +28,12 @@ typedef struct {
 } ring_t;
 
 static RTC_NOINIT_ATTR ring_t s_ring;
+// The breadcrumbs: a second small RTC record for the resets the log ring cannot explain (hardware watchdog,
+// brownout) and the panic's backtrace. No checksum: tasks and the panic handler write it without a lock, and a
+// torn field is worth more than a dropped record; only a valid magic and an abnormal reset make it speak.
+static RTC_NOINIT_ATTR crash_record_t s_rec;
+static crash_record_t s_prev_rec;
+static bool s_have_rec;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static esp_reset_reason_t s_reason;
@@ -73,10 +83,43 @@ void last_words_boot(void)
         s_previous_len = s_ring.len;
         s_previous[s_previous_len] = '\0';
     }
+    if (s_abnormal && cr_valid(&s_rec)) { s_prev_rec = s_rec; s_have_rec = true; }
+    cr_init(&s_rec);
     s_ring.magic = RING_MAGIC;
     s_ring.head = 0;
     s_ring.len = 0;
     ring_seal();
+}
+
+static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+
+void last_words_phase(lw_task_t task, const char *phase)
+{
+    const uint32_t now = now_ms();
+    cr_phase(&s_rec, (unsigned)task, phase, now);
+    static uint32_t s_heap_ms;   // heap numbers are O(1) but not free: once a second is plenty
+    if (now - s_heap_ms >= 1000) {
+        s_heap_ms = now;
+        s_rec.free_int = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        s_rec.min_int = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+    }
+}
+
+void last_words_rx(uint32_t ms) { s_rec.rx_ms = ms; }
+
+// The panic's backtrace. IDF's panic handler prints it through this weak hook, one (pc, sp) per frame, from
+// the frame-pointer unwinder (CONFIG_ESP_SYSTEM_USE_FRAME_POINTER), and it runs after the panic text is on its
+// way and before the reboot — on an exception, a failed assert, abort(), the task watchdog and the interrupt
+// watchdog alike. Kept: still prints as IDF does, plus a copy into RTC. IRAM and no calls out of it: it can
+// run with the flash cache off.
+void IRAM_ATTR esp_fp_generated_step(uint32_t pc, uint32_t sp)
+{
+    panic_print_str(" 0x");
+    panic_print_hex((int)pc);
+    panic_print_str(":0x");
+    panic_print_hex((int)sp);
+    if (s_rec.magic == CR_MAGIC && s_rec.npc < CR_PCS) s_rec.pc[s_rec.npc++] = pc;
+    s_rec.panicked = 1;
 }
 
 void last_words_add(const char *line, size_t len)
@@ -102,6 +145,15 @@ void last_words_report(void)
     s_reported = true;
     if (s_abnormal) ESP_LOGW(TAG, "reset reason: %s", reason_name(s_reason));
     else            ESP_LOGI(TAG, "reset reason: %s", reason_name(s_reason));
+    if (s_have_rec) {
+        static char text[512];
+        cr_format(&s_prev_rec, text, sizeof text);
+        for (char *p = text, *nl; p && *p; p = nl ? nl + 1 : NULL) {
+            if ((nl = strchr(p, '\n'))) *nl = '\0';
+            ESP_LOGW(TAG, "%s", p);
+        }
+        s_have_rec = false;
+    }
     if (!s_previous_len) return;
     ESP_LOGW(TAG, "last %u bytes of log before that reset follow", (unsigned)s_previous_len);
     // The first line is very likely a fragment (the ring wrapped through it); everything after is whole.

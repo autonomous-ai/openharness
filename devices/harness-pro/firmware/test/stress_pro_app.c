@@ -23,6 +23,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_task_wdt.h"
+#include "sys/last_words.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -44,6 +45,8 @@ void vTaskDelay(TickType_t t) { (void)t; }
 uint32_t uxTaskGetStackHighWaterMark(TaskHandle_t t) { (void)t; return 0; }
 esp_err_t esp_task_wdt_add(void *t) { (void)t; return ESP_OK; }
 esp_err_t esp_task_wdt_reset(void) { return ESP_OK; }
+void last_words_phase(lw_task_t t, const char *p) { (void)t; (void)p; }
+void last_words_rx(uint32_t ms) { (void)ms; }
 size_t heap_caps_get_free_size(unsigned c) { (void)c; return 0; }
 size_t heap_caps_get_largest_free_block(unsigned c) { (void)c; return 0; }
 uint8_t config_load_brightness(void) { return 220; }

@@ -25,6 +25,7 @@
 #include "sys/device_mac.h"
 #include "task_stacks.h"
 #include "sys/last_words.h"
+#include "esp_task_wdt.h"
 #include "board/board.h"
 #include "sys/config_store.h"
 #include "sys/fw_update.h"
@@ -141,6 +142,10 @@ const esp_app_desc_t *esp_app_get_description(void) { static const esp_app_desc_
 const board_t *board(void) { static const board_t b = { .name = "stub" }; return &b; }
 bool device_mac_str(char *o, size_t n) { snprintf(o, n, "aa"); return true; }
 void last_words_report(void) {}
+void last_words_phase(lw_task_t t, const char *p) { (void)t; (void)p; }
+void last_words_rx(uint32_t ms) { (void)ms; }
+esp_err_t esp_task_wdt_add(void *t) { (void)t; return ESP_OK; }
+esp_err_t esp_task_wdt_reset(void) { return ESP_OK; }
 struct host_mutex { pthread_mutex_t m; };
 SemaphoreHandle_t xSemaphoreCreateMutex(void) { struct host_mutex *m = malloc(sizeof *m); pthread_mutex_init(&m->m, NULL); return m; }
 BaseType_t xSemaphoreTake(SemaphoreHandle_t m, TickType_t w) { (void)w; pthread_mutex_lock(&m->m); return pdTRUE; }
@@ -170,12 +175,14 @@ bool pro_voice_open(void) { return voice_is_open; }
 static struct { int offers, slices, aborts, ticks; char version[32], sha[80], why[32]; int size; bool busy; size_t slice_len; uint8_t first; uint32_t now; } fw;
 // What the gate says, how long the stubbed fw_update_* "block" (the slot erase, the read-back hash), what they answer.
 static bool gate_ok = true, offer_accepts, offer_active;
-static int gate_begins, gate_ends, confirms, notes;
+static int gate_begins, gate_ends, confirms, confirm_downs, notes;
+static uint32_t confirm_at;
 static int64_t block_us;
 bool pro_app_begin_update_gate(void) { gate_begins++; return gate_ok; }
 void pro_app_end_update_gate(void) { gate_ends++; }
 void pro_app_note_update(void) { notes++; }
-bool fw_confirm_session_up(void) { confirms++; return confirms == 1; }
+void fw_confirm_session_up(uint32_t ms) { confirms++; confirm_at = ms; }
+void fw_confirm_session_down(void) { confirm_downs++; }
 bool fw_update_active(void) { return offer_active; }
 bool fw_update_offer(const char *v, int size, const char *sha, bool busy)
 {
@@ -913,17 +920,18 @@ static void fw_offer_gate(void)
     end_session();
 }
 
-// H3: the first welcome asks fw to confirm the image (once per session-up), and announces the update only if it did.
+// H3: the welcome starts the clock a fresh image is confirmed on (once per session-up), and the end of the session stops it.
 static void fw_confirms_on_welcome(void)
 {
-    confirms = notes = 0;
+    confirms = confirm_downs = notes = 0;
     welcome();
-    CHECK(confirms == 1 && notes == 1);
+    CHECK(confirms == 1 && confirm_at == (uint32_t)(now_us / 1000) && notes == 0);
     welcome();                          // a repeat welcome on a live session is not a new session
-    CHECK(confirms == 1 && notes == 1);
+    CHECK(confirms == 1 && confirm_downs == 0);
     end_session();
-    welcome();                          // a new session asks again, but nothing confirmed this time
-    CHECK(confirms == 2 && notes == 1);
+    CHECK(confirm_downs == 1);
+    welcome();                          // a new session starts the clock again
+    CHECK(confirms == 2);
     end_session();
 }
 

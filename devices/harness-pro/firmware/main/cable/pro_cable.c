@@ -28,6 +28,7 @@
 #include "sys/device_mac.h"
 #include "sys/fw_update.h"
 #include "sys/last_words.h"
+#include "esp_task_wdt.h"
 #include "task_stacks.h"
 
 static const char *TAG = "pro_cable";
@@ -793,8 +794,7 @@ static void session_up(const cJSON *p)
         // console and `idf.py monitor` behaves as it always has.
         cable_link_set_log_framing(true);
         ESP_LOGI(TAG, "session up: %s", s_machine_name);
-        // The welcome parsed: this image's cable path works, so a fresh install may be confirmed now (fw_update.h).
-        if (fw_confirm_session_up()) pro_app_note_update();
+        fw_confirm_session_up((uint32_t)(esp_timer_get_time() / 1000));   // starts the clock a fresh image is confirmed on (fw_update.h)
     }
     if (was && !moved) return;
     // Anything held belonged to another host. Drop a half-streamed roster before its end can make it current.
@@ -828,6 +828,7 @@ static void session_down(const char *why)
     cable_link_reset_decoder();   // runs on the tick: whatever is half-received belonged to the session that ended
     cable_link_set_log_framing(false);   // first: what follows should be readable on a plain monitor
     ESP_LOGI(TAG, "session down (%s)", why);
+    fw_confirm_session_down();
     fw_update_abort("session down");
     pro_app_machines(s_machines.rows, 0, "");
     pro_app_link(false, NULL);
@@ -962,6 +963,13 @@ static void link_resync(void)
 void pro_cable_tick(void *ctx)
 {
     (void)ctx;
+    // Under the task watchdog like the render task, so a hang here is a TASK_WDT panic with a backtrace, not a silent
+    // hardware reset. Joined on the first tick (this runs on the link's reader task, which this file does not create).
+    static bool watched;
+    if (!watched) { watched = esp_task_wdt_add(NULL) == ESP_OK; }
+    else esp_task_wdt_reset();
+    last_words_phase(LW_CABLE, fw_update_active() ? "ota" : "cable.read");
+    last_words_rx((uint32_t)(s_last_rx_us / 1000));
     fw_update_tick((uint32_t)(esp_timer_get_time() / 1000));
     link_resync();
     if (atomic_load(&s_session) && esp_timer_get_time() - s_last_rx_us > (int64_t)SILENCE_MS * 1000)

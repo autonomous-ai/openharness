@@ -24,6 +24,7 @@
 #include "pro_frame.h"
 #include "sys/config_store.h"
 #include "sys/fw_update.h"
+#include "sys/last_words.h"
 #include "sys/ram_telemetry.h"
 #include "task_stacks.h"
 #include "theme.h"
@@ -869,6 +870,7 @@ static void render_task(void *arg)
     uint32_t frames = 0, raster_max_us = 0, frame_max_us = 0;
     for (;;) {
         ESP_ERROR_CHECK(esp_task_wdt_reset());
+        last_words_phase(LW_RENDER, "render");
         pro_app_tick();
         const bool fresh = pro_app_take_scene(&s_scene[front ^ 1]);
         uint32_t wake_ms = pro_app_next_wake_ms();

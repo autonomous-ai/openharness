@@ -16,15 +16,18 @@
 // Confirm THIS image if this boot is a freshly installed one. With CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE an
 // app booted from an OTA slot starts PENDING_VERIFY and the bootloader REVERTS it at the next reset unless told
 // otherwise (an unconfirmed image keeps running until then). Do not call it directly: use the fw_confirm_*
-// triggers below, which hold it back until the image has proved its cable path.
+// triggers below, which hold it back until the image has proved itself.
 void fw_mark_valid(void);
 
-// When to confirm: never before the first frame is painted, then at the FIRST cable session (pro_cable's
-// session_up on `welcome`) or after 60 s of uptime, whichever comes first. A crash on the cable path then
-// still rolls back, and an idle cable cannot cost a good image (it is merely confirmed at 60 s). Each returns
-// true only on the call that did the confirming, so the caller can announce the update once.
-bool fw_confirm_frame_painted(void);
-bool fw_confirm_session_up(void);
+// When to confirm: never before the first frame is painted; then once the image has run 60 s AND its cable session
+// has been up for 30 s without a break, or, if no such session happens, once it has run 180 s. A reset before that
+// rolls back to the previous image, so a crash in the first minute of a new image (render, cable, voice) is undone.
+// fw_confirm_due is that rule as a pure function (session_since_ms 0: no session); fw_confirm_tick applies it and
+// returns true only on the call that did the confirming, so the caller can announce the update once.
+bool fw_confirm_due(uint32_t uptime_ms, uint32_t session_since_ms);
+void fw_confirm_frame_painted(void);
+void fw_confirm_session_up(uint32_t uptime_ms);   // pro_cable's welcome: the session starts now
+void fw_confirm_session_down(void);               // the session ended: the 30 s count starts over
 bool fw_confirm_tick(uint32_t uptime_ms);
 bool fw_confirm_pending(void);   // not confirmed (or decided) yet: keep ticking
 

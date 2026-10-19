@@ -68,6 +68,20 @@ No Wi-Fi: the Pro talks over the cable only, and the module's ESP32-C5 is held i
 only for `# > _ ?`, and font 32 only for `> _` (`test_fonts.py` fails on any other character drawn at those sizes). The image is about 1.87 MB;
 `docs/size-baseline.txt` has the before and after.
 
+## Crashes and updates
+
+- A panic always reboots (JTAG-aware halting is off). Its backtrace, the phase each task was in (`ota.write`,
+  `render`, `cable.read`, `voice.*`), the last cable byte and the internal heap are kept in RTC memory
+  (`sys/last_words.c`, `sys/crash_record.c`). After a panic or watchdog reset the next session logs them as
+  `crumbs:` lines with the reset reason and the last log lines. Decode the backtrace with `addr2line` against the ELF of the
+  version the unit ran. A power cut clears RTC memory, so it leaves nothing.
+- The task watchdog (10 s) covers the render task and the cable reader task; the interrupt watchdog is on. A hang
+  becomes a TASK_WDT or INT_WDT panic with a backtrace. A bare `WATCHDOG` reason with no `panic backtrace` is a
+  hardware watchdog: read the `crumbs:` task lines, the stale one is the stuck task.
+- A new OTA image is confirmed late: after 60 s up with a cable session that has stayed up 30 s, or after 180 s up
+  with no cable. A reset before then rolls back to the previous image (the daemon does not offer a written version
+  again).
+
 ## Layout
 
 - `docs/`: the cable contract and the port inventory.
@@ -77,7 +91,7 @@ only for `# > _ ?`, and font 32 only for `> _` (`test_fonts.py` fails on any oth
 - `firmware/main/cable/`: cable link, frame parsing, JSON guard, features, machines, scroll.
 - `firmware/main/display/`: panel and bus, GT911 touch, compositor, canvas, terminal, fonts.
 - `firmware/main/pod/`: the Pod model, navigation, views, pets and engine logos.
-- `firmware/main/sys/`: config store, device MAC, last words, RAM telemetry.
+- `firmware/main/sys/`: config store, device MAC, last words and crash record, RAM telemetry.
 - `firmware/fonts/`: bundled Liberation Sans for tests and CI.
 - `firmware/scripts/`: font generator, flash, pet import, logo generator.
 - `firmware/test/`: host tests, host stubs and the tree-isolation check.

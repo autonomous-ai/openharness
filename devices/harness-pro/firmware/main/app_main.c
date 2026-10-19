@@ -64,10 +64,10 @@ void app_main(void)
     pro_cable_start();
     ram_telemetry_checkpoint("app_ready");
 
-    // A freshly installed image is confirmed by fw_confirm_* (sys/fw_update.h): never before the first frame, then at the first
-    // cable session (pro_cable) or at 60 s up, whichever comes first. One that never paints is reverted at once.
+    // A freshly installed image is confirmed by fw_confirm_* (sys/fw_update.h): never before the first frame, then after
+    // 60 s up with a 30 s cable session (or 180 s up without). One that never paints is reverted at once.
     if (pro_app_wait_first_frame(10000)) {
-        if (fw_confirm_frame_painted()) pro_app_note_update();
+        fw_confirm_frame_painted();
         while (fw_confirm_pending()) {
             vTaskDelay(pdMS_TO_TICKS(1000));
             if (fw_confirm_tick((uint32_t)(esp_timer_get_time() / 1000))) pro_app_note_update();

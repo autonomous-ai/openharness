@@ -123,6 +123,11 @@ cc "${cc_flags[@]}" -DFW_UPDATE_HOST_TEST -Wframe-larger-than=1024 -c -o "$out/f
 cc "${cc_flags[@]}" -I"$fw/main/sys" -o "$out/test_fw_update" "$here/test_fw_update.c" "$out/fw_update.o"
 "$out/test_fw_update"
 
+# crash_record: the RTC breadcrumb record's phases and text (the pure half of last_words.c).
+cc "${cc_flags[@]}" -Wframe-larger-than=1024 -c -o "$out/crash_record.o" "$fw/main/sys/crash_record.c"
+cc "${cc_flags[@]}" -I"$fw/main/sys" -o "$out/test_crash_record" "$here/test_crash_record.c" "$out/crash_record.o"
+"$out/test_crash_record"
+
 # The app layer: pro_app.c, pod_glue.c and pro_touch.c with the cable, the recorder and the clock as host stubs,
 # replayed. It builds its own fonts and objects.
 python3 "$here/test_pro_app.py"
