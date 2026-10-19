@@ -1306,35 +1306,15 @@ static void handle_message(const cJSON *root)
         // emits done THEN summary; an empty or phantom turn emits only done — so a session that briefly
         // registers and vanishes stays silent, and the notification always carries a real recap.
         //
-        // These two lines lived in commander_client.c and went out with it. Nothing else calls them, so
-        // for a day the dial updated its tile in complete silence: no beep, no wake, nothing in the
-        // drawer — the one part of a finished turn a person is not looking at the screen for.
-        //
-        // A SUB-AGENT'S turn (`silent`, decided by the daemon: an Orchestrator specialist, or its
-        // Director while specialists are still out) is not news at all — the tile above is redrawn and
-        // that is the whole of it. A project of four specialists used to ring eight times before the one
-        // ring that mattered (owner, 2026-09-21: "chỉ cần báo thằng main thôi"). Absent = false, so an
-        // older daemon rings exactly as before.
-        if (bool_of(p, "silent")) return;
-        // THE BEEP ALWAYS SOUNDS. A finished turn is news even when the person is looking straight at
-        // it: they are reading the last one, not watching for the next to end, and three tones is how
-        // they learn a task is done without moving their eyes.
-        audio_notify_done();
-        // The NOTIFICATION is what gets withheld. It exists to reach someone who is not looking —
-        // waking a dark panel, filing an entry in the drawer — and `quiet` is the daemon saying the
-        // desktop window already has this agent on screen. The tile itself is still redrawn above: the
-        // recap is what it draws, and a stale tile is a worse lie than a missing badge.
-        //
-        // The other half of "already looking" is decided inside ui_notify_task_done(), which skips its
-        // own work when the dial is awake, on the carousel, and centred on this very agent.
-        //
-        // Absent field = false, so a daemon that predates this notifies exactly as it always did.
-        //
-        // WHO IT IS ABOUT rides on the frame. The dial holds one tab's agents, and this turn may have
-        // finished on any of them; the drawer row for one off this tab has nobody else to ask.
-        if (!bool_of(p, "quiet")) {
-            ui_notify_task_done(agent_id, str_of(p, "name"), str_of(p, "machine"), str_of(p, "recap"));
-        }
+        // THE TIER decides everything else (daemon, 2026-10-19): `alert` beeps, wakes and celebrates,
+        // `list` only files a drawer row, `silent` files nothing. ui_notify_summary maps an old daemon's
+        // `silent`/`quiet` flags when there is no tier, and says whether to beep: an alert, and not for
+        // the pane already on the glass. The beep itself coalesces to one per 30 s in audio_notify_done.
+        // WHO IT IS ABOUT rides on the frame: the dial holds one tab's agents, and this turn may have
+        // finished on any of them.
+        if (ui_notify_summary(agent_id, str_of(p, "name"), str_of(p, "machine"), str_of(p, "recap"),
+                              str_of(p, "tier"), bool_of(p, "quiet"), bool_of(p, "silent")))
+            audio_notify_done();
         return;
     }
     // The WINDOW looked at this agent — its drawer row here is stale. The tap's half of this pair
@@ -1354,7 +1334,9 @@ static void handle_message(const cJSON *root)
     }
     if (strcmp(t, "turn.error") == 0) {
         if (agent_id) ui_project_emit(agent_id, "", "done", "", NULL);
-        ui_cable_toast(str_of(p, "message"));
+        // A failure is an alert: it beeps (coalesced) unless that pane is already on the glass.
+        if (agent_id ? ui_turn_error(agent_id, str_of(p, "message")) : (ui_cable_toast(str_of(p, "message")), false))
+            audio_notify_done();
         return;
     }
     if (strcmp(t,"question.state")==0) { ui_question_state(p); return; }
@@ -1362,7 +1344,12 @@ static void handle_message(const cJSON *root)
     if (strcmp(t, "question") == 0) {
         const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
         // The name rides on the frame for the same reason as on `summary`: the asker may be off this tab.
-        if (agent_id && questions) ui_question_show(agent_id, str_of(p, "name"), str_of(p, "machine"), str_of(p, "id"), questions);
+        if (agent_id && questions) {
+            // A question is an alert: pinned row, wake and a (coalesced) beep, all but the beep inside
+            // ui_question_show, which stays quiet for the pane already on the glass.
+            if (ui_question_show(agent_id, str_of(p, "name"), str_of(p, "machine"), str_of(p, "id"), questions))
+                audio_notify_done();
+        }
         return;
     }
     // Somebody else answered it. A question is a dialog in a tmux pane, not a shared object, so this is

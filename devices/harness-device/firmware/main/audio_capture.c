@@ -175,7 +175,9 @@ void audio_notify_done(void)
     if (!s_beep_task || audio_notify_is_muted()) return;
     uint32_t previous = atomic_load(&last_ms);
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-    if (now - previous < 1000) return;
+    if (!now) now = 1;   // 0 means "never beeped", so the first one always sounds
+    // One beep per 30 s: a burst of finished turns is one piece of news, not five.
+    if (previous && now - previous < 30000) return;
     // A concurrent completion owns the notification if it won this exchange.
     if (!atomic_compare_exchange_strong(&last_ms, &previous, now)) return;
     xTaskNotifyGive(s_beep_task);

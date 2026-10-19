@@ -2049,7 +2049,7 @@ describe('cable session', () => {
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
 
     await session.summary('a1', 'recap one', 'body one')
-    await session.summary('a2', 'recap two', 'body two', true)
+    await session.summary('a2', 'recap two', 'body two', 'list')
 
     const sent = port.sent.filter((m) => m.t === 'summary' && !m.restore)
     // Absent, not false, on the ordinary path: firmware that predates the flag must keep notifying
@@ -2059,10 +2059,18 @@ describe('cable session', () => {
     expect(sent.find((m) => m.agentId === 'a2')).toMatchObject({ quiet: true, recap: 'recap two' })
 
     // A sub-agent's turn: silent — no beep, no drawer row — and the recap still travels.
-    await session.summary('a1', 'recap three', 'body three', false, true)
+    await session.summary('a1', 'recap three', 'body three', 'silent', undefined, true)
     const silent = port.sent.filter((m) => m.t === 'summary' && m.agentId === 'a1').pop()
     expect(silent).toMatchObject({ silent: true, recap: 'recap three' })
     expect(silent).not.toHaveProperty('quiet')
+  })
+
+  it('sends the tier, with quiet for list and silent for silent, and neither for alert', async () => {
+    const { session, port } = await connect(makeHost({}))
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    for (const tier of ['alert', 'list', 'silent'] as const) await session.summary('a1', `r ${tier}`, 'b', tier)
+    const sent = port.sent.filter((m) => m.t === 'summary' && !m.restore)
+    expect(sent.map((m) => [m.tier, m.quiet, m.silent])).toEqual([['alert', undefined, undefined], ['list', true, undefined], ['silent', undefined, true]])
   })
 
   it('redraws a reattached dial with what each agent was last doing', async () => {
@@ -3131,7 +3139,7 @@ describe('hello capabilities', () => {
       // A turn with prose and tool cards, a summary carrying the whole answer, and a library request.
       await session.turnStarted('a1', 'Processing', 'Looking at the spec first')
       await session.turnStep('a1', 'Read · cableSession.ts')
-      await session.summary('a1', 'r', 'b', false, false, answer)
+      await session.summary('a1', 'r', 'b', 'alert', answer)
       port.say({ t: 'player.library.get', offset: 0, request: 1 }); await settle()
       await session.syncSwarms(true)
 
@@ -3139,7 +3147,7 @@ describe('hello capabilities', () => {
       expect(port.sent.map((m) => JSON.stringify(m))).toEqual([
         '{"t":"turn.started","agentId":"a1","text":"Processing"}',
         '{"t":"turn.activity","agentId":"a1","text":"Working"}',
-        '{"t":"summary","agentId":"a1","name":"Fix login screen","engine":"claude","machine":"","recap":"r","text":"b"}',
+        '{"t":"summary","agentId":"a1","name":"Fix login screen","engine":"claude","machine":"","recap":"r","text":"b","tier":"alert"}',
         '{"t":"swarms","selected":"t1","items":[{"id":"t1","name":"Tab 1","agents":2,"panes":2},{"id":"t2","name":"Tab 2","agents":1,"panes":1}],"tiles":[]}',
       ])
     } finally { await session.stop() }
@@ -3267,7 +3275,7 @@ describe('hello capabilities', () => {
     try {
       port.say(PRO_HELLO)
       await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
-      await session.summary('a1', 'r', 'x'.repeat(7_900), false, false, 'y'.repeat(1_000))
+      await session.summary('a1', 'r', 'x'.repeat(7_900), 'alert', 'y'.repeat(1_000))
       const frame = ofType(port, 'summary').at(-1)!
       expect(frame.text).toBe('x'.repeat(7_900))
       expect(frame).not.toHaveProperty('full')
@@ -3319,7 +3327,7 @@ describe('hello capabilities', () => {
     try {
       port.say(PRO_HELLO)
       await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
-      await session.summary('a1', 'Kết quả', 'Kết quả', false, false, answer)
+      await session.summary('a1', 'Kết quả', 'Kết quả', 'alert', answer)
       const frame = ofType(port, 'summary').at(-1) as { full: string }
       expect(frame.full.length).toBeLessThanOrEqual(1200)
       expect(Buffer.byteLength(frame.full)).toBeLessThanOrEqual(3600)
@@ -3499,7 +3507,7 @@ describe('hello capabilities', () => {
       await session.questionClose('session-0', 'q1')
       await session.syncPlayerLibrary(true)
       expect(statusOf('session-0')).toBe('working')        // answered: the turn goes on
-      await session.summary('session-0', 'Sub done.', 'Sub done.', false, true)
+      await session.summary('session-0', 'Sub done.', 'Sub done.', 'silent', undefined, true)
       await session.syncPlayerLibrary(true)
       expect(statusOf('session-0')).toBe('working')        // a sub-agent's end is not the turn's
       await session.turnDone('session-0')

@@ -57,14 +57,16 @@ void pro_app_context(const char *id, const char *machine, const char *project, c
 //   "step"     text = one tool card (non-empty, <= 120 B), elapsed_s -1
 //   "done" / "error"  text "", elapsed_s 0
 // `turn.activity` is delivered as verb, then activity, then step, each only when its field is present.
+// kind "error": `text` is the failure message (may be ""); the failed turn is filed as an alert.
 void pro_app_turn(const char *id, const char *kind, const char *text, int elapsed_s);
 // turn.stats, once before turn.done: each count is 0..1000000, or -1 when the message left it out.
 void pro_app_turn_stats(const char *id, int tests_passed, int tests_failed, int commits, int tokens_in, int tokens_out);
 
 // `text` and `recap` are NULL when absent, `full` is NULL from a daemon without recap=long-v1.
-// `notify`: a live turn's end that is news here (not `restore`, not `quiet`, not `silent`): file an unread entry, show the
-// banner and beep. The recap itself is applied either way.
-void pro_app_summary(const char *id, const char *text, const char *recap, const char *full, bool restore, bool notify);
+// `tier`: how loud a live turn's end is (see pod_tier_t; a `restore` is never news, whatever it says): alert files an unread
+// entry, shows the banner and beeps (one beep per POD_BEEP_COALESCE_MS), list only files the entry, silent files nothing.
+// The recap itself is applied either way.
+void pro_app_summary(const char *id, const char *text, const char *recap, const char *full, bool restore, pod_tier_t tier);
 
 // ---- notifications ----
 // notif.replace: the whole unread list (the daemon sends it on greeting; at most 8 items, one per agent). Strings are never
@@ -74,7 +76,8 @@ void pro_app_notif_replace(const pro_notif_row_t *rows, int n);
 // notif.seen: read elsewhere. token is NULL without one.
 void pro_app_notif_seen(const char *id, const char *token);
 
-void pro_app_question(const char *id, const char *text);
+// request is the question's request id: with the prompt it tells a re-sent question from a new one.
+void pro_app_question(const char *id, const char *request, const char *text);
 void pro_app_question_close(const char *id);
 
 // The daemon's surface moved to this agent.

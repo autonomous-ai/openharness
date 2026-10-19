@@ -658,12 +658,12 @@ static void room_agent_gone_lands_home(void) {
 // Pets: no toast over Home or Notices; the unread entry and the beep (notify's true) stay.
 static void no_toast_on_home_pets(void) {
     fresh();
-    CHECK(pod_ui_notify(&U, "a3", true, 1000));   // on Home
+    CHECK(pod_ui_notify(&U, "a3", POD_TIER_ALERT, true, 1000));   // on Home
     render(1000);
     CHECK(!U.frame.banner && !U.ban_on && !find(POD_A_BANNER) && pod_model_unread_find(&U.model, "a3"));
     fresh();
     act(POD_A_INBOX, 0);   // on Notices
-    CHECK(pod_ui_notify(&U, "a3", true, 1000));
+    CHECK(pod_ui_notify(&U, "a3", POD_TIER_ALERT, true, 1000));
     render(1000);
     CHECK(!U.frame.banner && !U.ban_on && !find(POD_A_BANNER) && pod_model_unread_find(&U.model, "a3"));
 }
@@ -988,7 +988,7 @@ static void toast_and_edges(void) {
     // A toast over a room: the bar's swipe down still opens Notices, but a contact on the toast belongs to the toast (below).
     fresh();
     to_agent(0, 0);
-    CHECK(pod_ui_notify(&U, "a3", true, 1000));
+    CHECK(pod_ui_notify(&U, "a3", POD_TIER_ALERT, true, 1000));
     render(1000);
     CHECK(U.ban_on && U.frame.banner);
     t_(true, 360, 190, 1100); t_(true, 360, 240, 1140); t_(false, 360, 300, 1180);   // under the toast: a drag on the room
@@ -1001,7 +1001,7 @@ static void toast_shows_and_expires(void) {
     fresh();
     calm();
     to_agent(0, 2);   // a3's Recap: a still room
-    CHECK(pod_ui_notify(&U, "a1", true, 1000));   // the beep still plays
+    CHECK(pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000));   // the beep still plays
     CHECK(U.ban_on && U.ban_until == 6000 && pod_ui_banner_shown_ms(&U) == 1000);
     render(1000);
     CHECK(U.frame.banner && hits_of_banner() == 1);
@@ -1016,18 +1016,18 @@ static void toast_shows_and_expires(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    pod_ui_notify(&U, "a1", true, 1000);
+    pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000);
     render(1000);
     for (uint32_t t = 1000; t < 6000; t += 5) CHECK(pod_ui_wake_ms(&U, t) <= 66);
     // a newer notice replaces it: 5 s from then
-    CHECK(pod_ui_notify(&U, "a2", true, 3000));
+    CHECK(pod_ui_notify(&U, "a2", POD_TIER_ALERT, true, 3000));
     CHECK(!strcmp(U.ban_agent, "a2") && U.ban_until == 8000 && pod_ui_banner_shown_ms(&U) == 3000);
 }
 static void toast_tap_opens_notices(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    pod_ui_notify(&U, "a1", true, 1000);
+    pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000);
     render(1000);
     const int depth = U.nav.depth;
     pod_out_t o = tap_(360, 80, 1100);
@@ -1039,7 +1039,7 @@ static void toast_tap_opens_notices(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    pod_ui_notify(&U, "a1", true, 1000);
+    pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000);
     render(1000);
     o = tap_(360, 300, 1100);
     CHECK(o.fx == POD_FX_VOICE_BEGIN && !strcmp(o.agent, "a3") && top()->view == POD_V_TALK);
@@ -1048,7 +1048,7 @@ static void toast_swipe_up_dismisses(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    pod_ui_notify(&U, "a1", true, 1000);
+    pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000);
     render(1000);
     const int depth = U.nav.depth;
     CHECK(!U.talk_armed);
@@ -1061,7 +1061,7 @@ static void toast_swipe_up_dismisses(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    pod_ui_notify(&U, "a1", true, 1000);
+    pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000);
     render(1000);
     t_(true, 360, 40, 1100); t_(true, 360, 90, 1140); t_(false, 360, 170, 1180);
     CHECK(U.nav.depth == 3 && top()->view == POD_V_RECAP && U.ban_on);
@@ -1071,8 +1071,8 @@ static void toast_not_here(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    CHECK(pod_ui_notify(&U, "a3", true, 1000) && !U.ban_on);
-    CHECK(pod_ui_notify(&U, "a3", false, 1100) && !U.ban_on);
+    CHECK(!pod_ui_notify(&U, "a3", POD_TIER_ALERT, true, 1000) && !U.ban_on);
+    CHECK(pod_ui_notify(&U, "a3", POD_TIER_ALERT, false, 1100) && !U.ban_on);
     CHECK(pod_model_unread_find(&U.model, "a3"));
     // a room over Notices (opened from a notice) shows toasts for the others
     // not over Talk: recording or sending
@@ -1080,7 +1080,7 @@ static void toast_not_here(void) {
     to_agent(0, 0);
     act(POD_A_TALK, 0);
     CHECK(top()->view == POD_V_TALK);
-    CHECK(pod_ui_notify(&U, "a3", true, 1000) && !U.ban_on);
+    CHECK(pod_ui_notify(&U, "a3", POD_TIER_ALERT, true, 1000) && !U.ban_on);
     render(1000);
     CHECK(!U.frame.banner);
     // not over the update
@@ -1088,7 +1088,7 @@ static void toast_not_here(void) {
     calm();
     to_agent(0, 2);
     pod_ui_ota(&U, "0.1.1", "0.1.2", 10, false);
-    CHECK(pod_ui_notify(&U, "a1", true, 1000) && !U.ban_on);
+    CHECK(pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000) && !U.ban_on);
     pod_ui_ota(&U, NULL, NULL, -1, false);
     render(1100);
     CHECK(!U.frame.banner && pod_model_unread_find(&U.model, "a1"));
@@ -1096,7 +1096,7 @@ static void toast_not_here(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    pod_ui_notify(&U, "a1", true, 1000);
+    pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000);
     render(1000);
     CHECK(U.frame.banner);
     act(POD_A_INBOX, 0);
@@ -1106,7 +1106,7 @@ static void toast_not_here(void) {
     fresh();
     calm();
     to_agent(0, 2);
-    pod_ui_notify(&U, "a1", true, 1000);
+    pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000);
     act(POD_A_PREV, 0);   // a3 -> a2
     act(POD_A_PREV, 0);   // a2 -> a1
     render(1100);
@@ -1154,7 +1154,7 @@ static void home_notices_come_and_go(void) {
     CHECK(top()->scroll == 1 && pod_tabs_pages_of(&U.nav, &U.model) == 2);
     render(1100);
     CHECK(find(POD_A_ENTER_TAB) && !strcmp(find(POD_A_ENTER_TAB)->id, "s2"));
-    CHECK(pod_ui_notify(&U, "a3", true, 1200));
+    CHECK(pod_ui_notify(&U, "a3", POD_TIER_ALERT, true, 1200));
     CHECK(top()->scroll == 1 && pod_tabs_pages_of(&U.nav, &U.model) == 3);
     render(1300);
     CHECK(find(POD_A_ENTER_TAB) && !strcmp(find(POD_A_ENTER_TAB)->id, "s2"));
@@ -1313,7 +1313,7 @@ static void toast_cap_only_when_drawn(void) {
     fresh();
     calm();
     to_agent(0, 2);   // a3's Recap: a still room
-    CHECK(pod_ui_notify(&U, "a1", true, 1000));
+    CHECK(pod_ui_notify(&U, "a1", POD_TIER_ALERT, true, 1000));
     render(1000);
     CHECK(U.ban_on && U.frame.banner);
     for (uint32_t t = 1000; t < 2000; t += 7) CHECK(pod_ui_wake_ms(&U, t) <= 66);
@@ -1451,12 +1451,18 @@ static void home_page(void) {
     CHECK(tap_(h->x + h->w / 2, h->y + h->h / 2, 1400).fx == POD_FX_AGENT_OPEN && !strcmp(top()->agent, "a3"));
 }
 
-// A notice for the agent already on screen still adds its unread entry (the finished bubble shows).
+// A notice for the agent already on screen is shown in place: no beep or wake (false), no toast, and its entry is read at once.
+// Dark (not awake), the same screen is not looked at: the entry stays and the glass is to be lit.
 static void notify_while_looking(void) {
     fresh();
     to_agent(0, 2);   // a3, Recap
-    CHECK(pod_ui_notify(&U, "a3", true, 1000));
+    CHECK(!pod_ui_notify(&U, "a3", POD_TIER_ALERT, true, 1000));
+    CHECK(pod_model_unread_find(&U.model, "a3") == NULL && !U.ban_on);
+    CHECK(pod_ui_notify(&U, "a3", POD_TIER_ALERT, false, 1100));
     CHECK(pod_model_unread_find(&U.model, "a3") != NULL);
+    // list: filed, never a beep (false) nor a toast; silent: nothing filed.
+    CHECK(!pod_ui_notify(&U, "a1", POD_TIER_LIST, true, 1200) && pod_model_unread_find(&U.model, "a1") && !U.ban_on);
+    CHECK(!pod_ui_notify(&U, "a2", POD_TIER_SILENT, true, 1300) && !pod_model_unread_find(&U.model, "a2"));
 }
 
 // One swipe is one page, in the list's order: Notices, Working, Build, Docs.
