@@ -61,10 +61,13 @@ export function parsePrimeList(stdout: string): PrimeAgentRow[] | null {
   } catch { return null }
 }
 
-/** The agents, or null when Prime cannot be asked (not installed, daemon down, unreadable output). */
-export function listPrimeAgents(): Promise<PrimeAgentRow[] | null> {
+/**
+ * The agents, or null when Prime cannot be asked (not installed, daemon down, unreadable output). `fresh`
+ * skips the short cache: a hook verified against a read from before its client attached was refused (measured).
+ */
+export function listPrimeAgents(options: { fresh?: boolean } = {}): Promise<PrimeAgentRow[] | null> {
   const now = Date.now()
-  if (cached && now - cached.at < CACHE_MS) return cached.rows
+  if (!options.fresh && cached && now - cached.at < CACHE_MS) return cached.rows
   const rows = runner().then(parsePrimeList, () => null)
   cached = { at: now, rows }
   return rows
@@ -78,7 +81,7 @@ export function isAttachedRoot(agent: PrimeAgentRow): boolean {
 /** Whether `sessionId` is an attached root conversation. False when Prime cannot be asked: no evidence. */
 export async function primeSessionAttached(sessionId: string | undefined): Promise<boolean> {
   if (!sessionId) return false
-  const rows = await listPrimeAgents()
+  const rows = await listPrimeAgents({ fresh: true })
   return !!rows?.some((agent) => agent.sessionId === sessionId && isAttachedRoot(agent))
 }
 

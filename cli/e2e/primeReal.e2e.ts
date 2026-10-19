@@ -8,7 +8,7 @@
  *
  *   RUN_REAL_PRIME=1 npx vitest run --config vitest.e2e.config.ts e2e/primeReal.e2e.ts
  */
-import { copyFileSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { userInfo } from 'node:os'
 import { join } from 'node:path'
@@ -26,6 +26,7 @@ describe.skipIf(!REAL)('Prime Agent, for real', () => {
   let daemon: IsolatedDaemon | undefined
   let client: LocalClient | undefined
   let socket = ''
+  let testRoot = ''
   afterAll(async () => {
     client?.close()
     await daemon?.close()
@@ -33,19 +34,23 @@ describe.skipIf(!REAL)('Prime Agent, for real', () => {
     // `shutdown` takes no --daemon-socket (0.9.5). End the supervisor and its workers together: a worker that
     // outlives its supervisor starts a replacement (Prime's docs/daemon.md). Workers name the socket only in
     // their environment (PRIME_AGENT_INTERNAL_DAEMON_SUPERVISOR_SOCKET), which `ps eww` shows for our own.
+    // Match the test's root too: every worker inherits its Prime directory from the wrapper and every kernel runs
+    // from its home, including ones whose supervisor is already gone (seen: orphaned workers, ppid 1, and kernels).
     if (socket) {
-      const table = execFileSync('ps', ['-axww', '-e', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-      const pids = table.split('\n').filter((line) => line.includes(socket)).map((line) => Number.parseInt(line, 10))
+      const table = execFileSync('ps', ['-axww', '-e', '-o', 'pid=,command='], { encoding: 'latin1', maxBuffer: 64 * 1024 * 1024 })
+      const pids = table.split('\n').filter((line) => line.includes(socket) || (!!testRoot && line.includes(testRoot)))
+        .map((line) => Number.parseInt(line, 10))
         .filter((pid) => pid > 0 && pid !== process.pid)
       for (const pid of pids) try { process.kill(pid, 'SIGTERM') } catch {}
     }
   })
 
-  it('follows a launched agent through a typed turn and a turn its own child started, and recaps it', async () => {
+  it('follows a launched agent through a typed turn, a recap, a turn its own child started and a /new switch', async () => {
     const real = realBinary()
     const d = daemon = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: 'claude,codex,prime' } })
     onTestFailed(() => console.log(d.log()))
-    const primeDir = join(d.projectsDir, '..', 'prime-agent')
+    testRoot = realpathSync(join(d.projectsDir, '..'))
+    const primeDir = join(testRoot, 'prime-agent')
     mkdirSync(primeDir, { recursive: true })
     // The suite's HOME is a throwaway one (vitest.setup.ts); the account's own is where Prime is signed in.
     const person = process.env.REAL_PRIME_AGENT_DIR ?? join(userInfo().homedir, '.prime', 'agent')
@@ -90,5 +95,21 @@ describe.skipIf(!REAL)('Prime Agent, for real', () => {
     await c.next((f) => f.type === 'turn_ended' && f.agentId === agentId, 300_000, 'the child-started turn’s end')
     const history = await c.request('session_get', { sessionId: agentId, limit: 50 }, 30_000)
     expect(JSON.stringify(history)).toContain('agent-message from child:pinger')
+
+    // `/new` switches conversation inside the same worker. The new one is a draft with no file until its first
+    // message (measured), so the move comes with that message, through the extension's hook. `/new` opens no
+    // turn, so the input path gives up on it after its two re-presses (~9s); wait those out first.
+    c.send('message', { agentId, content: '/new' })
+    await new Promise((resolve) => setTimeout(resolve, 12_000))
+    c.send('message', { agentId, content: 'Reply with the single word: second' })
+    const moved = await until('the agent bound to the new conversation', async () => {
+      const row = (await rows(c)).find((a) => a.id === agentId)
+      return row?.sessionId && row.sessionId !== bound.sessionId ? row : null
+    }, 120_000, 500)
+    await until('the new conversation’s answer in its history', async () => {
+      const page = await c.request('session_get', { sessionId: agentId, limit: 20 }, 30_000)
+      // The prompt is only in the NEW conversation's file: finding it proves the agent reads that one now.
+      return JSON.stringify(page.events ?? page).includes('Reply with the single word: second') ? page : null
+    }, 120_000, 1_000)
   }, 900_000)
 })

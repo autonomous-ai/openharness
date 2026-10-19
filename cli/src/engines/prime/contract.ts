@@ -74,6 +74,10 @@ export default function (pi: ExtensionAPI) {
   const posted = new Set<string>();
   const started = new Set<string>(); // sessions this worker saw start, so a client opened them here
 
+  // When Prime fired the event, kept across retries: the daemon orders a session switch by it
+  // (X-Harness-Hook-Fired-At, src/hookServer.ts hookFiredAt) and holds one that has none.
+  const firedAt = new Map<string, number>();
+
   const register = async (ctx: any, attempt: number) => {
     const pane = process.env.TMUX_PANE;
     if (!pane) return;
@@ -85,6 +89,7 @@ export default function (pi: ExtensionAPI) {
     const file = ctx?.sessionManager?.getSessionFile?.() ?? null;
     const sessionId = ctx?.sessionManager?.getSessionId?.();
     if (!file || !sessionId || posted.has(sessionId)) return; // --no-session has no file to follow
+    if (!firedAt.has(sessionId)) firedAt.set(sessionId, Date.now());
     const head = header(file);
     // Prime writes the header just AFTER session_start fires (measured: its first entry 1ms later).
     if (!head) { retry(ctx, attempt); return; }
@@ -95,7 +100,11 @@ export default function (pi: ExtensionAPI) {
 { argument: 'port' },
 `/api/hook/session-start", {
         method: "POST",
-        headers: { "content-type": "application/json", "x-harness-hook-token": token },
+        headers: {
+          "content-type": "application/json",
+          "x-harness-hook-token": token,
+          "x-harness-hook-fired-at": String(firedAt.get(sessionId)),
+        },
         body: JSON.stringify({
           engine: "prime",
           pluginVersion: `,
@@ -109,7 +118,9 @@ export default function (pi: ExtensionAPI) {
           runtimeHints: [{ backend: "tmux", paneId: pane }],
         }),
       });
-      ok = res.ok;
+      // A 200 that says ignored is a refusal too: at startup the hook can beat the client's attach (measured).
+      const reply: any = await res.json().catch(() => ({}));
+      ok = res.ok && !reply?.ignored;
     } catch {}
     if (ok) { posted.add(sessionId); return; }
     // The daemon may not have seen the pane's client yet.
