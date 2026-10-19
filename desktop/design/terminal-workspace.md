@@ -31,8 +31,11 @@ same rule. The agent remains in its conversation and its terminal can be reopene
 The coordinating agent is labeled **Lead** throughout the Super Tab, including
 its terminal header; its first message is not its name.
 Super Tab membership protects an agent from automatic idle and parent cleanup,
-including while the host is offline. If an earlier build already stopped the
-agent, opening its terminal resumes the same saved conversation first.
+including while the host is offline and while the Super Tab is paused. Membership
+only in archived conversations does not, and protection lapses after a week without a
+confirmed roster (for example after sign-out). If the agent is already stopped,
+only **Open terminal** (in Participants or on a message) resumes its saved conversation; a restored
+or revisited terminal selection closes instead, so an explicit stop stays stopped.
 
 ## Keep the workspace structure
 

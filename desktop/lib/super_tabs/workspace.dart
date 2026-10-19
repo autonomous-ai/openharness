@@ -35,6 +35,10 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
   AppNotifier get app => widget.app;
   (String, String, String?, String, bool)? _terminalRequest;
   (String, String, String?, String, bool)? _readyRequest;
+  // Only Open terminal (Participants or a message) may relaunch a stopped
+  // member. A restored or revisited selection must not undo `harness close`
+  // or a person's stop.
+  (String, String)? _resumeRequest;
   Future<void> _terminalChange = Future.value();
   TerminalPane? _nativePane;
   Timer? _nativeHeartbeat;
@@ -75,6 +79,9 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     if (_terminalRequest == request) return;
     _clearNativeContext();
     _terminalRequest = request;
+    final resume =
+        agent != null && _resumeRequest == (controller.selectedId, agent.id);
+    _resumeRequest = null;
     bool current() =>
         mounted &&
         _terminalRequest == request &&
@@ -89,7 +96,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       ) async {
         if (!current()) return;
         if (agent != null) {
-          await _open(agent, controller, swarmId, request.$2, current);
+          await _open(agent, controller, swarmId, request.$2, current, resume);
           if (current()) setState(() => _readyRequest = request);
         } else {
           final tab = app.swarms.where((s) => s.id == swarmId).firstOrNull;
@@ -108,6 +115,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     String swarmId,
     String conversationId,
     bool Function() current,
+    bool resume,
   ) async {
     try {
       final tab = app.swarms.where((s) => s.id == swarmId).firstOrNull;
@@ -129,6 +137,27 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       // A narrowly shared harness remains its existing read-only observer.
       // Controlling a machine and joining a Super Tab are separate grants.
       if (controller.canWrite && machine?.machine.isShared != true) {
+        final stopped = machine?.agents
+            .where((a) => a.id == agent.harnessId)
+            .firstOrNull
+            ?.isStopped;
+        if (stopped == true) {
+          if (!resume) {
+            controller.selectTerminal(conversationId, null);
+            return;
+          }
+          // Older idle cleanup may already have stopped a contributed harness.
+          // Open its saved conversation through the existing resume receipt
+          // before issuing a native context, so a failed resume leaves none.
+          final resumeError = await app.resumeStoppedSession(
+            agent.machineId,
+            agent.harnessId,
+          );
+          if (!current()) return;
+          if (resumeError != null) {
+            throw SuperTabFailure('TERMINAL_UNAVAILABLE', resumeError);
+          }
+        }
         final issued = await controller.request(
           'POST',
           '/api/super-tabs/${controller.tabId}/native',
@@ -146,17 +175,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             'NATIVE_UNAVAILABLE',
             'Could not prepare terminal sharing. Try opening it again.',
           );
-        }
-        // Older idle cleanup may already have stopped a contributed harness.
-        // Open its saved conversation through the existing resume receipt before
-        // asking the host to prepare recording for that exact live session.
-        final resumeError = await app.resumeStoppedSession(
-          agent.machineId,
-          agent.harnessId,
-        );
-        if (!current()) return;
-        if (resumeError != null) {
-          throw SuperTabFailure('TERMINAL_UNAVAILABLE', resumeError);
         }
         final prepared = await app.superTabMachineRequest(agent.machineId, {
           'action': 'prepareNative',
@@ -289,6 +307,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   onAddAgent: widget.onAddAgent,
                   onOpenTerminal: (agent) {
                     _terminalRequest = null;
+                    _resumeRequest = (controller.selectedId, agent.id);
                     controller.selectTerminal(controller.selectedId, agent.id);
                     setState(() {});
                   },

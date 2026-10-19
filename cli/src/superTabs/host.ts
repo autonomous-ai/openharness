@@ -61,6 +61,7 @@ export class SuperTabHost {
   private readonly now: () => number
   private readonly write: (file: string, journal: Journal) => void
   private readonly log: (message: string) => void
+  private retentionError: string | null = null
   private readonly observers: typeof publishObservers
   private readonly active = new Set<string>()
   private readonly authorized = new Map<string, number>()
@@ -208,7 +209,15 @@ export class SuperTabHost {
     if (!Array.isArray(data)) throw new Error('Invalid Super Tab host roster.')
     // Multiply was closed by the ordinary 30-minute idle cleanup while still a
     // shared member. Membership outlives its task, terminal view and host process.
-    retainContributions(this.core.dataDir, this.machineId, data)
+    // Retention only pauses cleanup when it fails; it must never hold up delivery.
+    try {
+      retainContributions(this.core.dataDir, this.machineId, data)
+      this.retentionError = null
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (message !== this.retentionError) this.log(message)
+      this.retentionError = message
+    }
     this.observers(this.core.dataDir, this.machineId, data, requestedAt + 2500)
     // Runtime observations cannot delay the live input leases. A stale host
     // observation is fenced by the backend's per-agent configuration version.

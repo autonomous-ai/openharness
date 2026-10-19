@@ -314,7 +314,9 @@ export class SuperTabStore {
         for (const target of state.agents.filter(a => a.machineId === machineId && a.machineOwnerId === user.sub)) {
           try { agent(state, target.id); await this.agentGrant(tx, state, target) }
           catch (error) { if (error instanceof SuperTabError) continue; throw error }
-          result.push({ tabId: row.id, revision: row.revision, paused: state.paused, agent: target,
+          // `active` lets the host release members that are only in archived groups to automatic cleanup.
+          const active = state.conversations.some(c => !c.archived && c.agentIds.includes(target.id))
+          result.push({ tabId: row.id, revision: row.revision, paused: state.paused, active, agent: target,
             observers: people.filter(p => p.id !== user.sub).map(p => ({ email: p.email, userId: p.id })) })
         }
       }

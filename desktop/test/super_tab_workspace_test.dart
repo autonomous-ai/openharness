@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/workspace.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
@@ -56,9 +57,24 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      c.selectTerminal('offline', 'worker');
-      await tester.pumpAndSettle();
       final calls = f.connection.calls;
+      // Participants → Open terminal, the only way to relaunch a stopped member.
+      Future<void> openTerminal() async {
+        tester
+            .widget<SuperTabView>(find.byType(SuperTabView))
+            .onOpenTerminal(c.snapshot!.agents.single);
+        await tester.pumpAndSettle();
+      }
+
+      if (!scenario.viewer) {
+        // A restored or revisited selection never undoes an explicit stop.
+        c.selectTerminal('offline', 'worker');
+        await tester.pumpAndSettle();
+        expect(calls.where((call) => call.$1 == 'agent_resume'), isEmpty);
+        expect(c.terminalAgent('offline'), isNull);
+        expect(f.app.activeSwarm.panes, isEmpty);
+      }
+      await openTerminal();
       expect(calls.where((call) => call.$1 == 'agent_create'), isEmpty);
       expect(
         calls.where((call) => call.$1 == 'agent_resume'),
@@ -68,6 +84,13 @@ void main() {
         expect(c.terminalAgent('offline'), isNull);
         expect(
           calls.where((call) => call.$2['action'] == 'prepareNative'),
+          isEmpty,
+        );
+        // A failed resume leaves no native context behind on the backend.
+        expect(
+          calls.where(
+            (call) => (call.$2['path'] as String?)?.endsWith('/native') == true,
+          ),
           isEmpty,
         );
         expect(find.textContaining('did not come back'), findsOneWidget);
@@ -87,8 +110,7 @@ void main() {
           );
           await f.app.requestClosePane(f.app.activeSwarm.panes.single.id);
           await tester.pumpAndSettle();
-          c.selectTerminal('offline', 'worker');
-          await tester.pumpAndSettle();
+          await openTerminal();
           expect(
             calls.where((call) => call.$1 == 'agent_resume'),
             hasLength(1),
