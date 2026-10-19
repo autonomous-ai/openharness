@@ -1,8 +1,91 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/ws/local_cli_discovery.dart';
+import 'package:harness/ws/ws_conn.dart';
+
+/// The account's machine list, as `/api/machines` answers it now.
+class _Api extends ApiClient {
+  _Api() : super(config: AppConfig.dev, session: AuthSession());
+  List<Machine> listed = const [];
+
+  @override
+  Future<Map<String, dynamic>?> me() async => null;
+  @override
+  Future<Map<String, dynamic>?> desk() async => null;
+  @override
+  Future<Map<String, dynamic>?> daemonDevices() async => null;
+  @override
+  Future<List<Machine>> machines() async => listed;
+}
+
+class _Discovery extends LocalCliDiscovery {
+  _Discovery() : super(config: AppConfig.dev);
+  @override
+  Future<String?> computerId() async => 'aabbccddeeff0011';
+  @override
+  Future<LocalCliEndpoint?> discover({String? expectedComputerId}) async =>
+      LocalCliEndpoint(
+        computerId: 'aabbccddeeff0011',
+        wsUri: Uri.parse('ws://127.0.0.1:18473/ws'),
+        protocolVersion: localWsProtocolVersion,
+        terminalProtocolVersion: 1,
+        machineId: 'local-machine',
+        backendOnline: true,
+      );
+}
+
+class _Connection extends WsConn {
+  _Connection(String machineId)
+    : super(
+        wsBaseUrl: 'ws://fixture.invalid',
+        autonomousEnv: 'test',
+        machineId: machineId,
+        accessTokenProvider: (_, _) async => '',
+        onAuthFailure: (_) {},
+        onEvent: (_) {},
+        onStatus: (_) {},
+      );
+  @override
+  Future<void> waitUntilReady({required Duration timeout}) async {}
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async => const {'agents': []};
+}
+
+/// Signed in, with this computer's daemon and its machine connections faked.
+class _App extends AppNotifier {
+  _App(_Api api)
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+        localCliDiscovery: _Discovery(),
+        connectionForTest: _Connection.new,
+      ) {
+    this.api = api;
+  }
+  @override
+  Future<void> ensureCliDaemonReady() async {}
+}
+
+const _studio = Machine(
+  machineId: 'studio',
+  authMode: MachineAuthMode.remote,
+  name: 'MacBook Pro',
+  machineShare: MachineShare(
+    ownerName: 'Dee',
+    ownerEmail: 'dee@acme.io',
+    via: 'email',
+    added: true,
+  ),
+);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -51,6 +134,33 @@ void main() {
       ConnectionStatus.disconnected,
     );
   });
+
+  // Seen 2026-10-16: "Tuan at Autonomous stopped sharing Mac Auto with you." stayed up after Tuan
+  // shared it again and the app was using it.
+  test(
+    'the stopped-sharing message comes down once the machine is shared again',
+    () async {
+      final api = _Api();
+      app = _App(api)..status = AppStatus.authenticated;
+      app.machines = [_studio];
+      app.machineStates['studio'] = MachineState(_studio)
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected;
+      await app.handleEventForTest('studio', {
+        'type': 'machine_select_error',
+        'payload': {'machineId': 'studio', 'error': 'NOT_YOUR_MACHINE'},
+      });
+      expect(app.lastError, 'Dee stopped sharing MacBook Pro with you.');
+      // Still not shared: the list leaves it out, and the message stays.
+      await app.refreshMachines();
+      expect(app.lastError, 'Dee stopped sharing MacBook Pro with you.');
+      // Shared again.
+      api.listed = const [_studio];
+      await app.refreshMachines();
+      expect(app.lastError, isNull);
+      expect(app.sharingEnded('studio'), isNull);
+    },
+  );
 
   test('the account’s own machine refused is said in words, retryable only when retrying can help', () async {
     app = withMachine(

@@ -44,6 +44,14 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   private var tabShareActions: [String: Bool] = [:]
   private var tabShareItems: [String: NSMenuItem] = [:]
   private var removeFromTabItem: NSMenuItem?
+  /// File's Make Leader / Remove Leader: its title follows `leaderAction` (`make` or `remove`); hidden when Dart offers neither.
+  private var toggleLeaderItem: NSMenuItem?
+  private var leaderAction: String?
+  /// View's Show Tab Activity / Hide Tab Activity: shown and enabled with `canShowTabActivity` (the condition Dart's toggle
+  /// itself uses), titled by `tabActivityOpen`.
+  private var tabActivityItem: NSMenuItem?
+  private var canShowTabActivity = false
+  private var tabActivityOpen = false
   static let tabShareActionNames = ["invitePeople", "stopSharingTab", "moveTabHere", "leaveTab"]
   private let historyMenu = NSMenu(title: "History")
   private var historyMenuNeedsRebuild = false
@@ -89,9 +97,14 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         self.canClosePane = state["canClosePane"] as? Bool == true
         self.paneActions = state["paneActions"] as? [String: Bool] ?? [:]
         self.canShowAgentMessages = state["canShowAgentMessages"] as? Bool == true
+        self.canShowTabActivity = state["canShowTabActivity"] as? Bool == true
+        self.tabActivityOpen = state["tabActivityOpen"] as? Bool == true
+        self.updateTabActivityItem()
         self.tabShareActions = state["tabShareActions"] as? [String: Bool] ?? [:]
         self.updateTabShareItems()
         self.updateRemoveFromTabItem()
+        self.leaderAction = state["leaderAction"] as? String
+        self.updateToggleLeaderItem()
         self.canGoBack = state["canGoBack"] as? Bool == true
         self.canGoForward = state["canGoForward"] as? Bool == true
         self.updateHistory(state["history"] as? [[String: Any]] ?? [], closed: state["closedHistory"] as? [[String: Any]] ?? [])
@@ -149,7 +162,7 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   }
 
   private func sendTabAction(_ method: String, arguments: Any?) {
-    guard ["daemon", "subscriptions", "focusedContext", "harnessControls", "resourceMonitor", "machineControls", "modelControls", "select", "close", "new", "rename", "commands", "notifications", "notificationInbox", "openStatusHarness", "store", "devices", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "removeFromTab", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
+    guard ["daemon", "subscriptions", "focusedContext", "harnessControls", "resourceMonitor", "machineControls", "modelControls", "select", "close", "new", "rename", "commands", "notifications", "notificationInbox", "openStatusHarness", "store", "devices", "sessions", "models", "addAgent", "newAgent", "newTerminal", "cloneAgent", "restartAgent", "shareAgent", "removeFromTab", "toggleLeader", "toggleTabActivity", "toggleViewer", "toggleComposer", "movePaneToTab", "runLocalModel", "splitRight", "splitDown", "zoomPane", "pinPane", "machineDestination", "machineAgent", "manageMachines", "machineList"].contains(method) else {
       channel.invokeMethod(method, arguments: arguments)
       return
     }
@@ -325,7 +338,8 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       let symbols = [
         "new": "plus.square", "newAgent": "plus", "sessions": "arrow.up.right.square", "addAgent": "folder", "newTerminal": "terminal",
         "cloneAgent": "plus.square.on.square", "restartAgent": "arrow.clockwise",
-        "shareAgent": "square.and.arrow.up", "removeFromTab": "minus.circle",
+        "shareAgent": "square.and.arrow.up", "removeFromTab": "minus.circle", "toggleLeader": "star",
+        "toggleTabActivity": "sidebar.left",
         "renameActive": "pencil", "closeActive": "xmark",
         "showAgentMessages": "text.bubble", "invitePeople": "person.2", "stopSharingTab": "person.2.slash",
         "moveTabHere": "laptopcomputer.and.arrow.down", "leaveTab": "rectangle.portrait.and.arrow.right",
@@ -360,6 +374,9 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     // Takes the focused pane's own harness off the shared tab it is in (1c); shown only where Dart offers it.
     removeFromTabItem = add(file, "Remove from Tab", "", "removeFromTab")
     updateRemoveFromTabItem()
+    // Makes the focused pane's harness the leader of its tab, or takes that back (Dart: `agent_messages.make_leader` / `.remove_leader`).
+    toggleLeaderItem = add(file, "Make Leader", "", "toggleLeader")
+    updateToggleLeaderItem()
     file.addItem(.separator())
     add(file, "New Tab", "t", "new")
     add(file, "Rename Tab", "r", "renameActive", [.command, .shift])
@@ -401,6 +418,10 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
       view.addItem(.separator())
       add(view, "Toggle Viewer", "", "toggleViewer")
       add(view, "Toggle Message Composer", "", "toggleComposer")
+      // The active tab's Tab Activity sidebar (Dart: `agent_messages.activity`); shown only where the tab has Agent
+      // Messages, titled by whether it is open.
+      tabActivityItem = add(view, "Show Tab Activity", "", "toggleTabActivity")
+      updateTabActivityItem()
     }
     installTerminalFindMenu(main)
   }
@@ -546,10 +567,11 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
     let action = menuItem.representedObject as? String ?? ""
     // Privacy settings must remain reachable before a workspace or account exists.
     if action == "settings" && menuItem.action == #selector(menuAction(_:)) { return true }
-    if ["restartAgent", "shareAgent", "removeFromTab", "toggleViewer", "toggleComposer"].contains(action) {
+    if ["restartAgent", "shareAgent", "removeFromTab", "toggleLeader", "toggleViewer", "toggleComposer"].contains(action) {
       return actionsEnabled && paneActions[action] == true
     }
     if action == "showAgentMessages" { return actionsEnabled && canShowAgentMessages }
+    if action == "toggleTabActivity" { return actionsEnabled && canShowTabActivity }
     if Self.tabShareActionNames.contains(action) { return actionsEnabled && tabShareActions[action] == true }
     if menuItem.action == #selector(machineAction(_:)) {
       return actionsEnabled && machines.contains(where: { $0.id == action })
@@ -575,6 +597,18 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
   /// Remove from Tab shows only for a focused harness a shared tab lists.
   private func updateRemoveFromTabItem() {
     removeFromTabItem?.isHidden = paneActions["removeFromTab"] != true
+  }
+
+  /// Make Leader or Remove Leader, as Dart says for the focused pane; hidden when it offers neither.
+  private func updateToggleLeaderItem() {
+    toggleLeaderItem?.isHidden = paneActions["toggleLeader"] != true || leaderAction == nil
+    toggleLeaderItem?.title = leaderAction == "remove" ? "Remove Leader" : "Make Leader"
+  }
+
+  /// Show Tab Activity or Hide Tab Activity, as the active tab's sidebar stands; hidden where the tab has no Agent Messages.
+  private func updateTabActivityItem() {
+    tabActivityItem?.isHidden = !canShowTabActivity
+    tabActivityItem?.title = tabActivityOpen ? "Hide Tab Activity" : "Show Tab Activity"
   }
 
   /// File's sharing rows show only where the active tab offers them.
@@ -1964,6 +1998,8 @@ private final class SwarmTabStrip: NSView {
   private let scroll = SwarmStripScrollView()
   private let document = NSView()
   fileprivate let newButton = SwarmPlainIconButton()
+  /// Tab Activity's sidebar for the active tab, just after New Tab; hidden where the tab cannot show it.
+  fileprivate let tabActivityButton = SwarmPlainIconButton()
   fileprivate let contextButton = SwarmContextButton()
   fileprivate let subscriptionUsageButton = SwarmContextButton()
   fileprivate let harnessMonitorButton = SwarmContextButton()
@@ -2028,6 +2064,17 @@ private final class SwarmTabStrip: NSView {
     newButton.image = HarnessControlSymbols.image("plus")
     newButton.title = ""
     newButton.imagePosition = .imageOnly
+    tabActivityButton.isBordered = false
+    tabActivityButton.focusRingType = .none
+    tabActivityButton.title = ""
+    tabActivityButton.image = HarnessControlSymbols.image("sidebar.left", description: "Show Tab Activity")
+    tabActivityButton.imagePosition = .imageOnly
+    tabActivityButton.isEnabled = false
+    tabActivityButton.isHidden = true
+    tabActivityButton.target = self
+    tabActivityButton.action = #selector(toggleTabActivity)
+    tabActivityButton.setAccessibilityLabel("Show Tab Activity")
+    addSubview(tabActivityButton)
     contextButton.isBordered = false
     contextButton.alignment = .right
     contextButton.target = self
@@ -2319,7 +2366,17 @@ private final class SwarmTabStrip: NSView {
       accountButton.setAccessibilityLabel(accountKind == .signIn ? SwarmAccountButton.label : "Account")
       accountButton.setAccessibilityHelp(accountButton.toolTip)
     }
-    var children: [Any] = [scroll, newButton, searchButton]
+    // Tab Activity's button: only where Dart's toggle would act, titled by whether the sidebar is open.
+    let tabActivityOpen = state["tabActivityOpen"] as? Bool == true
+    let tabActivityTitle = tabActivityOpen ? "Hide Tab Activity" : "Show Tab Activity"
+    tabActivityButton.isHidden = state["canShowTabActivity"] as? Bool != true
+    tabActivityButton.setAccessibilityHidden(tabActivityButton.isHidden)
+    tabActivityButton.setAccessibilityLabel(tabActivityTitle)
+    tabActivityButton.toolTip = state["tabActivityTooltip"] as? String ?? tabActivityTitle
+    tabActivityButton.setAccessibilityHelp(tabActivityButton.toolTip)
+    var children: [Any] = [scroll, newButton]
+    if !tabActivityButton.isHidden { children.append(tabActivityButton) }
+    children.append(searchButton)
     if !phoneButton.isHidden { children.append(phoneButton) }
     if !devicesButton.isHidden { children.append(devicesButton) }
     children.append(storeButton)
@@ -2351,6 +2408,8 @@ private final class SwarmTabStrip: NSView {
     searchButton.setAccessibilityHelp(searchButton.toolTip)
     phoneButton.foreground = palette.navigationForeground
     phoneButton.isEnabled = actionsEnabled && !phoneButton.isHidden
+    tabActivityButton.foreground = palette.navigationForeground
+    tabActivityButton.isEnabled = actionsEnabled && !tabActivityButton.isHidden
     phoneButton.toolTip = state["addPhoneTooltip"] as? String ?? "Add Phone"
     phoneButton.setAccessibilityHelp(phoneButton.toolTip)
     storeButton.toolTip = state["storeTooltip"] as? String ?? "Explore Harness Store"
@@ -2447,6 +2506,7 @@ private final class SwarmTabStrip: NSView {
       tab.activity = HarnessNativeActivity(row["activity"] as? [String: Any])
       tab.canShowAgentMessages = row["canShowAgentMessages"] as? Bool == true
       tab.canInvitePeople = row["canInvitePeople"] as? Bool == true
+      tab.superTabPaused = row["superTabPaused"] as? Bool
       tab.applyShared(row["shared"] as? [String: Any])
       tab.emit = { [weak self, weak tab] method, args in
         guard let self, let tab, self.actionsEnabled,
@@ -2611,7 +2671,8 @@ private final class SwarmTabStrip: NSView {
     searchButton.frame = NSRect(x: searchEdge - iconWidth,
       y: (bounds.height - toolHeight) / 2, width: iconWidth, height: toolHeight)
     // Only navigation actions share the tab row. Context has the full footer.
-    let tabBudget = max(0, searchButton.frame.minX - cell * 6)
+    let tabActivityWidth = tabActivityButton.isHidden ? 0 : iconWidth
+    let tabBudget = max(0, searchButton.frame.minX - cell * 6 - tabActivityWidth)
     let tabWidth = min(tabBudget, max(SwarmTabButton.minimumLayoutWidth,
       min(SwarmTabButton.maximumLayoutWidth, floor(tabBudget / CGFloat(max(1, tabs.count))))))
     let widths = Array(repeating: tabWidth, count: tabs.count)
@@ -2628,6 +2689,8 @@ private final class SwarmTabStrip: NSView {
     }
     newButton.frame = NSRect(x: scroll.frame.maxX, y: (bounds.height - toolHeight) / 2,
       width: 32, height: toolHeight)
+    tabActivityButton.frame = NSRect(x: newButton.frame.maxX, y: (bounds.height - toolHeight) / 2,
+      width: tabActivityWidth, height: toolHeight)
     if statusBar.superview == nil {
       statusBar.setFrameSize(NSSize(width: bounds.width, height: preferredStatusBarHeight))
     }
@@ -2785,6 +2848,9 @@ private final class SwarmTabStrip: NSView {
           let agentId = shareTarget?["agentId"] as? String else { return }
     emit?("shareAgent", ["paneId": paneId, "machineId": machineId, "agentId": agentId])
   }
+  @objc private func toggleTabActivity() {
+    if actionsEnabled && tabActivityButton.isEnabled { emit?("toggleTabActivity", nil) }
+  }
   @objc private func newSwarm() {
     if actionsEnabled && newButton.isEnabled { emit?("new", nil) }
   }
@@ -2857,6 +2923,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   var canInvitePeople = false {
     didSet { if canInvitePeople != oldValue { updateMessagesItems() } }
   }
+  var superTabPaused: Bool? { didSet { updateMessagesItems() } }
+  private var pauseSuperTabItem: NSMenuItem?
   func applyShared(_ shared: [String: Any]?) {
     let count = shared?["count"] as? Int
     let role = count == nil ? nil : shared?["role"] as? String
@@ -3020,6 +3088,7 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
       return item
     }
     _ = item("Rename Tab…", #selector(renameSwarm))
+    pauseSuperTabItem = item("Pause new work", #selector(pauseSuperTab))
     let separator = NSMenuItem.separator()
     menu.addItem(separator)
     messagesSeparator = separator
@@ -3089,6 +3158,8 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   /// The menu's Show Agent Messages (only where the tab has a log), its sharing rows, and their separator when any
   /// of them shows.
   private func updateMessagesItems() {
+    pauseSuperTabItem?.isHidden = superTabPaused == nil
+    pauseSuperTabItem?.title = superTabPaused == true ? "Resume new work" : "Pause new work"
     for item in messagesItems { item.isHidden = !canShowAgentMessages }
     for (action, item) in shareItems { item.isHidden = !offers(action) }
     messagesSeparator?.isHidden = (messagesItems + Array(shareItems.values)).allSatisfy(\.isHidden)
@@ -3304,6 +3375,9 @@ private final class SwarmTabButton: NSView, NSDraggingSource, NSMenuItemValidati
   @objc private func selectSwarm() { if actionsEnabled { emit?("select", ["id": swarmId]) } }
   @objc private func closeSwarm() { if actionsEnabled { emit?("close", ["id": swarmId]) } }
   @objc private func renameSwarm() { if actionsEnabled { emit?("rename", ["id": swarmId]) } }
+  @objc private func pauseSuperTab() {
+    if actionsEnabled && superTabPaused != nil { emit?("pauseSuperTab", ["id": swarmId]) }
+  }
   @objc private func showMessages() {
     if actionsEnabled && canShowAgentMessages { emit?("showAgentMessages", ["id": swarmId]) }
   }

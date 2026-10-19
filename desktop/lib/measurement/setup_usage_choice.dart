@@ -3,6 +3,12 @@ import 'package:flutter/material.dart';
 import '../shared/widgets/setting_row.dart';
 import 'product_measurement.dart';
 
+/// What sharing product usage data means, said the same wherever its switch is: Settings ▸ Experimental's row, signed
+/// in or not, and the web's Privacy page.
+const productUsageDetail =
+    'Help improve Harness by sharing usage counts and duration statistics. '
+    'Your prompts, code, files, and conversations are never included.';
+
 /// Settings-only control for this computer before an account preference is known.
 class SetupUsageChoice extends StatefulWidget {
   const SetupUsageChoice({super.key, required this.measurement});
@@ -47,7 +53,7 @@ class _SetupUsageChoiceState extends State<SetupUsageChoice> {
     listenable: widget.measurement,
     builder: (context, _) => SettingRow(
       title: 'Share product usage data',
-      inlineControl: true,
+      detail: productUsageDetail,
       controlSemanticLabel: 'Share product usage data',
       control: Switch(
         key: const ValueKey('product-usage-sharing'),

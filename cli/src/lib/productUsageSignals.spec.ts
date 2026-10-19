@@ -1,6 +1,9 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { expect, it, vi } from 'vitest'
-import { productObservation, productUsageIntent, productUsageLaunch, productUsageRequest, productUsageSource } from './productUsageSignals.js'
-import { PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_SETUP_METRICS } from './productUsageContract.js'
+import { failureKind, launchErrorCode, productObservation, productUsageIntent, productUsageLaunch, productUsageRequest, productUsageSource } from './productUsageSignals.js'
+import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_SETUP_METRICS } from './productUsageContract.js'
 import { HEALTH_MEASURES } from './productHealthContract.js'
 
 it('separates automated polling, tool and app RPCs without inspecting error objects or content', () => {
@@ -76,8 +79,91 @@ it('reduces durable launch statuses to fixed categories without forwarding error
   const emit = vi.fn(), id = 'fixture-creation-one'
   productUsageLaunch('agent_create', id, emit)(undefined, 'pending', false, 'install')
   productUsageLaunch('agent_create_status', id, emit)('PRIVATE_CANARY', 'failed', false, 'PRIVATE_CANARY')
-  expect(emit.mock.calls.flat()).toEqual([{ id, phase: 'start' }, { id, phase: 'pending', wait: 'install' }, { id, phase: 'failed', failure: 'other' }])
+  expect(emit.mock.calls.flat()).toEqual([{ id, phase: 'start', engine: 'other' }, { id, phase: 'pending', wait: 'install' },
+    { id, phase: 'failed', failure: 'other', code: 'unlisted' }])
   expect(JSON.stringify(emit.mock.calls)).not.toContain('PRIVATE_CANARY')
+})
+
+it.each([
+  ['INVALID_PROMPT', 'invalid_prompt'], ['ENGINE_INSTALL_FAILED', 'engine_install_failed'], ['CREATION_STORAGE_FAILED', 'creation_storage_failed'],
+  ['PRIVATE_ERROR_WITH_PATH', 'unlisted'], ['__proto__', 'unlisted'], ['UNLISTED', 'unlisted'], ['NONE', 'unlisted'],
+  ['INTERNAL'.repeat(20), 'unlisted'], [undefined, 'none'], [{ code: 'INVALID_PROMPT' }, 'none'],
+])('names the code of an `other` launch failure %s as %s, from the fixed list only', (error, code) => {
+  expect(launchErrorCode(error)).toBe(code)
+  const emit = vi.fn()
+  productUsageLaunch('agent_create_status', 'fixture-creation-one', emit)(error, 'failed', false, undefined)
+  expect(emit).toHaveBeenCalledWith({ id: 'fixture-creation-one', phase: 'failed', failure: 'other', code })
+  expect(LAUNCH_ERROR_CODES).toContain(code)
+})
+it('names no code for a failure of a fixed kind, which its kind already says', () => {
+  const emit = vi.fn()
+  productUsageLaunch('agent_create_status', 'fixture-creation-one', emit)('TMUX_UNAVAILABLE', 'failed', false, undefined)
+  expect(emit).toHaveBeenCalledWith({ id: 'fixture-creation-one', phase: 'failed', failure: 'setup' })
+})
+
+it('counts the code of an `other` create or resume refusal beside its kind, so each code family adds up to its `_other`', () => {
+  const emit = vi.fn()
+  productUsageRequest('agent_create', emit, () => 0, 'app')('PROMPT_TOO_LONG', undefined, false)
+  productUsageRequest('agent_create', emit, () => 0, 'app')('PRIVATE_ERROR_WITH_PATH', 'failed', false)
+  productUsageRequest('agent_create', emit, () => 0, 'app')(undefined, 'failed', false)
+  productUsageRequest('agent_create', emit, () => 0, 'app')('INVALID_CWD', undefined, false)
+  productUsageRequest('agent_resume', emit, () => 0, 'app')('SESSION_NOT_FOUND', 'failed', false)
+  productUsageRequest('agent_resume', emit, () => 0, 'app')(undefined, undefined, false, false)
+  // Other actions keep their kinds only.
+  productUsageRequest('agent_restart', emit, () => 0, 'app')('RESTART_FAILED', 'failed', false)
+  const names: string[] = emit.mock.calls.flat()
+  const family = (prefix: string) => names.filter(name => name.startsWith(prefix)).sort()
+  expect(family('create_error_code_')).toEqual(['create_error_code_none', 'create_error_code_prompt_too_long', 'create_error_code_unlisted'])
+  expect(names.filter(name => name === 'create_error_other')).toHaveLength(3)
+  expect(family('resume_error_code_')).toEqual(['resume_error_code_none', 'resume_error_code_session_not_found'])
+  expect(names.filter(name => name === 'resume_error_other')).toHaveLength(2)
+  expect(names.some(name => name.startsWith('restart_error_code_'))).toBe(false)
+  for (const name of names) expect(PRODUCT_USAGE_METRICS).toContain(name)
+  expect(JSON.stringify(names)).not.toContain('PRIVATE_')
+})
+
+it('says which engine a new launch asked for, as a fixed name', () => {
+  const emit = vi.fn()
+  for (const engine of ['claude', 'codex', 'opencode', 'cursor', 'other', 'PRIVATE_ENGINE', undefined, { name: 'claude' }]) {
+    productUsageLaunch('agent_create', 'fixture-creation-one', emit, engine)
+  }
+  expect(emit.mock.calls.map(([signal]) => signal.engine)).toEqual(['claude', 'codex', 'opencode', 'other', 'other', 'other', 'other', 'other'])
+  // A status poll is no new launch: it says no engine.
+  emit.mockClear(); productUsageLaunch('agent_create_status', 'fixture-creation-one', emit, 'claude')
+  expect(emit).not.toHaveBeenCalled()
+})
+
+it('hands a created launch\'s starting agent on for its start, or says its start had already failed', () => {
+  const emit = vi.fn(), id = 'fixture-creation-one'
+  const done = (agent: unknown) => productUsageLaunch('agent_create_status', id, emit)(undefined, 'created', agent, undefined)
+  done({ id: 'fixture-agent', launch: { state: 'starting' }, name: 'PRIVATE_CANARY' })
+  done({ id: 'fixture-agent', launch: { state: 'failed', error: 'ENGINE_DID_NOT_START', detail: 'PRIVATE_CANARY' } })
+  done({ id: 'fixture-agent', launch: { state: 'failed', error: 'PRIVATE_CANARY' } })
+  done({ id: 'fixture-agent', launch: { state: 'ready' } })
+  done({ id: 'x'.repeat(257), launch: { state: 'starting' } })
+  done(true)
+  expect(emit.mock.calls.flat()).toEqual([
+    { id, phase: 'created', agent: 'fixture-agent' },
+    { id, phase: 'created', late: true, code: 'engine_did_not_start' },
+    { id, phase: 'created', late: true, code: 'unlisted' },
+    { id, phase: 'created' }, { id, phase: 'created' }, { id, phase: 'created' },
+  ])
+  expect(JSON.stringify(emit.mock.calls)).not.toContain('PRIVATE_CANARY')
+})
+
+it('keeps every refusal core/agents can answer named: in a fixed kind, or in the code list', () => {
+  // A code missing from both reads as `unlisted` and says nothing again (production counters, 2026-10-16).
+  const root = fileURLToPath(new URL('../core/agents/', import.meta.url))
+  const codes = new Set<string>()
+  for (const name of readdirSync(root)) {
+    if (!name.endsWith('.ts') || name.endsWith('.spec.ts')) continue
+    for (const match of readFileSync(join(root, name), 'utf8').matchAll(/error: '([A-Z][A-Z0-9_]*)'/g)) codes.add(match[1])
+  }
+  expect(codes.size).toBeGreaterThan(40)
+  const unnamed = [...codes].filter(code => failureKind(code) === 'other' && launchErrorCode(code) === 'unlisted')
+  expect(unnamed, 'add each to LAUNCH_ERROR_CODES (lib/productUsageContract.ts and its backend copy)').toEqual([])
+  // The codes the new-pane watcher sets after a create replied, which no `error: '…'` literal names.
+  for (const code of ['ENGINE_DID_NOT_START', 'ENGINE_NOT_INSTALLED', 'START_TIMEOUT']) expect(launchErrorCode(code)).toBe(code.toLowerCase())
 })
 
 
@@ -114,6 +200,9 @@ it.each([
   ['GRID_CREDENTIAL_REQUIRED', 'credentials_missing'], ['AGENT_BUSY', 'busy'],
   ['RESUME_PREPARATION_FAILED', 'preparation_failed'], ['RESUME_FAILED', 'launch_failed'],
   ['INVALID_PERMISSION_MODE', 'invalid'], ['PRIVATE_ERROR_WITH_PATH', 'other'], ['__proto__', 'other'],
+  // Fell to `other` until 2026-10-16's counters showed them.
+  ['ENGINE_DID_NOT_START', 'launch_failed'], ['ENGINE_NOT_INSTALLED', 'launch_failed'], ['START_TIMEOUT', 'launch_failed'],
+  ['DELETE_IN_PROGRESS', 'busy'], ['MISSING_AGENT_ID', 'invalid'],
 ])('reduces resume condition %s to an approved counter without retaining it', (error, reason) => {
   const emit = vi.fn(), done = productUsageRequest('agent_resume', emit, () => 0, 'app')
   done(error, 'failed', false); done(error, 'failed', false)

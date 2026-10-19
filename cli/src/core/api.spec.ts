@@ -6,6 +6,17 @@ import { FAIL, readFallback } from './serviceHost.js'
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
 describe('the core API services stand on', () => {
+  it('exposes an optional native-turn observer without importing feature state', () => {
+    const nativeTurns = vi.fn(async () => null)
+    expect(createCoreApi({ ...coreDeps(), nativeTurns }).transcripts.nativeTurns).toBe(nativeTurns)
+    expect(createCoreApi(coreDeps()).transcripts.nativeTurns).toBeUndefined()
+  })
+  it('carries the existing native creation-status provider without inventing one for an older core', async () => {
+    const creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'cancelled' as const }))
+    const core = createCoreApi({ ...coreDeps(), creationStatus })
+    expect(await core.agents.creationStatus!('creation-fixture-1234')).toEqual({ creationId: 'creation-fixture-1234', state: 'cancelled' })
+    expect(createCoreApi(coreDeps()).agents.creationStatus).toBeUndefined()
+  })
   it('gives a service with no lane of the core\'s nothing to seal with, and never its frame back in the clear', async () => {
     await expect(LANE_OFF.hello('m', 'pub')).rejects.toThrow(/no E2EE identity/)
     expect(await LANE_OFF.welcome('m', {})).toBe(false)
@@ -40,6 +51,7 @@ describe('the core API services stand on', () => {
     expect(DELIVERIES_OFF.deliver('a', 'hello', 'd1')).toBeUndefined()
     expect(DELIVERIES_OFF.cancelDelivery('d1')).toBe(false)
     expect(DELIVERIES_OFF.onDelivery(() => {})()).toBeUndefined()
+    expect(await DELIVERIES_OFF.leaseDeliveries('test', {})).toBe(false)
   })
 
   it('resolves an agent in a service\'s own copy as the registry does: by agent id, then session id', () => {
@@ -88,7 +100,7 @@ describe('the core API services stand on', () => {
       tabRelay: TAB_RELAY_OFF,
       connectorVault: CONNECTOR_VAULT_OFF,
       observer: vi.fn(() => true),
-      turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []), deliver: vi.fn(), cancelDelivery: vi.fn(() => true), onDelivery: vi.fn(() => () => {}) },
+      turns: { send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []), deliver: vi.fn(), cancelDelivery: vi.fn(() => true), onDelivery: vi.fn(() => () => {}), leaseDeliveries: vi.fn(async () => false) },
       questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => true) },
       machine: { id: vi.fn(() => 'machine-1'), computerId: vi.fn(() => 'computer-1'), name: vi.fn(() => 'Studio') },
       activityText: vi.fn(async () => 'Reading 3 files'),
@@ -125,6 +137,9 @@ describe('the core API services stand on', () => {
     const terminals = { ...TERMINALS_OFF, open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })), watch: TERMINALS_OFF.watch }
     expect(createCoreApi({ ...deps, terminals }).terminals).toBe(terminals)
     expect(core.agents.all().map((s) => s.agentId)).toEqual(['live', 'stopped'])
+    expect(await core.agents.stopped!('live')).toBe(false)
+    expect(await core.agents.stopped!('unknown')).toBe(false)
+    expect(await core.agents.stopped!('stopped')).toBe(true)
     expect(core.agents.live().map((s) => s.agentId)).toEqual(['live'])
     expect(core.agents.displayName).toBe(projectDisplayName)
     expect(core.transcripts.databaseHistory).toBe(deps.databaseHistory)
@@ -174,6 +189,10 @@ describe('the core API services stand on', () => {
     await expect(core.agents.activity(['a1'])).resolves.toEqual({})
     const activity = vi.fn(async () => ({ a1: 'working' as const }))
     await expect(createCoreApi({ ...deps, activity }).agents.activity(['a1'])).resolves.toEqual({ a1: 'working' })
+    // The same for the one-line summaries (ruling T2): none from a core that was not given the reader.
+    await expect(core.agents.summaries(['a1'])).resolves.toEqual({})
+    const summaries = vi.fn(async () => ({ a1: 'Fix the login' }))
+    await expect(createCoreApi({ ...deps, summaries }).agents.summaries(['a1'])).resolves.toEqual({ a1: 'Fix the login' })
     expect(core.account.signedIn).toBe(deps.signedIn)
     expect(core.account.environment).toBe(deps.environment)
     expect(core.account.machines).toBe(deps.machines)
@@ -316,7 +335,7 @@ describe('the core API services stand on', () => {
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null })
+    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 

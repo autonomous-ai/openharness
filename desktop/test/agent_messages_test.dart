@@ -595,13 +595,13 @@ void main() {
       final api = await joinAgentMessagesDesk(app);
       expect(api.reads, 1);
       expect(app.agentMessages.loaded, isTrue);
-      // desk_changed no longer means a tab's flag moved: nothing to read.
+      // desk_changed may have moved a tab's leader: the settings are read again.
       await app.handleEventForTest('studio', {
         'type': 'desk_changed',
         'payload': {'revision': 0},
       });
       await pumpEventQueue();
-      expect(api.reads, 1);
+      expect(api.reads, 2);
       app.expireSessionForTest('Signed out');
       expect(app.agentMessages.loaded, isFalse);
     });

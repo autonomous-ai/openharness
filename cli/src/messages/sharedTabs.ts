@@ -91,6 +91,10 @@ export interface SharedTabsDeps {
   /** The owner's own panes in a desk tab, with each harness's name and engine, from the account's directory; null when
    *  the directory cannot be read, so that a roster never loses the owner's harnesses to a failed read. */
   ownPanes(tabId: string): Promise<Pane[] | null>
+  /** The leader the account's tab setting names for a desk tab, from its directory: null for none, or one that may lead it
+   *  no more. Undefined when it is not known: the directory not read yet (a failed read keeps the last good listing), or
+   *  a backend that lists no leaders; the roster then keeps its own. Unset, a roster keeps its own leader too. */
+  ownLeader?(tabId: string): Promise<{ machineId: string; agentId: string } | null | undefined>
   /** This account's machines' identity keys, by machine id, each as that machine reports it; null when it cannot be asked. */
   machineKey(machineId: string): Promise<string | null>
   /** An `agent_messages` request to another machine of this account, over the paired relay: its answer;
@@ -300,7 +304,7 @@ export class SharedTabs {
       if (held && held.sharedTabId !== sharedTabIdOf(me.accountId, tabId)) throw shareIdMismatch()
       if (held) { await this.reread(shares); return { sharedTabId: held.sharedTabId } }
       const own = await this.ownHarnesses(tabId, [])
-      const { roster: draft, cut } = composeCut(await this.empty(UNNAMED, name), { own: own ?? [] })
+      const { roster: draft, cut } = composeCut(await this.empty(UNNAMED, name), { own: own ?? [], ...await this.leaderOf(tabId) })
       // Version 1, or past the version a share of this tab stopped at: shared again, it carries on from there.
       const first = await this.put(tabId, draft)
       const sharedTabId = String(first.data.sharedTabId)
@@ -338,13 +342,24 @@ export class SharedTabs {
     })
   }
 
-  setLeader(sharedTabId: string, leader: { machineId: string; agentId: string } | null): Promise<void> {
-    return this.serial(async () => {
-      const roster = await this.authority(sharedTabId)
-      const wanted = leader && harnessRef(leader)
-      if (leader && !(wanted && roster.harnesses.some((h) => same(h, wanted)))) throw new MessageError('NOT_IN_TAB', 'That harness is not in the tab.')
-      await this.change(roster, { leader: wanted })
-    })
+  /**
+   * The person chose the tab's leader, from any computer of the owner's account: written to the owner's tab setting
+   * (`PATCH /api/agent-messages/tabs/<tabId>`), the one source of a tab's leader, shared or not (the spec's "A leader in
+   * every tab"). Nothing is signed here: the backend tells every computer of the account (`desk_changed`), and the one
+   * that shares the tab signs its next roster with it (`reshare`), at once or when it wakes. 1c let only that computer
+   * change the leader, so the owner could not from a laptop while the studio slept. The backend checks that the leader
+   * is a harness of the tab on a machine of the account (`INVALID_LEADER`).
+   */
+  async setLeader(sharedTabId: string, leader: { machineId: string; agentId: string } | null): Promise<void> {
+    const wanted = leader && harnessRef(leader)
+    if (leader && !wanted) throw new MessageError('INVALID_LEADER', 'Choose a harness in this tab.')
+    const shares = await this.shares()
+    if (!shares) throw unavailable()
+    const share = shares.find((s) => s.sharedTabId === sharedTabId && s.owner)
+    if (!share) throw new MessageError('NOT_OWNER', 'Only the account that shares this tab can choose its leader.')
+    // A share listed under an id the backend did not derive from the account and the tab names some other desk tab.
+    if (sharedTabId !== sharedTabIdOf((await this.self()).accountId, share.tabId)) throw shareIdMismatch()
+    await this.call('PATCH', `/api/agent-messages/tabs/${encodeURIComponent(share.tabId)}`, { leader: wanted })
   }
 
   removeMember(sharedTabId: string, accountId: string): Promise<void> {
@@ -455,7 +470,7 @@ export class SharedTabs {
       this.owned.set(sharedTabId, { tabId: share.tabId, floor: Math.max(share.version, base?.version ?? 0), ...(keyChange ? { keyChange } : {}) })
       const start = base ?? { ...await this.empty(sharedTabId, parseRoster(signedOf(share.roster)?.body ?? '')?.name ?? ''), version: 0 }
       const own = await this.ownHarnesses(share.tabId, start.harnesses)
-      await this.change(start, { members: share.members, invites: share.invites, ...(own ? { own } : {}) }, true, true)
+      await this.change(start, { members: share.members, invites: share.invites, ...(own ? { own } : {}), ...await this.leaderOf(share.tabId) }, true, true)
       return { sharedTabId, version: this.owned.get(sharedTabId)!.floor }
     })
   }
@@ -568,7 +583,7 @@ export class SharedTabs {
     }
     const base = held ?? { ...await this.empty(id, parseRoster(signed?.body ?? '')?.name ?? ''), version: 0 }
     const own = await this.ownHarnesses(share.tabId, base.harnesses)
-    await this.change(base, { members: share.members, invites: share.invites, ...(own ? { own } : {}) }, !held)
+    await this.change(base, { members: share.members, invites: share.invites, ...(own ? { own } : {}), ...await this.leaderOf(share.tabId) }, !held)
   }
 
   /** A share of another computer: a member's, whose owner key was pinned when the person accepted, on this computer or
@@ -633,6 +648,14 @@ export class SharedTabs {
     const me = await this.self()
     return { sharedTabId, version: 1, name: name.slice(0, 200), leader: null, members: [], harnesses: [], invites: [],
       owner: { accountId: me.accountId, email: me.email, machineId: me.machineId, machinePublicKey: await this.myPub() } }
+  }
+
+  /** The roster's leader as the owner's tab setting names it (`setLeader`): the setting is the one source, so a roster
+   *  this computer signs follows it, a leader that may lead no more included. Nothing while the setting is not known: the
+   *  roster keeps its own. `composeCut` drops one the roster does not list. */
+  private async leaderOf(tabId: string): Promise<{ leader?: Roster['leader'] }> {
+    const leader = await this.deps.ownLeader?.(tabId)
+    return leader === undefined ? {} : { leader }
   }
 
   /** The desk tab's panes as the owner's harnesses, each with its machine's key; a machine that cannot be asked keeps

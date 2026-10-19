@@ -9,7 +9,7 @@ let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'agent-settings-')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); clearAuthSession() })
 
-const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false }
+const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false }
 const session = (over: Partial<AuthSession> = {}): AuthSession =>
   ({ version: 1, accessToken: 't', autonomousEnv: 'prod', computerId: 'c', machineId: 'm1', updatedAt: 0, ...over })
 const owner = { accountId: 'acct', machineId: 'm1' }
@@ -19,8 +19,8 @@ describe('what the person lets agents do', () => {
     // Off for all: none had been announced (owner, 2026-10-12).
     expect(readAgentSettings(dir, session())).toEqual(OFF)
     expect(readAgentSettings(dir, null)).toEqual(OFF)
-    expect(AGENT_SETTING_NAMES).toEqual({ 'agents-start-agents': 'agentsStartAgents', 'pull-request-line': 'pullRequestLine', 'agent-messages': 'agentMessages' })
-    expect(AGENT_SETTING_EXPERIMENTS).toEqual({ agentsStartAgents: 'agents_start_agents', pullRequestLine: 'agent_pull_request_line', agentMessages: 'agent_messages' })
+    expect(AGENT_SETTING_NAMES).toEqual({ 'agents-start-agents': 'agentsStartAgents', 'pull-request-line': 'pullRequestLine', 'agent-messages': 'agentMessages', 'agent-messages-hide-summary': 'agentMessagesHideSummary' })
+    expect(AGENT_SETTING_EXPERIMENTS).toEqual({ agentsStartAgents: 'agents_start_agents', pullRequestLine: 'agent_pull_request_line', agentMessages: 'agent_messages', agentMessagesHideSummary: 'agent_messages_hide_summary' })
   })
 
   it('reads the copy kept for the account signed in here, written whole and private', () => {
@@ -36,7 +36,7 @@ describe('what the person lets agents do', () => {
   })
 
   it('never turns one account\'s experiments on for another, or for no one', () => {
-    saveAgentSettings(dir, owner, { agentsStartAgents: true, pullRequestLine: true, agentMessages: true })
+    saveAgentSettings(dir, owner, { agentsStartAgents: true, pullRequestLine: true, agentMessages: true, agentMessagesHideSummary: true })
     // Signed out, signed in with no machine yet, to another account's machine, or to another account.
     expect(readAgentSettings(dir, null)).toEqual(OFF)
     expect(readAgentSettings(dir, session({ machineId: undefined }))).toEqual(OFF)
@@ -60,6 +60,9 @@ describe('what the person lets agents do', () => {
     const answer = (data: unknown, status = 200, success = true) => ({ status, body: { success, data } })
     expect(agentSettingsFromAnswer(answer({ accountId: 'acct', revision: 3, features: { share_button: true, agent_messages: true, agents_start_agents: false } })))
       .toEqual({ accountId: 'acct', settings: { ...OFF, agentMessages: true } })
+    // The summary switch is stored inverted (T4): true hides it, and a backend that does not name it leaves it shown.
+    expect(agentSettingsFromAnswer(answer({ accountId: 'acct', features: { agent_messages_hide_summary: true } })))
+      .toEqual({ accountId: 'acct', settings: { ...OFF, agentMessagesHideSummary: true } })
     // A backend from before them names none: off.
     expect(agentSettingsFromAnswer(answer({ accountId: 'acct', features: { share_button: true } }))).toEqual({ accountId: 'acct', settings: OFF })
     for (const refused of [answer({ accountId: 'acct', features: {} }, 401), answer({ accountId: 'acct', features: {} }, 200, false), answer(null),

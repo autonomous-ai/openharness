@@ -18,11 +18,13 @@ import { CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF,
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { turnsLink } from './turnsLink.js'
+import { creationObservation } from '../lib/creationObservation.js'
+import { nativeTurnPageIn } from '../lib/nativeTurnObservations.js'
 
 type Payload = Record<string, unknown>
 
 /** An agent as the core shows it to an experiment (core/experimentQueries.ts `shown`). */
-export type ShownAgent = RegisteredSession & { displayName?: string; terminalAvailable?: boolean; dshContext?: AgentDshContext | null }
+export type ShownAgent = RegisteredSession & { displayName?: string; terminalAvailable?: boolean; selectedModel?: string | null; dshContext?: AgentDshContext | null }
 
 /** The agents a process was last told of, and how it asks the core to act. Those it is never told of read
  *  as none, and with no way to ask, it acts on nothing. */
@@ -72,6 +74,8 @@ export const UNASKED = {
   activityText: async (): Promise<string | null> => null,
   /** What only Agent Messages asks: whether harnesses work (its own process asks the core). */
   activity: async (): Promise<Record<string, 'working' | 'idle' | 'unknown'>> => ({}),
+  /** What only Agent Messages asks: one line on what each harness does. */
+  summaries: async (): Promise<Record<string, string>> => ({}),
   account: { signedIn: () => false, environment: () => '', machines: async () => ({ status: 503, body: {} }) },
   clients: { sendLocal: () => {}, sendToWindow: () => false, hasWindow: () => false, devicesChanged: () => {}, dialWatching: () => {}, turnCard: () => {}, turnSummary: () => {} },
   wifi: WIFI_OFF,
@@ -81,6 +85,7 @@ export const UNASKED = {
   machine: CoreApi['machine']
   activityText: CoreApi['agents']['activityText']
   activity: CoreApi['agents']['activity']
+  summaries: CoreApi['agents']['summaries']
   account: Pick<CoreApi['account'], 'signedIn' | 'environment' | 'machines'>
   clients: Pick<CoreApi['clients'], 'sendLocal' | 'sendToWindow' | 'hasWindow' | 'devicesChanged' | 'dialWatching' | 'turnCard' | 'turnSummary'>
   wifi: CoreApi['wifi']
@@ -108,12 +113,18 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       live,
       displayName: (session) => (session as ShownAgent).displayName ?? '',
       byAgent: (agentId) => live().find((session) => session.agentId === agentId),
+      stopped: async agentId => (await ask?.('stopped', { agentId }).catch(() => null))?.stopped === true,
+      creationStatus: async creationId => creationObservation(creationId,
+        (await ask?.('creation_status', { creationId }).catch(() => null))?.observation),
       resolve: (id) => resolveAgent(live(), id),
       advertised: () => view.advertised?.() ?? [],
       terminalAvailable: (agentId) => live().find((session) => session.agentId === agentId)?.terminalAvailable === true,
       sync: () => {},
       runtimeModels: async () => [],
-      runtimeProfile: () => null,
+      runtimeProfile: session => {
+        const profile = (session as ShownAgent).selectedModel
+        return typeof profile === 'string' ? profile : null
+      },
       setRuntime: () => {},
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
       create: async (request) => {
@@ -131,6 +142,13 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
         if (!states || typeof states !== 'object') return {}
         return Object.fromEntries(Object.entries(states).filter((e): e is [string, 'working' | 'idle' | 'unknown'] => e[1] === 'working' || e[1] === 'idle' || e[1] === 'unknown'))
       },
+      // The same query, asked for the one-line summaries too. A core from before them answers without `summaries`: none.
+      summaries: async (agentIds) => {
+        const answer = await ask?.('activity', { agentIds, summaries: true }).catch(() => null)
+        const lines = answer?.summaries
+        if (!lines || typeof lines !== 'object') return {}
+        return Object.fromEntries(Object.entries(lines).filter((e): e is [string, string] => typeof e[1] === 'string' && e[1] !== ''))
+      },
     },
     turns: {
       send: () => {},
@@ -138,9 +156,16 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       recent: async () => [],
       asks: async () => [],
       ...(view.deliveries?.turns ?? DELIVERIES_OFF),
+      // The connected service identity decides the namespace; the payload cannot
+      // grant another process permission to write a queued instruction.
+      leaseDeliveries: async (maker, leases) => maker === service &&
+        (await ask?.('lease_deliveries', { leases }).catch(() => null))?.leased === true,
     },
     questions: { answer: () => {}, answerReviewed: async () => false },
-    transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn },
+    transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn,
+      nativeTurns: async (agentId, cursor) => nativeTurnPageIn(
+        (await ask?.('native_turns', { agentId, ...(cursor ? { cursor } : {}) }).catch(() => null))?.page),
+    },
 
     account: {
       mintGridName: async () => null,

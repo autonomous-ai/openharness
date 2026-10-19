@@ -16,7 +16,7 @@ library;
 /// field that was not secret costs one unreadable line, missing one that was
 /// costs a credential on disk.
 final RegExp _secretKey = RegExp(
-  r'key|token|secret|password|passphrase|credential|auth|bearer|cookie|session',
+  r'key|token|secret|password|passphrase|credential|auth|bearer|cookie|session|email',
   caseSensitive: false,
 );
 

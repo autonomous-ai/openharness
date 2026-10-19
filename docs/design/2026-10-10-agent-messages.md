@@ -331,6 +331,8 @@ Experimental → Swarm collaboration, the Swarm conversation views on desktop an
    messages cross accounts over a blind relay against a roster the owner's computer signs, and tasks go through
    GitHub issues and pull requests. No new switch, verb or service. Design:
    [docs/superpowers/specs/2026-10-15-agent-messages-across-accounts-design.md](../superpowers/specs/2026-10-15-agent-messages-across-accounts-design.md).
+7. A leader, tasks and Tab Activity in every tab (owner, 2026-10-16). Built on branch `feat/tab-activity`, not released.
+   Design: [docs/superpowers/specs/2026-10-16-shared-tab-activity-sidebar-design.md](../superpowers/specs/2026-10-16-shared-tab-activity-sidebar-design.md).
 
 ## Verification
 

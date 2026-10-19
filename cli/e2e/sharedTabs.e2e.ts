@@ -34,6 +34,7 @@ const alice = account('alice'), bob = account('bob')
 const named = (name: string, domain: string): Account => ({ ...account(name), email: `${name}@${domain}.spike.invalid` })
 const alice1b = named('alice', 'delivery'), bob1b = named('bob', 'delivery')
 const aliceCore = named('alice', 'incore'), bobCore = named('bob', 'incore')
+const aliceAct = named('alice', 'activity'), bobAct = named('bob', 'activity')
 const times: string[] = []
 let backend: RealBackend
 type Side = { who: Account; d: IsolatedDaemon; machineId: string; client: LocalClient }
@@ -80,7 +81,7 @@ const storedShare = async (a: Account, id: string) =>
   ((await backend.api(a, '/api/agent-messages/shares')).body?.data?.shares ?? []).find((s: Record<string, any>) => s.sharedTabId === id) as Record<string, any> | undefined
 
 describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accounts (step 1a), real processes', () => {
-  beforeAll(async () => { backend = await startRealBackend([alice, bob, alice1b, bob1b, aliceCore, bobCore], (l) => times.push(l)) }, 180_000)
+  beforeAll(async () => { backend = await startRealBackend([alice, bob, alice1b, bob1b, aliceCore, bobCore, aliceAct, bobAct], (l) => times.push(l)) }, 180_000)
   afterAll(async () => {
     console.log('timings', times.join(' | '))
     if (process.env.SHARED_TABS_TIMINGS_FILE) appendFileSync(process.env.SHARED_TABS_TIMINGS_FILE, `${times.join(' | ')}\n`)
@@ -328,10 +329,10 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
     const tasks = await am(A, { action: 'share_tasks', sharedTabId })
     expect(tasks.error, JSON.stringify(tasks)).toBeUndefined()
     expect(tasks.rows).toEqual([{ repo: 'acme/shop', issue: 7, title: 'Fix the checkout total', url: 'https://github.com/acme/shop/issues/7', state: 'open',
-      assignee: { account: 'bob', harness: 'api' }, pr: { number: 9, url: 'https://github.com/acme/shop/pull/9', state: 'Open', ci: 'passing' }, updatedAt: '2026-10-15T10:00:00Z' }])
+      assignee: { account: 'bob', harness: 'api' }, pr: { number: 9, url: 'https://github.com/acme/shop/pull/9', state: 'Open', ci: 'passing', autoMerge: false, mergeState: 'CLEAN', mergedAt: '' }, updatedAt: '2026-10-15T10:00:00Z' }])
     expect(tasks.truncated).toBe(false)
     expect(readFileSync(calls, 'utf8').trim().split('\n').sort()).toEqual([
-      'pr view https://github.com/acme/shop/pull/9 --json statusCheckRollup,state,isDraft,mergedAt',
+      'pr view https://github.com/acme/shop/pull/9 --json statusCheckRollup,state,isDraft,mergedAt,autoMergeRequest,mergeStateStatus',
       `search issues harness-tab:${sharedTabId} --match body --limit 100 --json number,title,state,url,repository,body,updatedAt`,
       `search prs harness-tab:${sharedTabId} --match body --limit 100 --json number,state,url,repository,body,isDraft`,
     ])
@@ -386,6 +387,126 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
     times.push(`1b listing dropped after ${Date.now() - removed}ms`)
     await holdThenNotInTab(A, String(stranded.id), removed, '1b')
   }, 1_200_000)
+
+  // Tab Activity (docs/plans/2026-10-16-tab-activity.md, Task A5): a leader and tasks in every tab, and a summary of what a
+  // harness does, on the real layout. core/main.ts is outside unit coverage, so this is the one proof a real daemon's
+  // core produces the summary.
+  it.concurrent('tab activity: a leader in an unshared tab, its tasks kept through sharing, a leader changed from another computer reaching the member, and a working harness\'s summary', async ({ expect, onTestFailed }) => {
+    const sides: Side[] = []
+    onTestFailed(() => failureLogs('activity', sides))
+    const mark = (label: string, since: number) => times.push(`activity ${label} ${Date.now() - since}ms`)
+    let t = Date.now()
+    for (const who of [aliceAct, bobAct]) {
+      const s = await signIn(backend, who, { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', VITEST: '' })
+      sides.push({ who, d: s.daemon, machineId: s.machineId, client: s.client })
+    }
+    const [A, B] = sides
+    mark('sign in both', t)
+    for (const s of sides) {
+      const on = await settings(s.d, { agentMessages: true })
+      expect(on.status, await on.clone().text()).toBe(200)
+      await until(`${s.who.name}: shared tabs to answer`, async () => !(await am(s, { action: 'shares' })).error || null, 30_000, 300)
+    }
+    // Each daemon's gh answers for whatever tab key it is asked for, as a task of that tab, and notes its calls.
+    const calls = { A: join(A.d.root, 'gh-calls.log'), B: join(B.d.root, 'gh-calls.log') }
+    writeFileSync(join(A.d.root, 'bin', 'gh'), keyedGh(calls.A), { mode: 0o755 })
+    writeFileSync(join(B.d.root, 'bin', 'gh'), keyedGh(calls.B), { mode: 0o755 })
+
+    // 1. Two harnesses of Alice's in an unshared tab; the leader set through the backend route: both notes say so.
+    const lead = await create(A, 'activity-lead')
+    const worker = await create(A, 'activity-worker')
+    const desk = await backend.api(aliceAct, '/api/desk/ops', 'POST', { ops: [
+      { op: 'tab.create', id: 'app', name: 'app' },
+      { op: 'pane.add', tabId: 'app', machineId: A.machineId, agentId: lead.id },
+      { op: 'pane.add', tabId: 'app', machineId: A.machineId, agentId: worker.id }] })
+    expect(desk.status, JSON.stringify(desk.body)).toBe(200)
+    t = Date.now()
+    const set = await backend.api(aliceAct, '/api/agent-messages/tabs/app', 'PATCH', { leader: { machineId: A.machineId, agentId: lead.id } })
+    expect(set.status, JSON.stringify(set.body)).toBe(200)
+    const noteOf = async (s: Side, agent: Record<string, any>, includes: string) => until(`${agent.id}'s note to say ${includes.slice(0, 40)}`, async () => {
+      const r = await am(s, { action: 'send', pane: agent.tmuxPane })
+      return !r.error && String(r.roster).includes(includes) ? r : null
+    }, 30_000, 500)
+    const leadNote = await noteOf(A, lead, 'You lead this tab.')
+    const workerNote = await noteOf(A, worker, ' leads this tab. Take work from it')
+    const leadName = /^(.*) leads this tab\./m.exec(String(workerNote.roster))?.[1]
+    expect(leadName, String(workerNote.roster)).toBeTruthy()
+    expect(String(leadNote.roster)).not.toContain('leads this tab. Take work')
+    // Both notes carry the marker, with the key the tab would be shared under and this account's concrete label.
+    const key = /harness-tab:([a-f0-9]{24})/.exec(String(leadNote.roster))?.[1]
+    expect(key, String(leadNote.roster)).toBeDefined()
+    for (const n of [leadNote, workerNote]) expect(String(n.roster)).toContain(`assignee:alice/<harness>`)
+    expect((await backend.api(aliceAct, '/api/agent-messages')).body.data.tabs.find((tab: Record<string, any>) => tab.id === 'app')?.leader)
+      .toEqual({ machineId: A.machineId, agentId: lead.id })
+    mark('leader and notes', t)
+
+    // 2. A task made before sharing is the tab's: listed by tab id, then again after sharing, for the owner and the member.
+    const before = await am(A, { action: 'share_tasks', tabId: 'app' })
+    expect(before.error, JSON.stringify(before)).toBeUndefined()
+    expect(before.rows).toHaveLength(1)
+    expect(before.rows[0]).toMatchObject({ repo: 'acme/shop', issue: 7, title: 'Fix the checkout total', assignee: { account: 'alice', harness: 'lead' } })
+    expect(readFileSync(calls.A, 'utf8')).toContain(`search issues harness-tab:${key} `)
+    t = Date.now()
+    const shared = await am(A, { action: 'share_tab', tabId: 'app', name: 'app' })
+    expect(shared.error, JSON.stringify(shared)).toBeUndefined()
+    const sharedTabId = String(shared.sharedTabId)
+    expect(sharedTabId, 'the key a tab is shared under is the one its tasks already carried').toBe(key)
+    const sinceInvite = B.client.frames.length
+    expect(await am(A, { action: 'share_invite', sharedTabId, emails: [bobAct.email], days: 7 })).toMatchObject({ invited: [bobAct.email] })
+    await B.client.waitFor((f) => f.type === 'shared_tabs_changed', 15_000, 'shared_tabs_changed after an invitation', sinceInvite)
+    const invitation = await until('the invitation', async () => (await shares(B)).invites.find((i) => i.sharedTabId === sharedTabId) ?? null, 20_000, 300)
+    expect((await am(B, { action: 'share_accept', inviteId: invitation.id })).error).toBeUndefined()
+    const api = await create(B, 'activity-api')
+    expect(await am(B, { action: 'share_add', sharedTabId, harness: { machineId: B.machineId, agentId: api.id, name: 'api', engine: 'claude' } })).toEqual({ queued: true })
+    const want = [`${A.machineId}/${lead.id}`, `${A.machineId}/${worker.id}`, `${B.machineId}/${api.id}`].sort()
+    await until('both daemons to hold the roster with all three harnesses', async () => {
+      const [ra, rb] = [await rosterOf(A, sharedTabId), await rosterOf(B, sharedTabId)]
+      return ra && rb && ra.version === rb.version && JSON.stringify(harnessKeys(ra)) === JSON.stringify(want) && JSON.stringify(harnessKeys(rb)) === JSON.stringify(want) || null
+    }, 90_000, 300)
+    mark('shared, invited, member added', t)
+    const after = await am(A, { action: 'share_tasks', sharedTabId })
+    expect(after.error, JSON.stringify(after)).toBeUndefined()
+    expect(after.rows, 'the same task after sharing').toEqual(before.rows)
+    const bobs = await am(B, { action: 'share_tasks', sharedTabId })
+    expect(bobs.error, JSON.stringify(bobs)).toBeUndefined()
+    expect(bobs.rows, 'the member lists the same task').toEqual(before.rows)
+    expect(readFileSync(calls.B, 'utf8')).toContain(`search issues harness-tab:${sharedTabId} `)
+
+    // 3. The leader changed from "another computer" (the backend route): the sharing computer re-signs the roster, and the
+    // member's roster names the new leader, after first naming the one the tab had.
+    const leaderOf = async (s: Side) => (await rosterOf(s, sharedTabId))?.leader ?? null
+    await until('bob\'s roster to name the first leader', async () => (await leaderOf(B))?.agentId === lead.id || null, 30_000, 500)
+    t = Date.now()
+    const moved = await backend.api(aliceAct, '/api/agent-messages/tabs/app', 'PATCH', { leader: { machineId: A.machineId, agentId: worker.id } })
+    expect(moved.status, JSON.stringify(moved.body)).toBe(200)
+    const newLeader = await until('bob\'s roster to name the new leader', async () => {
+      const l = await leaderOf(B)
+      return l?.agentId === worker.id ? l : null
+    }, 30_000, 500)
+    expect(newLeader).toEqual({ machineId: A.machineId, agentId: worker.id })
+    mark('leader change reached the member', t)
+
+    // 4. Alice's lead works on a turn: Bob's window hears it working with a summary of the prompt, and so does `tab_activity`.
+    t = Date.now()
+    const sinceWork = B.client.frames.length
+    A.client.send('message', { agentId: lead.id, content: '!work 12 refactor the parser', requestId: randomUUID() })
+    const seen = await B.client.waitFor((f) => f.type === 'shared_activity' && f.payload?.agentId === lead.id && f.payload?.state === 'working' && typeof f.payload?.summary === 'string',
+      40_000, 'Alice\'s working harness with a summary, seen by Bob', sinceWork)
+    expect(seen.payload).toMatchObject({ sharedTabId, machineId: A.machineId, agentId: lead.id, state: 'working' })
+    expect(String(seen.payload?.summary)).toContain('refactor the parser')
+    expect(String(seen.payload?.summary).length).toBeLessThanOrEqual(120)
+    mark('summary reached the member\'s window', t)
+    const own = await until('tab_activity to give the working harness its summary', async () => {
+      const r = await am(A, { action: 'tab_activity', tabId: 'app' })
+      const row = (r.harnesses as Array<Record<string, any>> | undefined)?.find((h) => h.agentId === lead.id)
+      return row?.state === 'working' && row.summary ? r : null
+    }, 20_000, 500)
+    expect(String(own.harnesses.find((h: Record<string, any>) => h.agentId === lead.id).summary)).toContain('refactor the parser')
+    expect(own.harnesses.map((h: Record<string, any>) => h.agentId).sort()).toEqual([lead.id, worker.id, api.id].sort())
+    const theirs = await am(B, { action: 'tab_activity', tabId: sharedTabId })
+    expect(theirs.error, JSON.stringify(theirs)).toBeUndefined()
+    expect(String(theirs.harnesses.find((h: Record<string, any>) => h.agentId === lead.id)?.summary ?? ''), 'the member\'s own tab_activity').toContain('refactor the parser')
+  }, 420_000)
 
   it.concurrent('step 1b in the core\'s process (HARNESSD_SERVICES=none): messages cross accounts both ways, and a removed member\'s waits fail NOT_IN_TAB', async ({ expect, onTestFailed }) => {
     const sides: Side[] = []
@@ -552,7 +673,7 @@ function cannedGh(id: string, log: string): string {
       body: `See harness-tab:${id} for context.`, updatedAt: '2026-10-15T11:00:00Z' }])
   const prs = JSON.stringify([{ number: 9, state: 'OPEN', url: 'https://github.com/acme/shop/pull/9', repository: { nameWithOwner: 'acme/shop' },
     body: `Closes #7\n<!-- harness-tab:${id} assignee:bob/api -->`, isDraft: false }])
-  const view = JSON.stringify({ state: 'OPEN', isDraft: false, mergedAt: null, statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] })
+  const view = JSON.stringify({ state: 'OPEN', isDraft: false, mergedAt: null, autoMergeRequest: null, mergeStateStatus: 'CLEAN', statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] })
   return `#!/bin/sh
 echo "$*" >> '${log}'
 case "$*" in
@@ -564,10 +685,26 @@ JSON
 ${prs}
 JSON
   ;;
-  "pr view https://github.com/acme/shop/pull/9 --json statusCheckRollup,state,isDraft,mergedAt") cat <<'JSON'
+  "pr view https://github.com/acme/shop/pull/9 --json statusCheckRollup,state,isDraft,mergedAt,autoMergeRequest,mergeStateStatus") cat <<'JSON'
 ${view}
 JSON
   ;;
+  *) echo "the test's gh was called in a way it has no answer for: $*" >&2; exit 98 ;;
+esac
+`
+}
+
+/** A `gh` that answers any tab's issue search with one task of that tab (the key is read from the call) and no pull
+ *  requests, noting each call in [log]; any other call fails loudly. */
+function keyedGh(log: string): string {
+  return `#!/bin/sh
+echo "$*" >> '${log}'
+case "$*" in
+  "search issues harness-tab:"*" --match body --limit 100 --json number,title,state,url,repository,body,updatedAt")
+    id="\${3#harness-tab:}"
+    printf '[{"number":7,"title":"Fix the checkout total","state":"OPEN","url":"https://github.com/acme/shop/issues/7","repository":{"nameWithOwner":"acme/shop"},"body":"Totals are off.\\\\n<!-- harness-tab:%s assignee:alice/lead -->","updatedAt":"2026-10-15T10:00:00Z"}]\\n' "$id"
+  ;;
+  "search prs harness-tab:"*" --match body --limit 100 --json number,state,url,repository,body,isDraft") echo '[]' ;;
   *) echo "the test's gh was called in a way it has no answer for: $*" >&2; exit 98 ;;
 esac
 `

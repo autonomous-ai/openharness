@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/agent_messages/update_harness.dart';
 
 /// Runs before every test file under `test/`.
 ///
@@ -21,6 +22,9 @@ Future<void> testExecutable(FutureOr<void> Function() testMain) async {
     binding.defaultTestTimeout = const Timeout(Duration(minutes: 2));
   }
   HttpOverrides.global = _LoopbackOnly();
+  // Never the developer's daemon (18473) or the real `harness update`.
+  daemonVersionReader = (_, _) async => null;
+  harnessUpdateRunner = (_) async => false;
   await testMain();
 }
 

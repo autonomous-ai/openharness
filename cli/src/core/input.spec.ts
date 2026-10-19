@@ -447,6 +447,19 @@ describe('createInput', () => {
 describe('message', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('carries a bounded opaque context with the actual composed message, without treating it as identity', async () => {
+    const promptTyped = vi.fn(), run = deps({ promptTyped }), inputs = createInput(run.deps)
+    const context = 'conversation-input-context'
+    inputs.messageRequest({ agentId: 'a1', content: 'Scoped composed input', inputContext: context })
+    await vi.waitFor(() => expect(promptTyped).toHaveBeenCalledWith(agents.get('a1'), READY_PANE, expect.any(Object), context))
+    inputs.input.forget('a1')
+    const plain = vi.fn(), request = createMessageRequest(plain)
+    request({ agentId: 'a1', content: 'Unscoped', inputContext: { user: 'untrusted' } })
+    expect(plain).toHaveBeenCalledWith('a1', 'Unscoped')
+    // An observer is optional; a scoped message still uses the original writer.
+    expect(await messageWriter(deps().deps)('a1', 'Without observer', undefined, context)).toEqual(ok)
+  })
+
   it('writes what a person typed into the agent the frame names, and reads no tab an older window still names', () => {
     const typed = vi.fn()
     const inputs = createInput({ ...deps().deps, typed })

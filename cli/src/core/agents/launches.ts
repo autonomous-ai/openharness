@@ -234,7 +234,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       const session = byAgent(status.agentId)
       return session
         ? { state: 'created', agent: await toProject(session), ...(status.level ? { level: status.level } : {}), ...(status.resumed !== undefined ? { resumed: status.resumed } : {}) }
-        : { state: 'unavailable' }
+        : { state: 'unavailable', createdAgentId: status.agentId }
     }
     // A recorded refusal is a completed outcome. Keep it separate from transport/dispatch errors
     // so clients can distinguish "safe to correct the choices" from "outcome still unknown".

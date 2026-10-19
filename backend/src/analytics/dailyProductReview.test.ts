@@ -14,6 +14,21 @@ it('keeps today out of comparisons and marks sparse or absent baselines honestly
   expect(r.investigate[0]).toMatchObject({ area: 'Agent setup', count: 1 })
 })
 
+it('names the most frequent codes of unknown launch refusals and of engines that did not start after a create', () => {
+  const r = dailyProductReview([
+    row('2026-10-12', 'launch_failed_other', 9), row('2026-10-12', 'launch_failed_code_invalid_prompt', 4),
+    row('2026-10-11', 'launch_failed_code_invalid_prompt', 1), row('2026-10-12', 'launch_failed_code_unlisted', 2),
+    ...['clone_failed', 'internal', 'busy', 'none'].map(code => row('2026-10-12', `launch_failed_code_${code}`, 1)),
+    row('2026-10-12', 'launch_late_failed', 3), row('2026-10-12', 'launch_late_failed_code_start_timeout', 3),
+    row('2026-10-12', 'launch_failed_code_PRIVATE_CANARY', 50),
+  ], new Date('2026-10-13T12:00:00Z'))
+  const unknown = r.investigate.find(s => s.area === 'Unknown launch refusal')
+  expect(unknown).toMatchObject({ count: 9, codes: [{ code: 'invalid_prompt', count: 5 }, { code: 'unlisted', count: 2 },
+    { code: 'busy', count: 1 }, { code: 'clone_failed', count: 1 }, { code: 'internal', count: 1 }] })
+  expect(r.investigate.find(s => s.area === 'Engine did not start after create')).toMatchObject({ count: 3, codes: [{ code: 'start_timeout', count: 3 }] })
+  expect(JSON.stringify(r)).not.toContain('PRIVATE_CANARY')
+})
+
 it('uses matured original working-day cohorts and refuses to interpret missing follow-up coverage as zero', () => {
   const r = dailyProductReview([
     row('2026-10-11', 'working_installation_days', 10), row('2026-10-11', 'd1_returning_work_installations', 6),

@@ -146,6 +146,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       },
       // Whether harnesses work is asked by Agent Messages alone.
       activity: UNASKED.activity,
+      summaries: UNASKED.summaries,
       // The devices make no agent of their own and show no harness's viewer.
       ...AGENT_ACTIONS_OFF,
     },

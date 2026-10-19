@@ -13,6 +13,8 @@ import '../widgets/terminal_prompt.dart';
 import 'agent_messages.dart';
 import 'shared_tab_people.dart';
 import 'shared_tab_tasks.dart';
+import 'tab_people.dart';
+import 'update_harness.dart';
 import 'shared_tabs.dart' show SharedTabsState;
 
 /// The parts of a shared tab's Agent Messages panel.
@@ -132,6 +134,7 @@ class _AgentMessagesViewState extends State<AgentMessagesView> {
     super.initState();
     widget.controller.addListener(_changed);
     widget.app?.sharedTabs.addListener(_sharesChanged);
+    widget.app?.experimentalFeatures.addListener(_sharesChanged);
     unawaited(_read(focusNewest: true));
   }
 
@@ -139,6 +142,7 @@ class _AgentMessagesViewState extends State<AgentMessagesView> {
   void dispose() {
     widget.controller.removeListener(_changed);
     widget.app?.sharedTabs.removeListener(_sharesChanged);
+    widget.app?.experimentalFeatures.removeListener(_sharesChanged);
     _newest.dispose();
     for (final node in _pills.values) {
       node.dispose();
@@ -229,25 +233,35 @@ class _AgentMessagesViewState extends State<AgentMessagesView> {
     final app = widget.app;
     final shared = app?.sharedTabs.tabForDesk(widget.tabId);
     final sharedState = app?.sharedTabs.state;
-    final tab = shared == null ? AgentMessagesTab.messages : _tab;
+    // Every tab with Agent Messages on has the panel; a shared tab adds the
+    // roster, an unshared one has its own harnesses and Invite People…, once
+    // the account's switch is on (final review I1). The panel itself is
+    // offered only where the daemon and backend support Agent Messages.
+    final panels =
+        app != null &&
+        (shared != null ||
+            (sharedState == SharedTabsState.ready && app.agentMessagesOn));
+    final tab = panels ? _tab : AgentMessagesTab.messages;
     final hint =
         '${terminalPromptHint(context, 'picker.next', '↓')} move · '
         '${terminalPromptHint(context, 'picker.accept', '⏎')} '
         '${tab == AgentMessagesTab.tasks ? 'open issue' : 'open pane'} · '
         '${terminalPromptHint(context, 'picker.cancel', 'Esc')} close';
     final Widget body;
-    if (shared != null && tab == AgentMessagesTab.people) {
-      body = SharedTabPeople(
-        key: _people,
-        app: app!,
-        sharedTabId: shared.sharedTabId,
-        deskTabId: widget.tabId,
-      );
-    } else if (shared != null && tab == AgentMessagesTab.tasks) {
+    if (panels && tab == AgentMessagesTab.people) {
+      body = shared == null
+          ? TabPeople(key: _people, app: app, deskTabId: widget.tabId)
+          : SharedTabPeople(
+              key: _people,
+              app: app,
+              sharedTabId: shared.sharedTabId,
+              deskTabId: widget.tabId,
+            );
+    } else if (panels && tab == AgentMessagesTab.tasks) {
       body = SharedTabTasks(
         key: _tasks,
-        app: app!,
-        sharedTabId: shared.sharedTabId,
+        app: app,
+        sharedTabId: shared?.sharedTabId,
         deskTabId: widget.tabId,
         onOpenPane: (machineId, agentId) =>
             widget.onOpenPane?.call(machineId, agentId),
@@ -307,7 +321,7 @@ class _AgentMessagesViewState extends State<AgentMessagesView> {
                       title: '${widget.tabName} · Agent Messages',
                       onClose: widget.onClose,
                     ),
-                    if (shared != null)
+                    if (panels)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
                         child: Focus(
@@ -332,13 +346,15 @@ class _AgentMessagesViewState extends State<AgentMessagesView> {
                     else if (sharedState == SharedTabsState.tooOld)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
-                        child: Text(
-                          'Update Harness on this computer to share tabs.',
-                          key: const ValueKey('agent-messages-too-old'),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.metadata(),
-                        ),
+                        child: widget.app == null
+                            ? Text(
+                                'Update Harness on this computer to share tabs.',
+                                key: const ValueKey('agent-messages-too-old'),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: DesktopChrome.metadata(),
+                              )
+                            : UpdateHarnessLine(widget.app!),
                       )
                     else if (sharedState == SharedTabsState.off)
                       Padding(

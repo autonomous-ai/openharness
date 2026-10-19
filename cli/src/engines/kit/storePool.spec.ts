@@ -415,7 +415,7 @@ async function stopFixture() {
   const live = registry.openProcessAgent({ engine: 'hermes', cwd: '/fixture/work', tmuxPane: '%77', processIdentity })!.entry
   const forgetSession = createForgetSession({
     registry, stoppedAgents, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
-    forgetAttach: vi.fn(), turnStartedAt: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
+    forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
     clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, cursorSubagents: { forget: vi.fn() },
     runtimeProfiles: { forget: vi.fn() }, watcher: { removeSession: vi.fn(async () => {}) },
     stopHeartbeat: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },

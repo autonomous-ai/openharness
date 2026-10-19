@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/agent_messages/shared_tabs.dart';
+import 'package:harness/agent_messages/tab_settings.dart';
 import 'package:harness/agent_messages/shared_tabs_model.dart' show memberDeskTabId;
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
@@ -14,10 +15,21 @@ import 'package:harness/sharing/share_harness_dialog.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm.dart';
 import 'package:harness/state/swarm_catalog.dart';
+import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/agent_messages_api.dart';
 import 'swarm_screen_test.dart' show mount;
+
+class _LeaderApi extends AgentMessagesApi {
+  @override
+  Future<Map<String, dynamic>> setAgentMessageTab(
+    String tabId, {
+    bool? enabled,
+    AgentMessageLeader? leader,
+    bool clearLeader = false,
+  }) async => {'tabId': tabId, 'leader': leader?.toJson()};
+}
 
 class _App extends AppNotifier {
   _App({WsConn? daemon})
@@ -369,6 +381,123 @@ void main() {
     await tester.idle();
     expect(row().containsKey('canShowAgentMessages'), isFalse);
     expect(updates().last['canShowAgentMessages'], isFalse);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('File offers Make Leader, then Remove Leader, for the focused harness', (
+    tester,
+  ) async {
+    // Prose: with Agent Messages on, the focused own harness offers Make
+    // Leader; choosing it makes it the leader, and the offer becomes Remove
+    // Leader; with Agent Messages off nothing is offered.
+    final app = _App();
+    addTearDown(app.dispose);
+    final api = await joinAgentMessagesDesk(app, _LeaderApi());
+    app.panes.add(TerminalPane(id: 900, machineId: 'm', agentId: 'a'));
+    app.focusPane(900);
+    expect(app.focusedPane?.agentId, 'a');
+    await mount(tester, app, nativeTabs: true);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.idle();
+    Map actions() => updates().last['paneActions'] as Map;
+    expect(actions()['toggleLeader'], isTrue);
+    expect(updates().last['leaderAction'], 'make');
+
+    unawaited(
+      tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'harness/swarm_tabs',
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('toggleLeader'),
+        ),
+        (_) {},
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.idle();
+    expect(app.tabLeader(app.activeSwarmId)?.agentId, 'a');
+    expect(updates().last['leaderAction'], 'remove');
+
+    api.unsupported = true;
+    await app.agentMessages.refresh();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.idle();
+    expect(actions()['toggleLeader'], isFalse);
+    expect(updates().last.containsKey('leaderAction'), isFalse);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('Tab Activity: the strip button and View row follow the '
+      'toggle\'s own condition and the open state', (tester) async {
+    // Prose: with Agent Messages the toolbar button and View's row are
+    // offered, say Show Tab Activity, and the native action opens the
+    // sidebar (then Hide Tab Activity); without Agent Messages neither is
+    // offered and nothing reads as open.
+    final app = _App();
+    addTearDown(app.dispose);
+    final api = await joinAgentMessagesDesk(app);
+    await mount(tester, app, nativeTabs: true);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.idle();
+    expect(updates().last['canShowTabActivity'], isTrue);
+    expect(updates().last['tabActivityOpen'], isFalse);
+    expect(
+      updates().last['tabActivityTooltip'],
+      startsWith('Show Tab Activity'),
+    );
+
+    unawaited(
+      tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'harness/swarm_tabs',
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('toggleTabActivity'),
+        ),
+        (_) {},
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.idle();
+    expect(updates().last['tabActivityOpen'], isTrue);
+    expect(
+      updates().last['tabActivityTooltip'],
+      startsWith('Hide Tab Activity'),
+    );
+
+    api.unsupported = true;
+    await app.agentMessages.refresh();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.idle();
+    expect(updates().last['canShowTabActivity'], isFalse);
+    expect(updates().last['tabActivityOpen'], isFalse);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('with the account\'s Agent Messages switch off, neither Tab '
+      'Activity nor Make Leader is offered, though the daemon supports them', (
+    tester,
+  ) async {
+    // Prose (final review I1): support alone (the daemon and backend answer
+    // for Agent Messages) is not the person's choice. Off, the strip button,
+    // View's row and File's Make Leader are not offered; turned on, they are.
+    final app = _App();
+    addTearDown(app.dispose);
+    await joinAgentMessagesDesk(app, _LeaderApi());
+    await agentMessagesSwitch(app, false);
+    app.panes.add(TerminalPane(id: 900, machineId: 'm', agentId: 'a'));
+    app.focusPane(900);
+    await mount(tester, app, nativeTabs: true);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.idle();
+    expect(app.agentMessagesOffered(app.activeSwarmId), isTrue);
+    expect(updates().last['canShowTabActivity'], isFalse);
+    expect((updates().last['paneActions'] as Map)['toggleLeader'], isFalse);
+    expect(updates().last.containsKey('leaderAction'), isFalse);
+
+    await agentMessagesSwitch(app, true);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.idle();
+    expect(updates().last['canShowTabActivity'], isTrue);
+    expect((updates().last['paneActions'] as Map)['toggleLeader'], isTrue);
+    expect(updates().last['leaderAction'], 'make');
     await tester.pumpWidget(const SizedBox());
   });
 

@@ -200,9 +200,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(app.sets.last.sameDomain, isTrue);
       expect(
-        find.text(
-          'Anyone with an @autonomous.ai address can add it from Add machine.',
-        ),
+        find.text('Anyone with an @autonomous.ai address can use it.'),
         findsOneWidget,
       );
       await _snap(tester, boundary, 'share-people-dark');
@@ -253,34 +251,39 @@ void main() {
     },
   );
 
-  testWidgets('Back with nothing changed closes quietly; light appearance', (
-    tester,
-  ) async {
-    final app = _SharingApp()
-      ..policy = {
-        'emails': ['ann@gmail.com'],
-        'sameDomain': true,
-        'domain': 'autonomous.ai',
-        'members': [
-          {'email': 'ann@gmail.com', 'via': 'email', 'machines': 2},
-          {'email': 'lee@autonomous.ai', 'via': 'domain', 'machines': 1},
-        ],
-      };
-    final (closed, boundary) = await open(
-      tester,
-      app,
-      brightness: Brightness.light,
-    );
-    expect(find.text('Using it · added from autonomous.ai'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('machine-sharing:remove:lee@autonomous.ai')),
-      findsNothing,
-    );
-    await _snap(tester, boundary, 'share-people-light');
-    await tester.tap(find.byKey(const ValueKey('machine-sharing:back')));
-    await tester.pump();
-    expect(closed(), '');
-  });
+  testWidgets(
+    'Back with nothing changed closes quietly; light appearance; the domain is not listed person by person',
+    (tester) async {
+      final app = _SharingApp()
+        ..policy = {
+          'emails': ['ann@gmail.com'],
+          'sameDomain': true,
+          'domain': 'autonomous.ai',
+          'members': [
+            {'email': 'ann@gmail.com', 'via': 'email', 'machines': 2},
+            {'email': 'lee@autonomous.ai', 'via': 'domain', 'machines': 1},
+          ],
+        };
+      final (closed, boundary) = await open(
+        tester,
+        app,
+        brightness: Brightness.light,
+      );
+      // Everyone at the domain is the switch: since 2026-10-16 they use it with no add step, so the
+      // members hold the whole domain, and none of them is a row of their own.
+      expect(find.text('lee@autonomous.ai'), findsNothing);
+      expect(find.textContaining('added from'), findsNothing);
+      expect(find.text('Using it'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('machine-sharing:remove:ann@gmail.com')),
+        findsOneWidget,
+      );
+      await _snap(tester, boundary, 'share-people-light');
+      await tester.tap(find.byKey(const ValueKey('machine-sharing:back')));
+      await tester.pump();
+      expect(closed(), '');
+    },
+  );
 
   testWidgets(
     'a machine that cannot say offers Retry, and no domain at a public one',

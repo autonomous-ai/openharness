@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GatewayAccount } from '../core/api.js'
 import { AuthSessionError } from '../lib/authSession.js'
-import { createAccountHttp } from './accountHttp.js'
+import { createAccountHttp, retryAfterMs } from './accountHttp.js'
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -46,6 +46,22 @@ describe('account HTTP in the gateway', () => {
     expect(tokens.accessToken).toHaveBeenCalledTimes(2)
     request.mockResolvedValueOnce(new Response('not json', { status: 502 }))
     expect(await api.backend('GET', '/api/auth/me')).toEqual({ status: 502, body: {} })
+  })
+  it('says when a busy or failing backend asks to be tried again, for the usage reports\' backoff', async () => {
+    const { api, request } = setup()
+    const at = (status: number, retryAfter: string) => new Response('{}', { status, headers: { 'retry-after': retryAfter } })
+    request.mockResolvedValueOnce(at(429, '120'))
+    expect(await api.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 429, body: {}, retryAfterMs: 120_000 })
+    request.mockResolvedValueOnce(at(503, new Date(Date.now() + 60_000).toUTCString()))
+    expect((await api.backend('POST', '/api/product-usage/report', {})).retryAfterMs).toBeGreaterThan(50_000)
+    // Unreadable, or on an answer that is not a busy one: nothing said.
+    request.mockResolvedValueOnce(at(429, 'soon'))
+    expect(await api.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 429, body: {} })
+    request.mockResolvedValueOnce(at(200, '120'))
+    expect(await api.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 200, body: {} })
+    expect(retryAfterMs(null)).toBeNull()
+    expect(retryAfterMs(' 7 ', 0)).toBe(7_000)
+    expect(retryAfterMs('Thu, 01 Jan 1970 00:00:01 GMT', 5_000)).toBe(0)
   })
 
   it.each([['MISSING', 401, 'NOT_SIGNED_IN'], ['INVALID_REFRESH', 401, 'NOT_SIGNED_IN'], ['UNAVAILABLE', 502, 'AUTH_UNAVAILABLE']] as const)(

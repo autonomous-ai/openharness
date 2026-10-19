@@ -1,0 +1,176 @@
+import { createHash } from 'node:crypto'
+import type { Prisma, SuperTab, SuperTabNativeContext } from '@prisma/client'
+import { z } from 'zod'
+import type { AuthUser } from '../lib/ssoAuth.js'
+import { activeWork, agent, author, conversation, fail, stableId, SuperTabError,
+  type Actor, type Agent, type Author, type SuperTabState } from './model.js'
+
+const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
+export const openNativeSchema = z.object({ operationId: id, conversationId: id, agentId: id }).strict()
+export const nativeEventSchema = z.object({
+  turnId: id, kind: z.enum(['prompt', 'answer', 'gap']), previousEventId: id.nullable(),
+  text: z.string().max(16_000), truncated: z.boolean(), interrupted: z.boolean(),
+}).strict()
+type NativeEvent = z.infer<typeof nativeEventSchema>
+type Transaction = Prisma.TransactionClient
+type Grant = { machineOwnerId: string; contributorId: string; hostGrant: string | null }
+interface Binding {
+  tabId: string; conversationId: string; agentId: string; harnessId: string; machineId: string; machineOwnerId: string
+  operator: Author; contributorId: string; contributionGeneration: string; contributionGrant: string | null; inputGrant: string | null
+}
+interface Deps {
+  transaction<T>(body: (tx: Transaction) => Promise<T>): Promise<T>
+  row(tx: Transaction, user: AuthUser, tabId: string): Promise<{ row: SuperTab; state: SuperTabState }>
+  agentGrant(tx: Transaction, state: SuperTabState, target: Agent): Promise<void>
+  contribution(tx: Transaction, state: SuperTabState, actor: Actor, command: { machineId: string }): Promise<Grant>
+}
+const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
+const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+
+/** A host reports what its native engine observed; it cannot create human-authored
+ * messages. The human attached to the source is the authenticated opener of that
+ * terminal context, not an inference from a device name or the machine owner. */
+export class SuperTabNativeStore {
+  constructor(private readonly deps: Deps) {}
+
+  private async validate(tx: Transaction, state: SuperTabState, record: SuperTabNativeContext) {
+    if (record.revoked) fail('NATIVE_CONTEXT_REVOKED', 'Reopen the terminal from this conversation.', 403)
+    const binding = record.binding as unknown as Binding
+    const operator = author(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, true)
+    const target = agent(state, record.agentId)
+    const group = conversation(state, record.conversationId)
+    if (operator.membershipGeneration !== binding.operator.membershipGeneration || group.archived || !group.agentIds.includes(target.id)
+      || target.harnessId !== binding.harnessId || target.machineId !== binding.machineId || target.machineOwnerId !== binding.machineOwnerId
+      || target.contributorId !== binding.contributorId || target.membershipGeneration !== binding.contributionGeneration
+      || (target.hostGrant ?? null) !== binding.contributionGrant) {
+      fail('NATIVE_CONTEXT_REVOKED', 'This terminal context no longer belongs to the current contribution.', 403)
+    }
+    await this.deps.agentGrant(tx, state, target)
+    // Read the person's current identity, rather than trusting a name supplied by
+    // a terminal client or reusing an old email after an account change.
+    const user = await tx.user.findUnique({ where: { id: operator.id }, select: { email: true, autonomousEnv: true } })
+    if (!user || user.autonomousEnv !== state.environment) fail('NATIVE_CONTEXT_REVOKED', 'The terminal opener is unavailable.', 403)
+    const grant = await this.deps.contribution(tx, state, { kind: 'person', userId: operator.id, email: user.email }, target)
+    if (grant.machineOwnerId !== binding.machineOwnerId || grant.hostGrant !== binding.inputGrant) {
+      fail('NATIVE_CONTEXT_REVOKED', 'The terminal opener no longer has the original machine access.', 403)
+    }
+    return { binding, target, group }
+  }
+
+  async open(user: AuthUser, tabId: string, input: z.infer<typeof openNativeSchema>) {
+    const request = openNativeSchema.parse(input)
+    return this.deps.transaction(async tx => {
+      const { state } = await this.deps.row(tx, user, tabId)
+      const operator = author(state, { kind: 'person', userId: user.sub, email: user.email }, true)
+      const target = agent(state, request.agentId), group = conversation(state, request.conversationId)
+      if (group.archived || !group.agentIds.includes(target.id)) fail('AGENT_UNAVAILABLE', 'Choose an agent in this conversation.')
+      await this.deps.agentGrant(tx, state, target)
+      const grant = await this.deps.contribution(tx, state, { kind: 'person', userId: user.sub, email: user.email }, target)
+      const contextId = stableId('native', tabId, user.sub, request.operationId)
+      const prior = await tx.superTabNativeContext.findUnique({ where: { id: contextId } })
+      if (prior) {
+        if (prior.conversationId !== request.conversationId || prior.agentId !== request.agentId) fail('OPERATION_REUSED', 'Use a new operation ID for a different terminal.')
+        await this.validate(tx, state, prior)
+        return { contextId }
+      }
+      const binding: Binding = { tabId, conversationId: group.id, agentId: target.id, harnessId: target.harnessId,
+        machineId: target.machineId, machineOwnerId: target.machineOwnerId, operator,
+        contributorId: target.contributorId, contributionGeneration: target.membershipGeneration,
+        contributionGrant: target.hostGrant ?? null, inputGrant: grant.hostGrant }
+      await tx.superTabNativeContext.create({ data: { id: contextId, tabId, conversationId: group.id,
+        agentId: target.id, userId: user.sub, binding: json(binding) } })
+      return { contextId }
+    })
+  }
+
+  private async hosted(tx: Transaction, user: AuthUser, tabId: string, contextId: string) {
+    const { row, state } = await this.deps.row(tx, user, tabId)
+    const record = await tx.superTabNativeContext.findFirst({ where: { id: contextId, tabId } })
+      ?? fail('NOT_FOUND', 'This terminal context is unavailable.', 404)
+    const binding = record.binding as unknown as Binding
+    if (binding.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can record this terminal.', 403)
+    const verified = await this.validate(tx, state, record)
+    return { ...verified, row, state, record }
+  }
+
+  async read(user: AuthUser, tabId: string, contextId: string) {
+    return this.deps.transaction(async tx => {
+      const { binding, record } = await this.hosted(tx, user, tabId, contextId)
+      return { contextId, ...binding, lastEventId: record.lastEventId }
+    })
+  }
+
+  async allowsDelivery(tx: Transaction, state: SuperTabState, contextId: string): Promise<boolean> {
+    const record = await tx.superTabNativeContext.findFirst({ where: { id: contextId, tabId: state.id } })
+    if (!record) return false
+    try { await this.validate(tx, state, record); return true }
+    catch (error) { if (error instanceof SuperTabError) return false; throw error }
+  }
+
+  async append(user: AuthUser, tabId: string, contextId: string, input: NativeEvent) {
+    const event = nativeEventSchema.parse(input)
+    return this.deps.transaction(async tx => {
+      const { row, state, record, binding, target, group } = await this.hosted(tx, user, tabId, contextId)
+      const eventId = stableId('native-event', contextId, event.turnId, event.kind), requestHash = digest(event)
+      const prior = await tx.superTabOperation.findUnique({ where: { id: eventId } })
+      if (prior) {
+        if (prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'This native observation already has different content.')
+        return prior.result
+      }
+      if (record.lastEventId !== event.previousEventId) fail('NATIVE_ORDER_CHANGED', 'Reconcile the recorded terminal observations before continuing.')
+      const promptId = stableId('native-event', contextId, event.turnId, 'prompt')
+      if (event.kind === 'answer' && !await tx.superTabOperation.findUnique({ where: { id: promptId } })) {
+        fail('NATIVE_PROMPT_MISSING', 'The terminal prompt was not recorded. Record the observation gap first.')
+      }
+      const revision = row.revision + 1
+      group.lastMessageSequence = revision
+      const observedBy = author(state, { kind: 'agent', agentId: target.id, machineOwnerId: user.sub }, true)
+      const text = event.kind === 'gap' ? 'Some terminal activity could not be recorded. Check the native session for the full conversation.' : event.text
+      // Inform the coordinating lead without replaying this input into the agent
+      // that already received it. Its resulting programmatic turn is not native input.
+      const recipients = event.kind !== 'gap' && group.leadId && group.leadId !== target.id ? [group.leadId] : []
+      await tx.superTabMessage.create({ data: { id: eventId, tabId, conversationId: group.id, sequence: revision,
+        author: json(observedBy), source: json({ kind: 'native', phase: event.kind, turnId: event.turnId,
+          operator: binding.operator, truncated: event.truncated, interrupted: event.interrupted }),
+        text, replyTo: event.kind === 'answer' ? promptId : null, recipientIds: recipients } })
+      for (const recipient of recipients) {
+        const lead = agent(state, recipient)
+        await tx.superTabDelivery.create({ data: { id: stableId(eventId, recipient), tabId, conversationId: group.id,
+          messageId: eventId, nativeContextId: contextId, agentId: recipient, machineId: lead.machineId, machineOwnerId: lead.machineOwnerId,
+          assignmentId: activeWork(group) && group.assignment?.agentId === recipient ? group.assignment.id : null,
+          membershipGeneration: lead.membershipGeneration, authorKind: 'person', authorId: binding.operator.id,
+          authorGeneration: binding.operator.membershipGeneration } })
+      }
+      await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: { revision, state: json(state) } })
+      await tx.superTabNativeContext.update({ where: { id: contextId }, data: { lastEventId: eventId } })
+      const result = { eventId, revision }
+      await tx.superTabOperation.create({ data: { id: eventId, tabId, actorKey: `agent:${target.id}`, requestHash, revision, result } })
+      return result
+    })
+  }
+}
+
+/** Removal followed by rejoining must not revive an old terminal binding. */
+export async function revokeNativeContexts(tx: Transaction, before: SuperTabState, after: SuperTabState) {
+  const conditions: Prisma.SuperTabNativeContextWhereInput[] = []
+  for (const member of before.people) {
+    const current = after.people.find(p => p.id === member.id)
+    if (!current || current.generation !== member.generation || current.role === 'viewer') conditions.push({ userId: member.id })
+  }
+  for (const target of before.agents) if (!after.agents.some(a => a.id === target.id)) conditions.push({ agentId: target.id })
+  for (const group of before.conversations) {
+    const current = after.conversations.find(c => c.id === group.id)
+    if (!current || current.archived) conditions.push({ conversationId: group.id })
+    else {
+      const removed = group.agentIds.filter(id => !current.agentIds.includes(id))
+      if (removed.length) conditions.push({ conversationId: group.id, agentId: { in: removed } })
+    }
+  }
+  if (conditions.length) {
+    const where = { tabId: before.id, revoked: false, OR: conditions }
+    const revoked = await tx.superTabNativeContext.findMany({ where, select: { id: true } })
+    await tx.superTabNativeContext.updateMany({ where, data: { revoked: true } })
+    if (revoked.length) await tx.superTabDelivery.updateMany({ where: { tabId: before.id,
+      nativeContextId: { in: revoked.map(r => r.id) }, status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled' } })
+  }
+}

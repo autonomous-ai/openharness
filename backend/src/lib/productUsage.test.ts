@@ -20,7 +20,7 @@ vi.mock('./prisma.js', () => ({ prisma: db }))
 // A configured key, so deletion through setProductUsageChoice and the legacy delete path is real.
 vi.mock('../config/env.js', () => ({ env: { PRODUCT_USAGE_SUBJECT_KEY: 'k'.repeat(32) } }))
 import { activitySubject, deleteActivity, deleteLegacyProductUsage, ensureProductUsageExpiry, markActivity, resetActivityMarksForTests, ingestProductUsage, ingestSetupUsage, productUsageChoice, recordRelayUsage, setProductUsageChoice } from './productUsage.js'
-import type { ProductUsageReport } from '../types/productUsage.js'
+import { LAUNCH_ERROR_CODES, LAUNCH_ERROR_FAMILIES, PRODUCT_USAGE_METRICS, type ProductUsageReport } from '../types/productUsage.js'
 
 it('commits release and platform margins under the same unlinked receipt and discards development reports', async () => {
   const context = { surface: 'desktop', release: '1.2.73', platform: 'macos', channel: 'production' } as const
@@ -51,6 +51,23 @@ beforeEach(() => {
 it('keeps the client and server vocabulary identical', () => {
   expect(readFileSync(new URL('../../../cli/src/lib/productUsageContract.ts', import.meta.url), 'utf8'))
     .toBe(readFileSync(new URL('../types/productUsage.ts', import.meta.url), 'utf8'))
+})
+
+it('names every launch code in each of its families, once, as a fixed word that can carry no message', () => {
+  const metrics = new Set<string>(PRODUCT_USAGE_METRICS)
+  expect(metrics.size).toBe(PRODUCT_USAGE_METRICS.length)
+  for (const family of LAUNCH_ERROR_FAMILIES) for (const code of LAUNCH_ERROR_CODES) expect(metrics.has(`${family}_${code}`), `${family}_${code}`).toBe(true)
+  for (const code of LAUNCH_ERROR_CODES) expect(code).toMatch(/^[a-z][a-z0-9_]{1,39}$/)
+  expect(new Set(LAUNCH_ERROR_CODES).size).toBe(LAUNCH_ERROR_CODES.length)
+  expect(LAUNCH_ERROR_CODES).toEqual(expect.arrayContaining(['unlisted', 'none']))
+  for (const name of ['launch_late_failed', 'first_launch_engine_opencode', 'first_launch_engine_other', 'first_launch_codex_signed_out']) expect(metrics.has(name), name).toBe(true)
+})
+
+it('stores launch codes as day totals like any other counter', async () => {
+  const counters = { launch_failed_other: 2, launch_failed_code_invalid_prompt: 1, launch_failed_code_unlisted: 1, first_launch_claude_signed_in: 1 }
+  expect(await ingestProductUsage('private-account', { ...report, counters }, now)).toEqual({ accepted: true })
+  expect(db.$runCommandRaw.mock.calls[0][0].updates.map((u: { q: { metric: string }; u: unknown }) => [u.q.metric, u.u]))
+    .toEqual(Object.entries(counters).map(([metric, value]) => [metric, { $inc: { value } }]))
 })
 
 describe('preference', () => {

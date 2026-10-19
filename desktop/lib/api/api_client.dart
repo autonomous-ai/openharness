@@ -2,6 +2,7 @@ import 'dart:collection';
 
 import 'package:dio/dio.dart';
 
+import '../agent_messages/tab_settings.dart' show AgentMessageLeader;
 import '../auth/auth_session.dart';
 import '../core/config.dart';
 import '../core/models.dart';
@@ -222,6 +223,26 @@ class ApiClient {
     final res = await _dio.get('/api/agent-messages');
     if (res.statusCode == 404) return null;
     return unwrapApiResponse(res) as Map<String, dynamic>?;
+  }
+
+  /// A desk tab's Agent Messages settings (backend PATCH /api/agent-messages/tabs/:tabId): [leader]
+  /// sets it, [clearLeader] removes it. Answers `{tabId, enabled, leader, revision}`; a refusal
+  /// (400 `INVALID_LEADER` "Choose a harness in this tab.") throws [ApiException].
+  Future<Map<String, dynamic>> setAgentMessageTab(
+    String tabId, {
+    bool? enabled,
+    AgentMessageLeader? leader,
+    bool clearLeader = false,
+  }) async {
+    final res = await _dio.patch(
+      '/api/agent-messages/tabs/${Uri.encodeComponent(tabId)}',
+      data: {
+        'enabled': ?enabled,
+        if (leader != null) 'leader': leader.toJson() else if (clearLeader) 'leader': null,
+      },
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    return Map<String, dynamic>.from(unwrapApiResponse(res) as Map);
   }
 
   // -- account-wide Experimental preferences --

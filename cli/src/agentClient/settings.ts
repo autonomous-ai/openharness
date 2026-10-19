@@ -16,9 +16,13 @@ import { outsideCaller } from './model.js'
 const REFUSED = 5
 
 /** Said to an agent that tries to turn a setting on: the person's consent is theirs to give. */
-export const settingsOnlyThePerson = (name: string): string =>
-  `Only the person turns this on: it is their consent to what agents may do. Ask them to run \`harness settings ${name} on\` `
-  + 'in their own terminal, or to turn it on in Harness Settings ▸ Experimental.'
+export const settingsOnlyThePerson = (name: string, value: 'on' | 'off' = 'on'): string =>
+  `Only the person turns this ${value}: it is their consent to what agents may do. Ask them to run \`harness settings ${name} ${value}\` `
+  + `in their own terminal, or to ${value === 'on' ? 'turn it on' : 'change it'} in Harness Settings ▸ Experimental.`
+
+/** The value of a setting that widens what is shared or allowed, which only the person gives. Every setting is granted by `on`
+ *  but the summary switch, which is stored inverted: it widens sharing when it is turned off. */
+const GRANTING: Partial<Record<keyof AgentSettings, 'off'>> = { agentMessagesHideSummary: 'off' }
 
 export const SETTINGS_USAGE = `Usage: harness settings [<name> on|off]
 
@@ -27,12 +31,16 @@ computers, and each off until you turn it on:
   agents-start-agents   agents may start, wait for and close harnesses of their own, and are told how
   pull-request-line     a harness another agent starts says so in the pull requests it opens: one line beside the
                         engine's own
-  agent-messages        agents in the same tab may message each other with harness send`
+  agent-messages        agents in the same tab may message each other with harness send
+  agent-messages-hide-summary
+                        keep the one-line summary of what a harness does from a shared tab's other accounts
+                        (on hides it; it is shared while this is off)`
 
 const ABOUT: Record<keyof AgentSettings, string> = {
   agentsStartAgents: 'agents may start, wait for and close harnesses of their own',
   pullRequestLine: 'a harness another agent starts says so in the pull requests it opens',
   agentMessages: 'agents in the same tab may message each other',
+  agentMessagesHideSummary: 'the one-line summary of what a harness does is kept from a shared tab\'s other accounts',
 }
 
 export const SETTINGS_SIGNED_OUT = 'Signed out: these are experiments of your account. Sign in (harness login) to turn them on.'
@@ -60,8 +68,9 @@ export async function settingsCommand(argv: readonly string[], deps: SettingsDep
     if (!key || (value !== 'on' && value !== 'off') || rest.length) { err(SETTINGS_USAGE); return 2 }
     change = { [key]: value === 'on' }
     // An agent refused a start would otherwise turn on the setting that refused it, and the person's say would be its
-    // own. Its shell says it is one (Claude Code, Codex, AI_AGENT), in a Harness pane or not. Turning one off is safe.
-    if (value === 'on' && outsideCaller(deps.env ?? process.env, '')) { err(settingsOnlyThePerson(name)); return REFUSED }
+    // own. Its shell says it is one (Claude Code, Codex, AI_AGENT), in a Harness pane or not. Turning one off is safe, but for the one stored inverted.
+    const granting = GRANTING[key] ?? 'on'
+    if (value === granting && outsideCaller(deps.env ?? process.env, '')) { err(settingsOnlyThePerson(name, granting)); return REFUSED }
   }
   let answer: Answer
   try {
@@ -89,7 +98,7 @@ export async function settingsCommand(argv: readonly string[], deps: SettingsDep
     return 0
   }
   out(Object.entries(AGENT_SETTING_NAMES)
-    .map(([name, key]) => `${name.padEnd(22)}${answer.body[key] === true ? 'on ' : 'off'}  ${ABOUT[key]}`).join('\n'))
+    .map(([name, key]) => `${name.padEnd(28)}${answer.body[key] === true ? 'on ' : 'off'}  ${ABOUT[key]}`).join('\n'))
   if (answer.body.signedIn === false) out(SETTINGS_SIGNED_OUT)
   return 0
 }

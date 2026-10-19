@@ -56,14 +56,22 @@ SharedPlacement planSharedPlacement({
       if (before != null || tab.ownedBy(me)) continue;
       creates.add((id: deskTabId, name: tab.name));
       for (final h in foreign) {
-        adds.add((deskTabId: deskTabId, machineId: h.machineId, agentId: h.agentId));
+        adds.add((
+          deskTabId: deskTabId,
+          machineId: h.machineId,
+          agentId: h.agentId,
+        ));
       }
       continue;
     }
     for (final h in foreign) {
       if (deskPaneKeys.contains(h.key)) continue;
       if (before != null && before.contains(h.key)) continue;
-      adds.add((deskTabId: deskTabId, machineId: h.machineId, agentId: h.agentId));
+      adds.add((
+        deskTabId: deskTabId,
+        machineId: h.machineId,
+        agentId: h.agentId,
+      ));
     }
   }
   return SharedPlacement(createTabs: creates, addPanes: adds, seen: nextSeen);

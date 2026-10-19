@@ -254,7 +254,7 @@ class _RootShellState extends ConsumerState<RootShell>
         onTimeout: () {},
       );
     } finally {
-      flushAppLog();
+      flushAppLog(durable: true);
     }
     return AppExitResponse.exit;
   }

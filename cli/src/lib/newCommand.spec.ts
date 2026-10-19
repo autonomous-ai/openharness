@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events'
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { newAgentPayload, newCommand, NewUsageError, parseNewArgs, resolveNewMachine, trustAsked, type NewCommandDeps, type NewSocket } from './newCommand.js'
+import { machineChoices, newAgentPayload, newCommand, NewUsageError, parseNewArgs, resolveNewMachine, trustAsked, type NewCommandDeps, type NewSocket } from './newCommand.js'
 import { SANDBOXED } from './unreachable.js'
 import { AgentClientError } from '../agentClient/daemon.js'
 
@@ -118,6 +118,39 @@ describe('harness new: the words', () => {
     expect(resolveNewMachine('macb', machines).machineId).toBe('m2')
     expect(() => resolveNewMachine('mac', machines)).toThrow(/could be Mac mini or MacBook Pro/)
     expect(() => resolveNewMachine('linux', machines)).toThrow(/No machine called/)
+  })
+
+  // Seen 2026-10-16: `harness ps --machine "Mac Auto"` said `No machine called “Mac Auto”` for a machine Tuan
+  // shared with this account, which the app opened and created on with the owner's rights.
+  it('finds a machine shared with the account, and its own machine wins a name both have', () => {
+    const machines = machineChoices({
+      machines: [
+        { machineId: 'own', name: 'MacBook Pro', hostname: 'mbp.local', status: 'running' },
+        { machineId: 'own-mini', name: ' ', hostname: 'Mac mini', status: '' },
+      ],
+      sharedMachines: [
+        { machineId: 'auto', name: 'Mac Auto', status: 'running', share: { ownerName: 'Tuan', added: true } },
+        { machineId: 'theirs-mini', name: 'Mac mini', status: 'running', share: { ownerName: 'Dee', added: true } },
+        { machineId: 'team', name: 'gpu-box', status: 'running', share: { ownerName: 'Lee', added: false } },
+        { machineId: 'nameless', hostname: 'studio.local', share: { ownerName: '  ', added: true } },
+      ],
+    }, 'own')
+    expect(machines.map((machine) => [machine.machineId, machine.label, machine.status, machine.current, machine.sharedBy, machine.toAdd])).toEqual([
+      ['own', 'MacBook Pro', 'running', true, undefined, undefined],
+      ['own-mini', 'Mac mini', 'unknown', false, undefined, undefined],
+      ['auto', 'Mac Auto', 'running', false, 'Tuan', undefined],
+      ['theirs-mini', 'Mac mini', 'running', false, 'Dee', undefined],
+      ['team', 'gpu-box', 'running', false, 'Lee', true],
+      ['nameless', 'studio.local', 'unknown', false, 'another account', undefined],
+    ])
+    expect(resolveNewMachine('Mac Auto', machines).machineId).toBe('auto')
+    expect(resolveNewMachine('auto', machines).machineId).toBe('auto')
+    expect(resolveNewMachine('mac mini', machines).machineId).toBe('own-mini')
+    // A domain share not added yet is not the account's to use: its machine refuses it. Named, it says how to add it.
+    expect(() => resolveNewMachine('gpu-box', machines)).toThrow('Lee shared “gpu-box” with everyone at your company. Add it first: Machines › Shared with your team, in the app or hn.')
+    expect(() => resolveNewMachine('team', machines)).toThrow(/Add it first/)
+    expect(() => resolveNewMachine('gpu', machines)).toThrow('No machine called “gpu”. Yours: MacBook Pro, Mac mini. Shared with you: Mac Auto, Mac mini, studio.local.')
+    expect(() => resolveNewMachine('linux', machineChoices({}, null))).toThrow('No machine called “linux”. Yours: none.')
   })
 })
 

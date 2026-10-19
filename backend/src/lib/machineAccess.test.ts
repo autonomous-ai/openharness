@@ -17,7 +17,7 @@ import { emailDomain, isPublicEmailDomain } from './publicEmailDomains.js'
 const pub = (n: number) => Buffer.alloc(32, n).toString('base64')
 const kim = { sub: 'kim', email: ' Kim@Acme.io ', role: 'user', autonomousEnv: 'prod' as const }
 const share = (patch: Record<string, unknown> = {}) => ({ id: 's1', machineId: 'm1', ownerId: 'owner', autonomousEnv: 'prod',
-  emails: [] as string[], domain: null as string | null, createdAt: new Date(), updatedAt: new Date(), ...patch })
+  emails: [] as string[], domain: null as string | null, grantVersions: null, createdAt: new Date(), updatedAt: new Date(), ...patch })
 const machine = (patch: Record<string, unknown> = {}) => ({ machineId: 'm1', userId: 'owner', autonomousEnv: 'prod', name: 'Studio',
   hostname: 'studio.local', billingStatus: 'not_required', ...patch })
 
@@ -47,15 +47,13 @@ describe('who a share reaches', () => {
 describe('sharedMachineAccess', () => {
   beforeEach(() => { vi.resetAllMocks() })
 
-  it('lets a named address in, and a colleague only once they added it', async () => {
+  // The owner, 2026-10-16: a machine shared with the domain is used as one shared by email is, nothing to add.
+  it('lets a named address in, and a colleague at the domain as well, with nothing to add first', async () => {
     mocks.prisma.machineShare.findUnique.mockResolvedValue(share({ emails: ['kim@acme.io'] }))
     expect(await sharedMachineAccess(kim, machine())).toBe('email')
     mocks.prisma.machineShare.findUnique.mockResolvedValue(share({ domain: 'acme.io' }))
-    mocks.prisma.machineShareAdd.findUnique.mockResolvedValueOnce(null)
-    expect(await sharedMachineAccess(kim, machine())).toBeNull()
-    mocks.prisma.machineShareAdd.findUnique.mockResolvedValueOnce({ machineId: 'm1', userId: 'kim' })
     expect(await sharedMachineAccess(kim, machine())).toBe('domain')
-    expect(mocks.prisma.machineShareAdd.findUnique).toHaveBeenCalledWith({ where: { machineId_userId: { machineId: 'm1', userId: 'kim' } } })
+    expect(mocks.prisma.machineShareAdd.findUnique).not.toHaveBeenCalled()
   })
 
   it('refuses the owner (no share needed), no share, another owner’s row and another environment', async () => {
@@ -83,7 +81,7 @@ describe('machinesSharedWith', () => {
     mocks.keys.mockResolvedValue([{ machineId: 'm1', pub: pub(1), label: 'studio', kind: 'machine', addedAt: 1, seq: 1 }])
   })
 
-  it('lists named and domain shares, with the owner, the machine key and whether it was added', async () => {
+  it('lists named and domain shares alike, with the owner and the machine key', async () => {
     mocks.prisma.machineShare.findMany.mockResolvedValue([share({ emails: ['kim@acme.io'] }), share({ machineId: 'm2', domain: 'acme.io' })])
     mocks.prisma.machine.findMany.mockResolvedValue([machine(), machine({ machineId: 'm2', name: null, hostname: null })])
     const rows = await machinesSharedWith(kim)
@@ -94,8 +92,9 @@ describe('machinesSharedWith', () => {
       { machineId: 'm1', name: 'Studio', hostname: 'studio.local', authMode: 'remote', status: 'running', pub: pub(1),
         share: { ownerName: 'Dee', ownerEmail: 'dee@acme.io', via: 'email', added: true } },
       { machineId: 'm2', name: null, hostname: null, authMode: 'remote', status: 'offline', pub: null,
-        share: { ownerName: 'Dee', ownerEmail: 'dee@acme.io', via: 'domain', added: false } },
+        share: { ownerName: 'Dee', ownerEmail: 'dee@acme.io', via: 'domain', added: true } },
     ])
+    expect(mocks.prisma.machineShareAdd.findMany).not.toHaveBeenCalled()
   })
 
   it('asks no domain at a public one, and drops deleted, suspended and re-owned machines', async () => {
@@ -113,10 +112,9 @@ describe('machinesSharedWith', () => {
     expect(mocks.prisma.machine.findMany).not.toHaveBeenCalled()
   })
 
-  it('names an owner with no name by email, and one gone as a Harness user; an added domain share reads added', async () => {
+  it('names an owner with no name by email, and one gone as a Harness user', async () => {
     mocks.prisma.machineShare.findMany.mockResolvedValue([share({ domain: 'acme.io' })])
     mocks.prisma.machine.findMany.mockResolvedValue([machine()])
-    mocks.prisma.machineShareAdd.findMany.mockResolvedValue([{ machineId: 'm1', userId: 'kim' }])
     mocks.prisma.user.findMany.mockResolvedValueOnce([{ id: 'owner', name: null, email: 'dee@acme.io' }])
     expect((await machinesSharedWith(kim))[0].share).toEqual({ ownerName: 'dee@acme.io', ownerEmail: 'dee@acme.io', via: 'domain', added: true })
     mocks.prisma.user.findMany.mockResolvedValueOnce([])
@@ -130,21 +128,36 @@ describe('shareMembers', () => {
     mocks.keys.mockImplementation(async (id: string) => [{ machineId: `${id}-mac`, pub: pub(id.length), label: `${id}'s Mac`, kind: 'machine', addedAt: 1, seq: 1 }])
   })
 
-  it('names the addresses and the colleagues who added it, with their machines’ keys', async () => {
-    mocks.prisma.machineShareAdd.findMany.mockResolvedValue([{ machineId: 'm1', userId: 'kim' }])
-    mocks.prisma.user.findMany.mockResolvedValue([
-      { id: 'ann', email: 'Ann@Gmail.com', name: 'Ann' },
-      { id: 'kim', email: 'kim@acme.io', name: null },
-      { id: 'lee', email: 'lee@acme.io', name: 'Lee' }, // at the domain, never added
-      { id: 'old', email: 'old@other.io', name: 'Old' }, // added once, no longer reached
-    ])
+  it('names the addresses, then everyone at the domain, with their machines’ keys', async () => {
+    mocks.prisma.user.findMany
+      .mockResolvedValueOnce([{ id: 'ann', email: 'Ann@Gmail.com', name: 'Ann' }])
+      .mockResolvedValueOnce([
+        { id: 'kim', email: 'kim@acme.io', name: null },
+        { id: 'old', email: 'old@other.io', name: 'Old' }, // not at the domain after all: never trusted
+      ])
     const members = await shareMembers(share({ emails: ['ann@gmail.com'], domain: 'acme.io' }))
-    expect(mocks.prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {
-      autonomousEnv: 'prod', id: { not: 'owner' }, OR: [{ email: { in: ['ann@gmail.com'] } }, { id: { in: ['kim'] } }],
+    expect(mocks.prisma.user.findMany).toHaveBeenNthCalledWith(1, expect.objectContaining({ where: {
+      autonomousEnv: 'prod', id: { not: 'owner' }, email: { in: ['ann@gmail.com'] },
+    } }))
+    expect(mocks.prisma.user.findMany).toHaveBeenNthCalledWith(2, expect.objectContaining({ where: {
+      autonomousEnv: 'prod', id: { notIn: ['owner', 'ann'] }, email: { endsWith: '@acme.io', mode: 'insensitive' },
     } }))
     expect(members).toEqual([
       { email: 'ann@gmail.com', name: 'Ann', via: 'email', machines: [{ machineId: 'ann-mac', name: "ann's Mac", pub: pub(3) }] },
       { email: 'kim@acme.io', name: null, via: 'domain', machines: [{ machineId: 'kim-mac', name: "kim's Mac", pub: pub(3) }] },
     ])
+    expect(mocks.prisma.machineShareAdd.findMany).not.toHaveBeenCalled()
+  })
+
+  it('asks for no one at the domain when it is not shared with the domain, or the domain is a public one', async () => {
+    mocks.prisma.user.findMany.mockResolvedValue([{ id: 'ann', email: 'ann@gmail.com', name: 'Ann' }])
+    await shareMembers(share({ emails: ['ann@gmail.com'] }))
+    await shareMembers(share({ emails: ['ann@gmail.com'], domain: 'gmail.com' }))
+    expect(mocks.prisma.user.findMany).toHaveBeenCalledTimes(2)
+    mocks.prisma.user.findMany.mockClear()
+    // Shared with the domain alone: one query, for the domain.
+    mocks.prisma.user.findMany.mockResolvedValue([])
+    expect(await shareMembers(share({ domain: 'acme.io' }))).toEqual([])
+    expect(mocks.prisma.user.findMany).toHaveBeenCalledTimes(1)
   })
 })

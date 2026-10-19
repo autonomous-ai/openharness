@@ -542,6 +542,9 @@ add a kind there, not at the call site.
   sha256(`<provider>:<id>`), `usageAccountKey` here and `accountKey` there, both suites pinning one
   vector — decides whether a remote subscription is this one again (folded in, unlabelled) or
   another (its own figure, labelled with the machine). Hashed because RPC replies are logged.
+  Subscription headings show the provider login's email when available; older readings without
+  an email show only the provider. Email is display metadata, redacted from structured logs.
+  Account grouping, search identity and model selection continue to use the full hashed key.
   ⚠️ A null key never matches, itself included, and a remote reading folds into this computer's
   only when this computer HAS figures — otherwise a token that expired here would swallow a live
   reading of the same account taken there. `readings` stays this computer's alone and `accounts`
@@ -718,9 +721,13 @@ add a kind there, not at the call site.
   (`log_stream.dart` + `log_stream_sinks.dart`): a bounded ring of the last 500 entries that
   `installFileLogs` tees into. Routine DEBUG records use a one-second flush deadline,
   256 entries or 64 Ki characters. INFO/WARN and admitted ERROR records flush their preceding context;
-  export, backgrounding, normal quit and updater handoff also flush. An abrupt process kill
-  can lose the pending DEBUG batch. CLI transcripts remain immediately
-  flushed. No timer runs with an empty buffer. It is developer
+  export, backgrounding, normal quit and updater handoff also flush. Every flush and immediate
+  record reaches the kernel at once, but only admitted ERROR records (crashes included), normal
+  quit and updater handoff fsync (`flushAppLog(durable: true)`): on Linux ext4 an fsync on the UI
+  isolate waits for a journal commit (10–500+ ms under I/O), the best fit for the Linux long
+  frames of 2026-10-16. An abrupt process kill can lose the pending DEBUG batch; a power loss can
+  also lose written lines not yet synced. CLI transcripts are still written line by line, without
+  an fsync. No timer runs with an empty buffer. It is developer
   furniture — `kDebugSurfaceEnabled` (`logging/debug_surface.dart`, `kDebugMode` or
   `--dart-define=HARNESS_DEBUG_SURFACE=true`) gates the rail row, the ⌘D shortcut
   (`kDebugShortcut`, in `appShortcuts()` rather than `kAppShortcuts`) and the ring itself; the log

@@ -17,10 +17,10 @@ import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
 
 type Row = { id: string; userId: string; focusBarCreature: boolean; shareButton: boolean; devicesTab?: boolean
-  agentsStartAgents?: boolean; agentPullRequestLine?: boolean; agentMessages?: boolean; revision: number }
-const COLUMNS = ['focusBarCreature', 'shareButton', 'devicesTab', 'agentsStartAgents', 'agentPullRequestLine', 'agentMessages'] as const
+  agentsStartAgents?: boolean; agentPullRequestLine?: boolean; agentMessages?: boolean; agentMessagesHideSummary?: boolean; revision: number }
+const COLUMNS = ['focusBarCreature', 'shareButton', 'devicesTab', 'agentsStartAgents', 'agentPullRequestLine', 'agentMessages', 'agentMessagesHideSummary'] as const
 /** Every experiment off, as a new account reads them. */
-const OFF = { focus_bar_creature: false, share_button: false, devices_tab: false, agents_start_agents: false, agent_pull_request_line: false, agent_messages: false }
+const OFF = { focus_bar_creature: false, share_button: false, devices_tab: false, agents_start_agents: false, agent_pull_request_line: false, agent_messages: false, agent_messages_hide_summary: false }
 describe('account experiments and retained collections', () => {
   let app: FastifyInstance
   let rows: Map<string, Row>
@@ -59,10 +59,20 @@ describe('account experiments and retained collections', () => {
     expect((await app.inject({ method: 'GET', url: '/api/experimental-settings' })).statusCode).toBe(401)
     expect(mocks.prisma.experimentalSettings.findUnique).not.toHaveBeenCalled()
     expect((await read()).json().data).toEqual({ accountId: 'owner', revision: 0, features: OFF, available: {
-      focus_bar_creature: true, share_button: true, devices_tab: true, agents_start_agents: true, agent_pull_request_line: true, agent_messages: true } })
+      focus_bar_creature: true, share_button: true, devices_tab: true, agents_start_agents: true, agent_pull_request_line: true, agent_messages: true, agent_messages_hide_summary: true } })
     expect(rows.size).toBe(0)
     expect((await zoo()).statusCode).toBe(404)
     expect(mocks.prisma.zoo.findUnique).not.toHaveBeenCalled()
+  })
+  it('keeps the one-line summary shared unless the account hides it: the switch is stored inverted, off by default', async () => {
+    const id = experimentalSettingsId('owner')
+    // A row from before the column has none: read as off, so summaries are shared.
+    rows.set(id, { id, userId: 'owner', focusBarCreature: false, shareButton: true, devicesTab: true, agentMessages: true, revision: 5 })
+    expect((await read()).json().data.features.agent_messages_hide_summary).toBe(false)
+    expect((await write('agent_messages_hide_summary', true)).json().data.features).toEqual({ ...OFF, share_button: true, devices_tab: true, agent_messages: true, agent_messages_hide_summary: true })
+    expect(rows.get(id)).toMatchObject({ agentMessagesHideSummary: true, agentMessages: true, revision: 6 })
+    expect((await write('agent_messages_hide_summary', false)).json().data.features.agent_messages_hide_summary).toBe(false)
+    expect(mocks.deskChanged).toHaveBeenCalledWith('owner', { revision: 0 })
   })
   it('shares choices between clients without losing concurrent changes to different switches', async () => {
     expect((await Promise.all([write('focus_bar_creature', true), write('share_button', true)])).map(r => r.statusCode)).toEqual([200, 200])

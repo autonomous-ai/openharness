@@ -35,12 +35,17 @@ abstract interface class AppLog {
 /// File-backed sinks expose their pending diagnostics without requiring
 /// in-memory sinks or test recorders to manage a buffer.
 abstract interface class FlushableAppLog implements AppLog {
-  void flush();
+  /// Writes what is pending; [durable] also fsyncs what is already written.
+  void flush({bool durable = false});
 }
 
-void flushAppLog() {
+/// [durable] is for quit and the updater's handoff, the last chance before
+/// the process goes: on the UI isolate an fsync can take hundreds of
+/// milliseconds on Linux, so export and backgrounding (every focus change on
+/// a desktop) only write.
+void flushAppLog({bool durable = false}) {
   final sink = appLog;
-  if (sink is FlushableAppLog) sink.flush();
+  if (sink is FlushableAppLog) sink.flush(durable: durable);
 }
 
 /// Level-named conveniences over [AppLog.record], kept as extensions so every
@@ -70,8 +75,11 @@ extension AppLogX on AppLog {
 }
 
 /// [AppLog] backed by a per-day file under `~/.harness/logs`. Writes are
-/// synchronous and flushed except when [bufferDebug] is enabled for routine
-/// debug entries. Errors and lifecycle records also commit pending context.
+/// synchronous except when [bufferDebug] is enabled for routine debug
+/// entries; INFO and WARN also write the pending context. Only an admitted
+/// ERROR (a crash included) is fsynced with it, since an fsync on the UI
+/// isolate can stall a frame for hundreds of milliseconds on Linux (see
+/// `appendLog`); a killed process still loses none of what was written.
 class FileAppLog implements FlushableAppLog {
   FileAppLog(
     this._file, {
@@ -85,7 +93,7 @@ class FileAppLog implements FlushableAppLog {
   final bool bufferDebug;
 
   @override
-  void flush() => _file.flush();
+  void flush({bool durable = false}) => _file.flush(durable: durable);
 
   /// Injected so the stamp this writes is a thing a test can assert, rather than
   /// a thing a test has to watch happen. Same reason [ErrorBurstFilter] takes one.
@@ -124,22 +132,25 @@ class FileAppLog implements FlushableAppLog {
     // back into a per-frame fsync. Its context keeps the normal batch deadline.
     final admitted = _burst.admit(body.toString());
     if (admitted == null) return;
-    _file.append('[${logStamp(_clock())}] $admitted');
-    _appendStack(stackTrace);
+    final line = '[${logStamp(_clock())}] $admitted';
+    // The line and its stack in one durable write: one fsync, not two.
+    _file.append(
+      stackTrace == null ? line : '$line\n${_stackBlock(stackTrace)}',
+      durable: true,
+    );
   }
 
   void _appendStack(StackTrace? stackTrace, {bool buffered = false}) {
     if (stackTrace == null) return;
-    _file.append(
-      stackTrace
-          .toString()
-          .trimRight()
-          .split('\n')
-          .map((l) => '    $l')
-          .join('\n'),
-      buffered: buffered,
-    );
+    _file.append(_stackBlock(stackTrace), buffered: buffered);
   }
+
+  static String _stackBlock(StackTrace stackTrace) => stackTrace
+      .toString()
+      .trimRight()
+      .split('\n')
+      .map((l) => '    $l')
+      .join('\n');
 
   /// Five-wide upper-case level so message columns line up.
   static String _levelTag(AppLogLevel level) => switch (level) {

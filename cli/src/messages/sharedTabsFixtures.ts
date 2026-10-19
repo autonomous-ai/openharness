@@ -22,6 +22,8 @@ export class FakeBackend {
   members = new Map<string, Map<string, string>>()
   invites = new Map<string, Invite>()
   puts: Array<{ tabId: string; version: number; roster: SignedRoster }> = []
+  /** Each account's desk tab settings' leader (`<userId>:<tabId>`), as `PATCH /api/agent-messages/tabs/:tabId` wrote it. */
+  leaders = new Map<string, { machineId: string; agentId: string } | null>()
   calls: string[] = []
   down = false
   /** While set, every call waits for it: a refresh caught half way. */
@@ -56,6 +58,14 @@ export class FakeBackend {
       this.puts.push({ tabId, version: body.version as number, roster: body.roster as SignedRoster })
       for (const told of [user, ...this.members.get(id)?.keys() ?? []]) this.deskChanged?.(told)
       return ok({ sharedTabId: id, version: body.version })
+    }
+    if (method === 'PATCH' && (m = /^\/api\/agent-messages\/tabs\/([^/]+)$/.exec(path))) {
+      // As the route does: the account's word for its desk tab, which every computer of the account hears of
+      // (`desk_changed`). The fake knows no desk, so it takes any leader; the listing derives it (sharedTabs.spec.ts).
+      const tabId = decodeURIComponent(m[1]), leader = (body.leader ?? null) as { machineId: string; agentId: string } | null
+      this.leaders.set(`${user}:${tabId}`, leader)
+      this.deskChanged?.(user)
+      return ok({ tabId, enabled: false, leader, revision: ++this.seq })
     }
     if (method === 'GET' && path === '/api/agent-messages/shares') {
       const shares = [...this.shares].filter(([id, s]) => !s.stopped && (s.ownerUserId === user || this.members.get(id)?.has(user))).map(([id, s]) => {

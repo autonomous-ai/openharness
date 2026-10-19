@@ -293,6 +293,39 @@ void main() {
     }
   });
 
+  testWidgets('View shows Tab Activity only where its toggle acts, titled by '
+      'whether it is open', (tester) async {
+    // Agent Messages alone (a phone-width window) is not enough.
+    swarmMenuBus.send('update', {
+      'enabled': true,
+      'canShowAgentMessages': true,
+    });
+    await pumpBar(tester);
+    await tap(tester, 'menu-bar-view');
+    expect(find.byKey(const Key('menu-bar-toggle-tab-activity')), findsNothing);
+    await tap(tester, 'menu-bar-view');
+
+    swarmMenuBus.send('update', {
+      'enabled': true,
+      'canShowAgentMessages': true,
+      'canShowTabActivity': true,
+    });
+    await tester.pump();
+    await tap(tester, 'menu-bar-view');
+    expect(find.text('Show Tab Activity'), findsOneWidget);
+    await tap(tester, 'menu-bar-toggle-tab-activity');
+    expect(swarmCalls.last.method, 'toggleTabActivity');
+
+    swarmMenuBus.send('update', {
+      'enabled': true,
+      'canShowTabActivity': true,
+      'tabActivityOpen': true,
+    });
+    await tester.pump();
+    await tap(tester, 'menu-bar-view');
+    expect(find.text('Hide Tab Activity'), findsOneWidget);
+  });
+
   testWidgets('History navigates and reopens from the state', (tester) async {
     swarmMenuBus.send('update', {
       'enabled': true,
@@ -364,6 +397,41 @@ void main() {
     expect(find.byKey(const Key('menu-bar-find-terminal')), findsNothing);
     await tap(tester, 'menu-bar-commands');
     expect(swarmCalls.last.method, 'commands');
+  });
+
+  testWidgets('File offers Make Leader or Remove Leader only where the pane can take it', (
+    tester,
+  ) async {
+    // Prose: the row is absent without an offer; with one its title says which.
+    swarmMenuBus.send('update', {
+      'enabled': true,
+      'paneActions': {'toggleLeader': false},
+    });
+    await pumpBar(tester);
+    await tap(tester, 'menu-bar-file');
+    expect(find.byKey(const Key('menu-bar-toggle-leader')), findsNothing);
+    await tap(tester, 'menu-bar-file');
+
+    swarmMenuBus.send('update', {
+      'enabled': true,
+      'paneActions': {'toggleLeader': true},
+      'leaderAction': 'make',
+    });
+    await tester.pump();
+    await tap(tester, 'menu-bar-file');
+    expect(find.text('Make Leader'), findsOneWidget);
+    await tap(tester, 'menu-bar-toggle-leader');
+    expect(swarmCalls.last.method, 'toggleLeader');
+
+    swarmMenuBus.send('update', {
+      'enabled': true,
+      'paneActions': {'toggleLeader': true},
+      'leaderAction': 'remove',
+    });
+    await tester.pump();
+    await tap(tester, 'menu-bar-file');
+    expect(find.text('Remove Leader'), findsOneWidget);
+    expect(find.text('Make Leader'), findsNothing);
   });
 
   testWidgets('rows show the chord the keymap gives their action', (

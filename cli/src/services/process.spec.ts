@@ -212,10 +212,15 @@ describe('a service in its own process', () => {
     // The connection and the client's own request id, when the core gave them: what a grid command is a job of.
     socket().say({ type: 'session_search', payload: { requestId: 'r4' }, asker: { local: true, owner: true, connection: 'local:1', requestId: 'cmd-1' } })
     socket().say({ type: 'session_search', payload: { requestId: 'r5' }, asker: { local: true, owner: true, connection: 7, requestId: null } })
-    await vi.waitFor(() => expect(asked).toHaveLength(5))
+    socket().say({ type: 'session_search', payload: { requestId: 'r6', accountOwner: true }, asker: { local: false, owner: true, accountOwner: false } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r7' }, asker: { local: false, owner: true, accountOwner: true } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r8', accountOwner: true }, asker: { local: false, owner: true, accountOwner: 'yes' } })
+    await vi.waitFor(() => expect(asked).toHaveLength(8))
     expect(asked).toEqual([
       { local: true, owner: true }, { local: false, owner: false }, { local: false, owner: false },
       { local: true, owner: true, connection: 'local:1', requestId: 'cmd-1' }, { local: true, owner: true },
+      { local: false, owner: true, accountOwner: false }, { local: false, owner: true, accountOwner: true },
+      { local: false, owner: true },
     ])
   })
 

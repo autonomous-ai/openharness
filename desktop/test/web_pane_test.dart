@@ -2,16 +2,21 @@
 // agent's frame names a viewer, navigated when that URL changes, left closed
 // once the person closes it, and taken down with the agent.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/open_in_browser.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_monitor_controller.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/widgets/web_pane_panel.dart';
+import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart';
 
+import 'support/fake_webview.dart';
 import 'swarm_screen_test.dart' show mount, terminal;
 import 'swarm_state_test.dart' show createApp;
 
@@ -22,11 +27,12 @@ Map<String, dynamic> _frame(
   String? viewerError,
   String? viewerName,
   Map<String, dynamic>? verdict,
+  String dsh = 'autonomous/autonomous-circuit',
 }) => {
   'id': id,
   'name': 'Agent $id',
   'engine': 'claude',
-  'dsh': 'autonomous/autonomous-circuit',
+  'dsh': dsh,
   'dshName': 'Autonomous Circuit',
   'viewerUrl': ?viewerUrl,
   'viewerError': ?viewerError,
@@ -49,6 +55,7 @@ Future<void> _synced(
   String? viewerError,
   String? viewerName,
   Map<String, dynamic>? verdict,
+  String? dsh,
 }) => app.handleEventForTest('m', {
   'type': 'agent_synced',
   'payload': {
@@ -59,6 +66,7 @@ Future<void> _synced(
       viewerError: viewerError,
       viewerName: viewerName,
       verdict: verdict,
+      dsh: dsh ?? 'autonomous/autonomous-circuit',
     ),
   },
 });
@@ -509,4 +517,116 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  group('with a webview', () {
+    late FakeWebViewPlatform platform;
+    setUp(() {
+      final previous = WebViewPlatform.instance;
+      platform = FakeWebViewPlatform();
+      WebViewPlatform.instance = platform;
+      WebPanePanel.webviewAvailableForTest = true;
+      addTearDown(() {
+        WebPanePanel.webviewAvailableForTest = null;
+        if (previous != null) WebViewPlatform.instance = previous;
+      });
+    });
+
+    Future<AppNotifier> open(
+      WidgetTester tester, {
+      String? dsh,
+      String url = 'http://127.0.0.1:4179/',
+    }) async {
+      final app = createApp();
+      addTearDown(app.dispose);
+      app.stateOf('m')!.nodeOnline = true;
+      app.adoptSessionForTest(terminal('a0', <TerminalBinaryFrame>[]));
+      await mount(tester, app);
+      await _synced(app, 'a0', viewerUrl: url, dsh: dsh);
+      await tester.pump();
+      return app;
+    }
+
+    testWidgets(
+      'Harness Monitor loads its page once, though the tile rebuilds while its channel is added',
+      (tester) async {
+        final gate = platform.channelGate = Completer<void>();
+        final app = await open(tester, dsh: harnessMonitorId);
+        final controller = platform.controllers.single;
+        // The workspace repaints before the native channel call returns.
+        app.notifyListeners();
+        await tester.pump();
+        gate.complete();
+        await tester.pump();
+
+        // A second load cancelled the first (-999), and that read as a failed viewer load.
+        expect(controller.loads, [Uri.parse('http://127.0.0.1:4179/')]);
+        // Let the terminal's batched resize run out.
+        await tester.pump(const Duration(milliseconds: 300));
+      },
+    );
+
+    testWidgets(
+      'a viewer that refuses is tried again by itself; a cancelled navigation shows nothing',
+      (tester) async {
+        await open(tester);
+        final controller = platform.controllers.single;
+        final delegate = controller.delegate!;
+        const url = 'http://127.0.0.1:4179/';
+        expect(controller.loads, [Uri.parse(url)]);
+
+        delegate.onPageStarted!(url);
+        delegate.onWebResourceError!(
+          const WebResourceError(
+            errorCode: -999,
+            description: 'cancelled',
+            isForMainFrame: true,
+            url: url,
+          ),
+        );
+        await tester.pump();
+        expect(find.byKey(const ValueKey('web-pane-waiting')), findsNothing);
+
+        delegate.onWebResourceError!(
+          const WebResourceError(
+            errorCode: -1004,
+            description: 'Could not connect to the server.',
+            isForMainFrame: true,
+            url: url,
+          ),
+        );
+        await tester.pump();
+        expect(find.byKey(const ValueKey('web-pane-waiting')), findsOneWidget);
+        expect(find.text('Could not connect to the server.'), findsOneWidget);
+
+        await tester.pump(const Duration(seconds: 1));
+        expect(controller.loads, [Uri.parse(url), Uri.parse(url)]);
+
+        delegate.onPageStarted!(url);
+        delegate.onPageFinished!(url);
+        await tester.pump();
+        expect(find.byKey(const ValueKey('web-pane-waiting')), findsNothing);
+        await tester.pump(const Duration(milliseconds: 300));
+      },
+    );
+
+    testWidgets(
+      "Reload loads the pane's address, never the webview's own reload",
+      (tester) async {
+        await open(tester);
+        final controller = platform.controllers.single;
+        const url = 'http://127.0.0.1:4179/';
+        controller.delegate!
+          ..onPageStarted!(url)
+          ..onPageFinished!(url);
+        await tester.pump();
+
+        await tester.tap(find.byTooltip(RegExp(r'^Reload viewer(?: · .+)?$')));
+        await tester.pump();
+
+        expect(controller.reloads, 0);
+        expect(controller.loads, [Uri.parse(url), Uri.parse(url)]);
+        await tester.pump(const Duration(milliseconds: 300));
+      },
+    );
+  });
 }

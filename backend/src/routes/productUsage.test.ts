@@ -35,6 +35,22 @@ it.each([
   expect(response.body).not.toContain('PRIVATE_CANARY')
   expect(methods.ingestProductUsage).not.toHaveBeenCalled()
 })
+it('keeps a report with a name this backend does not know yet, without that name', async () => {
+  const context = { surface: 'cli', release: '0.4.18', platform: 'macos', channel: 'production' }
+  const response = await submit({ ...good, context, counters: { turns_started: 2, PRIVATE_CANARY_from_a_newer_client: 1 } })
+  expect(response.statusCode).toBe(200)
+  expect(response.body).not.toContain('PRIVATE_CANARY')
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account',
+    { ...good, context, counters: { turns_started: 2, health_cli_report_unknown_metric: 1 } })
+})
+it('keeps a setup report with a name this backend does not know yet, without that name', async () => {
+  const setup = { schemaVersion: 1, id: good.id, day: good.day, sharing: 'default',
+    counters: { setup_desktop_sign_in_started: 1, setup_desktop_PRIVATE_CANARY: 1 } }
+  const response = await app.inject({ method: 'POST', url: '/api/product-usage/setup', payload: setup })
+  expect(response.statusCode).toBe(200)
+  expect(methods.ingestSetupUsage).toHaveBeenCalledExactlyOnceWith(
+    { ...setup, counters: { setup_desktop_sign_in_started: 1 } })
+})
 it('does not reflect a database error or report contents', async () => {
   methods.ingestProductUsage.mockRejectedValue(new Error('PRIVATE_CANARY'))
   const response = await submit(good)
@@ -91,6 +107,28 @@ it('the complete vocabulary fits bounded chunks, including the longest metric ke
     const payload = { ...good, context: { surface: 'desktop', release: '999.999.999', platform: 'windows', channel: 'production' }, counters: Object.fromEntries(PRODUCT_USAGE_METRICS.slice(i, i + 64).map(k => [k, PRODUCT_USAGE_MAX_COUNT])) }
     expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThan(8192)
     expect((await submit(payload)).statusCode).toBe(200)
+  }
+})
+
+it('takes the CLI\'s launch codes, late launch failures and first launches by engine, and still no name outside the list', async () => {
+  const context = { surface: 'cli', release: '0.4.9', platform: 'macos', channel: 'production' }
+  const counters = { launch_failed_other: 2, launch_failed_code_invalid_prompt: 1, launch_failed_code_unlisted: 1,
+    launch_late_failed: 1, launch_late_failed_code_engine_did_not_start: 1, create_error_code_none: 1,
+    resume_error_code_session_not_found: 1, first_launch_engine_claude: 1, first_launch_claude_signed_in: 1,
+    first_launch_engine_other: 1, first_launch_codex_unknown: 1 }
+  expect((await submit({ ...good, context, counters })).statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledWith('account', expect.objectContaining({ counters }))
+  methods.ingestProductUsage.mockClear()
+  // A name outside the list is never stored: the report keeps its known counters without it (an unknown
+  // name no longer refuses the whole report), and alone it is still refused.
+  for (const name of ['launch_failed_code_PRIVATE_CANARY', 'launch_failed_code_ENGINE_DID_NOT_START', 'restart_error_code_internal',
+    'first_launch_engine_cursor', 'first_launch_opencode_signed_in', 'launch_late_failed_other']) {
+    const response = await submit({ ...good, context, counters: { launch_late_failed: 1, [name]: 1 } })
+    expect(response.statusCode, name).toBe(200)
+    expect(response.body).not.toContain('PRIVATE_CANARY')
+    expect(methods.ingestProductUsage).toHaveBeenLastCalledWith('account', expect.objectContaining(
+      { counters: { launch_late_failed: 1, health_cli_report_unknown_metric: 1 } }))
+    expect((await submit({ ...good, context, counters: { [name]: 1 } })).statusCode, name).toBe(400)
   }
 })
 

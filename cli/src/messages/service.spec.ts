@@ -7,7 +7,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { PaneInbox } from './inbox.js'
 import { deliveryKey, FYI_REASON, PUMP_MS } from './mailbox.js'
-import { header, LIMITS, LONG_TEXT, longAdvice, MessageError, parseMessage, RULES, type Message } from './model.js'
+import { header, LEADER_ROLE, LIMITS, LONG_TEXT, longAdvice, MessageError, parseMessage, RULES, WORKER_ROLE, type Message } from './model.js'
 import type { Rpc } from './rpc.js'
 import { HELD_OFF_REASON, HELD_OUTSIDE_MS, MESSAGES_OFF_TEXT, REMOTE_STATUS_MS, SETTING_FRESH_MS, startAgentMessages, SWEEP_AFTER_MS, TICK_MS, WHO_MS } from './service.js'
 import { MessageStore } from './store.js'
@@ -30,7 +30,7 @@ const session = (agentId: string, pane: string, engine = 'claude', cwd = `/work/
   ({ agentId, sessionId: `s-${agentId}`, engine, cwd, tmuxPane: pane, active: true, title: agentId }) as unknown as RegisteredSession
 
 interface Setup {
-  tabs?: Array<{ id: string; name: string; panes: Array<{ machineId: string; agentId: string }> }>
+  tabs?: Array<{ id: string; name: string; panes: Array<{ machineId: string; agentId: string }>; leader?: { machineId: string; agentId: string } | null }>
   agents?: RegisteredSession[]
   rpc?: Rpc
   backendStatus?: number
@@ -590,7 +590,7 @@ describe('from the owner\'s other machines', () => {
 
   it('names its agents for another machine, and only those it has', async () => {
     const t = setup()
-    expect(await t.ask({ action: 'who', agentIds: ['api', 'ghost', 3] }, OWNER_REMOTE)).toEqual({ agents: [{ agentId: 'api', name: 'api', engine: 'claude', project: 'api' }] })
+    expect(await t.ask({ action: 'who', agentIds: ['api', 'ghost', 3] }, OWNER_REMOTE)).toEqual({ agents: [{ agentId: 'api', name: 'api', engine: 'claude', project: 'api', state: 'unknown' }] })
     expect(await t.ask({ action: 'who' }, OWNER_REMOTE)).toEqual({ agents: [] })
     expect(await t.ask({ action: 'status' }, OWNER_REMOTE)).toEqual({ statuses: [] })
   })
@@ -626,6 +626,51 @@ describe('the roster note and the directory', () => {
     await vi.advanceTimersByTimeAsync(TICK_MS)
     expect(waiting('%2').some((n) => n.startsWith('0note-'))).toBe(true)
     t.service.stop()
+  })
+
+  it('tells every harness of an unshared tab who leads it, as the tab setting lists it: the leader its role, the others theirs', async () => {
+    vi.useFakeTimers()
+    const tabs = [{ id: 'app', name: 'app', leader: { machineId: 'm1', agentId: 'lead' } as { machineId: string; agentId: string } | null,
+      panes: [{ machineId: 'm1', agentId: 'lead' }, { machineId: 'm1', agentId: 'api' }, { machineId: 'm2', agentId: 'phone' }] }]
+    const t = setup({ tabs })
+    const roster = async (pane: string) => String((await t.ask({ action: 'send', pane })).roster)
+    // The leader is told it leads; its teammates, on this machine, by the name they reach it by. No shared tab's lines.
+    expect(await roster('%1')).toBe(['[Harness] Agent Messages are on in tab "app". Teammates:', '  api    Claude Code · studio · api',
+      '  phone  Claude Code · laptop · app', RULES, LEADER_ROLE].join('\n'))
+    expect(await roster('%2')).toBe(['[Harness] Agent Messages are on in tab "app". Teammates:', '  lead   Codex · studio · lead',
+      '  phone  Claude Code · laptop · app', RULES, WORKER_ROLE('lead')].join('\n'))
+    // The notes in each agent's inbox say it too.
+    t.service.start()
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(TICK_MS)
+    const notes = (pane: string) => {
+      const dir = t.inbox.paneDir(pane)!
+      return (require('node:fs').readdirSync(dir) as string[]).filter((n) => n.startsWith('0note-'))
+        .map((n) => JSON.parse(require('node:fs').readFileSync(join(dir, n), 'utf8')).text as string)
+    }
+    expect(notes('%1')).toEqual([await roster('%1')])
+    expect(notes('%2')).toEqual([await roster('%2')])
+    // The leader's pane left the tab: the listing names no leader (the backend derives it), and at the next read every
+    // note loses its role, given again once.
+    tabs[0].leader = null
+    t.notice({ type: 'desk_changed', revision: 5 })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(TICK_MS)
+    expect(notes('%1')).toEqual([expect.stringMatching(/Teammates:/)])
+    expect(notes('%1')[0].endsWith(RULES)).toBe(true)
+    expect(notes('%2')[0].endsWith(RULES)).toBe(true)
+    t.service.stop()
+  })
+
+  it('names no leader that is no teammate of the harness, nor one a backend from before tab leaders never lists', async () => {
+    const panes = [{ machineId: 'm1', agentId: 'lead' }, { machineId: 'm1', agentId: 'api' }]
+    const elsewhere = setup({ tabs: [{ id: 'app', name: 'app', leader: { machineId: 'm9', agentId: 'gone' }, panes }] })
+    expect(String((await elsewhere.ask({ action: 'send', pane: '%1' })).roster).endsWith(RULES)).toBe(true)
+    const old = setup({ tabs: [{ id: 'app', name: 'app', panes }] })
+    expect(String((await old.ask({ action: 'send', pane: '%1' })).roster).endsWith(RULES)).toBe(true)
+    // A leader that is no harness at all is taken as none listed.
+    const odd = setup({ tabs: [{ id: 'app', name: 'app', leader: { machineId: 7, agentId: 'lead' } as unknown as { machineId: string; agentId: string }, panes }] })
+    expect(String((await odd.ask({ action: 'send', pane: '%1' })).roster).endsWith(RULES)).toBe(true)
   })
 
   it('counts Agent Messages turned on or off as a change of the directory, at its next read', async () => {

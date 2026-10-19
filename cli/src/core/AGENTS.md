@@ -65,10 +65,10 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   theirs. `messagesLink.ts`: Agent Messages out of this process (the edge host): which of its deliveries may be
   written, as it last said, the few things it may ask (`MESSAGES_QUERIES`: the agents, this daemon, the account
   signed in here, the account's backend, its log's notice for the windows, shared tabs' keys and relay, whether its
-  harnesses work (`activity`), and that a
+  harnesses work (`activity`, with a one-line summary of what each does when asked), and that a
   roster changed), the desk's changes and changes to its switch (the account's, as the core keeps it), and the ask
   for it as the core starts. Its backend ask is held to `MESSAGES_BACKEND_ROUTES`, an allowlist of method and
-  whole path (the tab listing, and shared tabs' shares, rosters, invitations, members and moves): the process holds
+  whole path (the tab listing and a tab's leader, and shared tabs' shares, rosters, invitations, members and moves): the process holds
   no credential, so every route listed there is a route that process could call as the account. `tab_key` and
   `tab_relay` pass one `TabKey` or `TabRelay` method a call to the gateway, which signs and seals and holds the
   sockets; `observers` hands a changed roster to Share (`harness_share_rosters`).

@@ -21,6 +21,7 @@ import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/ws/ws_conn.dart';
 
+import 'support/agent_messages_api.dart' show agentMessagesSwitch;
 import 'swarm_state_test.dart' show MemoryStore;
 
 const _tab = 'aaaaaaaaaaaaaaaaaaaaaaaa';
@@ -337,6 +338,9 @@ Future<(AppNotifier, _Daemon)> _started({_Daemon? daemon}) async {
   addTearDown(app.dispose);
   await app.deskStartForTest();
   await _settle();
+  // A shared tab's harnesses message each other: the account's switch is on,
+  // which the Leader chip needs (final review I1).
+  await agentMessagesSwitch(app, true);
   expect(app.swarms.any((s) => s.id == _deskTab), isTrue);
   return (app, d);
 }

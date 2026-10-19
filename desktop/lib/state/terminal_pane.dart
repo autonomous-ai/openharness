@@ -81,6 +81,10 @@ class TerminalPane {
 
   TerminalSession? session;
 
+  /// Ephemeral input provenance. Never persisted in shared pane layout.
+  String? inputContext;
+  bool watchOnly = false;
+
   /// Browser viewer input, installed only while its renderer is mounted.
   bool Function()? focusViewerInput;
   SharedHarness? sharedHarness;

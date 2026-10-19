@@ -25,8 +25,9 @@ final _emailPattern = RegExp(
   r"^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9-]*\.)+[A-Za-z]{2,}$",
 );
 
-/// One person in the list: an address the owner named, or a colleague who added a domain share.
-typedef _Person = ({String email, bool named, bool usingIt});
+/// One person in the list: an address the owner named, and whether they use it now. Everyone at the
+/// domain is the switch above the list, never listed one by one.
+typedef _Person = ({String email, bool usingIt});
 
 /// Sharing one of the account's machines with other accounts
 /// (docs/plans/2026-10-15-share-machine-plan.md), in the Machines picker's preview like Rename.
@@ -156,24 +157,15 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     ];
   }
 
-  /// Everyone in the list: the addresses named, in order, then colleagues who added it through the
-  /// domain. Whether each uses it now comes from the machine's members.
+  /// Everyone in the list: the addresses named, in order. Whether each uses it now comes from the
+  /// machine's members. Since 2026-10-16 a domain share is used like an email one, with no add step,
+  /// so the members hold everyone at the domain: they are the switch, not rows.
   List<_Person> get _people {
     bool usingIt(String email) => _members.any(
       (m) => m['email'] == email && ((m['machines'] as num?) ?? 0) > 0,
     );
     return [
-      for (final email in _emails)
-        (email: email, named: true, usingIt: usingIt(email)),
-      for (final member in _members)
-        if (member['via'] == 'domain' &&
-            member['email'] is String &&
-            !_emails.contains(member['email']))
-          (
-            email: member['email'] as String,
-            named: false,
-            usingIt: usingIt(member['email'] as String),
-          ),
+      for (final email in _emails) (email: email, usingIt: usingIt(email)),
     ];
   }
 
@@ -321,11 +313,10 @@ class MachineSharingFormState extends State<MachineSharingForm> {
             : () => unawaited(_add()),
       ),
       for (final person in _people)
-        if (person.named)
-          (
-            id: 'remove:${person.email}',
-            run: _busy ? null : () => unawaited(_remove(person.email)),
-          ),
+        (
+          id: 'remove:${person.email}',
+          run: _busy ? null : () => unawaited(_remove(person.email)),
+        ),
     ];
   }
 
@@ -574,8 +565,8 @@ class MachineSharingFormState extends State<MachineSharingForm> {
                       const SizedBox(height: 2),
                       Text(
                         _sameDomain
-                            ? 'Anyone with an @$domain address can add it from Add machine.'
-                            : 'Let anyone with an @$domain address add it.',
+                            ? 'Anyone with an @$domain address can use it.'
+                            : 'Let anyone with an @$domain address use it.',
                         style: DesktopChrome.metadata(),
                       ),
                     ],
@@ -693,12 +684,8 @@ class MachineSharingFormState extends State<MachineSharingForm> {
                     Flexible(
                       child: Text(
                         person.usingIt
-                            ? person.named
-                                  ? 'Using it'
-                                  : 'Using it · added from $_domain'
-                            : person.named
-                            ? 'Invited · not using it yet'
-                            : 'Added from $_domain',
+                            ? 'Using it'
+                            : 'Invited · not using it yet',
                         style: DesktopChrome.metadata(),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -708,28 +695,14 @@ class MachineSharingFormState extends State<MachineSharingForm> {
               ],
             ),
           ),
-          if (person.named)
-            AppIconButton(
-              key: ValueKey('machine-sharing:remove:${person.email}'),
-              icon: AppIcons.close,
-              tooltip: 'Stop sharing with ${person.email}',
-              destructive: true,
-              focusNode: _node('remove:${person.email}'),
-              onPressed: _busy ? null : () => unawaited(_remove(person.email)),
-            )
-          else
-            Tooltip(
-              message:
-                  'Turn off Everyone at $_domain to stop sharing with them',
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: Icon(
-                  AppIcons.globe,
-                  size: AppIcons.inlineSize,
-                  color: DesktopChrome.muted,
-                ),
-              ),
-            ),
+          AppIconButton(
+            key: ValueKey('machine-sharing:remove:${person.email}'),
+            icon: AppIcons.close,
+            tooltip: 'Stop sharing with ${person.email}',
+            destructive: true,
+            focusNode: _node('remove:${person.email}'),
+            onPressed: _busy ? null : () => unawaited(_remove(person.email)),
+          ),
         ],
       ),
     );
@@ -950,19 +923,14 @@ class MachineSharingFormState extends State<MachineSharingForm> {
                 children: [
                   Expanded(
                     child: line(
-                      '${person.email}  ${person.usingIt
-                          ? 'using it'
-                          : person.named
-                          ? 'invited'
-                          : 'added from $_domain'}',
+                      '${person.email}  ${person.usingIt ? 'using it' : 'invited'}',
                     ),
                   ),
-                  if (person.named)
-                    action(
-                      'remove:${person.email}',
-                      'Remove',
-                      _busy ? null : () => unawaited(_remove(person.email)),
-                    ),
+                  action(
+                    'remove:${person.email}',
+                    'Remove',
+                    _busy ? null : () => unawaited(_remove(person.email)),
+                  ),
                 ],
               ),
           ],

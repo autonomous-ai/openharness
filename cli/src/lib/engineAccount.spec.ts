@@ -72,6 +72,9 @@ describe('engineAccount', () => {
     touch(join(root, '.codex', 'sessions', '2026', '09', '30'), 1_850_000_000)
     expect((await engineAccount('codex', { home: root, ...linux })).lastUsedAt).toBe(1_800_000_000_000)
     expect((await engineAccount('codex', { home: home(), ...linux })).lastUsedAt).toBeNull()
+    // Asked for the sign-in alone (the gateway's first-launch count): no folder is scanned.
+    expect(await engineAccount('claude', { home: root, ...linux, lastUsed: false })).toEqual({ signedIn: false, lastUsedAt: null })
+    expect(await engineAccount('codex', { home: root, ...linux, lastUsed: false })).toEqual({ signedIn: false, lastUsedAt: null })
   })
 
   it('finds Codex signed in only with a token or key in auth.json, or an API key', async () => {

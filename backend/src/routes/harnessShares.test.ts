@@ -4,8 +4,9 @@ import { randomUUID } from 'node:crypto'
 const mocks = vi.hoisted(() => ({
   prisma: { harnessShare: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
     machine: { findFirst: vi.fn(), findMany: vi.fn() }, user: { findMany: vi.fn(), findUnique: vi.fn() } },
-  presence: vi.fn(), changed: vi.fn(), listChanged: vi.fn(), auth: vi.fn(),
+  mayObserve: vi.fn(), presence: vi.fn(), changed: vi.fn(), listChanged: vi.fn(), auth: vi.fn(),
 }))
+vi.mock('../superTabs/store.js', () => ({ SuperTabStore: class { mayObserve = mocks.mayObserve } }))
 vi.mock('../lib/prisma.js', () => ({ prisma: mocks.prisma, machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] } }))
 vi.mock('../lib/bus.js', () => ({ getAgentPresenceMany: mocks.presence, publishShareChanged: mocks.changed,
   publishDeviceMachineListChanged: mocks.listChanged }))
@@ -159,4 +160,17 @@ describe('account-bound harness invitations', () => {
     mocks.prisma.machine.findFirst.mockResolvedValueOnce({ ...machine, billingStatus: 'pending' })
     expect(await recipientShare('share', ken)).toBeNull()
   })
+  it('rechecks Super Tab membership for session admission and excludes revoked views from inventory', async () => {
+    mocks.auth.mockResolvedValue(ken)
+    const share = { id: 'share', ...input(), superTabId: 'a'.repeat(24), ownerId: owner.sub, expiresAt: new Date(input().expiresAt) }
+    mocks.prisma.harnessShare.findFirst.mockResolvedValue(share)
+    mocks.prisma.harnessShare.findMany.mockResolvedValue([share])
+    mocks.mayObserve.mockResolvedValue(true)
+    expect(await recipientShare('share', ken)).toEqual(share)
+    expect(mocks.mayObserve).toHaveBeenCalledWith(ken, share.superTabId, 'm1', 'agent-1', owner.sub)
+    mocks.mayObserve.mockResolvedValue(false)
+    expect(await recipientShare('share', ken)).toBeNull()
+    expect((await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })).json().data.machines).toEqual([])
+  })
+
 })

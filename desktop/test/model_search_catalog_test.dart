@@ -30,13 +30,15 @@ class _MachineSubscriptions extends ModelsMenuController {
     {
       'engine': 'codex',
       'title': 'OpenAI',
-      'account': 'local-account',
+      'account': 'same@example.com',
+      'accountKey': 'local-account',
       'status': signedOut ? 'Not signed in' : '50% remaining',
     },
     {
       'engine': 'codex',
       'title': 'OpenAI',
-      'account': 'remote-account',
+      'account': 'same@example.com',
+      'accountKey': 'remote-account',
       'status': '75% remaining',
     },
   ];
@@ -226,7 +228,7 @@ void main() {
         'DDD catalog',
         'EEE catalog',
         '[ More models (2) ]',
-        'Shared Qwen · team.lan',
+        'Shared Qwen · team.lan · Team',
       ]);
       expect(search.rows.map(search.modelSection), [
         ModelSearchSection.subscriptions,
@@ -257,7 +259,7 @@ void main() {
         for (final letter in ['A', 'B', 'C', 'D', 'E', 'F', 'G'])
           '${letter * 3} catalog',
         '[ Show fewer ]',
-        'Shared Qwen · team.lan',
+        'Shared Qwen · team.lan · Team',
       ]);
       expect(search.selected!.title, 'AAA catalog');
       expect(search.modelRowAction(search.selected!), isNull);
@@ -332,13 +334,13 @@ void main() {
           search.rows.singleWhere(test);
       final subscription = row((r) => r.title == 'OpenAI');
       final api = row((r) => r.title == 'Custom API');
-      final shared = row((r) => r.title == 'Shared Qwen · team.lan');
+      final shared = row((r) => r.title == 'Shared Qwen · team.lan · Team');
       final more = row(search.isModelDownloadsRow);
 
       // One line a row: every other row keeps its own title, who shares a model included.
       expect(search.modelRowTitle(subscription), 'OpenAI');
       expect(search.modelRowTitle(api), 'Custom API');
-      expect(search.modelRowTitle(shared), 'Shared Qwen · team.lan');
+      expect(search.modelRowTitle(shared), 'Shared Qwen · team.lan · Team');
       // The fold is named for what Enter does, with how many it holds.
       expect(search.modelRowTitle(more), 'More models (2)');
       search.move(search.rows.indexOf(more) - search.cursor);
@@ -374,7 +376,7 @@ void main() {
         machineId: 'm',
       );
       final own = search.rows.singleWhere(
-        (row) => row.title == 'OpenAI · local-account',
+        (row) => grouped.entries[row.modelId]?.subscription?['accountKey'] == 'local-account',
       );
       expect(search.canSelectModel(own), isTrue);
       expect(search.modelRowStatus(own), '50% remaining');
@@ -385,129 +387,134 @@ void main() {
     }
   });
 
-  test(
-    'own models precede shared models even without local inventory',
-    () async {
-      app.localReadFails = true;
-      app.inventory = const GridModels(
-        gridName: 'home',
-        models: [],
-        grids: [
-          GridSection(
-            name: 'Team',
-            own: false,
-            models: [GridModel(id: 'Shared model', node: 'team.lan')],
-          ),
-          GridSection(
-            name: 'home',
-            own: true,
-            models: [GridModel(id: 'qwen3.8-27b', node: 'mac.lan')],
-          ),
-        ],
-      );
-      await app.modelManager.refresh();
-      expect(catalog.rows.map((row) => row.title), [
-        'qwen3.8-27b',
-        'Shared model · team.lan',
-      ]);
-      final own = catalog.entries[catalog.rows.first.modelId]!;
-      expect(own.source, 'On your machines');
-      expect(own.node, 'mac.lan');
-      expect(own.local, isNull);
-      final search = SwarmSearchController(app, const [], models: catalog)
-        ..setQuery(':local');
-      addTearDown(search.dispose);
-      expect(search.rows.map((row) => row.title), ['qwen3.8-27b']);
-      search.setQuery(':mac.lan');
-      expect(search.rows.map((row) => row.title), ['qwen3.8-27b']);
-      expect(app.actions, isEmpty);
-      expect(app.downloads, isEmpty);
-    },
-  );
+  // The owner, 2026-10-18: a model another machine serves — on your own grid too — is shared with
+  // you, named with that machine and its grid; Your models are this computer's.
+  test('a model another machine serves on your own grid is shared, under its machine and grid', () async {
+    app.localReadFails = true;
+    app.inventory = const GridModels(
+      gridName: 'home',
+      models: [],
+      grids: [
+        GridSection(
+          name: 'Team',
+          own: false,
+          models: [GridModel(id: 'Shared model', node: 'team.lan')],
+        ),
+        GridSection(
+          name: 'home',
+          own: true,
+          models: [GridModel(id: 'qwen3.8-27b', node: 'mac.lan')],
+        ),
+      ],
+    );
+    await app.modelManager.refresh();
+    // Your own grid's first, then other teams'.
+    expect(catalog.rows.map((row) => row.title), [
+      'qwen3.8-27b · mac.lan · home',
+      'Shared model · team.lan · Team',
+    ]);
+    final other = catalog.entries[catalog.rows.first.modelId]!;
+    expect(other.section, ModelSearchSection.shared);
+    expect(other.source, 'Shared · home');
+    expect(other.node, 'mac.lan');
+    expect(other.local, isNull);
+    final search = SwarmSearchController(app, const [], models: catalog)
+      ..setQuery(':local');
+    addTearDown(search.dispose);
+    expect(search.rows.map((row) => row.title), isEmpty);
+    search.setQuery(':mac.lan');
+    expect(search.rows.map((row) => row.title), [
+      'qwen3.8-27b · mac.lan · home',
+    ]);
+    expect(app.actions, isEmpty);
+    expect(app.downloads, isEmpty);
+  });
 
-  test(
-    'a catalog model running here is one row, matched to the name grid serves it under',
-    () async {
-      Map<String, Object?> running() => {
-        'models': [
-          {
-            'id': 'unsloth/Qwen3.8-27B-GGUF',
-            'name': 'Qwen3.8-27B',
-            'state': 'running',
-            'canStop': true,
-            'app': 'Grid',
-            'servedAs': ['Qwen3.8-27B-UD-Q4_K_M'],
-          },
-        ],
-      };
-      app.localInventory = running();
-      app.inventory = const GridModels(
-        gridName: 'home',
-        models: [],
-        grids: [
-          GridSection(
-            name: 'home',
-            own: true,
-            models: [GridModel(id: 'Qwen3.8-27B-UD-Q4_K_M', node: 'This Mac')],
-          ),
-        ],
-      );
-      await app.modelManager.refresh();
-      final served = catalog.entries.values.where(
-        (entry) => entry.local?.id == 'unsloth/Qwen3.8-27B-GGUF',
-      );
-      expect(catalog.entries, hasLength(1));
-      expect(served.single.gridModel?.id, 'Qwen3.8-27B-UD-Q4_K_M');
-    },
-  );
-
-  test('a name is shown without the quant its file ends in, as hn shows it', () {
-    const cases = {
-      'Qwen3.8-27B-UD-Q4_K_M': 'Qwen3.8-27B',
-      'Qwen3-4B-Instruct-2507-Q4_K_M': 'Qwen3-4B-Instruct-2507',
-      'qwen3:4b-instruct-2507-q4_k_m': 'qwen3:4b-instruct-2507',
-      'Kev-0.8B-Q8_0': 'Kev-0.8B',
-      'gpt-oss-20b-MXFP4': 'gpt-oss-20b',
-      'Mistral-7B-v0.1.IQ4_XS': 'Mistral-7B-v0.1',
-      'gemma-4-E4B-it-BF16': 'gemma-4-E4B-it',
-      'Qwen3.6-35B-A3B-UD_Q5_K_XL': 'Qwen3.6-35B-A3B',
-      'Qwen3.6-35B-A3B': 'Qwen3.6-35B-A3B',
-      'llama3.2:3b': 'llama3.2:3b',
-      'Qwen-Q3-Coder': 'Qwen-Q3-Coder',
-      'Q4_K_M': 'Q4_K_M',
-      '-Q4': '-Q4',
-      'Qwen/Qwen3.8-27B': 'Qwen/Qwen3.8-27B',
+  test('a catalog model running here is one row, matched to the name grid serves it under', () async {
+    Map<String, Object?> running() => {
+      'models': [
+        {
+          'id': 'unsloth/Qwen3.8-27B-GGUF',
+          'name': 'Qwen3.8-27B',
+          'state': 'running',
+          'canStop': true,
+          'app': 'Grid',
+          'servedAs': ['Qwen3.8-27B-UD-Q4_K_M'],
+        },
+      ],
     };
-    for (final MapEntry(:key, :value) in cases.entries) {
-      expect(withoutQuant(key), value, reason: key);
-    }
+    app.localInventory = running();
+    app.inventory = const GridModels(
+      gridName: 'home',
+      models: [],
+      grids: [
+        GridSection(
+          name: 'home',
+          own: true,
+          models: [GridModel(id: 'Qwen3.8-27B-UD-Q4_K_M', node: 'This Mac')],
+        ),
+      ],
+    );
+    await app.modelManager.refresh();
+    final served = catalog.entries.values.where(
+      (entry) => entry.local?.id == 'unsloth/Qwen3.8-27B-GGUF',
+    );
+    expect(catalog.entries, hasLength(1));
+    expect(served.single.gridModel?.id, 'Qwen3.8-27B-UD-Q4_K_M');
   });
 
   test(
-    'a model shared from another machine reads as it does there, without its quant',
-    () async {
-      app.localInventory = {'models': <Object>[]};
-      app.inventory = const GridModels(
-        gridName: 'home',
-        models: [],
-        grids: [
-          GridSection(
-            name: 'scholes-f8d388e6',
-            own: false,
-            models: [GridModel(id: 'Qwen3.8-27B-UD-Q4_K_M', node: 'harness')],
-          ),
-        ],
-      );
-      await app.modelManager.refresh();
-      expect(catalog.rows.single.title, 'Qwen3.8-27B · harness');
-      final entry = catalog.entries.values.single;
-      expect(entry.gridModel?.id, 'Qwen3.8-27B-UD-Q4_K_M');
-      final search = SwarmSearchController(app, const [], models: catalog)
-        ..setQuery(':Q4_K_M');
-      addTearDown(search.dispose);
-      expect(search.rows.map((row) => row.title), ['Qwen3.8-27B · harness']);
+    'a name is shown without the quant its file ends in, as hn shows it',
+    () {
+      const cases = {
+        'Qwen3.8-27B-UD-Q4_K_M': 'Qwen3.8-27B',
+        'Qwen3-4B-Instruct-2507-Q4_K_M': 'Qwen3-4B-Instruct-2507',
+        'qwen3:4b-instruct-2507-q4_k_m': 'qwen3:4b-instruct-2507',
+        'Kev-0.8B-Q8_0': 'Kev-0.8B',
+        'gpt-oss-20b-MXFP4': 'gpt-oss-20b',
+        'Mistral-7B-v0.1.IQ4_XS': 'Mistral-7B-v0.1',
+        'gemma-4-E4B-it-BF16': 'gemma-4-E4B-it',
+        'Qwen3.6-35B-A3B-UD_Q5_K_XL': 'Qwen3.6-35B-A3B',
+        'Qwen3.6-35B-A3B': 'Qwen3.6-35B-A3B',
+        'llama3.2:3b': 'llama3.2:3b',
+        'Qwen-Q3-Coder': 'Qwen-Q3-Coder',
+        'Q4_K_M': 'Q4_K_M',
+        '-Q4': '-Q4',
+        'Qwen/Qwen3.8-27B': 'Qwen/Qwen3.8-27B',
+      };
+      for (final MapEntry(:key, :value) in cases.entries) {
+        expect(withoutQuant(key), value, reason: key);
+      }
     },
   );
+
+  test('a model shared from another machine reads as it does there, without its quant', () async {
+    app.localInventory = {'models': <Object>[]};
+    app.inventory = const GridModels(
+      gridName: 'home',
+      models: [],
+      grids: [
+        GridSection(
+          name: 'scholes-f8d388e6',
+          own: false,
+          models: [GridModel(id: 'Qwen3.8-27B-UD-Q4_K_M', node: 'harness')],
+        ),
+      ],
+    );
+    await app.modelManager.refresh();
+    expect(
+      catalog.rows.single.title,
+      'Qwen3.8-27B · harness · scholes-f8d388e6',
+    );
+    final entry = catalog.entries.values.single;
+    expect(entry.gridModel?.id, 'Qwen3.8-27B-UD-Q4_K_M');
+    final search = SwarmSearchController(app, const [], models: catalog)
+      ..setQuery(':Q4_K_M');
+    addTearDown(search.dispose);
+    expect(search.rows.map((row) => row.title), [
+      'Qwen3.8-27B · harness · scholes-f8d388e6',
+    ]);
+  });
 
   test('legacy own-grid replies remain visible in models', () async {
     app.localInventory = {'models': <Object>[]};
@@ -516,11 +523,11 @@ void main() {
       models: [GridModel(id: 'Qwen', node: 'mac.lan')],
     );
     await app.modelManager.refresh();
-    expect(catalog.rows.single.title, 'Qwen');
-    expect(catalog.entries.values.single.source, 'On your machines');
+    expect(catalog.rows.single.title, 'Qwen · mac.lan · home');
+    expect(catalog.entries.values.single.source, 'Shared · home');
   });
 
-  test('Use identifies only the subscription available on the pane host', () {
+  test('Use keeps accounts with the same email scoped to the pane host', () {
     final usage = _MachineSubscriptions();
     final accounts = ModelSearchCatalog(
       app.modelManager,
@@ -533,12 +540,12 @@ void main() {
     try {
       final local = search.rows.firstWhere(
         (row) =>
-            accounts.entries[row.modelId]?.subscription?['account'] ==
+            accounts.entries[row.modelId]?.subscription?['accountKey'] ==
             'local-account',
       );
       final remote = search.rows.firstWhere(
         (row) =>
-            accounts.entries[row.modelId]?.subscription?['account'] ==
+            accounts.entries[row.modelId]?.subscription?['accountKey'] ==
             'remote-account',
       );
       expect(search.modelRowAction(local), 'Use');
@@ -581,11 +588,18 @@ void main() {
         catalog.entries.values.where((entry) => entry.local != null),
         hasLength(1),
       );
+      // This computer's is yours; mac.lan's is shared with you.
       expect(
         catalog.entries.values.where(
-          (entry) => entry.source == 'On your machines',
+          (entry) => entry.source == 'On this computer',
         ),
-        hasLength(2),
+        hasLength(1),
+      );
+      expect(
+        catalog.entries.values.where(
+          (entry) => entry.source == 'Shared · home',
+        ),
+        hasLength(1),
       );
     },
   );
@@ -718,8 +732,12 @@ void main() {
         ..setQuery(':')
         ..setModelSelection('codex', app.inventory, machineId: 'm');
       try {
-        final resting = search.rows.firstWhere((row) => row.title == 'Resting');
-        final offline = search.rows.firstWhere((row) => row.title == 'Offline');
+        final resting = search.rows.firstWhere(
+          (row) => row.title == 'Resting · mac.lan · home',
+        );
+        final offline = search.rows.firstWhere(
+          (row) => row.title == 'Offline · rig.lan · home',
+        );
         expect(search.modelRowAction(resting), 'Use');
         expect(search.modelRowAction(offline), isNull);
         expect(search.canSelectModel(offline), isFalse);

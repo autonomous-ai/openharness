@@ -91,6 +91,64 @@ void main() {
     expect(identical(session.terminal, before), isTrue);
   });
 
+  test('changing input context withholds typing until the new stream is ready and preserves its terminal', () async {
+    await ready();
+    await session.handleBinary(
+      output(
+        0,
+        'retained screen'.codeUnits,
+        keyframe: true,
+        cols: 100,
+        rows: 30,
+      ),
+    );
+    final terminal = session.terminal;
+    expect(session.acceptsInput, isTrue);
+    session.stageInputContext('context_alpha_123456');
+    expect(session.acceptsInput, isFalse);
+    await session.setInputContext('context_alpha_123456');
+    final opening = sent
+        .lastWhere((frame) => frame.type == 'terminal_open')
+        .payload;
+    expect(opening['inputContext'], 'context_alpha_123456');
+    expect(identical(session.terminal, terminal), isTrue);
+    await session.handleFrame('terminal_ready', {
+      'requestId': opening['requestId'],
+      'protocolVersion': 3,
+      'streamId': streamId,
+      'agentId': 'agent-1',
+    });
+    await session.handleBinary(
+      output(
+        0,
+        'retained screen'.codeUnits,
+        keyframe: true,
+        cols: 100,
+        rows: 30,
+      ),
+    );
+    expect(session.acceptsInput, isTrue);
+    final latestTerminal = session.terminal;
+    expect(await session.sendComposerText('Scoped composed input'), isTrue);
+    expect(
+      sent
+          .lastWhere((frame) => frame.type == 'message')
+          .payload['inputContext'],
+      'context_alpha_123456',
+    );
+    session.stageInputContext(null);
+    expect(session.acceptsInput, isFalse);
+    await session.setInputContext(null);
+    expect(
+      sent
+          .lastWhere((frame) => frame.type == 'terminal_open')
+          .payload
+          .containsKey('inputContext'),
+      isFalse,
+    );
+    expect(identical(session.terminal, latestTerminal), isTrue);
+  });
+
   test(
     'a renderer that keeps failing still gives up rather than looping',
     () async {
@@ -108,6 +166,25 @@ void main() {
       expect(resyncs, lessThanOrEqualTo(3));
     },
   );
+
+  test('a watch-only scope cannot take control or submit text', () async {
+    await ready();
+    await session.handleBinary(
+      output(0, 'screen'.codeUnits, keyframe: true, cols: 100, rows: 30),
+    );
+    session.stageInputContext(null, watchOnly: true);
+    expect(session.readOnly, isTrue);
+    expect(session.acceptsInput, isFalse);
+    expect(await session.sendComposerText('Do not send'), isFalse);
+    await session.setInputContext(null, watchOnly: true);
+    expect(
+      sent
+          .lastWhere((frame) => frame.type == 'terminal_open')
+          .payload['watchOnly'],
+      isTrue,
+    );
+    expect(sent.where((frame) => frame.type == 'message'), isEmpty);
+  });
 
   test('a tmux passthrough sequence is swallowed, not painted', () async {
     await ready();
@@ -1454,22 +1531,28 @@ void main() {
     await reopening;
   });
 
-  test('a stream the daemon no longer has is reopened in place at once', () async {
-    await ready();
-    await session.handleBinary(
-      output(0, utf8.encode('screen'), keyframe: true, cols: 100, rows: 30),
-    );
-    await session.handleFrame('terminal_error', {
-      'streamId': streamId,
-      'code': 'TERMINAL_STREAM_NOT_FOUND',
-      'message': 'no live terminal stream',
-    });
-    await pumpEventQueue();
+  test(
+    'a stream the daemon no longer has is reopened in place at once',
+    () async {
+      await ready();
+      await session.handleBinary(
+        output(0, utf8.encode('screen'), keyframe: true, cols: 100, rows: 30),
+      );
+      await session.handleFrame('terminal_error', {
+        'streamId': streamId,
+        'code': 'TERMINAL_STREAM_NOT_FOUND',
+        'message': 'no live terminal stream',
+      });
+      await pumpEventQueue();
 
-    expect(sent.where((frame) => frame.type == 'terminal_open'), hasLength(2));
-    expect(session.status, TerminalSessionStatus.opening);
-    expect(session.errorCode, isNot('TERMINAL_STREAM_NOT_FOUND'));
-  });
+      expect(
+        sent.where((frame) => frame.type == 'terminal_open'),
+        hasLength(2),
+      );
+      expect(session.status, TerminalSessionStatus.opening);
+      expect(session.errorCode, isNot('TERMINAL_STREAM_NOT_FOUND'));
+    },
+  );
 
   test('a missing-stream report about another stream is ignored', () async {
     await ready();

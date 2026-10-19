@@ -37,22 +37,25 @@ import { env } from '../config/env.js'
 import { agentProject } from '../lib/agentProject.js'
 import { agentSettingsPath, readAgentSettings } from '../lib/agentSettings.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { type DirectoryTab, MessageDirectory, type Member } from './directory.js'
+import { type DirectoryTab, MessageDirectory, POLL_MS, type Member } from './directory.js'
 import { PaneInbox } from './inbox.js'
 import { Mailbox, type MailboxAgent } from './mailbox.js'
-import { type DeliveryStatus, LIMITS, LONG_TEXT, longAdvice, type Message, MessageError, messageId, note, parseMessage, type Recipient, rendered, type SharedNote, type Teammate } from './model.js'
+import { type DeliveryStatus, LIMITS, LONG_TEXT, longAdvice, type Message, MessageError, messageId, note, parseMessage, type Recipient, rendered, type TabNote, type Teammate } from './model.js'
 import { messagesRpc, RefusedError, type Rpc } from './rpc.js'
 import { RequestStore } from './requestStore.js'
 import { cleanName, type Roster } from './roster.js'
 import { consentKey, ConsentStore } from './consentStore.js'
 import { NoticeStore } from './noticeStore.js'
 import { RosterStore } from './rosterStore.js'
-import { accountsIn, sharedTabsFor } from './sharedDirectory.js'
+import { accountsIn, markerLabel, markerName, markerNameWithId, sharedTabsFor } from './sharedDirectory.js'
+import { sharedTabIdOf } from './sharedTabsRoster.js'
 import { SharedTabs } from './sharedTabs.js'
 import { carries, checkHandedOver, cleanText, fitsRequest, RateCounter, statusCode, wireMessage, type TabContext } from './tabDelivery.js'
 import { Ledger, ledgerPath, parseStarted } from '../agentClient/ledger.js'
 import { watchSettingFile } from './settingWatch.js'
-import { ActivityIn, ActivityOut } from './tabActivity.js'
+import { ActivityIn, ActivityOut, type ActivityNow, type ActivityState } from './tabActivity.js'
+import { cleanSummary } from '../lib/activitySummary.js'
+import { VERSION } from '../version.js'
 import { createTaskReader, type TaskReader, type TaskResult } from './tasks.js'
 import { MessageStore, type Entry, type LocalDelivery, type Outgoing } from './store.js'
 
@@ -123,6 +126,7 @@ export const SETTING_FRESH_MS = 2_000
 /** How long another machine's key, as it reported it for a shared tab's roster, is taken as read. */
 export const MACHINE_KEY_MS = 10 * 60_000
 /** The requests about tabs shared with other accounts: answered only while it is awake. */
+const ACTIVITY_STATES = new Set<ActivityState>(['working', 'idle', 'unknown'])
 const SHARE_ACTIONS = ['shares', 'share_tab', 'share_invite', 'share_revoke', 'share_accept', 'share_add', 'share_remove',
   'share_leader', 'share_remove_member', 'share_leave', 'share_stop', 'share_retrust_check', 'share_retrust', 'share_move', 'share_tasks', 'share_who', 'share_notice_dismiss']
 /** How long People waits for a machine of the tab to say its harnesses' repo and branch. */
@@ -201,9 +205,10 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
   // The account's experiment, kept by the core in the data folder (lib/agentSettings.ts) as it changes: a small file,
   // read again at most every SETTING_FRESH_MS, so a switch turned off takes effect at the next look; while off,
   // nothing looks, and the core's word (`settingsChanged`) or the file's watch wakes it (settingWatch.ts).
-  let setting = { on: true, at: -Infinity }
+  let setting = { on: true, hide: false, at: -Infinity }
   const readSetting = (): boolean => {
-    setting = { on: readAgentSettings(options.dataDir ?? core.dataDir).agentMessages, at: now() }
+    const saved = readAgentSettings(options.dataDir ?? core.dataDir)
+    setting = { on: saved.agentMessages, hide: saved.agentMessagesHideSummary, at: now() }
     return setting.on
   }
   const messagingOn = (): boolean => {
@@ -214,6 +219,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     }
     return setting.on
   }
+  /** Whether the account keeps the one-line summary from other accounts (Settings ▸ Experimental), read as `messagingOn` is. */
+  const summaryHidden = (): boolean => { messagingOn(); return setting.hide }
   let waking = false
   const later = (): void => {
     if (waking) return
@@ -228,7 +235,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       if (response.status !== 200 || response.body.success !== true) throw new Error('directory unavailable')
       return response.body.data
     },
-    changed: () => { mailbox.refuseAll(); notesPump(); options.changed?.() },
+    changed: () => { mailbox.refuseAll(); notesPump(); followLeaders(); options.changed?.() },
     // The shared tabs this computer holds, once it knows its account: which rosters are its own depends on it, and which
     // machines are its own, this one always (as sharedTabs.ts `checkOwn` takes them). This machine's harnesses are in
     // another account's tab only as it asked (`consent`).
@@ -366,10 +373,11 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
    * account's harness shares with a harness of any other account, this one's included, takes its account's prefix
    * (`bob/api`, the spec's "Messages across accounts"); a name still shared with anyone here, the sender included,
    * gets the start of its id, which `harness send` takes on its own. `qualified` and `bare`: another account's harness
-   * by its name with its account's prefix and without, for a sender that writes one or the other.
+   * by its name with its account's prefix and without, for a sender that writes one or the other. `harness`: the name
+   * without the account's prefix, and `marker`: its account's label in a task marker, which `tabNote` names it by.
    */
-  function distinct(me: Member, members: Member[]): Array<ReturnType<typeof teammate> & { qualified?: string; bare?: string }> {
-    const mates = members.map(teammate)
+  function distinct(me: Member, members: Member[]): Array<ReturnType<typeof teammate> & { qualified?: string; bare?: string; harness: string; marker?: string }> {
+    const mates = members.map((m) => { const mate = teammate(m); return { ...mate, harness: mate.name } })
     const accounts = accountsIn(rosters?.all() ?? [])
     const accountOf = (m: Member): string => (foreign(m) ? m.accountId! : '')
     const holders = new Map<string, Set<string>>()
@@ -382,11 +390,12 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       const qualified = `${named?.label ?? idStart(m.member.accountId!)}/${m.name}`
       // A shared tab's note names its account (`Bob's account`), as a message's header does.
       return { ...m, name: holders.get(m.name.toLowerCase())!.size > 1 ? qualified : m.name, qualified: qualified.toLowerCase(), bare: m.name.toLowerCase(),
-        account: named?.name ?? idStart(m.member.accountId!) }
+        account: named?.name ?? idStart(m.member.accountId!), marker: named?.marker ?? markerLabel(idStart(m.member.accountId!)) }
     })
     const counts = new Map<string, number>()
     for (const name of [teammate(me).name, ...prefixed.map((m) => m.name)]) counts.set(name.toLowerCase(), (counts.get(name.toLowerCase()) ?? 0) + 1)
-    return prefixed.map((m) => (counts.get(m.name.toLowerCase()) ?? 0) > 1 ? { ...m, name: `${m.name} (${idStart(m.member.agentId)})` } : m)
+    return prefixed.map((m) => (counts.get(m.name.toLowerCase()) ?? 0) > 1
+      ? { ...m, name: `${m.name} (${idStart(m.member.agentId)})`, harness: `${m.harness} (${idStart(m.member.agentId)})` } : m)
   }
 
   /** This harness's own name as its teammates see it: with the start of its id when one of them shares it. Another
@@ -450,27 +459,45 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     if (!peers.length) return null
     const mates = distinct(me, peers)
     const tabs = directory.tabsOf(me)
-    const sharing = sharedNote(me, tabs, mates)
-    const text = note(tabs, mates, sharing)
+    const about = tabNote(me, tabs, mates)
+    const text = note(tabs, mates, about)
     // The signature, which decides whether the agent is given the note again, leaves the branches out: an agent switches
     // branches many times in a task, and each switch would otherwise put the whole note in every teammate's context
     // again. `harness send` alone prints the branches as they are now.
-    const signed = sharing ? note(tabs, mates.map(({ branch: _branch, ...mate }) => mate), sharing) : text
+    const signed = about.sharedTabId ? note(tabs, mates.map(({ branch: _branch, ...mate }) => mate), about) : text
     return { text, signature: createHash('sha256').update(signed).digest('hex').slice(0, 12) }
   }
 
   /**
-   * What a tab shared with other accounts adds to a harness's note: its id and who leads it, by the name the harness
-   * reaches it by, as its roster says. A leader the tab does not list (an owner's roster may name any harness) is no
-   * one to defer to, and is not named. A harness in two shared tabs is told of the first.
+   * What a harness's note says of its tab: who leads it, by the name the harness reaches it by, and for a tab shared with
+   * other accounts its id. A harness in a shared tab is told of the first one, as before tab leaders; any other of its
+   * first tab. The leader is the account's tab setting, as the directory lists it, for every tab of this account's desk,
+   * the one it shares included: that setting is the one source, and the roster only follows it. In a tab another account
+   * shares, which lists no setting, it is the roster's. A leader the tab does not list (an owner's roster may name any
+   * harness) is no one to defer to, and is not named.
    */
-  function sharedNote(me: Member, tabs: DirectoryTab[], mates: ReturnType<typeof distinct>): SharedNote | undefined {
-    const sharedTabId = tabs.find((t) => t.sharedTabId)?.sharedTabId
-    if (!sharedTabId) return undefined
-    const lead = rosters?.current(sharedTabId)?.roster.leader ?? null
+  function tabNote(me: Member, tabs: DirectoryTab[], mates: ReturnType<typeof distinct>): TabNote {
+    const tab = tabs.find((t) => t.sharedTabId) ?? tabs[0]
+    const sharedTabId = tab.sharedTabId
+    // A backend from before tab leaders lists no setting for this account's tabs either: a shared one's roster names it.
+    const lead = tab.leader !== undefined ? tab.leader : sharedTabId ? rosters?.current(sharedTabId)?.roster.leader ?? null : null
     const youLead = !!lead && lead.machineId === me.machineId && lead.agentId === me.agentId
     const leader = lead && mates.find((m) => m.member.machineId === lead.machineId && m.member.agentId === lead.agentId)?.name
-    return { sharedTabId, youLead, ...(leader ? { leader } : {}) }
+    // An unshared tab's tasks carry the id it would get if shared (`tabKey`), so a task made before sharing stays the tab's.
+    // Unknown until the account is (`signedInAs`), and the note then changes once.
+    const tabKey = !sharedTabId && account ? sharedTabIdOf(account.accountId, tab.id) : undefined
+    const label = account ? markerLabel(account.email) : undefined
+    // Each harness by what the marker takes (final review I2): its name as said, made marker-safe, under its account's label.
+    // Two harnesses of one account whose marker names are the same (titles that differ only in what a marker drops, or
+    // that have no letter) would be one assignee, and the desktop would give the task to the first: each gets the start
+    // of its id, where the marker name collides in the tab, not only where the display names do.
+    const entries = label ? [{ account: label, display: ownName(me, mates.map((m) => m.member)), agentId: me.agentId, name: '', you: true },
+      ...mates.map((m) => ({ account: m.marker ?? label, display: m.harness, agentId: m.member.agentId, name: m.name, you: false }))] : []
+    const taken = new Map<string, number>()
+    for (const e of entries) taken.set(`${e.account}/${markerName(e.display)}`, (taken.get(`${e.account}/${markerName(e.display)}`) ?? 0) + 1)
+    const assignees = entries.map((e) => ({ name: e.name, marker: `${e.account}/${(taken.get(`${e.account}/${markerName(e.display)}`) ?? 0) > 1
+      ? markerNameWithId(e.display, e.agentId) : markerName(e.display)}`, ...(e.you ? { you: true } : {}) }))
+    return { ...(sharedTabId ? { sharedTabId } : tabKey ? { tabKey } : {}), ...(label ? { account: label, assignees } : {}), youLead, ...(leader ? { leader } : {}) }
   }
 
   /** A tab's tasks for a request or a note, only for a roster this computer holds: `gh` is never run for any other id. */
@@ -479,11 +506,29 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     return tasks(sharedTabId)
   }
 
-  /** What `harness send` alone adds in a tab shared with other accounts: its tasks, or the reason they cannot be read now
-   *  (no `gh`, signed out): the roster is still given whole. */
+  /** The tasks of one of this account's desk tabs, shared or not, by the key shared tabs use (sharedTabs `sharedTabIdOf`):
+   *  `gh` runs for it without a roster, since the key is derived and nothing another account sent is in it. A tab of another
+   *  account's shared tab is not on this desk, and is refused. */
+  async function tasksOfTab(tabId: string): Promise<TaskResult> {
+    const me = await signedInAs()
+    const key = sharedTabIdOf(me.accountId, tabId)
+    // A tab of another account's has its share id for id, which is never the key derived from this account.
+    const onDesk = (): boolean => !!directory.current()?.tabs.some((t) => t.id === tabId && (!t.sharedTabId || t.sharedTabId === key))
+    // The listing at hand answers for a tab it has; only a tab it lacks may be new, and asks the backend again.
+    if (!onDesk()) await directory.refresh()
+    const tab = onDesk()
+    if (!tab) throw new MessageError('NOT_A_TAB', 'That tab is not on your desk.')
+    return tasks(key)
+  }
+
+  /** What `harness send` alone adds: its tab's tasks, or the reason they cannot be read now (no `gh`, signed out): the
+   *  roster is still given whole. In a tab shared with other accounts, from its held roster; in any other, from the key
+   *  the tab would be shared with. */
   async function tasksSection(me: Member): Promise<TaskResult | { error: string; detail: string } | null> {
-    const sharedTabId = directory.tabsOf(me).find((t) => t.sharedTabId)?.sharedTabId
-    if (!sharedTabId || mode !== 'awake') return null
+    const tabs = directory.tabsOf(me)
+    const tab = tabs.find((t) => t.sharedTabId) ?? tabs[0]
+    if (!tab || mode !== 'awake') return null
+    const sharedTabId = tab.sharedTabId
     // The roster and the messages are never held back for GitHub: gh may take 8 s a run and several runs a refresh, and the
     // client waits 30 s in all. A slow refresh goes on and fills the cache for the next look.
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -491,7 +536,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       timer = setTimeout(() => resolve({ error: 'LOADING', detail: 'still loading: ask again in a moment' }), TASKS_WAIT_MS)
       timer.unref?.()
     })
-    return Promise.race([tasksOf(sharedTabId), late]).finally(() => clearTimeout(timer)).catch((error: unknown) => error instanceof MessageError
+    return Promise.race([sharedTabId ? tasksOf(sharedTabId) : tasksOfTab(tab.id), late]).finally(() => clearTimeout(timer)).catch((error: unknown) => error instanceof MessageError
       ? { error: error.code, detail: error.message }
       : { error: 'TASKS_UNAVAILABLE', detail: 'The tasks could not be read right now.' })
   }
@@ -758,6 +803,14 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     return answer
   }
 
+  let missedTabAt = -Infinity
+  /** An answer within `ms`, or null: a machine that did not answer, or refused, is not waited for longer. */
+  async function within(asking: Promise<Record<string, unknown>>, ms: number): Promise<Record<string, unknown> | null> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<null>((done) => { timer = setTimeout(() => done(null), ms); timer.unref?.() })
+    return Promise.race([asking.catch(() => null), late]).finally(() => clearTimeout(timer))
+  }
+
   /**
    * Each harness of a held tab with its repo and branch, asked of its machine as a tab's note does (`who`). A machine is
    * asked only for the roster's harnesses on it, and only the answers for those are kept, so People never names more than
@@ -772,10 +825,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     const answers = await Promise.all([...byMachine].map(async ([machineId, agentIds]) => {
       const payload = { action: 'who', agentIds }
       const own = roster.harnesses.some((h) => h.machineId === machineId && h.accountId === me.accountId)
-      const asking = machineId === self() ? whoAre(payload) : own ? rpc(at(machineId), payload, WHO_WAIT_MS) : askTab(sharedTabId, machineId, payload, WHO_WAIT_MS)
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const late = new Promise<null>((done) => { timer = setTimeout(() => done(null), WHO_WAIT_MS); timer.unref?.() })
-      const answer = await Promise.race([asking.catch(() => null), late]).finally(() => clearTimeout(timer))
+      const asking = machineId === self() ? whoAre(payload, undefined, false) : own ? rpc(at(machineId), payload, WHO_WAIT_MS) : askTab(sharedTabId, machineId, payload, WHO_WAIT_MS)
+      const answer = await within(asking, WHO_WAIT_MS)
       const agents = Array.isArray(answer?.agents) ? answer.agents as Record<string, unknown>[] : []
       return agents.filter((a) => typeof a.agentId === 'string' && agentIds.includes(a.agentId)).map((a) => ({ machineId, agentId: a.agentId as string,
         ...(typeof a.project === 'string' ? { project: cleanText(a.project, 120) } : {}), ...(typeof a.branch === 'string' ? { branch: cleanText(a.branch, 200) } : {}) }))
@@ -1002,7 +1053,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
         return { ok: true }
       }
       case 'who': return whoAre(payload, (agentId) => roster.harnesses.some((h) => h.machineId === self() && h.agentId === agentId && h.accountId === me.accountId)
-        && (roster.owner.accountId === me.accountId || consented(ctx.sharedTabId, agentId)))
+        && (roster.owner.accountId === me.accountId || consented(ctx.sharedTabId, agentId)), false)
       default: throw new MessageError('UNKNOWN_ACTION', 'Unknown Agent Messages request.')
     }
   }
@@ -1071,18 +1122,67 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     }) }
   }
 
-  /** This machine's agents' names, for the machine that asks: with `listed`, only those it may name. A harness in a
+  /** This machine's agents' names, for the machine that asks (`ownMachine`: one of the account's own, which is also told each
+   *  harness's state and summary; another account's never is, it has `activity` for what it may know): with `listed`, only those it may name. A harness in a
    *  shared tab's branch too, for that tab's note on the asking machine; no Git runs for any other. */
-  async function whoAre(payload: Record<string, unknown>, listed: (agentId: string) => boolean = () => true): Promise<Record<string, unknown>> {
+  async function whoAre(payload: Record<string, unknown>, listed: (agentId: string) => boolean = () => true, ownMachine = true): Promise<Record<string, unknown>> {
     const ids = Array.isArray(payload.agentIds) ? payload.agentIds.filter((id): id is string => typeof id === 'string').slice(0, 64) : []
     const sessions = ids.filter(listed).flatMap((agentId) => { const session = localAgent(agentId); return session ? [session] : [] })
     const shared = new Set(sessions.filter((s) => s.cwd && inSharedTab({ machineId: self(), agentId: s.agentId })).map((s) => s.cwd!))
-    await readBranches([...shared])
+    const [, now] = await Promise.all([readBranches([...shared]), ownMachine ? activityNow(sessions.map((s) => s.agentId), true) : Promise.resolve<Record<string, ActivityNow>>({})])
     return { agents: sessions.map((session) => {
       const branch = session.cwd && shared.has(session.cwd) ? branches.get(session.cwd)?.branch : undefined
       return { agentId: session.agentId, name: core.agents.displayName(session) || session.agentId.slice(0, 8), engine: session.engine,
-        ...(session.cwd ? { project: basename(session.cwd) } : {}), ...(branch ? { branch } : {}) }
+        ...(session.cwd ? { project: basename(session.cwd) } : {}), ...(branch ? { branch } : {}), ...(ownMachine ? now[session.agentId] ?? { state: 'unknown' } : {}) }
     }) }
+  }
+
+  /** What this machine's harnesses are doing now, as its core says: their state and, unless it is to be kept back, one
+   *  line on what each does: only for the agents the core reports (it reports none that is not live). */
+  async function activityNow(agentIds: string[], withSummary: boolean): Promise<Record<string, ActivityNow>> {
+    if (!agentIds.length) return {}
+    const [states, lines] = await Promise.all([core.agents.activity(agentIds), withSummary ? core.agents.summaries(agentIds) : Promise.resolve<Record<string, string>>({})])
+    return Object.fromEntries(Object.entries(states).map(([agentId, state]) => [agentId, { state, ...(lines[agentId] ? { summary: lines[agentId] } : {}) }]))
+  }
+
+  /**
+   * Every harness of one of this account's desk tabs, shared or not, with what it does now (`tab_activity`, the sidebar's
+   * rows): this machine's from the core; the account's other machines' by `who`, which they answer with state and summary,
+   * `away` for one that does not answer within WHO_WAIT_MS; other accounts' from what their machines told
+   * (tabActivity.ts), for a tab shared with them. Nothing here needs shared tabs to be running.
+   */
+  async function tabActivity(tabId: string): Promise<Record<string, unknown>> {
+    if (!messagingOn()) throw new MessageError('MESSAGES_OFF', MESSAGES_OFF_TEXT)
+    const me = await signedInAs()
+    const onDesk = (): DirectoryTab | undefined => directory.current()?.tabs.find((t) => t.id === tabId)
+    // A tab it does not know may be new: the desk is read again for it, but not more than once in POLL_MS, so ids a window
+    // makes up cannot drive reads of the backend.
+    if (!onDesk() && now() - missedTabAt >= POLL_MS) { missedTabAt = now(); await directory.refresh() }
+    const tab = onDesk()
+    if (!tab) throw new MessageError('NOT_A_TAB', 'That tab is not on your desk.')
+    const foreign = (m: Member): boolean => !!m.accountId && m.accountId !== me.accountId
+    const byMachine = new Map<string, string[]>()
+    for (const m of tab.panes.filter((p) => !foreign(p))) byMachine.set(m.machineId, [...(byMachine.get(m.machineId) ?? []), m.agentId])
+    const known = new Map<string, ActivityNow & { away?: true }>()
+    await Promise.all([...byMachine].map(async ([machineId, agentIds]) => {
+      if (machineId === self()) {
+        const now = await activityNow(agentIds, true)
+        for (const agentId of agentIds) known.set(`${machineId} ${agentId}`, now[agentId] ?? { state: 'unknown' })
+        return
+      }
+      const answer = await within(rpc(at(machineId), { action: 'who', agentIds }, WHO_WAIT_MS), WHO_WAIT_MS)
+      // An answer that names no state is a daemon from before them: its harnesses are not away, only not known.
+      const heard = new Map((Array.isArray(answer?.agents) ? answer.agents as Record<string, unknown>[] : []).map((a) => [a.agentId, a]))
+      for (const agentId of agentIds) {
+        const a = heard.get(agentId)
+        const summary = cleanSummary(a?.summary)
+        known.set(`${machineId} ${agentId}`, { state: ACTIVITY_STATES.has(a?.state as ActivityState) ? a!.state as ActivityState : 'unknown',
+          ...(summary ? { summary } : {}), ...(answer ? {} : { away: true as const }) })
+      }
+    }))
+    return { harnesses: tab.panes.map((m) => ({ machineId: m.machineId, agentId: m.agentId,
+      ...(foreign(m) ? (tab.sharedTabId ? activityIn.of(tab.sharedTabId, m.machineId, m.agentId, now()) : undefined) ?? { state: 'unknown' }
+        : known.get(`${m.machineId} ${m.agentId}`)) })) }
   }
 
   function history(payload: Record<string, unknown>): Record<string, unknown> {
@@ -1167,6 +1267,31 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     return read && [...read.machines.keys()]
   }
 
+  /** The leader the account's tab setting names for a desk tab, as the directory lists it (null for none, or one that may
+   *  lead it no more). Undefined before the tabs were first read (a failed read keeps the last good listing), from a
+   *  backend that lists no setting, or for a tab the listing does not have: the roster this computer signs then keeps its
+   *  own leader (sharedTabs.ts `ownLeader`). */
+  async function ownLeader(tabId: string): Promise<{ machineId: string; agentId: string } | null | undefined> {
+    return (await directory.refresh())?.tabs.find((t) => t.id === tabId)?.leader
+  }
+
+  /**
+   * The directory changed: when it lists, for a tab this computer shares, another leader than the roster it holds names,
+   * the shares are read again, and that signs the setting's leader (sharedTabs.ts `reshare`). The `desk_changed` the
+   * setting's change causes does this already; this catches one this computer missed (its socket was down as it was
+   * sent), at the next read of the tabs, so the members are not left with the old leader until something else changes.
+   */
+  function followLeaders(): void {
+    if (!shared || !rosters) return
+    const held = rosters
+    const behind = (directory.current()?.tabs ?? []).some((t) => {
+      const roster = t.sharedTabId && t.leader !== undefined ? held.current(t.sharedTabId)?.roster : undefined
+      return !!roster && roster.owner.machineId === self()
+        && (roster.leader?.machineId !== t.leader?.machineId || roster.leader?.agentId !== t.leader?.agentId)
+    })
+    if (behind) void shared.refresh().catch(() => {})
+  }
+
   /** The owner's panes in a desk tab, named as its teammates see them; null while the tabs cannot be read. */
   async function ownPanes(tabId: string): Promise<Array<{ machineId: string; agentId: string; name: string; engine: string }> | null> {
     const tabs = await directory.refresh()
@@ -1194,8 +1319,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       const peers = [...new Set([...roster.harnesses.filter((h) => h.accountId !== me.accountId).map((h) => h.machineId),
         ...(roster.owner.accountId !== me.accountId ? [roster.owner.machineId] : [])])]
       if (!mine.length || !peers.length) continue
-      const states = await core.agents.activity(mine.map((h) => h.agentId))
-      const agents = activityOut.due(roster.sharedTabId, now(), states)
+      // The account may keep the summary from other accounts: then it is not even read, and one sent before is replaced.
+      const agents = activityOut.due(roster.sharedTabId, now(), await activityNow(mine.map((h) => h.agentId), !summaryHidden()))
       if (!agents.length) continue
       await Promise.all(peers.filter((m) => !activityOut.refusing(roster.sharedTabId, m, now())).map(async (machineId) => {
         try { await askTab(roster.sharedTabId, machineId, { action: 'activity', sharedTabId: roster.sharedTabId, agents }, 5_000) }
@@ -1238,7 +1363,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       })
     } catch { return }
     const tabs = new SharedTabs({ key: core.account.tabKey, relay: core.account.tabRelay, store: rosters,
-      backend: (method, path, body) => core.account.backend(method, path, body), self: signedInAs, ownPanes, machineKey, askMachine, ownMachines, consent,
+      backend: (method, path, body) => core.account.backend(method, path, body), self: signedInAs, ownPanes, ownLeader, machineKey, askMachine, ownMachines, consent,
       requests: new RequestStore(join(stateDir, 'shared-tabs-requests.json'), now), changed: () => directory.rebuild(),
       ...(notices ? { notices } : {}), announce: tellShares, answer: answerTab,
       // A session with another account's machine opened: what waits for it goes now, not at its next try.
@@ -1288,6 +1413,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       case 'share_accept': return shared.accept(String(payload.inviteId), typeof payload.ownerPub === 'string' ? payload.ownerPub : undefined)
       case 'share_add': return shared.addHarness(String(payload.sharedTabId), payload.harness as { machineId: string; agentId: string; name: string; engine: string }, payload.forwarded === true)
       case 'share_remove': return shared.removeHarness(String(payload.sharedTabId), String(payload.machineId), String(payload.agentId), payload.forwarded === true)
+      // Written to the owner's tab setting, from any computer of the account; the computer that shares the tab signs it.
       case 'share_leader': return shared.setLeader(String(payload.sharedTabId), (payload.leader ?? null) as { machineId: string; agentId: string } | null).then(() => ({ ok: true }))
       case 'share_remove_member': return shared.removeMember(String(payload.sharedTabId), String(payload.accountId)).then(() => ({ ok: true }))
       case 'share_notice_dismiss': {
@@ -1302,7 +1428,9 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       // Trust a tab's owner again without a new invitation: the check shows the fingerprint, the confirm pins that key.
       case 'share_retrust_check': return shared.retrustOffer(String(payload.sharedTabId))
       // The tasks of a tab this computer holds, found with this computer's own `gh` login (tasks.ts).
-      case 'share_tasks': return tasksOf(String(payload.sharedTabId)).then((result) => ({ ...result }))
+      // `tabId`: a desk tab of this account, shared or not (`tasksOfTab`); `sharedTabId`: a held one. Both: the shared tab's own
+      // id wins, as the one a roster names; a desk id beside it is only the window's hint.
+      case 'share_tasks': return (payload.sharedTabId === undefined && typeof payload.tabId === 'string' ? tasksOfTab(payload.tabId) : tasksOf(String(payload.sharedTabId))).then((result) => ({ ...result }))
       // Each harness of a held tab with its repo and branch, for People (sharedWho).
       case 'share_who': return sharedWho(String(payload.sharedTabId))
       case 'share_retrust': return shared.retrust(String(payload.sharedTabId), typeof payload.ownerPub === 'string' ? payload.ownerPub : '')
@@ -1311,7 +1439,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
         // `api: 2` tells a window this daemon sends `shared_tabs_changed`; `tabId` is the desk tab of a roster this account owns.
         const invites = await shared.invites(), untrusted = await shared.untrusted()
         // `pendingInvites` carries the ids that revoke an invitation, which only the owner's shares list.
-        return { api: 2, me: { accountId: me.accountId, email: me.email, machineId: me.machineId },
+        return { api: 2, version: VERSION, me: { accountId: me.accountId, email: me.email, machineId: me.machineId },
           rosters: shared.rosters().map((r) => {
             const own = r.owner.accountId === me.accountId
             return { ...r, tabId: own ? shared.deskTab(r.sharedTabId) : null, pendingInvites: own ? shared.pendingInvites(r.sharedTabId) : [] }
@@ -1363,6 +1491,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       unwatch?.()
       unwatch = null
       directory.start()
+      // The account names an unshared tab's key in its agents' notes: they are looked at again once it is known.
+      void signedInAs().then(() => notesPump(), () => {})
       mailbox.resume()
       startTick()
       sharedUp()
@@ -1409,6 +1539,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
           case 'who': return whoAre(payload)
           case 'started': return started(payload)
           case 'history': return history(payload)
+          // The windows' sidebar: every harness of a desk tab, shared or not, with its state and one line on what it does.
+          case 'tab_activity': return tabActivity(String(payload.tabId))
           case 'tab_pub': return { pub: await core.account.tabKey.publicKey() }
           // Only another machine of this account: the same trust as `tab_pub` (sharedTabs.ts `pull`).
           case 'tab_pin': return awakeShares().shared.pinOf(String(payload.sharedTabId))

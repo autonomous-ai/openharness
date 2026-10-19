@@ -41,7 +41,7 @@ describe('Agent Messages in its own process, as the core keeps it', () => {
       daemon: { command: `'node' 'cli.js'`, port: 18473, machineId: () => 'machine-7', autonomousEnv: 'prod' },
       account: { signedIn: () => signedIn },
     })
-    expect(await l.answer('shown', {})).toEqual({ agents: [{ ...agent('a1'), displayName: 'name of a1', terminalAvailable: true, dshContext: null }] })
+    expect(await l.answer('shown', {})).toEqual({ agents: [{ ...agent('a1'), displayName: 'name of a1', terminalAvailable: true, selectedModel: null, dshContext: null }] })
     expect(await l.answer('daemon', {})).toEqual({ command: `'node' 'cli.js'`, port: 18473, machineId: 'machine-7', autonomousEnv: 'prod', signedIn: true })
     signedIn = false
     expect(await l.answer('daemon', {})).toMatchObject({ signedIn: false })
@@ -63,6 +63,8 @@ describe('Agent Messages in its own process, as the core keeps it', () => {
       ['DELETE', `/api/agent-messages/shares/${SID}/members/u-bob_7`],
       ['DELETE', `/api/agent-messages/shares/${SID}`],
       ['POST', `/api/agent-messages/shares/${SID}/move`, { machineId: 'm2' }],
+      // The tab's leader, which the person chooses for a shared tab from any computer of the account (`share_leader`).
+      ['PATCH', '/api/agent-messages/tabs/tab-1_A', { leader: { machineId: 'm1', agentId: 'a1' } }],
     ]
     for (const [method, path, body] of allowed) {
       expect(await l.answer('backend', { method, path, ...(body === undefined ? {} : { body }) })).toMatchObject({ status: 200 })
@@ -87,6 +89,10 @@ describe('Agent Messages in its own process, as the core keeps it', () => {
       { method: 'POST', path: `/api/agent-messages/shares/${SID}0/invites` }, { method: 'DELETE', path: '/api/agent-messages/invites/../../machines' },
       { method: 'POST', path: '/api/agent-messages/invites/inv-1/accept' }, { method: 'DELETE', path: `/api/agent-messages/shares/${SID}/../../machines` },
       { method: 7, path: '/api/agent-messages' }, { method: 'GET', path: ['/api/agent-messages'] },
+      // A tab's setting only by PATCH, of one desk tab's id, and nothing after it.
+      { method: 'PUT', path: '/api/agent-messages/tabs/tab-1' }, { method: 'PATCH', path: '/api/agent-messages/tabs' },
+      { method: 'PATCH', path: '/api/agent-messages/tabs/../machines' }, { method: 'PATCH', path: `/api/agent-messages/tabs/${'t'.repeat(65)}` },
+      { method: 'PATCH', path: '/api/agent-messages/tabs/tab-1/roster' },
       // The move, only as a POST of a shared tab's own id, and nothing after it.
       { method: 'POST', path: `/api/agent-messages/shares/${SID}/move/x` }, { method: 'GET', path: `/api/agent-messages/shares/${SID}/move` },
       { method: 'POST', path: '/api/agent-messages/shares/tab-1/move' },
@@ -139,6 +145,20 @@ describe('Agent Messages in its own process, as the core keeps it', () => {
     const answer = await l.answer('activity', { agentIds: [...ids, 5] })
     expect(Object.keys((answer as { activity: object }).activity)).toHaveLength(64)
     expect(await l.answer('activity', { agentIds: 'x' })).toEqual({ activity: {} })
+  })
+
+  it('answers the one-line summaries too, only when asked, and for at most 64 agents', async () => {
+    const summaries = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, `doing ${id}`])))
+    const activity = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, 'idle' as const])))
+    const { link: l } = link({ agents: { activity, summaries } })
+    expect(await l.answer('activity', { agentIds: ['a1'] })).toEqual({ activity: { a1: 'idle' } })
+    expect(summaries).not.toHaveBeenCalled()
+    expect(await l.answer('activity', { agentIds: ['a1'], summaries: true })).toEqual({ activity: { a1: 'idle' }, summaries: { a1: 'doing a1' } })
+    const ids = Array.from({ length: 70 }, (_, i) => `a${i}`)
+    const answer = await l.answer('activity', { agentIds: ids, summaries: true }) as { summaries: object }
+    expect(Object.keys(answer.summaries)).toHaveLength(64)
+    // Only `true` asks: another value is not a request for them.
+    expect(await l.answer('activity', { agentIds: ['a1'], summaries: 'yes' })).toEqual({ activity: { a1: 'idle' } })
   })
 
   it('hands a roster change to Share, which derives its observers again, and nothing it was sent with', async () => {

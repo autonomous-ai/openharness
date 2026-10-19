@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' show min;
+import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/update/desktop_updater.dart';
@@ -10,6 +13,65 @@ import 'package:harness/update/desktop_updater.dart';
 Future<String> _sha256Hex(List<int> bytes) async {
   final hash = await Sha256().hash(bytes);
   return hash.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+}
+
+String _sha256HexSync(List<int> bytes) => const DartSha256()
+    .hashSync(bytes)
+    .bytes
+    .map((b) => b.toRadixString(16).padLeft(2, '0'))
+    .join();
+
+/// Serves [bytes] for any GET, in 64 KiB pieces as a socket would, without a
+/// server on this isolate whose own copying would muddy [_EventLoopGaps].
+class _MemoryAdapter implements HttpClientAdapter {
+  _MemoryAdapter(this.bytes);
+  final Uint8List bytes;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    const piece = 64 << 10;
+    return ResponseBody(
+      Stream.fromIterable([
+        for (var at = 0; at < bytes.length; at += piece)
+          Uint8List.sublistView(bytes, at, min(at + piece, bytes.length)),
+      ]),
+      200,
+      headers: {
+        Headers.contentLengthHeader: ['${bytes.length}'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+/// The longest stretch the event loop went without running a 1 ms timer.
+class _EventLoopGaps {
+  final _clock = Stopwatch();
+  Timer? _timer;
+  var _last = Duration.zero, _longest = Duration.zero;
+
+  void start() {
+    _clock.start();
+    _timer = Timer.periodic(const Duration(milliseconds: 1), (_) => _tick());
+  }
+
+  void _tick() {
+    final now = _clock.elapsed;
+    if (now - _last > _longest) _longest = now - _last;
+    _last = now;
+  }
+
+  Duration stop() {
+    _tick();
+    _timer?.cancel();
+    return _longest;
+  }
 }
 
 /// Why the macOS half of this file is host-gated.
@@ -681,6 +743,64 @@ void main() {
         expect(staged, isNull);
       },
     );
+
+    // A release is ~45 MB. Its hash ran synchronously on the UI isolate
+    // (535 ms for 45 MiB in an AOT build), so nothing else — no frame, no
+    // timer — ran until it finished. The same hash timed here, twice so the
+    // second is warm, is the yardstick: the longest the event loop goes
+    // unserved while the download is verified must be well under it (the old
+    // code measured 0.96 of it; this one ~0.13; 0.75 leaves room for a busy CI
+    // runner slowing both alike).
+    test('downloadAndStage verifies a large download off the UI isolate', () async {
+      final bytes = Uint8List(24 << 20);
+      for (var i = 0; i < bytes.length; i += 4093) {
+        bytes[i] = i & 0xff;
+      }
+      var onThisIsolate = const Duration(days: 1);
+      late String expected;
+      for (var round = 0; round < 2; round++) {
+        final timing = Stopwatch()..start();
+        expected = _sha256HexSync(bytes);
+        if (timing.elapsed < onThisIsolate) onThisIsolate = timing.elapsed;
+      }
+      final dio = Dio()..httpClientAdapter = _MemoryAdapter(bytes);
+      final updater = DesktopUpdater(
+        enabled: true,
+        dio: dio,
+        isLinux: true,
+        architecture: 'x64',
+      );
+      final gaps = _EventLoopGaps()..start();
+      final staged = await updater.downloadAndStage(
+        UpdateInfo(
+          version: newVersion,
+          url: 'https://fixture.invalid/Harness-linux-x64.AppImage',
+          sha256: expected,
+          size: bytes.length,
+        ),
+      );
+      final longest = gaps.stop();
+      expect(staged, isNotNull, reason: 'the digest must still match');
+      addTearDown(
+        () => Directory(staged!.stagingDirPath).delete(recursive: true),
+      );
+      expect(File(staged!.bundlePath).lengthSync(), bytes.length);
+      expect(
+        longest,
+        lessThan(onThisIsolate * 0.75),
+        reason:
+            'the UI isolate went ${longest.inMilliseconds} ms without an event; '
+            'hashing these bytes here takes ${onThisIsolate.inMilliseconds} ms',
+      );
+    });
+
+    test('the background digest is the sha256 the manifest carries', () async {
+      expect(
+        await sha256HexOffUiIsolate(utf8.encode('abc')),
+        'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+      );
+      expect(await sha256HexOffUiIsolate(appImageBytes), appImageSha);
+    });
 
     test('applyStaged on Linux execs the swapped AppImage file directly instead of `open -n`', () async {
       final calls = <String>[];

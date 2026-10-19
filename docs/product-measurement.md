@@ -8,16 +8,16 @@ automatically proven improvement. Changes still need review, tests and a deliber
 
 | Question | Signal | Interpretation |
 | --- | --- | --- |
-| Does first measured use lead to work? | First-launch installation cohorts; work and first text response within 24 hours | Same participating installation, not signup conversion, same-task success or unique people. Existing users enter when updated; mature only after the full follow-up day ends. |
-| Where does a launch stall or fail? | Pending install/model/native waits; observed launch created/failed/cancelled/unconfirmed; fixed failure categories and duration buckets | Polls are not attempts. Missing outcomes, daemon restarts and the 15-minute observation bound reduce coverage. Inspect unknowns alongside failures. |
-| Which actions break? | Create, resume, restart, model-change, history, fork, close, delete, search, history paging, Store list/install/update/remove, model list/download/start/stop and browser-open requests, fixed outcomes/errors and latency buckets | Request acceptance is not task success. Pending/unknown requests are separate from completed replies. Requests are also counted by source: `app`, `tool`, `automatic` (fixed polls, whichever app makes them), `unknown` and `phone` — the phone marks the requests the daemon measures (`usageSurface: 'phone'`, inside the E2EE payload); older phones still count as `app`. |
+| Does first measured use lead to work? | First-launch installation cohorts; work and first text response within 24 hours; the first launch's engine (`first_launch_engine_opencode`, `_claude`, `_codex`, `_other`) and, for Claude Code and Codex, whether that engine had a credential here (`first_launch_<engine>_signed_in`, `_signed_out`, `_unknown`) | Same participating installation, not signup conversion, same-task success or unique people. Existing users enter when updated; mature only after the full follow-up day ends. The credential is one presence check per installation, in the gateway (`cli/src/lib/engineAccount.ts`: a file stat'ed or parsed for a token, a Keychain item looked up without its secret); it reads the gateway's own environment and starts no login shell, so a key only a shell profile exports reads as signed out on a daemon launchd or systemd started. `unknown` is a Codex that keeps its tokens in the OS keyring, or a check that failed. An answer lost to a stop or a choice change leaves the engine count without one. |
+| Where does a launch stall or fail? | Pending install/model/native waits; observed launch created/failed/cancelled/unconfirmed; fixed failure categories and duration buckets; an `other` failure's code (`launch_failed_code_<code>`); a created launch whose engine then did not start (`launch_late_failed`, by code in `launch_late_failed_code_<code>`) | Polls are not attempts. Missing outcomes, daemon restarts and the 15-minute observation bound reduce coverage. Inspect unknowns alongside failures. Codes are the daemon's own fixed names, lower-cased (`LAUNCH_ERROR_CODES`); `unlisted` is a code not in the list and `none` a failure that named none, so the codes add up to `launch_failed_other`. A late failure (the new-pane watcher's ENGINE_DID_NOT_START, ENGINE_NOT_INSTALLED or START_TIMEOUT, set after the reply said created) is one of the `launch_created`, never a `launch_failed`; the gateway reads it from the agent's own announcement for 15 minutes after the launch was created, and earlier CLI releases counted these only as created (compare releases separately). |
+| Which actions break? | Create, resume, restart, model-change, history, fork, close, delete, search, history paging, Store list/install/update/remove, model list/download/start/stop and browser-open requests, fixed outcomes/errors and latency buckets; the code of an `other` create or resume refusal (`create_error_code_<code>`, `resume_error_code_<code>`) | Request acceptance is not task success. Pending/unknown requests are separate from completed replies. Requests are also counted by source: `app`, `tool`, `automatic` (fixed polls, whichever app makes them), `unknown` and `phone` — the phone marks the requests the daemon measures (`usageSurface: 'phone'`, inside the E2EE payload); older phones still count as `app`. Each code family adds up to its `create_error_other` or `resume_error_other`. |
 | Does work get a response promptly? | First text response buckets; over-one-minute waits; error events; matched ends without text; interruptions | Includes automation. Tool-only turns, interruptions and missing lifecycle events can explain missing text. No message is inspected. |
 | Do installations return to work? | D1/D7/D28 working-day cohorts, consecutive complete-week and calendar-month returns, return after a seven-day gap | Any working day can be a cohort; not new-signup retention. Local date flags produce unlinked totals. Opt-outs, reinstallations, resets and missing uploads affect results. |
 | Was the task useful? | Optional Completed / Partly completed / Not completed plus five fixed reason choices from clients that offer feedback; current Desktop Settings no longer exposes feedback controls | Voluntary and self-selected; not representative success or satisfaction. There is no free-text input. |
 | Is there usage at all? | Active and working computer counts; app opens; older-client relay totals | Background windows can count as active. An open is a surface going from no attached window to one, not each connection (the desktop holds one per machine and redials). Relay events are not distinct people; the populations must not be added together. |
 
 | Which features get tried and used again? | First measured installations and daily first/repeat feature reach | Locally deduplicated installation-days, not unique accounts. Reads the apps make on their own (history, history paging, Store list, model list; `PRODUCT_USAGE_AUTOMATIC_ACTIONS`) count reliability only. The Store and model lists get reach only from the request an app marks `userAction` when a person opens them (`<action>_user_*`, `PRODUCT_USAGE_USER_OPENED_ACTIONS`); history has none. |
-| Where do app flows break? | Setup, Harness/tmux/clipboard steps, sign-in, workspace/remote connections, computer linking, viewer-pane opening and manual update checking/staging | Fixed started/ok/failed/cancelled/unknown counts and coarse duration buckets. Opening a viewer pane is not rendering its content; staging an update is not a successful relaunch. |
+| Where do app flows break? | Setup, Harness/tmux/clipboard steps, sign-in, workspace/remote connections, computer linking, viewer-pane opening and manual update checking/staging; a setup step whose tool was missing at a check (`setup_desktop_setup_<step>_missing`); the agents a new computer downloads beside setup (`setup_desktop_agent_download_<opencode\|codex\|claude>_started`, `_ok`, `_failed`, with under 1 min, 1–5 min and over 5 min) | Fixed started/ok/failed/cancelled/unknown counts and coarse duration buckets. Opening a viewer pane is not rendering its content; staging an update is not a successful relaunch. A setup step stays open from the first check until its tool is in place, so a tool that was missing and then installed is one ok step and one `_missing` mark; only a setup that ends failed fails its step. Earlier Desktop releases counted every check that found a tool missing as a failed step (on 2026-10-16 the Harness step read 72 failed of 221 while 0 setups failed): compare releases separately. `_missing` is any tool a check found absent or out of date (a Harness CLI older than this Desktop needs, on a computer already in use, counts too), not only new computers. A step left waiting (the review, a Linux Terminal handoff, manual mode, someone who walks away) now ends `unknown` at the 15-minute observation bound instead of `failed`, so expect `setup_*_unknown` to rise, mostly on Linux. `_missing` and the download counts are anonymous setup counts only. A download whose prerequisite (curl, Harness's Node) never arrived counts as started and failed; `ok` means the agent's program is in place, judged per engine. |
 | Where does the phone's onboarding stall? | After sign-in: waiting for the first computer, opening its session, the first message, the notification prompt. A sign-in that went through, by button, counted again under the account's sharing. Waits past a minute split into 1–5 min, 5–15 min, 15 min–1 h and over 1 h for the computer and the first message. Once per step per sign-in: `resumed` (reopened in a run that did not sign in), "Not you? Sign out", the address sent from the share sheet, a joining computer that wants its password or is offline | Stage totals per day, not a linked funnel. Subtract `resumed` from starts for fresh starts; an unmatched start is a closed app or a step still waiting. A resumed step's duration starts at the reopening. Signed-in sign-in counts are successes only; failures and cancels before an account remain the signed-out counts', but a success is marked `retried` (a failed or cancelled try came first in that app run) or `switched` (another button was tried first). Phone reports carry release and iOS/Android, so every phone count also splits by those two margins (above 20 collector days); debug builds are not kept. A chosen sign-out sends what is queued first (up to 2 s), so "Not you? Sign out" reaches the totals. |
 | How fast does the phone get back to work? | A launch that came back signed in, to its first computer answering (`app_start`); a dial the person asked for ("Try again", `connect_user`) apart from the app's own (`connect_auto`), beside the unchanged `remote_connect`; a stopped harness resumed from the phone, to its first live turn (`resume_recovery`) | A launch that signs in is the onboarding's and is not counted; one that leaves the screen before a computer answers is `unknown`, one whose computers never answer stays started. An asked-for dial fails at 12 s, as Desktop Connect does. A phone dial is `failed` only when the phone knows why (locked or offline), `unknown` otherwise; the reasons (`connect_error_*`) are Desktop health counters. |
 | Are the phone's side pages used? | Find and Computers opens, by a sideways swipe on the terminal or by a button (Computers' row in Settings, its link on a long wait at home) | Which page and which way, nothing more. Find's key and screen-reader actions are not counted; a swipe that lets Find go back opened nothing. |
@@ -92,9 +92,12 @@ measurement change is not evidence that fewer people encountered linking trouble
 counters do not count affected people. Retry suppression adds no identifiers or stored history.
 The startup bucket measures launch to the first consented observation of a connected workspace,
 including preference/sign-in delay. One in 60 rendered frames supplies a coarse duration bucket;
-it cannot reliably detect an idle freeze. Error hooks pass only framework/async categories.
-Desktop RSS and gateway RSS/CPU sample once per minute; they describe those processes, not the
-whole machine or agents. Sampling adds no core timer, process enumeration, or subprocess.
+it cannot reliably detect an idle freeze. Frames of a hidden, minimised or occluded window, and the
+first frame after it is shown again, are not sampled (the OS throttles them), nor is each launch's
+first frame, which `app_start` already times; earlier releases sampled both. Error hooks pass only framework/async categories.
+Desktop RSS samples once per minute and gateway RSS/CPU once per report tick (45 to 75 seconds, a
+minute on average); they describe those processes, not the whole machine or agents. Sampling adds
+no core timer, process enumeration, or subprocess.
 
 Desktop keeps its setup-sharing preference and pending opt-out booleans, plus the last sharing-enabled run's version, clean-exit/update flags, choice
 revision and a local-only account-scope hash. One serialized asynchronous write plus one latest
@@ -115,13 +118,33 @@ Unmeasured RPCs return a shared no-op immediately. The `HARNESSD_SERVICES=none` 
 runs services inline; it does not provide process isolation.
 
 The gateway coalesces asynchronous disk writes, caps its local queue at 256 KiB / 35 UTC days,
-and bounds in-memory turn/launch observations at 1,000 each. Reports contain at most 64 counters
-and stay below 8 KiB. One sync runs at a time, with five-second network deadlines and a one-minute
-report interval. Unknown or failed preference checks stop collection. Slow or failed reporting can
+and bounds in-memory turn/launch observations at 1,000 each (and the created launches' agents it
+watches for a late failure, for 15 minutes each). Reports contain at most 64 counters and stay below
+8 KiB. One sync runs at a time, with five-second network deadlines. The gateway reads the sharing
+choice as it starts, so collection starts with it, and sends its first report a random 10 to 60
+seconds later; each later tick comes a random 45 to 75 seconds after the last. Every daemon of a
+release updated at the same second, and a report at start then one each minute made the fleet report
+together: backend write conflicts and `USAGE_BUSY` refusals (41 and 48 on 2026-10-16). A report the
+backend refuses as busy or failing (429, 5xx, a timeout) waits for a full-jitter backoff whose ceiling
+doubles from two minutes to half an hour with each such refusal in a row, and never less than the
+answer's Retry-After (held to the same half hour); any other answer resets it. Ticks still read the
+choice meanwhile. Unknown or failed preference checks stop collection. Slow or failed reporting can
 lose counts and cannot become a product dependency. A failed disk write also disables collection.
 
+Stopping the gateway writes the collector's final, clean state synchronously before it returns
+(a temporary file and a rename, at most the 256 KiB queue), and its process stops the gateway before
+it closes the core's link and exits. A write still on its way cannot put an older state over it.
+Earlier releases wrote the clean exit asynchronously and their process exited first, so `harness
+stop`, updates, sign-in and sign-out restarts, service installs and OS logouts all counted as
+`health_cli_unclean_restart` (69, then 170 on 2026-10-16, production counters). Compare that counter
+by release across this change; now it counts a process that ended without stopping (a crash, a kill,
+power loss, a stop that outlasted its five-second grace).
+
 `health_cli_report_rejected` counts unsuccessful delivery attempts, including retries; it is not
-a count of lost reports. New `health_cli_report_failure_*` counters split those attempts into fixed
+a count of lost reports. A report that names a counter this backend does not know yet (a client a
+release ahead of it) is kept without that name, never stored or echoed, and counted once as
+`health_<cli|desktop|phone>_report_unknown_metric`; before, the whole report was refused and retried.
+A report with no known counter left is still refused. New `health_cli_report_failure_*` counters split those attempts into fixed
 invalid, too-large, authentication, rate-limit, timeout, unreachable, write-conflict, transaction,
 server and other categories. A transaction failure does not by itself prove a timeout. No raw error
 message, database detail, URL or unknown error code is collected. These diagnostics share the same
@@ -193,6 +216,9 @@ image build can be distinguished from the version actually serving requests.
 Resume diagnostics add fixed conditions by request source: runtime unavailable, saved state missing,
 project missing, harness missing, credentials missing, busy, changed, unconfirmed, preparation failed,
 launch failed, invalid and other. These come only from known error codes, never error text or paths.
+An engine of a resumed harness that did not start (ENGINE_DID_NOT_START, ENGINE_NOT_INSTALLED,
+START_TIMEOUT) is a launch failure, a resume while the harness is being deleted is busy, and a request
+that named no harness is invalid; earlier releases counted these as `other`.
 From CLI 0.4.3, an unconfirmed runtime counts as unknown and a concurrently changed harness as
 cancelled (legacy aggregate: unknown), rather than failed. Compare releases separately across this
 definition change; a lower failure rate alone is not proof the product improved.
@@ -238,7 +264,9 @@ Decision: keep | revise | revert | inconclusive
 Next review date:
 ```
 
-The `review` output proposes investigations, not code changes or automatic deployments. Feedback
+The `review` output proposes investigations, not code changes or automatic deployments. Its unknown
+launch refusals and its engines that did not start after a create each name their five most frequent
+codes; a large `unlisted` share means a code is missing from `LAUNCH_ERROR_CODES`. Feedback
 is one source of evidence; a missing response does not identify why a person stopped using Harness.
 
 ## Rollout and privacy controls
@@ -247,7 +275,7 @@ Deploy backend schema and the singleton worker first, including unique indexes a
 Use synthetic data to verify duplicate receipts, transaction rollback/retry, off/on revision fencing
 and expiry. Then release CLI, desktop and phone together. An older backend refuses a whole report
 carrying a counter it does not know (a phone page opening, a `request_phone_*` count, a phone
-`sharing: "default"` setup report), so the backend always goes first. Check that the switch saves and that reports
+`sharing: "default"` setup report, a launch code or a first launch's engine), so the backend always goes first. Check that the switch saves and that reports
 stop when it is off. Old clients stop contributing individual daily histories when the backend changes;
 the historical reporting command will no longer be a current-usage source.
 

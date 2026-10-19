@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
+import { SuperTabStore } from '../superTabs/store.js'
 import { prisma, machineAlive } from '../lib/prisma.js'
 import { getAgentPresenceMany, publishDeviceMachineListChanged, publishShareChanged } from '../lib/bus.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
@@ -9,6 +10,7 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 
 const params = z.object({ id: z.string().uuid() })
 const body = z.object({
+  superTabId: z.string().regex(/^[a-f0-9]{24}$/).nullable().optional(),
   machineId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/),
   agentId: z.string().min(1).max(160),
   recipientEmail: z.string().trim().toLowerCase().email().max(254),
@@ -46,7 +48,9 @@ export async function recipientShare(id: string, user: AuthUser) {
   const machine = await prisma.machine.findFirst({ where: {
     machineId: share.machineId, userId: share.ownerId, autonomousEnv: user.autonomousEnv, ...machineAlive,
   } })
-  return machine && machineBillingAllowsDataPlane(machine) ? share : null
+  if (!machine || !machineBillingAllowsDataPlane(machine)) return null
+  if (share.superTabId && !await new SuperTabStore(prisma).mayObserve(user, share.superTabId, share.machineId, share.agentId, share.ownerId)) return null
+  return share
 }
 
 export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
@@ -55,8 +59,12 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
       recipientEmail: req.user!.email.trim().toLowerCase(), autonomousEnv: req.user!.autonomousEnv,
       revokedAt: null, expiresAt: { gt: new Date() },
     }, orderBy: { createdAt: 'asc' }, take: 1000 })
+    const visible: typeof shares = []
+    for (const share of shares) {
+      if (!share.superTabId || await new SuperTabStore(prisma).mayObserve(req.user!, share.superTabId, share.machineId, share.agentId, share.ownerId)) visible.push(share)
+    }
     const machines = await prisma.machine.findMany({ where: {
-      machineId: { in: [...new Set(shares.map(s => s.machineId))] },
+      machineId: { in: [...new Set(visible.map(s => s.machineId))] },
       autonomousEnv: req.user!.autonomousEnv, ...machineAlive,
     } })
     const allowed = machines.filter(machineBillingAllowsDataPlane)
@@ -64,7 +72,7 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
       select: { id: true, name: true, email: true } })
     const presence = await getAgentPresenceMany(allowed.map(m => m.machineId))
     sendSuccess(reply, { machines: allowed.flatMap(machine => {
-      const grants = shares.filter(s => s.machineId === machine.machineId && s.ownerId === machine.userId)
+      const grants = visible.filter(s => s.machineId === machine.machineId && s.ownerId === machine.userId)
       if (grants.length === 0) return []
       const owner = owners.find(o => o.id === machine.userId)
       return [{ machineId: machine.machineId, name: machine.name, authMode: 'remote',
@@ -93,7 +101,7 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
         || existing.agentId !== input.agentId || existing.recipientEmail !== input.recipientEmail)) {
         return sendError(reply, 'This invitation cannot be changed.', 'FORBIDDEN', 403)
       }
-      const data = { ...input, expiresAt: new Date(input.expiresAt), revokedAt: null,
+      const data = { ...input, superTabId: input.superTabId ?? null, expiresAt: new Date(input.expiresAt), revokedAt: null,
         ownerId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv }
       await prisma.harnessShare.upsert({ where: { id: req.params.id },
         create: { id: req.params.id, ...data }, update: data })

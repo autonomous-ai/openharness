@@ -18,15 +18,27 @@ String sharedTabAlertText(String code) => switch (code) {
   'foreign_machine' => 'The tab lists a computer as yours that isn\'t.',
   'machine_key_mismatch' =>
     'A computer in this tab changed its key; its harnesses were left out.',
-  'own_machine_listed' =>
-    'The tab lists one of your computers under another account; it was left out.',
-  'bad_signature' =>
-    'A change to this tab wasn\'t signed by its owner\'s computer, so it was ignored.',
-  'unpinned_key' => 'This tab is signed by a computer you haven\'t trusted yet.',
-  'share_id_mismatch' =>
-    'The Harness service named this tab differently than expected, so this computer didn\'t sign for it.',
+  'own_machine_listed' => 'The tab lists one of your computers under another account; it was left out.',
+  'bad_signature' => 'A change to this tab wasn\'t signed by its owner\'s computer, so it was ignored.',
+  'unpinned_key' =>
+    'This tab is signed by a computer you haven\'t trusted yet.',
+  'share_id_mismatch' => 'The Harness service named this tab differently than expected, so this computer didn\'t sign for it.',
   _ => 'Something about this tab couldn\'t be verified.',
 };
+
+/// Make Leader or Remove Leader as the app says, answering the words of a new
+/// failure (the app keeps the old leader and sets [AppNotifier.lastError]), or
+/// null. One path for the shared and the unshared People.
+Future<String?> toggleLeaderReportingError(
+  AppNotifier app,
+  String machineId,
+  String agentId,
+) async {
+  final before = app.lastError;
+  await app.toggleLeaderOf(machineId, agentId);
+  final after = app.lastError;
+  return after != null && after != before ? after : null;
+}
 
 const _onlyOwner = 'Only the computer that shares this tab can change it.';
 const _ownerElsewhere =
@@ -57,7 +69,11 @@ class _SharedTabPeopleState extends State<SharedTabPeople> {
   int _whoReads = 0;
   String? _error;
   bool _busy = false;
-  late final _listenable = Listenable.merge([widget.app, widget.app.sharedTabs]);
+  late final _listenable = Listenable.merge([
+    widget.app,
+    widget.app.sharedTabs,
+    widget.app.experimentalFeatures,
+  ]);
 
   @override
   void initState() {
@@ -82,7 +98,27 @@ class _SharedTabPeopleState extends State<SharedTabPeople> {
     try {
       await action();
     } on SharedTabsFailure catch (f) {
-      if (mounted) setState(() => _error = sharedTabErrorText(f, machine: machine));
+      if (mounted) {
+        setState(() => _error = sharedTabErrorText(f, machine: machine));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _toggleLeader(String machineId, String agentId) async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final error = await toggleLeaderReportingError(
+        widget.app,
+        machineId,
+        agentId,
+      );
+      if (mounted && error != null) setState(() => _error = error);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -100,7 +136,10 @@ class _SharedTabPeopleState extends State<SharedTabPeople> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    return ListenableBuilder(listenable: _listenable, builder: (context, _) => _content(context));
+    return ListenableBuilder(
+      listenable: _listenable,
+      builder: (context, _) => _content(context),
+    );
   }
 
   Widget _content(BuildContext context) {
@@ -110,20 +149,26 @@ class _SharedTabPeopleState extends State<SharedTabPeople> {
     final snapshot = shares.snapshot;
     final me = snapshot.me;
     if (tab == null || me == null) return const SizedBox.shrink();
-    final harnessKeys = ([for (final h in tab.harnesses) h.key]..sort()).join('\n');
+    final harnessKeys = ([
+      for (final h in tab.harnesses) h.key,
+    ]..sort()).join('\n');
     if (harnessKeys != _whoFor) {
       _whoFor = harnessKeys;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) unawaited(_load());
       });
     }
-    final ownerHere = tab.ownedBy(me.accountId) && tab.ownerMachineId == me.machineId;
+    final ownerHere =
+        tab.ownedBy(me.accountId) && tab.ownerMachineId == me.machineId;
     final ownMachines = {
       me.machineId,
       for (final s in app.machineStates.values)
         if (!s.belongsToOtherAccount) s.machine.machineId,
     };
-    final alerts = [for (final a in snapshot.alerts) if (a.sharedTabId == tab.sharedTabId) a];
+    final alerts = [
+      for (final a in snapshot.alerts)
+        if (a.sharedTabId == tab.sharedTabId) a,
+    ];
     final relay = [
       for (final n in snapshot.notices)
         if (n.sharedTabId == tab.sharedTabId && n.kind == 'relay_taken') n,
@@ -133,17 +178,31 @@ class _SharedTabPeopleState extends State<SharedTabPeople> {
         if (u.sharedTabId == tab.sharedTabId) u,
     ];
     final ownerName = _nameOf(tab.members, tab.ownerAccountId);
-    final accounts = <({String accountId, String email, String name, bool owner})>[
-      (accountId: tab.ownerAccountId, email: tab.ownerEmail, name: ownerName, owner: true),
-      for (final m in tab.members)
-        if (m.accountId != tab.ownerAccountId)
-          (accountId: m.accountId, email: m.email, name: m.name, owner: false),
-      for (final id in {for (final h in tab.harnesses) h.accountId})
-        if (id != tab.ownerAccountId && !tab.members.any((m) => m.accountId == id))
-          (accountId: id, email: '', name: '', owner: false),
-    ];
+    final accounts =
+        <({String accountId, String email, String name, bool owner})>[
+          (
+            accountId: tab.ownerAccountId,
+            email: tab.ownerEmail,
+            name: ownerName,
+            owner: true,
+          ),
+          for (final m in tab.members)
+            if (m.accountId != tab.ownerAccountId)
+              (
+                accountId: m.accountId,
+                email: m.email,
+                name: m.name,
+                owner: false,
+              ),
+          for (final id in {for (final h in tab.harnesses) h.accountId})
+            if (id != tab.ownerAccountId &&
+                !tab.members.any((m) => m.accountId == id))
+              (accountId: id, email: '', name: '', owner: false),
+        ];
     final ownMachineName = _machineName(tab.ownerMachineId, mine: true);
-    final machineForErrors = ownMachines.contains(tab.ownerMachineId) ? ownMachineName : null;
+    final machineForErrors = ownMachines.contains(tab.ownerMachineId)
+        ? ownMachineName
+        : null;
     final menu = sharedTabMenu(app, widget.deskTabId);
     final pending = [for (final i in tab.pendingInvites) i];
 
@@ -162,14 +221,17 @@ class _SharedTabPeopleState extends State<SharedTabPeople> {
                 _BandAction(
                   key: const ValueKey('people-band-trust'),
                   label: 'Trust again',
-                  onPressed: () => showTrustAgain(context, app, tab.sharedTabId),
+                  onPressed: () =>
+                      showTrustAgain(context, app, tab.sharedTabId),
                 ),
             ],
           ),
         for (final n in relay)
           _Band(
             key: ValueKey('people-band:${n.id}'),
-            text: sharedTabErrorText(const SharedTabsFailure('RELAY_TAKEN', '')),
+            text: sharedTabErrorText(
+              const SharedTabsFailure('RELAY_TAKEN', ''),
+            ),
             onDismiss: () => unawaited(shares.dismiss(n.id)),
           ),
         for (final u in untrusted)
@@ -193,28 +255,42 @@ class _SharedTabPeopleState extends State<SharedTabPeople> {
               key: const ValueKey('people-error'),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.metadata(color: Theme.of(context).colorScheme.error),
+              style: DesktopChrome.metadata(
+                color: Theme.of(context).colorScheme.error,
+              ),
             ),
           ),
         for (final account in accounts)
-          _block(context, tab, me, account, ownerHere: ownerHere, ownMachines: ownMachines, machine: machineForErrors),
+          _block(
+            context,
+            tab,
+            me,
+            account,
+            ownerHere: ownerHere,
+            ownMachines: ownMachines,
+            machine: machineForErrors,
+          ),
         if (ownerHere && pending.isNotEmpty) ...[
           const _SectionTitle('Invited'),
           for (final i in pending)
-            _Row(
+            PeopleRow(
               key: ValueKey('people-invite:${i.id}'),
               title: shortSharedText(i.email, 60),
               trailing: [
-                _RowAction(
+                PeopleRowAction(
                   key: ValueKey('people-revoke:${i.id}'),
                   label: 'Revoke',
-                  onPressed: () => _run(() => shares.act('share_revoke', {'inviteId': i.id}), machine: machineForErrors),
+                  onPressed: () => _run(
+                    () => shares.act('share_revoke', {'inviteId': i.id}),
+                    machine: machineForErrors,
+                  ),
                 ),
               ],
             ),
         ] else if (!ownerHere && tab.invites.isNotEmpty) ...[
           const _SectionTitle('Invited'),
-          for (final i in tab.invites) _Row(title: shortSharedText(i.email, 60)),
+          for (final i in tab.invites)
+            PeopleRow(title: shortSharedText(i.email, 60)),
         ],
         const SizedBox(height: 8),
         Padding(
@@ -228,34 +304,43 @@ class _SharedTabPeopleState extends State<SharedTabPeople> {
                   key: const ValueKey('people-invite'),
                   label: 'Invite People…',
                   compact: true,
-                  onPressed: () => unawaited(showInvitePeople(context, app, widget.deskTabId)),
+                  onPressed: () => unawaited(
+                    showInvitePeople(context, app, widget.deskTabId),
+                  ),
                 ),
               DesktopPill(
                 key: const ValueKey('people-add-harnesses'),
                 label: 'Add Harnesses…',
                 compact: true,
-                onPressed: () => unawaited(showAddHarnesses(context, app, tab.sharedTabId)),
+                onPressed: () =>
+                    unawaited(showAddHarnesses(context, app, tab.sharedTabId)),
               ),
               if (menu.stop)
                 DesktopPill(
                   key: const ValueKey('people-stop'),
                   label: 'Stop Sharing…',
                   compact: true,
-                  onPressed: () => unawaited(confirmStopSharing(context, app, widget.deskTabId)),
+                  onPressed: () => unawaited(
+                    confirmStopSharing(context, app, widget.deskTabId),
+                  ),
                 ),
               if (menu.moveHere)
                 DesktopPill(
                   key: const ValueKey('people-move-here'),
                   label: 'Move here…',
                   compact: true,
-                  onPressed: () => unawaited(confirmMoveHere(context, app, widget.deskTabId)),
+                  onPressed: () => unawaited(
+                    confirmMoveHere(context, app, widget.deskTabId),
+                  ),
                 ),
               if (menu.leave)
                 DesktopPill(
                   key: const ValueKey('people-leave'),
                   label: 'Leave…',
                   compact: true,
-                  onPressed: () => unawaited(confirmLeaveTab(context, app, widget.deskTabId)),
+                  onPressed: () => unawaited(
+                    confirmLeaveTab(context, app, widget.deskTabId),
+                  ),
                 ),
             ],
           ),
@@ -300,35 +385,61 @@ class _SharedTabPeopleState extends State<SharedTabPeople> {
     final email = shortSharedText(account.email, 60);
     final name = shortSharedText(account.name, 40);
     final title = [
-      if (email.isNotEmpty) email else if (name.isEmpty) account.accountId.length <= 8 ? account.accountId : account.accountId.substring(0, 8),
+      if (email.isNotEmpty)
+        email
+      else if (name.isEmpty)
+        account.accountId.length <= 8
+            ? account.accountId
+            : account.accountId.substring(0, 8),
       if (name.isNotEmpty) name,
     ].join(' · ');
-    final harnesses = [for (final h in tab.harnesses) if (h.accountId == account.accountId) h];
-    final removable = ownerHere && !account.owner && account.accountId != me.accountId;
+    final harnesses = [
+      for (final h in tab.harnesses)
+        if (h.accountId == account.accountId) h,
+    ];
+    final removable =
+        ownerHere && !account.owner && account.accountId != me.accountId;
     return Column(
       key: ValueKey('people-account:${account.accountId}'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _Row(
+        PeopleRow(
           title: title,
           bold: true,
-          badge: account.owner ? 'owner' : (account.accountId == me.accountId ? 'you' : null),
+          badge: account.owner
+              ? 'owner'
+              : (account.accountId == me.accountId ? 'you' : null),
           trailing: [
             if (removable)
-              _RowAction(
+              PeopleRowAction(
                 key: ValueKey('people-remove-member:${account.accountId}'),
                 label: 'Remove member',
-                onPressed: () => _run(
-                  () => shares.act('share_remove_member', {
-                    'sharedTabId': tab.sharedTabId,
-                    'accountId': account.accountId,
-                  }),
-                  machine: machine,
+                onPressed: () => unawaited(
+                  confirmSharedAction(
+                    context,
+                    title:
+                        'Remove ${email.isNotEmpty ? email : (name.isNotEmpty ? name : 'this member')} and their harnesses from this tab?',
+                    body: 'They can be invited again.',
+                    confirm: 'Remove',
+                    destructive: true,
+                    machine: machine,
+                    run: () => shares.act('share_remove_member', {
+                      'sharedTabId': tab.sharedTabId,
+                      'accountId': account.accountId,
+                    }),
+                  ),
                 ),
               ),
           ],
         ),
-        for (final h in harnesses) _harness(tab, h, ownerHere: ownerHere, ownMachines: ownMachines, machine: machine),
+        for (final h in harnesses)
+          _harness(
+            tab,
+            h,
+            ownerHere: ownerHere,
+            ownMachines: ownMachines,
+            machine: machine,
+          ),
       ],
     );
   }
@@ -342,19 +453,26 @@ class _SharedTabPeopleState extends State<SharedTabPeople> {
   }) {
     final shares = widget.app.sharedTabs;
     final machineState = widget.app.machineStates[h.machineId];
-    final working = machineState?.processingAgentIds.contains(h.agentId) == true;
+    final working =
+        machineState?.processingAgentIds.contains(h.agentId) == true;
     // Idle only when the machine is known and connected; otherwise no claim.
-    final known = machineState != null &&
+    final known =
+        machineState != null &&
         !machineState.isOffline &&
         (machineState.nodeOnline == true ||
             machineState.connectionStatus == ConnectionStatus.connected);
     final where = _who?[h.key];
     final repo = [
-      if (where?.project case final p? when plainSharedText(p).isNotEmpty) shortSharedText(p, 40),
-      if (where?.branch case final b? when plainSharedText(b).isNotEmpty) shortSharedText(b, 40),
+      if (where?.project case final p? when plainSharedText(p).isNotEmpty)
+        shortSharedText(p, 40),
+      if (where?.branch case final b? when plainSharedText(b).isNotEmpty)
+        shortSharedText(b, 40),
     ].join('/');
     final engine = shortSharedText(h.engine, 24);
-    final isLeader = tab.leader?.machineId == h.machineId && tab.leader?.agentId == h.agentId;
+    final leader = widget.app.tabLeader(widget.deskTabId);
+    final isLeader =
+        leader?.machineId == h.machineId && leader?.agentId == h.agentId;
+    final leaderAction = widget.app.leaderActionFor(h.machineId, h.agentId);
     final details = [
       if (engine.isNotEmpty) engine,
       _machineName(h.machineId, mine: ownMachines.contains(h.machineId)),
@@ -362,7 +480,7 @@ class _SharedTabPeopleState extends State<SharedTabPeople> {
       if (repo.isNotEmpty) repo,
     ].join(' · ');
     final name = shortSharedText(h.name, 40);
-    return _Row(
+    return PeopleRow(
       key: ValueKey('people-harness:${h.machineId}/${h.agentId}'),
       indent: 24,
       title: name.isEmpty ? h.agentId : name,
@@ -370,32 +488,36 @@ class _SharedTabPeopleState extends State<SharedTabPeople> {
       detail: details,
       detailSkeleton: _who == null,
       trailing: [
-        if (ownerHere && !isLeader)
-          _RowAction(
+        // The setting lives with the tab's owner (`setTabLeader`), so it holds
+        // while the sharing computer sleeps; only where the app says it may.
+        if (leaderAction != null)
+          PeopleRowAction(
             key: ValueKey('people-leader:${h.machineId}/${h.agentId}'),
-            label: 'Make Leader',
-            onPressed: () => _run(
-              () => shares.act('share_leader', {
-                'sharedTabId': tab.sharedTabId,
-                'leader': {'machineId': h.machineId, 'agentId': h.agentId},
-              }),
-              machine: machine,
-            ),
+            label: leaderAction == 'remove' ? 'Remove Leader' : 'Make Leader',
+            onPressed: () => _toggleLeader(h.machineId, h.agentId),
           ),
         // A member's harness only: the owner's own are in the tab by being in
         // its desk tab, and the sharing computer refuses to take one out
         // (`OWNER_PANE`; final review of 1c, I2). The pane moves out instead.
         if (ownerHere && h.accountId != tab.ownerAccountId)
-          _RowAction(
+          PeopleRowAction(
             key: ValueKey('people-remove:${h.machineId}/${h.agentId}'),
             label: 'Remove',
-            onPressed: () => _run(
-              () => shares.act('share_remove', {
-                'sharedTabId': tab.sharedTabId,
-                'machineId': h.machineId,
-                'agentId': h.agentId,
-              }),
-              machine: machine,
+            onPressed: () => unawaited(
+              confirmSharedAction(
+                context,
+                title:
+                    'Remove ${name.isEmpty ? h.agentId : name} from this tab?',
+                body: 'Its owner can add it again.',
+                confirm: 'Remove',
+                destructive: true,
+                machine: machine,
+                run: () => shares.act('share_remove', {
+                  'sharedTabId': tab.sharedTabId,
+                  'machineId': h.machineId,
+                  'agentId': h.agentId,
+                }),
+              ),
             ),
           ),
       ],
@@ -415,8 +537,8 @@ class _SectionTitle extends StatelessWidget {
   );
 }
 
-class _Row extends StatelessWidget {
-  const _Row({
+class PeopleRow extends StatelessWidget {
+  const PeopleRow({
     super.key,
     required this.title,
     this.detail,
@@ -499,8 +621,12 @@ class _Row extends StatelessWidget {
   );
 }
 
-class _RowAction extends StatelessWidget {
-  const _RowAction({super.key, required this.label, required this.onPressed});
+class PeopleRowAction extends StatelessWidget {
+  const PeopleRowAction({
+    super.key,
+    required this.label,
+    required this.onPressed,
+  });
 
   final String label;
   final VoidCallback onPressed;
@@ -508,14 +634,24 @@ class _RowAction extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.only(left: 6),
-    child: DesktopPill(label: label, compact: true, quiet: true, onPressed: onPressed),
+    child: DesktopPill(
+      label: label,
+      compact: true,
+      quiet: true,
+      onPressed: onPressed,
+    ),
   );
 }
 
 /// A warning about the tab: amber, plain words, with what can be done and a
 /// way to dismiss it.
 class _Band extends StatelessWidget {
-  const _Band({super.key, required this.text, this.onDismiss, this.actions = const []});
+  const _Band({
+    super.key,
+    required this.text,
+    this.onDismiss,
+    this.actions = const [],
+  });
 
   final String text;
   final VoidCallback? onDismiss;

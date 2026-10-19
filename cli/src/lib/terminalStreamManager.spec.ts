@@ -341,6 +341,31 @@ describe('TerminalStreamManager', () => {
     expect(stream.sizes.at(-1)).toEqual({ cols: 140, rows: 50 })
   })
 
+  it('carries an opaque native input context without letting it grant terminal control', async () => {
+    const onInput = vi.fn(), inputContext = 'fixture-native-input-context'
+    manager = newManager({ onInput })
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'context', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24, inputContext,
+    })
+    const streamId = sent.find(frame => frame.type === 'terminal_ready' && frame.connId === 'web-1')!.payload.streamId as string
+    await manager.handleFrame('web-2', 'terminal_open', {
+      requestId: 'watch-context', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24, watch: true, inputContext,
+    })
+    const watchId = sent.find(frame => frame.type === 'terminal_ready' && frame.connId === 'web-2')!.payload.streamId as string
+    await manager.handleBinary('web-2', { kind: TerminalBinaryKind.input, streamId: watchId, seq: 0, compressed: false, bytes: Buffer.from('\r') })
+    expect(onInput).not.toHaveBeenCalled()
+    await manager.handleBinary('web-1', { kind: TerminalBinaryKind.input, streamId, seq: 0, compressed: false, bytes: Buffer.from('hello') })
+    expect(onInput).toHaveBeenLastCalledWith('agent-1', true, { connId: 'web-1', kind: null, inputContext })
+    await manager.handleBinary('web-1', { kind: TerminalBinaryKind.input, streamId, seq: 1, compressed: false, bytes: Buffer.from('\r') })
+    expect(onInput).toHaveBeenLastCalledWith('agent-1', true, { connId: 'web-1', kind: null, inputContext, submitted: true })
+    await manager.handleFrame('web-3', 'terminal_open', {
+      requestId: 'invalid-context', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24, inputContext: { userId: 'do-not-trust' },
+    })
+    const other = sent.find(frame => frame.type === 'terminal_ready' && frame.connId === 'web-3')!.payload.streamId as string
+    await manager.handleBinary('web-3', { kind: TerminalBinaryKind.input, streamId: other, seq: 0, compressed: false, bytes: Buffer.from('hello') })
+    expect(onInput).toHaveBeenLastCalledWith('agent-1', true, { connId: 'web-3', kind: null })
+  })
+
   it.each([[1, 1], [30, 30], [80, 8], [300, 120]])(
     'opens and resizes a terminal at its actual %i×%i pane size', async (cols, rows) => {
       const open = vi.spyOn(terminals, 'openStream')

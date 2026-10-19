@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { Prisma } from '@prisma/client'
 const mocks = vi.hoisted(() => ({
-  prisma: { desk: { findUnique: vi.fn() }, machine: { findMany: vi.fn() },
-    agentMessageTab: { findMany: vi.fn(), upsert: vi.fn(), update: vi.fn() } },
+  prisma: { desk: { findUnique: vi.fn() }, machine: { findMany: vi.fn(), findFirst: vi.fn() },
+    agentMessageTab: { findMany: vi.fn(), upsert: vi.fn(), update: vi.fn() }, agentMessageShare: { findMany: vi.fn(), findFirst: vi.fn() } },
   auth: vi.fn(),
   publish: vi.fn(),
   shareChanged: vi.fn(),
@@ -30,6 +30,8 @@ describe('Agent Messages per tab', () => {
     mocks.prisma.desk.findUnique.mockResolvedValue({ revision: 8, tabs: [tab, other] })
     mocks.prisma.machine.findMany.mockResolvedValue([{ machineId: 'm1', name: 'studio' }, { machineId: 'm2', name: null }])
     mocks.prisma.agentMessageTab.findMany.mockResolvedValue([])
+    mocks.prisma.agentMessageShare.findMany.mockResolvedValue([])
+    mocks.prisma.machine.findFirst.mockImplementation(async ({ where }) => (['m1', 'm2'].includes(where.machineId) ? { machineId: where.machineId } : null))
     mocks.prisma.agentMessageTab.upsert.mockImplementation(async ({ create }) => create)
     mocks.publish.mockResolvedValue(0); mocks.shareChanged.mockResolvedValue(0)
     app = Fastify(); app.setErrorHandler(errorHandler); registerAuthMiddleware(app, mocks.auth)
@@ -51,10 +53,10 @@ describe('Agent Messages per tab', () => {
     const result = await read()
     expect(result.statusCode).toBe(200)
     expect(result.json().data).toEqual({ revision: 8, machines: [{ machineId: 'm1', name: 'studio' }, { machineId: 'm2', name: null }], tabs: [
-      { id: 'app', name: 'App', named: true, enabled: false, panes: [{ machineId: 'm1', agentId: 'lead' }, { machineId: 'm2', agentId: 'api' }] },
-      { id: 'notes', name: 'Notes', named: false, enabled: false, panes: [{ machineId: 'm1', agentId: 'writer' }] },
+      { id: 'app', name: 'App', named: true, enabled: false, leader: null, panes: [{ machineId: 'm1', agentId: 'lead' }, { machineId: 'm2', agentId: 'api' }] },
+      { id: 'notes', name: 'Notes', named: false, enabled: false, leader: null, panes: [{ machineId: 'm1', agentId: 'writer' }] },
     ] })
-    expect(mocks.prisma.agentMessageTab.findMany).toHaveBeenCalledWith({ where: { userId: 'owner' }, select: { userId: true, tabId: true, enabled: true } })
+    expect(mocks.prisma.agentMessageTab.findMany).toHaveBeenCalledWith({ where: { userId: 'owner' }, select: { userId: true, tabId: true, enabled: true, leaderMachineId: true, leaderAgentId: true } })
   })
 
   it('reads each tab\'s own flag, and never another account\'s record', async () => {
@@ -75,9 +77,9 @@ describe('Agent Messages per tab', () => {
   it('turns one tab on, at its own address, and has the account\'s daemons read again', async () => {
     const result = await set('app', { enabled: true })
     expect(result.statusCode).toBe(200)
-    expect(result.json().data).toEqual({ tabId: 'app', enabled: true, revision: 1 })
+    expect(result.json().data).toEqual({ tabId: 'app', enabled: true, leader: null, revision: 1 })
     expect(mocks.prisma.agentMessageTab.upsert).toHaveBeenCalledWith({ where: { id: agentMessageTabId('owner', 'app') },
-      create: { id: agentMessageTabId('owner', 'app'), userId: 'owner', tabId: 'app', enabled: true, revision: 1 },
+      create: { id: agentMessageTabId('owner', 'app'), userId: 'owner', tabId: 'app', enabled: true, leaderMachineId: null, leaderAgentId: null, revision: 1 },
       update: { enabled: true, revision: { increment: 1 } } })
     expect(mocks.publish).toHaveBeenCalledWith('owner', { revision: 0 })
     expect(agentMessageTabId('owner', 'app')).toMatch(/^[0-9a-f]{24}$/)
@@ -87,7 +89,7 @@ describe('Agent Messages per tab', () => {
   it('converges when two first writes race', async () => {
     mocks.prisma.agentMessageTab.upsert.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('duplicate', { code: 'P2002', clientVersion: 'fixture' }))
     mocks.prisma.agentMessageTab.update.mockResolvedValue({ userId: 'owner', tabId: 'app', enabled: false, revision: 4 })
-    expect((await set('app', { enabled: false })).json().data).toEqual({ tabId: 'app', enabled: false, revision: 4 })
+    expect((await set('app', { enabled: false })).json().data).toEqual({ tabId: 'app', enabled: false, leader: null, revision: 4 })
   })
 
   it('refuses a malformed body or tab, and a record that is not this tab\'s', async () => {
@@ -100,6 +102,150 @@ describe('Agent Messages per tab', () => {
     mocks.prisma.agentMessageTab.upsert.mockRejectedValue(new Error('database down'))
     expect((await set('app', { enabled: true })).statusCode).toBe(500)
     expect(mocks.publish).not.toHaveBeenCalled()
+  })
+
+  describe('the tab\'s leader', () => {
+    const lead = { machineId: 'm1', agentId: 'lead' }
+    it('sets a leader that is a pane of the tab on a machine of the account, and tells the account\'s computers', async () => {
+      const res = await set('app', { leader: lead })
+      expect(res.statusCode).toBe(200)
+      expect(res.json().data).toMatchObject({ tabId: 'app', enabled: false, leader: lead })
+      expect(mocks.prisma.machine.findFirst).toHaveBeenCalledWith({ where: { machineId: 'm1', userId: 'owner' } })
+      expect(mocks.prisma.agentMessageTab.upsert).toHaveBeenCalledWith({ where: { id: agentMessageTabId('owner', 'app') },
+        create: { id: agentMessageTabId('owner', 'app'), userId: 'owner', tabId: 'app', enabled: false, leaderMachineId: 'm1', leaderAgentId: 'lead', revision: 1 },
+        update: { leaderMachineId: 'm1', leaderAgentId: 'lead', revision: { increment: 1 } } })
+      expect(mocks.publish).toHaveBeenCalledWith('owner', { revision: 0 })
+    })
+    it('clears the leader with null, and an enabled-only patch leaves the leader alone', async () => {
+      mocks.prisma.agentMessageTab.upsert.mockImplementation(async ({ create }) => create)
+      const cleared = await set('app', { leader: null })
+      expect(cleared.statusCode).toBe(200)
+      expect(cleared.json().data.leader).toBeNull()
+      expect(mocks.prisma.agentMessageTab.upsert.mock.calls[0][0].update).toEqual({ leaderMachineId: null, leaderAgentId: null, revision: { increment: 1 } })
+      expect(mocks.prisma.desk.findUnique).not.toHaveBeenCalled()
+      await set('app', { enabled: true })
+      expect(mocks.prisma.agentMessageTab.upsert.mock.calls[1][0].update).toEqual({ enabled: true, revision: { increment: 1 } })
+    })
+    it('answers the stored leader of an existing record', async () => {
+      mocks.prisma.agentMessageTab.upsert.mockResolvedValue({ userId: 'owner', tabId: 'app', enabled: true, leaderMachineId: 'm2', leaderAgentId: 'api', revision: 5 })
+      expect((await set('app', { enabled: true })).json().data).toEqual({ tabId: 'app', enabled: true, leader: { machineId: 'm2', agentId: 'api' }, revision: 5 })
+    })
+    for (const [what, leader] of [['a pane of another account', { machineId: 'shared', agentId: 'observer' }],
+      ['a harness not in the tab', { machineId: 'm1', agentId: 'other' }], ['an empty id', { machineId: '', agentId: 'x' }]] as const) {
+      it(`refuses ${what}`, async () => {
+        const res = await set('app', { leader })
+        expect(res.statusCode).toBe(400)
+        expect(res.json().error.code).toBe(leader.machineId ? 'INVALID_LEADER' : 'VALIDATION_ERROR')
+        expect(mocks.prisma.agentMessageTab.upsert).not.toHaveBeenCalled()
+        expect(mocks.publish).not.toHaveBeenCalled()
+      })
+    }
+    it('refuses a pane of the account that is in another tab, an unknown tab, and a machine that is not the account\'s', async () => {
+      for (const [id, leader] of [['app', { machineId: 'm1', agentId: 'writer' }], ['ghost', lead]] as const) {
+        const res = await set(id, { leader })
+        expect(res.statusCode).toBe(400)
+        expect(res.json().error).toEqual({ code: 'INVALID_LEADER', message: 'Choose a harness in this tab.' })
+      }
+      mocks.prisma.desk.findUnique.mockResolvedValue({ revision: 1, tabs: [{ id: 'app', name: 'App', panes: [{ machineId: 'm9', agentId: 'x' }] }] })
+      expect((await set('app', { leader: { machineId: 'm9', agentId: 'x' } })).json().error.code).toBe('INVALID_LEADER')
+      mocks.prisma.desk.findUnique.mockResolvedValue(null)
+      expect((await set('app', { leader: lead })).statusCode).toBe(400)
+      expect(mocks.prisma.agentMessageTab.upsert).not.toHaveBeenCalled()
+    })
+    it('refuses an empty body and a tab that is not an id', async () => {
+      expect((await set('app', {})).statusCode).toBe(400)
+      expect((await set('app', { leader: { ...lead, extra: 1 } })).statusCode).toBe(400)
+      expect((await set('bad.tab', { leader: lead })).statusCode).toBe(400)
+      expect(mocks.prisma.agentMessageTab.upsert).not.toHaveBeenCalled()
+    })
+    // Ids are opaque and may hold '/': `m1` + `a/b` must never equal `m1/a` + `b` (final review M1).
+    it('compares a leader by both ids, never by a joined string', async () => {
+      const slashed = { id: 'app', name: 'App', panes: [{ machineId: 'm1', agentId: 'a/b' }] }
+      mocks.prisma.desk.findUnique.mockResolvedValue({ revision: 1, tabs: [slashed] })
+      mocks.prisma.machine.findFirst.mockImplementation(async ({ where }) => (['m1', 'm1/a'].includes(where.machineId) ? { machineId: where.machineId } : null))
+      const res = await set('app', { leader: { machineId: 'm1/a', agentId: 'b' } })
+      expect(res.statusCode).toBe(400)
+      expect(res.json().error.code).toBe('INVALID_LEADER')
+      expect(mocks.prisma.agentMessageTab.upsert).not.toHaveBeenCalled()
+      expect((await set('app', { leader: { machineId: 'm1', agentId: 'a/b' } })).statusCode).toBe(200)
+      // At read time too: a stored pair that only matches when joined is no leader.
+      mocks.prisma.machine.findMany.mockResolvedValue([{ machineId: 'm1', name: null }, { machineId: 'm1/a', name: null }])
+      mocks.prisma.agentMessageTab.findMany.mockResolvedValue([{ userId: 'owner', tabId: 'app', enabled: true, leaderMachineId: 'm1/a', leaderAgentId: 'b' }])
+      expect((await read()).json().data.tabs[0].leader).toBeNull()
+    })
+    it('lists the leader with its tab, and null once its pane left the tab', async () => {
+      const record = (tabId: string, machineId: string | null, agentId: string | null, userId = 'owner') =>
+        ({ userId, tabId, enabled: true, leaderMachineId: machineId, leaderAgentId: agentId })
+      mocks.prisma.agentMessageTab.findMany.mockResolvedValue([record('app', 'm1', 'lead'), record('notes', 'm1', 'gone')])
+      expect((await read()).json().data.tabs.map((t: { id: string; leader: unknown }) => [t.id, t.leader])).toEqual([['app', lead], ['notes', null]])
+      // Moved to another tab, or its machine no longer the account's: derived away, nothing written.
+      mocks.prisma.desk.findUnique.mockResolvedValue({ revision: 9, tabs: [{ ...tab, panes: [{ machineId: 'm2', agentId: 'api' }] }, other] })
+      expect((await read()).json().data.tabs[0].leader).toBeNull()
+      mocks.prisma.desk.findUnique.mockResolvedValue({ revision: 9, tabs: [tab, other] })
+      mocks.prisma.machine.findMany.mockResolvedValue([{ machineId: 'm2', name: null }])
+      expect((await read()).json().data.tabs[0].leader).toBeNull()
+      // Another account's record, or a half-written pair, never names a leader.
+      mocks.prisma.machine.findMany.mockResolvedValue([{ machineId: 'm1', name: 'studio' }])
+      mocks.prisma.agentMessageTab.findMany.mockResolvedValue([record('app', 'm1', 'lead', 'someone-else'), record('notes', 'm1', null)])
+      expect((await read()).json().data.tabs.map((t: { leader: unknown }) => t.leader)).toEqual([null, null])
+      expect(mocks.prisma.agentMessageTab.upsert).not.toHaveBeenCalled()
+      expect(mocks.prisma.agentMessageTab.update).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('the leader of a tab the account shares', () => {
+    // Bob's harness, placed on the owner's desk tab: its machine is not the owner's, so only the share's roster lets it lead.
+    const bob = { machineId: 'mb', agentId: 'b1' }
+    const shared = { ...tab, panes: [...tab.panes, bob] }
+    const roster = (harnesses: unknown[]) => ({ body: JSON.stringify({ name: 'App', harnesses }), signature: 's' })
+    const listed = roster([{ accountId: 'owner', machineId: 'm1', agentId: 'lead' }, { accountId: 'bob', ...bob }])
+    beforeEach(() => { mocks.prisma.desk.findUnique.mockResolvedValue({ revision: 8, tabs: [shared, other] }) })
+
+    it('takes a member\'s harness the roster of its live share lists, and lists it as the leader', async () => {
+      mocks.prisma.agentMessageShare.findFirst.mockResolvedValue({ roster: listed })
+      const res = await set('app', { leader: bob })
+      expect(res.statusCode).toBe(200)
+      expect(res.json().data.leader).toEqual(bob)
+      expect(mocks.prisma.agentMessageShare.findFirst).toHaveBeenCalledWith({ where: { ownerUserId: 'owner', tabId: 'app', stoppedAt: null }, select: { roster: true } })
+      mocks.prisma.agentMessageTab.findMany.mockResolvedValue([{ userId: 'owner', tabId: 'app', enabled: false, leaderMachineId: 'mb', leaderAgentId: 'b1' }])
+      mocks.prisma.agentMessageShare.findMany.mockResolvedValue([{ tabId: 'app', roster: listed }])
+      const data = (await read()).json().data
+      expect(data.tabs[0].leader).toEqual(bob)
+      // Still only the owner's panes take part.
+      expect(data.tabs[0].panes).toEqual([{ machineId: 'm1', agentId: 'lead' }, { machineId: 'm2', agentId: 'api' }])
+      expect(mocks.prisma.agentMessageShare.findMany).toHaveBeenCalledWith({ where: { ownerUserId: 'owner', stoppedAt: null }, select: { tabId: true, roster: true } })
+    })
+
+    it('refuses one the roster does not list, one of a stopped share, and one not on the desk tab', async () => {
+      mocks.prisma.agentMessageShare.findFirst.mockResolvedValue({ roster: roster([{ machineId: 'm1', agentId: 'lead' }]) })
+      expect((await set('app', { leader: bob })).json().error.code).toBe('INVALID_LEADER')
+      // A stopped share is not found (`stoppedAt: null`).
+      mocks.prisma.agentMessageShare.findFirst.mockResolvedValue(null)
+      expect((await set('app', { leader: bob })).json().error.code).toBe('INVALID_LEADER')
+      // Listed, but no pane of this desk tab.
+      mocks.prisma.agentMessageShare.findFirst.mockResolvedValue({ roster: listed })
+      mocks.prisma.desk.findUnique.mockResolvedValue({ revision: 8, tabs: [tab, other] })
+      expect((await set('app', { leader: bob })).json().error.code).toBe('INVALID_LEADER')
+      // A roster that is not one lists no one.
+      mocks.prisma.desk.findUnique.mockResolvedValue({ revision: 8, tabs: [shared, other] })
+      for (const bad of [null, { body: 7 }, { body: '{' }, { body: 'null' }, { body: '{"harnesses":{}}' }, roster([null, { machineId: 'mb' }])]) {
+        mocks.prisma.agentMessageShare.findFirst.mockResolvedValue({ roster: bad })
+        expect((await set('app', { leader: bob })).json().error.code).toBe('INVALID_LEADER')
+      }
+      expect(mocks.prisma.agentMessageTab.upsert).not.toHaveBeenCalled()
+    })
+
+    it('lists none once the member\'s harness left the roster or the share stopped, and reads no roster while every leader is the account\'s', async () => {
+      mocks.prisma.agentMessageTab.findMany.mockResolvedValue([{ userId: 'owner', tabId: 'app', enabled: false, leaderMachineId: 'mb', leaderAgentId: 'b1' }])
+      mocks.prisma.agentMessageShare.findMany.mockResolvedValue([{ tabId: 'app', roster: roster([{ machineId: 'm1', agentId: 'lead' }]) }])
+      expect((await read()).json().data.tabs[0].leader).toBeNull()
+      mocks.prisma.agentMessageShare.findMany.mockResolvedValue([])
+      expect((await read()).json().data.tabs[0].leader).toBeNull()
+      mocks.prisma.agentMessageShare.findMany.mockClear()
+      mocks.prisma.agentMessageTab.findMany.mockResolvedValue([{ userId: 'owner', tabId: 'app', enabled: false, leaderMachineId: 'm1', leaderAgentId: 'lead' }])
+      expect((await read()).json().data.tabs[0].leader).toEqual({ machineId: 'm1', agentId: 'lead' })
+      expect(mocks.prisma.agentMessageShare.findMany).not.toHaveBeenCalled()
+    })
   })
 
   describe('shared tabs', () => {

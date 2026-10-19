@@ -206,10 +206,10 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     });
   }
 
-  /// Add a machine shared with this account's domain, from Add machine; or take one back out.
-  void _addSharedMachine(Machine machine, {bool remove = false}) => unawaited(
-    _run(() => app.addSharedMachine(machine.machineId, remove: remove)),
-  );
+  /// Add a machine shared with this account's domain, from Add machine. A machine shared with this
+  /// account, by its domain or by email alike, is never taken back off its list from here.
+  void _addSharedMachine(Machine machine) =>
+      unawaited(_run(() => app.addSharedMachine(machine.machineId)));
 
   void _closeMachineForm(String? message) {
     if (!mounted) return;
@@ -1079,14 +1079,6 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
             'Share',
             busy ? null : _shareMachine,
             command: 'picker.resource_share',
-          ),
-        if (machine.machine.machineShare case final share? when share.viaDomain)
-          _ResourceAction(
-            'Remove from my list',
-            busy
-                ? null
-                : () => _addSharedMachine(machine.machine, remove: true),
-            command: 'picker.resource_unshare',
           ),
         ...secondary.where((a) => a.command == 'picker.resource_remove'),
         ...secondary.where((a) => a.command == 'picker.device_mine'),

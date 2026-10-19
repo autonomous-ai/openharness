@@ -14,6 +14,7 @@ import 'package:harness/state/swarm.dart';
 import 'package:harness/widgets/terminal_prompt.dart';
 import 'package:harness/ws/ws_conn.dart';
 
+import 'support/agent_messages_api.dart' show agentMessagesSwitch;
 import 'swarm_state_test.dart' show createApp, MemoryStore;
 
 const _tab = 'aaaaaaaaaaaaaaaaaaaaaaaa';
@@ -146,6 +147,8 @@ void main() {
     app = createApp(store: MemoryStore(), connectionForTest: (_) => daemon, connected: true);
     app.machineStates['m']!.localOnly = true;
     addTearDown(app.dispose);
+    // An unshared tab's People and Tasks need the account's switch on (I1).
+    await tester.runAsync(() => agentMessagesSwitch(app, true));
     app.swarms.add(Swarm(id: tabId, name: 'app'));
     opened = [];
     urls = [];
@@ -190,12 +193,21 @@ void main() {
 
   Finder pill(String name) => find.byKey(ValueKey('agent-messages-tab:$name'));
 
-  testWidgets('an unshared tab shows the log alone, as today', (tester) async {
+  testWidgets('an unshared tab has Messages, People and Tasks too, opening on the log', (tester) async {
     await mount(tester, tabId: 'swarm-9');
-    expect(pill('messages'), findsNothing);
-    expect(pill('people'), findsNothing);
+    expect(pill('messages'), findsOneWidget);
+    expect(pill('people'), findsOneWidget);
+    expect(pill('tasks'), findsOneWidget);
     expect(find.text('No messages yet. Agents in this tab send them with `harness send`.'), findsOneWidget);
     expect(find.text('Update Harness on this computer to share tabs.'), findsNothing);
+  });
+
+  testWidgets('an unshared tab\'s People has Invite People… and no roster parts', (tester) async {
+    await mount(tester, tabId: 'swarm-9', initial: AgentMessagesTab.people);
+    expect(find.byKey(const ValueKey('tab-people')), findsOneWidget);
+    expect(find.byKey(const ValueKey('people-invite')), findsOneWidget);
+    expect(find.byKey(const ValueKey('people-stop')), findsNothing);
+    expect(daemon.actions, isNot(contains('share_who')));
   });
 
   testWidgets('a shared tab has Messages, People and Tasks, by mouse and by ←/→', (tester) async {
@@ -277,6 +289,8 @@ void main() {
     app = createApp(store: MemoryStore(), connectionForTest: (_) => daemon, connected: true);
     app.machineStates['m']!.localOnly = true;
     addTearDown(app.dispose);
+    // An unshared tab's People and Tasks need the account's switch on (I1).
+    await tester.runAsync(() => agentMessagesSwitch(app, true));
     app.machines = [
       ...app.machines,
       const Machine(machineId: 'ma', authMode: MachineAuthMode.remote, name: 'alice-mbp', isShared: true),
@@ -345,18 +359,37 @@ void main() {
     // Remove, which the sharing computer refuses (OWNER_PANE; final review of
     // 1c, I2). A member's harness keeps its Remove.
     expect(find.byKey(const ValueKey('people-remove:m/b1')), findsNothing);
-    expect(find.byKey(const ValueKey('people-leader:m/b1')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('people-leader:mc/c1')));
-    await settle(tester);
+    expect(find.byKey(const ValueKey('people-leader:m/b1')), findsNothing);
+    // Make Leader is the tab's setting (`setTabLeader`), offered only where
+    // the app says so; this tab is not on the desk, so nothing here.
+    expect(find.byKey(const ValueKey('people-leader:mc/c1')), findsNothing);
+    // Remove and Remove member ask first; Cancel sends nothing.
     await tester.tap(find.byKey(const ValueKey('people-remove:mc/c1')));
     await settle(tester);
+    expect(find.text('Remove api from this tab?'), findsOneWidget);
+    expect(find.text('Its owner can add it again.'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await settle(tester);
+    expect(daemon.actions, isNot(contains('share_remove')));
+    await tester.tap(find.byKey(const ValueKey('people-remove:mc/c1')));
+    await settle(tester);
+    await tester.tap(find.byKey(const ValueKey('shared-tab-confirm')));
+    await settle(tester);
     await tester.tap(find.byKey(const ValueKey('people-remove-member:carol')));
+    await settle(tester);
+    expect(find.text('Remove carol@example.com and their harnesses from this tab?'), findsOneWidget);
+    expect(find.text('They can be invited again.'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await settle(tester);
+    expect(daemon.actions, isNot(contains('share_remove_member')));
+    await tester.tap(find.byKey(const ValueKey('people-remove-member:carol')));
+    await settle(tester);
+    await tester.tap(find.byKey(const ValueKey('shared-tab-confirm')));
     await settle(tester);
     await tester.tap(find.byKey(const ValueKey('people-revoke:inv1')));
     await settle(tester);
     final acts = daemon.asked.where((p) => p['action'] != 'share_who').toList();
     expect(acts, [
-      {'action': 'share_leader', 'sharedTabId': _tab, 'leader': {'machineId': 'mc', 'agentId': 'c1'}},
       {'action': 'share_remove', 'sharedTabId': _tab, 'machineId': 'mc', 'agentId': 'c1'},
       {'action': 'share_remove_member', 'sharedTabId': _tab, 'accountId': 'carol'},
       {'action': 'share_revoke', 'inviteId': 'inv1'},
@@ -539,6 +572,8 @@ void main() {
       expect(find.text('<b>x</b>'), findsOneWidget);
       expect(find.text('#7'), findsOneWidget);
       expect(find.text('pass'), findsOneWidget);
+      expect(find.text('waiting for review'), findsOneWidget);
+      expect(find.text('not started'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('shared-task-open:acme/api#7')));
       await settle(tester);
       expect(urls.last.toString(), 'https://github.com/acme/api/issues/7');
@@ -562,6 +597,28 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await settle(tester);
       expect(urls.map((u) => u.toString()), ['https://github.com/acme/api/issues/7']);
+    });
+
+    testWidgets('an unshared tab reads its tasks by desk tab and shows them', (tester) async {
+      await mount(tester, tabId: 'swarm-9', shares: _shares());
+      daemon.answer = (p) => p['action'] == 'share_tasks' ? {'rows': [task(7, title: 'Fix it')]} : const {};
+      await tester.tap(pill('tasks'));
+      await settle(tester);
+      final reads = daemon.asked.where((p) => p['action'] == 'share_tasks').toList();
+      expect(reads, isNotEmpty);
+      expect(reads.last, {'action': 'share_tasks', 'tabId': 'swarm-9'});
+      expect(find.text('Fix it'), findsOneWidget);
+      expect(find.text('not started'), findsOneWidget);
+    });
+
+    testWidgets('a tab made a moment ago (NOT_A_TAB) is "no tasks yet", never an error or a skeleton', (tester) async {
+      await mount(tester, tabId: 'swarm-9', shares: _shares());
+      daemon.tasksFail = const WsRequestFailure(responseType: 'agent_messages_result', code: 'NOT_A_TAB');
+      await tester.tap(pill('tasks'));
+      await settle(tester);
+      expect(find.byKey(const ValueKey('shared-tasks-error')), findsNothing);
+      expect(find.byKey(const ValueKey('shared-tasks-loading')), findsNothing);
+      expect(find.byKey(const ValueKey('shared-tasks-empty')), findsOneWidget);
     });
 
     testWidgets('empty: its own words', (tester) async {

@@ -1,8 +1,9 @@
 /**
  * Who may use a machine another account owns (docs/plans/2026-10-15-share-machine-plan.md). Its owner
- * shares it with addresses, and with everyone at the owner's own domain; someone at the domain adds it with
- * one click (`MachineShareAdd`), someone the owner named needs none. A shared machine is used with the
- * owner's own rights: `machine_select` (lib/webWs.ts) asks `sharedMachineAccess` where it once compared
+ * shares it with addresses, and with everyone at the owner's own domain. Either way it is theirs to use at
+ * once: a domain share once had to be added first (`MachineShareAdd`, kept only for older apps), and the
+ * owner asked for it to work as one by email does (2026-10-16). A shared machine is used with the owner's
+ * own rights: `machine_select` (lib/webWs.ts) asks `sharedMachineAccess` where it once compared
  * owners, and `machinesSharedWith` is the "Shared with you" half of the Machines list.
  *
  * Only the listing and the relay are decided here. The machine's daemon keeps the policy it published and
@@ -17,34 +18,22 @@ import { activeMachineKeys } from './deviceKeyLog.js'
 import { emailDomain, isPublicEmailDomain } from './publicEmailDomains.js'
 import { storedAutonomousEnvironment } from './autonomousEnvironment.js'
 import type { AuthUser } from './ssoAuth.js'
+import { sharedVia, type ShareVia } from './machineSharePolicy.js'
 
-export type ShareVia = 'email' | 'domain'
+export { sharedVia, type ShareVia } from './machineSharePolicy.js'
 
 /** The most machines one account is shown as shared with it, and the most a machine lists as using it. */
 export const SHARED_LIST_MAX = 200
 
 const normalized = (email: string): string => email.trim().toLowerCase()
 
-/** How `share` reaches `email`: named, at the owner's domain, or not at all. */
-export function sharedVia(share: Pick<MachineShare, 'emails' | 'domain'>, email: string): ShareVia | null {
-  const address = normalized(email)
-  if (share.emails.includes(address)) return 'email'
-  const domain = emailDomain(address)
-  if (share.domain && domain === share.domain && !isPublicEmailDomain(domain)) return 'domain'
-  return null
-}
-
-/** Whether `user` may use `machine`, which another account owns: how it was shared with them, or null. A
- *  domain share counts once they added it. */
+/** Whether `user` may use `machine`, which another account owns: how it was shared with them, or null. */
 export async function sharedMachineAccess(user: AuthUser, machine: Pick<Machine, 'machineId' | 'userId' | 'autonomousEnv'>): Promise<ShareVia | null> {
   if (machine.userId === user.sub) return null
   const share = await prisma.machineShare.findUnique({ where: { machineId: machine.machineId } })
   if (!share || share.ownerId !== machine.userId || share.autonomousEnv !== user.autonomousEnv
     || storedAutonomousEnvironment(machine.autonomousEnv) !== user.autonomousEnv) return null
-  const via = sharedVia(share, user.email)
-  if (via !== 'domain') return via
-  const added = await prisma.machineShareAdd.findUnique({ where: { machineId_userId: { machineId: machine.machineId, userId: user.sub } } })
-  return added ? via : null
+  return sharedVia(share, user.email)
 }
 
 /** A machine shared with the person asking, as their Machines list shows it. `pub` is the machine's own
@@ -59,7 +48,7 @@ export interface SharedMachineRow {
   share: { ownerName: string; ownerEmail: string; via: ShareVia; added: boolean }
 }
 
-/** The machines other accounts share with `user`: named ones, and those at their domain, added or not. */
+/** The machines other accounts share with `user`: named ones, and those at their domain. */
 export async function machinesSharedWith(user: AuthUser): Promise<SharedMachineRow[]> {
   const email = normalized(user.email)
   const domain = emailDomain(email)
@@ -85,8 +74,7 @@ export async function machinesSharedWith(user: AuthUser): Promise<SharedMachineR
   if (!usable.length) return []
   const ids = usable.map(u => u.machine.machineId)
   const ownerIds = [...new Set(usable.map(u => u.machine.userId))]
-  const [adds, owners, presence, keys] = await Promise.all([
-    prisma.machineShareAdd.findMany({ where: { userId: user.sub, machineId: { in: ids } } }),
+  const [owners, presence, keys] = await Promise.all([
     prisma.user.findMany({ where: { id: { in: ownerIds } }, select: { id: true, name: true, email: true } }),
     getAgentPresenceMany(ids),
     Promise.all(ownerIds.map(async id => [id, await activeMachineKeys(id)] as const)),
@@ -99,8 +87,8 @@ export async function machinesSharedWith(user: AuthUser): Promise<SharedMachineR
       machineId: machine.machineId, name: machine.name ?? null, hostname: machine.hostname ?? null, authMode: 'remote',
       status: presence.get(machine.machineId) ? 'running' : 'offline',
       pub: keyOf(machine.userId, machine.machineId),
-      share: { ownerName: owner?.name || owner?.email || 'Harness user', ownerEmail: owner?.email ?? '', via,
-        added: via === 'email' || adds.some(a => a.machineId === machine.machineId) },
+      // `added` is always true now: an app that still reads it lists the machine as one it uses.
+      share: { ownerName: owner?.name || owner?.email || 'Harness user', ownerEmail: owner?.email ?? '', via, added: true },
     }
   })
 }
@@ -113,18 +101,24 @@ export interface ShareMember {
   machines: Array<{ machineId: string; name: string; pub: string }>
 }
 
-/** The accounts `share` lets use its machine right now: those named, and those at the domain who added it. */
+/** The accounts `share` lets use its machine right now: those named, and everyone at the domain when it is
+ *  shared with the domain. Named ones come first, so the cap never drops someone the owner named. */
 export async function shareMembers(share: MachineShare): Promise<ShareMember[]> {
-  const adds = await prisma.machineShareAdd.findMany({ where: { machineId: share.machineId }, take: SHARED_LIST_MAX })
-  const users = await prisma.user.findMany({
-    where: { autonomousEnv: share.autonomousEnv, id: { not: share.ownerId },
-      OR: [{ email: { in: share.emails } }, { id: { in: adds.map(a => a.userId) } }] },
-    select: { id: true, email: true, name: true }, take: SHARED_LIST_MAX,
-  })
-  const members = users.flatMap(user => {
+  const domain = share.domain && !isPublicEmailDomain(share.domain) ? share.domain : null
+  const select = { id: true, email: true, name: true } as const
+  const where = { autonomousEnv: share.autonomousEnv, id: { not: share.ownerId } }
+  const named = share.emails.length
+    ? await prisma.user.findMany({ where: { ...where, email: { in: share.emails } }, select, take: SHARED_LIST_MAX })
+    : []
+  const atDomain = domain && named.length < SHARED_LIST_MAX
+    ? await prisma.user.findMany({
+      where: { ...where, email: { endsWith: `@${domain}`, mode: 'insensitive' }, id: { notIn: [share.ownerId, ...named.map(u => u.id)] } },
+      select, orderBy: { createdAt: 'asc' }, take: SHARED_LIST_MAX - named.length,
+    })
+    : []
+  const members = [...named, ...atDomain].flatMap(user => {
     const via = sharedVia(share, user.email)
-    if (!via || (via === 'domain' && !adds.some(a => a.userId === user.id))) return []
-    return [{ user, via }]
+    return via ? [{ user, via }] : []
   })
   return Promise.all(members.map(async ({ user, via }) => ({
     email: normalized(user.email), name: user.name ?? null, via,

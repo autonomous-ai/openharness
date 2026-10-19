@@ -202,10 +202,45 @@ export function newAgentPayload(args: NewArgs, cwd: string | null, baseEngine = 
   }
 }
 
-export interface NewMachine { machineId: string; label: string; status: string; current: boolean }
+export interface NewMachine {
+  machineId: string; label: string; status: string; current: boolean
+  /** Another account's machine shared with this one: whose it is. */
+  sharedBy?: string
+  /** Shared with everyone at the account's domain and not added yet: named only to say how to add it. */
+  toAdd?: true
+}
 
-/** The machine `--machine <word>` means: an exact id, else a label, case-blind; ambiguity is an error, not a guess. */
-export function resolveNewMachine(word: string, machines: NewMachine[]): NewMachine {
+/** One row of `GET /api/machines`, as far as `--machine` reads it; a shared one carries its `share`. */
+export interface MachineRow {
+  machineId: string
+  name?: string | null
+  hostname?: string | null
+  status?: string | null
+  share?: { ownerName?: string | null; added?: boolean | null } | null
+}
+
+/** The machines `--machine` resolves among: the account's own, then those other accounts share with it that it
+ *  may use — named in the share, or added from one at its domain (`share.added`, as the backend decides). A domain
+ *  share not added yet is listed as `toAdd`: its machine refuses this account until it is added
+ *  (backend lib/machineAccess.ts `sharedMachineAccess`), so it is never chosen, only named. */
+export function machineChoices(data: { machines?: MachineRow[]; sharedMachines?: MachineRow[] }, currentId: string | null): NewMachine[] {
+  const label = (machine: MachineRow): string => machine.name?.trim() || machine.hostname?.trim() || '(unnamed)'
+  const choice = (machine: MachineRow): NewMachine => ({
+    machineId: machine.machineId, label: label(machine), status: machine.status || 'unknown', current: machine.machineId === currentId,
+  })
+  return [
+    ...(data.machines ?? []).map(choice),
+    ...(data.sharedMachines ?? []).map((machine) => ({
+      ...choice(machine), current: false, sharedBy: machine.share?.ownerName?.trim() || 'another account',
+      ...(machine.share?.added === true ? {} : { toAdd: true as const }),
+    })),
+  ]
+}
+
+/** The machine `--machine <word>` means: an exact id, else a label, case-blind; ambiguity is an error, not a guess.
+ *  A machine shared with the account answers its name too, but the account's own wins a name both have. */
+export function resolveNewMachine(word: string, choices: NewMachine[]): NewMachine {
+  const machines = choices.filter((machine) => !machine.toAdd)
   const byId = machines.find((machine) => machine.machineId === word)
   if (byId) return byId
   const wanted = word.toLowerCase()
@@ -218,11 +253,21 @@ export function resolveNewMachine(word: string, machines: NewMachine[]): NewMach
   let matches: NewMachine[] = []
   for (const tier of tiers) {
     matches = machines.filter((machine) => tier(machine.label.toLowerCase()))
+    const own = matches.filter((machine) => machine.sharedBy === undefined)
+    if (own.length > 0) matches = own
     if (matches.length > 0) break
   }
   if (matches.length === 1) return matches[0]!
   if (matches.length === 0) {
-    throw new NewUsageError(`No machine called “${word}”. Yours: ${machines.map((machine) => machine.label).join(', ') || 'none'}.`)
+    // Seen 2026-10-16: Mac Auto, shared with everyone at autonomous.ai and not added, read as no machine at all.
+    const team = choices.find((machine) => machine.toAdd && (machine.machineId === word || machine.label.toLowerCase() === word.toLowerCase()))
+    if (team) {
+      throw new NewUsageError(`${team.sharedBy} shared “${team.label}” with everyone at your company. Add it first: Machines › Shared with your team, in the app or hn.`)
+    }
+    const labels = (shared: boolean) => machines.filter((machine) => (machine.sharedBy !== undefined) === shared).map((machine) => machine.label)
+    const shared = labels(true)
+    throw new NewUsageError(`No machine called “${word}”. Yours: ${labels(false).join(', ') || 'none'}.`
+      + (shared.length ? ` Shared with you: ${shared.join(', ')}.` : ''))
   }
   throw new NewUsageError(`“${word}” could be ${matches.map((machine) => machine.label).join(' or ')}. Type more of the name.`)
 }

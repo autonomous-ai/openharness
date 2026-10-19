@@ -25,7 +25,17 @@ it('counts only explicit interactive intent and never serializes its identifiers
   expect(add.mock.calls.filter(([k]) => k === 'health_cli_first_interactive_work')).toHaveLength(1)
 })
 
-it('bounds RAM, expires unobserved intent, resets on a changed choice and samples at most once a minute', () => {
+it('samples once a tick, the shortest of which is 45 seconds, so the minute on average keeps its count', () => {
+  let now = Date.parse('2026-10-01T12:00:00Z')
+  const health = createProductHealth(vi.fn(), () => now, cleanHealthState(null, now))
+  const sample = vi.fn(() => ({ rss: 1 }))
+  health.sample(sample); now += 44_999; health.sample(sample)
+  expect(sample).toHaveBeenCalledOnce()
+  now += 1; health.sample(sample)
+  expect(sample).toHaveBeenCalledTimes(2)
+})
+
+it('bounds RAM, expires unobserved intent, resets on a changed choice and samples at most once a tick', () => {
   let now = Date.parse('2026-10-01T12:00:00Z')
   const add = vi.fn(), health = createProductHealth(add, () => now, cleanHealthState(null, now))
   for (let i = 0; i < 1001; i++) health.intent(`intent-${i}`, 'interactive')

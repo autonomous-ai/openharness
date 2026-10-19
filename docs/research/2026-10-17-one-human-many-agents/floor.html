@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Swarm floor</title>
+<style>
+  :root { --bg:#0b0c0e; --panel:#131518; --desk:#0f1113; --text:#e6e7e9; --muted:#8b8f96; --faint:#5a5e65; --line:#24272c;
+          --cyan:#5fd7d7; --yellow:#ffd75f; --red:#ff6b6b; --green:#7bd88f; --blue:#7aa2f7; --focus:#e6e7e9; color-scheme:dark; }
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--text); font:12px/1.45 ui-monospace,"SF Mono",Menlo,monospace; display:flex; flex-direction:column; overflow:hidden; }
+  header { display:flex; align-items:center; gap:18px; padding:8px 14px; border-bottom:1px solid var(--line); flex:none; }
+  header .tab { color:var(--muted); }
+  header .tab.on { color:var(--text); }
+  header .tab.on::before { content:"⚇ "; color:var(--blue); }
+  header .who { margin-left:auto; color:var(--muted); }
+  header .who b { color:var(--text); font-weight:400; }
+  .main { flex:1; display:flex; min-height:0; }
+  aside { width:330px; flex:none; border-right:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; min-height:0; }
+  aside.hidden { display:none; }
+  aside section { padding:10px 12px; border-bottom:1px solid var(--line); }
+  aside section.tasks { flex:1; overflow:auto; }
+  aside h3 { margin:0 0 6px; font-size:11px; color:var(--faint); font-weight:400; letter-spacing:.08em; display:flex; justify-content:space-between; }
+  .pkt { border:1px solid var(--line); border-radius:4px; padding:6px 8px; margin-bottom:6px; }
+  .pkt .k { color:var(--yellow); }
+  .pkt .rec { color:var(--muted); }
+  .pkt .acts { margin-top:4px; display:flex; gap:6px; }
+  .pkt button { font:inherit; background:none; color:var(--text); border:1px solid var(--line); border-radius:3px; padding:1px 8px; cursor:pointer; }
+  .pkt button:hover { border-color:var(--text); }
+  .pkt.done { opacity:.4; }
+  .row { display:flex; gap:6px; padding:1px 0; cursor:pointer; white-space:nowrap; }
+  .row:hover { color:#fff; }
+  .row .t { flex:1; overflow:hidden; text-overflow:ellipsis; }
+  .row .o { color:var(--muted); width:70px; text-align:right; }
+  .people { color:var(--muted); }
+  .floor { flex:1; display:grid; gap:8px; padding:8px; min-height:0; overflow:auto; grid-auto-rows:minmax(150px,1fr); }
+  .desk { background:var(--desk); border:1px solid var(--line); border-radius:5px; display:flex; flex-direction:column; min-height:150px; overflow:hidden; cursor:pointer; position:relative; }
+  .desk.ask { border-color:var(--yellow); }
+  .desk.fail { border-color:var(--red); }
+  .desk.focus { outline:1px solid var(--focus); outline-offset:1px; }
+  .desk .hd { display:flex; gap:6px; padding:4px 7px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  .desk .hd .n { color:var(--text); }
+  .desk .hd .m { color:var(--muted); }
+  .desk .hd .task { color:var(--faint); overflow:hidden; text-overflow:ellipsis; flex:1; }
+  .desk .hd .eye { color:var(--blue); }
+  .desk .term { flex:1; padding:5px 7px; overflow:hidden; color:#c9cbd0; display:flex; flex-direction:column; justify-content:flex-end; }
+  .desk .term div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .desk .term .dim { color:var(--faint); }
+  .desk .in { border-top:1px solid var(--line); padding:4px 7px; color:var(--faint); }
+  .desk.zoom { position:fixed; inset:42px 12px 30px 12px; z-index:5; min-height:0; }
+  .desk.zoom .term { font-size:13px; }
+  .desk.zoom .in input { all:unset; width:100%; color:var(--text); }
+  .mk { width:1ch; display:inline-block; }
+  .mk.ask { color:var(--yellow); } .mk.work { color:var(--cyan); } .mk.rev { color:var(--blue); } .mk.fail { color:var(--red); }
+  .mk.open, .mk.prop, .mk.idle { color:var(--faint); } .mk.done { color:var(--green); } .mk.off { color:var(--red); }
+  footer { flex:none; display:flex; gap:16px; padding:5px 14px; border-top:1px solid var(--line); color:var(--muted); white-space:nowrap; overflow:hidden; }
+  footer .need { margin-left:auto; color:var(--yellow); }
+  .note { position:fixed; right:14px; bottom:34px; max-width:420px; background:var(--panel); border:1px solid var(--line); border-radius:5px; padding:8px 10px; color:var(--muted); z-index:6; }
+  .note b { color:var(--text); font-weight:400; }
+  .note .x { float:right; cursor:pointer; color:var(--faint); }
+</style>
+</head>
+<body>
+<header>
+  <span class="tab">harness</span><span class="tab">docs</span><span class="tab on">device-os</span>
+  <span class="who"><b>Mira ●</b> (you) · Tomas ● · Ines ○</span>
+</header>
+<div class="main">
+  <aside id="panel">
+    <section><h3><span>YOU</span><span id="youCount"></span></h3><div id="you"></div></section>
+    <section class="tasks"><h3><span>TASKS</span><span id="taskCount"></span></h3><div id="tasks"></div></section>
+    <section><h3><span>PEOPLE</span><span>✉ invite</span></h3><div class="people" id="people"></div></section>
+  </aside>
+  <div class="floor" id="floor"></div>
+</div>
+<footer id="health"></footer>
+<div class="note" id="note"><span class="x" onclick="this.parentNode.remove()">✕</span>
+  <b>A design mockup, not the product.</b> The swarm is a team on an open floor: every worker's live terminal is a desk.
+  Arrows or click move between desks · <b>⌘⏎</b> (or <b>z</b>) zooms the desk to real size and back (Esc stays with the agent) · type into your own workers when zoomed ·
+  <b>t</b> shows or hides the panel · answer the packets under YOU. Desks keep their places; marks and borders change, positions never do. An idle desk (○) pulls its next task by itself, without waiting for the lead.
+  Everything here is invented and moves on its own.</div>
+<script>
+const ME = 'Mira'
+const MARK = { ask:'?', work:'●', rev:'◐', fail:'✗', open:'○', prop:'◇', idle:'○', done:'✓', off:'⚠' }
+const workers = [
+  { n:'lead', m:'Mira', s:'work', task:'Splitting setup into three tasks', lines:['Morning report sent: 38 merged, 12 on and shown working.','#806 split into #1401 ring, #1402 Wi-Fi join, #1403 reset.','Gave #1401 to third, #1402 and #1403 to ten.','Evening run at 19:00 on device-a.'] },
+  { n:'first', m:'Mira', s:'ask', task:'Elbow refuses to stand', lines:['Goal register read 37639, clamped to 4095.','Motors held still until a person checks the elbow.','Asked Mira: hands at device-a, ~5 min.'] },
+  { n:'second', m:'Mira', s:'work', task:'Policy holds device actions', lines:['holds.sh on device-a: unnamed light remark held.','Named ones run in 0 to 2 ms.','Writing the hand-back for #908.'] },
+  { n:'third', m:'Mira', s:'fail', task:'Setup breathes the ring', lines:['CI on the target arch: 2 tests failed.','ring_breath_resumes_after_join: timeout 300 ms.','Moving the test onto the test clock.'] },
+  { n:'fourth', m:'Tomas', s:'work', task:'Stop words stop it at once', lines:['A/B on device-b, five cut-ins at a time.','A committed 10/20, B committed 10/20.','So #1158 is not the cause. Posting to #828.'] },
+  { n:'fifth', m:'Tomas', s:'work', task:'Give way to a hand', lines:['Overload release on the elbow, as the old runtime did.','Power cut 3 of 5 with Tomas\'s hand on the arm.','Torque 0 and goal 0 after power returns.'] },
+  { n:'sixth', m:'Mira', s:'rev', task:'Cut-ins are not talk', lines:['PR #1291 ready: switch CUT_INS_NOT_TALK, off.','Verified: 11 of 12 unnamed questions answered.','Waiting for review.'] },
+  { n:'seventh', m:'Tomas', s:'work', task:'Session resumes after a mic drop', lines:['USB mic re-enumerated at 14:02.','Speaker level reset: was 8 dB louder.','Adding the level check to the self-test.'] },
+  { n:'eighth', m:'Ines', s:'idle', task:'next: #941 stuffy air skill', lines:['#1310 merged.','Next in my list: #941.','Lease taken in 2 s when the slot frees.'] },
+  { n:'nine', m:'Ines', s:'work', task:'One install for a new device', lines:['Units for setup and the keeper at first boot.','Harness as a user service with lingering on.','Installing on device-c.'] },
+  { n:'ten', m:'Ines', s:'work', task:'Wi-Fi join, then a voice', lines:['Took #1402 from the lead.','Reading the old app\'s setup request body.','It carries fields the new setup dropped.'] },
+  { n:'reviewer', m:'Mira', s:'work', task:'Reviewing #1325', lines:['Clean context. Hand-back read first, then the diff.','Broke the change: tests go red. Good.','P3: a magic number in ring.rs. Follow-up task.'] },
+  { n:'tests', m:'Mira', s:'work', task:'Three tests flaky under load', lines:['service_mute: privacy worker did not stop in 300 ms.','Moved onto the event, not the clock.','Full one-thread run: 0 flaky in 5.'] },
+  { n:'el', m:'Tomas', s:'off', task:'machine offline', lines:['(no desk: Tomas\'s studio machine is offline)','Lease on #1155 expires in 12 min.'] },
+  { n:'twelve', m:'Ines', s:'work', task:'Self-test reads the air sensor', lines:['Sensor swap failed the same way.','So not the part: I2C at 400 kHz vs its 100 kHz.','Patching the bus speed.'] },
+  { n:'gardener', m:'Mira', s:'work', task:'Retire switches that are on everywhere', lines:['89 switches, 37 still off.','Removing 6 that are on for every device.','Each removal is its own small PR.'] },
+]
+const tasks = [
+  ['ask','Hello quiet counts talk only','lead'], ['ask','Elbow refuses to stand','first'], ['work','Stop words stop it at once','fourth'],
+  ['work','Give way to a hand','fifth'], ['rev','Cut-ins are not talk','sixth'], ['fail','Setup breathes the ring','third'],
+  ['work','Policy holds device actions','second'], ['work','One install for a new device','nine'], ['open','Stuffy air skill','eighth'],
+  ['open','Self-test at first boot','—'], ['open','Head move settles first','—'], ['prop','Slow tests outside the group','tests'], ['prop','Retire the strip mapping','gardener'],
+]
+const packets = [
+  { k:'Decide', t:'#1155 hello quiet: count only talk to the device?', rec:'Lead recommends yes: in a busy room the hello was refused 9 of 12.', acts:['yes','no'] },
+  { k:'Hands', t:'device-a: unplug the servo bus, press the elbow back (~5 min)', rec:'first is waiting; motors stay still until then.', acts:['done','can\'t'] },
+  { k:'Try it', t:'3 changes on device-a since lunch: stop words, head tap, setup ring', rec:'Each switched on for device-a only. Notes per change.', acts:['notes'] },
+]
+const MACHINE = { Mira: 'studio-mac', Tomas: 'build-box', Ines: 'ines-laptop' }
+workers.forEach(w => {
+  if (w.s === 'off') return
+  const before = w.n === 'lead'
+    ? ['$ harness report', '165 merged/day · 24 waiting · 2 decisions waiting', '$ harness task --all --open | head', 'Reading proposals: 2 new since 09:40.']
+    : w.n === 'reviewer'
+    ? ['$ harness task --role reviewer', '4 ready for review, oldest 22 min', '$ gh pr checkout 1325', 'Reading the hand-back.']
+    : ['$ harness task next', '→ ' + w.task, 'Reading the task thread and the brief.', '$ harness slot build -- cargo build -p ' + w.n + '-crate', '   Compiling (slot 2 of 3 on ' + MACHINE[w.m] + ')', '   Finished in 48 s']
+  w.lines = before.concat(w.lines)
+})
+let focus = 0, zoomed = -1, panel = true
+const floor = document.getElementById('floor')
+function cols() { const w = floor.clientWidth; return Math.max(2, Math.min(5, Math.floor(w / 260))) }
+function render() {
+  const old = floor.querySelector('.zoom input'), draft = old ? old.value : ''
+  floor.style.gridTemplateColumns = `repeat(${cols()}, 1fr)`
+  floor.innerHTML = workers.map((w, i) => {
+    const mine = w.m === ME
+    const cls = ['desk', w.s === 'ask' ? 'ask' : '', w.s === 'fail' ? 'fail' : '', i === focus ? 'focus' : '', i === zoomed ? 'zoom' : ''].join(' ')
+    const eye = (i === 4 ? ' <span class="eye">👁 Tomas</span>' : '')
+    const lines = w.lines.slice(-(i === zoomed ? 40 : 8)).map((l, j, a) => `<div class="${j < a.length - 2 ? 'dim' : ''}">▌ ${l}</div>`).join('')
+    const input = i === zoomed ? (mine ? '<input placeholder="type to ' + w.n + '…" onkeydown="say(event,' + i + ')">' : '🔒 ' + w.m + '\'s worker: read-only') : (mine ? '&gt; _' : '🔒')
+    return `<div class="${cls}" onclick="pick(${i})"><div class="hd"><span class="mk ${w.s}">${MARK[w.s]}</span><span class="n">${w.n}</span><span class="m">${w.m}</span><span class="task">${w.task}</span>${eye}</div><div class="term">${lines}</div><div class="in">${input}</div></div>`
+  }).join('')
+  if (zoomed >= 0) { const inp = floor.querySelector('.zoom input'); if (inp) { inp.value = draft; inp.focus() } }
+  document.getElementById('tasks').innerHTML = tasks.map(([s, t, o]) => `<div class="row" onclick="pick(${Math.max(0, workers.findIndex(w => w.n === o))})"><span class="mk ${s}">${MARK[s]}</span><span class="t">${t}</span><span class="o">${o}</span></div>`).join('')
+  document.getElementById('taskCount').textContent = tasks.filter(t => t[0] !== 'done').length + ' open · ' + (38 + tasks.filter(t => t[0] === 'done').length) + ' ✓'
+  const open = packets.filter(p => !p.done).length
+  document.getElementById('youCount').textContent = open ? open + ' need you' : 'clear'
+  document.getElementById('you').innerHTML = packets.map((p, i) => `<div class="pkt ${p.done ? 'done' : ''}"><span class="k">${p.k}</span> ${p.t}<div class="rec">${p.rec}</div>${p.done ? '<div class="rec">answered: ' + p.done + '</div>' : '<div class="acts">' + p.acts.map((a, j) => `<button onclick="answer(${i},${j})">${a}</button>`).join('') + '</div>'}</div>`).join('')
+  document.getElementById('people').innerHTML = 'Mira (owner) 8 · Tomas 4 · Ines 4<br>✉ Ana invited you to "web-app": join with a worker?'
+  const marks = workers.reduce((a, w) => (a[w.s] = (a[w.s] || 0) + 1, a), {})
+  document.getElementById('health').innerHTML = `<span>165 merged/day</span><span>PR wait p50 1.5 h</span><span>24 waiting</span><span>rework 18%</span><span>37 switches off</span><span>CI 7 running · 3 queued</span><span>$212 today</span><span class="need">${open} need you · ${marks.ask || 0} ? desks</span>`
+  document.getElementById('panel').classList.toggle('hidden', !panel)
+}
+function pick(i) { if (zoomed >= 0 && zoomed !== i) zoomed = -1; focus = i; render() }
+function answer(i, j) { const a = packets[i].acts[j]; packets[i].done = a; if (i === 1 && a === 'done') { workers[1].s = 'work'; tasks[1][0] = 'work'; workers[1].lines.push('Mira: done. Elbow back. Standing test resumes.') } if (i === 0) { tasks[0][0] = 'work'; workers[0].lines.push('Mira answered ' + a + ' on #1155. el told when back online.') } render() }
+function say(e, i) { if (e.key !== 'Enter' || e.metaKey || e.ctrlKey || !e.target.value) return; workers[i].lines.push('you: ' + e.target.value); workers[i].lines.push('• Working on it…'); e.target.value = ''; render() }
+document.addEventListener('keydown', e => {
+  const mod = e.metaKey || e.ctrlKey
+  if (e.target.tagName === 'INPUT' && !(mod && e.key === 'Enter')) return
+  const c = cols()
+  if ((mod && e.key === 'Enter') || (!mod && e.key === 'z')) { zoomed = zoomed === focus ? -1 : focus; e.preventDefault(); render(); return }
+  if (zoomed >= 0) return
+  if (!mod && e.key === 't') { panel = !panel; render(); return }
+  const moves = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: c, ArrowUp: -c }
+  if (moves[e.key] !== undefined) { focus = Math.max(0, Math.min(workers.length - 1, focus + moves[e.key])); e.preventDefault(); render() }
+})
+window.addEventListener('resize', render)
+const chatter = {
+  fourth: ['Cut-in 4: committed in 220 ms.', 'Cut-in 5: missed, the reply kept talking.', 'Run 4 of 5.'],
+  tests: ['Run 2 of 5: 0 flaky.', 'service_mute repeated 50×: green.'],
+  nine: ['device-c: unit installed, keeper up.', 'First boot: 41 s to ready.'],
+  reviewer: ['#1325: approved, merging (switch off).', 'Next: #1327, oldest first.'],
+  twelve: ['Bus at 100 kHz: 30 reads, 0 failures.', 'Hand-back written for #1307.'],
+  second: ['Hand-back: what changed, how verified, risks.', 'PR #1408 opened.'],
+  gardener: ['Removed SWITCH_HEAD_TAP: on everywhere since Oct 16.', '35 still off.'],
+  lead: ['third: two red CI rounds on #806, I\'ll pair you with tests.', 'eighth: lease on #941.'],
+}
+setInterval(() => {
+  if (new URLSearchParams(location.search).has('still')) return
+  const names = Object.keys(chatter), n = names[Math.floor(Math.random() * names.length)]
+  const w = workers.find(x => x.n === n), opts = chatter[n]
+  w.lines.push(opts[Math.floor(Math.random() * opts.length)])
+  const idle = workers.find(x => x.s === 'idle')
+  if (idle && Math.random() < .3) {
+    const t = tasks.find(t => t[0] === 'open' && (t[2] === idle.n || t[2] === '—'))
+    if (t) { t[0] = 'work'; t[2] = idle.n; idle.s = 'work'; idle.task = t[1]; idle.lines.push('$ harness task next', '→ ' + t[1] + ' (oldest unowned in my area)', 'Lease taken. Reading the task and the brief.') }
+  }
+  if (n === 'reviewer' && workers[6].s === 'rev' && Math.random() < .3) { workers[6].s = 'idle'; workers[6].task = 'next: #1409'; tasks[4][0] = 'done'; workers[6].lines.push('#1291 merged by the reviewer, switch off.') }
+  const typing = document.activeElement && document.activeElement.tagName === 'INPUT' && document.activeElement.value
+  if (!typing) render()
+}, 1800)
+render()
+</script>
+</body>
+</html>

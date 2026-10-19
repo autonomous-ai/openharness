@@ -25,7 +25,7 @@ import 'keymap_host_test.dart' show MemoryKeymap, key;
 import 'keymap_runtime_test.dart' as configured;
 import 'support/mixed_agents.dart';
 import 'swarm_screen_test.dart' show terminal;
-import 'swarm_state_test.dart' show createApp;
+import 'swarm_state_test.dart' show createApp, MemoryStore;
 
 const _products = [
   {
@@ -125,11 +125,13 @@ void main() {
     bool workingPane = true,
     bool history = true,
     bool remotePane = false,
+    bool superTabReady = false,
   }) async {
     connections = {
       for (final id in ['m', 'studio', 'build']) id: _Connection(id),
     };
-    app = createApp(connectionForTest: (id) => connections[id]!);
+    app = createApp(connectionForTest: (id) => connections[id]!, store: superTabReady ? MemoryStore() : null);
+    if (superTabReady) app.currentUser = const CurrentUserProfile(id: 'owner', email: 'owner@example.com');
     seedMixedAgents(app);
     app.machineStates['m']!.localOnly = true;
     app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
@@ -203,6 +205,24 @@ void main() {
     await typeHarnessQuery(tester, name);
     await acceptSetupOrSearch(tester);
   }
+
+  testWidgets('the hidden Super Tab shortcut reuses New Tab without changing Cmd-T', (tester) async {
+    await mount(tester, store: false, superTabReady: true);
+    final before = app.swarms.length;
+    await key(tester, LogicalKeyboardKey.keyT, cmd: true, alt: true, shift: true);
+    await tester.pumpAndSettle();
+    expect(app.swarms, hasLength(before + 1));
+    expect(app.activeSwarm.isSuperTab, isTrue);
+    expect(find.byType(NewHarnessForm), findsOneWidget);
+    expect(find.text('New Super Tab'), findsOneWidget);
+    expect(box(tester).actionLabel, 'New Super Tab');
+    expect(connections.values.expand((c) => c.starts), isEmpty);
+    await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+    await tester.pumpAndSettle();
+    expect(app.activeSwarm.kind, 'harness');
+    expect(box(tester).actionLabel, 'New Harness');
+    await tester.pumpWidget(const SizedBox());
+  });
 
   for (final shortcut in [LogicalKeyboardKey.keyN, LogicalKeyboardKey.keyP]) {
     testWidgets(

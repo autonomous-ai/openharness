@@ -20,6 +20,7 @@ function setup() {
     normalizers: { forget: vi.fn() },
     forgetAttach: vi.fn(),
     turnStartedAt: new Map([['s1', 1], ['other', 2]]),
+    prompts: new Map([['a1', 'Fix it'], ['other', 'Keep me']]),
     neverFoldedHistory: new Set(['s1', 'other']),
     replayedFirstTurn: new Set(['s1', 'other']),
     clearAgyIdleWatch: vi.fn(),
@@ -60,6 +61,16 @@ function expectLetGo(deps: ForgetDeps, sessionId: string, agentId: string) {
 }
 
 describe('forgetting a session', () => {
+  it('drops the agent\'s kept prompt when the agent goes, and keeps it when only a session is released', () => {
+    const gone = setup()
+    gone.forgetSession('a1')
+    expect(gone.deps.prompts.has('a1')).toBe(false)
+    expect(gone.deps.prompts.get('other')).toBe('Keep me')
+    const kept = setup()
+    kept.forgetSession('a1', { keepAgent: true })
+    expect(kept.deps.prompts.get('a1')).toBe('Fix it')
+  })
+
   afterEach(() => { vi.restoreAllMocks(); vi.mocked(removePendingCursorTasks).mockClear() })
 
   it.each(['bound', 'unbound', 'process'] as const)('archives the proven capture of an unchanged %s agent', mode => {

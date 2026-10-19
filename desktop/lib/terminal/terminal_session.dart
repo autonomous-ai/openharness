@@ -152,7 +152,13 @@ class TerminalSession extends ChangeNotifier {
   final TerminalBinarySender sendBinary;
 
   final Duration resyncTimeout;
-  final bool readOnly;
+  final bool _readOnly;
+  bool get readOnly => _readOnly || _watchOnly;
+  String? _inputContext;
+  String? _openedInputContext;
+  bool _watchOnly;
+  bool _openedWatchOnly = false;
+  String? get inputContext => _inputContext;
 
   // A controllable clock keeps coalescing tests independent of host scheduling.
   final DateTime Function() _now;
@@ -213,10 +219,19 @@ class TerminalSession extends ChangeNotifier {
     this.client,
     this.onOpenStalled,
     this.takeover = true,
-    this.readOnly = false,
+    bool readOnly = false,
+    String? inputContext,
+    bool watchOnly = false,
     this.resyncTimeout = const Duration(seconds: 4),
     DateTime Function()? now,
-  }) : _now = now ?? DateTime.now {
+  }) : _now = now ?? DateTime.now,
+       // ignore: prefer_initializing_formals
+       _readOnly = readOnly,
+       // The public parameter deliberately omits the private field's underscore.
+       // ignore: prefer_initializing_formals
+       _inputContext = inputContext,
+       // ignore: prefer_initializing_formals
+       _watchOnly = watchOnly {
     terminal = _newTerminal();
   }
 
@@ -305,7 +320,10 @@ class TerminalSession extends ChangeNotifier {
 
   bool get acceptsInput =>
       !readOnly &&
+      !_watchOnly &&
       !watching &&
+      _inputContext == _openedInputContext &&
+      _watchOnly == _openedWatchOnly &&
       status == TerminalSessionStatus.controlling &&
       streamId != null;
 
@@ -331,6 +349,31 @@ class TerminalSession extends ChangeNotifier {
     if (engine == engineId) return;
     engineId = engine;
     notifyListeners();
+  }
+
+  /// An opaque provenance hint, never an access grant. Staging a new scope
+  /// immediately withholds input until its replacement stream is ready.
+  void stageInputContext(String? value, {bool watchOnly = false}) {
+    if (_inputContext == value && _watchOnly == watchOnly) return;
+    _inputContext = value;
+    _watchOnly = watchOnly;
+    _inputBytes.clear();
+  }
+
+  Future<void> setInputContext(String? value, {bool watchOnly = false}) async {
+    stageInputContext(value, watchOnly: watchOnly);
+    if (_disposed ||
+        (_openedInputContext == value && _openedWatchOnly == watchOnly)) {
+      return;
+    }
+    await _open(
+      initialCols: _measuredViewport?.cols ?? cols,
+      initialRows: _measuredViewport?.rows ?? rows,
+      waitForViewportSize: false,
+      resetRecovery: true,
+      preserveTerminal: true,
+      allowRedial: false,
+    );
   }
 
   Future<void> open({
@@ -453,11 +496,15 @@ class TerminalSession extends ChangeNotifier {
       'rows': rows,
       'compression': const ['zlib', 'none'],
       if (client != null) 'client': client!.toJson(),
+      if (_inputContext != null) 'inputContext': _inputContext,
+      if (_watchOnly) 'watchOnly': true,
       // Absent is the takeover an open has always been; `false` asks the daemon
       // to leave whoever holds the terminal alone and hand this one a watcher.
       if (!takeover) 'takeover': false,
     };
     _openAskedTakeover = takeover;
+    _openedInputContext = _inputContext;
+    _openedWatchOnly = _watchOnly;
     var sent = await send('terminal_open', openPayload);
     if (!_isCurrent(generation) ||
         status != TerminalSessionStatus.opening ||
@@ -1039,6 +1086,7 @@ class TerminalSession extends ChangeNotifier {
       'content': content,
       'agentId': agentId,
       'mode': 'auto',
+      if (_inputContext != null) 'inputContext': _inputContext,
       if (!kIsWeb && client?.kind == 'desktop') 'usageIntent': 'interactive',
     });
   }
@@ -1672,7 +1720,7 @@ class TerminalSession extends ChangeNotifier {
     appLog.warn(
       'terminal',
       'failed machine=$machineId agent=$agentId stream=$streamId code=$code'
-      '${message == null ? '' : ' message=$message'}',
+          '${message == null ? '' : ' message=$message'}',
     );
     _generation++;
     _cancelTimers();

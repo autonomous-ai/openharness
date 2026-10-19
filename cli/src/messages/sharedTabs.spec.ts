@@ -95,6 +95,17 @@ function world(ids: { alice?: string; bob?: string } = {}) {
       key: m.key, relay: m.relay, store: m.store, backend: backend.as(userId),
       self: async () => ({ machineId: id, accountId: userId, email }),
       ownPanes: async (tabId) => m.panes.has(tabId) ? m.panes.get(tabId)! : [],
+      // The tab setting's leader as the account's directory lists it: one of its panes, or a harness the roster of the
+      // account's live share of the tab lists (a member's); none once it is neither (the backend derives it). Not known
+      // before the directory is read.
+      ownLeader: async (tabId) => {
+        const panes = m.panes.has(tabId) ? m.panes.get(tabId)! : []
+        const leader = backend.leaders.get(`${userId}:${tabId}`) ?? null
+        const live = [...backend.shares.values()].find((s) => s.ownerUserId === userId && s.tabId === tabId && !s.stopped)
+        const listed = parseRoster(String((live?.roster as SignedRoster | null)?.body))?.harnesses ?? []
+        const is = (h: { machineId: string; agentId: string }) => !!leader && h.machineId === leader.machineId && h.agentId === leader.agentId
+        return panes === null ? undefined : leader && (panes.some(is) || listed.some(is)) ? leader : null
+      },
       machineKey: async (machineId) => m.keys.get(machineId) ?? null,
       askMachine: async (machineId, payload) => {
         m.asked.push([machineId, payload])
@@ -142,6 +153,15 @@ async function added(w: World, agentId = 'api'): Promise<string> {
   await w.bob.shared.addHarness(id, harnessOf(w.bob, agentId))
   await w.net.settle()
   return id
+}
+
+/** Alice's own harness in tab-1, which may lead it: the backend takes only a harness of the tab on the account's machines. */
+const LEAD_OF = (w: World) => ({ machineId: w.alice.id, agentId: 'lead' })
+/** The owner chooses a leader (its tab setting, from any of its computers), and the computer that shares the tab signs it
+ *  as it does on the `desk_changed` the choice causes: a roster change any test can make. */
+async function lead(w: World, id: string, leader: { machineId: string; agentId: string } | null, sharer = w.alice): Promise<void> {
+  await w.alice.shared.setLeader(id, leader)
+  await sharer.shared.refresh()
 }
 
 /** What a window reads and then dismisses, as the first notices were read once. */
@@ -240,14 +260,15 @@ describe('the owner', () => {
   it('shares a stopped tab again, from this computer or another of the owner\'s, and an old member accepts it afresh', async () => {
     const w = world()
     const id = await added(w)
-    await w.alice.shared.setLeader(id, { machineId: w.bob.id, agentId: 'api' })
+    await lead(w, id, LEAD_OF(w))
     await w.net.settle()
     const old = roster(w.bob, id).version
     expect(w.backend.shares.get(id)!.version).toBe(old)
     await w.alice.shared.stop(id)
     expect(await w.alice.shared.share('tab-1', 'app')).toEqual({ sharedTabId: id })
-    // Its version carries on past the stopped share's: version 1 is refused with the version held, and signed past it.
-    expect(roster(w.alice, id)).toMatchObject({ version: old + 2, members: [], leader: null })
+    // Its version carries on past the stopped share's: version 1 is refused with the version held, and signed past it. The
+    // leader is the tab setting's, which Stop Sharing leaves.
+    expect(roster(w.alice, id)).toMatchObject({ version: old + 2, members: [], leader: LEAD_OF(w) })
     expect(w.backend.puts.slice(-2).map((p) => p.version)).toEqual([old + 1, old + 2])
     expect(agents(roster(w.alice, id))).toEqual(['m2-alice/lead'])
     // Bob never heard the stop and still holds the old roster, at a lower version than the new one's.
@@ -297,7 +318,7 @@ describe('the owner', () => {
     await expect(new SharedTabs(w.bob.deps).share('tab-9', 'mine')).rejects.toMatchObject({ code: 'NOT_OWNER' })
     expect(roster(w.bob, mine).owner.machinePublicKey).toBe(b64e(carol.pub))
     // Alice's next roster is still Bob's to take.
-    await w.alice.shared.setLeader(id, { machineId: w.bob.id, agentId: 'api' })
+    await lead(w, id, LEAD_OF(w))
     await w.net.settle()
     expect(roster(w.bob, id).version).toBe(pinned.version + 1)
   })
@@ -307,21 +328,20 @@ describe('the owner', () => {
     const id = await added(w)
     const before = roster(w.alice, id).version
     const puts = w.backend.puts.length
-    await w.alice.shared.setLeader(id, { machineId: w.bob.id, agentId: 'api' })
+    await lead(w, id, LEAD_OF(w))
     await w.net.settle()
     expect(w.backend.puts.length).toBe(puts + 1)
     expect(w.backend.puts.at(-1)!.version).toBe(before + 1)
-    expect(roster(w.alice, id)).toMatchObject({ version: before + 1, leader: { machineId: w.bob.id, agentId: 'api' } })
+    expect(roster(w.alice, id)).toMatchObject({ version: before + 1, leader: LEAD_OF(w) })
     // Bob's machine is in the roster: it got the new one over the relay, sealed, not from the backend.
     const calls = w.backend.calls.length
     expect(roster(w.bob, id).version).toBe(before + 1)
     expect(w.backend.calls.length).toBe(calls)
     expect(w.net.sent.filter((s) => s.from === w.alice.id && s.to === w.bob.id).at(-1)!.payload).toHaveProperty('__e2e')
-    // The same leader again is no change; a leader not in the tab is refused; none clears it.
-    await w.alice.shared.setLeader(id, { machineId: w.bob.id, agentId: 'api' })
+    // The same leader again is no change; none clears it.
+    await lead(w, id, LEAD_OF(w))
     expect(w.backend.puts.length).toBe(puts + 1)
-    await expect(w.alice.shared.setLeader(id, { machineId: w.bob.id, agentId: 'nobody' })).rejects.toMatchObject({ code: 'NOT_IN_TAB' })
-    await w.alice.shared.setLeader(id, null)
+    await lead(w, id, null)
     expect(roster(w.alice, id).leader).toBeNull()
   })
 
@@ -506,7 +526,7 @@ describe('the owner', () => {
     w.bob.deps.announce = announce
     // A notice, and nothing else, once.
     w.alice.relay.send.mockResolvedValueOnce(false)
-    await w.alice.shared.setLeader(id, { machineId: w.bob.id, agentId: 'api' })
+    await lead(w, id, LEAD_OF(w))
     expect(w.alice.shared.notices()).toHaveLength(1)
     expect(announce).toHaveBeenCalledTimes(1)
     // A request that waits for the owner: written down, and told.
@@ -542,7 +562,7 @@ describe('the owner', () => {
     w.alice.deps.announce = announce
     const id = await added(w)
     w.alice.relay.send.mockResolvedValueOnce(false)
-    await w.alice.shared.setLeader(id, { machineId: w.bob.id, agentId: 'api' })
+    await lead(w, id, LEAD_OF(w))
     // The notice, and the request queue's own save, tell the windows.
     expect(announce).toHaveBeenCalledTimes(2)
     const [n] = w.alice.shared.notices()
@@ -575,13 +595,13 @@ describe('the owner', () => {
     const w = world()
     const id = await added(w)
     w.alice.relay.send.mockResolvedValueOnce(false).mockResolvedValueOnce(false)
-    await w.alice.shared.setLeader(id, { machineId: w.bob.id, agentId: 'api' })
-    await w.alice.shared.setLeader(id, null)
+    await lead(w, id, LEAD_OF(w))
+    await lead(w, id, null)
     expect(readAll(w.alice.shared)).toEqual([{ id: expect.any(String), sharedTabId: id, kind: 'unsent', machineId: w.bob.id, at: expect.any(String) }])
-    await w.alice.shared.setLeader(id, { machineId: w.bob.id, agentId: 'api' })
+    await lead(w, id, LEAD_OF(w))
     await w.net.settle()
     expect(w.alice.shared.notices()).toEqual([])
-    expect(roster(w.bob, id).leader).toEqual({ machineId: w.bob.id, agentId: 'api' })
+    expect(roster(w.bob, id).leader).toEqual(LEAD_OF(w))
   })
 
   it('never signs for an own share the backend lists under an id it did not derive: alerts once, and refuses to move it', async () => {
@@ -677,10 +697,9 @@ describe('the owner', () => {
   it('removes a member and its harnesses, and drops the session with its machine', async () => {
     const w = world()
     const id = await added(w)
-    await w.alice.shared.setLeader(id, { machineId: w.bob.id, agentId: 'api' })
     const drop = vi.spyOn(w.alice.key, 'drop')
     await w.alice.shared.removeMember(id, 'u-bob')
-    expect(roster(w.alice, id)).toMatchObject({ members: [], leader: null })
+    expect(roster(w.alice, id)).toMatchObject({ members: [] })
     expect(agents(roster(w.alice, id))).toEqual(['m2-alice/lead'])
     expect(drop).toHaveBeenCalledWith(expect.objectContaining({ sharedTabId: id, machineId: w.bob.id }))
     await expect(w.alice.shared.removeMember(id, 'u-nobody')).rejects.toMatchObject({ code: 'FORBIDDEN' })
@@ -740,8 +759,142 @@ describe('the owner', () => {
     const again = new SharedTabs({ key: w.alice.key, relay: w.alice.relay, store: w.alice.store, backend: async () => ({ status: 502, body: {} }),
       self: async () => ({ machineId: w.alice.id, accountId: 'u-alice', email: 'alice@x.io' }), ownPanes: async () => [], machineKey: async () => null, askMachine: async () => null, ownMachines: async () => null })
     await expect(again.setLeader(id, null)).rejects.toMatchObject({ code: 'SHARES_UNAVAILABLE' })
+    await expect(again.invite(id, ['x@y.io'], 7)).rejects.toMatchObject({ code: 'SHARES_UNAVAILABLE' })
     await expect(w.alice.shared.addHarness(id, harnessOf(w.alice, 'lead'))).rejects.toMatchObject({ code: 'OWNER_PANE' })
     await expect(w.alice.shared.leave(id)).rejects.toMatchObject({ code: 'IS_OWNER' })
+  })
+})
+
+describe('the leader, from the owner\'s tab setting', () => {
+  const LEAD = (w: World) => ({ machineId: w.alice.id, agentId: 'lead' })
+
+  it('is chosen from any computer of the owner\'s account: written to the tab setting, and signed by the sharing computer when it next reads the shares', async () => {
+    const w = world()
+    const id = await added(w)
+    const laptop = w.make('m4-alice', 'u-alice', 'alice@x.io')
+    laptop.keys.set(w.alice.id, w.alice.pub)
+    // The studio, which shares the tab, is asleep: the laptop changes the leader all the same.
+    const puts = w.backend.puts.length
+    await laptop.shared.setLeader(id, LEAD(w))
+    expect(w.backend.calls.at(-1)).toBe('PATCH /api/agent-messages/tabs/tab-1')
+    expect(w.backend.leaders.get('u-alice:tab-1')).toEqual(LEAD(w))
+    // Nothing is signed by the laptop, nor by anyone yet: the members see no leader the roster does not name.
+    expect(w.backend.puts).toHaveLength(puts)
+    expect(roster(w.bob, id).leader).toBeNull()
+    // The studio wakes and reads the shares (as on `desk_changed`): it signs the setting's leader, and Bob takes it.
+    await w.alice.shared.refresh()
+    await w.net.settle()
+    expect(w.backend.puts).toHaveLength(puts + 1)
+    expect(roster(w.alice, id).leader).toEqual(LEAD(w))
+    expect(roster(w.bob, id).leader).toEqual(LEAD(w))
+    // Read again with the same setting: nothing new is signed.
+    await w.alice.shared.refresh()
+    expect(w.backend.puts).toHaveLength(puts + 1)
+    // Remove Leader, from the studio itself this time: again only the setting, until the next read.
+    await w.alice.shared.setLeader(id, null)
+    expect(roster(w.alice, id).leader).toEqual(LEAD(w))
+    await w.alice.shared.refresh()
+    await w.net.settle()
+    expect(roster(w.bob, id).leader).toBeNull()
+  })
+
+  it('is refused for a tab the account does not share, a malformed harness, or as the backend refuses it', async () => {
+    const w = world()
+    const id = await added(w)
+    const calls = w.backend.calls.length
+    await expect(w.alice.shared.setLeader(id, { machineId: '', agentId: 'lead' })).rejects.toMatchObject({ code: 'INVALID_LEADER' })
+    expect(w.backend.calls).toHaveLength(calls)
+    // A member's account, or a tab no one shares: not its to lead.
+    await expect(w.bob.shared.setLeader(id, null)).rejects.toMatchObject({ code: 'NOT_OWNER' })
+    await expect(w.alice.shared.setLeader('f'.repeat(24), null)).rejects.toMatchObject({ code: 'NOT_OWNER' })
+    // The backend's refusal (a harness not in the tab) is told as it said it.
+    const refusing = new SharedTabs({ ...w.alice.deps, backend: async (method, path, body) => method === 'PATCH'
+      ? { status: 400, body: { success: false, error: { code: 'INVALID_LEADER', message: 'Choose a harness in this tab.' } } } : w.alice.deps.backend(method, path, body) })
+    await expect(refusing.setLeader(id, { machineId: w.bob.id, agentId: 'api' })).rejects.toMatchObject({ code: 'INVALID_LEADER', message: 'Choose a harness in this tab.' })
+    // A listing it cannot read, and a share listed under an id not derived from the account and the tab.
+    w.backend.down = true
+    await expect(w.alice.shared.setLeader(id, null)).rejects.toMatchObject({ code: 'SHARES_UNAVAILABLE' })
+    w.backend.down = false
+    w.backend.shares.set('f'.repeat(24), { ...w.backend.shares.get(id)!, tabId: 'tab-2' })
+    await expect(w.alice.shared.setLeader('f'.repeat(24), null)).rejects.toMatchObject({ code: 'SHARE_ID_MISMATCH' })
+    expect(w.backend.leaders.size).toBe(0)
+  })
+
+  it('is carried into the first roster of a tab shared with a leader already chosen, and stays with the tab after Stop Sharing', async () => {
+    const w = world()
+    w.backend.leaders.set('u-alice:tab-1', LEAD(w))
+    const id = await share(w)
+    expect(roster(w.alice, id)).toMatchObject({ version: 2, leader: LEAD(w) })
+    expect(parseRoster(w.backend.puts[0].roster.body)!.leader).toEqual(LEAD(w))
+    await w.alice.shared.stop(id)
+    expect(w.backend.leaders.get('u-alice:tab-1')).toEqual(LEAD(w))
+    // Shared again: the setting still names it.
+    await w.alice.shared.share('tab-1', 'app')
+    expect(roster(w.alice, id).leader).toEqual(LEAD(w))
+  })
+
+  it('follows the setting: a leader whose pane left the tab goes; an unread directory, or none to ask, keeps the roster\'s; one the roster does not list is dropped', async () => {
+    const w = world()
+    w.alice.panes.set('tab-1', [{ machineId: w.alice.id, agentId: 'lead', name: 'lead', engine: 'codex' }, { machineId: w.alice.id, agentId: 'web', name: 'web', engine: 'claude' }])
+    w.backend.leaders.set('u-alice:tab-1', LEAD(w))
+    const id = await added(w)
+    expect(roster(w.bob, id).leader).toEqual(LEAD(w))
+    // The directory not read yet (a new process): the owner's harnesses and the leader stay as they were, nothing signed.
+    const puts = w.backend.puts.length
+    w.alice.panes.set('tab-1', null)
+    await w.alice.shared.refresh()
+    expect(w.backend.puts).toHaveLength(puts)
+    expect(roster(w.alice, id).leader).toEqual(LEAD(w))
+    // Nor by a computer that has no directory to ask.
+    const blind = new SharedTabs({ ...w.alice.deps, ownLeader: undefined })
+    w.alice.panes.set('tab-1', [{ machineId: w.alice.id, agentId: 'lead', name: 'lead', engine: 'codex' }])
+    await blind.refresh()
+    expect(roster(w.alice, id).leader).toEqual(LEAD(w))
+    // A setting naming a harness the roster does not list (one the desk has and the roster cut, say): no leader is signed.
+    const ghost = new SharedTabs({ ...w.alice.deps, ownLeader: async () => ({ machineId: w.alice.id, agentId: 'ghost' }) })
+    await ghost.refresh()
+    expect(roster(w.alice, id).leader).toBeNull()
+    await w.alice.shared.refresh()
+    expect(roster(w.alice, id).leader).toEqual(LEAD(w))
+    // The leader's pane closed: the listing names no leader (the backend derives it, nobody clears it), and the next
+    // roster names none, for the members too (Review Focus 1).
+    w.alice.panes.set('tab-1', [{ machineId: w.alice.id, agentId: 'web', name: 'web', engine: 'claude' }])
+    await w.alice.shared.refresh()
+    await w.net.settle()
+    expect(w.backend.leaders.get('u-alice:tab-1')).toEqual(LEAD(w))
+    expect(roster(w.alice, id)).toMatchObject({ leader: null })
+    expect(agents(roster(w.alice, id))).toEqual(['m2-alice/web', 'm3-bob/api'])
+    expect(roster(w.bob, id).leader).toBeNull()
+  })
+
+  it('may be a member\'s harness the roster lists: signed for every member, and gone once that harness leaves the roster', async () => {
+    const w = world()
+    const id = await added(w)
+    const api = { machineId: w.bob.id, agentId: 'api' }
+    await lead(w, id, api)
+    await w.net.settle()
+    expect(roster(w.alice, id).leader).toEqual(api)
+    expect(roster(w.bob, id).leader).toEqual(api)
+    // Bob takes it out: the owner's next roster lists it no more, and names no leader (the setting is left as it was).
+    await w.bob.shared.removeHarness(id, w.bob.id, 'api')
+    await w.net.settle()
+    expect(roster(w.bob, id)).toMatchObject({ leader: null })
+    expect(w.backend.leaders.get('u-alice:tab-1')).toEqual(api)
+    await w.alice.shared.refresh()
+    expect(roster(w.alice, id).leader).toBeNull()
+  })
+
+  it('a member\'s harness added or taken out keeps the leader the roster names', async () => {
+    const w = world()
+    w.backend.leaders.set('u-alice:tab-1', LEAD(w))
+    const id = await added(w)
+    await w.bob.shared.addHarness(id, harnessOf(w.bob, 'web'))
+    await w.net.settle()
+    expect(roster(w.alice, id)).toMatchObject({ leader: LEAD(w) })
+    await w.alice.shared.removeHarness(id, w.bob.id, 'web')
+    await w.net.settle()
+    expect(roster(w.bob, id)).toMatchObject({ leader: LEAD(w) })
+    expect(agents(roster(w.bob, id))).toEqual(['m2-alice/lead', 'm3-bob/api'])
   })
 })
 
@@ -763,7 +916,10 @@ describe('the owner moves a tab to another of its computers', () => {
     const w = world()
     const { id, laptop } = await moving(w)
     const before = roster(w.bob, id)
+    // A leader the owner chose while the studio held the tab: the laptop's first roster names it, as the setting does.
+    w.backend.leaders.set('u-alice:tab-1', { machineId: w.alice.id, agentId: 'lead' })
     expect(await laptop.shared.move(id)).toEqual({ sharedTabId: id, version: before.version + 1 })
+    expect(roster(laptop, id).leader).toEqual({ machineId: w.alice.id, agentId: 'lead' })
     // The old computer was asked, over the account's paired relay, to sign the laptop's key for this tab.
     expect(laptop.asked).toContainEqual([w.alice.id, { action: 'tab_keychange', sharedTabId: id, nextPub: laptop.pub, machineId: laptop.id }])
     expect(w.backend.shares.get(id)).toMatchObject({ ownerMachineId: laptop.id, version: before.version + 1 })
@@ -786,12 +942,13 @@ describe('the owner moves a tab to another of its computers', () => {
     expect(w.alice.store.pinned(id)).toBe(laptop.pub)
     expect(roster(w.alice, id).owner.machineId).toBe(laptop.id)
     expect(w.alice.store.alerts()).toEqual([])
-    await expect(w.alice.shared.setLeader(id, null)).rejects.toMatchObject({ code: 'NOT_OWNER' })
     await expect(w.alice.shared.keyChange(id, laptop.pub, laptop.id)).rejects.toMatchObject({ code: 'NOT_OWNER' })
-    // The laptop changes the tab from now on, and the members' requests reach it.
-    await laptop.shared.setLeader(id, { machineId: w.bob.id, agentId: 'api' })
+    // The laptop signs the tab from now on, and the members' requests reach it. The studio may still choose the leader,
+    // as any computer of the account may: the laptop signs it.
+    await lead(w, id, null, laptop)
     await w.net.settle()
-    expect(roster(w.bob, id).leader).toEqual({ machineId: w.bob.id, agentId: 'api' })
+    expect(roster(w.bob, id).leader).toBeNull()
+    expect(roster(w.alice, id).owner.machineId).toBe(laptop.id)
     await w.bob.shared.addHarness(id, harnessOf(w.bob, 'web'))
     await w.net.settle()
     expect(agents(roster(laptop, id))).toEqual(['m2-alice/lead', 'm3-bob/api', 'm3-bob/web'])
@@ -820,14 +977,14 @@ describe('the owner moves a tab to another of its computers', () => {
     const w = world()
     const { id, laptop } = await moving(w)
     await laptop.shared.move(id)
-    await laptop.shared.setLeader(id, { machineId: w.bob.id, agentId: 'api' })
+    await lead(w, id, LEAD_OF(w), laptop)
     // Bob was away for both: the roster he finds is the one after the move, still carrying the change.
     w.bob.online = false
     await w.net.settle()
     expect(w.backend.puts.at(-1)!.roster.keyChange?.previousPub).toBe(w.alice.pub)
     w.bob.online = true
     await w.bob.shared.refresh()
-    expect(roster(w.bob, id)).toMatchObject({ owner: { machineId: laptop.id }, leader: { machineId: w.bob.id, agentId: 'api' } })
+    expect(roster(w.bob, id)).toMatchObject({ owner: { machineId: laptop.id }, leader: LEAD_OF(w) })
     expect(w.bob.store.alerts()).toEqual([])
     // A laptop that starts again finds the change in the roster it holds and keeps carrying it.
     const restarted = new SharedTabs(laptop.deps)
@@ -2020,9 +2177,9 @@ describe('frames between machines', () => {
     expect(w.alice.store.alerts()).toEqual([])
     expect(roster(w.alice, id)).toEqual(held)
     // The owner's own roster frames still reach the members.
-    await w.alice.shared.setLeader(id, { machineId: w.bob.id, agentId: 'api' })
+    await lead(w, id, LEAD_OF(w))
     await w.net.settle()
-    expect(roster(w.bob, id).leader).toEqual({ machineId: w.bob.id, agentId: 'api' })
+    expect(roster(w.bob, id).leader).toEqual(LEAD_OF(w))
   })
 
   /** Another socket of this machine took the tab over (4409): the gateway dropped the tab's socket, as it does. */
@@ -2196,9 +2353,9 @@ describe('frames between machines', () => {
     await w.net.settle()
     // Bob's gateway restarted: Alice's next roster cannot be opened there, so Bob knocks; Alice drops hers and says hello.
     w.bob.key.clear()
-    await w.alice.shared.setLeader(id, { machineId: w.bob.id, agentId: 'api' })
+    await lead(w, id, LEAD_OF(w))
     await w.net.settle()
-    expect(roster(w.bob, id).leader).toEqual({ machineId: w.bob.id, agentId: 'api' })
+    expect(roster(w.bob, id).leader).toEqual(LEAD_OF(w))
     // Two requests wait while Alice is away; Bob's gateway restarts again, and the first seal finds no session.
     w.alice.online = false
     await w.bob.shared.removeHarness(id, w.bob.id, 'api')

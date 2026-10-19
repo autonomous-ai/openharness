@@ -32,25 +32,42 @@ class SharedTaskRow {
     required this.state,
     this.assignee,
     this.pr,
+    this.updatedAt,
   });
 
   final String repo, title, url;
   final int issue;
+
+  /// When the issue last changed, as GitHub says; null when it did not say.
+  /// A merged task leaves Tab Activity 24 hours after it.
+  final DateTime? updatedAt;
 
   /// `open` or `closed`.
   final String state;
 
   /// The marker's `<account>/<harness>`, as the daemon read it.
   final ({String accountId, String harness})? assignee;
-  final ({int number, String url, String state, String ci})? pr;
+  final ({
+    int number,
+    String url,
+    String state,
+    String ci,
+    bool autoMerge,
+    String mergeState,
+    DateTime? mergedAt,
+  })?
+  pr;
 
   static SharedTaskRow? fromJson(Object? json) {
     if (json is! Map) return null;
     final repo = json['repo'], issue = json['issue'], url = json['url'];
     if (repo is! String || issue is! int || url is! String) return null;
     final a = json['assignee'], p = json['pr'];
-    final title = json['title'], state = json['state'];
+    final title = json['title'],
+        state = json['state'],
+        updated = json['updatedAt'];
     return SharedTaskRow(
+      updatedAt: updated is String ? DateTime.tryParse(updated) : null,
       repo: repo,
       issue: issue,
       title: title is String ? title : '',
@@ -65,6 +82,14 @@ class SharedTaskRow {
               url: p['url'] as String,
               state: p['state'] is String ? p['state'] as String : 'Open',
               ci: p['ci'] is String ? p['ci'] as String : 'none',
+              autoMerge: p['autoMerge'] == true,
+              mergeState: p['mergeState'] is String
+                  ? p['mergeState'] as String
+                  : '',
+              // When it merged (`gh pr view`), for Tab Activity's 24 hours.
+              mergedAt: p['mergedAt'] is String
+                  ? DateTime.tryParse(p['mergedAt'] as String)
+                  : null,
             )
           : null,
     );
@@ -98,15 +123,69 @@ class SharedTabsController extends ChangeNotifier {
     required this.request,
     required this.foreground,
     this.onActivity,
-  });
+    this.messagesSwitch,
+  }) {
+    _switchKnown = messagesSwitch?.value;
+    messagesSwitch?.addListener(_switchChanged);
+    if (_switchKnown == false) _settleOff();
+  }
 
   final SharedTabsRequest request;
   final ValueListenable<bool> foreground;
   final void Function(SharedActivity activity)? onActivity;
 
+  /// The account's Agent Messages switch (Settings ▸ Experimental, off by
+  /// default), null until the account's settings are read. While it is off,
+  /// [refresh] asks nothing and answers as the daemon would: every daemon
+  /// refuses `shares` with MESSAGES_OFF then (cli/src/messages/service.ts
+  /// `awakeShares`), and asking anyway was a request and an fsync'd WARN every
+  /// 60 s and on each reconnect, for every account that never turned it on.
+  /// Not read yet, it asks as before. None given (tests): always asks.
+  final ValueListenable<bool?>? messagesSwitch;
+
+  /// The switch's last value other than null: the store passes through null
+  /// whenever it is bound again.
+  bool? _switchKnown;
+
+  /// Whether [refresh] asks the daemon.
+  bool get asking => messagesSwitch?.value != false;
+
+  void _switchChanged() {
+    final now = messagesSwitch!.value;
+    if (now == null) return;
+    final was = _switchKnown;
+    _switchKnown = now;
+    if (!now) {
+      _settleOff();
+    } else if (was == false) {
+      // Turned on: read now, not at the next poll.
+      unawaited(refresh());
+    }
+  }
+
+  /// What a MESSAGES_OFF answer does, for a switch that is off; a read in
+  /// flight is dropped.
+  void _settleOff() {
+    if (_disposed) return;
+    ++_reads;
+    if (_state == SharedTabsState.off &&
+        identical(_snapshot, SharedTabsSnapshot.empty)) {
+      return;
+    }
+    _state = SharedTabsState.off;
+    _snapshot = SharedTabsSnapshot.empty;
+    _notify();
+  }
+
+  /// The last `shared_activity` frame this computer's daemon sent, each a new
+  /// value: Tab Activity reads its tab again on one for it.
+  ValueListenable<SharedActivity?> get heard => _heard;
+  final _heard = ValueNotifier<SharedActivity?>(null);
+
   SharedTabsSnapshot _snapshot = SharedTabsSnapshot.empty;
   SharedTabsState _state = SharedTabsState.unknown;
-  final _hidden = <String>{}; // dismissed here when the daemon could not be told
+  final _hidden =
+      <String>{}; // dismissed here when the daemon could not be told
   final _tasks = <String, SharedTasks>{};
   final _taskReads = <String, Future<void>>{};
   int _reads = 0, _account = 0, _activityRevision = 0;
@@ -126,11 +205,13 @@ class SharedTabsController extends ChangeNotifier {
   }
 
   static SharedTabsState? _stateFor(String code) => switch (code) {
-        'UNKNOWN_ACTION' || 'DAEMON_TOO_OLD' || 'UNSUPPORTED' => SharedTabsState.tooOld,
-        'MESSAGES_OFF' => SharedTabsState.off,
-        'SHARED_TABS_UNSUPPORTED' => SharedTabsState.unsupported,
-        _ => null,
-      };
+    'UNKNOWN_ACTION' ||
+    'DAEMON_TOO_OLD' ||
+    'UNSUPPORTED' => SharedTabsState.tooOld,
+    'MESSAGES_OFF' => SharedTabsState.off,
+    'SHARED_TABS_UNSUPPORTED' => SharedTabsState.unsupported,
+    _ => null,
+  };
 
   /// Reads `shares` again. One read at a time: a call while one is in flight
   /// asks for one more after it and joins it, never a second in parallel. A
@@ -138,6 +219,10 @@ class SharedTabsController extends ChangeNotifier {
   /// had started its own (two backend requests each; final review of 1c, I4).
   Future<void> refresh() {
     if (_disposed) return Future<void>.value();
+    if (!asking) {
+      _settleOff();
+      return Future<void>.value();
+    }
     final running = _flight;
     if (running != null && _flightAccount == _account) {
       _again = true;
@@ -162,7 +247,8 @@ class SharedTabsController extends ChangeNotifier {
   }
 
   Future<void> _readShares() async {
-    if (_disposed) return;
+    // Turned off while an earlier read was in flight: no second one.
+    if (_disposed || !asking) return;
     final read = ++_reads, account = _account;
     Map<String, dynamic> answer;
     try {
@@ -211,10 +297,15 @@ class SharedTabsController extends ChangeNotifier {
 
   void handleActivity(Map<String, dynamic> payload) {
     final a = SharedActivity.fromJson(payload);
-    if (a != null && !_disposed) _hand(a);
+    if (a == null || _disposed) return;
+    _heard.value = _hand(a);
   }
 
-  void _hand(SharedActivity a) => onActivity?.call(a.withRevision(++_activityRevision));
+  SharedActivity _hand(SharedActivity a) {
+    final revised = a.withRevision(++_activityRevision);
+    onActivity?.call(revised);
+    return revised;
+  }
 
   /// Sign-out or another account: nothing of the old one stays, and its late
   /// answers are dropped.
@@ -252,7 +343,10 @@ class SharedTabsController extends ChangeNotifier {
         : [deskTabId];
   }
 
-  Future<Map<String, dynamic>> _ask(String action, Map<String, dynamic> payload) async {
+  Future<Map<String, dynamic>> _ask(
+    String action,
+    Map<String, dynamic> payload,
+  ) async {
     final account = _account;
     try {
       return await request({'action': action, ...payload});
@@ -263,7 +357,10 @@ class SharedTabsController extends ChangeNotifier {
         _notify();
       }
       final detail = e.detail;
-      throw SharedTabsFailure(e.code, detail == null || detail.isEmpty ? e.code : detail);
+      throw SharedTabsFailure(
+        e.code,
+        detail == null || detail.isEmpty ? e.code : detail,
+      );
     } catch (_) {
       // A timeout, a closed socket or a session not ready: this computer's daemon was not reached.
       throw const SharedTabsFailure(
@@ -275,7 +372,10 @@ class SharedTabsController extends ChangeNotifier {
 
   /// One `share_*` action; the shares are read again after it, whatever it
   /// answered.
-  Future<Map<String, dynamic>> act(String action, Map<String, dynamic> payload) async {
+  Future<Map<String, dynamic>> act(
+    String action,
+    Map<String, dynamic> payload,
+  ) async {
     final account = _account;
     try {
       return await _ask(action, payload);
@@ -294,21 +394,28 @@ class SharedTabsController extends ChangeNotifier {
     }
   }
 
-  SharedTasks tasksFor(String sharedTabId) => _tasks[sharedTabId] ?? const SharedTasks();
+  SharedTasks tasksFor(String sharedTabId) =>
+      _tasks[sharedTabId] ?? const SharedTasks();
 
   /// Reads the tab's tasks; a second call while one runs joins it.
-  Future<void> loadTasks(String sharedTabId) {
+  ///
+  /// The first argument is the key [tasksFor] answers by: the shared tab id, or, for a desk tab
+  /// that is not shared, any key the caller keeps with [tabId] (the desk tab
+  /// the daemon reads by).
+  Future<void> loadTasks(String sharedTabId, {String? tabId}) {
     final running = _taskReads[sharedTabId];
     if (running != null) return running;
     late final Future<void> flight;
-    flight = _loadTasks(sharedTabId).whenComplete(() {
+    flight = _loadTasks(sharedTabId, tabId).whenComplete(() {
       // After a reset a newer flight may hold the slot: remove only our own.
-      if (identical(_taskReads[sharedTabId], flight)) _taskReads.remove(sharedTabId);
+      if (identical(_taskReads[sharedTabId], flight)) {
+        _taskReads.remove(sharedTabId);
+      }
     });
     return _taskReads[sharedTabId] = flight;
   }
 
-  Future<void> _loadTasks(String sharedTabId) async {
+  Future<void> _loadTasks(String sharedTabId, String? tabId) async {
     final account = _account, before = tasksFor(sharedTabId);
     _tasks[sharedTabId] = SharedTasks(
       loading: true,
@@ -319,17 +426,33 @@ class SharedTabsController extends ChangeNotifier {
     _notify();
     SharedTasks next;
     try {
-      final answer = await _ask('share_tasks', {'sharedTabId': sharedTabId});
+      final answer = await _ask(
+        'share_tasks',
+        tabId != null ? {'tabId': tabId} : {'sharedTabId': sharedTabId},
+      );
       final rows = answer['rows'];
       next = SharedTasks(
         loaded: true,
-        rows: rows is List ? rows.map(SharedTaskRow.fromJson).whereType<SharedTaskRow>().toList() : const [],
+        rows: rows is List
+            ? rows
+                  .map(SharedTaskRow.fromJson)
+                  .whereType<SharedTaskRow>()
+                  .toList()
+            : const [],
         truncated: answer['truncated'] == true,
       );
     } on SharedTabsFailure catch (e) {
-      next = SharedTasks(loaded: before.loaded, rows: before.rows, error: e.code);
+      next = SharedTasks(
+        loaded: before.loaded,
+        rows: before.rows,
+        error: e.code,
+      );
     } catch (_) {
-      next = SharedTasks(loaded: before.loaded, rows: before.rows, error: 'GH_FAILED');
+      next = SharedTasks(
+        loaded: before.loaded,
+        rows: before.rows,
+        error: 'GH_FAILED',
+      );
     }
     if (_disposed || account != _account) return;
     _tasks[sharedTabId] = next;
@@ -338,7 +461,9 @@ class SharedTabsController extends ChangeNotifier {
 
   /// Each harness of the tab's repo and branch, by `machineId\u0000agentId`;
   /// empty when nobody answers.
-  Future<Map<String, ({String? project, String? branch})>> who(String sharedTabId) async {
+  Future<Map<String, ({String? project, String? branch})>> who(
+    String sharedTabId,
+  ) async {
     final account = _account;
     try {
       final answer = await _ask('share_who', {'sharedTabId': sharedTabId});
@@ -361,12 +486,17 @@ class SharedTabsController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    messagesSwitch?.removeListener(_switchChanged);
+    _heard.dispose();
     super.dispose();
   }
 }
 
 /// Reads the shares every 60 s while the window is in front, and once as soon
-/// as it comes back. A hidden or minimised window asks nothing.
+/// as it comes back. A hidden or minimised window asks nothing, and neither
+/// does any window while the account's Agent Messages switch is off
+/// ([SharedTabsController.asking]); turned on, the controller reads at once
+/// and the polls start again from there.
 class SharedTabsWatch {
   SharedTabsWatch({
     required this.controller,
@@ -378,28 +508,47 @@ class SharedTabsWatch {
   final ValueListenable<bool> foreground;
   final Duration every;
   Timer? _timer;
-  bool _started = false, _disposed = false;
+  bool _started = false, _disposed = false, _asking = false;
 
   void start() {
     if (_started || _disposed) return;
     _started = true;
+    _asking = controller.asking;
     foreground.addListener(_foregroundChanged);
+    controller.messagesSwitch?.addListener(_switchChanged);
     _foregroundChanged();
   }
 
   void _foregroundChanged() {
     _timer?.cancel();
     _timer = null;
-    if (foreground.value) unawaited(poll());
+    if (foreground.value && controller.asking) unawaited(poll());
+  }
+
+  /// The settings store notifies on each of its 30 s reads: only a change
+  /// counts.
+  void _switchChanged() {
+    final asking = controller.asking;
+    if (_disposed || asking == _asking) return;
+    _asking = asking;
+    _timer?.cancel();
+    _timer = null;
+    if (asking && foreground.value) {
+      _timer = Timer(every, () => unawaited(poll()));
+    }
   }
 
   @visibleForTesting
   Future<void> poll() async {
     _timer?.cancel();
     _timer = null;
-    if (_disposed || !foreground.value) return;
+    if (_disposed || !foreground.value || !controller.asking) return;
     await controller.refresh();
-    if (!_disposed && _started && foreground.value && _timer == null) {
+    if (!_disposed &&
+        _started &&
+        foreground.value &&
+        controller.asking &&
+        _timer == null) {
       _timer = Timer(every, () => unawaited(poll()));
     }
   }
@@ -408,6 +557,9 @@ class SharedTabsWatch {
     _disposed = true;
     _timer?.cancel();
     _timer = null;
-    if (_started) foreground.removeListener(_foregroundChanged);
+    if (_started) {
+      foreground.removeListener(_foregroundChanged);
+      controller.messagesSwitch?.removeListener(_switchChanged);
+    }
   }
 }

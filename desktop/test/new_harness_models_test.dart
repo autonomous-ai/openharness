@@ -572,16 +572,16 @@ void main() {
     addTearDown(usage.dispose);
     await menu.refresh();
     expect(
-      menu.subscriptionFor('codex', local: true, machineName: '')?['account'],
-      '111111',
+      menu.subscriptionFor('codex', local: true, machineName: '')?['accountKey'],
+      '1111111111111111',
     );
     expect(
       menu.subscriptionFor(
         'codex',
         local: false,
         machineName: 'M2',
-      )?['account'],
-      '333333',
+      )?['accountKey'],
+      '3333333333333333',
     );
     expect(
       menu.subscriptionFor('claude', local: false, machineName: 'M2'),

@@ -44,6 +44,10 @@ const rosterBody = z.object({
   roster: z.record(z.string(), z.unknown()),
 }).strict()
 const moveBody = z.object({ machineId: z.string().min(1).max(200) }).strict()
+const tabBody = z.object({
+  enabled: z.boolean().optional(),
+  leader: z.object({ machineId: z.string().min(1).max(200), agentId: z.string().min(1).max(160) }).strict().nullable().optional(),
+}).strict().refine(b => b.enabled !== undefined || b.leader !== undefined)
 const inviteBody = z.object({
   email: z.string().email().max(320),
   days: z.union([z.literal(7), z.literal(30), z.literal(90)]),
@@ -55,13 +59,14 @@ export async function agentMessagesRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/agent-messages', async (req, reply) => {
     sendSuccess(reply, await readAgentMessages(req.user!.sub))
   })
-  app.patch<{ Params: { tabId: string }; Body: { enabled: boolean } }>('/api/agent-messages/tabs/:tabId', {
-    preHandler: validateBody(z.object({ enabled: z.boolean() }).strict()),
+  app.patch<{ Params: { tabId: string }; Body: z.infer<typeof tabBody> }>('/api/agent-messages/tabs/:tabId', {
+    preHandler: validateBody(tabBody),
   }, async (req, reply) => {
     const parsed = tabId.safeParse(req.params.tabId)
     if (!parsed.success) return sendError(reply, 'Choose a tab on your desk.', 'INVALID_TAB', 400)
     const userId = req.user!.sub
-    const result = await setAgentMessages(userId, parsed.data, req.body.enabled)
+    const result = await setAgentMessages(userId, parsed.data, req.body)
+    if ('error' in result) return sendError(reply, 'Choose a harness in this tab.', 'INVALID_LEADER', 400)
     // Every daemon of the account re-reads its directory on `desk_changed`, and every window its tabs: the
     // account's existing invalidation, with the desk itself unchanged.
     void publishDeskChanged(userId, { revision: 0 })

@@ -206,9 +206,10 @@ Future<void> confirmStopSharing(
 ) {
   final tab = app.sharedTabs.tabForDesk(deskTabId);
   if (tab == null) return Future.value();
-  return _confirm(
+  return confirmSharedAction(
     context,
-    title: 'Stop sharing "${shortSharedText(_deskTabName(app, deskTabId, tab))}"?',
+    title:
+        'Stop sharing "${shortSharedText(_deskTabName(app, deskTabId, tab))}"?',
     body: 'Everyone in it loses its harnesses\' terminals and messages.',
     confirm: 'Stop Sharing',
     destructive: true,
@@ -227,7 +228,7 @@ Future<void> confirmLeaveTab(
   final tab = app.sharedTabs.tabForDesk(deskTabId);
   if (tab == null) return Future.value();
   final owner = plainSharedText(tab.ownerEmail);
-  return _confirm(
+  return confirmSharedAction(
     context,
     title: 'Leave "${shortSharedText(_deskTabName(app, deskTabId, tab))}"?',
     body:
@@ -248,7 +249,7 @@ Future<void> confirmMoveHere(
 ) {
   final tab = app.sharedTabs.tabForDesk(deskTabId);
   if (tab == null) return Future.value();
-  return _confirm(
+  return confirmSharedAction(
     context,
     title: 'Move "${_deskTabName(app, deskTabId, tab)}" here?',
     body:
@@ -262,7 +263,7 @@ Future<void> confirmMoveHere(
   );
 }
 
-Future<void> _confirm(
+Future<void> confirmSharedAction(
   BuildContext context, {
   required String title,
   required String body,
@@ -678,7 +679,10 @@ class _AddHarnessesState extends State<_AddHarnesses> {
           .where((t) => t.sharedTabId == widget.sharedTabId)
           .firstOrNull;
       final owner = _plain(tab?.ownerEmail ?? '', 'the owner');
-      setState(() => _error = 'The tab will appear when $owner\'s computer is reachable.');
+      setState(
+        () => _error =
+            'The tab will appear when $owner\'s computer is reachable.',
+      );
       return;
     }
     setState(() {
@@ -718,8 +722,11 @@ class _AddHarnessesState extends State<_AddHarnesses> {
         error = sharedTabErrorText(refused!, machine: h.machine);
         break;
       }
-      final deskSwarm = widget.app.swarms.where((s) => s.id == desk).firstOrNull;
-      final landed = deskSwarm?.panes.any(
+      final deskSwarm = widget.app.swarms
+          .where((s) => s.id == desk)
+          .firstOrNull;
+      final landed =
+          deskSwarm?.panes.any(
             (p) => p.machineId == h.machineId && p.agentId == h.agent.id,
           ) ??
           false;

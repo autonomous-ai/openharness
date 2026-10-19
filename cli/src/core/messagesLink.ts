@@ -88,10 +88,14 @@ export function createMessagesLink(deps: MessagesLinkDeps) {
         // removed member's at once. Only that request, with nothing the process sent: the roster is read where it is kept.
         case 'observers':
           return deps.share?.('harness_share_rosters', {}) ?? { error: 'SERVICE_UNAVAILABLE' }
-        // Whether this computer's harnesses in a shared tab are working, for that tab's other accounts (messages/tabActivity.ts).
+        // Whether this computer's harnesses in a shared tab are working, for that tab's other accounts (messages/tabActivity.ts),
+        // and what they are doing, in a line, when asked.
         case 'activity': {
           const ids = Array.isArray(payload.agentIds) ? payload.agentIds.filter((id): id is string => typeof id === 'string').slice(0, 64) : []
-          return core.agents.activity(ids).then((activity) => ({ activity }))
+          // The one-line summaries only for a caller that asks (an older process asks for neither and reads none).
+          return payload.summaries === true
+            ? Promise.all([core.agents.activity(ids), core.agents.summaries(ids)]).then(([activity, summaries]) => ({ activity, summaries }))
+            : core.agents.activity(ids).then((activity) => ({ activity }))
         }
         // Shared tabs' keys, which the gateway holds: one of the nine `TabKey` methods, and `UNKNOWN_METHOD` for any other.
         case 'tab_key':

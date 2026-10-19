@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { RemoteRelayPool } from './remoteRelay.js'
+import { TerminalP2pInitiator } from './terminalP2p.js'
 
 /** Minimal fake of the private `Entry` shape `noteTerminalResponse`/`demoteP2p` operate on — exercised
  *  directly (bypassing the class's `private` marker, the lightest way to unit-test this without a real
@@ -187,6 +188,30 @@ describe('RemoteRelayPool p2p retry policy', () => {
       expect(entry.p2pRetryTimestamps).toHaveLength(HOURLY_CAP)
       expect(logSpy).toHaveBeenLastCalledWith(expect.stringContaining('[p2p] retry budget exhausted'))
     } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Seen 2026-10-16: one failed negotiation left a shared machine's terminal on the ws relay — every
+  // keystroke through the backend — for a whole minute before the first retry.
+  it('retries after 5s first, then backs off through 15s and 30s to every minute', () => {
+    vi.useFakeTimers()
+    const start = vi.spyOn(TerminalP2pInitiator.prototype, 'start').mockImplementation(() => {})
+    try {
+      const entry = fakeEntry({ p2pPolicy: { enabled: true, protocolVersion: 1, stunUrls: [], openWaitMs: 1500 } })
+      ;(pool as unknown as { entries: Map<string, unknown> }).entries.set('machine-1', entry)
+      for (const seconds of [5, 15, 30, 60, 60]) {
+        pool.scheduleP2pRetry('machine-1', entry)
+        expect(logSpy).toHaveBeenLastCalledWith(expect.stringContaining(`[p2p] retry scheduled · machine=machine- in ${seconds}s`))
+        vi.advanceTimersByTime(seconds * 1000 - 1)
+        expect(entry.p2p, `not before ${seconds}s`).toBeNull()
+        vi.advanceTimersByTime(1)
+        expect(entry.p2p, `at ${seconds}s`).not.toBeNull()
+        entry.p2p = null
+      }
+    } finally {
+      start.mockRestore()
+      ;(pool as unknown as { entries: Map<string, unknown> }).entries.delete('machine-1')
       vi.useRealTimers()
     }
   })
@@ -663,6 +688,56 @@ describe('RemoteRelayPool keeps background (isolated) clients cheap', () => {
   ] as const
   const sink = () => ({ sendFrame: vi.fn(() => true), sendBinary: vi.fn(() => true) })
   const select = { type: 'machine_select', payload: { relayIsolation: true } }
+
+  // Seen 2026-10-16: every negotiation to a shared machine spent 8–10s timing out direct pairs before
+  // settling on the TURN pair it always ended on.
+  it('a machine only TURN reached is negotiated TURN-first next time, until a direct pair or a failure', () => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const start = vi.spyOn(TerminalP2pInitiator.prototype, 'start').mockImplementation(() => {})
+    try {
+      const pool = new RemoteRelayPool(...ctorArgs) as unknown as {
+        startP2p: (machineId: string, entry: ReturnType<typeof fakeEntry>) => void
+      }
+      const turn = { urls: ['turn:turn.example:3478'], username: 'u', credential: 'c' }
+      type Deps = { relayOnly?: boolean; onState: (state: string, setupMs: number, reason?: string) => void }
+      const negotiate = (policy: Record<string, unknown>) => {
+        const entry = fakeEntry({ p2pPolicy: { enabled: true, protocolVersion: 1, stunUrls: ['stun:s'], openWaitMs: 1500, ...policy } })
+        pool.startP2p('m1', entry)
+        const p2p = entry.p2p as unknown as { deps: Deps; transport: string }
+        return { relayOnly: !!p2p.deps.relayOnly, p2p, entry }
+      }
+      const reach = (p2p: { deps: Deps }, via: 'relay' | 'host') => {
+        Object.defineProperty(p2p, 'transport', { value: via, configurable: true })
+        p2p.deps.onState('direct', 9_000)
+      }
+
+      const first = negotiate({ turn })
+      expect(first.relayOnly).toBe(false)
+      reach(first.p2p, 'relay')
+      const second = negotiate({ turn })
+      expect(second.relayOnly).toBe(true)
+      // Without a TURN credential there is nothing to gather TURN-first.
+      expect(negotiate({}).relayOnly).toBe(false)
+      // A TURN-first attempt that fails forgets it: the path changed.
+      second.p2p.deps.onState('failed', 10_000, 'peer_failed')
+      expect(negotiate({ turn }).relayOnly).toBe(false)
+      // So does a direct pair, and the memory lasts a working day.
+      const third = negotiate({ turn })
+      reach(third.p2p, 'relay')
+      expect(negotiate({ turn }).relayOnly).toBe(true)
+      vi.advanceTimersByTime(12 * 60 * 60 * 1000)
+      expect(negotiate({ turn }).relayOnly).toBe(false)
+      const fourth = negotiate({ turn })
+      reach(fourth.p2p, 'relay')
+      reach(negotiate({ turn }).p2p, 'host')
+      expect(negotiate({ turn }).relayOnly).toBe(false)
+    } finally {
+      start.mockRestore()
+      vi.restoreAllMocks()
+      vi.useRealTimers()
+    }
+  })
 
   it('a pool built with p2p off never starts a negotiation, even with a policy and on retry', () => {
     const pool = new RemoteRelayPool(...ctorArgs, { p2p: false }) as unknown as {

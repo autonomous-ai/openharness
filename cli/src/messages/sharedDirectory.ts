@@ -18,13 +18,44 @@ export function accountLabel(email: string): string {
   return cleanName(email.replace(/@[^@]*$/, '')) || cleanName(email)
 }
 
-/** The accounts the rosters name: each one's label for prefixes, and for headers the name a roster gives it as a
- *  member (`Bob's account`), or its label where none does (an owner, a member with no name). */
-export function accountsIn(rosters: readonly Roster[]): Map<string, { label: string; name: string }> {
-  const out = new Map<string, { label: string; name: string }>()
+/** `accountLabel` as a marker's `assignee:<account>/<harness>` takes it (tasks.ts matches `[\w.-]{1,64}`; any other
+ *  character would make the whole marker unreadable, and the issue no task): other characters, and runs of `-`, become one `-`, none at either
+ *  end, at most 64, `account` when nothing is left. The note tells agents this label, and the desktop maps assignees back
+ *  with the same function. */
+export function markerLabel(email: string): string {
+  return markerSafe(accountLabel(email)) || 'account'
+}
+
+/** A harness as a marker's `<harness>` takes it: `markerLabel`'s rule on its display name, in lower case, `harness` when
+ *  nothing is left. Display names are session titles ("Fix login test"), or carry the start of an id when two share one
+ *  ("app (1a2b)"): written as the note named them, the reader did not take the marker and the issue was no task (final
+ *  review I2). The note gives each harness this name, and the desktop maps an assignee back with the same function. */
+export function markerName(name: string): string {
+  return markerSafe(cleanName(name)).toLowerCase() || 'harness'
+}
+
+/** A harness's marker name told apart from another's that makes the same one ("Fix login test" and "fix (login) test",
+ *  or two titles with no letter in them, both `harness`): `<markerName>-<the start of its id>`, the name cut so the
+ *  whole stays within the 64 the reader takes. The note gives it only where `markerName` collides in a tab; the desktop
+ *  maps it back with the same function (`markerNameWithId`, task_step.dart). */
+export function markerNameWithId(name: string, agentId: string): string {
+  const start = markerSafe(cleanName(agentId).slice(0, 8)).toLowerCase() || 'id'
+  return `${markerName(name).slice(0, 63 - start.length).replace(/-+$/, '')}-${start}`
+}
+
+/** Only [\w.-]: other runs, and runs of `-`, one `-`, none at either end, at most 64. */
+const markerSafe = (text: string): string =>
+  text.replace(/[^\w.-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '').slice(0, 64).replace(/-+$/, '')
+
+/** The accounts the rosters name: each one's label for prefixes, its label in a task marker (`markerLabel`), and for
+ *  headers the name a roster gives it as a member (`Bob's account`), or its label where none does (an owner, a member
+ *  with no name). */
+export function accountsIn(rosters: readonly Roster[]): Map<string, { label: string; marker: string; name: string }> {
+  const out = new Map<string, { label: string; marker: string; name: string }>()
   const put = (accountId: string, email: string, name: string): void => {
     const label = out.get(accountId)?.label ?? accountLabel(email)
-    out.set(accountId, { label, name: cleanName(name) || out.get(accountId)?.name || label })
+    const marker = out.get(accountId)?.marker ?? markerLabel(email)
+    out.set(accountId, { label, marker, name: cleanName(name) || out.get(accountId)?.name || label })
   }
   for (const roster of rosters) {
     put(roster.owner.accountId, roster.owner.email, '')

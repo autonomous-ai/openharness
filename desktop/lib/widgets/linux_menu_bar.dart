@@ -337,6 +337,18 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
         action: 'shareAgent',
         enabled: _paneAction('shareAgent'),
       ),
+      // Make Leader / Remove Leader for the focused harness, as the Mac's File
+      // menu: shown only where the pane can take it.
+      if (_state.paneActions['toggleLeader'] == true)
+        _swarmRow(
+          key: 'menu-bar-toggle-leader',
+          icon: AppIcons.users,
+          label: _state.leaderAction == 'remove'
+              ? 'Remove Leader'
+              : 'Make Leader',
+          action: 'toggleLeader',
+          enabled: _paneAction('toggleLeader'),
+        ),
       const AppMenuDivider(),
       _swarmRow(
         key: 'menu-bar-new-tab',
@@ -550,6 +562,17 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
         action: 'toggleComposer',
         enabled: _paneAction('toggleComposer'),
       ),
+      // The active tab's Tab Activity sidebar, as the Mac's View menu: shown
+      // only where the workspace's toggle acts, titled by whether it is open.
+      if (_state.canShowTabActivity)
+        _swarmRow(
+          key: 'menu-bar-toggle-tab-activity',
+          icon: AppIcons.panelLeft,
+          label: _state.tabActivityOpen
+              ? 'Hide Tab Activity'
+              : 'Show Tab Activity',
+          action: 'toggleTabActivity',
+        ),
     ];
   }
 

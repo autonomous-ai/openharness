@@ -3,7 +3,7 @@ import { consentKey } from './consentStore.js'
 import { MessageDirectory, type DirectoryTab } from './directory.js'
 import { header, parseMessage, type Message } from './model.js'
 import type { Roster } from './roster.js'
-import { accountLabel, accountsIn, sharedTabsFor } from './sharedDirectory.js'
+import { accountLabel, accountsIn, markerLabel, markerName, markerNameWithId, sharedTabsFor } from './sharedDirectory.js'
 
 /* The directory's side of shared tabs (sharedDirectory.ts): the rosters this computer holds, merged into the account's
  * desk tabs, and the words other accounts are named by. */
@@ -150,6 +150,15 @@ describe('accounts\' names', () => {
   it('labels an account by its address\'s local part, for prefixes', () => {
     expect(accountLabel('bob@y.io')).toBe('bob')
     expect(accountLabel('first.last+x@y.io')).toBe('first.last+x')
+    // The label a marker takes: only [\w.-], other runs one `-`, trimmed, at most 64, never empty.
+    expect(markerLabel('a+b@x.com')).toBe('a-b')
+    expect(markerLabel('first.last+x@y.io')).toBe('first.last-x')
+    expect(markerLabel('a+-+b@x.com')).toBe('a-b')
+    expect(markerLabel('+a+@x.com')).toBe('a')
+    expect(markerLabel('bob_1.x-y@y.io')).toBe('bob_1.x-y')
+    expect(markerLabel(`${'x'.repeat(70)}@y.io`)).toBe('x'.repeat(64))
+    expect(markerLabel(`${'x'.repeat(63)}+yyy@y.io`)).toBe('x'.repeat(63))
+    expect(markerLabel('+++@y.io')).toBe('account')
     expect(accountLabel('a@b@c.io')).toBe('a@b')
     expect(accountLabel('nobody')).toBe('nobody')
     expect(accountLabel('b‮ob\u0007@y.io')).toBe('bob')
@@ -157,14 +166,37 @@ describe('accounts\' names', () => {
     expect(accountLabel('@y.io')).toBe('@y.io')
   })
 
+  // A harness's half of the marker (final review I2): display names are session titles ("Fix login test") or carry an id
+  // when two share one ("app (1a2b)"), and the reader takes only [\w.-]{1,64}, so the note says this name instead.
+  it('names a harness as a marker takes it: only [\\w.-], lower case, other runs one `-`, trimmed, at most 64, never empty', () => {
+    expect(markerName('Fix login test')).toBe('fix-login-test')
+    expect(markerName('app (1a2b)')).toBe('app-1a2b')
+    expect(markerName('api.v2')).toBe('api.v2')
+    expect(markerName('bob_1.x-y')).toBe('bob_1.x-y')
+    expect(markerName('Fix  --  Login')).toBe('fix-login')
+    expect(markerName('Ünï cødé')).toBe('n-c-d')
+    expect(markerName('b\u202Eo\u0007b')).toBe('bob')
+    expect(markerNameWithId('Fix login test', 'aaaa1111bbbb')).toBe('fix-login-test-aaaa1111')
+    expect(markerNameWithId('修复', 'AAAA1111')).toBe('harness-aaaa1111')
+    expect(markerNameWithId('x'.repeat(70), 'aaaa1111bbbb')).toBe(`${'x'.repeat(55)}-aaaa1111`)
+    expect(markerNameWithId('x'.repeat(62) + ' y', 'a\u0007')).toBe(`${'x'.repeat(62)}-a`)
+    expect(markerNameWithId('app', '\u0007')).toBe('app-id')
+    expect(markerName('x'.repeat(70))).toBe('x'.repeat(64))
+    expect(markerName(`${'x'.repeat(63)} yyy`)).toBe('x'.repeat(63))
+    expect(markerName('(((')).toBe('harness')
+    expect(markerName('')).toBe('harness')
+  })
+
   it('names each account of the rosters: its label for prefixes, and the member\'s name, else the label, for headers', () => {
     expect(accountsIn([owned, member])).toEqual(new Map([
-      ['u-alice', { label: 'alice', name: 'Alice' }],
-      ['u-bob', { label: 'bob', name: 'Bob' }],
-      ['u-carol', { label: 'carol', name: 'carol' }],
-      ['u-dave', { label: 'dave', name: 'dave' }],
+      ['u-alice', { label: 'alice', marker: 'alice', name: 'Alice' }],
+      ['u-bob', { label: 'bob', marker: 'bob', name: 'Bob' }],
+      ['u-carol', { label: 'carol', marker: 'carol', name: 'carol' }],
+      ['u-dave', { label: 'dave', marker: 'dave', name: 'dave' }],
     ]))
-    expect(accountsIn([{ ...owned, members: [{ accountId: 'u-bob', email: 'bob@y.io', name: 'B​ob\u0007', acceptedAt: at }] }]).get('u-bob')).toEqual({ label: 'bob', name: 'Bob' })
+    expect(accountsIn([{ ...owned, members: [{ accountId: 'u-bob', email: 'bob@y.io', name: 'B​ob\u0007', acceptedAt: at }] }]).get('u-bob')).toEqual({ label: 'bob', marker: 'bob', name: 'Bob' })
+    // The marker's label is the address's, marker-safe: a `+` address keeps it in the prefix but not in the marker.
+    expect(accountsIn([{ ...owned, members: [{ accountId: 'u-bob', email: 'bob+x@y.io', name: '', acceptedAt: at }] }]).get('u-bob')).toEqual({ label: 'bob+x', marker: 'bob-x', name: 'bob+x' })
   })
 })
 

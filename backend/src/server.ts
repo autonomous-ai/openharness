@@ -25,6 +25,7 @@ import { deskRoutes } from './routes/desk.js'
 import { connectorRoutes } from './routes/connectors.js'
 import { connectorVaultRoutes } from './routes/connectorVault.js'
 import { agentMessagesRoutes } from './routes/agentMessages.js'
+import { superTabRoutes } from './routes/superTabs.js'
 import { zooRoutes } from './routes/zoo.js'
 import { experimentalSettingsRoutes } from './routes/experimentalSettings.js'
 import { describeDaemonsSwitch } from './lib/daemonsSwitch.js'
@@ -203,6 +204,7 @@ async function start(): Promise<void> {
   await app.register(connectorRoutes)     // sign-in to GitHub, Slack, Google… for local agents (lib/connectorGateway.ts)
   await app.register(connectorVaultRoutes) // those connections sealed for the account's computers, which keep them in step
   await app.register(agentMessagesRoutes)   // which tabs' harnesses may message each other (lib/agentMessages.ts)
+  await app.register(superTabRoutes)
   await app.register(experimentalSettingsRoutes, { daemons: DAEMONS })
   // Availability is separate from opt-in: every account starts off, and its collection is retained.
   await app.register(zooRoutes, { daemons: DAEMONS, requireAccountOptIn: true })

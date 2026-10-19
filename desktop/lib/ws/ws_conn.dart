@@ -633,6 +633,7 @@ class WsConn {
       !type.startsWith('api_connections') &&
       !type.startsWith('connectors') &&
       !type.startsWith('orchestrator') &&
+      !type.startsWith('super_tabs') &&
       !type.startsWith('route_') &&
       !type.startsWith('harness_share_') &&
       // Pair responses can contain retained memory quotations and one-use
@@ -640,6 +641,16 @@ class WsConn {
       type != 'pair' &&
       type != 'pair_result' &&
       !type.startsWith('observer_');
+
+  /// Refusals that are the daemon working as designed, logged at DEBUG: Agent
+  /// Messages off (the account default) and an action an older CLI does not
+  /// know. At WARN each was an immediate, fsync'd write to the app log on the
+  /// UI isolate — once a minute for `shares` alone, for every account that
+  /// never turned Agent Messages on — while saying nothing anyone acts on.
+  static const _expectedRefusals = {'MESSAGES_OFF', 'UNKNOWN_ACTION'};
+
+  static bool _expectedRefusal(Object error) =>
+      error is WsRequestFailure && _expectedRefusals.contains(error.code);
 
   Future<Map<String, dynamic>> request(
     String type, {
@@ -669,8 +680,12 @@ class WsConn {
       // becomes an unhandled rejection.
       completer.future.then(
         (value) => appLog.debug('ws', '← $type ${summariseForLog(value)}'),
-        onError: (Object error) =>
-            appLog.warn('ws', '← $type failed', error: error),
+        onError: (Object error) => appLog.record(
+          _expectedRefusal(error) ? AppLogLevel.debug : AppLogLevel.warn,
+          'ws',
+          '← $type failed',
+          error: error,
+        ),
       );
     }
     final frame = {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -18,9 +20,9 @@ SharedPaneChipState sharedPaneChipState(
   String machineId,
   String agentId,
 ) {
+  final leader = app.isTabLeader(machineId, agentId);
   final tab = app.sharedTabHolding(machineId, agentId);
-  if (tab == null) return (leader: false, joining: null, tab: null);
-  final leader = tab.leader;
+  if (tab == null) return (leader: leader, joining: null, tab: null);
   final joining = app.sharedTabs.snapshot.pending
       .where(
         (p) =>
@@ -30,19 +32,12 @@ SharedPaneChipState sharedPaneChipState(
             p.agentId == agentId,
       )
       .firstOrNull;
-  return (
-    leader:
-        leader != null &&
-        leader.machineId == machineId &&
-        leader.agentId == agentId,
-    joining: joining,
-    tab: tab,
-  );
+  return (leader: leader, joining: joining, tab: tab);
 }
 
-/// `Leader`, `Joining…` and Remove from Tab, beside the title of an own
-/// harness's pane in a shared tab. Another account's strings are plain text on
-/// one ellipsized line. Nothing is drawn outside a shared tab.
+/// `Leader` (in every tab), `Make Leader` on the focused pane, `Joining…` and
+/// Remove from Tab (shared tabs), beside the title of a pane. Another
+/// account's strings are plain text on one ellipsized line.
 class PaneSharedChips extends StatelessWidget {
   const PaneSharedChips({
     super.key,
@@ -58,38 +53,92 @@ class PaneSharedChips extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([app.sharedTabs, app]),
+    listenable: Listenable.merge([
+      app.sharedTabs,
+      app.agentMessages,
+      app.experimentalFeatures,
+      app,
+    ]),
     builder: (context, _) {
       final state = sharedPaneChipState(app, machineId, agentId);
       final tab = state.tab;
-      if (tab == null) return const SizedBox.shrink();
+      final focused = app.focusedPane;
+      final isFocused =
+          focused?.machineId == machineId && focused?.agentId == agentId;
+      final leaderAction = isFocused
+          ? app.leaderActionFor(machineId, agentId)
+          : null;
+      final makeLeader = leaderAction == 'make';
+      final removeLeader = leaderAction == 'remove';
+      if (tab == null && !state.leader && !makeLeader && !removeLeader) {
+        return const SizedBox.shrink();
+      }
       final ink = style.color ?? grid.AppPalette.textPrimary;
       final quiet = style.copyWith(color: ink.withValues(alpha: .7));
       final gap = workspaceBarCellSizeOf(context).width;
-      Widget line(String text, TextStyle s, {String? tip, Key? key}) =>
-          Flexible(
-            child: Padding(
-              padding: EdgeInsets.only(left: gap),
-              child: Tooltip(
-                message: tip ?? text,
+      // The Leader chip is never cut: it keeps its own width and the links
+      // beside it give way first.
+      Widget line(String text, TextStyle s, {String? tip, Key? key}) {
+        final chip = Padding(
+          padding: EdgeInsets.only(left: gap),
+          child: Tooltip(
+            message: tip ?? text,
+            child: Text(
+              text,
+              key: key,
+              maxLines: 1,
+              softWrap: false,
+              overflow: text == 'Leader'
+                  ? TextOverflow.visible
+                  : TextOverflow.ellipsis,
+              style: s,
+            ),
+          ),
+        );
+        return text == 'Leader' ? chip : Flexible(child: chip);
+      }
+
+      final owner = plainSharedText(tab?.ownerEmail ?? '');
+      final joining = state.joining;
+      // A link takes what the Leader chip leaves: it shortens with an
+      // ellipsis, and below [_minLink] it is not drawn at all (its gap would
+      // overflow). The tooltip and the menu keep the action.
+      final minLink = gap + 28;
+      Widget yielding(Widget link) => Flexible(
+        child: LayoutBuilder(
+          builder: (context, box) =>
+              box.maxWidth < minLink ? const SizedBox.shrink() : link,
+        ),
+      );
+      Widget leaderLink(String label, Key key) => yielding(
+        Padding(
+          padding: EdgeInsets.only(left: gap),
+          child: Tooltip(
+            message: label,
+            child: Semantics(
+              button: true,
+              label: label,
+              excludeSemantics: true,
+              child: InkWell(
+                key: key,
+                onTap: () => unawaited(app.toggleLeaderOf(machineId, agentId)),
                 child: Text(
-                  text,
-                  key: key,
+                  label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: s,
+                  style: quiet,
                 ),
               ),
             ),
-          );
-      final owner = plainSharedText(tab.ownerEmail);
-      final joining = state.joining;
-      final focused = app.focusedPane;
+          ),
+        ),
+      );
       final remove =
-          app.canRemoveFromSharedTab(machineId, agentId) &&
-          focused?.machineId == machineId &&
-          focused?.agentId == agentId;
+          app.canRemoveFromSharedTab(machineId, agentId) && isFocused;
+      // More than the old equal share: the chips and the title (flex 4) split
+      // what the header leaves.
       return Flexible(
+        flex: 3,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -104,13 +153,30 @@ class PaneSharedChips extends StatelessWidget {
                     ? 'Waiting for the owner\'s computer'
                     : 'Waiting for $owner\'s computer',
               ),
+            if (makeLeader)
+              leaderLink(
+                'Make Leader',
+                const ValueKey('pane-chip-make-leader'),
+              ),
+            if (removeLeader)
+              leaderLink(
+                'Remove Leader',
+                const ValueKey('pane-chip-remove-leader'),
+              ),
             if (remove)
-              Padding(
-                padding: EdgeInsets.only(left: gap),
-                child: InkWell(
-                  key: const ValueKey('pane-chip-remove-from-tab'),
-                  onTap: () => app.removeFromSharedTab(machineId, agentId),
-                  child: Text('Remove from Tab', maxLines: 1, style: quiet),
+              yielding(
+                Padding(
+                  padding: EdgeInsets.only(left: gap),
+                  child: InkWell(
+                    key: const ValueKey('pane-chip-remove-from-tab'),
+                    onTap: () => app.removeFromSharedTab(machineId, agentId),
+                    child: Text(
+                      'Remove from Tab',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: quiet,
+                    ),
+                  ),
                 ),
               ),
           ],

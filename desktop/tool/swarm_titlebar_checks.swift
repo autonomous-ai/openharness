@@ -1367,6 +1367,44 @@ private extension SwarmTabStrip {
       "Workspace teardown hides the daemon")
   }
 
+  /// Tab Activity's button, just after New Tab: shown only where the active tab can show the sidebar, its
+  /// tooltip and label saying Show or Hide as the sidebar stands, and a click toggles it in Flutter.
+  func checkTabActivityButton() throws {
+    var state: [String: Any] = ["enabled": true, "tabs": [["id": "work", "name": "Desktop"]], "activeId": "work"]
+    var calls: [String] = []
+    emit = { method, _ in calls.append(method) }
+    setFrameSize(NSSize(width: 900, height: 40))
+    update(state)
+    layout()
+    try checkTitlebar(tabActivityButton.isHidden && !tabActivityButton.isEnabled &&
+      accessibilityChildren()?.contains(where: { $0 as? NSView === tabActivityButton }) == false,
+      "No Tab Activity button where the tab cannot show it")
+    let budgetWithout = scroll.frame.width
+    for (open, title) in [(false, "Show Tab Activity"), (true, "Hide Tab Activity")] {
+      state["canShowTabActivity"] = true
+      state["tabActivityOpen"] = open
+      state["tabActivityTooltip"] = "\(title) · ⇧⌘Y"
+      update(state)
+      layout()
+      try checkTitlebar(!tabActivityButton.isHidden && tabActivityButton.isEnabled &&
+        tabActivityButton.image != nil &&
+        tabActivityButton.frame.minX == newButton.frame.maxX && tabActivityButton.frame.width > 0 &&
+        tabActivityButton.frame.maxX < searchButton.frame.minX &&
+        tabActivityButton.accessibilityLabel() == title &&
+        tabActivityButton.toolTip == "\(title) · ⇧⌘Y" &&
+        tabActivityButton.accessibilityHelp() == tabActivityButton.toolTip &&
+        accessibilityChildren()?.contains(where: { $0 as? NSView === tabActivityButton }) == true,
+        "Tab Activity sits after New Tab and says \(title)")
+    }
+    try checkTitlebar(scroll.frame.width <= budgetWithout, "The button takes its room from the tabs, not over them")
+    tabActivityButton.performClick(nil)
+    try checkTitlebar(calls == ["toggleTabActivity"], "Tab Activity's button toggles the sidebar in Flutter")
+    state["enabled"] = false
+    update(state)
+    tabActivityButton.performClick(nil)
+    try checkTitlebar(!tabActivityButton.isEnabled && calls.count == 1, "A modal disables Tab Activity's button")
+  }
+
   func checkTopActions() throws {
     var state: [String: Any] = ["enabled": true,
       "searchTooltip": "Open Harness · ⌘P", "addPhoneTooltip": "Add Phone", "storeTooltip": "Explore Harness Store · ⌘S",
@@ -2519,11 +2557,12 @@ private extension SwarmTitlebar {
       "New Terminal stays off the File menu; its chord lives in the keymap")
     let historyMenu = main.item(withTitle: "History")!.submenu!
     try checkTitlebar(agent.items.contains { $0.title == "Clone Harness" && $0.representedObject as? String == "cloneAgent" }, "Clone Harness preserves its action")
-    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["newAgent", "sessions", "addAgent", "cloneAgent", "restartAgent", "shareAgent", "removeFromTab", "separator", "new", "renameActive", "closeActive", "invitePeople", "showAgentMessages", "stopSharingTab", "moveTabHere", "leaveTab", "separator", "splitRight", "splitDown", "zoomPane", "movePaneToTab", "closePane"], "File groups harness, tab and pane actions, harnesses first")
+    try checkTitlebar(agent.items.map { $0.isSeparatorItem ? "separator" : ($0.representedObject as? String ?? "") } == ["newAgent", "sessions", "addAgent", "cloneAgent", "restartAgent", "shareAgent", "removeFromTab", "toggleLeader", "separator", "new", "renameActive", "closeActive", "invitePeople", "showAgentMessages", "stopSharingTab", "moveTabHere", "leaveTab", "separator", "splitRight", "splitDown", "zoomPane", "movePaneToTab", "closePane"], "File groups harness, tab and pane actions, harnesses first")
     for (action, title, menu) in [
       ("restartAgent", "Restart Harness", agent),
       ("shareAgent", "Share Harness", agent),
       ("removeFromTab", "Remove from Tab", agent),
+      ("toggleLeader", "Make Leader", agent),
       ("toggleViewer", "Toggle Viewer", main.item(withTitle: "View")!.submenu!),
       ("toggleComposer", "Toggle Message Composer", main.item(withTitle: "View")!.submenu!),
     ] {
@@ -2544,6 +2583,15 @@ private extension SwarmTitlebar {
     for offered in [true, false] {
       _ = try messenger.receive("update", arguments: ["enabled": true, "tabs": [], "paneActions": ["removeFromTab": offered]])
       try checkTitlebar(removeRow.isHidden == !offered, "File shows Remove from Tab only where the focused harness can leave its tab")
+    }
+    // Make Leader / Remove Leader: one row whose title follows what Dart offers the focused pane, hidden when neither.
+    let leaderRow = agent.items.first { $0.representedObject as? String == "toggleLeader" }!
+    for (offered, action, title) in [(true, "make", "Make Leader"), (true, "remove", "Remove Leader"), (false, "make", "Make Leader"), (true, "none", "Make Leader")] {
+      var update: [String: Any] = ["enabled": true, "tabs": [], "paneActions": ["toggleLeader": offered]]
+      if action != "none" { update["leaderAction"] = action }
+      _ = try messenger.receive("update", arguments: update)
+      try checkTitlebar(leaderRow.title == title, "File says \(title) for a \(action) offer")
+      try checkTitlebar(leaderRow.isHidden == !(offered && action != "none"), "File shows Make Leader / Remove Leader only where Dart offers one")
     }
     // File's sharing rows (1c) for the active tab: shown and enabled only as Dart offers them.
     let shareRows = ["invitePeople": "Invite People", "stopSharingTab": "Stop Sharing Tab", "moveTabHere": "Move Here",
@@ -2610,6 +2658,24 @@ private extension SwarmTitlebar {
     actionsEnabled = false
     try checkTitlebar(!validateMenuItem(showMessagesRow), "Show Agent Messages respects modal state")
     actionsEnabled = true
+    // View's Show Tab Activity / Hide Tab Activity for the active tab: shown and enabled where the tab has Agent
+    // Messages, titled by whether its sidebar is open.
+    let tabActivityRow = main.item(withTitle: "View")!.submenu!.items.first { $0.representedObject as? String == "toggleTabActivity" }!
+    try checkTitlebar(tabActivityRow.image != nil, "Tab Activity has a native icon")
+    for (log, open) in [(true, false), (true, true), (false, false), (false, true)] {
+      _ = try messenger.receive("update", arguments: ["enabled": true, "tabs": [], "canShowAgentMessages": true, "canShowTabActivity": log, "tabActivityOpen": open])
+      try checkTitlebar(tabActivityRow.isHidden == !log, "View shows Tab Activity only where Dart's toggle would act")
+      try checkTitlebar(tabActivityRow.title == (open ? "Hide Tab Activity" : "Show Tab Activity"),
+        "View says Show or Hide Tab Activity as the sidebar stands")
+      try checkTitlebar(validateMenuItem(tabActivityRow) == log, "Tab Activity is enabled only where Dart's toggle would act, not with Agent Messages alone")
+    }
+    _ = try messenger.receive("update", arguments: ["enabled": true, "tabs": [], "canShowTabActivity": true])
+    menuAction(tabActivityRow)
+    try checkTitlebar(messenger.calls.last?.method == "toggleTabActivity", "Tab Activity dispatches to Flutter for the active tab")
+    _ = try messenger.receive("update", arguments: ["enabled": false, "tabs": [], "canShowTabActivity": true])
+    try checkTitlebar(!validateMenuItem(tabActivityRow), "Tab Activity respects modal state")
+    actionsEnabled = true
+    canShowAgentMessages = true
     let closeTabShortcut = agent.items.first { $0.representedObject as? String == "closeActive" }!
     let closePaneShortcut = agent.items.first { $0.representedObject as? String == "closePane" }!
     try checkTitlebar(closeTabShortcut.keyEquivalent == "w" && closeTabShortcut.keyEquivalentModifierMask == [.command], "Close Tab defaults to Command-W")
@@ -2942,6 +3008,7 @@ do {
   try strip.checkHarnessMonitor()
   try strip.checkInventoryFooter()
   try strip.checkTopActions()
+  try SwarmTabStrip(frame: NSRect(x: 0, y: 0, width: 900, height: 40)).checkTabActivityButton()
   try checkIconTooltipTracking()
   try strip.checkActivityMarks()
   try SwarmTabButton(id: "label-measurements").checkLabelMeasurementChanges()

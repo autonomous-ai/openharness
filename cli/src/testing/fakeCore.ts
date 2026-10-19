@@ -37,11 +37,13 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       dsh: vi.fn(() => null),
       activityText: vi.fn(async () => null),
       activity: vi.fn(async () => ({})),
+      summaries: vi.fn(async () => ({})),
       ...over.agents,
     },
     turns: {
       send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []),
       deliver: vi.fn(), cancelDelivery: vi.fn(() => false), onDelivery: vi.fn(() => () => {}),
+      leaseDeliveries: vi.fn(async () => true),
       ...over.turns,
     },
     questions: { answer: vi.fn(), answerReviewed: vi.fn(async () => false), ...over.questions },

@@ -8,7 +8,11 @@
  * loosely; the marker in the body is the real filter, so an issue that merely mentions the id is not a task.
  */
 import { execFile } from 'node:child_process'
+import { homedir } from 'node:os'
+import { delimiter, join } from 'node:path'
 import { promisify } from 'node:util'
+import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
+import { warmLoginShellEnvironment } from '../lib/loginShellEnv.js'
 import { validPullRequestUrl } from '../lib/sessionWorkWire.js'
 import { MessageError } from './model.js'
 import { cleanText } from './tabDelivery.js'
@@ -17,7 +21,9 @@ export type CiState = 'passing' | 'failing' | 'pending' | 'none'
 export interface TaskRow {
   repo: string; issue: number; title: string; url: string; state: 'open' | 'closed'
   assignee: { account: string; harness: string } | null
-  pr: { number: number; url: string; state: 'Draft' | 'Open' | 'Merged' | 'Closed'; ci: CiState } | null
+  /** `mergedAt`: when the pull request was merged, as `gh pr view` says (ISO), else empty — the window keeps a merged task
+   *  for 24 hours after it. */
+  pr: { number: number; url: string; state: 'Draft' | 'Open' | 'Merged' | 'Closed'; ci: CiState; autoMerge: boolean; mergeState: string; mergedAt: string } | null
   updatedAt: string
 }
 export interface TaskResult { rows: TaskRow[]; truncated: boolean; checkedAt: string }
@@ -37,15 +43,43 @@ const TITLE_MAX = 512
 const REPO = /^[\w.-]+\/[\w.-]+$/
 const ISSUE_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*$/
 
+/** GitHub's `mergeStateStatus` words; anything else (a new one, a missing field) is `UNKNOWN` rather than shown as is. */
+const MERGE_STATES = ['BEHIND', 'BLOCKED', 'CLEAN', 'DIRTY', 'DRAFT', 'HAS_HOOKS', 'UNSTABLE']
+
 const exec = promisify(execFile)
+
+/** Where gh is installed when the daemon's PATH does not have it: Homebrew on Apple silicon and on Intel, Linuxbrew, and
+ *  a user install. */
+export const GH_DIRS: readonly string[] = ['/opt/homebrew/bin', '/usr/local/bin', '/home/linuxbrew/.linuxbrew/bin', join(homedir(), '.local', 'bin')]
+
+/**
+ * gh's full path, or null. The daemon is started by launchd or the app, not a shell, so its PATH is the bare system one:
+ * a Mac with gh from Homebrew was told "Install the GitHub CLI (gh) on this computer" beside a working `gh` in every
+ * terminal (2026-10-17), as tmux once was (lib/tmuxOnPath.ts). So: the daemon's PATH, then the usual install folders,
+ * then the PATH the person's own login shell gives, which is spawned only when the first two have no gh.
+ */
+export async function findGh(env: NodeJS.ProcessEnv = process.env, dirs: readonly string[] = GH_DIRS,
+  shellPath: () => Promise<string | undefined> = async () => (await warmLoginShellEnvironment()).PATH): Promise<string | null> {
+  return resolveBinaryOnPath('gh', env) ?? resolveBinaryOnPath('gh', { PATH: dirs.join(delimiter) })
+    ?? resolveBinaryOnPath('gh', { PATH: (await shellPath()) ?? '' })
+}
+
+// Found once and kept; a gh still missing is looked for again at the next read, so installing it needs no restart.
+let ghPath: string | null = null
+
 /** `gh` with no prompt and no wait for one: a terminal login question would hang the run until its timeout. */
 const ghRun: Run = async (args) => {
   // Refused under a test runner, whatever the caller: a real `gh` would read the developer's own GitHub login and search
   // public GitHub with it. Tests inject a `Run`; production never has VITEST set.
   if (process.env.VITEST) throw Object.assign(new Error('The real gh is not run in tests.'), { stderr: 'The real gh is not run in tests.' })
-  return { stdout: (await exec('gh', args, { timeout: 8000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
+  ghPath ??= await findGh()
+  if (!ghPath) throw Object.assign(new Error('gh was not found'), { code: 'ENOENT', stderr: '' })
+  return { stdout: (await exec(ghPath, args, { timeout: 8000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
   env: { ...process.env, GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' } })).stdout }
 }
+
+/** Test seam: forget the gh that was found. */
+export function resetGhPath(): void { ghPath = null }
 
 /** What a failed run means to the person, as a `MessageError`; the stderr shown is `gh`'s own, cleaned and cut. */
 function ghError(error: unknown): MessageError {
@@ -142,7 +176,7 @@ export function createTaskReader(run: Run = ghRun, now: () => number = Date.now)
       const [best] = (closing.get(`${repo}#${issue.number}`) ?? []).sort((a, b) => PR_RANK[a.state] - PR_RANK[b.state] || b.number - a.number)
       rows.push({ repo, issue: Number(issue.number), title: cleanText(issue.title, TITLE_MAX), url: issue.url,
         state: String(issue.state).toLowerCase() === 'open' ? 'open' : 'closed', assignee: found.assignee,
-        pr: best ? { ...best, ci: 'none' } : null, updatedAt: typeof issue.updatedAt === 'string' ? cleanText(issue.updatedAt, 40) : '' })
+        pr: best ? { ...best, ci: 'none', autoMerge: false, mergeState: 'UNKNOWN', mergedAt: '' } : null, updatedAt: typeof issue.updatedAt === 'string' ? cleanText(issue.updatedAt, 40) : '' })
     }
     rows.sort((a, b) => (a.state === 'open' ? 0 : 1) - (b.state === 'open' ? 0 : 1) || (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
     // CI, and the pull request's state as GitHub says now (a search can lag a merge). One that cannot be read keeps what
@@ -150,10 +184,16 @@ export function createTaskReader(run: Run = ghRun, now: () => number = Date.now)
     await pooled(rows.filter((r) => r.pr).slice(0, CI_MAX), CI_PARALLEL, async (row) => {
       const pr = row.pr!
       try {
-        const view = JSON.parse(await call(['pr', 'view', pr.url, '--json', 'statusCheckRollup,state,isDraft,mergedAt'])) as Record<string, unknown>
+        const view = JSON.parse(await call(['pr', 'view', pr.url, '--json', 'statusCheckRollup,state,isDraft,mergedAt,autoMergeRequest,mergeStateStatus'])) as Record<string, unknown>
         const state = String(view.state).toUpperCase()
         pr.state = view.mergedAt || state === 'MERGED' ? 'Merged' : state === 'CLOSED' ? 'Closed' : view.isDraft === true ? 'Draft' : 'Open'
         pr.ci = ciOf(view.statusCheckRollup)
+        // "Merging" is auto-merge only: gh has no merge-queue field (`isInMergeQueue` is refused as an unknown field, which
+        // failed this whole read), and the queue would cost another `gh api graphql` run per pull request.
+        pr.autoMerge = !!view.autoMergeRequest && typeof view.autoMergeRequest === 'object'
+        const merge = String(view.mergeStateStatus ?? '').toUpperCase()
+        pr.mergeState = MERGE_STATES.includes(merge) ? merge : 'UNKNOWN'
+        pr.mergedAt = cleanText(view.mergedAt, 40)
       } catch { /* keeps the search's word */ }
     })
     return { rows, truncated: issueRows.length >= SEARCH_LIMIT || prRows.length >= SEARCH_LIMIT, checkedAt: new Date(now()).toISOString() }

@@ -417,8 +417,8 @@ describe('viewer forwarding authentication', () => {
     role.mockReturnValue('web')
     await dispatchDown(socket, sealed, 'remote')
     expect(routed).toEqual([
-      { type: 'memory_snapshot', asker: { local: false, owner: false, connection: 'remote', requestId: 'one' } },
-      { type: 'memory_snapshot', asker: { local: false, owner: true, connection: 'remote', requestId: 'one' } },
+      { type: 'memory_snapshot', asker: { local: false, owner: false, accountOwner: false, connection: 'remote', requestId: 'one' } },
+      { type: 'memory_snapshot', asker: { local: false, owner: true, accountOwner: false, connection: 'remote', requestId: 'one' } },
     ])
     expect(ownerCommands).not.toHaveBeenCalled()
     expect(sealedReply).toHaveBeenCalledWith('remote', 'memory_snapshot_result', 'one', { memories: [] })
@@ -1067,13 +1067,13 @@ describe('BackendSocket outbound queue', () => {
     await vi.waitFor(() => {
       expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-1', { hits: [], indexed: 3, pending: 0, ready: true, tookMs: 1 })
     })
-    expect(routed[0]).toEqual({ type: 'session_search', payload: { requestId: 's-1', query: 'dial scroll', limit: 12 }, asker: { local: false, owner: true, connection: 'web-1', requestId: 's-1' } })
+    expect(routed[0]).toEqual({ type: 'session_search', payload: { requestId: 's-1', query: 'dial scroll', limit: 12 }, asker: { local: false, owner: true, accountOwner: false, connection: 'web-1', requestId: 's-1' } })
 
     // A device's session may not act as the owner, and the service is told so.
     role.mockReturnValue('device')
     ask('session_search', { requestId: 's-2', query: 'dial' })
     await vi.waitFor(() => expect(routed).toHaveLength(2))
-    expect(routed[1].asker).toEqual({ local: false, owner: false, connection: 'web-1', requestId: 's-2' })
+    expect(routed[1].asker).toEqual({ local: false, owner: false, accountOwner: false, connection: 'web-1', requestId: 's-2' })
 
     // A type no service declared is the socket's own: an unknown one is refused at once, in the clear,
     // as a reply that carries nothing is.
@@ -2058,6 +2058,42 @@ describe('BackendSocket outbound queue', () => {
     }
   })
 
+  it('tells the gateway a launch\'s engine and the agent it created, and then that agent\'s start failing', async () => {
+    // A create whose engine then did not start was counted as a launch that worked: the reply had said created
+    // (core/agents/newPane.ts; production counters, 2026-10-16). Only fixed names and the agent's id leave here.
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
+    const signals: unknown[] = []
+    vi.spyOn(gatewayOf(socket), 'usageLaunch').mockImplementation((signal) => { signals.push(signal) })
+    const states: unknown[][] = []
+    gatewayOf(socket).productUsage = { observe: vi.fn(), opened: vi.fn(), presence: vi.fn(), launchState: (...args) => { states.push(args) } }
+    socket.registerLocalClient('local:measured', { sendFrame: () => true, sendBinary: () => true })
+    const session: RegisteredSession = {
+      schemaVersion: 2, active: true, launch: { state: 'starting' },
+      agentId: 'measured-agent', sessionId: '', boundAt: null, engine: 'claude',
+      transcriptPath: null, projectDir: 'work', cwd: '/tmp/work',
+      runtimes: [{ backend: 'tmux', paneId: '%measured' }], primaryRuntimeKey: 'tmux/%measured', tmuxPane: '%measured',
+      source: null, title: 'PRIVATE_CANARY', model: null, cliVersion: null, processIdentity: null,
+      registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    }
+    vi.spyOn(registry, 'byAgent').mockReturnValue(session)
+    socket.onCreateAgent = vi.fn(async () => ({ ok: true as const, session }))
+    const creationId = randomUUID()
+    try {
+      socket.handleLocalFrame('local:measured', { type: 'agent_create', payload: { requestId: 'measured', creationId, engine: 'claude', cwd: '/tmp/work' } })
+      await vi.waitFor(() => expect(signals).toHaveLength(2))
+      expect(signals).toEqual([{ id: creationId, phase: 'start', engine: 'claude' }, { id: creationId, phase: 'created', agent: 'measured-agent' }])
+      socket.send({ type: 'agent_synced', payload: { agent: { ...await socket.toProject(session),
+        launch: { state: 'failed', error: 'ENGINE_DID_NOT_START', detail: 'PRIVATE_CANARY could not start' } } } })
+      socket.send({ type: 'agent_synced', payload: { agent: await socket.toProject({ ...session, launch: { state: 'ready' } }) } })
+      expect(states).toEqual([['measured-agent', 'failed', 'engine_did_not_start'], ['measured-agent', 'ready', undefined]])
+      expect(JSON.stringify([signals, states])).not.toContain('PRIVATE_CANARY')
+    } finally {
+      await socket.unregisterLocalClient('local:measured')
+      await socket.stop()
+    }
+  })
+
   it('explains invalid repository choices without echoing credentials or preparing a folder', async () => {
     const socket = relaySocket('token')
     bindLaunchRequests(socket)
@@ -2719,7 +2755,7 @@ describe('agent_fork RPC', () => {
       lookup.mockReturnValue(undefined)
       ask('agent_fork', 'deleted')
       await vi.waitFor(() => expect(frames).toContainEqual({
-        type: 'agent_fork_result', payload: { requestId: 'deleted', creationId, state: 'unavailable' },
+        type: 'agent_fork_result', payload: { requestId: 'deleted', creationId, state: 'unavailable', createdAgentId: FORK.agentId },
       }))
       expect(fork).toHaveBeenCalledTimes(1)
     } finally {
@@ -4062,7 +4098,7 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     const serviceRouter = vi.fn(() => true)
     socket.serviceRouter = serviceRouter
     await dispatch(sealedDown(socket, 'web-1', 'dsh_install', { requestId: 'r', id: 'acme/some-dsh' }).frame, 'web-1')
-    expect(serviceRouter).toHaveBeenCalledWith('dsh_install', expect.objectContaining({ id: 'acme/some-dsh' }), { local: false, owner: expect.any(Boolean), connection: 'web-1', requestId: 'r' }, expect.any(Function))
+    expect(serviceRouter).toHaveBeenCalledWith('dsh_install', expect.objectContaining({ id: 'acme/some-dsh' }), { local: false, owner: expect.any(Boolean), accountOwner: false, connection: 'web-1', requestId: 'r' }, expect.any(Function))
   })
 
   it('refuses a plaintext RPC even from the backend itself (connId \'\'), which would read the reply', async () => {

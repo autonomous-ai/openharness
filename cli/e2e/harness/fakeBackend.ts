@@ -103,6 +103,11 @@ const json = (value: unknown): string => JSON.stringify(value)
 const bytes = (raw: RawData): Uint8Array => new Uint8Array(Array.isArray(raw) ? Buffer.concat(raw) : raw instanceof ArrayBuffer ? raw : Buffer.from(raw))
 
 export class FakeBackend {
+  /** Optional Super Tab control-plane fixture. Native creation, input and relay
+   * still go through the real daemon; database policy has its own integration suite. */
+  superTabs: ((method: string, path: string, body: Record<string, any>, machine: FakeMachine) => Promise<{
+    status?: number; data?: unknown; error?: { code: string; message: string }
+  }>) | null = null
   /** Opt-in fixture: older scenarios keep the endpoint absent, as on an older backend. */
   productUsage: { enabled: boolean; revision: number; reports: Record<string, unknown>[]; stallReports?: boolean } | null = null
   readonly seen: string[] = []
@@ -156,6 +161,18 @@ export class FakeBackend {
       res.setHeader('content-type', 'application/json')
       if (backend.down) { res.statusCode = 503; res.end(json({ success: false, error: { code: 'UNAVAILABLE' } })); return }
       if (!machine) { res.statusCode = 401; res.end(json({ success: false, error: { code: 'UNAUTHORIZED' } })); return }
+      if (backend.superTabs && req.url?.startsWith('/api/super-tabs')) {
+        const handler = backend.superTabs
+        let raw = ''
+        req.on('data', chunk => { raw += chunk })
+        req.on('end', () => {
+          void Promise.resolve().then(() => handler(req.method!, req.url!, JSON.parse(raw || '{}'), machine)).then(result => {
+            res.statusCode = result.status ?? 200
+            res.end(json({ success: !result.error, data: result.data, error: result.error }))
+          }, error => { res.statusCode = 500; res.end(json({ success: false, error: { code: 'FIXTURE', message: String(error) } })) })
+        })
+        return
+      }
       const usage = backend.productUsage
       if (usage && req.url === '/api/product-usage/settings' && req.method === 'GET') {
         res.end(json({ success: true, data: { enabled: usage.enabled, revision: usage.revision } })); return

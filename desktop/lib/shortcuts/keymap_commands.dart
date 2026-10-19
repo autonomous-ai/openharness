@@ -528,6 +528,38 @@ final harnessCommands = <HarnessCommand>[
     nativeAction: 'showAgentMessages',
     keywords: _agentMessagesKeywords,
   ),
+  // The active tab's Tab Activity sidebar, opened or closed: its native row
+  // is View's, which says Show or Hide as it stands.
+  const HarnessCommand(
+    'agent_messages.activity',
+    'Show Tab Activity',
+    ShortcutGroup.actions,
+    nativeAction: 'toggleTabActivity',
+    extraKeys: ['cmd+shift+y'],
+    keywords: [
+      'tab activity',
+      'sidebar',
+      'hide',
+      'harnesses',
+      'tasks',
+      'leader',
+      'summary',
+    ],
+  ),
+  // The focused harness leads its tab, or stops: its native row is File's
+  // Make Leader / Remove Leader, which swaps its title.
+  const HarnessCommand(
+    'agent_messages.make_leader',
+    'Make Leader',
+    ShortcutGroup.actions,
+    keywords: ['lead', 'leader', 'agent messages', 'tasks'],
+  ),
+  const HarnessCommand(
+    'agent_messages.remove_leader',
+    'Remove Leader',
+    ShortcutGroup.actions,
+    keywords: ['lead', 'leader', 'agent messages', 'tasks'],
+  ),
   // Shared tabs (1c): the active tab, by role, as its tab menu and File offer
   // them; each is here so none needs a menu. Move Tab Here only in a native
   // window, on another of the owner's computers.
@@ -656,6 +688,13 @@ final harnessCommands = <HarnessCommand>[
     'Pause quick start',
     ShortcutGroup.actions,
     keywords: ['hide guide', 'dismiss tutorial'],
+  ),
+  const HarnessCommand(
+    'super_tab.new',
+    'New Super Tab',
+    ShortcutGroup.actions,
+    extraKeys: ['cmd+alt+shift+t'],
+    hidden: true,
   ),
   if (kDebugSurfaceEnabled)
     const HarnessCommand(

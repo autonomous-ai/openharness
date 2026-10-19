@@ -4,7 +4,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const child = vi.hoisted(() => ({ execFile: vi.fn() }))
 vi.mock('node:child_process', () => ({ execFile: child.execFile }))
 
-import { createTaskReader, TASKS_FAILED_MS, TASKS_FRESH_MS, type Run } from './tasks.js'
+import { markerLabel, markerName } from './sharedDirectory.js'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createTaskReader, findGh, resetGhPath, TASKS_FAILED_MS, TASKS_FRESH_MS, type Run } from './tasks.js'
+
+/** A folder holding an executable named gh, which nothing runs: the tests read where it is, never start it. */
+function ghFolder(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'gh-'))
+  writeFileSync(join(dir, 'gh'), '#!/bin/sh\nexit 1\n')
+  chmodSync(join(dir, 'gh'), 0o755)
+  return dir
+}
 
 const ID = 'a'.repeat(24)
 const OTHER = 'b'.repeat(24)
@@ -32,7 +44,7 @@ const failing = (error: unknown): Run => async () => { throw error }
 const reason = async (p: Promise<unknown>) => p.then(() => 'resolved', (e: { code?: string; message: string }) => `${e.code}: ${e.message}`)
 
 describe('Tasks search', () => {
-  beforeEach(() => { child.execFile.mockReset(); vi.stubEnv('VITEST', '') })
+  beforeEach(() => { child.execFile.mockReset(); vi.stubEnv('VITEST', ''); resetGhPath() })
   afterEach(() => { vi.unstubAllEnvs() })
 
   it('runs gh for the tab\'s issues and pull requests with the brief\'s arguments, the tab id one argument, then each linked PR\'s CI', async () => {
@@ -40,7 +52,34 @@ describe('Tasks search', () => {
     await createTaskReader(run)(ID)
     expect(calls).toContainEqual(['search', 'issues', `harness-tab:${ID}`, '--match', 'body', '--limit', '100', '--json', 'number,title,state,url,repository,body,updatedAt'])
     expect(calls).toContainEqual(['search', 'prs', `harness-tab:${ID}`, '--match', 'body', '--limit', '100', '--json', 'number,state,url,repository,body,isDraft'])
-    expect(calls).toContainEqual(['pr', 'view', 'https://github.com/o/r/pull/5', '--json', 'statusCheckRollup,state,isDraft,mergedAt'])
+    expect(calls).toContainEqual(['pr', 'view', 'https://github.com/o/r/pull/5', '--json', 'statusCheckRollup,state,isDraft,mergedAt,autoMergeRequest,mergeStateStatus'])
+  })
+
+  // gh checks `--json` fields before it asks GitHub anything, and refuses the whole command for one it does not know
+  // (`Unknown JSON field: "isInMergeQueue"`, exit 1: every pull request read failed that way before the final review).
+  // The lists are gh 2.95.0's own, printed by `gh <command> --json` with no fields, offline.
+  const GH_JSON_FIELDS: Record<string, string[]> = {
+    'search issues': ['assignees', 'author', 'authorAssociation', 'body', 'closedAt', 'commentsCount', 'createdAt', 'id', 'isLocked', 'isPullRequest', 'labels',
+      'number', 'repository', 'state', 'title', 'updatedAt', 'url'],
+    'search prs': ['assignees', 'author', 'authorAssociation', 'body', 'closedAt', 'commentsCount', 'createdAt', 'id', 'isDraft', 'isLocked', 'isPullRequest',
+      'labels', 'number', 'repository', 'state', 'title', 'updatedAt', 'url'],
+    'pr view': ['additions', 'assignees', 'author', 'autoMergeRequest', 'baseRefName', 'baseRefOid', 'body', 'changedFiles', 'closed', 'closedAt',
+      'closingIssuesReferences', 'comments', 'commits', 'createdAt', 'deletions', 'files', 'fullDatabaseId', 'headRefName', 'headRefOid', 'headRepository',
+      'headRepositoryOwner', 'id', 'isCrossRepository', 'isDraft', 'labels', 'latestReviews', 'maintainerCanModify', 'mergeCommit', 'mergeStateStatus',
+      'mergeable', 'mergedAt', 'mergedBy', 'milestone', 'number', 'potentialMergeCommit', 'projectCards', 'projectItems', 'reactionGroups', 'reviewDecision',
+      'reviewRequests', 'reviews', 'state', 'statusCheckRollup', 'title', 'updatedAt', 'url'],
+  }
+
+  it('asks gh only for JSON fields gh has, and the pull request view for exactly the six it reads', async () => {
+    const { run, calls } = gh([issue(1)], [pr(5, 1)])
+    await createTaskReader(run)(ID)
+    expect(calls.map((args) => args.slice(0, 2).join(' ')).sort()).toEqual(['pr view', 'search issues', 'search prs'])
+    for (const args of calls) {
+      const fields = args[args.indexOf('--json') + 1].split(',')
+      expect(fields.filter((f) => !GH_JSON_FIELDS[args.slice(0, 2).join(' ')].includes(f)), args.join(' ')).toEqual([])
+    }
+    const view = calls.find((args) => args[0] === 'pr')!
+    expect(view[view.indexOf('--json') + 1].split(',').sort()).toEqual(['autoMergeRequest', 'isDraft', 'mergeStateStatus', 'mergedAt', 'state', 'statusCheckRollup'])
   })
 
   it('reads the marker with and without an assignee, and keeps the issue\'s fields', async () => {
@@ -52,6 +91,22 @@ describe('Tasks search', () => {
     ])
     expect(truncated).toBe(false)
     expect(checkedAt).toBe('2026-10-15T00:00:00.000Z')
+  })
+
+  it('parses back the assignee a note tells an agent to write, whatever the address: the label round-trips through the marker', async () => {
+    for (const email of ['a+b@x.com', 'first.last+x@y.io', 'Ünï cødé@y.io', '+++@y.io', `${'x'.repeat(80)}@y.io`]) {
+      const label = markerLabel(email)
+      const { run } = gh([issue(1, { body: mark(ID, `${label}/api`) })])
+      expect((await createTaskReader(run)(ID)).rows[0].assignee).toEqual({ account: label, harness: 'api' })
+    }
+  })
+
+  it('parses back the harness a note names, whatever its display name: the marker name round-trips through the marker', async () => {
+    for (const name of ['Fix login test', 'app (1a2b)', 'api.v2', 'Ünï cødé', '(((', '', 'x'.repeat(80), 'b\u202Eo\u0007b']) {
+      const harness = markerName(name)
+      const { run } = gh([issue(1, { body: mark(ID, `${markerLabel('a+b@x.com')}/${harness}`) })])
+      expect((await createTaskReader(run)(ID)).rows[0].assignee, name).toEqual({ account: 'a-b', harness })
+    }
   })
 
   it('ignores a marker for another tab, a malformed one, a missing body, and takes only the first marker', async () => {
@@ -124,7 +179,7 @@ describe('Tasks search', () => {
     ['a check with nothing known', [{}], 'pending'],
   ])('CI: %s is %s', async (_name, rollup, ci) => {
     const { run } = gh([issue(1)], [pr(5, 1)], { 'https://github.com/o/r/pull/5': { statusCheckRollup: rollup, state: 'OPEN', isDraft: false } })
-    expect((await createTaskReader(run)(ID)).rows[0].pr).toEqual({ number: 5, url: 'https://github.com/o/r/pull/5', state: 'Open', ci })
+    expect((await createTaskReader(run)(ID)).rows[0].pr).toEqual({ number: 5, url: 'https://github.com/o/r/pull/5', state: 'Open', ci, autoMerge: false, mergeState: 'UNKNOWN', mergedAt: '' })
   })
 
   it('takes the PR\'s state as GitHub says now: merged, closed, draft or open', async () => {
@@ -136,12 +191,45 @@ describe('Tasks search', () => {
     expect(rows.map((r) => [r.issue, r.pr!.state]).sort()).toEqual([[1, 'Merged'], [2, 'Merged'], [3, 'Closed'], [4, 'Draft'], [5, 'Open']])
   })
 
+  it.each([
+    ['a merged PR\'s time', { state: 'MERGED', mergedAt: '2026-10-01T00:00:00Z' }, '2026-10-01T00:00:00Z'],
+    ['none for an open PR', { state: 'OPEN', mergedAt: null }, ''],
+    ['not text', { state: 'MERGED', mergedAt: 7 }, ''],
+    ['cut and cleaned', { state: 'MERGED', mergedAt: `2026-10-01T00:00:00Z\u0007${'9'.repeat(60)}` }, `2026-10-01T00:00:00Z${'9'.repeat(20)}`],
+  ])('mergedAt: %s', async (_name, view, mergedAt) => {
+    const { run } = gh([issue(1)], [pr(5, 1)], { 'https://github.com/o/r/pull/5': { statusCheckRollup: [], ...view } })
+    expect((await createTaskReader(run)(ID)).rows[0].pr!.mergedAt).toBe(mergedAt)
+  })
+
   it('a PR whose view fails keeps the search\'s state and no CI, and the others are still read', async () => {
     const { run } = gh([issue(1), issue(2)], [pr(5, 1), pr(6, 2, { state: 'closed' })], {
       'https://github.com/o/r/pull/5': new Error('boom'), 'https://github.com/o/r/pull/6': null })
     const { rows } = await createTaskReader(run)(ID)
     expect(rows.map((r) => r.pr)).toEqual(expect.arrayContaining([
-      { number: 5, url: 'https://github.com/o/r/pull/5', state: 'Open', ci: 'none' }, { number: 6, url: 'https://github.com/o/r/pull/6', state: 'Closed', ci: 'none' }]))
+      { number: 5, url: 'https://github.com/o/r/pull/5', state: 'Open', ci: 'none', autoMerge: false, mergeState: 'UNKNOWN', mergedAt: '' },
+      { number: 6, url: 'https://github.com/o/r/pull/6', state: 'Closed', ci: 'none', autoMerge: false, mergeState: 'UNKNOWN', mergedAt: '' }]))
+  })
+
+  it.each([
+    ['auto-merge on, clean', { autoMergeRequest: { enabledAt: '2026-10-01T00:00:00Z' }, mergeStateStatus: 'CLEAN' }, true, 'CLEAN'],
+    ['no auto-merge, blocked', { autoMergeRequest: null, mergeStateStatus: 'BLOCKED' }, false, 'BLOCKED'],
+    ['an unknown merge state word', { mergeStateStatus: 'SOMETHING_NEW' }, false, 'UNKNOWN'],
+    ['a merge state that is not text', { mergeStateStatus: 7, autoMergeRequest: 'on' }, false, 'UNKNOWN'],
+    ['a lower-case known word', { mergeStateStatus: 'behind' }, false, 'BEHIND'],
+  ])('merge fields: %s', async (_name, fields, autoMerge, mergeState) => {
+    const { run } = gh([issue(1)], [pr(5, 1)], { 'https://github.com/o/r/pull/5': { statusCheckRollup: [], state: 'OPEN', isDraft: false, ...fields } })
+    const read = (await createTaskReader(run)(ID)).rows[0].pr!
+    expect(read).toMatchObject({ autoMerge, mergeState })
+    expect(read).not.toHaveProperty('inQueue')
+  })
+
+  it('a pull request beyond the 20 read keeps the merge defaults while the others carry GitHub\'s word', async () => {
+    const n = Array.from({ length: 21 }, (_, i) => i + 1)
+    const base = gh(n.map((i) => issue(i, { updatedAt: `2026-10-${String(i).padStart(2, '0')}` })), n.map((i) => pr(100 + i, i)))
+    const run: Run = async (args) => args[0] === 'pr' ? { stdout: JSON.stringify({ statusCheckRollup: [], state: 'OPEN', mergeStateStatus: 'CLEAN' }) } : base.run(args)
+    const { rows } = await createTaskReader(run)(ID)
+    expect(rows.filter((r) => r.pr!.mergeState === 'UNKNOWN').map((r) => r.issue)).toEqual([1])
+    expect(rows.filter((r) => r.pr!.mergeState === 'CLEAN')).toHaveLength(20)
   })
 
   it('reads CI for at most 20 PRs a refresh, four at a time', async () => {
@@ -256,16 +344,32 @@ describe('Tasks search', () => {
     })
   })
 
-  it('the default runner starts gh with a timeout, SIGKILL, a 1 MiB buffer and no prompts, the arguments untouched', async () => {
+  it('the default runner starts gh by its full path with a timeout, SIGKILL, a 1 MiB buffer and no prompts, the arguments untouched', async () => {
+    const dir = ghFolder()
+    vi.stubEnv('PATH', dir)
     child.execFile.mockImplementation((...all: unknown[]) => { const done = all.at(-1) as (e: unknown, r: { stdout: string; stderr: string }) => void
       done(null, { stdout: '[]', stderr: '' })
     })
     await createTaskReader()(ID)
     const [command, args, options] = child.execFile.mock.calls[0]
-    expect(command).toBe('gh')
+    expect(command).toBe(join(dir, 'gh'))
     expect(args.slice(0, 3)).toEqual(['search', 'issues', `harness-tab:${ID}`])
     expect(options).toMatchObject({ timeout: 8000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, env: { GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' } })
-    expect(child.execFile.mock.calls.every(([c]) => c === 'gh')).toBe(true)
+    expect(child.execFile.mock.calls.every(([c]) => c === join(dir, 'gh'))).toBe(true)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('finds gh off the daemon\'s PATH: in the usual install folders, then on the login shell\'s PATH, and the shell only when needed', async () => {
+    // A daemon started by launchd has the bare system PATH: Homebrew's gh was "not installed" beside a working one (2026-10-17).
+    const onPath = ghFolder(), installed = ghFolder(), inShell = ghFolder(), empty = mkdtempSync(join(tmpdir(), 'nogh-'))
+    const shell = vi.fn(async () => inShell)
+    expect(await findGh({ PATH: onPath }, [installed], shell)).toBe(join(onPath, 'gh'))
+    expect(await findGh({ PATH: empty }, [empty, installed], shell)).toBe(join(installed, 'gh'))
+    expect(shell).not.toHaveBeenCalled()
+    expect(await findGh({ PATH: empty }, [empty], shell)).toBe(join(inShell, 'gh'))
+    expect(await findGh({}, [], async () => undefined)).toBeNull()
+    expect(await findGh({ PATH: empty }, [empty], async () => empty)).toBeNull()
+    for (const dir of [onPath, installed, inShell, empty]) rmSync(dir, { recursive: true, force: true })
   })
 
   it('the default runner refuses to start gh under a test runner, whatever the caller', async () => {

@@ -117,6 +117,10 @@ export interface TerminalP2pInitiatorDeps {
    *  RemoteRelayPool's TURN-to-direct upgrade), not a fresh session — tags the offer so the responder
    *  routes it to acceptUpgradeOffer() instead of tearing down the connId's live entry. */
   upgrade?: boolean
+  /** Only TURN reached this machine last time (RemoteRelayPool's turn-first memory): gather relay
+   *  candidates only, so ICE settles on the relay pair at once instead of timing out direct pairs for
+   *  ~8s first. Ignored without a TURN credential, which would leave nothing to gather. */
+  relayOnly?: boolean
 }
 
 type ReadyWaiter = (ready: boolean) => void
@@ -139,7 +143,7 @@ interface TurnChoice {
   credential: string
 }
 
-function peerConfig(stunUrls: string[], turn?: TurnChoice): ConstructorParameters<typeof RTCPeerConnection>[0] {
+function peerConfig(stunUrls: string[], turn?: TurnChoice, relayOnly = false): ConstructorParameters<typeof RTCPeerConnection>[0] {
   const iceServers: Array<{ urls: string[]; username?: string; credential?: string }> = []
   if (stunUrls.length > 0) iceServers.push({ urls: stunUrls })
   if (turn) iceServers.push({ urls: [turn.url], username: turn.username, credential: turn.credential })
@@ -148,11 +152,12 @@ function peerConfig(stunUrls: string[], turn?: TurnChoice): ConstructorParameter
     // Diagnostic only (TERMINAL_P2P_FORCE_RELAY): drops host and srflx so nothing but a TURN
     // allocation can be nominated. Note it also skips STUN gathering entirely inside werift, which is
     // why a forced run is fast even on a network where STUN is unreachable.
-    ...(env.TERMINAL_P2P_FORCE_RELAY ? { iceTransportPolicy: 'relay' as const } : {}),
-    // Left at the default 'all' deliberately: that is what produces "direct first, relay only if
-    // nothing else works". werift scores candidates host 126 > srflx 100 > relay 0, so a TURN relay
-    // pair is only ever nominated once every direct pair has failed. Setting 'relay' here would force
-    // every session through Cloudflare — and bill for it.
+    ...(env.TERMINAL_P2P_FORCE_RELAY || (relayOnly && turn) ? { iceTransportPolicy: 'relay' as const } : {}),
+    // Otherwise left at the default 'all' deliberately: that is what produces "direct first, relay only
+    // if nothing else works". werift scores candidates host 126 > srflx 100 > relay 0, so a TURN relay
+    // pair is only ever nominated once every direct pair has failed. Setting 'relay' for every session
+    // would force it through Cloudflare — and bill for it; `relayOnly` is only ever a machine that
+    // reached nothing else last time.
     // Terminal keyframes can approach 480 KiB. SCTP fragments them, but advertise enough room so
     // the peer never rejects the message at the WebRTC API boundary before fragmentation happens.
     maxMessageSize: 512 * 1024,
@@ -309,7 +314,7 @@ export class TerminalP2pInitiator {
     // strand it: nothing holds a reference any more, so its UDP sockets would never be closed.
     if (this.finished) return
     this.step('stun-raced')
-    const pc = new RTCPeerConnection(peerConfig(stunUrls, turnChoice(this.deps.policy.turn, udpReachable)))
+    const pc = new RTCPeerConnection(peerConfig(stunUrls, turnChoice(this.deps.policy.turn, udpReachable), this.deps.relayOnly))
     const channel = pc.createDataChannel(TERMINAL_P2P_CHANNEL, { ordered: true })
     this.pc = pc
     this.channel = channel

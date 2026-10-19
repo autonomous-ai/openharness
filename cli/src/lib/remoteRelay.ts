@@ -64,7 +64,8 @@ const ISOLATED_IDLE_MAX = 4
 
 // A p2p attempt that never reaches 'direct', or one that did and then got demoted mid-session, both
 // leave the stream(s) on the ws relay with nothing to bring them back — see scheduleP2pRetry(). One
-// policy for both cases: retry every 60s, capped at P2P_RETRY_HOURLY_CAP attempts within any trailing
+// policy for both cases: retry after 5s, then 15s, 30s and every 60s (P2P_RETRY_DELAYS_MS, by how many
+// attempts the trailing hour already holds), capped at P2P_RETRY_HOURLY_CAP attempts within any trailing
 // hour (tracked in p2pRetryTimestamps, not a plain counter) — a ROLLING window rather than a lifetime
 // total, deliberately: the underlying reason a connection can't reach p2p is often transient at the
 // scale of hours (the machine's public IP changed, a router rebooted, a NAT binding thawed), so a
@@ -72,12 +73,21 @@ const ISOLATED_IDLE_MAX = 4
 // staying stuck on relay for the rest of the daemon's uptime. Old attempts simply age out of the
 // lookback on their own, which is also why there is no separate "reset on a success" step any more —
 // a connection that's been healthy for a while naturally has an empty recent window already.
-const P2P_RETRY_DELAY_MS = 60_000
+// The first retry is quick: a terminal left on the ws relay echoes every keystroke through the backend,
+// which is what a person typing feels (2026-10-16: one failed negotiation left a shared machine's
+// terminal on the relay for a full minute). Later ones back off to the old minute.
+const P2P_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000]
 const P2P_RETRY_WINDOW_MS = 60 * 60 * 1000
 const P2P_RETRY_HOURLY_CAP = 10
 // How long a stream may sit in p2pMigrating before the sweep (piggybacked on the liveness tick) gives up
 // on it and lets the ordinary demote-on-mismatch rule apply again.
 const P2P_MIGRATION_TTL_MS = 30_000
+// A machine reached only through TURN last time is negotiated TURN-first next time (relay candidates
+// only), so ICE does not spend ~8s timing out direct pairs before settling on the relay pair it always
+// ends on (2026-10-16: every negotiation to a shared machine took 8–10s, one failed outright). The
+// TURN-to-direct upgrade below still looks for a direct pair in the background, and finding one, or a
+// TURN-first attempt failing, forgets it. Kept for a working day: networks change.
+const P2P_TURN_FIRST_MEMORY_MS = 12 * 60 * 60 * 1000
 
 // A connection that reached 'direct' only via a Cloudflare TURN relay pair still costs per GB — worth
 // trying, periodically, for a truly direct pair instead. Unlike p2pRetry* above this NEVER touches the
@@ -261,6 +271,8 @@ export class RemoteRelayPool {
   /** Last failed dial per machine, for the cooldown. Cleared by the next successful dial. */
   private readonly lastDialFailure: Map<string, { at: number; error: unknown }>
   private readonly p2pEnabled: boolean
+  /** machineId -> when a negotiation last reached it only through TURN (P2P_TURN_FIRST_MEMORY_MS). */
+  private readonly turnOnly = new Map<string, number>()
   private readonly lingerMs: number
   private readonly dialCooldownMs: number
   private readonly onSessionReady: ((machineId: string) => void) | null
@@ -834,8 +846,11 @@ export class RemoteRelayPool {
     // through this same method, and a background pool must stay relay-only through every retry too.
     if (!policy || entry.p2p || !this.p2pEnabled) return
     let wasDirect = false
+    const turnFirst = !!policy.turn && Date.now() - (this.turnOnly.get(machineId) ?? -Infinity) < P2P_TURN_FIRST_MEMORY_MS
+    if (turnFirst) console.log(`[p2p] turn first · machine=${sid(machineId)} — only TURN reached it last time`)
     const p2p = new TerminalP2pInitiator({
       policy,
+      relayOnly: turnFirst,
       sendSignal: (type, payload) => {
         const wrapped = entry.crypto.wrapOutgoing({ type, payload })
         try { entry.ws.send(JSON.stringify(wrapped)) } catch { /* relay close handles cleanup */ }
@@ -856,6 +871,7 @@ export class RemoteRelayPool {
           // 'relayed' distinguishes a Cloudflare TURN path from a truly direct one. Both are "p2p" as far
           // as the terminal is concerned, but only one of them is billed per GB.
           const relayed = p2p.transport === 'relay'
+          if (relayed) this.turnOnly.set(machineId, Date.now()); else this.turnOnly.delete(machineId)
           console.log(`[p2p] connected · machine=${sid(machineId)} via=${relayed ? 'turn' : 'direct'} setup=${Math.round(setupMs)}ms`)
           this.reportP2pResult(entry, 'direct', setupMs, relayed ? 'relayed' : undefined)
           this.promoteOpenStreams(machineId, entry)
@@ -864,6 +880,8 @@ export class RemoteRelayPool {
           console.log(`[p2p] gave up · machine=${sid(machineId)} reason=${reason ?? 'unknown'} after=${Math.round(setupMs)}ms`
             + ` · ${p2p.negotiationDetail} — terminals stay on the ws relay`)
           this.reportP2pResult(entry, reason === 'negotiation_timeout' ? 'timeout' : 'failed', setupMs, reason)
+          // TURN-first failing says the path changed: the next attempt gathers everything again.
+          if (turnFirst) this.turnOnly.delete(machineId)
           // Without this the entry is stuck: entry.p2p still points at this now-finished instance, and
           // startP2p()'s own guard (`if (!policy || entry.p2p) return`) would block every future attempt
           // forever — previously the only way out was a full entry teardown (network drop).
@@ -1014,8 +1032,9 @@ export class RemoteRelayPool {
       console.log(`[p2p] retry budget exhausted · machine=${sid(machineId)} (${entry.p2pRetryTimestamps.length}/${P2P_RETRY_HOURLY_CAP} in the last hour)`)
       return
     }
+    const delay = P2P_RETRY_DELAYS_MS[Math.min(entry.p2pRetryTimestamps.length, P2P_RETRY_DELAYS_MS.length - 1)]
     entry.p2pRetryTimestamps.push(Date.now())
-    console.log(`[p2p] retry scheduled · machine=${sid(machineId)} in ${P2P_RETRY_DELAY_MS / 1000}s`
+    console.log(`[p2p] retry scheduled · machine=${sid(machineId)} in ${delay / 1000}s`
       + ` (${entry.p2pRetryTimestamps.length}/${P2P_RETRY_HOURLY_CAP} this hour)`)
     entry.p2pRetryTimer = setTimeout(() => {
       entry.p2pRetryTimer = null
@@ -1025,7 +1044,7 @@ export class RemoteRelayPool {
       }
       entry.p2p = null
       this.startP2p(machineId, entry)
-    }, P2P_RETRY_DELAY_MS)
+    }, delay)
     entry.p2pRetryTimer.unref?.()
   }
 
@@ -1202,6 +1221,7 @@ export class RemoteRelayPool {
     if (acked) {
       void old.stop('upgraded', false)
       console.log(`[p2p-upgrade] promoted · machine=${sid(machineId)} attempt=${entry.upgradeAttempts}`)
+      this.turnOnly.delete(machineId) // a direct pair exists after all: negotiate it first next time
     } else {
       // Ack never arrived — keep OLD alive rather than guess it is safe to close; entry.upgradeOrphan is
       // closed wherever the entry itself is torn down (invalidate/ws-close/idle-linger).

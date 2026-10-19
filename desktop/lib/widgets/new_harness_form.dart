@@ -382,7 +382,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _Row.worktree => 'Worktree',
     _Row.approvals => 'Approvals',
     _Row.profile => widget.desktop ? 'Account' : 'Profile',
-    _Row.start => 'New Harness',
+    _Row.start => box.actionLabel,
   };
 
   /// What the row currently answers — or, while its list is open, what the
@@ -399,7 +399,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     _Row.approvals => box.modeLabel,
     _Row.profile =>
       box.profileLabel ?? (widget.desktop ? 'Default account' : 'Default'),
-    _Row.start => box.checking ? 'Check status' : _label(row),
+    _Row.start => box.checking ? box.pendingActionLabel : _label(row),
   };
 
   // These leave this form for a native sheet, account flow or another route.
@@ -899,6 +899,33 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   Future<void> _start() async {
     if (box.busy) return;
+    bool? resendAttachments;
+    if (box.needsAttachmentReview) {
+      resendAttachments = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Check file delivery'),
+          content: const Text(
+            'The files and first message may already have reached the harness. Open it from Recent harnesses to check. Before sending again, clear any unfinished text in its terminal.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Already sent'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Send again'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || resendAttachments == null) return;
+    }
     _restoreChoiceFocus = false;
     if (box.requiredChoice case final choice?) {
       box.focusField(choice.field);
@@ -909,7 +936,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       return;
     }
     _checkingLaunch = box.checking;
-    final outcome = await box.create();
+    final outcome = await box.create(resendAttachments: resendAttachments);
     if (!mounted) return;
     switch (outcome) {
       case NewHarnessOutcome.created:
@@ -2201,8 +2228,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       final label = box.busy
           ? (_checkingLaunch ? 'Checking…' : 'Starting…')
           : box.checking
-          ? 'Check status'
-          : 'New Harness';
+          ? box.pendingActionLabel
+          : box.actionLabel;
       return FocusTraversalOrder(
         order: const NumericFocusOrder(10),
         child: FilledButton(

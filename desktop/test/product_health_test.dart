@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ui' show AppLifecycleState, FrameTiming;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/measurement/product_measurement.dart';
@@ -240,6 +241,50 @@ void main() {
       runtime.dispose();
       await tester.pump();
       expect(saved, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'frames sample every 60th visible frame, never the first or a hidden one',
+    (tester) async {
+      var lifecycle = AppLifecycleState.resumed;
+      final runtime = ProductRuntimeHealth(
+        usage,
+        readState: () async => {},
+        writeState: (_) async {},
+        readVersion: () async => '1.2.73',
+        lifecycle: () => lifecycle,
+      );
+      runtime.account('PRIVATE_ACCOUNT');
+      await usage.flush();
+      await tester.pump();
+      FrameTiming frame(int ms) => FrameTiming(
+        vsyncStart: 0,
+        buildStart: 0,
+        buildFinish: 0,
+        rasterStart: 0,
+        rasterFinish: ms * 1000,
+        rasterFinishWallTime: ms * 1000,
+      );
+      // A launch's first frame is its heavy workspace restore: not a sample
+      // (frames 1–59 are not sampled; the 60th is).
+      runtime.framesForTest([frame(900), for (var i = 1; i < 59; i++) frame(5)]);
+      // Minimised, then shown: the first frame back is the catch-up, and would
+      // otherwise be the 60th, the sampled one.
+      runtime.lifecycleChanged(AppLifecycleState.hidden);
+      runtime.lifecycleChanged(AppLifecycleState.inactive);
+      runtime.framesForTest([frame(700), frame(5)]);
+      // A batch reported while hidden is the OS's throttling: none of it counts.
+      lifecycle = AppLifecycleState.hidden;
+      runtime.framesForTest([for (var i = 0; i < 120; i++) frame(400)]);
+      // Visible but without focus (inactive) still counts: a person sees it.
+      lifecycle = AppLifecycleState.inactive;
+      runtime.framesForTest([frame(700), for (var i = 0; i < 60; i++) frame(5)]);
+      await usage.flush();
+      expect(totals()['health_desktop_frame_under_16ms'], 2);
+      expect(totals()['health_desktop_frame_over_250ms'], isNull);
+      runtime.dispose();
+      await tester.pump();
     },
   );
 

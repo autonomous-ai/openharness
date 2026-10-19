@@ -191,7 +191,7 @@ class ModelsMenuController extends ChangeNotifier {
     }
     return {
       'title': provider,
-      'account': _accountLabel(reading),
+      'account': reading.email?.trim() ?? '',
       'accountKey': reading.account,
       'local': account.isLocal,
       'machines': account.machines,
@@ -201,16 +201,6 @@ class ModelsMenuController extends ChangeNotifier {
       'engine': reading.provider.engineId,
       'iconAsset': engineIdentity(reading.provider.engineId).asset,
     };
-  }
-
-  static String _accountLabel(ProviderUsage reading) {
-    // The same opaque identity is available locally and across machines.
-    // Use it consistently instead of mixing emails with fallback IDs.
-    final key = reading.account;
-    if (key != null && RegExp(r'^[0-9a-f]{16}$').hasMatch(key)) {
-      return key.substring(0, 6);
-    }
-    return '';
   }
 
   static String _remaining(UsageWindow window) {

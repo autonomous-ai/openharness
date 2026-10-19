@@ -376,6 +376,55 @@ void main() {
       expect(setup.length, 1);
     },
   );
+  test('a missing tool keeps its setup step open and is marked once', () async {
+    usage.setupFacts({ProductFlow.setupHarness: 'pending'});
+    usage.setupFacts({ProductFlow.setupHarness: 'missing'});
+    usage.setupFacts({ProductFlow.setupHarness: 'missing'});
+    usage.setupFacts({ProductFlow.setupHarness: 'running'});
+    usage.setupFacts({ProductFlow.setupHarness: 'ready'});
+    await usage.flush();
+    expect(setup.single['counters'], {
+      'setup_desktop_setup_harness_started': 1,
+      'setup_desktop_setup_harness_missing': 1,
+      'setup_desktop_setup_harness_ok': 1,
+      'setup_desktop_setup_harness_under_1s': 1,
+    });
+  });
+  test('a signed-in setup step counts no missing mark', () async {
+    await account();
+    usage.setupFacts({ProductFlow.setupTmux: 'missing'});
+    usage.setupFacts({ProductFlow.setupTmux: 'ready'});
+    await usage.flush();
+    expect(reports.last['counters'], {
+      'ui_desktop_setup_tmux_started': 1,
+      'ui_desktop_setup_tmux_ok': 1,
+      'ui_desktop_setup_tmux_under_1s': 1,
+    });
+    expect(setup, isEmpty);
+  });
+  test('agent downloads are anonymous setup counts by engine name', () async {
+    usage.setupDownload('codex');
+    usage.setupDownload('codex', ok: true, took: const Duration(seconds: 95));
+    usage.setupDownload('claude');
+    usage.setupDownload('claude', ok: false, took: const Duration(minutes: 7));
+    usage.setupDownload('/Users/PRIVATE/.local/bin/x', ok: true);
+    await account();
+    usage.setupDownload('opencode');
+    await usage.flush();
+    final counters = {
+      for (final report in setup) ...(report['counters'] as Map),
+    };
+    expect(counters, {
+      'setup_desktop_agent_download_codex_started': 1,
+      'setup_desktop_agent_download_codex_ok': 1,
+      'setup_desktop_agent_download_codex_1m_to_5m': 1,
+      'setup_desktop_agent_download_claude_started': 1,
+      'setup_desktop_agent_download_claude_failed': 1,
+      'setup_desktop_agent_download_claude_over_5m': 1,
+      'setup_desktop_agent_download_opencode_started': 1,
+    });
+    expect(jsonEncode(setup), isNot(contains('PRIVATE')));
+  });
   test(
     'flow observations are bounded and unknown operations never upload content',
     () async {

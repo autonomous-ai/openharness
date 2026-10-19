@@ -231,43 +231,45 @@ void main() {
     expect(app.actions, isEmpty);
   });
 
-  testWidgets('own-machine models remain visible when local discovery fails', (
-    tester,
-  ) async {
-    await mount(tester, ':mac.lan');
-    expect(find.text('qwen3.8-27b'), findsOneWidget);
-    expect(find.text('On your machines'), findsOneWidget);
-    expect(find.text('mac.lan'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('resource-action:picker.accept')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('resource-action:picker.model_stop')),
-      findsNothing,
-    );
-    final selected = search.selected!.id;
-    app.localReadFails = true;
-    await invoke(tester, 'picker.refresh');
-    expect(search.selected!.id, selected);
-    expect(
-      find.textContaining('Local models · Models are unavailable'),
-      findsOneWidget,
-    );
-    search.setQuery(':Shared Qwen');
-    await tester.pumpAndSettle();
-    expect(
-      find.textContaining('Local models · Models are unavailable'),
-      findsOneWidget,
-    );
-    app.localReadFails = false;
-    await invoke(tester, 'picker.refresh');
-    expect(
-      find.byKey(const ValueKey('local-model-inventory-notice')),
-      findsNothing,
-    );
-    expect(app.actions, isEmpty);
-  });
+  // A model another machine serves on your grid is shared with you, under that machine and grid.
+  testWidgets(
+    'another machine\'s models remain visible when local discovery fails',
+    (tester) async {
+      await mount(tester, ':mac.lan');
+      expect(find.text('qwen3.8-27b'), findsOneWidget);
+      expect(find.text('Shared · home'), findsOneWidget);
+      expect(find.text('mac.lan'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('resource-action:picker.accept')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('resource-action:picker.model_stop')),
+        findsNothing,
+      );
+      final selected = search.selected!.id;
+      app.localReadFails = true;
+      await invoke(tester, 'picker.refresh');
+      expect(search.selected!.id, selected);
+      expect(
+        find.textContaining('Local models · Models are unavailable'),
+        findsOneWidget,
+      );
+      search.setQuery(':Shared Qwen');
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Local models · Models are unavailable'),
+        findsOneWidget,
+      );
+      app.localReadFails = false;
+      await invoke(tester, 'picker.refresh');
+      expect(
+        find.byKey(const ValueKey('local-model-inventory-notice')),
+        findsNothing,
+      );
+      expect(app.actions, isEmpty);
+    },
+  );
 
   testWidgets('running model details and refresh report real inventory', (
     tester,
@@ -321,8 +323,9 @@ void main() {
     catalog.setVisible(true);
     await tester.pumpAndSettle();
     expect(search.selected!.id, id);
+    // Another machine of yours: shared with you, under that machine and the grid it serves on.
     expect(
-      search.rows.where((row) => row.title == 'qwen3.8-27b'),
+      search.rows.where((row) => row.title == 'qwen3.8-27b · M2 · home'),
       hasLength(1),
     );
     expect(find.text('M2'), findsOneWidget);

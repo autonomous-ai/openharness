@@ -23,6 +23,7 @@ import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
+import { promptLine } from '../../lib/activitySummary.js'
 import type { TurnActivity } from '../../lib/turnActivity.js'
 
 type Events = ReturnType<CursorNormalizer['ingest']>
@@ -46,6 +47,9 @@ export interface FunnelDeps {
   clients: Pick<FunnelClients, 'send'>
   search: { touch(sessionId: string): void } | null | undefined
   turnStartedAt: Map<string, number>
+  /** The prompt of each agent's last turn start, by agent, for the one-line summary of what it does (turns/summaries.ts).
+   *  Not cleared when the turn ends: an idle agent with no recap is summarised by its last prompt. */
+  prompts?: Map<string, string>
   input: Pick<SessionInputController, 'onTurnStarted' | 'onTurnEnded'>
   deviceInput: Pick<AutonomousDeviceInput, 'onTurnStarted' | 'onTurnEnded'>
   /** Which engines take a message typed mid-turn into their own queue (their declared submission policy). */
@@ -54,6 +58,8 @@ export interface FunnelDeps {
   startHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'start' | 'noteTurnStart' | 'stop'>
   mirror: Pick<TurnRecaps, 'ingest'>
+  /** On-demand, bounded native prompt/answer observers. No consumer is awaited. */
+  nativeTurns?: { ingest(agentId: string, events: readonly Events[number][], replay: boolean): void }
   /** How a consumer outside the core is called ([outsideConsumers]). */
   outside?: OutsideConsumers
 }
@@ -95,8 +101,8 @@ export function outsideConsumers(options: {
 
 /** The funnel itself, over what it feeds. */
 export function funnelFor({
-  bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, input,
-  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(),
+  bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, prompts, input,
+  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, nativeTurns, outside = outsideConsumers(),
 }: FunnelDeps) {
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
     if (!events.length || !bySession(sessionId)?.active) return
@@ -131,6 +137,9 @@ export function funnelFor({
       if (event.type === 'turn_started' || event.type === 'turn_ended') search?.touch(sessionId)
       if (event.type === 'turn_started') {
         turnStartedAt.set(sessionId, Date.now())
+        const line = promptLine(event.payload.userMessage)
+        if (line) prompts?.set(agentId, line)
+        else prompts?.delete(agentId)
         console.log(`[turn] ${sid(sessionId)} started · engine=${bySession(sessionId)?.engine ?? 'claude'} · bytes=${Buffer.byteLength(event.payload.userMessage, 'utf8')}`)
         input.onTurnStarted(agentIdFor(sessionId), event.payload.userMessage)
         deviceInput.onTurnStarted(agentId, event.payload.userMessage)
@@ -166,6 +175,7 @@ export function funnelFor({
         // stops once mirror.heartbeat() reads it idle, which is at once while the recaps are off.
       }
     }
+    if (nativeTurns) outside('native-turns', () => nativeTurns.ingest(agentIdFor(sessionId), events, !!(opts?.resumed || opts?.replay)))
     mirror.ingest(events, sessionId, { replay: !!(opts?.resumed || opts?.replay) })
     // Subscribed devices only (lib/autonomous-device/stream.ts). A transcript re-read is history, not live.
     if (!opts?.replay) outside('devices', () => device()?.stream(agentIdFor(sessionId), events))

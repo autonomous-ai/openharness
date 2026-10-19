@@ -17,8 +17,11 @@
  *  this account's machines cannot be asked about it (service.ts `teammate`). */
 export interface Member { machineId: string; agentId: string; accountId?: string; name?: string; engine?: string }
 /** `named`: the person named the tab; any other is labelled by the windows themselves (backend lib/agentMessages.ts).
- *  `sharedTabId`: the tab is shared across accounts, under that id. */
-export interface DirectoryTab { id: string; name: string; named: boolean; panes: Member[]; sharedTabId?: string }
+ *  `sharedTabId`: the tab is shared across accounts, under that id. `leader`: the harness the account's tab setting
+ *  names to lead it; null for none, or for one that may lead it no more: its pane left the tab, or a member's
+ *  harness left the shared tab's roster (the backend derives that, and nothing clears it). Absent where no setting is listed: a backend from before tab leaders, and a tab another account
+ *  shares with this one, whose leader is its roster's. */
+export interface DirectoryTab { id: string; name: string; named: boolean; panes: Member[]; sharedTabId?: string; leader?: { machineId: string; agentId: string } | null }
 export interface Directory { revision: number; machines: ReadonlyMap<string, string | null>; tabs: DirectoryTab[] }
 
 export const POLL_MS = 15_000
@@ -44,8 +47,13 @@ export function parseDirectory(value: unknown): Directory | null {
       const machineId = str(p?.machineId, 128), agentId = str(p?.agentId, 160)
       return machineId && agentId ? [{ machineId, agentId }] : []
     })
+    // A leader that is not one (a malformed answer) is taken as one not listed, as from a backend before tab leaders: a
+    // shared tab's roster then keeps its own (sharedTabs.ts `ownLeader`), rather than lose it to a bad read.
+    const lead = t.leader as Record<string, unknown> | null | undefined
+    const machineId = str(lead?.machineId, 128), agentId = str(lead?.agentId, 160)
+    const leader = lead === null ? null : machineId && agentId ? { machineId, agentId } : undefined
     // A backend from before `named` says nothing: then only the window's own default name is no name.
-    tabs.push({ id, name, named: typeof t.named === 'boolean' ? t.named : name !== 'New Tab', panes })
+    tabs.push({ id, name, named: typeof t.named === 'boolean' ? t.named : name !== 'New Tab', panes, ...(leader !== undefined ? { leader } : {}) })
   }
   return { revision: typeof v.revision === 'number' ? v.revision : 0, machines, tabs }
 }

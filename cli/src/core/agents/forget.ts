@@ -33,6 +33,8 @@ export interface ForgetDeps {
   normalizers: Pick<SessionNormalizers, 'forget'>
   forgetAttach: (sessionId: string) => void
   turnStartedAt: Map<string, number>
+  /** Each agent's kept prompt (turns/funnel.ts), by agent: gone with the agent. */
+  prompts: Map<string, string>
   /** Attach's two per-session marks (core/transcripts/attach.ts). */
   neverFoldedHistory: Set<string>
   replayedFirstTurn: Set<string>
@@ -53,7 +55,7 @@ export interface ForgetDeps {
 }
 
 export function createForgetSession({
-  registry, stoppedAgents, syncRecapPool, normalizers, forgetAttach, turnStartedAt, neverFoldedHistory, replayedFirstTurn, relaunchMarks,
+  registry, stoppedAgents, syncRecapPool, normalizers, forgetAttach, turnStartedAt, prompts, neverFoldedHistory, replayedFirstTurn, relaunchMarks,
   clearAgyIdleWatch, cursorDiscovery, cursorSubagents, runtimeProfiles, watcher, stopHeartbeat, input,
   deviceInput, detachDsh, mirror, clients, dataDir, onRemoved, owners,
 }: ForgetDeps) {
@@ -116,7 +118,7 @@ export function createForgetSession({
     stopHeartbeat(sessionId)
     input.forget(announceId)
     deviceInput.forget(announceId)
-    if (!opts.keepAgent) { detachDsh(announceId); onRemoved?.(announceId) }
+    if (!opts.keepAgent) { detachDsh(announceId); onRemoved?.(announceId); prompts.delete(announceId) }
     mirror.forget(sessionId) // aborts any in-flight recap + clears busy; KEEPS the persisted summary
     if (opts.keepAgent) return
     clients.send({ type: 'agent_deleted', payload: { agentId: announceId, retained: !!doomed } }) // web tab

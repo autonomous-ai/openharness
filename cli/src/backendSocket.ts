@@ -836,7 +836,7 @@ export class BackendSocket {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const launchMeasured = productUsageLaunch(type, (frame.payload as { creationId?: unknown } | undefined)?.creationId,
-      signal => this.toGateway('usage', gateway => gateway.usageLaunch?.(signal)))
+      signal => this.toGateway('usage', gateway => gateway.usageLaunch?.(signal)), (frame.payload as { engine?: unknown } | undefined)?.engine)
     const usageSource = productUsageSource(local, !!connId && this.toolClients.has(connId), role, frame.payload)
     const measured = productUsageRequest(type, (metric) => this.toGateway('usage', (gateway) => gateway.usageCounter?.(metric)), Date.now, usageSource,
       (frame.payload as { userAction?: unknown } | undefined)?.userAction === true)
@@ -846,7 +846,8 @@ export class BackendSocket {
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => {
       if (t === type) {
         measured(p.error ?? (p.failure as { code?: unknown } | undefined)?.code, p.state, !!p.agent, p.ok)
-        launchMeasured(p.error ?? (p.failure as { code?: unknown } | undefined)?.code, p.state, !!p.agent, (p.held as { service?: unknown } | undefined)?.service)
+        // The agent frame itself: a created launch's agent is watched until it starts (gateway/productUsage.ts).
+        launchMeasured(p.error ?? (p.failure as { code?: unknown } | undefined)?.code, p.state, p.agent, (p.held as { service?: unknown } | undefined)?.service)
       }
       this.emitReply(connId, t, rid, p)
     }
@@ -913,7 +914,8 @@ export class BackendSocket {
     // A request a service answers, in its own process or in this one: routed to it, or answered
     // SERVICE_UNAVAILABLE while it is off. Never waited on in line: the next frame is not held for it.
     // Who asked is established here, after the gates above, and the service trusts only that.
-    const asker: Asker = { local, owner, connection: connId, ...(typeof requestId === 'string' ? { requestId } : {}) }
+    const asker: Asker = { local, owner, ...(!local ? { accountOwner: this.remoteClient(connId)?.accountOwner === true } : {}),
+      connection: connId, ...(typeof requestId === 'string' ? { requestId } : {}) }
     // A window that draws row state asks for the models list with `rowState`, and the list's changes are
     // pushed to it in that form (`pushGridModels`). Noted here, by connection: the models service answers
     // the list, and a request reaches it without its connection.

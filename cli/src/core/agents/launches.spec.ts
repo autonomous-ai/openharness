@@ -6,6 +6,8 @@ import { installedDsh } from '../../dsh/installed.js'
 import { dshSupportedEngines } from '../../dsh/manifest.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { opencodeMajorVersion } from '../../engines/launchControl.js'
+import type { NativeLaunchResult } from '../../engines/nativeLaunch.js'
+import { createNativeLaunchPreparer } from '../../engines/prepareNativeLaunch.js'
 import { AgentCreationReceiptError, AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from '../../lib/engineLaunch.js'
@@ -619,6 +621,44 @@ describe('agent_create with a receipt', () => {
     await vi.waitFor(() => expect(replies[0]).toMatchObject({ state: 'pending', held: { service: 'install', detail: 'Installing Codex. The harness starts once it is installed.' } }))
   })
 
+  it('holds a create while Desktop Harness downloads its engine, and creates it once by itself when the download ends', async () => {
+    // A brand-new Mac (2026-10-16): the Desktop sends agent_create as soon as its own download of Codex is under way.
+    // The launch is held as an install, tried again every two seconds with nobody asking, and dispatched once.
+    let downloading = true, clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    const missing: NativeLaunchResult = { ok: false, error: 'NATIVE_LAUNCH_HELD', unavailable: 'native', detail: 'Not installed',
+      install: { command: 'fixture-installer', source: 'fixture', executable: { names: ['codex'] } }, environment: { HOME: '/fixture/home' } }
+    const inspect = vi.fn(async (): Promise<NativeLaunchResult> => downloading ? missing : { ok: true, launch: {} as never })
+    const ensure = vi.fn()
+    // Read as it is asked: an attempt keeps the answer it was given, whatever the test says after.
+    const downloadingNow = vi.fn(async () => downloading)
+    const prepareEngine = createNativeLaunchPreparer({ installations: { ensure, status: vi.fn(async () => null) }, inspect, downloading: downloadingNow })
+    const dispatch = vi.fn(async () => ({ ok: true as const, session: session('new-agent') }))
+    const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>(async () => ({ ok: true, dispatch }))
+    const { ask, replies, requests, deps } = setup({ prepareCreate, prepareEngine })
+    await ask({ engine: 'codex', projectSource: 'new', projectName: 'scratch1', creationId: CREATION })
+    await vi.waitFor(() => expect(replies[0]).toMatchObject({ state: 'pending',
+      held: { service: 'install', detail: 'Downloading Codex. The harness starts once it is downloaded.' } }))
+    requests.open()
+    // Still downloading: asked again and held again, nothing installed beside it, no folder, nothing created.
+    clock += 3_000; await requests.recover()
+    await vi.waitFor(() => expect(inspect).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(downloadingNow).toHaveBeenCalledTimes(2))
+    expect(deps.receipts.status(CREATION)).toMatchObject({ state: 'pending', held: { service: 'install' } })
+    expect(prepareProjectFolder).not.toHaveBeenCalled()
+    // The download ends: the next pass creates it.
+    downloading = false
+    clock += 3_000; await requests.recover()
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(deps.receipts.status(CREATION)).toEqual({ state: 'created', agentId: 'new-agent' }))
+    // Once: later passes find nothing to do.
+    for (let pass = 0; pass < 3; pass++) { clock += 3_000; await requests.recover() }
+    await settle()
+    expect(dispatch).toHaveBeenCalledOnce()
+    expect(prepareProjectFolder).toHaveBeenCalledOnce()
+    expect(ensure).not.toHaveBeenCalled()
+  })
+
   it('trusts only a folder it just made empty, or a worktree of a repository the engine already trusts', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { ask, replies } = setup()
@@ -800,7 +840,7 @@ describe('agent_create_status', () => {
     expect(created).toStrictEqual({ creationId: CREATION, state: 'created', agent: { id: 'forked' }, level: 'handoff', resumed: true })
     expect(Object.keys(created!)).toEqual(['creationId', 'state', 'agent', 'level', 'resumed'])
     outcome({ state: 'created', agentId: 'deleted-since' })
-    expect(await status({ creationId: CREATION })).toStrictEqual({ creationId: CREATION, state: 'unavailable' })
+    expect(await status({ creationId: CREATION })).toStrictEqual({ creationId: CREATION, state: 'unavailable', createdAgentId: 'deleted-since' })
     outcome({ state: 'failed', error: 'ENGINE_MISSING', detail: 'claude is not installed', preparedFolder: '/projects/prepared' })
     expect(await status({ creationId: CREATION })).toStrictEqual({ creationId: CREATION, state: 'failed', preparedFolder: '/projects/prepared', failure: { code: 'ENGINE_MISSING', detail: 'claude is not installed' } })
     outcome({ state: 'unconfirmed' })

@@ -16,16 +16,17 @@ function daemon(answer: (method: string, body: unknown) => { status: number; bod
   return { run, asked, out, err }
 }
 
-const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false }
+const OFF = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false }
 
 describe('harness settings', () => {
   it('lists the account\'s settings as this computer keeps them, every one off until turned on', async () => {
     const d = daemon(() => ({ status: 200, body: { ...OFF, signedIn: true } }))
     expect(await d.run()).toBe(0)
     expect(d.out).toEqual([[
-      'agents-start-agents   off  agents may start, wait for and close harnesses of their own',
-      'pull-request-line     off  a harness another agent starts says so in the pull requests it opens',
-      'agent-messages        off  agents in the same tab may message each other',
+      'agents-start-agents         off  agents may start, wait for and close harnesses of their own',
+      'pull-request-line           off  a harness another agent starts says so in the pull requests it opens',
+      'agent-messages              off  agents in the same tab may message each other',
+      'agent-messages-hide-summary off  the one-line summary of what a harness does is kept from a shared tab\'s other accounts',
     ].join('\n')])
     expect(d.asked).toEqual([{ url: 'http://127.0.0.1:4321/api/agent-settings', method: 'GET', headers: { 'x-adapter-local': '1' }, body: undefined }])
     expect(SETTINGS_USAGE).toContain('experiments of your account, the same on each of its\ncomputers, and each off until you turn it on')
@@ -76,6 +77,17 @@ describe('harness settings', () => {
       expect(await d.run('agent-messages', 'off')).toBe(0)
       expect(await d.run()).toBe(0)
     }
+  })
+
+  it('refuses an agent the direction that widens sharing: for the inverted summary switch that is off, not on', async () => {
+    const agent = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's' }
+    const d = daemon((method, body) => ({ status: 200, body: { ...OFF, ...(body as object), signedIn: true } }), agent)
+    expect(await d.run('agent-messages-hide-summary', 'off')).toBe(5)
+    expect(d.err).toEqual(['Only the person turns this off: it is their consent to what agents may do. Ask them to run '
+      + '`harness settings agent-messages-hide-summary off` in their own terminal, or to change it in Harness Settings ▸ Experimental.'])
+    expect(d.asked).toEqual([])
+    // Hiding the summary narrows what is shared: an agent may.
+    expect(await d.run('agent-messages-hide-summary', 'on')).toBe(0)
   })
 
   it('refuses what it does not know with the usage, and prints it for --help', async () => {

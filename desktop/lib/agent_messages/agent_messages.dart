@@ -3,6 +3,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
+import 'tab_settings.dart';
+
 /// Agent Messages (docs/design/2026-10-10-agent-messages.md) as this window
 /// sees them: harnesses in the same tab message each other with `harness send`,
 /// and the daemons deliver. Whether they may is the account's experiment
@@ -299,6 +301,26 @@ class AgentMessagesController extends ChangeNotifier {
   bool get loaded => _loaded;
   bool _loaded = false;
 
+  /// What the backend keeps per desk tab, as the last read told it.
+  Map<String, AgentMessageTabSetting> _settings = const {};
+
+  /// The leader chosen for [deskTabId], or null. A member's shared tab shows the
+  /// roster's instead (`AppNotifier.tabLeader`).
+  AgentMessageLeader? leaderOf(String deskTabId) =>
+      _settings[deskTabId]?.leader;
+
+  /// A change the backend just confirmed for one tab, before the next read.
+  void applyTabSetting(String deskTabId, AgentMessageLeader? leader) {
+    // A read begun before this change would answer with the old leader.
+    _reads++;
+    _settings = {
+      ..._settings,
+      deskTabId: (_settings[deskTabId] ?? const AgentMessageTabSetting())
+          .withLeader(leader),
+    };
+    _notify();
+  }
+
   /// Counts the `messages_changed` frames for [tabId], so an open log knows
   /// when to read again.
   int trafficFor(String tabId) => _traffic[tabId] ?? 0;
@@ -324,8 +346,10 @@ class AgentMessagesController extends ChangeNotifier {
     }
     if (_disposed || account != _account || read != _reads) return;
     final loaded = answer != null;
-    if (loaded == _loaded) return;
+    final settings = parseTabSettings(answer);
+    if (loaded == _loaded && mapEquals(settings, _settings)) return;
     _loaded = loaded;
+    _settings = settings;
     _notify();
   }
 
@@ -571,6 +595,7 @@ class AgentMessagesController extends ChangeNotifier {
     _polling.clear();
     _stopTimers();
     _loaded = false;
+    _settings = const {};
     _notify();
   }
 

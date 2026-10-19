@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:harness/agent_messages/tab_settings.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
@@ -106,6 +107,73 @@ void main() {
       }
     },
   );
+
+  test('setAgentMessageTab PATCHes only what is given, and a refusal is an ApiException', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    var status = 200;
+    final seen = <(String, String, String?, Object?)>[];
+    final subscription = server.listen((request) async {
+      seen.add((
+        request.method,
+        request.uri.path,
+        request.headers.value('x-adapter-local'),
+        jsonDecode(await utf8.decoder.bind(request).join()),
+      ));
+      request.response
+        ..statusCode = status
+        ..headers.contentType = ContentType.json
+        ..write(
+          jsonEncode(
+            status == 200
+                ? {
+                    'success': true,
+                    'data': {'tabId': 't 1', 'enabled': false, 'leader': null, 'revision': 2},
+                  }
+                : {
+                    'success': false,
+                    'error': {'message': 'Choose a harness in this tab.'},
+                  },
+          ),
+        );
+      await request.response.close();
+    });
+    try {
+      final api = ApiClient(
+        config: AppConfig(
+          apiBaseUrl: 'http://unused.invalid',
+          localCliBaseUrl: 'http://127.0.0.1:${server.port}',
+        ),
+        session: AuthSession(),
+      );
+      final answer = await api.setAgentMessageTab(
+        't 1',
+        leader: const AgentMessageLeader('m', 'a'),
+      );
+      expect(answer['revision'], 2);
+      expect(seen.last.$1, 'PATCH');
+      expect(seen.last.$2, '/api/agent-messages/tabs/t%201');
+      expect(seen.last.$3, '1');
+      expect(seen.last.$4, {
+        'leader': {'machineId': 'm', 'agentId': 'a'},
+      });
+      await api.setAgentMessageTab('t 1', clearLeader: true);
+      expect(seen.last.$4, {'leader': null});
+      await api.setAgentMessageTab('t 1', enabled: true);
+      expect(seen.last.$4, {'enabled': true});
+      status = 400;
+      await expectLater(
+        api.setAgentMessageTab('t 1', leader: const AgentMessageLeader('m', 'z')),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.status, 'status', 400)
+              .having((e) => e.message, 'message', 'Choose a harness in this tab.'),
+        ),
+      );
+    } finally {
+      await subscription.cancel();
+      await server.close(force: true);
+    }
+  });
 
   test(
     'Agent Messages: 404 is a daemon without them, 401 and 503 are a moment',
