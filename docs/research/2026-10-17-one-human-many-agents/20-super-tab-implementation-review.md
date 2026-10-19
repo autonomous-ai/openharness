@@ -47,3 +47,13 @@ Review PR: https://github.com/autonomous-ai/openharness/pull/1436
 Official internal Desktop build: https://github.com/autonomous-ai/openharness/actions/runs/39294760131 (Desktop source `da0a3f9dacbd70e31cc78905f2208f77affa84b8`; the follow-up settlement fix changes backend files only).
 
 Validation/build timing for this final review phase: required CI and internal build started around 17:30 UTC; native macOS and final local integration checks completed by 17:35 UTC. Earlier implementation time is not represented as build time. Publication and merge remain separate, and their final status is reported with the review handoff.
+
+## Installed review build
+
+The official internal build succeeded and was locally accepted by Gatekeeper as a notarized Developer ID app. It is installed at `/Users/ab/Applications/Harness SuperTab Oct19.app` and opened for review. Press Cmd-Option-Shift-T to create a Super Tab. Local CLI `0.4.23-dev.f2e4605215` is installed using the repository installer, with a binary-only rollback copy in `.harness/review/cli-rollback-before-f2e4605`. No user harnesses were used for tests.
+
+[Apple Silicon DMG](https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop-internal/9207d418957f7828742b619a9d848fac/Harness-macos-arm64-1.2.94-da0a3f9.dmg)
+
+SHA-256: `9e3a2d3f5e60add9380c1acde01e57744accd71c99bfa462bb76395730cf4682`.
+
+The final broad CI run exposed one obsolete welcome-page assertion that expected Recent harnesses on Super Tab creation. The test now verifies the approved lead-only form and preservation of existing harnesses; all 15 tests in that file pass locally. This correction changes tests only, so the installed application's source remains current. Required CI must pass before merge. The matching backend has not been published by the internal app build; machine contribution needs that server rollout before it can be used against production.

@@ -197,7 +197,7 @@ void main() {
     },
   );
 
-  testWidgets('Super Tab recents open an ordinary harness through the shared welcome page', (tester) async {
+  testWidgets('Super Tab shortcut shows only the lead form and preserves existing harnesses', (tester) async {
     await setup(tester, storage: MemoryStore());
     app.currentUser = const CurrentUserProfile(
       id: 'owner',
@@ -214,19 +214,19 @@ void main() {
       ),
     ];
     final pane = app.adoptSessionForTest(terminal('recent-existing', []));
+    final originalTab = app.activeSwarm;
     await tester.pumpAndSettle();
     await key(tester, LogicalKeyboardKey.keyT, cmd: true, alt: true, shift: true);
     await tester.pumpAndSettle();
     final target = app.activeSwarm;
     expect(target.isSuperTab, isTrue);
     expect(form, findsOneWidget);
-    await tester.tap(find.text('Continue existing work'));
-    await tester.pumpAndSettle();
-    expect(target.isSuperTab, isFalse);
-    expect(target.panes.single.agentId, 'recent-existing');
-    expect(target.panes.single, same(pane));
+    expect(find.text('Continue existing work'), findsNothing);
+    expect(find.text('Recent harnesses'), findsNothing);
+    expect(target.panes, isEmpty);
+    expect(originalTab.panes.single, same(pane));
     expect(connection.starts, isEmpty);
-    expect(form, findsNothing);
+    expect(form, findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
