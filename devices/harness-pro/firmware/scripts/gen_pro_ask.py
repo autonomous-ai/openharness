@@ -2,7 +2,9 @@
 """The asking look -> main/pod/pets_ask.c: pod_ask_bubble (the "?" bubble drawn over every pet in the Agent room) and pod_claude_ask (Claude's
 raised hand, from assets/claude/ask). Pixels are composited over the room ground, alpha 255 or 0 (ALPHA_CUT), quantised with Floyd-Steinberg dither:
 all of that is gen_pro_codex.py's, imported. Codex's ask scene is emitted by gen_pro_codex.py (it shares the send scene's frames).
-Usage: python3 scripts/gen_pro_ask.py [--check]"""
+The bubble's pixels come from assets/ask/bubble.png, drawn once by --draw-bubble: FreeType renders the "?" differently on
+macOS and Linux, so drawing it at --check time made CI see the file as stale.
+Usage: python3 scripts/gen_pro_ask.py [--check] [--draw-bubble]"""
 import re
 import sys
 from pathlib import Path
@@ -15,20 +17,26 @@ import gen_pro_codex as gc
 root = gc.root
 OUT = root / 'main/pod/pets_ask.c'
 FONT = root / 'fonts/Inter-Bold.ttf'
+BUBBLE = root / 'assets/ask/bubble.png'
 CREAM, INK = (0xF5, 0xF2, 0xED), gc.BG
 BW, BH, TAIL = 64, 60, 14                  # the bubble, and the tail's extra rows below it
 CLAUDE_MS = 120
 CLAUDE_STEPS = [0] * 7 + [1] * 2 + [0] * 3  # up (hand raised) x7, down x2, up x3
 
 
-def bubble():
+def draw_bubble():
     S = gc.OS
     im = Image.new('RGBA', (BW * S, (BH + TAIL) * S), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     d.rounded_rectangle((0, 0, BW * S - 1, BH * S - 1), radius=22 * S, fill=CREAM + (255,))
     d.polygon([(10 * S, (BH - 6) * S), (2 * S, (BH + 12) * S), (26 * S, (BH - 2) * S)], fill=CREAM + (255,))   # tail, bottom-left
     d.text((BW * S / 2, BH * S / 2 + 2 * S), '?', font=ImageFont.truetype(str(FONT), 46 * S), fill=INK + (255,), anchor='mm')
-    return gc.prep(im.resize((BW, BH + TAIL), Image.LANCZOS))
+    BUBBLE.parent.mkdir(parents=True, exist_ok=True)
+    im.resize((BW, BH + TAIL), Image.LANCZOS).save(BUBBLE)
+
+
+def bubble():
+    return gc.prep(Image.open(BUBBLE).convert('RGBA'))
 
 
 def bubble_code():
@@ -58,6 +66,8 @@ def generate():
 
 
 def main():
+    if '--draw-bubble' in sys.argv:
+        draw_bubble()
     text = generate()
     if '--check' in sys.argv:
         sys.exit(0 if OUT.exists() and OUT.read_text() == text else 'main/pod/pets_ask.c is stale: run scripts/gen_pro_ask.py')
