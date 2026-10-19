@@ -205,14 +205,18 @@ class FromPhone(unittest.TestCase):
     def test_the_mark_is_there_before_the_sign_in_and_stays_only_when_it_worked(self):
         with tempfile.TemporaryDirectory() as folder:
             marker = Path(folder) / 'set-up-from-phone'
-            with patch.object(setup, 'FROM_PHONE', marker), patch.object(setup, 'signed_in', return_value=False):
+            with patch.object(setup, 'FROM_PHONE', marker), patch.object(setup, 'signed_in', return_value=False), \
+                 patch.object(setup, 'as_user') as as_user:
                 with patch.object(setup, 'run_sign_in', side_effect=lambda t: (marker.exists(), '')):
                     self.assertEqual(setup.sign_in('t'), (True, ''))
                 self.assertTrue(marker.exists())
+                # Online in the account only with its daemon, which no screen session may start.
+                as_user.assert_called_once_with('systemctl', '--user', 'start', 'harness-daemon', timeout=150)
                 marker.unlink()
                 with patch.object(setup, 'run_sign_in', return_value=(False, 'used')):
                     self.assertEqual(setup.sign_in('t'), (False, 'used'))
                 self.assertFalse(marker.exists())
+                as_user.assert_called_once()
 
 
 class FactoryReset(unittest.TestCase):

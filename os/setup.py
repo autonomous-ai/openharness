@@ -359,6 +359,10 @@ def sign_in(ticket):
     ok, message = run_sign_in(ticket)
     if not ok:
         FROM_PHONE.unlink(missing_ok=True)
+        return ok, message
+    # Online in the account only with its daemon running, and nobody may ever sign in at a screen
+    # to start a session (one with no encryption asks for its password there first): started here.
+    as_user('systemctl', '--user', 'start', 'harness-daemon', timeout=150)
     return ok, message
 
 

@@ -529,6 +529,11 @@ def install_image(config, source, target, progress, resources):
         chroot(target, 'systemctl', 'enable', 'NetworkManager', 'systemd-resolved', 'systemd-timesyncd',
                'harness-setup.service')
         chroot(target, 'systemctl', 'disable', 'sshd.service')
+        if not config['encrypt']:
+            # Its account's daemon from the start (the user lingers), not only with a session at the
+            # screen: the screen asks for its password first, and a computer set up from a phone
+            # may never be signed in at it.
+            chroot(target, 'systemctl', '--global', 'enable', 'harness-daemon.service')
         report('Preparing startup and recovery…')
         chroot(target, '/usr/lib/harness-os/init-keyring')
         # Keep the live marker through this initial optional package transaction,
