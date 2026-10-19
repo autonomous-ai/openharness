@@ -13,6 +13,17 @@ import { listenLocalSocket } from '../lib/localSocket.js'
 import { attachLocalWsServer } from '../localWsServer.js'
 import { localSocketPath } from '../lib/localSocket.js'
 import { NOT_RUNNING, SANDBOXED } from '../lib/unreachable.js'
+import { newPipePath } from '../lib/windows/pipeAuth.js'
+
+/** A real named pipe on Windows; a short Unix socket with the same auth name elsewhere. */
+function pipeFixture(): { path: string; close: () => void } {
+  if (process.platform === 'win32') return { path: newPipePath(), close: () => {} }
+  const dir = mkdtempSync('/tmp/agent-pipe-')
+  return {
+    path: join(dir, `harness-${randomBytes(16).toString('hex')}`),
+    close: () => rmSync(dir, { recursive: true, force: true }),
+  }
+}
 
 /** A socket whose connection fails with [code], as Codex's sandbox refuses the daemon's (2026-10-12). */
 function failing(code: string): ClientSocket {
@@ -53,7 +64,7 @@ describe('a line to the daemon that cannot open', () => {
   })
 
   // Root opens a socket whatever its mode, so the refusal cannot be made there.
-  it.skipIf(process.getuid?.() === 0)('reads a real refused socket as a sandbox\'s, through the real connect', async () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reads a real refused socket as a sandbox\'s, through the real connect', async () => {
     running()
     const path = localSocketPath(dataDir, 1)!
     const server = createServer((socket) => socket.end())
@@ -80,7 +91,7 @@ it('dials the port this user recorded when another daemon took the configured po
     const configuredPort = unusedAddress.port
     await new Promise<void>((resolve) => unused.close(() => resolve()))
     saveDaemonPort(dataDir, configuredPort, address.port)
-    const socket = await connectSocket({ port: configuredPort, dataDir, machineId: 'm1' })
+    const socket = await connectSocket({ port: configuredPort, dataDir, machineId: 'm1' }, { platform: 'linux' })
     await new Promise<void>((resolve, reject) => {
       socket.on('open', resolve)
       socket.on('error', reject)
@@ -130,7 +141,8 @@ it.each([false, true])('never sends the local credential to TCP when the Windows
 
 it('opens a Windows agent line over the proven pipe without a TCP credential', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'agent-daemon-pipe-'))
-  const pipePath = join(dataDir, `harness-${randomBytes(16).toString('hex')}`)
+  const fixture = pipeFixture()
+  const pipePath = fixture.path
   const token = randomBytes(32)
   const pipe = await listenLocalSocket((_req, response) => response.end(), pipePath, { token })
   const tcp = http.createServer()
@@ -155,13 +167,15 @@ it('opens a Windows agent line over the proven pipe without a TCP credential', a
     await local.close()
     await pipe.close()
     await new Promise<void>((resolve) => tcp.close(() => resolve()))
+    fixture.close()
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
 
 it('rejects a pipe squatter before sending any agent frame', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'agent-daemon-squatter-'))
-  const pipePath = join(dataDir, `harness-${randomBytes(16).toString('hex')}`)
+  const fixture = pipeFixture()
+  const pipePath = fixture.path
   const token = randomBytes(32)
   const server = http.createServer()
   const wsServer = new WebSocketServer({ server })
@@ -183,6 +197,7 @@ it('rejects a pipe squatter before sending any agent frame', async () => {
     for (const client of wsServer.clients) client.terminate()
     await new Promise<void>((resolve) => wsServer.close(() => resolve()))
     await new Promise<void>((resolve) => server.close(() => resolve()))
+    fixture.close()
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
