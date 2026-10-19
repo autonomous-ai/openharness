@@ -17,6 +17,10 @@ SETUP_HOTSPOT = 'harness-setup'
 SETUP_SCREEN = '/run/harness-os/setup-screen'
 # Untouched this long, the page lets the hotspot back for a phone; a key takes the radio again.
 SCREEN_IDLE = 300
+# Written by the startup's unlock hotspot (unlock/http) when a phone opened the disk: the session at
+# the screen then started by itself (autologin), with nobody there. The first Wi-Fi page leaves the
+# radio to setup.py's hotspot, for that phone to choose the Wi-Fi, until a key here.
+UNLOCKED_BY_PHONE = '/run/harness-os/unlocked-by-phone'
 
 
 def nmcli(*args, secret=None, wait=8):
@@ -81,6 +85,17 @@ def hold_radio():
         time.sleep(1)
         return True
     return False
+
+
+def phone_unlocked():
+    """Whether a phone unlocked this computer as it started (UNLOCKED_BY_PHONE), asked once: the mark
+    goes, so a Wi-Fi page opened later at the screen holds the radio as usual."""
+    path = Path(UNLOCKED_BY_PHONE)
+    try:
+        path.unlink()
+        return True
+    except OSError:
+        return False
 
 
 def release_radio():
@@ -368,8 +383,16 @@ class NetworkPage:
         until_online = self.first_use or not online
         # Someone who typed this computer's password is here: the phone's hotspot goes first, and the
         # list is the radio's own, scanned now.
-        self.held, touched = True, time.monotonic()
-        self.refresh(rescan=True if hold_radio() else None)
+        touched = time.monotonic()
+        if self.first_use and phone_unlocked():
+            # A phone unlocked this computer and is setting it up: its hotspot stays. A key here
+            # still takes the radio, as below.
+            self.held = False
+            self.refresh()
+            self.message = 'A phone can set this computer up now. Press a key to choose a Wi-Fi here.'
+        else:
+            self.held = True
+            self.refresh(rescan=True if hold_radio() else None)
         checked = time.monotonic()
         while True:
             if until_online and time.monotonic() - checked >= 2:

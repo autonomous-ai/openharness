@@ -361,6 +361,23 @@ class SetupHotspot(unittest.TestCase):
         self.assertEqual(held, [True])
         self.assertIn('A phone can set this computer up now', '\n'.join(text for _, text in screen.lines))
 
+    def test_a_computer_a_phone_unlocked_leaves_it_the_radio_until_a_key(self):
+        # The disk opened from a phone: the screen's session started by itself, nobody at it. The
+        # phone sets the Wi-Fi up on setup.py's hotspot; a key here still takes the radio.
+        screen = Screen(['x', '\n'])
+        page = network.NetworkPage(screen, first_use=True)
+        held = []
+        with patch.object(network, 'phone_unlocked', return_value=True), \
+             patch.object(network, 'connected', return_value=False), \
+             patch.object(network, 'wired_devices', return_value=[]), \
+             patch.object(network, 'nmcli', return_value=result()), \
+             patch.object(network, 'scan', return_value=[WIFI]), \
+             patch.object(network, 'hold_radio', wraps=network.hold_radio) as hold, \
+             patch.object(network, 'connect', side_effect=lambda *a: held.append(self.held.exists()) or True):
+            self.assertEqual(page.run(), 0)
+        hold.assert_called_once()
+        self.assertEqual(held, [True])
+        self.assertIn('A phone can set this computer up now', '\n'.join(text for _, text in screen.lines))
 
     def test_the_hotspot_alone_is_not_online(self):
         with patch.object(network, 'nmcli', return_value=result(output='connected (local only)')), \

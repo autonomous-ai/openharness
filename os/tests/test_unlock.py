@@ -38,7 +38,8 @@ class Unlock(unittest.TestCase):
         self.ask()
         self.env = dict(os.environ, ROOT=str(self.root), HARNESS_UNLOCK_STATE=str(self.root / 'state'),
                         HARNESS_UNLOCK_ASK=str(self.root / 'ask'), HARNESS_UNLOCK_REPLY=str(reply),
-                        HARNESS_UNLOCK_MAPPER=str(self.root / 'mapper'), HARNESS_UNLOCK_OPENS='3')
+                        HARNESS_UNLOCK_MAPPER=str(self.root / 'mapper'), HARNESS_UNLOCK_OPENS='3',
+                        HARNESS_UNLOCK_BY_PHONE=str(self.root / 'run/unlocked-by-phone'))
 
     def ask(self):
         (self.root / 'ask/ask.first').write_text(
@@ -61,6 +62,8 @@ class Unlock(unittest.TestCase):
     def test_the_right_password_opens_the_disk(self):
         self.assertEqual(self.request('POST', '/setup/unlock', 'right horse'.encode()), (200, dict(state='unlocked')))
         self.assertEqual((self.root / 'given').read_text(), 'right horse')
+        # Marked as opened from a phone, for the screen's Wi-Fi page to leave it the radio.
+        self.assertTrue((self.root / 'run/unlocked-by-phone').is_file())
         # Opened already: said so again, with nothing more sent.
         (self.root / 'given').unlink()
         self.assertEqual(self.request('POST', '/setup/unlock', b'anything')[0], 200)
@@ -70,6 +73,8 @@ class Unlock(unittest.TestCase):
         for attempt in range(5):
             status, body = self.request('POST', '/setup/unlock', b'wrong one')
             self.assertEqual((status, body['error']), (401, 'WRONG_PASSWORD'), attempt)
+        # Not opened: no mark of a phone.
+        self.assertFalse((self.root / 'run/unlocked-by-phone').exists())
         status, body = self.request('POST', '/setup/unlock', b'right horse')
         self.assertEqual((status, body['error']), (429, 'WAIT'))
         self.assertGreater(body['wait'], 0)

@@ -14,6 +14,7 @@ REPLY=${HARNESS_UNLOCK_REPLY:-/usr/lib/systemd/systemd-reply-password}
 MAPPER=${HARNESS_UNLOCK_MAPPER:-/dev/mapper}
 # How long a password may take to open the disk (argon2 takes a few seconds on purpose).
 OPENS=${HARNESS_UNLOCK_OPENS:-40}
+BY_PHONE=${HARNESS_UNLOCK_BY_PHONE:-/run/harness-os/unlocked-by-phone}
 # Wrong ones before the page makes the phone wait, and the first wait; it doubles after each.
 FREE_TRIES=5
 FIRST_WAIT=30
@@ -104,6 +105,10 @@ for _ in $(seq "$OPENS"); do
 done
 if [ "$result" = opened ]; then
     echo '0 0' > "$STATE/tries"
+    # Unlocked from a phone, not at the screen: /run outlives the switch to the system proper, where
+    # the screen's first Wi-Fi page reads this and leaves the radio to setup.py's hotspot, for the
+    # phone to choose the Wi-Fi (network.py UNLOCKED_BY_PHONE). Nobody at the screen typed anything.
+    mkdir -p "$(dirname "$BY_PHONE")" && : > "$BY_PHONE"
     reply '200 OK' '{"state":"unlocked"}'
 fi
 [ -z "$result" ] && reply '504 Gateway Timeout' '{"error":"TIMEOUT","message":"The computer did not say whether that opened it. Try again."}'

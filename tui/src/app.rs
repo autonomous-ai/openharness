@@ -5901,6 +5901,12 @@ impl App {
         // The OS opens on the agent launcher. An explicit `hn new ...` still gets
         // its requested shell; reconnecting to existing work is handled by the desk.
         if self.os_session && self.start_session.is_none() {
+            // Work of this computer's own on the desk: the "code" tab a phone's Start made. Tabs of
+            // other computers do not count — the account's desk can hold those of one since removed
+            // (this very computer before a reinstall), "Connecting…" for ever.
+            let local = self.fleet.local_id.clone();
+            let own_work = self.tabs.iter().flat_map(|t| t.panes())
+                .any(|id| self.panes.get(&id).is_some_and(|p| p.machine_id == local));
             if (self.os_live || self.os_first_use) && self.tabs.len() == 1 && self.tabs[0].root.is_none() {
                 if self.link(&self.fleet.local_id).is_none() { return }
                 self.shell_asked = true;
@@ -5910,15 +5916,21 @@ impl App {
                 crate::input::new_shell_from(self, None, Placement::Fill(tab), None, Some("/usr/bin/hn-os welcome".into()));
             } else if (self.os_live || self.os_first_use) && crate::os_welcome::welcome_waits_on_wifi(self) {
                 // Asked again every tick until the Wi-Fi form gives the tab back.
+            } else if self.os_first_use && !self.os_live && !own_work {
+                // Only other computers' tabs on the desk: the welcome still comes, in a tab of its own.
+                if self.link(&self.fleet.local_id).is_none() { return }
+                self.shell_asked = true;
+                crate::input::new_shell_from(self, None, Placement::Tab, None, Some("/usr/bin/hn-os welcome".into()));
             } else {
                 self.shell_asked = true;
                 // The desk already had work for this screen — the "code" tab a phone's Start made
                 // after setting this computer up — so it opens on that instead of a welcome with
                 // an OpenCode of its own. Its first use is over all the same: the welcome is what
                 // marks that (onboarding.py), and without the mark every boot is a first one.
-                if self.os_first_use && !self.os_live && self.tabs.iter().any(|t| t.root.is_some()) {
+                if self.os_first_use && !self.os_live && own_work {
                     self.os_first_use = false;
-                    if let Some(home) = std::env::var_os("HOME") {
+                    // Not from a test: it would mark the developer's own home.
+                    if let Some(home) = std::env::var_os("HOME").filter(|_| !cfg!(test)) {
                         let state = std::path::Path::new(&home).join(".local/state/harness-os");
                         let _ = std::fs::create_dir_all(&state).and_then(|_| std::fs::File::create(state.join("onboarded")));
                     }
@@ -6807,6 +6819,30 @@ mod scroll_settle_tests {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn os_first_use_skips_its_welcome_only_for_work_of_this_computer() {
+        let first_use = |machine: &str| {
+            let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+            let mut app = App::new(19790, sink, (80, 24));
+            app.handed_over = true;
+            app.os_session = true;
+            app.os_first_use = true;
+            app.desk_answered = true;
+            app.fleet.local_id = "this-computer".into();
+            app.new_tab();
+            app.open_agent(machine, "a", Placement::Auto(None));
+            app.maybe_start_shell();
+            app
+        };
+        // A desk tab of another computer — one since removed, "Connecting…" for ever: the welcome
+        // still comes (it waits here only for this computer's daemon).
+        let app = first_use("removed-computer");
+        assert!(app.os_first_use && !app.shell_asked);
+        // A tab of its own (the "code" tab a phone's Start made): that, and its first use is done.
+        let app = first_use("this-computer");
+        assert!(!app.os_first_use && app.shell_asked);
+    }
 
     #[tokio::test]
     async fn os_first_workspace_waits_while_the_wifi_form_holds_the_tabs() {
