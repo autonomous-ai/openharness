@@ -314,7 +314,7 @@ describe('restore ownership across asynchronous work', () => {
     h.deps.probeProcess = () => probe.promise
     await restoreAgents(h.deps)
     const swap = createPaneSwap({ restartJobs, byAgent: h.deps.registry.byAgent, tmuxBackend: null,
-      prepareSessionResume: () => {}, keepAbandonedConversation: () => {} })
+      prepareSessionResume: () => {}, keepAbandonedConversation: () => {}, stopNative: async () => {} })
     expect(swap.restartJobs).toBe(restartJobs)
     probe.resolve(identity(8))
     await settled(h, 1, 1)
