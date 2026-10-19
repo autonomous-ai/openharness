@@ -466,7 +466,7 @@ export class SuperTabStore {
           const lead = group.leadId && group.leadId !== worker.id && group.agentIds.includes(group.leadId) ? group.leadId : null
           notices.push({ id: stableId('stop-notice', tabId, assignmentId), conversationId: group.id,
             author: { kind: 'agent', id: worker.id, name: worker.name, membershipGeneration: worker.membershipGeneration },
-            text: `Stopped\n\n${assignment.result} Assign a new attempt to continue this work.`, replyTo: null, recipients: lead ? [lead] : [] })
+            text: `Stopped\n\n${assignment.result} If this work should continue, assign a new attempt.`, replyTo: null, recipients: lead ? [lead] : [] })
           group.lastMessageSequence = revision
         }
       }

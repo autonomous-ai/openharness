@@ -404,7 +404,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const notices = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.text.startsWith('Stopped'))
     expect(notices).toHaveLength(1)
     expect(notices[0]).toMatchObject({ author: { kind: 'agent', id: worker, name: 'Builder' },
-      text: 'Stopped\n\nThe execution host confirmed that this harness stopped. Assign a new attempt to continue this work.' })
+      text: 'Stopped\n\nThe execution host confirmed that this harness stopped. If this work should continue, assign a new attempt.' })
     expect(await store.deliveries(host, tab, lead)).toHaveLength(before + 1)
     expect((await store.read(owner, tab)).state.conversations[0]!.lastMessageSequence).toBe(notices[0]!.sequence)
   })
