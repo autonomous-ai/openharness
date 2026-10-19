@@ -111,6 +111,14 @@ module.exports = {
         ],
       })),
       {
+        // The MCP registry domain-auth file: served exactly as written, never cached or rewritten.
+        source: '/.well-known/mcp-registry-auth',
+        headers: [
+          { key: 'Cache-Control', value: 'no-store, no-transform' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+        ],
+      },
+      {
         source: '/os/latest',
         // Cache the GitHub lookup on the server, never the release redirect in a browser or CDN.
         headers: [{ key: 'Cache-Control', value: 'no-store, max-age=0' }],
