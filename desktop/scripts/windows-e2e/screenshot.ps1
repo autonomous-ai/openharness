@@ -10,6 +10,20 @@ Add-Type -Namespace HxE2E -Name Shot -MemberDefinition @'
 [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+[DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr h);
+[DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr h, IntPtr dc);
+[DllImport("gdi32.dll", SetLastError = true)] private static extern bool BitBlt(
+  IntPtr dst, int x, int y, int width, int height, IntPtr src, int srcX, int srcY, uint rop);
+public static void CopyScreen(IntPtr destination, int x, int y, int width, int height) {
+  IntPtr screen = GetDC(IntPtr.Zero);
+  if (screen == IntPtr.Zero) throw new InvalidOperationException("GetDC could not acquire the screen.");
+  try {
+    // CopyFromScreen rejects combined CopyPixelOperation values on .NET Framework.
+    const uint SRCCOPY = 0x00CC0020, CAPTUREBLT = 0x40000000;
+    if (!BitBlt(destination, 0, 0, width, height, screen, x, y, SRCCOPY | CAPTUREBLT))
+      throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+  } finally { ReleaseDC(IntPtr.Zero, screen); }
+}
 '@
 [HxE2E.Shot]::SetProcessDPIAware() | Out-Null
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -25,18 +39,21 @@ if ($Window) {
   }
 }
 $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-$copy = [System.Drawing.CopyPixelOperation]::SourceCopy -bor [System.Drawing.CopyPixelOperation]::CaptureBlt
-$graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bitmap.Size, $copy)
-if ($Mask) {
-  foreach ($box in $Mask.Split(';')) {
-    $n = @($box.Split(',') | ForEach-Object { [int]$_ })
-    if ($n.Count -ne 4) { throw "a mask box is x,y,w,h: '$box'" }
-    $graphics.FillRectangle([System.Drawing.Brushes]::Black, $n[0] - $bounds.Left, $n[1] - $bounds.Top, $n[2], $n[3])
-  }
-}
-$graphics.Dispose()
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Out) | Out-Null
-$bitmap.Save($Out, [System.Drawing.Imaging.ImageFormat]::Png)
-$bitmap.Dispose()
+try {
+  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+  try {
+    $dc = $graphics.GetHdc()
+    try { [HxE2E.Shot]::CopyScreen($dc, $bounds.Left, $bounds.Top, $bounds.Width, $bounds.Height) }
+    finally { $graphics.ReleaseHdc($dc) }
+    if ($Mask) {
+      foreach ($box in $Mask.Split(';')) {
+        $n = @($box.Split(',') | ForEach-Object { [int]$_ })
+        if ($n.Count -ne 4) { throw "a mask box is x,y,w,h: '$box'" }
+        $graphics.FillRectangle([System.Drawing.Brushes]::Black, $n[0] - $bounds.Left, $n[1] - $bounds.Top, $n[2], $n[3])
+      }
+    }
+  } finally { $graphics.Dispose() }
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Out) | Out-Null
+  $bitmap.Save($Out, [System.Drawing.Imaging.ImageFormat]::Png)
+} finally { $bitmap.Dispose() }
 Write-Output "screenshot $Out ($($bounds.Width)x$($bounds.Height) at $($bounds.Left),$($bounds.Top)$(if ($Mask) { ", masked" }))"
