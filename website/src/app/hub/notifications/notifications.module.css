@@ -2,7 +2,7 @@
 .inbox{padding:40px 0 100px}
 .head{margin-bottom:26px}
 .head h1{font-size:30px;font-weight:400;letter-spacing:-.8px;line-height:1.15}
-.head p{margin-top:6px;font-size:13px;color:#888}
+.head p{margin-top:6px;font-size:13px;color:#6b6b6b}
 
 .list{list-style:none;margin:0;padding:6px;border:1px solid #efefed;border-radius:16px;background:#fff;box-shadow:0 1px 2px rgba(36,36,36,.03)}
 .row{position:relative;display:grid;grid-template-columns:40px minmax(0,1fr) auto;align-items:center;gap:14px;padding:12px 14px;border-radius:11px;font-size:14px;line-height:1.45;color:#555;transition:background-color .15s}
@@ -17,7 +17,7 @@
 .kind{position:absolute;right:-3px;bottom:-3px;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#242424;color:#fff;box-shadow:0 0 0 2px #fff}
 .kind svg{width:11px;height:11px}
 .text{min-width:0;overflow-wrap:anywhere}
-.time{font-size:12px;color:#999;white-space:nowrap;padding-right:8px}
+.time{font-size:12px;color:#707070;white-space:nowrap;padding-right:8px}
 
 .skeleton{display:grid;grid-template-columns:40px 1fr;gap:14px;align-items:center;padding:12px 14px}
 .skeleton span{height:12px;border-radius:6px;background:linear-gradient(100deg,#efeeeb 40%,#f7f6f3 50%,#efeeeb 60%) 0 0/200% 100%;animation:shimmer 1.4s linear infinite}
@@ -27,8 +27,8 @@
 
 .placeholder{display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;padding:56px 24px;border:1px solid #efefed;border-radius:16px;background:linear-gradient(180deg,#fafaf8,#fff)}
 .placeholder h2{font-size:17px;font-weight:600;color:#242424}
-.placeholder p{max-width:340px;margin:0;font-size:13px;line-height:1.6;color:#777}
-.placeholderIcon{display:inline-flex;align-items:center;justify-content:center;width:52px;height:52px;margin-bottom:4px;border-radius:50%;background:rgba(255,255,255,.7);border:1px solid #ecebe8;box-shadow:0 6px 18px rgba(36,36,36,.06);color:#777}
+.placeholder p{max-width:340px;margin:0;font-size:13px;line-height:1.6;color:#666}
+.placeholderIcon{display:inline-flex;align-items:center;justify-content:center;width:52px;height:52px;margin-bottom:4px;border-radius:50%;background:rgba(255,255,255,.7);border:1px solid #ecebe8;box-shadow:0 6px 18px rgba(36,36,36,.06);color:#666}
 .placeholderIcon svg{width:22px;height:22px}
 .placeholder .retry{margin-top:6px;height:36px;padding:0 18px;border-radius:8px;background:#242424;color:#fff;font-size:13px}
 .placeholder .retry:hover{background:#000}
