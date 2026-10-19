@@ -44,6 +44,7 @@ idf_component_register(
         "pod/home/ph_view.c"
         "pod/engine_logos.c"
         "pod/pets.c"
+        "pod/pets_ask.c"
         "pod/pets_codex.c"
         "pod/pod_draw.c"
         "pod/pod_model.c"

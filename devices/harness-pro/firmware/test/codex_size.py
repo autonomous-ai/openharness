@@ -19,7 +19,9 @@ TOL = 0.03
 # label: (screen, region x0 y0 x1 y1 in the 720 x 720 render)
 REGIONS = {
     "agent:be": ("agent:be", (150, 260, 610, 580)),                 # working, 13/8 smooth today
-    "agent:cli": ("agent:cli", (40, 440, 360, 680)),                # asking, small pet
+    # asking: the Codex waving scene at 1x (pod_codex_ask, the asking look), no longer the small pet. It is taller, so the region starts higher
+    # (380, under the question's tail) and this row's baseline was re-recorded by design; the "?" bubble is cream, not blue: never measured.
+    "agent:cli": ("agent:cli", (40, 380, 360, 680)),
     "agent:be:offline": ("agent:be:offline", (150, 260, 610, 580)),  # rest room
     "recap:docs": ("recap:docs", (0, 415, 260, 560)),               # relax + recap
     "talk:be": ("talk:be", (150, 200, 600, 560)),

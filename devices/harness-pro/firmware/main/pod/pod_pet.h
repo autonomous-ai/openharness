@@ -11,6 +11,11 @@ typedef enum { POD_SCENE_REST, POD_SCENE_WORK, POD_SCENE_ASK, POD_SCENE_RELAX, P
 // The engine's pet, or NULL when it has none (the player then shows its mark on a pale rounded box).
 const ht_pet_t *pod_pet_for(const char *engine);
 extern const ht_pet_t pod_codex_pet;   // the HD Codex (pets_codex.c, scripts/gen_pro_codex.py)
+// The asking look: ASK plays pod_claude_ask (pets_ask.c, scripts/gen_pro_ask.py) for Claude and pod_codex_ask (pets_codex.c; it shares the send scene's
+// frames) for Codex, the small pet's asking loop for the others. In the Agent room (zoom8 16) pod_ask_bubble, a "?" bubble, is drawn over the pet as one
+// extra run: beside its head, popping in over 250 ms at each loop's start and bobbing 4 px once a loop. Cards, Inbox and Recap (zoom8 8) have none.
+extern const ht_pet_scene_t pod_claude_ask, pod_codex_ask;
+extern const ht_cell_frame_t pod_ask_bubble;
 // Whether the engine has this scene of its own: REST and ASK need a pet; WORK, RELAX, LISTEN and SEND need the
 // pet to carry that scene. pod_pet_draw falls back to REST for a scene the pet lacks.
 bool pod_pet_has(const char *engine, pod_scene_t scene);

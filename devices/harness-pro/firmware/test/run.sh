@@ -21,6 +21,8 @@ python3 "$fw/scripts/gen_fonts.py" ${font_args[@]+"${font_args[@]}"} --out "$out
 python3 "$fw/scripts/gen_ph_spark.py" --check   # the voice sparkle baked from the round's glyph
 python3 "$fw/scripts/gen_pro_codex.py" --check
 python3 "$here/test_pro_codex.py"
+python3 "$fw/scripts/gen_pro_ask.py" --check   # the asking look: the "?" bubble and Claude's raised hand
+python3 "$here/test_pro_ask.py"
 python3 "$here/codex_size.py"   # Codex's on-screen size against the pre-change baseline
 
 # Stack guard. Pod's model, nav and glue run on the cable_link task (6 KB stack, under display_lock); the render

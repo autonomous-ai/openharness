@@ -20,6 +20,13 @@ const ht_pet_t *pod_pet_for(const char *engine)
         if (!strcmp(engine, ht_pets[i].engine)) return &ht_pets[i];
     return NULL;
 }
+// The ASK scene of an engine (NULL: the small pet's asking loop plays).
+static const ht_pet_scene_t *pod_ask_scene_for(const char *engine)
+{
+    if (!strcmp(engine, "claude")) return &pod_claude_ask;
+    if (!strcmp(engine, "codex")) return &pod_codex_ask;
+    return NULL;
+}
 static const ht_pet_scene_t *scene_of(const ht_pet_t *pet, pod_scene_t which)
 {
     switch (which) {
@@ -28,6 +35,7 @@ static const ht_pet_scene_t *scene_of(const ht_pet_t *pet, pod_scene_t which)
     case POD_SCENE_RELAX: return pet->relaxing_scene;
     case POD_SCENE_LISTEN: return pet->listening_scene;
     case POD_SCENE_SEND: return pet->sending_scene;
+    case POD_SCENE_ASK: return pod_ask_scene_for(pet->engine);
     default: return NULL;
     }
 }
@@ -281,6 +289,7 @@ static uint32_t next_step_ms(const char *engine, pod_scene_t scene, uint32_t clo
     const ht_pet_t *pet = pod_pet_for(engine);
     if (!pet) return 1000;   // a still logo: only the screen's own clocks move
     const ht_pet_scene_t *e = scene_of(pet, scene);
+    if (scene == POD_SCENE_ASK) return beat ? POD_PH_ANIM_MS - clock_ms % POD_PH_ANIM_MS : POD_PET_STEP_MS;   // the room's "?" bubble bobs: every beat (the cards' ASK is not redrawn by this)
     unsigned n = e ? e->steps : ht_pet_steps(pet), step_ms = 0, from = 0, k;
     bool hold = false;   // SEND holds its last step instead of wrapping
     ht_pet_state_t state = HT_PET_IDLE;
@@ -386,6 +395,22 @@ int pod_pet_ink_h(const char *engine, pod_scene_t scene, int side, unsigned zoom
     int uw = u.x1 - u.x0, uh = u.y1 - u.y0, room = imax(1, side - 6), big = imax(uw, uh);
     return sc(uh, fit_zoom(big, room, zmax, hd));
 }
+// The "?" bubble over the pet the runs from..count drew (the Agent room's ASK): left edge 6 px right of the pet's, top 6 px under its top plus the bob, kept
+// inside the pet's square and never above the pet. Always 1:1 (pod_cell16 at its own zoom). Over each loop of loop_ms (the ASK scene's, or the small
+// pet's asking loop) it pops in once, zoom 10 -> 13 -> 16 over the first 250 ms, and bobs round(4 sin(2 pi u / loop_ms)) px.
+static void put_ask_bubble(const ctx_t *c, int from, unsigned loop_ms, uint32_t age)
+{
+    ht_scene_t *s = c->s;
+    if (s->count <= from) return;
+    int top = s->runs[from].y, right = 0;
+    for (int i = from; i < s->count; i++) { top = imin(top, s->runs[i].y); right = imax(right, s->runs[i].x + s->runs[i].w); }
+    uint32_t u = age % loop_ms;
+    float v = 4.0f * fsin(6.2831853f * (float)u / (float)loop_ms);
+    int bob = (int)(v + (v >= 0 ? 0.5f : -0.5f));
+    int x = clampi(right + 6, c->bx, c->bx + c->side - pod_ask_bubble.cols);
+    int y = clampi(top + 6 + bob, imax(top, c->by), c->by + c->side - pod_ask_bubble.rows);
+    pod_cell16(s, x, y, &pod_ask_bubble, u < 125 ? 10u : u < 250 ? 13u : 16u);
+}
 enum { DRAW_BEAT = 1, DRAW_FLAT = 2 };
 static void draw(ht_scene_t *s, int x, int y, int side, const char *engine, pod_scene_t scene,
                  uint32_t clock_ms, uint32_t started_ms, uint32_t ground_rgb, unsigned zoom8, unsigned flags)
@@ -405,10 +430,14 @@ static void draw(ht_scene_t *s, int x, int y, int side, const char *engine, pod_
     const bool hd = is_hd(pet);
     ctx_t c = {s, x, y, side, x, y, 16, hd ? 16u : 2 * zmax, ground_rgb, (flags & DRAW_FLAT) != 0, (flags & DRAW_BEAT) != 0, hd};
     const ht_pet_scene_t *e = scene_of(pet, scene);
+    const int first = s->count;
+    const bool ask = scene == POD_SCENE_ASK && zoom8 == 16;   // the Agent room's "?" bubble
+    const uint32_t age = (int32_t)(clock_ms - started_ms) >= 0 ? clock_ms - started_ms : 0;
     if (!e) {
         ht_pet_state_t state = HT_PET_IDLE;
         if (scene == POD_SCENE_ASK && loops_differ(pet, HT_PET_ASKING, HT_PET_IDLE)) state = HT_PET_ASKING;
         play_rest(&c, pet, state, clock_ms);
+        if (ask) put_ask_bubble(&c, first, ht_pet_steps(pet) * pet->step_ms[state], age);
         return;
     }
     unsigned level = scene_level(e, scene), step;
@@ -424,6 +453,7 @@ static void draw(ht_scene_t *s, int x, int y, int side, const char *engine, pod_
         step = age / step_ms >= e->steps ? e->steps - 1u : age / step_ms;
     } else step = scene_clock_step(e, clock_ms, c.beat);
     play_scene(&c, e, level, step, clock_ms);
+    if (ask) put_ask_bubble(&c, first, e->steps * e->step_ms, age);
 }
 
 // Pets (the beat, white ground), Pets over a ground of one colour (the beat, and a frame below 1x baked), and the clock-stepped variant.

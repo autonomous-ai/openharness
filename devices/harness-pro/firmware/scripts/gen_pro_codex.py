@@ -38,7 +38,8 @@ CX_FILL, CX_LINE, CX_BAR, CX_BAR_HI = '#172d63', '#bceeff', '#74d7ff', '#b6f6ff'
 WORK_STEPS = [0, 1, 2, 3, 4, 5, 5] * 4
 LISTEN_FRAMES = [0, 0, 0, 0, 0, 1, 1, 2, 2, 1, 1, 3, 3, 3, 3]
 SEND_STEPS = [0, 1, 2, 3, 3] * 3
-WORK_MS, LISTEN_MS, SEND_MS = 120, 80, 140
+ASK_STEPS = [0, 1, 2, 3, 3] * 2           # the asking look (Agent room): the same waving frames, no plane; pod_codex_ask shares pxc_send's frames and palette
+WORK_MS, LISTEN_MS, SEND_MS = 120, 80, 140     # (the ask scene steps at SEND_MS too)
 BAR_X, BAR_W, BAR_CY, BAR_RADIUS, BAR_MIN, BAR_SWING = (184, 195, 206), 7, 61, 3, 9, 19   # 1x, from the robot frame
 BAR_PERIOD_MS, BAR_PHASE = 1200, 1.2
 
@@ -272,6 +273,10 @@ def scene(prefix, kind):
                    f'{k(BAR_W + 1)},{k(BAR_RADIUS)},{k(BAR_MIN)},{k(BAR_SWING)},{{{fills}}},{BAR_PERIOD_MS},{BAR_PHASE}f}};\n')
         bars = f'&{prefix}_bars'
     out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{len(seq)},{ms},{ovref},0,0,{bars},NULL,NULL,NULL,NULL}};\n')
+    if kind == 'send':
+        ask = [order[i] for i in ASK_STEPS]
+        out.append(f'static const uint8_t pxc_ask_loop[{len(ask)}] = {{' + ','.join(map(str, ask)) + '};\n')
+        out.append(f'const ht_pet_scene_t pod_codex_ask = {{{w},{h},{prefix}_frames,pxc_ask_loop,{len(ask)},{ms},NULL,0,0,NULL,NULL,NULL,NULL,NULL}};\n')
     return out, nf, nbytes
 
 

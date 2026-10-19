@@ -43,6 +43,11 @@ for name, steps, ms, levels in (('pxc_work', 28, 120, 1), ('pxc_listen', 15, 80,
     w, h, loop, n, t = scene(name)
     assert (n, t) == (steps, ms), (name, n, t)
     assert len(arrays[loop]) == steps * levels, (name, len(arrays[loop]))
+w, h, loop, n, t = scene('pod_codex_ask')   # the asking look: pxc_send's waving frames (no copy of the pixels), [0,1,2,3,3] x 2
+assert (n, t) == (10, 140) and loop == 'pxc_ask_loop' and (w, h) == scene('pxc_send')[:2], (n, t, loop)
+assert re.search(r'ht_pet_scene_t pod_codex_ask = \{\d+,\d+,pxc_send_frames,pxc_ask_loop,10,140,NULL,', src)
+sl = arrays[scene('pxc_send')[2]]
+assert arrays['pxc_ask_loop'] == [sl[i] for i in (0, 1, 2, 3, 3) * 2], arrays['pxc_ask_loop']
 assert arrays['pxc_step_ms'] == [46, 46, 43, 42], arrays['pxc_step_ms']
 assert 'ht_pet_t pod_codex_pet = {"codex",44,56,NULL,pxc_loops,pxc_step_ms,&pxc_work,&pxc_listen,&pxc_send,pxc_frames,NULL,0,&pxc_relax,NULL}' in src
 
