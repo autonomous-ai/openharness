@@ -153,10 +153,11 @@ it('starts either engine once, posts to its captured group and delivers shared i
     expect(posted.code, JSON.stringify(posted.answer)).toBe(0)
     expect(posts.at(-1)).toMatchObject({ conversationId: 'feature', text: `${engine} ready` })
     pending.set(target, { id: `delivery-${engine}`, status: 'queued', claimId: null,
-      message: { id: `message-${engine}`, conversationId: 'feature', author: { name: 'Fixture human' }, text: `verify-super-tab-${engine}` } })
+      message: { id: `message-${engine}`, conversationId: 'feature', replyTo: `question-${engine}`, author: { name: 'Fixture human' }, text: `verify-super-tab-${engine}` } })
     await until('native input acknowledgement', () => pending.get(target)?.status === 'delivered' || null, 60_000, 250)
     const submitted = readFileSync(join(d.root, 'submitted-prompts'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as string)
     expect(submitted.filter(prompt => prompt.includes(`verify-super-tab-${engine}`))).toHaveLength(1)
+    expect(submitted.find(prompt => prompt.includes(`verify-super-tab-${engine}`))).toContain(`In reply to message question-${engine}.`)
     const model = engine === 'claude' ? 'sonnet' : 'gpt-6-luna'
     // Wait for the native turn to settle before using the app's existing model controls.
     await until('worker idle before its model change', async () => {

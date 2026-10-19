@@ -10,7 +10,7 @@ const roots: string[] = []
 const hosts: SuperTabHost[] = []
 afterEach(() => { for (const host of hosts.splice(0)) host.stop(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
-function setup() {
+function setup(messageFields: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
   const listeners = new Set<(e: TurnDelivery) => void>()
   const row = { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }
@@ -25,7 +25,7 @@ function setup() {
       const command = body as Record<string, unknown>
       if (command.type === 'claim') { claimId = command.claimId as string; status = 'claimed' }
       else { receipts.push(command); status = command.uncertain ? 'uncertain' : 'delivered' }
-      data = { delivery: { id: 'delivery', claimId, status }, message: { id: 'message', conversationId: 'lead', text: 'Build the agreed feature.', authorName: 'Collaborator' } }
+      data = { delivery: { id: 'delivery', claimId, status }, message: { id: 'message', conversationId: 'lead', text: 'Build the agreed feature.', author: { name: 'Collaborator' }, ...messageFields } }
     }
     return { status: 200, body: { success: true, data } }
   })
@@ -43,6 +43,15 @@ function setup() {
 }
 
 describe('Super Tab native delivery handoff', () => {
+  it('preserves the exact reply reference when a short human answer reaches an agent', async () => {
+    const t = setup({ replyTo: 'question-2', text: 'Yes, keep them.' })
+    await t.open().tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledWith('harness', expect.stringContaining(
+      'In reply to message question-2. Read that message in this conversation before interpreting the answer.'
+    ), 'team:service:superTabs:delivery')
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Message message from Collaborator:\nYes, keep them.')
+  })
+
   it('keeps a slow configuration observation out of the native delivery and lease path', async () => {
     const t = setup(), host = t.open()
     vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', engine: 'claude' } as never)

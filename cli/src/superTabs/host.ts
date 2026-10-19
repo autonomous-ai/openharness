@@ -319,6 +319,9 @@ export class SuperTabHost {
   private prompt(entry: Entry, message: Json): string {
     const command = `${this.core.daemon.command} super-tab --port ${this.core.daemon.port} --machine ${shellQuote(this.machineId)} --tab ${shellQuote(entry.tabId)} --agent ${shellQuote(entry.agentId)}`
     const group = message.conversationId as string
+    const reply = identifier(message.replyTo)
+      ? `In reply to message ${message.replyTo}. Read that message in this conversation before interpreting the answer.\n\n`
+      : ''
     const source = object(message.source)
     const native = source.kind === 'native'
       ? `This is an observed native ${String(source.phase)} in ${String(object(message.author).name ?? 'an agent')}’s terminal, opened by ${String(object(source.operator).name ?? 'a collaborator')}. The input already reached that agent. Keep the shared work coordinated; do not replay the same instruction.\n\n`
@@ -328,7 +331,7 @@ export class SuperTabHost {
       + `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID\n`
       + `Manage agreed work and delegation: ${command} help. Use independently verifiable outcomes; local helper subagents need no separate group.\n`
       + `Ask questions and post results in this conversation. Include the exact revision, evidence and usable output links. Replies to these delivered instructions must be posted here explicitly.\n\n`
-      + native + `Message ${String(message.id)} from ${String(object(message.author).name ?? 'a collaborator')}:\n${message.text}`
+      + native + reply + `Message ${String(message.id)} from ${String(object(message.author).name ?? 'a collaborator')}:\n${message.text}`
   }
 
   private heard(event: TurnDelivery): void {
