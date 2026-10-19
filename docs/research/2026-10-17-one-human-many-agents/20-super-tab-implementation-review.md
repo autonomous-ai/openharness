@@ -1,59 +1,66 @@
-# Super Tab implementation review — 19 October 2026
+# Super Tab review build — 19 October 2026
 
-The existing app tab contains a flat workgroup list, a chat/native-terminal/PR centre, and a right sidebar with Leads, Humans, Agents and contributed machines. The hidden Cmd-Option-Shift-T shortcut reuses the Cmd-N lead form without Recent harnesses. Clicking an agent opens its exact native terminal; hiding a pane preserves the running harness.
+The review build is installed and running on this Mac at:
 
-## Machine contribution
+`/Users/ab/Applications/Harness SuperTab Oct19.app`
 
-A collaborator explicitly contributes an owned machine, project folder, permitted engines/default accounts and concurrency limit. The machine owner executes queued starts through the existing durable native creation receipts. Contributions do not create whole-machine shares. Removing the contributor revokes the contribution. Pausing stops new dispatch while preserving running agents. Model settlement completes before work assignment is permitted.
+Press **Cmd-Option-Shift-T** to create a Super Tab. Choose the lead's engine, machine, repository and settings using the existing Cmd-N form. Recent harnesses are omitted from this form.
 
-Fresh host readings expose CPU/GPU, RAM and project-volume disk, available subscription windows and resets. Unknown readings remain unknown. Routing rejects stale/full/paused machines and candidates missing required resources/tools. The backend independently admits each launch and the host reserves native capacity.
+[Download the signed Apple Silicon internal build](https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop-internal/9207d418957f7828742b619a9d848fac/Harness-macos-arm64-1.2.94-da0a3f9.dmg). It is notarized, unlisted and has public app updates disabled. No public Desktop or CLI release was made.
 
-## Review path
+## What is built
 
-1. Use Cmd-Option-Shift-T and create a lead using the familiar form.
-2. Click a member to focus its terminal; use the group terminal icon to show the group's panes. Hide a pane and reopen it.
-3. A native pending question adds a local “needs you” notice. Clicking it goes to that terminal; the native question-close event clears it.
-4. Humans + invites collaborators. Machines + contributes capacity; machine details configure or pause it and attach an existing harness.
-5. Inspect PR references in chat and the PR view. References are actual observed links; unknown GitHub state is not presented as verified.
+- Flat workgroup list on the left; chat, group terminals and PR references in the centre; Leads, Humans, Agents and machines on the right.
+- Clicking an agent opens or focuses its exact native terminal. The group terminal icon shows the group's agents together. Hiding a pane preserves its running harness, and reopening uses the same session.
+- Two-line member rows, stable avatars and engine icons. Agent details are secondary. Human invitations and machine contributions sit beside their respective section headings.
+- Local native questions and recorded `needs_human` assignments produce a notice in the relevant group. Clicking it opens the waiting terminal; the native question-close event clears the local notice. Answers remain in the engine's terminal UI.
+- Machine cards show device/chip/OS, CPU/GPU, RAM and project-volume disk, available resources, subscription allowance remaining and reset times. Unknown values remain unknown.
+- A machine owner explicitly contributes a project, engines/default accounts and concurrency limit. The owner can pause new work, configure the contribution or attach an existing harness.
+- The owner-side executor launches queued agents through durable native receipts. Repeated requests reconcile the same launch. Model setup must settle before work assignment; contribution settings cannot change during that interval.
+- Routing considers fresh host resources, subscription windows, permitted engines and available slots. It excludes stale/full/paused machines and candidates missing required resources/tools. The host independently reserves native capacity before launch.
+- PR references appear in chat and the centre PR view. Only actual references and observed native PR state are shown; unknown checks or titles are not invented.
 
-## Validation plan and evidence
+## Starter and teammate review
 
-Source scope: Desktop Super Tab UI/state and native macOS integration; CLI machine readings, routing and host launch protocol; backend Super Tab authorization, durable operations and Mongo transactions. Toolchain: pinned Flutter 3.47.2 and repository Node lockfiles. Use private test homes/daemons and synthetic engines only.
+1. Create a lead with the hidden shortcut and discuss a piece of work.
+2. Ask the lead to create a workgroup. Click a member, switch between Chat and group terminals, then hide and reopen a pane.
+3. Use **Humans +** to invite a collaborator. Conversation access does not silently grant machine access.
+4. Each contributor uses **Machines +**, chooses an owned machine/project, enables the engines they want to contribute, and sets a concurrency limit.
+5. Check resource and allowance readings, pause/resume new work, and ask the lead to delegate a task to contributed capacity.
 
-- Routing coverage: 100% statements, branches, functions and lines after the contributed-capacity cases.
-- Desktop affected widget tests: creation, multi-pane hide/reopen, roster, narrow/large-text layouts and native question handoff. Final checks are recorded below when complete.
-- macOS native fixture: actual Flutter terminal surface, both sidebars retained; synthetic accounts and harnesses.
-- Backend: disposable Mongo replica-set integration tests, including owner-only queue execution, project scope, concurrency, pause and revocation.
-- CLI: two disposable daemons demonstrate a teammate contributing capacity without a MachineShare; a repeated start uses the original native receipt.
-- Existing `superTabsCollaboration.e2e.ts` currently fails at `GUEST_NOT_ALLOWED`: main's guest policy does not permit the old `super_tabs` capacity RPC. This change does not widen guest permissions. The new explicit contribution flow has its own end-to-end test.
+The matching development CLI is installed on this Mac as `0.4.23-dev.f2e4605215`. Other machines participating in this internal pilot also need a CLI built from main containing PR #1436. Use the repository's `make install-cli` on those hosts; the normal public updater does not distribute this unpublished build. Owners keep their own credentials and subscriptions.
 
-## Delivery constraints
+## Delivery and evidence
 
-Use the official signed internal Desktop workflow, not a public feature-test release. New machine contribution requires the matching CLI and backend as well as Desktop. A Desktop-only artifact does not by itself deploy those changes. Existing remote terminal control permissions still apply: a collaborator allowed only to observe a terminal cannot type into it.
+- [Implementation PR #1436](https://github.com/autonomous-ai/openharness/pull/1436) merged as `2d174499f9ad5f75ad50a23e15c039433e79a769`.
+- [Required CI](https://github.com/autonomous-ai/openharness/actions/runs/39296700219): all four Desktop shards, all four CLI shards, backend, typecheck and process checks passed.
+- [Official internal Desktop build](https://github.com/autonomous-ai/openharness/actions/runs/39294760131): version `1.2.94`, Desktop source `da0a3f9dacbd70e31cc78905f2208f77affa84b8`. Subsequent changes were backend, tests and documentation; Desktop implementation inputs are the same. All workflow downloads were verified, and the installed DMG matched its checksum and passed local Gatekeeper assessment.
+- DMG SHA-256: `9e3a2d3f5e60add9380c1acde01e57744accd71c99bfa462bb76395730cf4682`.
+- [Matching backend publication](https://github.com/autonomous-ai/openharness/actions/runs/39298123649): `v1.2.92_backend`, image digest `sha256:50b15d75d89877cf3e5e31fa77aacca6473e6661e95bd2e7419df98ecce4817b`. The live `/api/health` reported this version and the merged SHA, rather than only relying on image-build success.
+- Local checks: 101 affected Desktop widget tests; native macOS terminal/roster/resource fixture; 265 CLI tests; 33 backend replica-set integration tests; both TypeScript typechecks; shared icon catalogue audit. Routing coverage is 100% for statements, branches, functions and lines.
+- Two disposable daemons verified contribution without a whole-machine share, real native creation receipts and duplicate-start reconciliation. The pool E2E passed again after main's creator-scoping fix. No real user harnesses were used for test prompts.
 
-Implementation, validation, merge, build/publication and waiting are distinct phases. No merge or production publication is claimed by this document.
+The final welcome-page CI failure was an obsolete assertion that expected Recent harnesses on Super Tab creation. The corrected test verifies the lead-only form and preservation of existing harnesses. Required CI then passed.
 
-## Completed local checks
+## Remaining boundaries
 
-- 86 affected Desktop widget tests passed, including native-question notice → exact terminal → cleared question, multi-agent panes, hiding and reopening, dark/light and narrow/large-text layouts.
-- Native macOS fixture passed with real terminal rendering and realistic CPU/GPU/RAM/disk/quota cards; screenshots saved locally under `/private/tmp/super-tab-review-final`.
-- 265 CLI tests across 16 files passed; both TypeScript typechecks passed.
-- Backend replica-set suite: 33 tests passed, including the final guard against changing a contribution during model settlement.
-- Two-daemon contribution E2E passed again after integrating main's creator-scoped creation receipts (`1fb7c4fc08`). No real user harnesses were used for testing.
-- Shared icon catalogue audit passed. Whole-tree Flutter analysis reported pre-existing third-party/deprecated and unrelated device-test warnings; it is not recorded as a clean whole-tree check.
+Native terminal control still follows existing machine/harness access. Joining a Super Tab does not give a collaborator permission to type into an otherwise read-only terminal. Owner-controlled native question handling works; broader cross-account terminal control needs its own scoped access design.
 
-Review PR: https://github.com/autonomous-ai/openharness/pull/1436
+The older `superTabsCollaboration.e2e.ts` hits main's `GUEST_NOT_ALLOWED` refusal on its legacy capacity RPC. This work preserves guest isolation and exercises the new explicit contribution flow separately. Whole-tree Flutter analysis also reports existing third-party/deprecated and unrelated device-test warnings; it is not described as a clean whole-tree analysis run.
 
-Official internal Desktop build: https://github.com/autonomous-ai/openharness/actions/runs/39294760131 (Desktop source `da0a3f9dacbd70e31cc78905f2208f77affa84b8`; the follow-up settlement fix changes backend files only).
+The official app was verified to start and restore existing windows. Native layout and question/terminal handoff were tested with disposable fixtures. Keyboard automation could not reliably activate modifier chords in the installed Flutter app; the hidden shortcut is covered by the widget tests.
 
-Validation/build timing for this final review phase: required CI and internal build started around 17:30 UTC; native macOS and final local integration checks completed by 17:35 UTC. Earlier implementation time is not represented as build time. Publication and merge remain separate, and their final status is reported with the review handoff.
+The leaderboard and learning from long-term quality/impact outcomes remain roadmap work. This iteration uses the existing routing policy plus measured capacity and allowance; it does not claim an empirical model leaderboard.
 
-## Installed review build
+## Timing and local receipts
 
-The official internal build succeeded and was locally accepted by Gatekeeper as a notarized Developer ID app. It is installed at `/Users/ab/Applications/Harness SuperTab Oct19.app` and opened for review. Press Cmd-Option-Shift-T to create a Super Tab. Local CLI `0.4.23-dev.f2e4605215` is installed using the repository installer, with a binary-only rollback copy in `.harness/review/cli-rollback-before-f2e4605`. No user harnesses were used for tests.
+Implementation and affected local validation preceded packaging. The recorded final delivery phases were:
 
-[Apple Silicon DMG](https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop-internal/9207d418957f7828742b619a9d848fac/Harness-macos-arm64-1.2.94-da0a3f9.dmg)
+- Internal packaging/signing/notarization/download verification: 17:30:53–17:38:39 UTC (7m 46s).
+- Final required CI after the welcome-test correction: 17:44:27–17:51:08 UTC (6m 41s).
+- Merge: 17:51:19 UTC.
+- Backend image publication: 17:54:40–17:56:00 UTC (1m 20s), followed by live-version verification during rollout.
 
-SHA-256: `9e3a2d3f5e60add9380c1acde01e57744accd71c99bfa462bb76395730cf4682`.
+These workflow durations are not the total implementation time. They overlap local review and installation; earlier implementation duration is not reconstructed from incomplete handoff timestamps.
 
-The final broad CI run exposed one obsolete welcome-page assertion that expected Recent harnesses on Super Tab creation. The test now verifies the approved lead-only form and preservation of existing harnesses; all 15 tests in that file pass locally. This correction changes tests only, so the installed application's source remains current. Required CI must pass before merge. The matching backend has not been published by the internal app build; machine contribution needs that server rollout before it can be used against production.
+The checkout retains `.harness/review/delivery-receipt.json`, the merge helper's exact-head evidence under `.harness/validation/`, and a binary-only CLI rollback copy at `.harness/review/cli-rollback-before-f2e4605`. The local native fixture screenshots are in `/private/tmp/super-tab-review-final`. Production user data was not copied into these receipts or the repository.
