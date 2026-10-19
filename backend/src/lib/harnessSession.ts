@@ -249,6 +249,39 @@ const qrSpokenKey = (digits: string): string => `hnauth:qrspoken:${digits}`
 /** A spoken code: eight digits, easy to say and to type on a phone's number pad. */
 const SPOKEN_CODE = /^\d{8}$/
 
+/** Whether [code] is a spoken code (eight digits, typed with any spacing) rather than a QR's. */
+export function isSpokenCode(code: string): boolean {
+  return SPOKEN_CODE.test(code.replace(/[\s-]/g, ''))
+}
+
+// Eight digits are a small space, so the wrong ones an account types are counted, per hour and per
+// day, in Redis so every replica shares them (the per-process 20/min alone let one account try
+// ~28,800 a day per replica, review of #1427). Misses only: a person who mistypes once is unaffected.
+export const SPOKEN_CODE_MISSES_PER_HOUR = 10
+export const SPOKEN_CODE_MISSES_PER_DAY = 30
+const SPOKEN_MISS_WINDOWS = [
+  { suffix: 'h', ms: 60 * 60_000, max: SPOKEN_CODE_MISSES_PER_HOUR },
+  { suffix: 'd', ms: 24 * 60 * 60_000, max: SPOKEN_CODE_MISSES_PER_DAY },
+] as const
+const spokenMissKey = (userId: string, suffix: string): string => `hnauth:spokenmiss:${userId}:${suffix}`
+// INCR every window, arming its expiry on first use, in one atomic round trip (as bus.ts's new-id quota).
+const SPOKEN_MISS_SCRIPT = `
+for i, key in ipairs(KEYS) do
+  if redis.call('incr', key) == 1 then redis.call('pexpire', key, ARGV[i]) end
+end
+return 1`
+
+/** False once [userId] has missed too many spoken codes: even the right one then waits for the window. */
+export async function spokenCodeGuessesLeft(userId: string): Promise<boolean> {
+  const counts = await Promise.all(SPOKEN_MISS_WINDOWS.map((w) => pub.get(spokenMissKey(userId, w.suffix))))
+  return counts.every((count, i) => Number(count ?? 0) < SPOKEN_MISS_WINDOWS[i]!.max)
+}
+
+export async function recordSpokenCodeMiss(userId: string): Promise<void> {
+  const keys = SPOKEN_MISS_WINDOWS.map((w) => spokenMissKey(userId, w.suffix))
+  await pub.eval(SPOKEN_MISS_SCRIPT, keys.length, ...keys, ...SPOKEN_MISS_WINDOWS.map((w) => w.ms))
+}
+
 /** The record a phone's code names: the QR's own code, or a spoken one typed with any spacing. */
 async function codeHashFor(code: string): Promise<string | null> {
   const digits = code.replace(/[\s-]/g, '')

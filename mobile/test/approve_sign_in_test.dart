@@ -117,13 +117,13 @@ void main() {
 
   group('Settings ▸ Sign in a computer', () {
     /// Settings' row opening the camera — [signInAComputer] with no real camera behind it.
-    Future<_Api> open(WidgetTester tester, {Size size = const Size(430, 932)}) async {
+    Future<_Api> open(WidgetTester tester, {Size size = const Size(430, 932), String status = 'pending'}) async {
       tester.view.devicePixelRatio = 1;
       tester.view.physicalSize = size;
       addTearDown(tester.view.reset);
       final app = AppNotifier(config: AppConfig.dev, authSession: AuthSession(), configStore: null);
       addTearDown(app.dispose);
-      final api = _Api({'label': 'build-box', 'kind': 'computer', 'sameNetwork': true, 'status': 'pending'});
+      final api = _Api({'label': 'build-box', 'kind': 'computer', 'sameNetwork': true, 'status': status});
       app.api = api;
       await tester.pumpWidget(
         MaterialApp(
@@ -199,6 +199,19 @@ void main() {
       await tester.tap(find.byKey(const Key('approve-sign-in-approve')));
       await tester.pumpAndSettle();
       expect(api.answers, ['approve:12345678']);
+    });
+
+    testWidgets('a typed code someone else answered warns before the device asks', (tester) async {
+      final api = await open(tester, status: 'approved');
+      await tester.tap(find.text('Type a code instead'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Never type a code someone sent you'), findsOneWidget);
+      await tester.enterText(find.byKey(const Key('sign-in-code-field')), '12345678');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('sign-in-code-continue')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Someone else already answered this code'), findsOneWidget);
+      expect(api.answers, isEmpty);
     });
 
     testWidgets('a typed code can be dropped without asking anything', (tester) async {

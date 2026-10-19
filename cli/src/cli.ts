@@ -115,8 +115,9 @@ Machine:
   harness login --google       sign in with Google in your browser, without asking
   harness login --apple        sign in with Apple in your browser, without asking
   harness login --qr           sign in by scanning a QR with Harness on your phone, without asking
-  harness login --code         for a device with no screen: say a short code to type into Harness on your
-                               phone (Settings ▸ Sign in a computer ▸ Type a code); with --json it is an event
+  harness login --code         for a device with no screen: say a short code the person types into Harness
+                               (phone: Settings ▸ Sign in a computer ▸ Type a code instead; desktop or web:
+                               Machines ▸ Approve a device); with --json the code is an event
   harness login --force        stop the daemon and sign in with a different account
   harness login --json         emit machine-readable NDJSON instead of opening a browser (for GUI clients)
   harness login --entry-point=desktop   record which surface started the sign-in (GUI clients; default cli)
@@ -627,7 +628,7 @@ async function qrSignInCommand(
         if (json) { emit({ type: 'code', code, expiresIn }); return }
         if (shown) return
         shown = true
-        console.log(`\n  On your phone, open Harness ▸ Settings ▸ Sign in a computer ▸ Type a code, and enter:\n\n    ${code.slice(0, 4)} ${code.slice(4)}\n`)
+        console.log(`\n  On your phone, open Harness ▸ Settings ▸ Sign in a computer ▸ Type a code instead (or Machines ▸ Approve a device on a computer), and enter:\n\n    ${code.slice(0, 4)} ${code.slice(4)}\n`)
         console.log('  Waiting for your phone…')
       },
     } : {}),

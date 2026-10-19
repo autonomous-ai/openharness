@@ -3,12 +3,15 @@ import { claimTicket, qrSignIn, qrSignInLink, type QrSignInDeps } from './qrSign
 import { terminalQr } from './terminalQr.js'
 
 /** A backend that answers the QR sign-in routes from a script of poll answers. */
-function backend(polls: Array<{ status: string; email?: string }>, opts: { extend?: 'ok' | 'fail'; claim?: 'ok' | 'fail'; spoken?: 'unsupported' } = {}) {
+function backend(polls: Array<{ status: string; email?: string }>, opts: { extend?: 'ok' | 'fail'; claim?: 'ok' | 'fail'; spoken?: 'unsupported' | 'rejected' } = {}) {
   const calls: Array<{ path: string; body: unknown }> = []
   let clock = 0
   const post = vi.fn(async (path: string, body: unknown) => {
     calls.push({ path, body })
     if (path === '/api/auth/qr/start') {
+      if ((body as { spokenCode?: boolean }).spokenCode && opts.spoken === 'rejected') {
+        throw Object.assign(new Error('Unrecognized key(s) in object: \'spokenCode\''), { status: 400 })
+      }
       const spoken = (body as { spokenCode?: boolean }).spokenCode && opts.spoken !== 'unsupported'
       return { code: 'hnq_code', pollToken: 'hnp_poll', expiresIn: 120, ...(spoken ? { spokenCode: '12345678' } : {}) }
     }
@@ -127,6 +130,18 @@ describe('qrSignIn with a spoken code', () => {
     await qrSignIn(d)
     expect(said.length).toBeGreaterThan(1)
     expect(new Set(said.map(([code]) => code))).toEqual(new Set(['12345678']))
+  })
+
+  it('says plainly that an older backend, which refuses the field, has no spoken codes', async () => {
+    const b = backend([], { spoken: 'rejected' })
+    const { d } = spokenDeps(b)
+    expect(await qrSignIn(d)).toEqual({ ok: false, code: 'BACKEND_ERROR', message: 'This Harness backend cannot give a spoken code yet.' })
+  })
+
+  it('names the way back that gives a new spoken code when this one runs out', async () => {
+    const b = backend(Array.from({ length: 60 }, () => ({ status: 'pending' })), { extend: 'fail' })
+    const { d } = spokenDeps(b)
+    expect(await qrSignIn(d)).toMatchObject({ ok: false, code: 'EXPIRED', message: 'The code expired. Run `harness login --code` again.' })
   })
 
   it('stops at once, and takes the sign-in back, when the backend gives no spoken code', async () => {

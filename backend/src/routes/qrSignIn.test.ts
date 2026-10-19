@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 
 // In-memory Redis and sessions, so the real QR sign-in, session and authentication code runs.
@@ -19,6 +19,16 @@ const fakes = vi.hoisted(() => {
     return 'OK'
   }
   const pub = {
+    // The quota scripts: INCR every key, arming its expiry (ms) on first use; the counts in KEYS order.
+    eval: vi.fn(async (_script: string, n: number, ...args: unknown[]) => {
+      const keys = args.slice(0, n) as string[]
+      return keys.map((key, i) => {
+        const next = Number(redis.get(key) ?? 0) + 1
+        redis.set(key, String(next))
+        if (next === 1) ttls.set(key, Math.ceil(Number(args[n + i]) / 1000))
+        return next
+      })
+    }),
     set: vi.fn(async (key: string, value: string, ...opts: unknown[]) => set(key, value, ...opts)),
     get: vi.fn(async (key: string) => redis.get(key) ?? null),
     del: vi.fn(async (key: string) => (redis.delete(key) ? 1 : 0)),
@@ -58,7 +68,7 @@ vi.mock('../services/UserService.js', () => ({
 vi.mock('../services/index.js', () => ({ userService: { get: fakes.get, toPublic: (u: unknown) => u } }))
 
 import { authenticateAccessToken, SsoAuthError } from '../lib/ssoAuth.js'
-import { redeemHandoff, startHandoff, BOX_TICKET_TTL_SEC, QR_SIGN_IN_MAX_LIFE_SEC } from '../lib/harnessSession.js'
+import { redeemHandoff, startHandoff, BOX_TICKET_TTL_SEC, QR_SIGN_IN_MAX_LIFE_SEC, SPOKEN_CODE_MISSES_PER_HOUR } from '../lib/harnessSession.js'
 import { qrSignInRoutes } from './qrSignIn.js'
 import { authRoutes } from './auth.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
@@ -184,6 +194,10 @@ describe('sign a computer in by scanning its QR', () => {
   describe('a spoken code', () => {
     // Each start from its own address: the start limit is per address and per process, across tests.
     let device = 0
+    // And each test in a minute of its own: the phone half's 20/min is per account and per process too.
+    let minute = 0
+    beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2030, 0, 1) + ++minute * 61_000) })
+    afterEach(() => { vi.restoreAllMocks() })
     const startSpoken = async () =>
       (await post('/api/auth/qr/start', { label: 'Lamp', kind: 'computer', computerId: COMPUTER_ID, spokenCode: true }, { 'cf-connecting-ip': `10.0.0.${++device}` })).json().data as { code: string; pollToken: string; spokenCode: string }
 
@@ -220,6 +234,30 @@ describe('sign a computer in by scanning its QR', () => {
       const { pollToken, spokenCode } = await startSpoken()
       await post('/api/auth/qr/cancel', { pollToken })
       expect((await post('/api/auth/qr/approve', { code: spokenCode }, asPhone())).statusCode).toBe(404)
+    })
+
+    it('lets an account miss only a few spoken codes an hour, whichever replica it reaches', async () => {
+      const { spokenCode } = await startSpoken()
+      const wrong = spokenCode === '00000000' ? '00000001' : '00000000'
+      for (let i = 0; i < SPOKEN_CODE_MISSES_PER_HOUR; i++) {
+        expect((await post('/api/auth/qr/lookup', { code: wrong }, asPhone())).statusCode).toBe(404)
+      }
+      // Out of guesses: even the right code waits, so a hit cannot follow a run of misses.
+      expect((await post('/api/auth/qr/approve', { code: spokenCode }, asPhone())).statusCode).toBe(429)
+      expect((await post('/api/auth/qr/lookup', { code: spokenCode }, asPhone())).statusCode).toBe(429)
+      // Counted in Redis, so every replica sees the same misses.
+      expect([...fakes.redis.keys()].some((k) => k.startsWith('hnauth:spokenmiss:'))).toBe(true)
+    })
+
+    it('a deny by spoken code reaches the device', async () => {
+      const { pollToken, spokenCode } = await startSpoken()
+      expect((await post('/api/auth/qr/deny', { code: spokenCode }, asPhone())).statusCode).toBe(200)
+      expect((await post('/api/auth/qr/poll', { pollToken })).json().data).toEqual({ status: 'denied' })
+    })
+
+    it('is only for a device signing itself in, never an app', async () => {
+      const r = await post('/api/auth/qr/start', { label: 'x', kind: 'viewer', spokenCode: true }, { 'cf-connecting-ip': '10.9.9.9' })
+      expect(r.statusCode).toBe(400)
     })
 
     it('a code that matches nothing, or is not eight digits, is not found', async () => {

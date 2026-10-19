@@ -3,7 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../api/api_client.dart' show describeApiError;
+import '../api/api_client.dart' show ApiException, describeApiError;
+import '../core/viewer_mode.dart' show kViewerMode;
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
@@ -24,12 +25,25 @@ Future<void> approveDeviceByCode(BuildContext context, AppNotifier notifier) asy
   try {
     asking = await notifier.api.signInLookup(code);
   } catch (error) {
-    if (context.mounted) await _tell(context, "Couldn't find that code", _sentence(describeApiError(error)));
+    if (!context.mounted) return;
+    // A daemon from before this route answers its own bare 404, not the backend's sentence.
+    final oldDaemon = !kViewerMode && error is ApiException && error.status == 404 && error.message.startsWith('Request failed');
+    await _tell(
+      context,
+      "Couldn't find that code",
+      oldDaemon ? 'Update Harness on this computer to approve devices from here.' : _sentence(describeApiError(error)),
+    );
     return;
   }
   if (!context.mounted) return;
   if (asking['status'] != 'pending') {
-    await _tell(context, 'Already answered', 'That code was already answered. Ask the device for a new one.');
+    // The device's own "Sign in as …?" is all that stands between a stranger who heard the code and
+    // the account: say so while the person can still answer it.
+    await _tell(
+      context,
+      'Already answered',
+      "Someone else already answered this code. If the device asks to sign in with an account that isn't yours, say no.",
+    );
     return;
   }
   final label = asking['label'] is String ? (asking['label'] as String).trim() : '';
@@ -121,6 +135,11 @@ class _TypeCodeDialogState extends State<_TypeCodeDialog> {
             Text(
               'Type the eight digits the device says aloud.',
               style: grid.AppType.body(height: 1.4),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Never type a code someone sent you — only one a device in front of you is saying.',
+              style: grid.AppType.body(height: 1.4, color: grid.AppPalette.textSecondary),
             ),
             const SizedBox(height: 14),
             TextField(
@@ -219,12 +238,83 @@ class _ApproveDialog extends StatelessWidget {
           ),
           child: Text(sameNetwork ? 'Deny' : 'Not me'),
         ),
-        FilledButton(
-          key: const Key('approve-sign-in-approve'),
-          onPressed: () => Navigator.pop(context, true),
-          child: Text(sameNetwork ? 'Approve' : 'Approve anyway'),
-        ),
+        if (sameNetwork)
+          FilledButton(
+            key: const Key('approve-sign-in-approve'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Approve'),
+          )
+        else
+          _HoldToApprove(
+            key: const Key('approve-sign-in-approve'),
+            onApproved: () => Navigator.pop(context, true),
+          ),
       ],
+    );
+  }
+}
+
+/// Approve for a device on another network: a two-second hold, as on the phone. A code is easily read
+/// out over a call or a chat, and a click given out of habit would hand that stranger the account.
+class _HoldToApprove extends StatefulWidget {
+  const _HoldToApprove({super.key, required this.onApproved});
+
+  final VoidCallback onApproved;
+
+  @override
+  State<_HoldToApprove> createState() => _HoldToApproveState();
+}
+
+class _HoldToApproveState extends State<_HoldToApprove> with SingleTickerProviderStateMixin {
+  late final _hold = AnimationController(vsync: this, duration: const Duration(seconds: 2))
+    ..addStatusListener((status) {
+      if (status == AnimationStatus.completed) widget.onApproved();
+    });
+
+  void _release() {
+    if (!_hold.isCompleted) _hold.reverse();
+  }
+
+  @override
+  void dispose() {
+    _hold.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final fill = grid.AppPalette.dangerFill;
+    return Listener(
+      onPointerDown: (_) => _hold.forward(),
+      onPointerUp: (_) => _release(),
+      onPointerCancel: (_) => _release(),
+      child: AnimatedBuilder(
+        animation: _hold,
+        builder: (context, _) => ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 150, minHeight: 36),
+            decoration: BoxDecoration(color: fill.withValues(alpha: 0.18)),
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Positioned.fill(
+                  child: FractionallySizedBox(
+                    alignment: Alignment.centerLeft,
+                    widthFactor: _hold.value,
+                    child: ColoredBox(color: fill),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Text('Hold to approve', style: grid.AppType.body(color: grid.AppPalette.textPrimary)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

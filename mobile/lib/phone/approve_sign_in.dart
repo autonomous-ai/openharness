@@ -89,6 +89,11 @@ class _TypeCodeDialogState extends State<_TypeCodeDialog> {
                 'The eight digits the device says aloud.',
                 style: TextStyle(color: AppPalette.textSecondary, fontSize: 15, height: 1.45),
               ),
+              const SizedBox(height: 6),
+              Text(
+                'Never type a code someone sent you — only one a device in front of you is saying.',
+                style: TextStyle(color: AppPalette.textSecondary, fontSize: 13, height: 1.4),
+              ),
               const SizedBox(height: 16),
               TextField(
                 key: const Key('sign-in-code-field'),
@@ -161,7 +166,11 @@ Future<void> approveComputerSignIn(
     await _tell(
       context,
       'Already answered',
-      scanAgain == null
+      // A typed code was heard, and could have been heard by someone else: the device's own
+      // "Sign in as …?" is then all that stands in their way, so say so while it can be answered.
+      _typed(code)
+          ? "Someone else already answered this code. If the device asks to sign in with an account that isn't yours, say no."
+          : scanAgain == null
           ? 'That code was already answered. Scan the new one.'
           : 'That code was already answered. $scanAgain',
     );
@@ -195,6 +204,9 @@ Future<void> approveComputerSignIn(
     if (context.mounted) await _tell(context, "Couldn't answer", _reason(error));
   }
 }
+
+/// A code typed from a device's voice (eight digits) rather than read from a QR.
+bool _typed(SignInCode code) => RegExp(r'^\d{8}$').hasMatch(code.code);
 
 /// Why a request failed, as a sentence for the person.
 ///

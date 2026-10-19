@@ -49,6 +49,8 @@ export interface QrSignInDeps {
   onStarted?: (cancel: () => Promise<void>) => void
 }
 
+const NO_SPOKEN_CODE = 'This Harness backend cannot give a spoken code yet.'
+
 /** Extend the code this long before it runs out, so an approval given at the last moment counts. */
 const EXTEND_BEFORE_MS = 30_000
 
@@ -63,16 +65,21 @@ export async function qrSignIn(deps: QrSignInDeps): Promise<QrSignInResult> {
       label: deps.label, kind: 'computer', computerId: deps.computerId, ...(spoken ? { spokenCode: true } : {}),
     })
   } catch (err) {
+    // A backend from before spoken codes refuses the field outright (its body schema is strict).
+    if (spoken && (err as { status?: number }).status === 400) {
+      return { ok: false, code: 'BACKEND_ERROR', message: NO_SPOKEN_CODE }
+    }
     return { ok: false, code: 'BACKEND_ERROR', message: (err as Error).message }
   }
   const { pollToken } = started
+  const expired = `The code expired. Run \`harness login${spoken ? ' --code' : ''}\` again.`
   const link = qrSignInLink(started.code)
   const cancel = async (): Promise<void> => { await deps.post('/api/auth/qr/cancel', { pollToken }).catch(() => {}) }
   const spokenCode = started.spokenCode
   if (spoken && !spokenCode) {
     // A backend from before spoken codes: there is nothing this device could say, so do not wait.
     await cancel()
-    return { ok: false, code: 'BACKEND_ERROR', message: 'This Harness backend cannot give a spoken code yet.' }
+    return { ok: false, code: 'BACKEND_ERROR', message: NO_SPOKEN_CODE }
   }
   const display = (expiresIn: number): void => {
     if (spokenCode) deps.showCode!(spokenCode, expiresIn)
@@ -89,7 +96,7 @@ export async function qrSignIn(deps: QrSignInDeps): Promise<QrSignInResult> {
         expiresAt = now() + expiresIn * 1000
         display(expiresIn)
       } catch {
-        return { ok: false, code: 'EXPIRED', message: 'The code expired. Run `harness login` again.' }
+        return { ok: false, code: 'EXPIRED', message: expired }
       }
     }
     let state: { status: string; email?: string }
@@ -101,7 +108,7 @@ export async function qrSignIn(deps: QrSignInDeps): Promise<QrSignInResult> {
     if (state.status === 'pending') continue
     if (state.status === 'denied') return { ok: false, code: 'DENIED', message: 'Sign-in was denied on the phone.' }
     if (state.status !== 'approved' || !state.email) {
-      return { ok: false, code: 'EXPIRED', message: 'The code expired. Run `harness login` again.' }
+      return { ok: false, code: 'EXPIRED', message: expired }
     }
     if (!(await deps.confirm(state.email))) {
       await cancel()
