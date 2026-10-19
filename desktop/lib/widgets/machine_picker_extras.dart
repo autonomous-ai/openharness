@@ -18,6 +18,7 @@ class MachinePickerHooks {
     required this.confirm,
     required this.onHistory,
     this.onAddPhone,
+    this.onApproveDevice,
   });
 
   /// Asks a yes/no question over the workspace (the picker steps aside while it is up).
@@ -28,6 +29,9 @@ class MachinePickerHooks {
 
   /// Opens Add Phone. Null where a phone cannot be added from here.
   final VoidCallback? onAddPhone;
+
+  /// Approves a device that says its code aloud (a lamp, `harness login --code`). Null hides it.
+  final VoidCallback? onApproveDevice;
 }
 
 /// The top of the Machines picker: which computer's tabs this window shows, and what the account's
@@ -340,6 +344,14 @@ class MachinePickerFooter extends StatelessWidget {
                   label: 'Add phone',
                   compact: true,
                   onPressed: addPhone,
+                ),
+              if (hooks.onApproveDevice case final approve?)
+                DesktopPill(
+                  key: const Key('machine-picker-approve-device'),
+                  label: 'Approve a device',
+                  compact: true,
+                  tooltip: 'Type the code a device with no screen says aloud.',
+                  onPressed: approve,
                 ),
               DesktopPill(
                 key: const Key('account-devices-history'),

@@ -27,7 +27,8 @@ import 'terminal_prompt.dart';
 ///
 /// **The code first, and few words (owner, 2026-10-13).** Desktop asks for an
 /// account before its workspace opens, so Add Phone opens on its QR: the code,
-/// "Scan with the Harness app.", and the stores for a phone without the app.
+/// "Scan with the Harness mobile app.", and the stores for a phone without
+/// the app.
 /// The phone's welcome leads with Scan QR code (mobile `phone_welcome.dart`):
 /// the scan signs it in to this account with nothing to type, so it cannot
 /// land on another account. No steps, no picture, no "Looking for your phone"
@@ -882,10 +883,11 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
         ),
       ],
       const SizedBox(height: 14),
-      // The phone's welcome leads with Scan QR code: "the Harness app" is
-      // where to scan, so nobody reaches for the Camera.
+      // The phone's welcome leads with Scan QR code: the Harness mobile app is
+      // where to scan, so nobody reaches for the Camera. "Mobile", because on
+      // this computer "the Harness app" read as the one already open.
       Text(
-        'Scan with the Harness app.',
+        'Scan with the Harness mobile app.',
         textAlign: TextAlign.center,
         style: DesktopChrome.text(size: 15, medium: true),
       ),

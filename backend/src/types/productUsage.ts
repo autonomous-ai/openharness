@@ -52,9 +52,19 @@ export const PRODUCT_USAGE_PHONE_SCREENS = ['find', 'computers'] as const
 export const PRODUCT_USAGE_SCREEN_OPENINGS = ['swipe', 'button'] as const
 export const PRODUCT_USAGE_PHONE_SCREEN_METRICS = PRODUCT_USAGE_PHONE_SCREENS.flatMap(screen =>
   PRODUCT_USAGE_SCREEN_OPENINGS.map(opening => `ui_phone_screen_${screen}_${opening}` as const))
+/** Desktop's Add Phone card (desktop/lib/widgets/phone_offer_card.dart), offered once per computer: started
+ * when it is on screen, ok for its Add Phone, cancelled for its ×, unknown when it goes another way (Add Phone
+ * opened from elsewhere, a sign-out). It waits beside the work, so it has no 15-minute observation bound.
+ * Vocabulary 3 (`x-harness-usage-vocabulary`, cli/src/lib/appProductUsageReport.ts), like the openings below. */
+export const PRODUCT_USAGE_DESKTOP_FLOWS = ['phone_offer'] as const
+/** Each time Add Phone opens on a computer, by its way in: that card (`offer`), the title bar's phone, Harness ▸
+ * Add Phone… (`menu`, or a key bound to it on macOS), the account menu, the Machines picker, or the command
+ * (`> add phone`, a key bound to it elsewhere). Which way in, nothing else. */
+export const PRODUCT_USAGE_ADD_PHONE_OPENINGS = ['offer', 'titlebar', 'menu', 'account', 'machines', 'command'] as const
+export const PRODUCT_USAGE_ADD_PHONE_METRICS = PRODUCT_USAGE_ADD_PHONE_OPENINGS.map(opening => `ui_desktop_add_phone_${opening}` as const)
 export const PRODUCT_USAGE_FLOWS = [...PRODUCT_USAGE_SETUP_FLOWS,
   'workspace_connect', 'computer_link', 'remote_connect', 'viewer_open', 'update_check', 'update_stage',
-  ...HEALTH_FLOWS, ...PRODUCT_USAGE_ONBOARDING_FLOWS] as const
+  ...HEALTH_FLOWS, ...PRODUCT_USAGE_ONBOARDING_FLOWS, ...PRODUCT_USAGE_DESKTOP_FLOWS] as const
 export const PRODUCT_USAGE_FLOW_MEASURES = ['started', 'ok', 'failed', 'cancelled', 'unknown',
   'under_1s', '1s_to_10s', '10s_to_1m', 'over_1m'] as const
 export const PRODUCT_USAGE_UI_METRICS = PRODUCT_USAGE_UI_SURFACES.flatMap(surface =>
@@ -155,6 +165,7 @@ export const PRODUCT_USAGE_METRICS = [
   ...PRODUCT_USAGE_UI_METRICS,
   ...PRODUCT_USAGE_ONBOARDING_METRICS,
   ...PRODUCT_USAGE_PHONE_SCREEN_METRICS,
+  ...PRODUCT_USAGE_ADD_PHONE_METRICS,
   // Written by the backend itself: a report that named counters this backend does not know yet, which
   // it kept without them (routes/productUsage.ts). One per report, never the names.
   'health_cli_report_unknown_metric', 'health_desktop_report_unknown_metric', 'health_phone_report_unknown_metric',

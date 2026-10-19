@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { z } from 'zod'
 import {
-  answerQrSignIn, cancelQrSignIn, claimQrSignIn, extendQrSignIn, issueBoxTicket, lookupQrSignIn, pollQrSignIn, startQrSignIn,
+  answerQrSignIn, cancelQrSignIn, claimQrSignIn, extendQrSignIn, isSpokenCode, issueBoxTicket, lookupQrSignIn, pollQrSignIn,
+  recordSpokenCodeMiss, spokenCodeGuessesLeft, startQrSignIn,
 } from '../lib/harnessSession.js'
 import { clientIpFromHeaders, countryCodeFromHeaders } from '../lib/clientGeo.js'
 import { validateBody } from '../middlewares/validation.js'
@@ -19,6 +20,8 @@ const start = z.object({
   kind: z.enum(['computer', 'viewer']),
   // A computer names the computer it is, so the session it gets is one; an app does not.
   computerId: z.string().regex(/^[0-9a-fA-F-]{16,64}$/).optional(),
+  // A device with no screen asks for a code it can say aloud (lib/harnessSession.ts).
+  spokenCode: z.boolean().optional(),
 }).strict()
 const byCode = z.object({ code: z.string().min(1).max(128) }).strict()
 const byPoll = z.object({ pollToken: z.string().min(1).max(128) }).strict()
@@ -47,6 +50,14 @@ const unavailable = (reply: FastifyReply, e: unknown, what: string) => {
   return sendError(reply, 'Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
 }
 const tooMany = (reply: FastifyReply) => sendError(reply, 'Too many tries. Wait a minute.', 'RATE_LIMITED', 429)
+const tooManyWrongCodes = (reply: FastifyReply) =>
+  sendError(reply, 'Too many wrong codes. Try again in an hour.', 'SPOKEN_CODE_LIMITED', 429)
+/** A spoken code that matches nothing: said as a typo, never "scan again", and counted against the account. */
+const noSuchCode = async (reply: FastifyReply, userId: string, code: string) => {
+  if (!isSpokenCode(code)) return sendError(reply, 'That code has expired. Scan the new one.', 'QR_INVALID', 404)
+  await recordSpokenCodeMiss(userId)
+  return sendError(reply, 'No device is waiting with that code. Check the digits, or ask the device for a new one.', 'QR_INVALID', 404)
+}
 
 export async function qrSignInRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: z.infer<typeof start> }>('/api/auth/qr/start', { preHandler: validateBody(start) }, async (req, reply) => {
@@ -54,6 +65,10 @@ export async function qrSignInRoutes(app: FastifyInstance): Promise<void> {
     if (!startLimit(ip ?? 'unknown')) return tooMany(reply)
     if (req.body.kind === 'computer' && !req.body.computerId) {
       return sendError(reply, 'A computer names itself to sign in.', 'COMPUTER_ID_REQUIRED', 400)
+    }
+    // A spoken code is for a device with no screen signing itself in; an app always has a screen for a QR.
+    if (req.body.spokenCode && req.body.kind !== 'computer') {
+      return sendError(reply, 'Only a device signing itself in can ask for a spoken code.', 'SPOKEN_CODE_COMPUTER_ONLY', 400)
     }
     try {
       return sendSuccess(reply, await startQrSignIn(req.body, { ...(ip ? { ip } : {}), ...(countryCodeFromHeaders(req.headers) ? { country: countryCodeFromHeaders(req.headers) } : {}) }))
@@ -90,11 +105,13 @@ export async function qrSignInRoutes(app: FastifyInstance): Promise<void> {
 
   // The phone's half.
   app.post<{ Body: z.infer<typeof byCode> }>('/api/auth/qr/lookup', { preHandler: validateBody(byCode) }, async (req, reply) => {
-    if (!answerLimit(req.user!.sub)) return tooMany(reply)
+    const userId = req.user!.sub
+    if (!answerLimit(userId)) return tooMany(reply)
     try {
+      if (isSpokenCode(req.body.code) && !(await spokenCodeGuessesLeft(userId))) return tooManyWrongCodes(reply)
       const ip = clientIpFromHeaders(req.headers, req.socket.remoteAddress)
       const found = await lookupQrSignIn(req.body.code, ip ? { ip } : {})
-      if (!found) return sendError(reply, 'That code has expired. Scan the new one.', 'QR_INVALID', 404)
+      if (!found) return await noSuchCode(reply, userId, req.body.code)
       return sendSuccess(reply, found)
     } catch (e) { return unavailable(reply, e, 'lookup') }
   })
@@ -103,8 +120,9 @@ export async function qrSignInRoutes(app: FastifyInstance): Promise<void> {
     const user = req.user!
     if (!answerLimit(user.sub)) return tooMany(reply)
     try {
+      if (isSpokenCode(req.body.code) && !(await spokenCodeGuessesLeft(user.sub))) return tooManyWrongCodes(reply)
       const out = await answerQrSignIn(req.body.code, approve ? { approve: true, userId: user.sub, email: user.email } : { approve: false })
-      if (out === 'gone') return sendError(reply, 'That code has expired. Scan the new one.', 'QR_INVALID', 404)
+      if (out === 'gone') return await noSuchCode(reply, user.sub, req.body.code)
       if (out === 'answered') return sendError(reply, 'This code was already answered.', 'QR_ANSWERED', 409)
       logger.info(`qr sign-in ${approve ? 'approved' : 'denied'}`, { userId: user.sub })
       return sendSuccess(reply, { ok: true })

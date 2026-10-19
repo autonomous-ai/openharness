@@ -2823,7 +2823,9 @@ private final class SwarmTabStrip: NSView {
     if actionsEnabled && searchButton.isEnabled { emit?("sessions", nil) }
   }
   @objc private func openAddPhone() {
-    if actionsEnabled && phoneButton.isEnabled { emit?("addPhone", nil) }
+    // Named, so Add Phone is counted as the title bar's rather than Harness ▸ Add Phone…'s,
+    // which sends the same action with no arguments (`AddPhoneOpening` in product_measurement.dart).
+    if actionsEnabled && phoneButton.isEnabled { emit?("addPhone", ["from": "titlebar"]) }
   }
   @objc private func openStore() {
     if actionsEnabled && storeButton.isEnabled { emit?("store", nil) }

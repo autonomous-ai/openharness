@@ -136,3 +136,16 @@ it("splits the phone onboarding's long waits past a minute and shows what happen
   expect(r.flows.find(f => f.channel === 'ui' && f.surface === 'phone' && f.flow === 'session_open')).not.toHaveProperty('over1mBuckets')
   expect(r.flows.find(f => f.channel === 'ui' && f.surface === 'desktop' && f.flow === 'computer_wait')).not.toHaveProperty('marks')
 })
+
+it('shows every way into Add Phone beside the Desktop\'s Add Phone card', () => {
+  const r = dailyProductReview([
+    row('2026-10-12', 'ui_desktop_phone_offer_started', 3), row('2026-10-12', 'ui_desktop_phone_offer_ok', 1),
+    row('2026-10-12', 'ui_desktop_phone_offer_cancelled', 1),
+    row('2026-10-12', 'ui_desktop_add_phone_offer', 1), row('2026-10-12', 'ui_desktop_add_phone_titlebar', 4),
+  ], new Date('2026-10-13'))
+  // Started minus its outcomes: an app closed with the card still up.
+  expect(r.flows.find(f => f.channel === 'ui' && f.surface === 'desktop' && f.flow === 'phone_offer')).toMatchObject({
+    started: 3, outcomes: { ok: 1, cancelled: 1, unknown: 0 }, unmatchedStarts: 1,
+    addPhoneOpenings: { offer: 1, titlebar: 4, menu: 0, account: 0, machines: 0, command: 0 } })
+  expect(r.flows.find(f => f.channel === 'ui' && f.surface === 'phone' && f.flow === 'phone_offer')).not.toHaveProperty('addPhoneOpenings')
+})

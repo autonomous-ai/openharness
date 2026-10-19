@@ -408,4 +408,160 @@ void main() {
       await tester.pump();
     },
   );
+
+  group('Add Phone', () {
+    Iterable<String> addPhoneNames() => totals().keys.where(
+      (key) =>
+          key.startsWith('ui_desktop_phone_offer_') ||
+          key.startsWith('ui_desktop_add_phone_'),
+    );
+
+    test(
+      'the card and its openings wait for a CLI that forwards them, then go',
+      () async {
+        await usage.flush();
+        // Counted from the start: the card shows once per computer, often
+        // before the CLI's first answer has said which names it forwards.
+        usage.begin(ProductFlow.phoneOffer)(ProductOutcome.ok);
+        usage.addPhoneOpened(AddPhoneOpening.offer);
+        await usage.flush();
+        // The day's coverage goes; the names wait.
+        expect(totals()['health_desktop_collector_days'], 1);
+        expect(addPhoneNames(), isEmpty);
+        final sent = reports.length;
+        await usage.flush();
+        // Only waiting names are left, and a report of none is not sent.
+        expect(reports, hasLength(sent));
+        for (final vocabulary in [1, 2]) {
+          usage.proxyVocabulary = vocabulary;
+          usage.health(ProductHealthMeasure.asyncError);
+          await usage.flush();
+          expect(totals()['health_desktop_async_error'], vocabulary);
+          expect(addPhoneNames(), isEmpty, reason: 'vocabulary $vocabulary');
+        }
+        usage.proxyVocabulary = 3;
+        await usage.flush();
+        expect(
+          {for (final name in addPhoneNames()) name: totals()[name]},
+          {
+            'ui_desktop_phone_offer_started': 1,
+            'ui_desktop_phone_offer_ok': 1,
+            'ui_desktop_phone_offer_under_1s': 1,
+            'ui_desktop_add_phone_offer': 1,
+          },
+        );
+        expect(reports.last['context'], isNotNull);
+      },
+    );
+
+    test(
+      'waiting names do not hold back a later day or other counts',
+      () async {
+        await usage.flush();
+        usage.health(ProductHealthMeasure.asyncError);
+        await usage.flush();
+        // The day's coverage is counted already: the day holds only a
+        // waiting name now.
+        usage.addPhoneOpened(AddPhoneOpening.menu);
+        now = now.add(const Duration(days: 1));
+        usage.health(ProductHealthMeasure.asyncError);
+        await usage.flush();
+        expect(reports.last['day'], '2026-10-15');
+        expect(totals()['health_desktop_async_error'], 2);
+        expect(addPhoneNames(), isEmpty);
+        usage.proxyVocabulary = 3;
+        await usage.flush();
+        expect(reports.last['day'], '2026-10-14');
+        expect(totals()['ui_desktop_add_phone_menu'], 1);
+      },
+    );
+
+    test('the card is not ended by the 15-minute observation bound', () async {
+      await usage.flush();
+      usage.proxyVocabulary = 3;
+      final card = usage.begin(ProductFlow.phoneOffer);
+      // A bounded flow begun beside it is ended unknown, as before.
+      usage.begin(ProductFlow.connectUser);
+      now = now.add(const Duration(minutes: 40));
+      await usage.flush();
+      await usage.flush();
+      expect(totals()['ui_desktop_connect_user_unknown'], 1);
+      expect(totals()['ui_desktop_phone_offer_unknown'], isNull);
+      // Put away 40 minutes later, and counted as that.
+      card(ProductOutcome.cancelled);
+      card(ProductOutcome.ok);
+      await usage.flush();
+      expect(totals()['ui_desktop_phone_offer_started'], 1);
+      expect(totals()['ui_desktop_phone_offer_cancelled'], 1);
+      expect(totals()['ui_desktop_phone_offer_ok'], isNull);
+    });
+
+    test('every way in has its own name, and nothing else is sent', () async {
+      await usage.flush();
+      usage.proxyVocabulary = 3;
+      for (final from in AddPhoneOpening.values) {
+        usage.addPhoneOpened(from);
+      }
+      usage.addPhoneOpened(AddPhoneOpening.titlebar);
+      await usage.flush();
+      expect(
+        {for (final name in addPhoneNames()) name: totals()[name]},
+        {
+          'ui_desktop_add_phone_offer': 1,
+          'ui_desktop_add_phone_titlebar': 2,
+          'ui_desktop_add_phone_menu': 1,
+          'ui_desktop_add_phone_account': 1,
+          'ui_desktop_add_phone_machines': 1,
+          'ui_desktop_add_phone_command': 1,
+        },
+      );
+    });
+
+    test(
+      'nothing is counted without sharing, an account or a Desktop',
+      () async {
+        await usage.flush();
+        usage.proxyVocabulary = 3;
+        usage.savedChoice({'enabled': false, 'revision': 1});
+        usage.begin(ProductFlow.phoneOffer)(ProductOutcome.ok);
+        usage.addPhoneOpened(AddPhoneOpening.offer);
+        choice = {'enabled': true, 'revision': 2};
+        await usage.flush();
+        expect(addPhoneNames(), isEmpty);
+
+        // Signed out: no account to count it under, and no signed-out name.
+        usage.account(null);
+        usage.begin(ProductFlow.phoneOffer)(ProductOutcome.ok);
+        usage.addPhoneOpened(AddPhoneOpening.offer);
+        await usage.flush();
+        expect(addPhoneNames(), isEmpty);
+        expect(jsonEncode(setup), isNot(contains('phone_offer')));
+        expect(jsonEncode(setup), isNot(contains('add_phone')));
+
+        // The browser has no health context, and no names for these.
+        final web = ProductMeasurement(
+          surface: 'web',
+          automatic: false,
+          now: () => now,
+          sendSetup: (report) async => {'accepted': true},
+        );
+        addTearDown(web.dispose);
+        final sentByWeb = <Map<String, dynamic>>[];
+        web.account(
+          'PRIVATE_ACCOUNT',
+          choice: () async => choice,
+          send: (report) async {
+            sentByWeb.add(report);
+            return {'accepted': true};
+          },
+        );
+        await web.flush();
+        web.proxyVocabulary = 3;
+        web.begin(ProductFlow.phoneOffer)(ProductOutcome.ok);
+        web.addPhoneOpened(AddPhoneOpening.command);
+        await web.flush();
+        expect(sentByWeb, isEmpty);
+      },
+    );
+  });
 }

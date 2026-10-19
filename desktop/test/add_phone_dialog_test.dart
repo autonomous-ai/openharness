@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/phone_app_links.dart';
+import 'package:harness/measurement/product_measurement.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/viewer/viewer_services.dart';
@@ -19,6 +20,7 @@ import 'package:harness/widgets/add_phone_dialog.dart';
 import 'package:harness/widgets/desktop_chrome.dart'
     show DesktopChrome, DesktopDialogSurface;
 
+import 'support/add_phone_measurement.dart';
 import 'swarm_interactions_test.dart' show chord;
 import 'swarm_screen_test.dart' show mount;
 import 'swarm_state_test.dart' show createApp, MemoryStore;
@@ -182,7 +184,7 @@ void main() {
         Uri.splitQueryString(Uri.parse(_qrData(tester)).fragment)['h'],
         'h1',
       );
-      expect(find.text('Scan with the Harness app.'), findsOneWidget);
+      expect(find.text('Scan with the Harness mobile app.'), findsOneWidget);
       expect(find.text('No app yet?'), findsOneWidget);
       expect(
         find.descendant(
@@ -232,7 +234,7 @@ void main() {
       expect(find.byKey(const ValueKey('add-phone-ready')), findsOneWidget);
       expect(find.text('Dee’s iPhone is ready.'), findsOneWidget);
       expect(find.byType(PhonePairQr), findsNothing);
-      expect(find.text('Scan with the Harness app.'), findsNothing);
+      expect(find.text('Scan with the Harness mobile app.'), findsNothing);
       expect(find.byKey(const ValueKey('add-phone-close')), findsNothing);
       expect(
         find.byKey(const ValueKey('add-phone-see-phones')),
@@ -365,7 +367,7 @@ void main() {
       );
       expect(find.byKey(const ValueKey('add-phone-cancel')), findsOneWidget);
       expect(find.text('Sign in first'), findsNothing);
-      expect(find.text('Scan with the Harness app.'), findsNothing);
+      expect(find.text('Scan with the Harness mobile app.'), findsNothing);
       expect(find.byType(PhonePairQr), findsNothing);
       expect(daemon.codes, isEmpty);
       expect(signIn.minted, 0);
@@ -688,7 +690,7 @@ void main() {
           signIn: 'h1',
         ).toString(),
       );
-      expect(find.text('Scan with the Harness app.'), findsOneWidget);
+      expect(find.text('Scan with the Harness mobile app.'), findsOneWidget);
       expect(find.byKey(const ValueKey('add-phone-status')), findsNothing);
 
       await tester.pump(const Duration(milliseconds: 1500));
@@ -874,7 +876,7 @@ void main() {
       );
       // Few words: no heading or caption of its own; Close stays.
       expect(find.text('Get Harness on your phone'), findsNothing);
-      expect(find.text('Scan with the Harness app.'), findsNothing);
+      expect(find.text('Scan with the Harness mobile app.'), findsNothing);
       expect(find.byKey(const ValueKey('add-phone-close')), findsOneWidget);
 
       await tester.tap(find.byKey(const ValueKey('add-phone-hide-downloads')));
@@ -895,39 +897,65 @@ void main() {
   group('the way in', () {
     // `createApp` has no profile and no local machine, so the dialog opens
     // with nothing to arm — these tests never reach for a real daemon.
-    testWidgets('Harness ▸ Add Phone… opens the dialog', (tester) async {
-      const channel = MethodChannel('harness/swarm_tabs');
-      final messenger = tester.binding.defaultBinaryMessenger;
-      messenger.setMockMethodCallHandler(channel, (_) async => true);
-      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
-      final app = createApp()..status = AppStatus.authenticated;
-      addTearDown(app.dispose);
-      await mount(tester, app, nativeTabs: true);
+    // Each way in is counted as its own (`ui_desktop_add_phone_<way>`).
+    for (final (name, arguments, from) in [
+      ('Harness ▸ Add Phone…', null, AddPhoneOpening.menu),
+      (
+        'The native title bar\'s phone',
+        {'from': 'titlebar'},
+        AddPhoneOpening.titlebar,
+      ),
+    ]) {
+      testWidgets('$name opens the dialog', (tester) async {
+        const channel = MethodChannel('harness/swarm_tabs');
+        final messenger = tester.binding.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(channel, (_) async => true);
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+        final usage = AddPhoneRecorder();
+        final app = createApp(productMeasurement: usage)
+          ..status = AppStatus.authenticated;
+        addTearDown(app.dispose);
+        await mount(tester, app, nativeTabs: true);
 
-      final handled = Completer<void>();
-      messenger.handlePlatformMessage(
-        channel.name,
-        const StandardMethodCodec().encodeMethodCall(
-          const MethodCall('addPhone'),
-        ),
-        (_) => handled.complete(),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(find.byType(AddPhoneDialog), findsOneWidget);
-      expect(find.text('Add your phone'), findsOneWidget);
+        final handled = Completer<void>();
+        messenger.handlePlatformMessage(
+          channel.name,
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall('addPhone', arguments),
+          ),
+          (_) => handled.complete(),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.byType(AddPhoneDialog), findsOneWidget);
+        expect(find.text('Add your phone'), findsOneWidget);
+        expect(usage.openings, [from]);
 
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pump();
-      await handled.future;
-      expect(find.byType(AddPhoneDialog), findsNothing);
-      await tester.pumpWidget(const SizedBox());
-    });
+        // Asked again while it is open: refused, so not counted.
+        messenger.handlePlatformMessage(
+          channel.name,
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall('addPhone', arguments),
+          ),
+          (_) {},
+        );
+        await tester.pump();
+        expect(usage.openings, [from]);
+
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        await handled.future;
+        expect(find.byType(AddPhoneDialog), findsNothing);
+        await tester.pumpWidget(const SizedBox());
+      });
+    }
 
     testWidgets('> add phone opens the dialog from the command search', (
       tester,
     ) async {
-      final app = createApp()..status = AppStatus.authenticated;
+      final usage = AddPhoneRecorder();
+      final app = createApp(productMeasurement: usage)
+        ..status = AppStatus.authenticated;
       addTearDown(app.dispose);
       await mount(tester, app);
       await chord(tester, LogicalKeyboardKey.keyP, shift: true);
@@ -940,6 +968,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
       expect(find.byType(AddPhoneDialog), findsOneWidget);
+      expect(usage.openings, [AddPhoneOpening.command]);
 
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
@@ -948,18 +977,48 @@ void main() {
     });
 
     testWidgets('the tab row\'s Add Phone opens the dialog', (tester) async {
-      final app = createApp()..status = AppStatus.authenticated;
+      final usage = AddPhoneRecorder();
+      final app = createApp(productMeasurement: usage)
+        ..status = AppStatus.authenticated;
       addTearDown(app.dispose);
       await mount(tester, app);
       await tester.tap(find.byKey(const ValueKey('swarm-add-phone-button')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
       expect(find.byType(AddPhoneDialog), findsOneWidget);
+      expect(usage.openings, [AddPhoneOpening.titlebar]);
 
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();
       expect(find.byType(AddPhoneDialog), findsNothing);
       await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('the account menu\'s Add Phone opens the dialog', (
+      tester,
+    ) async {
+      final usage = AddPhoneRecorder();
+      final app = createApp(productMeasurement: usage)
+        ..currentUser = const CurrentUserProfile(
+          name: 'Dee Example',
+          email: 'dee@example.com',
+        );
+      addTearDown(app.dispose);
+      await mount(tester, app);
+      await tester.tap(find.byKey(const ValueKey('swarm-account-button')));
+      await tester.pump();
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('account-menu-addPhone')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byType(AddPhoneDialog), findsOneWidget);
+      expect(usage.openings, [AddPhoneOpening.account]);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(find.byType(AddPhoneDialog), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 5));
     });
   });
 }
