@@ -170,13 +170,45 @@ void main() {
       expect(api.answers, ['approve:$_code']);
     });
 
-    testWidgets('Not now goes back and asks nothing', (tester) async {
+    testWidgets('Back goes back and asks nothing', (tester) async {
       final api = await open(tester);
-      await tester.tap(find.text('Not now'));
+      tester.widget<ScanToConnectPage>(find.byType(ScanToConnectPage)).onBack();
       await tester.pumpAndSettle();
       expect(find.byType(ScanToConnectPage), findsNothing);
       expect(api.looked, isEmpty);
       expect(api.answers, isEmpty);
+    });
+
+    // A device with no screen (a lamp, #1410) says eight digits aloud instead of showing a QR.
+    testWidgets('Type a code instead takes the eight digits a device says, on to the approval', (tester) async {
+      final api = await open(tester);
+      await tester.tap(find.text('Type a code instead'));
+      await tester.pumpAndSettle();
+      expect(find.byType(ScanToConnectPage), findsNothing);
+      final field = find.byKey(const Key('sign-in-code-field'));
+      final next = find.byKey(const Key('sign-in-code-continue'));
+      await tester.enterText(field, '1234 567');
+      await tester.pump();
+      expect(tester.widget<FilledButton>(next).onPressed, isNull);
+      await tester.enterText(field, '1234 5678');
+      await tester.pump();
+      await tester.tap(next);
+      await tester.pumpAndSettle();
+      expect(api.looked, ['12345678']);
+      expect(find.text('Sign in build-box?'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('approve-sign-in-approve')));
+      await tester.pumpAndSettle();
+      expect(api.answers, ['approve:12345678']);
+    });
+
+    testWidgets('a typed code can be dropped without asking anything', (tester) async {
+      final api = await open(tester);
+      await tester.tap(find.text('Type a code instead'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('sign-in-code-cancel')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('sign-in-code-field')), findsNothing);
+      expect(api.looked, isEmpty);
     });
   });
 }

@@ -35,6 +35,9 @@ export interface QrSignInDeps {
   post: <T>(path: string, body: unknown) => Promise<T>
   /** A new (or the same, extended) code to show. */
   show: (link: string, expiresIn: number) => void
+  /** For a device with no screen (a lamp, #1410): ask the backend for a short code to say aloud, and
+   *  say it — again each time it is kept alive — instead of showing the QR. */
+  showCode?: (code: string, expiresIn: number) => void
   /** Ask the person whether to sign in as [email]. */
   confirm: (email: string) => Promise<boolean>
   label: string
@@ -53,17 +56,30 @@ export async function qrSignIn(deps: QrSignInDeps): Promise<QrSignInResult> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const now = deps.now ?? (() => Date.now())
   const every = deps.pollEveryMs ?? 2_000
-  let started: { code: string; pollToken: string; expiresIn: number }
+  const spoken = deps.showCode !== undefined
+  let started: { code: string; pollToken: string; expiresIn: number; spokenCode?: string }
   try {
-    started = await deps.post('/api/auth/qr/start', { label: deps.label, kind: 'computer', computerId: deps.computerId })
+    started = await deps.post('/api/auth/qr/start', {
+      label: deps.label, kind: 'computer', computerId: deps.computerId, ...(spoken ? { spokenCode: true } : {}),
+    })
   } catch (err) {
     return { ok: false, code: 'BACKEND_ERROR', message: (err as Error).message }
   }
   const { pollToken } = started
   const link = qrSignInLink(started.code)
-  let expiresAt = now() + started.expiresIn * 1000
-  deps.show(link, started.expiresIn)
   const cancel = async (): Promise<void> => { await deps.post('/api/auth/qr/cancel', { pollToken }).catch(() => {}) }
+  const spokenCode = started.spokenCode
+  if (spoken && !spokenCode) {
+    // A backend from before spoken codes: there is nothing this device could say, so do not wait.
+    await cancel()
+    return { ok: false, code: 'BACKEND_ERROR', message: 'This Harness backend cannot give a spoken code yet.' }
+  }
+  const display = (expiresIn: number): void => {
+    if (spokenCode) deps.showCode!(spokenCode, expiresIn)
+    else deps.show(link, expiresIn)
+  }
+  let expiresAt = now() + started.expiresIn * 1000
+  display(started.expiresIn)
   deps.onStarted?.(cancel)
   for (;;) {
     await sleep(every)
@@ -71,7 +87,7 @@ export async function qrSignIn(deps: QrSignInDeps): Promise<QrSignInResult> {
       try {
         const { expiresIn } = await deps.post<{ expiresIn: number }>('/api/auth/qr/extend', { pollToken })
         expiresAt = now() + expiresIn * 1000
-        deps.show(link, expiresIn)
+        display(expiresIn)
       } catch {
         return { ok: false, code: 'EXPIRED', message: 'The code expired. Run `harness login` again.' }
       }

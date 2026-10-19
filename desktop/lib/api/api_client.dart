@@ -202,6 +202,40 @@ class ApiClient {
     return Map<String, dynamic>.from(unwrapApiResponse(response) as Map);
   }
 
+  // -- the phone half of a sign-in (backend routes/qrSignIn.ts): approving a device that says its code aloud
+  //    (a lamp, #1410). Natively the daemon passes these through with this computer's session; a viewer
+  //    sends them with its own. --
+
+  /// What is asking to sign in with [code]: its name, kind, network and status.
+  Future<Map<String, dynamic>> signInLookup(String code) async {
+    final res = await _dio.post(
+      '/api/auth/qr/lookup',
+      data: {'code': code},
+      options: Options(headers: {'x-adapter-local': '1'}),
+    );
+    return Map<String, dynamic>.from(unwrapApiResponse(res) as Map);
+  }
+
+  Future<void> approveSignIn(String code) async {
+    unwrapApiResponse(
+      await _dio.post(
+        '/api/auth/qr/approve',
+        data: {'code': code},
+        options: Options(headers: {'x-adapter-local': '1'}),
+      ),
+    );
+  }
+
+  Future<void> denySignIn(String code) async {
+    unwrapApiResponse(
+      await _dio.post(
+        '/api/auth/qr/deny',
+        data: {'code': code},
+        options: Options(headers: {'x-adapter-local': '1'}),
+      ),
+    );
+  }
+
   Future<Map<String, dynamic>?> me() async {
     final res = await _dio.get('/api/auth/me');
     return unwrapApiResponse(res) as Map<String, dynamic>?;

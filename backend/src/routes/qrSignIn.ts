@@ -19,6 +19,8 @@ const start = z.object({
   kind: z.enum(['computer', 'viewer']),
   // A computer names the computer it is, so the session it gets is one; an app does not.
   computerId: z.string().regex(/^[0-9a-fA-F-]{16,64}$/).optional(),
+  // A device with no screen asks for a code it can say aloud (lib/harnessSession.ts).
+  spokenCode: z.boolean().optional(),
 }).strict()
 const byCode = z.object({ code: z.string().min(1).max(128) }).strict()
 const byPoll = z.object({ pollToken: z.string().min(1).max(128) }).strict()

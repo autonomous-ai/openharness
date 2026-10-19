@@ -178,6 +178,58 @@ describe('sign a computer in by scanning its QR', () => {
     expect((await post('/api/auth/handoff', {}, { authorization: `Bearer ${phone}` })).statusCode).toBe(403)
   })
 
+  // A device with no screen (lampOS's lamp, #1410) cannot show a QR: it says a short code aloud and the
+  // person types it into Harness on their phone. The same QR sign-in underneath, with the same
+  // "Sign in as <email>?" on the device, so a stranger who hears the code still cannot use it.
+  describe('a spoken code', () => {
+    // Each start from its own address: the start limit is per address and per process, across tests.
+    let device = 0
+    const startSpoken = async () =>
+      (await post('/api/auth/qr/start', { label: 'Lamp', kind: 'computer', computerId: COMPUTER_ID, spokenCode: true }, { 'cf-connecting-ip': `10.0.0.${++device}` })).json().data as { code: string; pollToken: string; spokenCode: string }
+
+    it('signs a device in with eight digits typed on the phone, spaced however the person likes', async () => {
+      const { pollToken, spokenCode } = await startSpoken()
+      expect(spokenCode).toMatch(/^\d{8}$/)
+      const typed = `${spokenCode.slice(0, 4)} ${spokenCode.slice(4)}`
+      expect((await post('/api/auth/qr/lookup', { code: typed }, asPhone())).json().data).toMatchObject({ label: 'Lamp', kind: 'computer', status: 'pending' })
+      expect((await post('/api/auth/qr/approve', { code: typed }, asPhone())).statusCode).toBe(200)
+      expect((await post('/api/auth/qr/poll', { pollToken })).json().data).toEqual({ status: 'approved', email: 'dee@example.com' })
+      expect((await post('/api/auth/qr/claim', { pollToken })).json().data).toMatchObject({ email: 'dee@example.com', kind: 'computer' })
+    })
+
+    it('is made only when the device asks, so a QR sign-in gains no guessable handle', async () => {
+      const plain = await start()
+      expect(plain).not.toHaveProperty('spokenCode')
+      expect([...fakes.redis.keys()].filter((k) => k.startsWith('hnauth:qrspoken:'))).toEqual([])
+    })
+
+    it('lives and dies with its sign-in', async () => {
+      const { code, pollToken, spokenCode } = await startSpoken()
+      const key = `hnauth:qrspoken:${spokenCode}`
+      expect(fakes.ttls.get(key)).toBe(120)
+      expect((await post('/api/auth/qr/extend', { pollToken })).statusCode).toBe(200)
+      expect(fakes.ttls.get(key)).toBe(120)
+      expect((await post('/api/auth/qr/approve', { code: spokenCode }, asPhone())).statusCode).toBe(200)
+      expect(fakes.ttls.get(key)).toBeGreaterThan(QR_SIGN_IN_MAX_LIFE_SEC - 5)
+      expect((await post('/api/auth/qr/deny', { code }, asPhone())).statusCode).toBe(409)
+      expect((await post('/api/auth/qr/claim', { pollToken })).statusCode).toBe(200)
+      expect(fakes.redis.has(key)).toBe(false)
+    })
+
+    it('is gone once the device takes it back', async () => {
+      const { pollToken, spokenCode } = await startSpoken()
+      await post('/api/auth/qr/cancel', { pollToken })
+      expect((await post('/api/auth/qr/approve', { code: spokenCode }, asPhone())).statusCode).toBe(404)
+    })
+
+    it('a code that matches nothing, or is not eight digits, is not found', async () => {
+      await startSpoken()
+      for (const code of ['00000000', '1234567', '123456789', 'abcd efgh']) {
+        expect((await post('/api/auth/qr/lookup', { code }, asPhone())).statusCode).toBe(404)
+      }
+    })
+  })
+
   describe('a box ticket', () => {
     const ticket = async () => (await post('/api/auth/box/ticket', {}, asPhone())).json().data as { ticket: string; expiresIn: number }
 

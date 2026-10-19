@@ -81,6 +81,23 @@ class _AddPhoneApi extends ApiClient {
   Future<Map<String, dynamic>?> daemonDevices() async => null;
 }
 
+/// The phone half of a sign-in, canned: a lamp on this network asking, and what this computer said.
+class _ApproveApi extends ApiClient {
+  _ApproveApi() : super(config: AppConfig.dev, session: AuthSession());
+  final looked = <String>[];
+  final answers = <String>[];
+  @override
+  Future<Map<String, dynamic>> signInLookup(String code) async {
+    looked.add(code);
+    return {'label': 'Lamp', 'kind': 'computer', 'sameNetwork': true, 'status': 'pending'};
+  }
+
+  @override
+  Future<void> approveSignIn(String code) async => answers.add('approve:$code');
+  @override
+  Future<void> denySignIn(String code) async => answers.add('deny:$code');
+}
+
 AccountDevice _device(
   String pub, {
   required String label,
@@ -332,6 +349,31 @@ void main() {
     await tester.tap(find.byKey(const Key('account-devices-history')));
     await tester.pumpAndSettle();
     expect(find.text('Device history'), findsOneWidget);
+  });
+
+  // A device with no screen (a lamp, #1410) says eight digits aloud; this computer approves it as a
+  // phone would, with the same "Sign in …?" before anything is sent.
+  testWidgets('Approve a device takes the code a device says, and asks before approving', (tester) async {
+    final api = _ApproveApi();
+    app.api = api;
+    await mount(tester);
+    await openPicker(tester);
+    await tester.tap(find.byKey(const Key('machine-picker-approve-device')));
+    await tester.pumpAndSettle();
+    final next = find.byKey(const Key('sign-in-code-continue'));
+    await tester.enterText(find.byKey(const Key('sign-in-code-field')), '1234 567');
+    await tester.pump();
+    expect(tester.widget<FilledButton>(next).onPressed, isNull);
+    await tester.enterText(find.byKey(const Key('sign-in-code-field')), '1234 5678');
+    await tester.pump();
+    await tester.tap(next);
+    await tester.pumpAndSettle();
+    expect(api.looked, ['12345678']);
+    expect(find.text('Sign in Lamp?'), findsOneWidget);
+    expect(api.answers, isEmpty);
+    await tester.tap(find.byKey(const Key('approve-sign-in-approve')));
+    await tester.pumpAndSettle();
+    expect(api.answers, ['approve:12345678']);
   });
 
   testWidgets('Show in this window narrows the window to one computer', (

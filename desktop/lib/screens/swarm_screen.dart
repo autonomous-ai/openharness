@@ -36,6 +36,7 @@ import '../widgets/resting_section.dart'
 import '../widgets/session_close_dialog.dart';
 import '../notify/system_notifications.dart';
 import '../widgets/account_device_detail.dart';
+import '../widgets/approve_device_code.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
 import 'login_screen.dart' show showSignInSheet;
@@ -3424,6 +3425,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
             _closeSearch(restoreFocus: false);
             unawaited(_addPhone());
           },
+    onApproveDevice: () async {
+      _pickerModalChanged(true);
+      try {
+        await approveDeviceByCode(context, app);
+      } finally {
+        _pickerModalChanged(false);
+        if (mounted && _search != null) _focusSearch();
+      }
+    },
   );
 
   void _openResourcePicker(String prefix) {

@@ -1981,6 +1981,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onAgentSettingsRead: () => agentSettings.settingsRead(),
     onAgentSettingsWrite: (body) => agentSettings.settingsWrite(body),
     onProductFeedback: (body) => proxyBackend('POST', '/api/product-usage/feedback', body),
+    onSignInAnswer: (action, body) => proxyBackend('POST', `/api/auth/qr/${action}`, body),
     onProductUsageReport: (body) => proxyBackend('POST', '/api/product-usage/report', body),
     onProductUsageRead: () => proxyBackend('GET', '/api/product-usage/settings'),
     onProductUsageWrite: (body) => proxyBackend('POST', '/api/product-usage/settings', body),
