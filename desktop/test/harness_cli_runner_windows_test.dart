@@ -30,7 +30,21 @@ void main() {
   });
 
   tearDown(() async {
-    if (await scratch.exists()) await scratch.delete(recursive: true);
+    for (var attempt = 0; attempt < 40; attempt++) {
+      if (!await scratch.exists()) return;
+      try {
+        await scratch.delete(recursive: true);
+        return;
+      } on FileSystemException catch (error) {
+        // Windows can briefly retain node.exe after its process has exited.
+        if (!Platform.isWindows ||
+            error.osError?.errorCode != 32 ||
+            attempt == 39) {
+          rethrow;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 125));
+      }
+    }
   });
 
   File defaultNode() => File(
