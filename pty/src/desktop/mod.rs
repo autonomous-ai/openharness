@@ -618,13 +618,65 @@ mod tests {
             EXIT_OK
         );
         assert_eq!(system.writes, 1);
-        assert_eq!(system.reads, reads + 1);
+        assert_eq!(
+            system.reads,
+            reads + 2,
+            "the protocol and installed version are checked"
+        );
         let another_root = dir.path().join("another");
         launch_from(&another_root, Some(&paths), None, &[], &mut system);
         assert_eq!(
             system.reads,
-            reads + 1,
+            reads + 2,
             "an overridden launch elsewhere does not heal"
+        );
+    }
+
+    #[test]
+    fn an_updated_installed_launcher_refreshes_settings_display_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Harness");
+        std::fs::create_dir_all(install.join("app/1.0.1")).unwrap();
+        std::fs::write(install.join("app/1.0.1").join(APP_EXE), b"app").unwrap();
+        pointer::write(&install.join("current"), "1.0.1").unwrap();
+        std::fs::write(install.join("app/1.0.1/.started"), b"").unwrap();
+        let paths = Paths {
+            own: install.clone(),
+            install: install.clone(),
+            programs: dir.path().join("programs"),
+            registry: r"Software\HarnessTest\update".into(),
+            profile: dir.path().to_owned(),
+        };
+        let display_version = (
+            paths.registry.clone(),
+            registry::UNINSTALL_KEY.to_owned(),
+            "DisplayVersion".to_owned(),
+        );
+        let uninstall_string = (
+            paths.registry.clone(),
+            registry::UNINSTALL_KEY.to_owned(),
+            "UninstallString".to_owned(),
+        );
+        let mut system = system::Fake::default();
+        system
+            .values
+            .insert(display_version.clone(), "1.0.0".into());
+        system.values.insert(
+            uninstall_string.clone(),
+            "keep existing uninstall command".into(),
+        );
+
+        assert_eq!(
+            launch_from(&install, Some(&paths), None, &[], &mut system),
+            EXIT_OK
+        );
+        assert_eq!(
+            system.values.get(&display_version),
+            Some(&OsString::from("1.0.1"))
+        );
+        assert_eq!(
+            system.values.get(&uninstall_string),
+            Some(&OsString::from("keep existing uninstall command"))
         );
     }
 }

@@ -208,6 +208,34 @@ pub fn heal_protocol_key(root: &Path, registry_root: &str, system: &mut impl Sys
     }
 }
 
+/// The Flutter updater changes `current` without running `--install`, so keep
+/// Settings ▸ Apps' existing version in step with the folder we actually open.
+fn heal_uninstall_version(
+    root: &Path,
+    registry_root: &str,
+    version: &str,
+    system: &mut impl System,
+) {
+    let old = system.read_value(registry_root, registry::UNINSTALL_KEY, "DisplayVersion");
+    // An extracted or portable copy must not create a partial uninstall entry.
+    if old.is_none() || old.as_deref() == Some(std::ffi::OsStr::new(version)) {
+        return;
+    }
+    let key = registry::Key {
+        path: registry::UNINSTALL_KEY.to_owned(),
+        values: vec![(
+            "DisplayVersion".to_owned(),
+            registry::Value::Text(OsString::from(version)),
+        )],
+    };
+    if let Err(error) = system.write_keys(registry_root, &[key]) {
+        log(
+            root,
+            &format!("could not update Settings version to {version}: {error}"),
+        );
+    }
+}
+
 /// Wait before any launch/installation side effect. The caller chooses the diagnostic location.
 pub(super) fn wait_for_replaced(
     wait_pid: Option<u32>,
@@ -315,6 +343,9 @@ pub(super) fn run_after_wait(
                 log(root, &format!("went back to {to}: {reason}"));
             }
             Choice::Launch { version, record } => {
+                if let Some(registry) = heal_registry {
+                    heal_uninstall_version(root, registry, &version, system);
+                }
                 let dir = root.join(APP_DIR).join(&version);
                 let exe = dir.join(APP_EXE);
                 return match system.start_app(&exe, &dir, args) {
