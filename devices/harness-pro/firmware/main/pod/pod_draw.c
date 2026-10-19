@@ -286,8 +286,8 @@ static void cell_raster_core(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
 // recap's small pet) is resampled again every frame. When the caller knows what is under the frame is one colour (pod_cell_flat), the first raster
 // resamples it once onto that colour into the arena and every later one is a row copy. The result is the very pixels the resampler writes onto
 // that ground: the golden screens do not change. Keyed by the frame's identity (its pointers and shape), zoom and ground, so another engine, another
-// frame or another ground is another entry; entries are never evicted (a scene still waiting to be drawn may name one), and when the table or the
-// arena is full the frame is simply resampled each time as before. Render task only.
+// frame or another ground is another entry. When the table or the arena is full it starts over; a raster looks its entry up (and bakes it) when it
+// runs, so nothing holds an entry across rasters. Render task only.
 // 360 K pixels (720 KB of PSRAM): every frame the Notices faces and the recap's RELAX and REST scenes can show for all four pets at once come to 353 K.
 enum { BAKE_SLOTS = 64, BAKE_ARENA_PX = 360 * 1024 };
 typedef struct { const ht_cell_frame_t *f; const uint8_t *cells; const uint16_t *palette; uint16_t ground, w, h, cols, rows; uint8_t z, s16; uint32_t off; } bake_t;
@@ -320,7 +320,11 @@ static const bake_t *bake_of(const ht_run_t *r)
             b->cols == f->cols && b->rows == f->rows && b->w == r->w && b->h == r->pro_height) return b;
     }
     size_t px = (size_t)r->w * (size_t)r->pro_height;
-    if (s_nbake >= BAKE_SLOTS || px > BAKE_ARENA_PX - s_arena_used) return NULL;
+    if (px > BAKE_ARENA_PX) return NULL;
+    // Full: start the arena over (the arena never evicts one entry). The screen shown re-bakes what it draws, which fits: no
+    // screen needs more than the arena (the Working card about 126 K px), while a session that visits every Notices, Recap and
+    // Working pet adds up to more.
+    if (s_nbake >= BAKE_SLOTS || px > BAKE_ARENA_PX - s_arena_used) { s_nbake = 0; s_arena_used = 0; }
     ht_run_t plain = *r;   // the same run at the origin, an ordinary cell run: resampled over the ground into the arena
     plain.x = 0; plain.y = 0; plain.text[0] = 0;
     uint16_t *dst = s_arena + s_arena_used;
@@ -339,8 +343,13 @@ static void cell_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
     if (!b) { cell_raster_core(r, clip, out); return; }
     int left = imax(clip.x, r->x), right = imin(clip.x + clip.w, r->x + r->w);
     int top = imax(clip.y, r->y), bottom = imin(clip.y + clip.h, r->y + r->pro_height);
-    for (int y = top; y < bottom; y++)
-        memcpy(out + (y - clip.y) * clip.w + left - clip.x, s_arena + b->off + (size_t)(y - r->y) * b->w + (left - r->x), (size_t)(right - left) * sizeof *out);
+    // Only the frame's own pixels: what the resampler left as the ground is skipped, so a frame baked over one colour also sits on a ground that
+    // only nearly is (the Working card's gradient) without showing its box.
+    for (int y = top; y < bottom; y++) {
+        uint16_t *d = out + (y - clip.y) * clip.w + left - clip.x;
+        const uint16_t *src = s_arena + b->off + (size_t)(y - r->y) * b->w + (left - r->x);
+        for (int x = 0; x < right - left; x++) if (src[x] != b->ground) d[x] = src[x];
+    }
 }
 
 // ---- ring arc -------------------------------------------------------------------------------------------

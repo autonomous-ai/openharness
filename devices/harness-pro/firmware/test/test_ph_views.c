@@ -106,7 +106,7 @@ int main(void) {
         pod_model_question(&M, "x8", "ok?");                 // x8 asks
         pod_model_clock(&M, now);
         pod_nav_init(&N);
-        CHECK(pod_tabs_pages_of(&N, &M) == 8);   // seven tabs, and the Notices card first: x8 asks
+        CHECK(pod_tabs_pages_of(&N, &M) == 9);   // seven tabs, the Notices card (x8 asks) and the Working card (x1, x2)
         static const unsigned want[7][2] = {{PH_TINT_CODEX1, PH_TINT_CODEX2}, {PH_TINT_CLAUDE1, PH_TINT_CLAUDE2}, {PH_TINT_MUSE1, PH_TINT_MUSE2},
                                             {PH_TINT_OTHER1, PH_TINT_OTHER2}, {PH_TINT_CODEX1, PH_TINT_CODEX2}, {PH_TINT_OTHER1, PH_TINT_OTHER2},
                                             {PH_TINT_KILO1, PH_TINT_KILO2}};
@@ -134,7 +134,7 @@ int main(void) {
                 icons += r->pro_kind == K_IMAGE;
                 dots11 += r->pro_kind == K_RECT_AA && r->pro_height == 11 && r->y >= 660;
             }
-            CHECK(cards == 1 && grads == 1 + (t > 0) + (t < 6));   // the tab neighbours peek when they exist (tab 0's left one is the Notices letter, no gradient)
+            CHECK(cards == 1 && grads == 2 + (t < 6));   // the neighbours peek: a tab's left one is always a gradient card (tab 0's is the Working card, behind the Notices letter)
             CHECK(dots11 == 0 && dot_runs() == 0);                  // no page dots
             CHECK(hits_of(POD_A_ENTER_TAB) == 1 && F.hit_count == 1);
             const pod_hit_t *h = nth_hit(POD_A_ENTER_TAB, 0);
@@ -233,9 +233,11 @@ int main(void) {
         }
         // no tabs at all: with a notice (x8 asks) the Notices card alone, else the "Harness" wordmark
         pod_model_swarms(&M, sw, lists, counts, 0, "", NULL, 0);
+        pod_model_turn(&M, "x1", "done", NULL, 0, now); pod_model_turn(&M, "x2", "done", NULL, 0, now);   // nobody works: no Working card
         N.stack[0].scroll = 0; fresh(); ph_view_home(&F, &N, &M, now);
         CHECK(text_run("Notices") && text_run("1") && text_run("Tap to read") && hits_of(POD_A_INBOX) == 1 && F.hit_count == 1 && pod_tabs_pages_of(&N, &M) == 1);
         pod_model_question_close(&M, "x8");
+        pod_model_turn(&M, "x8", "done", NULL, 0, now);
         fresh(); ph_view_home(&F, &N, &M, now);
         {   // the first screen: "Harness" as seven letter runs in Inter Bold 84 (the only text), centred on x 360 within 2 px, baseline 373,
             // on the navy ground, a 200x6 track at (260, 430) with a clipped pill, no hits; the light sweeps left to right
@@ -316,7 +318,7 @@ int main(void) {
         // one entry: the card first, 1 new, one row
         pod_model_unread_add(&M, "c", "claude-one", "Fixed the cable resync. Tests pass on the host.", 40, now - 5000);
         CHECK(pod_notice_count(&M) == 1 && pod_tabs_pages_of(&N, &M) == 3);
-        N.stack[0].scroll = -1; fresh(); ph_view_home(&F, &N, &M, now);
+        N.stack[0].scroll = -2; fresh(); ph_view_home(&F, &N, &M, now);
         {
             int paper = 0, mid = 0, back = 0, grads = 0, logos = 0, badge = 0;
             for (int i = 0; i < S.count; i++) {
@@ -353,7 +355,7 @@ int main(void) {
         pod_model_unread_add(&M, "g", "mystery", "Bumped the SDK and regenerated the client. Nothing else changed in this run.", 41, now - 3000);
         pod_model_unread_add(&M, "m", "muse-one", "Done!", 7, now - 2000);
         CHECK(pod_notice_count(&M) == 5 && pod_tabs_pages_of(&N, &M) == 3);
-        N.stack[0].scroll = -1; fresh(); ph_view_home(&F, &N, &M, now);
+        N.stack[0].scroll = -2; fresh(); ph_view_home(&F, &N, &M, now);
         {
             CHECK(text_run("5") && text_run("+2 more \xc2\xb7 tap to read") && text_run("asker"));
             int rows = 0, logos = 0, outlines = 0, rules = 0;
@@ -397,7 +399,7 @@ int main(void) {
         // a long count and a notice with no text read "Done" / "Failed"
         pod_model_unread_add(&M, "c", "claude-one", "", 1, now);
         ((pod_unread_t *)pod_model_unread_find(&M, "c"))->kind = POD_UNREAD_FAILED;
-        N.stack[0].scroll = -1; fresh(); ph_view_home(&F, &N, &M, now);
+        N.stack[0].scroll = -2; fresh(); ph_view_home(&F, &N, &M, now);
         CHECK(text_run("Failed") && text_run("Failed")->x == 90 + 44 + 44 + 18);
         // an unknown engine in the first row (an entry of an agent that left the roster): the outline
         pod_model_unread_add(&M, "gone", "ghost", "Left the roster.", 1, now + 1);
@@ -411,7 +413,7 @@ int main(void) {
         }
         // the card is a still page: the beat does not run while it shows, even with a working agent on tab 0
         pod_model_turn(&M, "c", "started", NULL, 0, now);
-        N.stack[0].scroll = -1;
+        N.stack[0].scroll = -2;
         CHECK(!ph_home_moves(&N, &M));
         N.stack[0].scroll = 0;
         CHECK(ph_home_moves(&N, &M));
@@ -1193,6 +1195,93 @@ int main(void) {
             ph_first_sentence(o, sizeof o, o);   // in place
             CHECK(!strcmp(o, "A. B C."));
         }
+    }
+    {   // Home's Working card (option D): the working agents newest first, three to a page, a tap on a pet, the colour of one engine
+        static pod_model_t M;
+        static pod_nav_t N;
+        static cable_swarm_t sw[1];
+        static const char *const *lists[1];
+        static uint8_t counts[1] = {1};
+        static const char *const w0[] = {"w1"};
+        static const char *const eng[5] = {"claude", "codex", "muse", "kilo", "cursor"}, *const id[5] = {"w1", "w2", "w3", "w4", "w5"};
+        static const uint32_t since[5] = {10000, 50000, 30000, 40000, 20000};   // turn starts, ms: the elapsed times are 90, 50, 70, 60, 80 s
+        pod_model_reset(&M);
+        pod_model_agents_begin(&M);
+        for (int i = 0; i < 5; i++) pod_model_agent(&M, id[i], id[i], eng[i], "Mac");
+        pod_model_agents_end(&M);
+        snprintf(sw[0].id, SWARM_ID_MAX, "w"); snprintf(sw[0].name, CABLE_NAME_MAX, "Solo"); sw[0].panes = sw[0].agents = 1; lists[0] = w0;
+        pod_model_swarms(&M, sw, lists, counts, 1, "w", NULL, 0);
+        pod_model_link(&M, true);
+        const uint32_t now = 100000u;
+        for (int i = 0; i < 5; i++) pod_model_turn(&M, id[i], "started", NULL, 0, since[i]);
+        pod_model_clock(&M, now);
+        pod_nav_init(&N);
+        N.stack[0].scroll = POD_HOME_WORKING;
+        CHECK(pod_home_working(&M) == 5 && pod_tabs_pages_of(&N, &M) == 2 && ph_home_moves(&N, &M));
+        const pod_agent_t *list[8];
+        CHECK(ph_working_list(&M, list, 8, now) == 5);
+        static const char *const order[5] = {"w2", "w4", "w3", "w5", "w1"};
+        for (int i = 0; i < 5; i++) CHECK(!strcmp(list[i]->id, order[i]));
+        for (int i = 0; i < 5; i++) CHECK(pod_pet_ink_h(eng[i], POD_SCENE_WORK, 134, 8) <= 128);   // the card's square keeps every pet within 128 px
+        N.work_page = 0; fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(text_run("Working") && text_run("5") && text_run("w2") && text_run("w4") && text_run("w3") && !text_run("w5"));
+        CHECK(text_run("Working")->x == 90 + 44 && text_run("5")->x + text_run("5")->w == 90 + 496);
+        CHECK(hits_of(POD_A_FOLLOW) == 3 && F.hit_count == 3);
+        for (int k = 0; k < 3; k++) {
+            const pod_hit_t *h = nth_hit(POD_A_FOLLOW, k);
+            CHECK(h->x == 90 + 105 + k * 165 - 75 && h->y == 56 + 200 && h->w == 150 && h->h == 280);
+            CHECK(!strcmp(h->id, order[k]) && !strcmp(M.agents[h->arg].id, order[k]));
+        }
+        unsigned c1, c2, e1, e2;
+        ph_working_tint(&M, &c1, &c2);
+        ph_engine_tint("codex", &e1, &e2);
+        CHECK(c1 == e1 && c2 == e2);   // Codex's blue
+        {   // the card's gradient is that colour, and the same on every frame
+            unsigned d1 = 0, d2 = 0;
+            for (uint32_t t = 0; t < 3000; t += 700) {
+                fresh(); ph_view_home(&F, &N, &M, now + t);
+                for (int i = 0; i < S.count; i++)
+                    if (S.runs[i].pro_kind == POD_GRAD && S.runs[i].w == 540) {
+                        uint16_t g[2]; memcpy(g, S.runs[i].text, sizeof g);
+                        CHECK(!d1 || (d1 == g[0] && d2 == g[1]));
+                        d1 = g[0]; d2 = g[1];
+                    }
+                unsigned t1, t2; ph_working_tint(&M, &t1, &t2);
+                CHECK(t1 == c1 && t2 == c2);
+            }
+            CHECK(d1 == ht_rgb(c1) && d2 == ht_rgb(c2));
+        }
+        N.work_page = 1; fresh(); ph_view_home(&F, &N, &M, now);   // w5 (Cursor: no pet, its logo) and w1
+        CHECK(text_run("w5") && text_run("w1") && !text_run("w2") && hits_of(POD_A_FOLLOW) == 2 && F.hit_count == 2);
+        CHECK(!strcmp(nth_hit(POD_A_FOLLOW, 0)->id, "w5") && nth_hit(POD_A_FOLLOW, 0)->arg == 4 && !strcmp(nth_hit(POD_A_FOLLOW, 1)->id, "w1") && nth_hit(POD_A_FOLLOW, 1)->arg == 0);
+        CHECK(nth_hit(POD_A_FOLLOW, 0)->x == 90 + 188 - 75 && nth_hit(POD_A_FOLLOW, 1)->x == 90 + 352 - 75);   // two on a page sit in the middle
+        {
+            int logos = 0;
+            for (int i = 0; i < S.count; i++)
+                if (S.runs[i].pro_kind == K_IMAGE && S.runs[i].x >= 90 + 188 - 75 && S.runs[i].x + S.runs[i].w <= 90 + 188 + 75 && S.runs[i].y > 256 && S.runs[i].y < 456) logos++;   // two pets: centred, the first at 270 - 82
+            CHECK(logos >= 1);
+        }
+        {   // the worst case, two Codex pets and a Muse on page 0: every frame of a 2 s loop is baked once and the next loop bakes nothing, inside the arena
+            static uint16_t shot[540 * 560];
+            snprintf(M.agents[3].engine, sizeof M.agents[3].engine, "codex");   // w4
+            N.work_page = 0; pod_cell_bake_reset();
+            unsigned made = 0;
+            for (int lap = 0; lap < 3; lap++) {
+                for (uint32_t d = 0; d < 2000; d += 66) { fresh(); ph_view_home(&F, &N, &M, now + d); ht_raster(&S, (ht_rect_t){90, 56, 540, 560}, shot); }
+                if (lap == 1) made = pod_cell_bakes();
+            }
+            printf("working card: %u baked frames, %u px of the %u arena\n", made, pod_cell_bake_px(), 360u * 1024u);
+            CHECK(made > 0 && pod_cell_bakes() == made && pod_cell_bake_px() <= 360u * 1024u);
+        }
+        N.work_page = 9; fresh(); ph_view_home(&F, &N, &M, now);   // past the last page: the last
+        CHECK(text_run("w5") && hits_of(POD_A_FOLLOW) == 2);
+        N.work_page = 0; N.stack[0].scroll = 0; fresh(); ph_view_home(&F, &N, &M, now);   // tab 0 with Working as its left neighbour: no hits of its own
+        CHECK(!text_run("w2") && hits_of(POD_A_FOLLOW) == 0 && ph_home_moves(&N, &M));
+        for (int i = 0; i < 5; i++) pod_model_turn(&M, id[i], "done", NULL, 0, 200000);   // nobody works: no Working page, scroll -1 is tab 0
+        N.stack[0].scroll = POD_HOME_WORKING;
+        CHECK(pod_home_working(&M) == 0 && !pod_home_has(&M, POD_HOME_WORKING) && pod_tabs_pages_of(&N, &M) == 1);
+        fresh(); ph_view_home(&F, &N, &M, now);
+        CHECK(!text_run("Working") && text_run("Solo") && hits_of(POD_A_FOLLOW) == 0);
     }
     printf("test_ph_views: %d checks ok\n", checks);
     return 0;

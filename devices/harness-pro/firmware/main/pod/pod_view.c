@@ -22,10 +22,35 @@ uint32_t pod_view_next_ms(const pod_nav_t *nav, const pod_model_t *m, uint32_t n
     }
 }
 
+int pod_home_working(const pod_model_t *m)
+{
+    int n = 0;
+    for (int i = 0; i < m->agent_count; i++) n += pod_model_eff(m, &m->agents[i]) == POD_WORKING;
+    return n;
+}
+bool pod_home_has(const pod_model_t *m, int page)
+{
+    return page == POD_HOME_NOTICES ? pod_notice_count(m) > 0
+         : page == POD_HOME_WORKING ? pod_home_working(m) > 0
+         : page >= 0 && page < m->tab_count;
+}
+int pod_home_pages(const pod_model_t *m, int16_t *out, int cap)
+{
+    int n = 0;
+    for (int p = POD_HOME_NOTICES; p < m->tab_count; p++)
+        if (pod_home_has(m, p)) { if (out && n < cap) out[n] = (int16_t)p; n++; }
+    return n;
+}
+int pod_home_clamp(const pod_model_t *m, int s)
+{
+    for (int p = s < POD_HOME_NOTICES ? POD_HOME_NOTICES : s; p < m->tab_count; p++) if (pod_home_has(m, p)) return p;
+    for (int p = s < m->tab_count ? s : m->tab_count - 1; p >= POD_HOME_NOTICES; p--) if (pod_home_has(m, p)) return p;
+    return 0;
+}
 int pod_tabs_pages_of(const pod_nav_t *nav, const pod_model_t *m)
 {
     (void)nav;
-    return m->tab_count + (pod_notice_count(m) > 0);   // Home: one page a tab, and the Notices card first while there are notices
+    return pod_home_pages(m, NULL, 0);
 }
 
 int pod_scroll_pitch(const pod_nav_t *nav)
