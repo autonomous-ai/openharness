@@ -38,7 +38,7 @@ class AddDevicePage extends StatefulWidget {
   State<AddDevicePage> createState() => _AddDevicePageState();
 }
 
-enum _Step { start, join, unlock, networks, password, waiting, done }
+enum _Step { start, join, unlock, networks, password, waiting, done, back }
 
 /// Joining the device's hotspot, shown as it goes: the person picking it, the phone on it and
 /// asking the device, then reading its Wi-Fi list.
@@ -90,6 +90,13 @@ class _AddDevicePageState extends State<AddDevicePage> {
   /// Unlocked from here: it is starting, and its hotspot comes back under the same name.
   bool _unlocked = false;
 
+  /// After an unlock: the account's computers that were not online then. One of them online now is
+  /// the one just unlocked, set up before — on its own Wi-Fi, signed in, with no hotspot to come
+  /// back ([_Step.back]).
+  Set<String> _offlineAtUnlock = const {};
+  Timer? _backWatch;
+  Machine? _backOnline;
+
   _Step _step = _Step.start;
   bool _busy = false;
   String _error = '';
@@ -125,6 +132,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
   @override
   void dispose() {
     _poll?.cancel();
+    _backWatch?.cancel();
     unawaited(_hotspot.leave());
     _ssid.dispose();
     _password.dispose();
@@ -313,6 +321,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
     // It starts now. Its hotspot goes, and comes back under the same name for the rest of the
     // setup — unless it was set up before: then it goes on to its own Wi-Fi.
     _unlocked = true;
+    _watchBack();
     await _hotspot.leave();
     _show(_Step.join);
     setState(() {
@@ -322,6 +331,48 @@ class _AddDevicePageState extends State<AddDevicePage> {
     await Future<void>.delayed(const Duration(seconds: 15));
     if (!mounted || _step != _Step.join) return;
     await _join();
+  }
+
+  /// While the phone looks for its hotspot again: a computer set up before goes on to its own Wi-Fi
+  /// and signs in as it was, and no hotspot comes. The account says so — one that was offline at the
+  /// unlock is online — and the search stops there, done. For a few minutes; a computer not set up
+  /// yet comes back on its hotspot instead and the setup goes on as before.
+  void _watchBack() {
+    _offlineAtUnlock = {
+      for (final machine in _app.machines)
+        if (machine.status != 'running') machine.machineId,
+    };
+    _backWatch?.cancel();
+    if (_offlineAtUnlock.isEmpty) return;
+    final deadline = DateTime.now().add(const Duration(minutes: 3));
+    _backWatch = Timer.periodic(const Duration(seconds: 3), (_) async {
+      if (!mounted || !_unlocked || DateTime.now().isAfter(deadline)) {
+        _backWatch?.cancel();
+        return;
+      }
+      try {
+        await _app.refreshMachines();
+      } catch (_) {
+        // The phone may still be on the device's Wi-Fi, or finding its way back to its own.
+      }
+      if (!mounted || !_unlocked) return;
+      final back = _app.machines
+          .where(
+            (m) =>
+                _offlineAtUnlock.contains(m.machineId) && m.status == 'running',
+          )
+          .toList();
+      if (back.isEmpty) return;
+      // The one named after this hotspot, when there are several; else the first back.
+      final hotspot = _device['hotspot'] as String?;
+      _backOnline =
+          back.where((m) => m.displayName == hotspot).firstOrNull ?? back.first;
+      _backWatch?.cancel();
+      _poll?.cancel();
+      _unlocked = false;
+      unawaited(_hotspot.leave());
+      _show(_Step.back);
+    });
   }
 
   // -- 2c. on a cable: only the sign-in --
@@ -708,6 +759,13 @@ class _AddDevicePageState extends State<AddDevicePage> {
                       'This phone goes back to its own Wi-Fi meanwhile.',
           ),
         ];
+      case _Step.back:
+        return [
+          say(
+            '${_backOnline?.displayName ?? name} is unlocked and online again, on its own Wi-Fi '
+            'and signed in as before. Nothing else to set up.',
+          ),
+        ];
       case _Step.done:
         return [
           say(
@@ -813,6 +871,14 @@ class _AddDevicePageState extends State<AddDevicePage> {
               },
             ),
           ],
+        ];
+      case _Step.back:
+        return [
+          TtyPrimaryButton(
+            key: const Key('add-device-back-done'),
+            label: 'Done',
+            onPressed: () => Navigator.of(context).maybePop(),
+          ),
         ];
       case _Step.done:
         return [
