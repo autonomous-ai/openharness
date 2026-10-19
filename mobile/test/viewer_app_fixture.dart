@@ -70,6 +70,9 @@ class ScriptedConn extends PagerConn {
   final List<Uint8List> binaries = [];
   int redials = 0;
 
+  /// Request type → how long its last request was willing to wait for the reply.
+  final Map<String, Duration> timeouts = {};
+
   /// The request types asked, in order.
   List<String> get asked => [for (final (type, _) in requests) type];
 
@@ -97,6 +100,7 @@ class ScriptedConn extends PagerConn {
     Duration timeout = const Duration(seconds: 20),
   }) async {
     requests.add((type, payload));
+    timeouts[type] = timeout;
     final answer = answers[type];
     if (answer == null) return {};
     return await answer(payload);

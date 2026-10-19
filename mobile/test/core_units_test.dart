@@ -206,6 +206,74 @@ void main() {
       expect(newBranchHere(info, ' fresh '), 'fresh');
     });
 
+    test('with Worktree off, which choices move the folder onto another '
+        'branch', () {
+      final info = repo();
+      bool switches(
+        GitProjectInfo info, {
+        bool worktree = false,
+        String? ref,
+        String? name,
+      }) => switchesFolderBranch(
+        info,
+        worktree: worktree,
+        branchRef: ref,
+        branchName: name,
+      );
+
+      // Moved: another local branch with no worktree, or a new branch made here.
+      expect(switches(info, ref: 'refs/heads/feature'), isTrue);
+      expect(switches(info, name: 'fresh'), isTrue);
+      expect(
+        switches(info, ref: 'refs/heads/main', name: ' fresh '),
+        isTrue,
+        reason: 'a typed new name wins over the picked branch',
+      );
+      // A folder on no branch is moved by any local branch.
+      expect(switches(repo(branch: null), ref: 'refs/heads/main'), isTrue);
+
+      // Left where it is.
+      expect(switches(info), isFalse, reason: 'nothing picked: where it is');
+      expect(switches(info, ref: 'refs/heads/main'), isFalse);
+      expect(
+        switches(info, ref: 'refs/heads/main', name: 'feature'),
+        isFalse,
+        reason: 'a typed name an existing branch has is not a new one',
+      );
+      expect(
+        switches(info, ref: 'refs/heads/busy'),
+        isFalse,
+        reason: 'opened in its own worktree instead',
+      );
+      expect(
+        switches(info, ref: 'refs/remotes/origin/main'),
+        isFalse,
+        reason: 'the machine refuses a remote branch with Worktree off',
+      );
+      expect(switches(repo(branch: null)), isFalse);
+      expect(
+        switches(info, worktree: true, ref: 'refs/heads/feature'),
+        isFalse,
+      );
+      expect(switches(info, worktree: true, name: 'fresh'), isFalse);
+    });
+
+    test('a checkout holds itself and every folder inside it, nothing '
+        'else', () {
+      expect(withinCheckout('/w/app', '/w/app'), isTrue);
+      expect(withinCheckout('/w/app', '/w/app/'), isTrue);
+      expect(withinCheckout('/w/app/', '/w/app'), isTrue);
+      expect(withinCheckout('/w/app', '/w/app/cli'), isTrue);
+      expect(withinCheckout('/w/app', '/w/app/cli/src/lib'), isTrue);
+      expect(withinCheckout('/w/app', '/w/app/cli/../desktop'), isTrue);
+
+      expect(withinCheckout('/w/app', '/w/application'), isFalse);
+      expect(withinCheckout('/w/app', '/w/app-2'), isFalse);
+      expect(withinCheckout('/w/app', '/w'), isFalse);
+      expect(withinCheckout('/w/app', '/w/other'), isFalse);
+      expect(withinCheckout('/w/app', '/w/app/../other'), isFalse);
+    });
+
     test('a placeholder branch is two words none of the taken ones use', () {
       final taken = <String>{};
       final random = Random(1);

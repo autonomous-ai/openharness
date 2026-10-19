@@ -102,30 +102,35 @@ class PhoneSheetSection {
 /// caption, or a gap below the card before when it has none. An empty section is left out.
 ///
 /// The page behind stands on the app's sheet veil, dimmed and blurred — see [_PhoneSheetRoute].
+///
+/// [onShown] is handed the sheet's route as it is pushed, for a page that may have to take the
+/// sheet down itself: its rows are read once, as it opens, and something that ends under it — a
+/// Change agent — would otherwise leave it saying what is no longer true.
 Future<void> showPhoneSheet(
   BuildContext context, {
   required String title,
   List<PhoneSheetAction> actions = const [],
   List<PhoneSheetSection> sections = const [],
   String? titleBranch,
+  void Function(Route<void> route)? onShown,
 }) {
-  return Navigator.of(context, rootNavigator: true).push(
-    phoneSheetRoute<void>(
-      context,
-      builder: (sheetContext) => SafeArea(
-        child: _TmuxMenu(
-          title: title,
-          branch: titleBranch,
-          actions: actions,
-          sections: sections,
-          onAction: (action) {
-            Navigator.of(sheetContext).pop();
-            action.onTap();
-          },
-        ),
+  final route = phoneSheetRoute<void>(
+    context,
+    builder: (sheetContext) => SafeArea(
+      child: _TmuxMenu(
+        title: title,
+        branch: titleBranch,
+        actions: actions,
+        sections: sections,
+        onAction: (action) {
+          Navigator.of(sheetContext).pop();
+          action.onTap();
+        },
       ),
     ),
   );
+  onShown?.call(route);
+  return Navigator.of(context, rootNavigator: true).push(route);
 }
 
 /// The route [showPhoneSheet] pushes, around content of the caller's own — for a sheet that is not
