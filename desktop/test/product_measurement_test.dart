@@ -77,6 +77,16 @@ void main() {
       });
     },
   );
+  test('UTC-day counts survive before local midnight', () async {
+    now = DateTime.utc(2026, 10, 19, 4);
+    usage.begin(ProductFlow.signIn)(ProductOutcome.ok);
+    await usage.flush();
+    expect(setup.single['day'], '2026-10-19');
+    expect(
+      setup.single['counters'],
+      containsPair('setup_desktop_sign_in_ok', 1),
+    );
+  });
   ProductMeasurement withStore(LocalKeyValueStore storage) =>
       ProductMeasurement(
         surface: 'desktop',
