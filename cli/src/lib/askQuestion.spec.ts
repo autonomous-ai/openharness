@@ -918,6 +918,12 @@ const CURSOR_STYLES: CursorStyle[] = [
     off: (line) => line.replace(/^(\s*(?:[│┃|]\s*)?)([❯›>])(\s*)(\d+\.\s.*)$/, (_m, a: string, _g, sp: string, rest: string) => `${a} ${sp}${rest}`),
     on: (line, glyph) => line.replace(/^(\s*(?:[│┃|]\s*)?)(\s\s)(.*)$/, (_m, a: string, _s, rest: string) => `${a}${glyph} ${rest}`),
   },
+  { // devin 3000.11: `❭ 1 Yes` over a bare `  2 No`, the marker only under the cursor.
+    at: /^(\s*)❭(\s+\d+\s.*)$/,
+    row: /^(\s*)\s\s(\d+\s.*)$/,
+    off: (line) => line.replace(/^(\s*)❭/, '$1 '),
+    on: (line) => line.replace(/^(\s*)\s\s(\d+\s)/, '$1❭ $2'),
+  },
   { // devin: `❭ 1 Xanh` over `· 2 Đỏ` and `·   Other (type your own)`.
     at: /^(\s*)❭(\s.*)$/,
     row: /^(\s*)·(\s.*)$/,
@@ -946,6 +952,8 @@ function cursorMoves(pane: string): string[] {
         if (style.row.test(lines[i])) { targets.push(i); gap = 0 } else gap++
       }
     }
+    // A style whose cursor matched but whose rows did not is another engine's: try the next.
+    if (!targets.length) continue
     return targets.map((t) => {
       const moved = [...lines]
       moved[cur] = style.off(lines[cur])
@@ -971,7 +979,7 @@ function boxToggles(pane: string): string[] {
 
 // TUIs that mark the highlighted row by colour alone (the SGR is gone once captured) or lay the rows out
 // side by side: no glyph in the text to move, so nothing a cursor does can reach the id.
-const CURSOR_BY_COLOUR = ['permission-cursor.txt', 'permission-opencode.txt', 'question-grok.txt', 'question-kilo.txt', 'question-opencode.txt', 'question-devin-multi.txt']
+const CURSOR_BY_COLOUR = ['permission-cursor.txt', 'permission-opencode.txt', 'question-grok.txt', 'question-kilo.txt', 'question-opencode.txt', 'question-devin-multi.txt', 'question-devin-multi-3000-11.txt']
 // The captures that paint a live timer — inside the dialog (Hermes, Muse) or around it.
 const TICKING = ['permission-grok.txt', 'permission-hermes.txt', 'permission-muse.txt', 'question-codex.txt', 'question-grok.txt', 'question-hermes.txt', 'question-muse.txt']
 
@@ -1251,6 +1259,7 @@ describe('every captured dialog keeps its requestId', () => {
     'permission-copilot.txt': 'q_62873249',
     'permission-cursor.txt': 'q_e2102acb',
     'permission-devin.txt': 'q_0ed54a33',
+    'permission-devin-3000-11.txt': 'q_3023a098',
     'permission-grok.txt': 'q_5396976a',
     'permission-hermes.txt': 'q_9fe12e7e',
     'permission-muse.txt': 'q_2d480eba',
@@ -1260,7 +1269,9 @@ describe('every captured dialog keeps its requestId', () => {
     'question-commandcode.txt': 'q_66cbf314',
     'question-copilot.txt': 'q_101c92a4',
     'question-devin-multi.txt': 'q_19c3200e',
+    'question-devin-multi-3000-11.txt': 'q_2b724594',
     'question-devin.txt': 'q_19a084b7',
+    'question-devin-3000-11.txt': 'q_68442d94',
     'question-grok.txt': 'q_a5e412d6',
     'question-hermes.txt': 'q_58484dc6',
     'question-hermes-lock.txt': 'q_d72d9997',
