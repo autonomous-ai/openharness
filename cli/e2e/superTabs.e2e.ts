@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { superTabCommand } from '../src/superTabs/command.js'
 import { object } from '../src/superTabs/wire.js'
+import { retainedHarnesses } from '../src/superTabs/retention.js'
 import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
@@ -256,6 +257,8 @@ it('starts either engine once, posts to its captured group and delivers shared i
   const listed = await client.request('agents_list')
   expect(listed.agents).toHaveLength(3)
   const worker = listed.agents.find((a: Record<string, any>) => a.id === starts.get('start-claude')!.harnessId)
+  await until('host to retain contributed members independently of open panes', () =>
+    agents.every(a => retainedHarnesses(d.dataDir).has(a.harnessId)) || null, 10_000, 100)
   assignments.push({ tabId: TAB, assignmentId: 'worker-attempt', harnessId: worker.id })
   const closed = await client.request('agent_close', { agentId: worker.id, sessionId: worker.sessionId, createdAt: worker.createdAt, mode: 'now' }, 60_000)
   expect(closed, JSON.stringify(closed)).toMatchObject({ closed: true })
@@ -263,6 +266,22 @@ it('starts either engine once, posts to its captured group and delivers shared i
   expect(stopReceipts[0]).toMatchObject({ assignmentId: 'worker-attempt', receipt: expect.stringContaining('native-stopped:') })
   expect(await client.request('super_tabs', { action: 'observeCapacity', creationId: starts.get('start-claude')!.creationId }))
     .toMatchObject({ ok: true, harnessId: worker.id, released: true })
+  // A member may have stopped under an older build. The app resumes the same
+  // saved session before preparing a new recording context, never a new worker.
+  const reopened = await client.request('agent_resume', { agentId: worker.id, creationId: 'super-tab-resume-worker' }, 90_000)
+  expect(reopened.error, JSON.stringify(reopened)).toBeUndefined()
+  const resumed = await until('the exact contributed conversation to resume', async () => {
+    const rows = (await client.request('agents_list')).agents
+    const row = rows.find((a: Record<string, any>) => a.id === worker.id)
+    return row?.status === 'active' && row.sessionId === worker.sessionId ? row : null
+  }, 60_000, 250)
+  expect(resumed.id).toBe(worker.id)
+  const reopenContext = 'native-resumed-worker-context'
+  expect(await client.request('super_tabs', { action: 'backend', method: 'POST', path: `/api/super-tabs/${TAB}/native`,
+    body: { operationId: reopenContext, conversationId: 'feature', agentId: idFor(worker.id) } }))
+    .toMatchObject({ ok: true, value: { contextId: reopenContext } })
+  expect(await client.request('super_tabs', { action: 'prepareNative', tabId: TAB, contextId: reopenContext }))
+    .toMatchObject({ ok: true, inputContext: reopenContext })
   // Two callers see the same free memory. Only one may reserve most of it,
   // even though neither has started its native process yet.
   const capacity = await client.request('super_tabs', { action: 'capacity', cwd })

@@ -147,6 +147,17 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             'Could not prepare terminal sharing. Try opening it again.',
           );
         }
+        // Older idle cleanup may already have stopped a contributed harness.
+        // Open its saved conversation through the existing resume receipt before
+        // asking the host to prepare recording for that exact live session.
+        final resumeError = await app.resumeStoppedSession(
+          agent.machineId,
+          agent.harnessId,
+        );
+        if (!current()) return;
+        if (resumeError != null) {
+          throw SuperTabFailure('TERMINAL_UNAVAILABLE', resumeError);
+        }
         final prepared = await app.superTabMachineRequest(agent.machineId, {
           'action': 'prepareNative',
           'tabId': controller.tabId,

@@ -202,6 +202,15 @@ void main() {
       );
       expect(c.snapshot!.agents, hasLength(1));
       await shot('hidden-terminal');
+      // An earlier app/daemon may already have cleaned up this member. Reopening
+      // must resume its exact saved conversation before preparing recording.
+      f.connection.native = {
+        ...f.connection.native!,
+        'status': 'stopped',
+        'sessionId': 'saved-native-conversation',
+        'terminal': {'available': false},
+      };
+      f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
       await tester.tap(find.text('1 agent · 20 people'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Open terminal'));
@@ -214,6 +223,13 @@ void main() {
       ) {
         await tester.pump(const Duration(milliseconds: 50));
       }
+      expect(
+        f.app.activeSwarm.panes,
+        hasLength(1),
+        reason:
+            'Reopen failed: ${f.connection.calls}\n'
+            '${tester.widgetList<Text>(find.byType(Text)).map((text) => text.data).whereType<String>().join("\n")}',
+      );
       expect(f.app.activeSwarm.panes.single.agentId, 'native-lead');
       expect(
         f.app.activeSwarm.panes.single.session?.streamId,
@@ -223,6 +239,15 @@ void main() {
         f.connection.calls.where((call) => call.$1 == 'agent_create'),
         hasLength(1),
       );
+      expect(
+        f.connection.calls.where((call) => call.$1 == 'agent_resume'),
+        hasLength(1),
+      );
+      expect(
+        f.app.stateOf('m')!.agents.single.sessionId,
+        'saved-native-conversation',
+      );
+      await shot('resumed-terminal');
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       f.app.superTabs.dispose();

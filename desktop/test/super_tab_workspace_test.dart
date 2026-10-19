@@ -6,6 +6,103 @@ import 'package:harness/super_tabs/workspace.dart';
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 
 void main() {
+  for (final scenario in [
+    (engine: 'codex', viewer: false, fail: false),
+    (engine: 'claude', viewer: false, fail: false),
+    (engine: 'codex', viewer: true, fail: false),
+    (engine: 'codex', viewer: false, fail: true),
+  ]) {
+    testWidgets('opens a stopped member: $scenario', (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      final state = f.connection.server.state;
+      state['agents'] = [
+        {
+          'id': 'worker',
+          'name': 'Multiply',
+          'machineId': 'm',
+          'harnessId': 'native-worker',
+          'contributorId': 'owner',
+          'configuration': {'engine': scenario.engine},
+        },
+      ];
+      (state['conversations'] as List)[1]['agentIds'] = ['worker'];
+      if (scenario.viewer) (state['people'] as List)[0]['role'] = 'viewer';
+      f.connection.native = {
+        'id': 'native-worker',
+        'name': 'Multiply',
+        'engine': scenario.engine,
+        'sessionId': 'saved-multiply-conversation',
+        'status': 'stopped',
+        'terminal': {'available': false},
+      };
+      f.connection.failResume = scenario.fail;
+      f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      c.select('offline');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: f.app,
+              builder: (_, _) => SuperTabWorkspace(
+                app: f.app,
+                canvas: const Text('Native terminal'),
+                onAddAgent: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      c.selectTerminal('offline', 'worker');
+      await tester.pumpAndSettle();
+      final calls = f.connection.calls;
+      expect(calls.where((call) => call.$1 == 'agent_create'), isEmpty);
+      expect(
+        calls.where((call) => call.$1 == 'agent_resume'),
+        hasLength(scenario.viewer ? 0 : 1),
+      );
+      if (scenario.fail) {
+        expect(c.terminalAgent('offline'), isNull);
+        expect(
+          calls.where((call) => call.$2['action'] == 'prepareNative'),
+          isEmpty,
+        );
+        expect(find.textContaining('did not come back'), findsOneWidget);
+      } else {
+        expect(f.app.activeSwarm.panes.single.agentId, 'native-worker');
+        expect(
+          f.app.stateOf('m')!.agents.single.sessionId,
+          'saved-multiply-conversation',
+        );
+        expect(f.app.stateOf('m')!.agents.single.isStopped, scenario.viewer);
+        if (!scenario.viewer) {
+          expect(
+            calls.indexWhere((call) => call.$1 == 'agent_resume'),
+            lessThan(
+              calls.indexWhere((call) => call.$2['action'] == 'prepareNative'),
+            ),
+          );
+          await f.app.requestClosePane(f.app.activeSwarm.panes.single.id);
+          await tester.pumpAndSettle();
+          c.selectTerminal('offline', 'worker');
+          await tester.pumpAndSettle();
+          expect(
+            calls.where((call) => call.$1 == 'agent_resume'),
+            hasLength(1),
+          );
+          expect(calls.where((call) => call.$1 == 'agent_close'), isEmpty);
+        }
+      }
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    });
+  }
+
   testWidgets(
     'each group restores its terminal and closing it never stops the agent',
     (tester) async {

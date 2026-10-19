@@ -30,6 +30,9 @@ or stopping the agent. The close shortcut and closing the Super Tab follow the
 same rule. The agent remains in its conversation and its terminal can be reopened.
 The coordinating agent is labeled **Lead** throughout the Super Tab, including
 its terminal header; its first message is not its name.
+Super Tab membership protects an agent from automatic idle and parent cleanup,
+including while the host is offline. If an earlier build already stopped the
+agent, opening its terminal resumes the same saved conversation first.
 
 ## Keep the workspace structure
 

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { backend, hostJournalFile, SuperTabHost } from './host.js'
+import { retainedHarnesses } from './retention.js'
 
 const roots: string[] = []
 const hosts: SuperTabHost[] = []
@@ -43,6 +44,20 @@ function setup(messageFields: Record<string, unknown> = {}) {
 }
 
 describe('Super Tab native delivery handoff', () => {
+  it('keeps roster members through host failure and restart, releasing only a confirmed removal', async () => {
+    const t = setup(), first = t.open()
+    await first.tick()
+    expect(retainedHarnesses(t.dir).has('harness')).toBe(true)
+    first.stop()
+    expect(retainedHarnesses(t.dir).has('harness')).toBe(true)
+    const next = t.open()
+    vi.mocked(t.call).mockRejectedValueOnce(new Error('Host offline'))
+    await next.tick()
+    expect(retainedHarnesses(t.dir).has('harness')).toBe(true)
+    t.remove()
+    await next.tick()
+    expect(retainedHarnesses(t.dir).size).toBe(0)
+  })
   it('preserves the exact reply reference when a short human answer reaches an agent', async () => {
     const t = setup({ replyTo: 'question-2', text: 'Yes, keep them.' })
     await t.open().tick()

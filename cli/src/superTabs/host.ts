@@ -1,4 +1,5 @@
 import { publishObservers } from './observers.js'
+import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
 import { randomUUID } from 'node:crypto'
@@ -205,6 +206,9 @@ export class SuperTabHost {
     const data = await backend(this.core, 'GET', `/api/super-tabs/hosts/${this.machineId}`)
     if (this.stopped) return
     if (!Array.isArray(data)) throw new Error('Invalid Super Tab host roster.')
+    // Multiply was closed by the ordinary 30-minute idle cleanup while still a
+    // shared member. Membership outlives its task, terminal view and host process.
+    retainContributions(this.core.dataDir, this.machineId, data)
     this.observers(this.core.dataDir, this.machineId, data, requestedAt + 2500)
     // Runtime observations cannot delay the live input leases. A stale host
     // observation is fenced by the backend's per-agent configuration version.

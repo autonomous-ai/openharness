@@ -36,6 +36,7 @@ class SuperTabFixtureConnection extends WsConn {
   final joins = <Map<String, dynamic>>[];
   bool loseCreate = false, loseJoin = false;
   bool failNative = false;
+  bool failResume = false;
   bool nativeSurface = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
   late AppNotifier app;
@@ -124,6 +125,12 @@ class SuperTabFixtureConnection extends WsConn {
       if (payload['action'] == 'wake') return {'ok': true};
       if (payload['action'] == 'prepareNative' ||
           payload['action'] == 'renewNative') {
+        if (native?['status'] == 'stopped') {
+          return {
+            'error': 'SUPER_TAB_UNAVAILABLE',
+            'detail': 'The exact contributed terminal is unavailable on this machine.',
+          };
+        }
         return failNative
             ? {
                 'error': 'NATIVE_UNAVAILABLE',
@@ -179,6 +186,22 @@ class SuperTabFixtureConnection extends WsConn {
         throw StateError('Lost the join reply after committing');
       }
       return {'ok': true, 'value': value};
+    }
+    if (type == 'agent_resume') {
+      // The real native test completes this request during a frame pump.
+      expectSync(payload['agentId'], native!['id']);
+      if (failResume) return {'error': 'RESUME_FAILED'};
+      native = {
+        ...native!,
+        'status': 'active',
+        'terminal': {'available': true},
+      };
+      return {
+        'creationId': payload['creationId'],
+        'state': 'created',
+        'resumed': true,
+        'agent': native,
+      };
     }
     if (type == 'agent_create') {
       final records = store.values.entries.where(

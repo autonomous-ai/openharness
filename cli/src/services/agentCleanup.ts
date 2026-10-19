@@ -16,6 +16,8 @@
  * - **Never the person's.** Neither touches a harness the person typed or pasted into from a window or the phone: it is
  *   theirs from then on, and kept so in `<data>/agent-cleanup.json` across restarts. A harness the person started is
  *   never one this may close: the core refuses (`CoreApi.agents.closeStarted`).
+ * - **Keep shared members.** Super Tab membership also protects a harness from both forms of cleanup, even when its
+ *   terminal is hidden or its host is offline. Only a confirmed roster removal releases that protection.
  *
  * A close keeps the conversation, as `harness close` does: the person can resume it, and `harness show` still reads its
  * answer. One line in the log for each close.
@@ -25,6 +27,7 @@ import { dirname, join } from 'node:path'
 import type { AgentCleanupPort, CoreApi, CorePorts } from '../core/api.js'
 import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { retainedHarnesses } from '../superTabs/retention.js'
 
 /** How long a harness another agent started may sit idle after its last answer before it is closed. */
 export const IDLE_CLOSE_MS = 30 * 60_000
@@ -103,6 +106,9 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
 
   /** Closes [s] as the core lets this; a close done is said. */
   const close = async (s: RegisteredSession, mode: 'idle' | 'now', why: string): Promise<AgentCloseResult> => {
+    // Recheck after an activity read: a shared team may have adopted this agent
+    // while cleanup was waiting. This is independent of visible terminal panes.
+    if (retainedHarnesses(core.dataDir).has(s.agentId)) return { error: 'SESSION_RETAINED' }
     const result: AgentCloseResult = await (core.agents.closeStarted?.(s.agentId, mode) ?? Promise.resolve({ error: 'UNSUPPORTED' }))
     if (result.closed) log(`[agent-cleanup] closed ${label(s)}: ${why}. Its conversation is kept.`)
     return result
@@ -123,12 +129,13 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
       const live = core.agents.live()
       // Its starter is back (resumed while this notice was held, or between tries): its harnesses are its again.
       if (live.some((s) => s.agentId === parentId)) return
-      const orphans = live.filter((s) => s.parentAgentId === parentId && s.startedBy === 'agent' && !joined.has(s.agentId))
+      const retained = retainedHarnesses(core.dataDir)
+      const orphans = live.filter((s) => s.parentAgentId === parentId && s.startedBy === 'agent' && !joined.has(s.agentId) && !retained.has(s.agentId))
       const left: Array<[RegisteredSession, AgentCloseResult]> = []
       // One at a time: each close saves a screen and stops a process, and a starter may have several.
       for (const s of orphans) {
         const result = await close(s, 'now', STARTER_CLOSED)
-        if (!result.closed) left.push([s, result])
+        if (!result.closed && result.error !== 'SESSION_RETAINED') left.push([s, result])
       }
       if (!left.length || stopped) return
       if (attempt >= CASCADE_TRIES) {
@@ -146,6 +153,7 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
     try {
       await refresh()
       const live = core.agents.live()
+      const retained = retainedHarnesses(core.dataDir)
       const gone = (id: string) => !live.some((s) => s.agentId === id)
       for (const id of askAgainAt.keys()) if (gone(id)) askAgainAt.delete(id)
       for (const id of said) if (gone(id)) said.delete(id)
@@ -154,7 +162,7 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
       for (const s of live) if (!seen.has(incarnation(s))) seen.set(incarnation(s), now())
       for (const s of live) {
         if (stopped) return
-        if (s.startedBy !== 'agent' || joined.has(s.agentId) || (askAgainAt.get(s.agentId) ?? 0) > now()) continue
+        if (s.startedBy !== 'agent' || joined.has(s.agentId) || retained.has(s.agentId) || (askAgainAt.get(s.agentId) ?? 0) > now()) continue
         // Not before this run of it has been here that long; then by when its conversation last moved, its last answer
         // or later. Not known (an engine that keeps no dated transcript), it is left alone.
         const since = seen.get(incarnation(s))!
@@ -168,7 +176,7 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
         if (result.closed) continue
         askAgainAt.set(s.agentId, now() + ASK_AGAIN_MS)
         // Working after all, or waiting for the person: asked again later, nothing to say. Anything else is said once.
-        if (result.error !== 'SESSION_NOT_IDLE' && !said.has(s.agentId)) {
+        if (result.error !== 'SESSION_NOT_IDLE' && result.error !== 'SESSION_RETAINED' && !said.has(s.agentId)) {
           said.add(s.agentId)
           failed(s, why, result)
         }
