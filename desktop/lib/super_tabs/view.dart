@@ -13,6 +13,7 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
 import 'message_row.dart';
+import 'route_row.dart';
 import 'work_details.dart';
 
 /// The contents of one app tab. Its title stays in the app's existing tab bar.
@@ -790,6 +791,15 @@ class _SuperTabViewState extends State<SuperTabView> {
                     : null,
                 child: Text(c.isOwner ? 'Invite' : 'People'),
               ),
+              TextButton(
+                onPressed: c.snapshot != null
+                    ? () {
+                        _closeSidebar();
+                        unawaited(showSuperTabRouting(context, c));
+                      }
+                    : null,
+                child: const Text('Routing'),
+              ),
             ],
           ),
         ),
@@ -1018,6 +1028,15 @@ class _SuperTabViewState extends State<SuperTabView> {
     bool grouped,
     Map<String, SuperTabMessage> byId,
   ) {
+    final route = message.route;
+    if (route != null) {
+      return SuperTabRouteRow(
+        key: ValueKey('super-message-${message.id}'),
+        message: message,
+        route: route,
+        controller: c,
+      );
+    }
     final agent = message.fromAgent
         ? c.snapshot?.agent(message.authorId)
         : null;

@@ -10,7 +10,7 @@ import type { NativeLaunchResult } from '../../engines/nativeLaunch.js'
 import { createNativeLaunchPreparer } from '../../engines/prepareNativeLaunch.js'
 import { AgentCreationReceiptError, AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
-import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from '../../lib/engineLaunch.js'
+import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseNewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from '../../lib/projectFolder.js'
@@ -50,6 +50,8 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   ...await real<object>(),
   supportsFirstPrompt: vi.fn(() => true), supportsNamedAgent: vi.fn(() => true),
   permissionModeFlags: vi.fn(() => ['--flag']), permissionModeApproves: vi.fn(() => false),
+  // The engine's own --help is never run by a spec.
+  unsupportedLaunchModelFlag: vi.fn(async () => null),
 }))
 vi.mock('../../lib/projectFolder.js', async (real) => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -349,6 +351,46 @@ describe('agent_create, launched', () => {
     const [byAgent, byPerson] = vi.mocked(create!).mock.calls.map(([input]) => input)
     expect(byAgent).toMatchObject({ engine: 'claude', cwd: '/w', startedBy: 'agent' })
     expect(Object.keys(byPerson!)).not.toContain('startedBy')
+  })
+
+  it('hands a Claude launch its model and effort, and nothing for default, so older receipts\' fingerprints stay as they were', async () => {
+    const { ask, create } = setup()
+    await ask({ engine: 'claude', cwd: '/w', model: 'opus', effort: 'high' })
+    await ask({ engine: 'claude', cwd: '/w', model: 'default', effort: 'default' })
+    await ask({ engine: 'claude', cwd: '/w' })
+    const [routed, byDefault, plain] = vi.mocked(create!).mock.calls.map(([input]) => input)
+    expect(routed).toMatchObject({ engine: 'claude', launchModel: { model: 'opus', effort: 'high' } })
+    expect(Object.keys(byDefault!)).not.toContain('launchModel')
+    expect(Object.keys(plain!)).not.toContain('launchModel')
+  })
+
+  it('refuses a launch model before any receipt when the installed engine lacks a flag, and proceeds when it has them', async () => {
+    const { ask, create, deps } = setup()
+    vi.mocked(unsupportedLaunchModelFlag).mockResolvedValueOnce('--effort')
+    expect(await ask({ engine: 'claude', cwd: '/w', creationId: CREATION, model: 'opus', effort: 'high' }))
+      .toMatchObject({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: expect.stringContaining('--effort') })
+    expect(unsupportedLaunchModelFlag).toHaveBeenCalledWith('claude', { model: 'opus', effort: 'high' })
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.receipts.has(CREATION, 'any')).toBe(false)
+    expect(deps.receipts.pendingIntent(CREATION)).toBeFalsy()
+    // The same creation id is then free to start the agent without them.
+    vi.mocked(unsupportedLaunchModelFlag).mockResolvedValueOnce(null)
+    await ask({ engine: 'claude', cwd: '/w', creationId: CREATION, model: 'opus', effort: 'high' })
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce())
+    expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ launchModel: { model: 'opus', effort: 'high' } })
+  })
+
+  it('refuses a launch model its engine cannot take, a malformed one, and one beside a grid or a resumed conversation', async () => {
+    const { ask, create } = setup()
+    expect(await ask({ engine: 'codex', cwd: '/w', model: 'gpt-5', effort: 'high' })).toMatchObject({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: expect.stringContaining('codex') })
+    expect(await ask({ engine: 'claude', cwd: '/w', model: 'opus; ls' })).toMatchObject({ error: 'INVALID_LAUNCH_MODEL' })
+    expect(await ask({ engine: 'claude', cwd: '/w', effort: 'enormous' })).toMatchObject({ error: 'INVALID_LAUNCH_MODEL' })
+    vi.mocked(parseGridLaunchOverride).mockReturnValueOnce({ state: 'ok', override: { networkName: 'g' } } as never)
+    expect(await ask({ engine: 'claude', cwd: '/w', model: 'opus' })).toMatchObject({ error: 'INVALID_LAUNCH_MODEL', detail: expect.stringContaining('grid') })
+    vi.mocked(parseNewAgentModel).mockReturnValueOnce({ state: 'ok', selection: { model: 'm', grid: 'g' } })
+    expect(await ask({ engine: 'claude', cwd: '/w', model: 'opus' })).toMatchObject({ error: 'INVALID_LAUNCH_MODEL' })
+    expect(await ask({ engine: 'claude', cwd: '/w', resumeSessionId: 'abc12345', model: 'opus' })).toMatchObject({ error: 'INVALID_SESSION' })
+    expect(create).not.toHaveBeenCalled()
   })
 
   it('hands on which harness here started it, and leaves out one this machine does not know', async () => {

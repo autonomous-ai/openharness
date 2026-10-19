@@ -38,6 +38,11 @@ enum SettingsSection {
   shortcuts(AppIcons.keyboard, 'Keyboard shortcuts'),
   connectors(AppIcons.plug, 'Connectors'),
   usage(AppIcons.chartNoAxesColumn, 'Usage'),
+  routing(
+    AppIcons.slidersHorizontal,
+    'Routing',
+    keywords: ['models', 'quota', 'jev', 'super tab', 'lead'],
+  ),
   tabInvites(
     AppIcons.users,
     'Tab invites',
@@ -139,8 +144,13 @@ const _kSettingsGroups = [
     // What the agents on this machine have spent. It carries the switches that decide which logs
     // are read at all — the pane is off until somebody sets it.
     SettingsSection.usage,
+    // Which models a Super Tab's Lead may pick, and how it weighs them: the account's default.
+    SettingsSection.routing,
   ]),
-  SettingsGroup('Labs', [SettingsSection.tabInvites, SettingsSection.experimental]),
+  SettingsGroup('Labs', [
+    SettingsSection.tabInvites,
+    SettingsSection.experimental,
+  ]),
   // Debug, in builds that have it, beside the version a report has to name.
   SettingsGroup('Help', [SettingsSection.about, SettingsSection.debug]),
 ];

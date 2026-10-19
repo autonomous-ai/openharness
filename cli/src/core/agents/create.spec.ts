@@ -627,6 +627,16 @@ describe('creating an agent', () => {
       expect(t.deps.gridLaunchMachine).toHaveBeenCalledWith('claude', undefined)
     })
 
+    it('launches with the model and effort it was given, as a launch option the registry row never keeps', async () => {
+      const { create } = setup()
+      await create(request({ launchModel: { model: 'opus', effort: 'high' } }))
+      const options = vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>
+      expect(options).toMatchObject({ launchModel: { model: 'opus', effort: 'high' } })
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).not.toHaveProperty('launchModel')
+      await create(request())
+      expect(vi.mocked(buildEngineLaunchArgv).mock.calls[1][1]).not.toHaveProperty('launchModel')
+    })
+
     it('opens as a named agent, with a first prompt, and does not install an engine with a path override', async () => {
       vi.mocked(enginePathOverride).mockReturnValueOnce('/opt/claude' as never)
       const { deps, create } = setup()

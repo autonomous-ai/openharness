@@ -18,9 +18,15 @@ class ConversationServer {
   int revision = 0;
   bool loseReply = false, reject = false, failSave = false, failReads = false;
   Map<String, dynamic>? saved;
+  // Makes every command answer with this refusal: {code, message}.
+  Map<String, String>? refuse;
   final posts = <Map<String, dynamic>>[];
   final receipts = <String, Map<String, dynamic>>{};
   final messages = <Map<String, dynamic>>[];
+  // Route decisions by id, answered by GET .../route-decisions/:id.
+  final routeDecisions = <String, Map<String, dynamic>>{};
+  // The effective routing policy answered by GET .../routing-policy.
+  Map<String, dynamic>? routingPolicy;
   final state = <String, dynamic>{
     'version': 1,
     'id': 'tab',
@@ -72,6 +78,13 @@ class ConversationServer {
           statusCode: 400,
         );
       }
+      if (refuse case final refusal?) {
+        throw SuperTabFailure(
+          refusal['code']!,
+          refusal['message']!,
+          statusCode: 409,
+        );
+      }
       final operationId = body['operationId'] as String;
       if (receipts[operationId] case final receipt?) return receipt;
       final command = body['command'] as Map;
@@ -101,6 +114,21 @@ class ConversationServer {
     }
     if (failReads) throw StateError('Offline');
     final uri = Uri.parse(path);
+    if (uri.pathSegments.last == 'routing-policy') {
+      final policy = routingPolicy;
+      if (policy == null) {
+        throw const SuperTabFailure('NOT_FOUND', 'No routing policy.');
+      }
+      return jsonDecode(jsonEncode(policy)) as Map<String, dynamic>;
+    }
+    if (uri.pathSegments.length > 2 &&
+        uri.pathSegments[uri.pathSegments.length - 2] == 'route-decisions') {
+      final decision = routeDecisions[uri.pathSegments.last];
+      if (decision == null) {
+        throw const SuperTabFailure('NOT_FOUND', 'No such decision.');
+      }
+      return jsonDecode(jsonEncode(decision)) as Map<String, dynamic>;
+    }
     if (uri.pathSegments.last == 'messages') {
       final conversationId = uri.pathSegments[4];
       final after = int.tryParse(uri.queryParameters['after'] ?? '');

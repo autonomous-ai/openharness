@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import type { RouteDecisionEffect } from './routeRecord.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person { id: string; email: string; role: Role; generation: string }
@@ -26,6 +27,8 @@ export interface AgentStartRequest {
   conversationId: string
   machineId: string
   engine: string
+  model?: string
+  effort?: string
   name: string
   cwd: string
   worktree: boolean
@@ -89,6 +92,8 @@ export interface SuperTabState {
   name: string
   ownerId: string
   environment: string
+  /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
+  routingPolicy?: import('./routingPolicy.js').RoutingOverride
   paused: boolean
   people: Person[]
   agents: Agent[]
@@ -107,12 +112,15 @@ export interface MessageDraft {
   text: string
   replyTo: string | null
   recipients: string[]
+  /** Structured row kind for clients; `native` is written by native.ts, `route`/`route-override` by commands. */
+  source?: Record<string, unknown>
 }
 export interface CommandEffects {
   state: SuperTabState
   messages: MessageDraft[]
   cancelledAgents: string[]
   previousAttempts: Array<{ conversationId: string; brief: string; checks: Check[]; assignment: Assignment }>
+  routeDecisions: RouteDecisionEffect[]
   result: Record<string, unknown>
 }
 export class SuperTabError extends Error {

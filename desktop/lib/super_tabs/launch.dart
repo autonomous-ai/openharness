@@ -128,6 +128,7 @@ class SuperTabLaunch {
         'Reuse that operation ID and exact message after a lost reply. Your native terminal is not the shared conversation.\n'
         'If sandbox restrictions block this local Harness command, request permission to run it outside the sandbox. '
         'For work groups, assignments, acceptance evidence and messages to other agents, use `$command help`. '
+        '${saved['lead'] == true ? 'Before starting or assigning work, run `$command route GROUP JSON` with your difficulty and risk assessment, then start or assign its pick with the routeDecisionId it returns. To choose otherwise, pass overrideReason. If it answers NO_CANDIDATE, tell the person in the group why, using its reasons; do not guess another machine. ' : ''}'
         'Use a group for an independently assignable outcome with acceptance checks. Reuse existing groups and agents. '
         'Engine-native helper subagents do not need a group. Questions stay in the conversation where the work happens. '
         'Report exact revisions, evidence and links appropriate to the project.\n\n'

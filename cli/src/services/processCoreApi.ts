@@ -96,6 +96,13 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
   const live = (): ShownAgent[] => view.live?.() ?? []
   const ask = view.ask
   const daemon = (): DaemonAddress => view.daemon?.() ?? DAEMON_UNKNOWN
+  const backend: CoreApi['account']['backend'] = async (method, path, body) => {
+    const answer = await (ask?.('backend', { method, path, ...(body === undefined ? {} : { body }) }) ?? Promise.reject(new Error('no core to ask')))
+      .catch((): Payload => ({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } }))
+    return typeof answer.status === 'number' && answer.body && typeof answer.body === 'object'
+      ? { status: answer.status, body: answer.body as Payload }
+      : { status: 502, body: { error: typeof answer.error === 'string' ? answer.error : 'BACKEND_UNREACHABLE' } }
+  }
   return {
     dataDir,
     usage: async target => {
@@ -183,13 +190,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       connectorVault: CONNECTOR_VAULT_OFF,
       privateGridName: async () => null,
       machineName: () => null,
-      backend: async (method, path, body) => {
-        const answer = await (ask?.('backend', { method, path, ...(body === undefined ? {} : { body }) }) ?? Promise.reject(new Error('no core to ask')))
-          .catch((): Payload => ({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } }))
-        return typeof answer.status === 'number' && answer.body && typeof answer.body === 'object'
-          ? { status: answer.status, body: answer.body as Payload }
-          : { status: 502, body: { error: typeof answer.error === 'string' ? answer.error : 'BACKEND_UNREACHABLE' } }
-      },
+      backend,
       // The account signed in here, asked of the core: Share derives its tabs' observers for it (core/experimentQueries.ts
       // `account`), and Agent Messages asks its own link (services/messagesProcess.ts). A core that cannot say: none.
       identity: async () => {
@@ -199,6 +200,10 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       },
       onNotice: (listener) => view.onNotice?.(listener) ?? (() => {}),
       ...UNASKED.account,
+      // The account's machine list is the one read of `/api/machines` the core's `backend` answer gives an experiment
+      // already, so a service that is not asked for it gets the same refusal for it as for any other path. The Super
+      // Tab service's route context needs it: in its own process it saw none (the 2026-10-19 manual run).
+      machines: () => backend('GET', '/api/machines'),
     },
     clients: {
       viewerChanged: () => {}, viewerFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {},

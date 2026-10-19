@@ -85,6 +85,7 @@ export const LAUNCH_ERROR_CODES = [
   // What a new harness asked for, refused before anything starts (core/agents/launches.ts, lib/engineLaunch.ts).
   'invalid_codex_home', 'invalid_prompt', 'prompt_too_long', 'prompt_unsupported', 'invalid_agent', 'invalid_session',
   'invalid_started_by', 'agent_unsupported', 'invalid_runtime_profile', 'grid_engine_unsupported', 'codex_cli_too_old',
+  'invalid_launch_model', 'launch_model_unsupported',
   // A new project's folder (lib/projectFolder.ts) and the launch's durable receipt (lib/agentCreationReceipt.ts).
   'project_exists', 'invalid_repository', 'clone_failed', 'clone_timeout', 'git_unavailable', 'project_preparation_failed',
   'creation_conflict', 'creation_storage_failed', 'launch_authority_changed', 'internal',

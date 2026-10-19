@@ -101,6 +101,63 @@ class SuperTabSnapshot {
       : message.authorName;
 }
 
+class SuperTabRouteChoice {
+  const SuperTabRouteChoice(this.id, this.title);
+  final String id, title;
+}
+
+/// The routing decision a Lead message reports: who got the task and why.
+class SuperTabRoute {
+  SuperTabRoute._(
+    this.decisionId,
+    this.via,
+    this.p,
+    this.belowFloor,
+    this.why,
+    this.fallback,
+    this.pick,
+    this.alternatives,
+  );
+  static SuperTabRoute? fromSource(Map<String, dynamic> s) {
+    final pick = s['pick'];
+    final decisionId = s['decisionId'];
+    if (s['kind'] != 'route' ||
+        decisionId is! String ||
+        pick is! Map ||
+        pick['id'] is! String ||
+        pick['title'] is! String) {
+      return null;
+    }
+    final via = s['via'];
+    final why = s['why'];
+    final alternatives = s['alternatives'];
+    return SuperTabRoute._(
+      decisionId,
+      via is String ? via : 'order',
+      s['p'] is num ? (s['p'] as num).toDouble() : null,
+      s['belowFloor'] == true,
+      why is String ? why : '',
+      s['fallback'] is String ? s['fallback'] as String : null,
+      SuperTabRouteChoice(pick['id'] as String, pick['title'] as String),
+      [
+        if (alternatives is List)
+          for (final a in alternatives)
+            if (a is Map && a['id'] is String && a['title'] is String)
+              SuperTabRouteChoice(a['id'] as String, a['title'] as String),
+      ],
+    );
+  }
+
+  /// The Lead's reason for the task. Why the policy order decided, when it did,
+  /// is [fallback]: `unsure` or `unavailable`.
+  final String decisionId, via, why;
+  final String? fallback;
+  final double? p;
+  final bool belowFloor;
+  final SuperTabRouteChoice pick;
+  final List<SuperTabRouteChoice> alternatives;
+}
+
 class SuperTabMessage {
   SuperTabMessage.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -126,6 +183,8 @@ class SuperTabMessage {
   String get authorId => author['id'] as String? ?? '';
   bool get fromAgent => author['kind'] == 'agent';
   bool get fromTerminal => source['kind'] == 'native';
+  SuperTabRoute? get route => SuperTabRoute.fromSource(source);
+  bool get routeOverride => source['kind'] == 'route-override';
   String? get terminalNote {
     if (!fromTerminal) return null;
     final phase = source['phase'];

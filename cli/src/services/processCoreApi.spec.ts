@@ -145,7 +145,9 @@ describe('the core API a light service runs on in its own process', () => {
     await expect(withSummaries.agents.summaries(['a1'])).resolves.toEqual({})
     expect(api.account.signedIn()).toBe(false)
     expect(api.account.environment()).toBe('')
-    await expect(api.account.machines()).resolves.toEqual({ status: 503, body: {} })
+    await expect(api.account.machines()).resolves.toEqual({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } })
+    // What the devices' process starts from before it asks the core for the list.
+    await expect(UNASKED.account.machines()).resolves.toEqual({ status: 503, body: {} })
     api.clients.sendLocal({ type: 'dial_focus', payload: {} })
     expect(api.clients.sendToWindow('w1', { type: 'dial_form', payload: {} })).toBe(false)
     expect(api.clients.hasWindow()).toBe(false)
@@ -187,6 +189,17 @@ describe('the core API a light service runs on in its own process', () => {
     expect(await api.account.backend('GET', '/api/x')).toEqual({ status: 503, body: { error: 'SERVICE_UNAVAILABLE' } })
     api.account.onNotice(() => {})
     expect(listeners).toHaveLength(1)
+  })
+
+  it('lists the account\'s machines the way it reads the backend, and no more than that read may ask', async () => {
+    const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ status: 200, body: { data: { machines: [{ machineId: 'm1', name: 'remote-1' }] } } }))
+    const api = processCoreApi('/data', 'superTabs', { ask })
+    expect(await api.account.machines()).toEqual({ status: 200, body: { data: { machines: [{ machineId: 'm1', name: 'remote-1' }] } } })
+    expect(ask).toHaveBeenCalledOnce()
+    expect(ask).toHaveBeenCalledWith('backend', { method: 'GET', path: '/api/machines' })
+    // A service the core does not answer for (it is not an experiment) gets the core's refusal, not a list.
+    ask.mockResolvedValueOnce({ error: 'NOT_AN_EXPERIMENT' })
+    expect(await processCoreApi('/data', 'store', { ask }).account.machines()).toEqual({ status: 502, body: { error: 'NOT_AN_EXPERIMENT' } })
   })
 
   it('gives the cloud agents their doors only with a core to ask, and never waits on or throws from them', async () => {

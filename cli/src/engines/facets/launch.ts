@@ -230,12 +230,26 @@ export interface InstructionAttribution {
   args: readonly string[]
 }
 
+/**
+ * The flags that give ONE session its model and effort, so that nothing is written to the person's own engine
+ * settings (Claude Code's `/model` and `/effort` commands are saved there as the new default). `{value}` in an
+ * argument is the model or the effort. `efforts` are the levels the effort flag takes; any other is refused.
+ * Applied by lib/launchModel.ts.
+ */
+export interface ModelArgsContract {
+  model: readonly string[]
+  effort: readonly string[]
+  efforts: readonly string[]
+}
+
 /** Literal argv contracts copied from the existing launch paths. No engine version behavior changes. */
 export interface EngineLaunch {
   permissionModes: Readonly<Record<string, readonly string[]>>
   bypassPermission: string[]
   firstPromptArgs: readonly string[]
   resumeArgs: string[]
+  /** How a new session is launched with a model and effort of its own, for this session only. */
+  modelArgs?: ModelArgsContract
   forkArgs: { lead: string[]; after?: string[] }
   instructionFiles: readonly string[]
   contextArgs?: ContextArgsTemplate

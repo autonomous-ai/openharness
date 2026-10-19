@@ -20,6 +20,7 @@
     "test:harnessd": "vitest run --config vitest.harnessd.config.ts",
     "test:core": "vitest run --config vitest.core.config.ts",
     "test:shared-tabs": "vitest run --config vitest.shared-tabs.config.ts",
+    "test:super-tabs": "vitest run --config vitest.super-tabs.config.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:sharing-e2e": "tsx scripts/share-harness-e2e.ts",
     "test:remote-viewers": "vitest run --config vitest.viewer.config.ts",

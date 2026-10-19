@@ -3,6 +3,7 @@ import { constants } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { readMachineResources } from '../lib/machineResources.js'
 import { commandAvailableInInteractiveShell } from '../lib/engineLaunch.js'
+import { launchModelEngines } from '../lib/launchModel.js'
 import { object } from './wire.js'
 import { readCapacityDisk } from './disk.js'
 
@@ -11,6 +12,13 @@ export interface Requirements {
   memoryBytes: number; diskBytes: number; maxCpuPercent: number
   tools: string[]; devices: string[]; quotaRequired: boolean
 }
+/** What `start` asks of a machine when the Lead has no reason to ask for more: the help's template. */
+export const START_REQUIREMENTS: Requirements = { memoryBytes: 2147483648, diskBytes: 10737418240, maxCpuPercent: 85, tools: ['git'], devices: [], quotaRequired: false }
+/** The same plus what the task needs. The route admits a pick on exactly this, so the start it suggests is admitted too. */
+export const startRequirements = (needs: { tools: string[]; devices: string[] }): Requirements =>
+  // CPU use is only a momentary reading: a busy machine would refuse every candidate (seen in the route e2e at 98.7%), so the route does not cap it.
+  ({ ...START_REQUIREMENTS, maxCpuPercent: 100, tools: [...new Set([...START_REQUIREMENTS.tools, ...needs.tools])], devices: needs.devices })
+
 export async function readCapabilities(input: Json, deps = {
   resources: readMachineResources,
   disk: readCapacityDisk,
@@ -40,7 +48,9 @@ export async function readCapabilities(input: Json, deps = {
   ])
   return { ok: true, sampledAt: Date.now(), resources: { ...resources, projectDiskFreeBytes: disk?.freeBytes ?? null,
     projectDiskVolume: disk?.volume ?? null, projectDiskPath: disk?.path ?? null },
-    tools: Object.fromEntries(toolValues), devices: Object.fromEntries(deviceValues) }
+    tools: Object.fromEntries(toolValues), devices: Object.fromEntries(deviceValues),
+    // A daemon from before the launch flags leaves this out, and a start then switches the model after it.
+    launchModel: launchModelEngines() }
 }
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)

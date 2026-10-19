@@ -110,6 +110,8 @@ export class FakeBackend {
   }>) | null = null
   /** Opt-in fixture: older scenarios keep the endpoint absent, as on an older backend. */
   productUsage: { enabled: boolean; revision: number; reports: Record<string, unknown>[]; stallReports?: boolean } | null = null
+  /** `POST /api/route/jev`, Harness's hosted Jev. Unset answers 503 JEV_BUSY, which callers treat as unavailable. */
+  jev: ((body: Record<string, any>) => Record<string, unknown>) | null = null
   readonly seen: string[] = []
   /** What `GET /api/agent-messages` answers: the account's tabs and who is in each; null, a 404. */
   agentMessages: Record<string, unknown> | null = null
@@ -215,6 +217,15 @@ export class FakeBackend {
           if (!tab || typeof enabled !== 'boolean') { res.statusCode = 404; res.end(json({ success: false, error: { code: 'NOT_FOUND' } })); return }
           tab.enabled = enabled
           res.end(json({ success: true, data: { tabId: tab.id, enabled } }))
+        })
+        return
+      }
+      if (req.url?.split('?')[0] === '/api/route/jev' && req.method === 'POST') {
+        let raw = ''
+        req.on('data', (chunk) => { raw += chunk })
+        req.on('end', () => {
+          if (!backend.jev) { res.statusCode = 503; res.end(json({ success: false, error: { code: 'JEV_BUSY', message: 'Fixture Jev is off.' } })); return }
+          res.end(json({ success: true, data: { answers: backend.jev(JSON.parse(raw || '{}')) } }))
         })
         return
       }

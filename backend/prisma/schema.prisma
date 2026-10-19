@@ -1077,6 +1077,18 @@ model SuperTabRun {
   createdAt     DateTime @default(now())
 }
 
+// One routing policy document per account and environment (superTabs/routingPolicy.ts).
+model RoutingPolicy {
+  id            String   @id @map("_id")
+  userId        String
+  autonomousEnv String
+  revision      Int      @default(0)
+  policy        Json
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, autonomousEnv])
+}
+
 model SuperTabAttempt {
   id              String   @id @map("_id")
   tabId           String
@@ -1085,6 +1097,24 @@ model SuperTabAttempt {
   createdAt       DateTime @default(now())
 
   @@index([tabId, conversationId, createdAt])
+}
+
+/// One `harness super-tab route` decision (superTabs/routeRecord.ts). Pruned after 90 days on write.
+model SuperTabRouteDecision {
+  id             String    @id @map("_id")
+  tabId          String
+  conversationId String
+  record         Json
+  final          Json?
+  override       Json?
+  assignmentId   String?
+  outcome        String?
+  outcomeAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([tabId, createdAt])
+  @@index([tabId, conversationId, outcome])
+  @@index([tabId, assignmentId])
 }
 
 model SuperTabStopReceipt {

@@ -6,6 +6,8 @@ it('uses the destination filesystem and reports missing tools/devices without ex
     disk: vi.fn(async () => ({ freeBytes: 500, volume: 'volume', path: '/fixture/repo' })), tool: vi.fn(async () => true), device: vi.fn(async () => true) }
   const capacity = await readCapabilities({ cwd: '/fixture/repo', tools: ['git'], devices: ['/dev/test'] }, deps)
   expect(deps.disk).toHaveBeenCalledWith('/fixture/repo', false)
+  // Which engines this daemon launches with a model: a daemon without the field gets the switch after the start.
+  expect(capacity).toMatchObject({ ok: true, launchModel: ['claude'] })
   expect(admission(capacity, { installed: true }, quotaOf({}, 'codex', false), requirements)).toMatchObject({ allowed: true, unknown: ['Subscription allowance is unknown for this account.'] })
   deps.disk.mockRejectedValueOnce(new Error('not mounted'))
   const missing = await readCapabilities({ cwd: '/fixture/repo', tools: [], devices: [] }, deps)

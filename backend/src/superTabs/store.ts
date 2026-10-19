@@ -10,6 +10,8 @@ import {
   activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState,
   SuperTabError, type Actor, type Agent, type Author, type SuperTabState,
 } from './model.js'
+import { closeAssignment, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
+import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 
 type Transaction = Prisma.TransactionClient
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
@@ -44,6 +46,41 @@ export class SuperTabStore {
       row: async (tx, user, tabId) => { const row = await this.row(tx, user, tabId); return { row, state: stateOf(row) } },
       agentGrant: (tx, state, target) => this.agentGrant(tx, state, target),
       contribution: (tx, state, actor, command) => this.contribution(tx, state, actor, command),
+    })
+  }
+
+  private policyId(user: AuthUser) { return stableId('routing-policy', user.sub, user.autonomousEnv) }
+
+  async accountPolicy(user: AuthUser) {
+    const row = await this.db.routingPolicy.findUnique({ where: { id: this.policyId(user) } })
+    if (!row) return { policy: DEFAULT_ROUTING_POLICY, revision: 0, isDefault: true }
+    const { policy } = effectivePolicy(row.policy, null)
+    return { policy, revision: row.revision, isDefault: false }
+  }
+
+  async saveAccountPolicy(user: AuthUser, revision: number, input: RoutingPolicy) {
+    const policy = routingPolicySchema.parse(input)
+    return transaction(this.db, async tx => {
+      const id = this.policyId(user)
+      const row = await tx.routingPolicy.findUnique({ where: { id } })
+      if ((row?.revision ?? 0) !== revision) fail('REVISION_CHANGED', 'The routing policy changed elsewhere. Reload it and try again.')
+      const next = revision + 1
+      if (row) await tx.routingPolicy.update({ where: { id, revision }, data: { revision: next, policy: json(policy) } })
+      else await tx.routingPolicy.create({ data: { id, userId: user.sub, autonomousEnv: user.autonomousEnv, revision: next, policy: json(policy) } })
+      return { policy, revision: next, isDefault: false as const }
+    })
+  }
+
+  /** Viewers and agents read the same effective policy; it always comes from the tab owner's account. */
+  async tabPolicy(user: AuthUser, tabId: string, asAgentId?: string) {
+    return transaction(this.db, async tx => {
+      const row = await this.row(tx, user, tabId)
+      const state = stateOf(row)
+      author(state, await this.actor(tx, user, state, asAgentId))
+      const account = await tx.routingPolicy.findUnique({ where: { id: stableId('routing-policy', state.ownerId, state.environment) } })
+      // The owner's account policy alone, so a field reset to "use account default" can show its value.
+      return { ...effectivePolicy(account?.policy ?? null, state.routingPolicy ?? null), override: state.routingPolicy ?? null,
+        account: effectivePolicy(account?.policy ?? null, null).policy }
     })
   }
 
@@ -213,6 +250,10 @@ export class SuperTabStore {
         context.confirmedStopped = !!proof && !!execution && proof.machineId === execution.machineId &&
           proof.harnessId === execution.harnessId && proof.machineOwnerId === execution.machineOwnerId
       }
+      if (command.type === 'route.record') context.recentRoutes = await recentRoutes(tx, tabId, context.now)
+      const decisionId = command.type === 'route.override' || command.type === 'route.modelResult' ? command.decisionId
+        : command.type === 'work.assign' || command.type === 'agent.start' ? command.routeDecisionId : undefined
+      if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
       const effects = applyCommand(original, actor, command, context)
       await revokeNativeContexts(tx, original, effects.state)
       const revision = row.revision + 1
@@ -247,9 +288,14 @@ export class SuperTabStore {
       await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: {
         revision, state: json(effects.state), ...indexes(effects.state),
       } })
+      await writeRouteEffects(tx, tabId, effects.routeDecisions, context.now)
+      if (command.type === 'work.status' && (command.status === 'done' || command.status === 'stopped')) {
+        await closeAssignment(tx, tabId, command.assignmentId, command.status, context.now)
+      }
       for (const message of effects.messages) {
         await tx.superTabMessage.create({ data: { id: message.id, tabId, conversationId: message.conversationId,
-          sequence: revision, author: json(message.author), text: message.text, replyTo: message.replyTo, recipientIds: message.recipients } })
+          sequence: revision, author: json(message.author), ...(message.source ? { source: json(message.source) } : {}),
+          text: message.text, replyTo: message.replyTo, recipientIds: message.recipients } })
         for (const recipient of message.recipients) {
           const target = agent(effects.state, recipient)
           const group = conversation(effects.state, message.conversationId)
@@ -298,6 +344,24 @@ export class SuperTabStore {
       const deliveries = page.length ? await tx.superTabDelivery.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
         select: { id: true, messageId: true, agentId: true, status: true, receipt: true } }) : []
       return { messages: page.map(m => ({ ...m, deliveries: deliveries.filter(d => d.messageId === m.id) })), next, revision: row.revision }
+    })
+  }
+
+  async routeDecisions(user: AuthUser, tabId: string, asAgentId?: string) {
+    return transaction(this.db, async tx => {
+      const state = stateOf(await this.row(tx, user, tabId))
+      author(state, await this.actor(tx, user, state, asAgentId))
+      const rows = await tx.superTabRouteDecision.findMany({ where: { tabId }, orderBy: { createdAt: 'desc' }, take: 100 })
+      return rows.map(timedDecisionOf)
+    })
+  }
+
+  async routeDecision(user: AuthUser, tabId: string, decisionId: string, asAgentId?: string) {
+    return transaction(this.db, async tx => {
+      const state = stateOf(await this.row(tx, user, tabId))
+      author(state, await this.actor(tx, user, state, asAgentId))
+      const row = await tx.superTabRouteDecision.findFirst({ where: { id: decisionId, tabId } })
+      return row ? timedDecisionOf(row) : fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
     })
   }
 
@@ -450,6 +514,7 @@ export class SuperTabStore {
         await tx.superTabRun.deleteMany({ where: { tabId, assignmentId } })
         await tx.superTabDelivery.updateMany({ where: { tabId, assignmentId,
           status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled' } })
+        await closeAssignment(tx, tabId, assignmentId, 'stopped', this.now())
       }
       await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: {
         revision: { increment: 1 }, state: json(state), ...indexes(state),

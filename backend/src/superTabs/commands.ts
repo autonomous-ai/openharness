@@ -3,9 +3,12 @@ import {
   activeWork, actorKey, agent, author, conversation, fail, person, stableId,
   type Actor, type Agent, type Author, type CommandEffects, type SuperTabState,
 } from './model.js'
+import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
+import { routingOverrideSchema } from './routingPolicy.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
+const reason = z.string().trim().min(1).max(300)
 const text = z.string().trim().min(1).max(32_000)
 const configuration = z.object({
   engine: z.string().min(1).max(80), model: z.string().max(200).nullable(),
@@ -16,6 +19,7 @@ const path = z.string().min(1).max(4096).regex(/^\//).refine(value => !/[\x00-\x
 export const startRequestSchema = z.object({
   conversationId: id, machineId: id, engine: z.string().min(1).max(80), name: title, cwd: path,
   worktree: z.boolean(), branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(),
+  model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
   permissionMode: z.string().min(1).max(80).optional(), codexHome: path.optional(),
   gridModel: z.string().min(1).max(2048).optional(), gridName: z.string().min(1).max(2048).optional(),
   requirements: z.object({ memoryBytes: z.number().int().nonnegative().safe(), diskBytes: z.number().int().nonnegative().safe(),
@@ -27,11 +31,12 @@ const check = z.object({ description: z.string().trim().min(1).max(1000), indepe
 export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tab.rename'), name: title }).strict(),
   z.object({ type: z.literal('tab.pause'), paused: z.boolean() }).strict(),
+  z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSchema.nullable() }).strict(),
   z.object({ type: z.literal('conversation.create'), title, brief: z.string().trim().max(8000), checks: z.array(check).max(40) }).strict(),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), initialMessage: text.optional() }).strict(),
-  z.object({ type: z.literal('agent.start'), request: startRequestSchema }).strict(),
+  z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration }).strict(),
   z.object({ type: z.literal('agent.startFailed'), startId: id, error: text }).strict(),
@@ -45,9 +50,12 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('message.send'), conversationId: id, text, replyTo: id.nullable(), recipientIds: z.array(id).max(16) }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text, checks: z.array(check).min(1).max(40) }).strict(),
-  z.object({ type: z.literal('work.assign'), conversationId: id, agentId: id }).strict(),
+  z.object({ type: z.literal('work.assign'), conversationId: id, agentId: id, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('work.status'), conversationId: id, assignmentId: id,
     status: z.enum(['working', 'needs_human', 'review', 'done', 'stopped']), result: text.nullable() }).strict(),
+  z.object({ type: z.literal('route.record'), conversationId: id, decision: routeRecordSchema }).strict(),
+  z.object({ type: z.literal('route.override'), decisionId: id, candidateId: z.string().regex(/^c\d{1,2}$/), reason }).strict(),
+  z.object({ type: z.literal('route.modelResult'), decisionId: id, startId: id, model: z.string().min(1).max(200), effort: z.string().min(1).max(80) }).strict(),
   z.object({ type: z.literal('work.check'), conversationId: id, assignmentId: id, checkId: id, passed: z.boolean(), evidence: text }).strict(),
 ])
 export type Command = z.infer<typeof commandSchema>
@@ -64,6 +72,10 @@ export interface CommandContext {
   confirmedStopped?: boolean
   /** An uncertain receipt and its original message, read transactionally. */
   delivery?: { id: string; conversationId: string; agentId: string; messageId: string; text: string }
+  /** Route decisions this tab recorded in the last hour, counted by the store. */
+  recentRoutes?: number
+  /** The decision a command names, read from SuperTabRouteDecision by the store. */
+  routeDecision?: RouteDecision
 }
 
 function controls(state: SuperTabState, actor: Actor, conversationId = 'lead'): void {
@@ -85,7 +97,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const command = commandSchema.parse(input)
   const state = structuredClone(original)
   const result: Record<string, unknown> = {}
-  const effects: CommandEffects = { state, messages: [], cancelledAgents: [], previousAttempts: [], result }
+  const effects: CommandEffects = { state, messages: [], cancelledAgents: [], previousAttempts: [], routeDecisions: [], result }
   const operationId = stableId(state.id, actorKey(actor), context.operationId)
 
   // Acceptance is the only operation a non-member can perform; the verified account email owns the invite.
@@ -108,9 +120,30 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (group.assignment) effects.previousAttempts.push(structuredClone({ conversationId: group.id,
       brief: group.brief, checks: group.checks, assignment: group.assignment }))
   }
-  const message = (conversationId: string, body: string, recipients: string[] = [], replyTo: string | null = null) => {
-    effects.messages.push({ id: operationId, conversationId, author: sender, text: body, replyTo, recipients })
+  const message = (conversationId: string, body: string, recipients: string[] = [], replyTo: string | null = null, source?: Record<string, unknown>) => {
+    effects.messages.push({ id: operationId, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}) })
     result.messageId = operationId
+  }
+  const openDecision = (): RouteDecision => {
+    const decision = context.routeDecision ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
+    if (decision.outcome) fail('ROUTE_CLOSED', 'This routing decision is no longer open. Route the task again.')
+    return decision
+  }
+  /** The candidate a start or assignment should match, and whether it does. A mismatch needs the lead's reason. */
+  const linkDecision = (conversationId: string, matches: (c: RouteCandidate, d: RouteDecision) => boolean,
+    finalOf: (d: RouteDecision) => RouteFinal, reasonText: string | undefined, assignmentId?: string) => {
+    const decision = openDecision()
+    if (decision.conversationId !== conversationId) fail('ROUTE_MISMATCH', 'This routing decision belongs to another group.')
+    // A second start or assignment must not overwrite the final while the first attempt is still running.
+    if (decision.assignmentId && state.conversations.some(c => c.assignment?.id === decision.assignmentId && activeWork(c))) {
+      fail('ROUTE_LINKED', 'This routing decision already has running work. Stop it before handing the task over.')
+    }
+    const expected = decision.record.candidates.find(c => c.id === (decision.override?.candidateId ?? decision.record.pick))!
+    const matched = matches(expected, decision)
+    if (!matched && !reasonText) fail('OVERRIDE_REASON_REQUIRED', `Routing chose ${expected.title}. Pass an override reason to choose otherwise.`, 400)
+    const override: RouteOverride | undefined = matched ? undefined : { by: 'lead', actorKey: actorKey(actor), reason: reasonText! }
+    effects.routeDecisions.push({ op: 'final', id: decision.id, final: finalOf(decision), ...(override ? { override } : {}), ...(assignmentId ? { assignmentId } : {}) })
+    return { decision, expected, override }
   }
   const removeAgent = (target: Agent) => {
     state.agents = state.agents.filter(a => a.id !== target.id)
@@ -130,6 +163,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'tab.pause':
       controls(state, actor)
       state.paused = command.paused
+      break
+    case 'tab.routingPolicy':
+      if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can change its routing policy.', 403)
+      if (command.policy && Object.keys(command.policy).length) state.routingPolicy = command.policy
+      else delete state.routingPolicy
       break
     case 'conversation.create': {
       controls(state, actor)
@@ -206,6 +244,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: grant.machineOwnerId,
         hostGrant: grant.hostGrant ?? null, request: command.request, harnessId: null, dispatched: false, error: null })
       result.startId = operationId
+      if (command.routeDecisionId) {
+        const r = command.request
+        const model = r.model ?? 'default', effort = r.effort ?? 'default'
+        const { decision, expected, override } = linkDecision(r.conversationId,
+          c => c.kind === 'new' && c.machineId === r.machineId && c.engine === r.engine && c.model === model && c.effort === effort,
+          () => ({ kind: 'new', startId: operationId, machineId: r.machineId, engine: r.engine, model, effort }), command.overrideReason)
+        if (override) message(r.conversationId, `Lead started ${r.name} instead of ${expected.title}. Reason: ${override.reason}`, [], null,
+          { kind: 'route-override', decisionId: decision.id, by: 'lead' })
+      }
       break
     }
     case 'agent.startDispatch':
@@ -351,6 +398,52 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       result.resolution = command.resolution
       break
     }
+    case 'route.record': {
+      controls(state, actor, command.conversationId)
+      open(state, command.conversationId)
+      if ((context.recentRoutes ?? 0) >= 30) fail('RATE_LIMITED', 'This Super Tab routed 30 tasks in the last hour. Wait before routing again.', 429)
+      const decision = command.decision
+      const pick = decision.candidates.find(c => c.id === decision.pick)!
+      const via = decision.via === 'jev' ? `Jev ${Math.round((decision.p ?? 0) * 100)}%`
+        : decision.via === 'only' ? 'only candidate' : 'by policy order'
+      effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId, record: decision })
+      result.routeDecisionId = operationId
+      // The row quotes the Lead's reason for the task; the verdict's own text stays in the decision record.
+      const reason = decision.assessment.why
+      message(command.conversationId, `Routed to ${pick.title} — ${via} · "${reason}"`, [], null, {
+        kind: 'route', decisionId: operationId, via: decision.via, p: decision.p, belowFloor: decision.belowFloor, why: reason,
+        ...(decision.via === 'order' && decision.fallback ? { fallback: decision.fallback } : {}),
+        pick: { id: pick.id, title: pick.title },
+        alternatives: decision.candidates.filter(c => c.id !== pick.id).map(c => ({ id: c.id, title: c.title })),
+      })
+      break
+    }
+    case 'route.modelResult': {
+      const decision = openDecision()
+      controls(state, actor, decision.conversationId)
+      const final = decision.final
+      if (final?.kind !== 'new' || final.startId !== command.startId) fail('ROUTE_MISMATCH', 'This routing decision did not start that agent.')
+      // The final says who was actually started. When the routed switch failed, the request moves to `requested`.
+      effects.routeDecisions.push({ op: 'final', id: decision.id,
+        final: { ...final, model: command.model, effort: command.effort, requested: final.requested ?? { model: final.model, effort: final.effort } } })
+      break
+    }
+    case 'route.override': {
+      if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person changes a routing decision; the lead overrides when it starts or assigns.', 403)
+      const decision = openDecision()
+      controls(state, actor, decision.conversationId)
+      open(state, decision.conversationId)
+      const current = decision.override?.candidateId ?? decision.record.pick
+      const chosen = decision.record.candidates.find(c => c.id === command.candidateId) ?? fail('NOT_FOUND', 'Choose one of this decision’s candidates.', 404)
+      if (chosen.id === current) fail('ALREADY_CHOSEN', 'That candidate is already the choice.')
+      if (chosen.kind === 'member' && !state.agents.some(a => a.id === chosen.agentId)) fail('CANDIDATE_UNAVAILABLE', 'That agent left this Super Tab. Choose another.')
+      effects.routeDecisions.push({ op: 'override', id: decision.id, override: { by: 'person', actorKey: actorKey(actor), candidateId: chosen.id, reason: command.reason } })
+      const lead = conversation(state, decision.conversationId).leadId
+      message(decision.conversationId,
+        `${sender.name} chose ${chosen.title} instead of ${routeTitle(decision, current)}. Hand this task over to it. Reason: ${command.reason}`,
+        lead ? [lead] : [], null, { kind: 'route-override', decisionId: decision.id, by: 'person' })
+      break
+    }
     case 'work.define': {
       controls(state, actor, command.conversationId)
       const group = open(state, command.conversationId)
@@ -376,7 +469,20 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
       group.checks.forEach(c => { c.evidence = null; c.passedBy = null })
       result.assignmentId = operationId
+      let routeNote: { decisionId: string; text: string } | null = null
+      if (command.routeDecisionId) {
+        const started = (d: RouteDecision) => d.final?.kind === 'new' &&
+          !!state.starts?.some(s => s.id === (d.final as { startId: string }).startId && s.harnessId === worker.harnessId && s.request.machineId === worker.machineId)
+        // An agent started from this decision keeps the final that records its model and effort; only the assignment is added.
+        const { decision, expected, override } = linkDecision(group.id,
+          (c, d) => (c.kind === 'member' && c.agentId === worker.id) || (c.kind === 'new' && started(d) && d.final?.kind === 'new' &&
+            startedAs(c, d.final)),
+          d => started(d) ? d.final! : { kind: 'member', agentId: worker.id, machineId: worker.machineId }, command.overrideReason, operationId)
+        if (override) routeNote = { decisionId: decision.id, text: `Lead assigned ${worker.name} instead of ${expected.title}. Reason: ${override.reason}` }
+      }
       message(group.id, `${group.brief}\n\nAcceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`, [worker.id])
+      if (routeNote) effects.messages.push({ id: stableId(operationId, 'route-override'), conversationId: group.id, author: sender,
+        text: routeNote.text, replyTo: null, recipients: [], source: { kind: 'route-override', decisionId: routeNote.decisionId, by: 'lead' } })
       break
     }
     case 'work.status': {

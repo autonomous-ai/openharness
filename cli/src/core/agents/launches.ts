@@ -23,9 +23,10 @@ import type { AgentFrame } from '../../lib/agentFrame.js'
 import { engineLabel } from '../../lib/agentNames.js'
 import {
   AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves,
-  permissionModeFlags, supportsFirstPrompt, supportsNamedAgent,
+  permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag,
 } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunchWire.js'
+import { parseLaunchModel } from '../../lib/launchModel.js'
 import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError, type ProjectFolder } from '../../lib/projectFolder.js'
 import type { ScmLaunchRecord } from '../../scm/types.js'
@@ -292,6 +293,21 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     const grid = parseGridLaunchOverride(payload.grid)
     if (grid.state === 'invalid') { reply({ error: 'INVALID_GRID', detail: grid.reason }); return }
     if (terminal && grid.state === 'ok') { reply({ error: 'INVALID_GRID', detail: 'a terminal has no engine to point at a grid' }); return }
+    // A model and effort for this session alone, as flags (lib/launchModel.ts). Refused, never ignored: a daemon that
+    // dropped them would start the agent on the engine's own model and look like it worked, so a caller that gets
+    // LAUNCH_MODEL_UNSUPPORTED switches the model after the start instead. A grid picks its own model.
+    const launchModel = parseLaunchModel(engine, payload)
+    if (launchModel.state === 'invalid') { reply({ error: 'INVALID_LAUNCH_MODEL', detail: launchModel.detail }); return }
+    if (launchModel.state === 'unsupported') { reply({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: launchModel.detail }); return }
+    if (launchModel.state === 'ok' && (grid.state === 'ok' || model.state === 'ok')) {
+      reply({ error: 'INVALID_LAUNCH_MODEL', detail: 'a grid chooses its own model' }); return
+    }
+    // A Claude Code too old for the flags would print its help in the new pane. Refused here, before any receipt, so the
+    // caller creates the agent without them and switches the model afterwards, as it did before the flags.
+    if (launchModel.state === 'ok') {
+      const missing = await unsupportedLaunchModelFlag(engine, launchModel.launchModel)
+      if (missing) { reply({ error: 'LAUNCH_MODEL_UNSUPPORTED', detail: `The ${engine} on this machine does not support ${missing}; update ${engine} to launch it with a model.` }); return }
+    }
     // Same validation the desktop app already applies client-side (`Agent._safeCodexHome`) —
     // repeated here because a client's own check is not a guarantee about what actually
     // arrives on the wire.
@@ -365,7 +381,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       if (typeof payload.resumeSessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$/.test(payload.resumeSessionId)) {
         reply({ error: 'INVALID_SESSION', detail: 'resumeSessionId must be a session id' }); return
       }
-      if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || dsh || prompt || agent) {
+      if (terminal || projectFolder || grid.state === 'ok' || model.state === 'ok' || launchModel.state === 'ok' || dsh || prompt || agent) {
         reply({ error: 'INVALID_SESSION', detail: 'a resumed conversation takes no new folder, grid, harness, prompt or agent' }); return
       }
       resumeSessionId = payload.resumeSessionId
@@ -407,6 +423,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       takeOver,
       // Only when set: a person's create keeps the fingerprint its receipt was recorded with before the field.
       ...(payload.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
+      ...(launchModel.state === 'ok' ? { launchModel: launchModel.launchModel } : {}),
       ...(parentAgentId ? { parentAgentId } : {}),
     }
     const fingerprintInput = model.state === 'ok' ? { ...input, modelSelection: model.selection } : input

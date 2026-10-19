@@ -38,6 +38,7 @@ void main() {
       // files, and it reads nothing at all until a provider is switched on, so
       // there is nothing here for a shipped build to hide.
       SettingsSection.usage,
+      SettingsSection.routing,
       SettingsSection.tabInvites,
       SettingsSection.experimental,
       SettingsSection.about,
@@ -61,7 +62,11 @@ void main() {
         if (kIsWeb) SettingsSection.privacy,
         SettingsSection.shortcuts,
       ],
-      [if (!kIsWeb) SettingsSection.connectors, SettingsSection.usage],
+      [
+        if (!kIsWeb) SettingsSection.connectors,
+        SettingsSection.usage,
+        SettingsSection.routing,
+      ],
       [SettingsSection.tabInvites, SettingsSection.experimental],
       [SettingsSection.about, SettingsSection.debug],
     ]);
