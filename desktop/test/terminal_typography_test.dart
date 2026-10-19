@@ -15,6 +15,13 @@ void main() {
     if (Platform.isMacOS) {
       expect(terminalFontFamily, '.AppleSystemUIFontMonospaced');
       expect(terminalFontFallback, macTerminalFontFallback);
+    } else if (Platform.isWindows) {
+      expect(terminalFontFamily, 'Consolas');
+      expect(terminalFontFallback, [
+        'Cascadia Mono',
+        'Courier New',
+        'monospace',
+      ]);
     } else {
       expect(terminalFontFamily, 'DejaVu Sans Mono');
       expect(terminalFontFallback, linuxTerminalFontFallback);
@@ -42,7 +49,11 @@ void main() {
     // to name a face the platform actually ships — otherwise a machine without
     // the chosen font lands on the engine's proportional default and the whole
     // grid shears.
-    final anchor = Platform.isMacOS ? 'Menlo' : 'DejaVu Sans Mono';
+    final anchor = Platform.isMacOS
+        ? 'Menlo'
+        : Platform.isWindows
+        ? 'Consolas'
+        : 'DejaVu Sans Mono';
     for (final choice in TerminalFontChoice.available) {
       expect(choice.fontFamily, isNotEmpty);
       expect(
@@ -59,7 +70,7 @@ void main() {
     }
   });
 
-  test('the Apple faces are not offered off macOS, and vice versa', () {
+  test('the platform font picker offers only native presets', () {
     const appleOnly = {
       '.AppleSystemUIFontMonospaced',
       'Menlo',
@@ -71,6 +82,8 @@ void main() {
         .toSet();
     if (Platform.isMacOS) {
       expect(offered, appleOnly);
+    } else if (Platform.isWindows) {
+      expect(offered, {'Consolas'});
     } else {
       expect(offered.intersection(appleOnly), isEmpty);
     }

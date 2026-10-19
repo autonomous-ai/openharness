@@ -1,10 +1,9 @@
-import '../core/apple_fonts.dart';
-
 import 'package:flutter/foundation.dart';
 import 'package:xterm/xterm.dart';
 
 import '../core/harness_file_store.dart';
 import '../core/local_key_value_store.dart';
+import '../core/runtime_platform.dart';
 import 'terminal_typography.dart';
 
 /// A monospace font the terminal is allowed to render in.
@@ -59,7 +58,8 @@ enum TerminalFontChoice {
     'DejaVu Sans Mono',
     'Liberation Mono',
     'monospace',
-  ]);
+  ]),
+  consolas('Consolas', windowsTerminalFontFamily, windowsTerminalFontFallback);
 
   const TerminalFontChoice(
     this.label,
@@ -72,6 +72,7 @@ enum TerminalFontChoice {
   final List<String> fontFamilyFallback;
 
   static const _macChoices = [sfMono, menlo, monaco, courierNew];
+  static const _windowsChoices = [consolas];
   static const _linuxChoices = [
     dejaVuSansMono,
     ubuntuSansMono,
@@ -82,17 +83,28 @@ enum TerminalFontChoice {
 
   /// The faces worth offering on the host this build is running on.
   ///
-  /// Windows falls in with Linux deliberately rather than with macOS: its
-  /// runner is unexercised (see CLAUDE.md), and of the two lists the Linux one
-  /// at least ends every fallback at the generic `monospace`, which Windows
-  /// does resolve.
-  static List<TerminalFontChoice> get available => kIsWeb
-      ? const [robotoMono]
-      : (hasAppleFonts ? _macChoices : _linuxChoices);
+  static List<TerminalFontChoice> availableFor(String operatingSystem) {
+    if (operatingSystem == 'web') return const [robotoMono];
+    if (operatingSystem == 'macos' || operatingSystem == 'ios') {
+      return _macChoices;
+    }
+    if (operatingSystem == 'windows') return _windowsChoices;
+    return _linuxChoices;
+  }
+
+  static List<TerminalFontChoice> get available =>
+      availableFor(RuntimePlatform.operatingSystem);
 
   /// What a fresh install opens with, and what `reset()` returns to.
+  static TerminalFontChoice defaultFor(String operatingSystem) {
+    if (operatingSystem == 'web') return robotoMono;
+    if (operatingSystem == 'macos' || operatingSystem == 'ios') return sfMono;
+    if (operatingSystem == 'windows') return consolas;
+    return dejaVuSansMono;
+  }
+
   static TerminalFontChoice get defaultForPlatform =>
-      kIsWeb ? robotoMono : (hasAppleFonts ? sfMono : dejaVuSansMono);
+      defaultFor(RuntimePlatform.operatingSystem);
 }
 
 /// What the terminal is drawn in: one of the [TerminalFontChoice] presets, or any family installed on

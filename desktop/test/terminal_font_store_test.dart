@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/terminal/terminal_font_store.dart';
@@ -68,6 +70,17 @@ void main() {
 
     expect(store.family, TerminalFontChoice.defaultForPlatform);
     expect(store.size, terminalFontSize);
+  });
+
+  test('Windows Reset restores the readable system terminal face', () async {
+    if (!Platform.isWindows) return;
+    final store = TerminalFontStore(storage: _FakeStore());
+    await store.setFamily(TerminalFontChoice.dejaVuSansMono);
+
+    await store.reset();
+
+    expect(store.value.fontFamily, 'Consolas');
+    expect(store.size, 13.0);
   });
 
   test('increase/decrease step by 1pt and clamp', () async {
