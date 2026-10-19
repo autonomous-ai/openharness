@@ -1895,10 +1895,14 @@ impl App {
                 if let Some(taken) = payload.get("takenBy") {
                     let who = taken.get("name").and_then(Value::as_str).unwrap_or("another window").to_string();
                     pane.phase = Phase::Watching(who);
-                    // Still worth seeing: watch it until someone types here.
+                    // Watched until someone types here — the watcher is what hears `terminal_free`
+                    // — but frozen: its frames come at the taker's size (a phone's), and drawn
+                    // here they shrank the screen's pane. Its last frame stays, as the desktop's.
+                    pane.frozen = true;
                     let id = pane.id;
                     self.open_stream(id, false);
                 } else {
+                    pane.frozen = false;
                     let id = pane.id;
                     let reason = payload.get("reason").and_then(Value::as_str).unwrap_or("the terminal closed");
                     if matches!(reason, "heartbeat timeout" | "backend disconnected") {
@@ -1945,6 +1949,8 @@ impl App {
         pane.last_seq = Some(pane.last_seq.map(|s| s.max(frame.seq)).unwrap_or(frame.seq));
         pane.ack_due = true;
         if frame.kind == Kind::Sync { return }
+        // Taken by another client: acknowledged above, never drawn — see [Pane::frozen].
+        if pane.frozen { return }
         let bytes = if frame.compressed { match pane::inflate(&frame.bytes) { Some(b) => b, None => return } } else { frame.bytes };
         if let Ok(path) = std::env::var("HARNESS_TUI_TRACE") {
             use std::io::Write;
@@ -2124,6 +2130,8 @@ impl App {
                 pane.phase = if pane.read_only {
                     Phase::Watching(payload.get("heldBy").and_then(|h| h.get("name")).and_then(Value::as_str).unwrap_or("another window").to_string())
                 } else { Phase::Live };
+                // Held here again: its frames come at this side's size, so they are drawn.
+                if !pane.read_only { pane.frozen = false }
                 let retake = takeover_requested && pane.read_only;
                 let queued = if retake { Vec::new() } else { std::mem::take(&mut pane.queued) };
                 let read_only = pane.read_only;
@@ -5902,7 +5910,20 @@ impl App {
                 crate::input::new_shell_from(self, None, Placement::Fill(tab), None, Some("/usr/bin/hn-os welcome".into()));
             } else if (self.os_live || self.os_first_use) && crate::os_welcome::welcome_waits_on_wifi(self) {
                 // Asked again every tick until the Wi-Fi form gives the tab back.
-            } else { self.shell_asked = true; }
+            } else {
+                self.shell_asked = true;
+                // The desk already had work for this screen — the "code" tab a phone's Start made
+                // after setting this computer up — so it opens on that instead of a welcome with
+                // an OpenCode of its own. Its first use is over all the same: the welcome is what
+                // marks that (onboarding.py), and without the mark every boot is a first one.
+                if self.os_first_use && !self.os_live && self.tabs.iter().any(|t| t.root.is_some()) {
+                    self.os_first_use = false;
+                    if let Some(home) = std::env::var_os("HOME") {
+                        let state = std::path::Path::new(&home).join(".local/state/harness-os");
+                        let _ = std::fs::create_dir_all(&state).and_then(|_| std::fs::File::create(state.join("onboarded")));
+                    }
+                }
+            }
             return;
         }
         // `hn new -s work` (a session besides the desk's): made here, with its shell.
@@ -7594,6 +7615,29 @@ mod recovery_tests {
         }
         assert!(app.panes[&on_screen].opening, "the pane on screen takes it back");
         assert!(!app.panes[&hidden].opening, "one out of sight stays a watcher until someone comes to it");
+        app.links["test-peer"].link.as_ref().unwrap().close();
+    }
+
+    #[tokio::test]
+    async fn a_phone_taking_a_pane_does_not_shrink_it_here() {
+        // The phone took the terminal at its own size; this screen watches it frozen, as the
+        // desktop keeps its tile: the phone-sized frames are not drawn here.
+        let mut app = fixture();
+        app.rects = vec![(1, Rect::new(0, 0, 80, 24))];
+        let before = (app.panes[&1].cols, app.panes[&1].rows);
+        let stream = app.panes[&1].stream.unwrap().to_string();
+        app.on_machine("test-peer".into(), 1, MachineEvent::Frame {
+            ty: "terminal_closed".into(),
+            payload: json!({"streamId": stream, "code": "TERMINAL_TAKEN_OVER", "takenBy": {"name": "Pixel 8 Pro"}}),
+        });
+        let pane = app.panes.get_mut(&1).unwrap();
+        assert!(pane.frozen);
+        assert!(matches!(&pane.phase, Phase::Watching(who) if who == "Pixel 8 Pro"));
+        let watcher = Uuid::new_v4();
+        pane.stream = Some(watcher);
+        pane.read_only = true;
+        app.on_terminal(proto::Frame { kind: Kind::Keyframe, stream: watcher, seq: 1, bytes: b"phone".to_vec(), compressed: false, size: Some((45, 30)) });
+        assert_eq!((app.panes[&1].cols, app.panes[&1].rows), before, "the phone's size is not this screen's");
         app.links["test-peer"].link.as_ref().unwrap().close();
     }
 
