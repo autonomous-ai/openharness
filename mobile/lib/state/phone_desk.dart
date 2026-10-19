@@ -235,13 +235,15 @@ class PhoneDesk {
   void adopt(AgentRef agent, {String? name, String? tabId}) {
     if (!_state.enabled) return;
     final wanted = _newTabForNextAgent;
+    final wantedName = _newTabName;
     _newTabForNextAgent = false;
+    _newTabName = null;
     final pane = DeskPaneRef(
       machineId: agent.machineId,
       agentId: agent.agentId,
     );
     if (wanted) {
-      createTabFor(agent, name: name);
+      createTabFor(agent, name: wantedName ?? name);
       return;
     }
     final picked = tabId == null
@@ -349,12 +351,22 @@ class PhoneDesk {
   /// made minutes later from the terminal's own `+` — in a tab of its own.
   /// [forgetNewTabIntent] is the cancel path; between the two, the flag cannot
   /// survive the screen that set it.
-  void openNextAgentInNewTab() => _newTabForNextAgent = true;
+  ///
+  /// [name]: the tab's, over the agent's own — Start on a computer just set up names it "code", the
+  /// tab its screen then opens on.
+  void openNextAgentInNewTab({String? name}) {
+    _newTabForNextAgent = true;
+    _newTabName = name;
+  }
 
   /// The form closed without making anything — see [openNextAgentInNewTab].
-  void forgetNewTabIntent() => _newTabForNextAgent = false;
+  void forgetNewTabIntent() {
+    _newTabForNextAgent = false;
+    _newTabName = null;
+  }
 
   bool _newTabForNextAgent = false;
+  String? _newTabName;
 
   /// The desk's ids are 32 hex characters (backend `lib/desk.ts`), and a tab
   /// made here has to look like one made anywhere else.

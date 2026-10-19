@@ -8,6 +8,7 @@ import '../measurement/product_resumes.dart';
 import '../measurement/setup_transport.dart';
 
 import 'dart:async';
+import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:math' show Random;
 
 import 'package:dio/dio.dart';
@@ -761,7 +762,11 @@ class AppNotifier extends ChangeNotifier {
   /// The next agent made on this phone gets a tab of its own — armed by the `+`
   /// on the tab row before the new-agent form opens, and spent (or forgotten)
   /// by the time that form closes. See [PhoneDesk.openNextAgentInNewTab].
-  void openNextAgentInNewDeskTab() => _desk.openNextAgentInNewTab();
+  void openNextAgentInNewDeskTab({String? name}) =>
+      _desk.openNextAgentInNewTab(name: name);
+
+  /// Read the desk now and wait for it, so a write that follows has a desk to go to.
+  Future<void> readDesk() => _desk.refresh();
 
   /// That form closed without making anything.
   void forgetNewDeskTabIntent() => _desk.forgetNewTabIntent();
@@ -1316,7 +1321,8 @@ class AppNotifier extends ChangeNotifier {
     productMeasurement.context = {
       'surface': 'phone',
       // The backend refuses a whole report whose release is not a plain x.y.z.
-      'release': RegExp(r'^(0|[1-9]\d{0,2})(\.(0|[1-9]\d{0,2})){2}$').hasMatch(release)
+      'release':
+          RegExp(r'^(0|[1-9]\d{0,2})(\.(0|[1-9]\d{0,2})){2}$').hasMatch(release)
           ? release
           : 'unknown',
       'platform': switch (defaultTargetPlatform) {
@@ -1601,6 +1607,7 @@ class AppNotifier extends ChangeNotifier {
     // ([_warmStartMachines]). Started after the config and the sign-in check, they landed after
     // the first frame, ~250ms into the dial's wait. Disk only; dropped when nobody is signed in.
     lastOpenedAgent.prefetch();
+    unawaited(_readHarnessOsMachines());
     final cache = _machineCache;
     if (cache != null) {
       // Read before the first frame by `startHarness` — see [_preDialFromHint].
@@ -6042,14 +6049,15 @@ class AppNotifier extends ChangeNotifier {
 
   /// Hands a sign-in this phone caught back to [machineId], to the program waiting for it there
   /// (`browser_callback`, cli core/terminals/browser.ts). `{'error': 'UNAVAILABLE'}` when the line is down.
-  Future<Map<String, dynamic>> browserCallback(String machineId, String url) async {
+  Future<Map<String, dynamic>> browserCallback(
+    String machineId,
+    String url,
+  ) async {
     final machine = machineStates[machineId];
     if (machine == null || machine.needsLink) return {'error': 'UNAVAILABLE'};
     try {
-      return await _conn(machineId).request(
-        'browser_callback',
-        payload: {'url': url},
-      );
+      return await _conn(machineId)
+          .request('browser_callback', payload: {'url': url});
     } catch (_) {
       return {'error': 'UNAVAILABLE'};
     }
@@ -6066,9 +6074,8 @@ class AppNotifier extends ChangeNotifier {
     final machine = machineStates[machineId];
     if (machine == null || machine.needsLink) return {'error': 'UNAVAILABLE'};
     try {
-      return await _conn(
-        machineId,
-      ).request('os_device', payload: payload, timeout: timeout);
+      return await _conn(machineId)
+          .request('os_device', payload: payload, timeout: timeout);
     } catch (_) {
       return {'error': 'UNAVAILABLE'};
     }
@@ -6079,7 +6086,53 @@ class AppNotifier extends ChangeNotifier {
   final Map<String, Map<String, dynamic>> osStatus = {};
   final Map<String, DateTime> _osAsked = {};
 
-  bool runsHarnessOs(String machineId) => osStatus[machineId]?['harnessOs'] == true;
+  bool runsHarnessOs(String machineId) =>
+      osStatus[machineId]?['harnessOs'] == true ||
+      _harnessOsMachines.contains(machineId);
+
+  /// Computers seen running Harness OS, kept between launches: one that is off is not asked, and an
+  /// encrypted one that restarted is off until someone unlocks it — what its row then says
+  /// ([machineMayBeLocked]).
+  final Set<String> _harnessOsMachines = {};
+  static const _harnessOsKey = 'phone_harness_os_machines_v1';
+
+  Future<void> _readHarnessOsMachines() async {
+    final raw = await _paneLayout?.storage.read(_harnessOsKey);
+    if (raw == null) return;
+    try {
+      final ids = jsonDecode(raw);
+      if (ids is! List) return;
+      final before = _harnessOsMachines.length;
+      _harnessOsMachines.addAll(ids.whereType<String>());
+      if (_harnessOsMachines.length != before) notifyListeners();
+    } on FormatException {
+      // Nothing worth keeping: it fills again as computers answer.
+    }
+  }
+
+  void _rememberHarnessOs(String machineId, bool runs) {
+    final changed = runs
+        ? _harnessOsMachines.add(machineId)
+        : _harnessOsMachines.remove(machineId);
+    if (!changed) return;
+    unawaited(
+      _paneLayout?.storage.write(
+            _harnessOsKey,
+            jsonEncode(_harnessOsMachines.toList()),
+          ) ??
+          Future.value(),
+    );
+  }
+
+  /// A Harness OS computer that does not answer may be one that restarted with its disk encrypted,
+  /// waiting for its password — on its screen, or from a phone on its hotspot (Set up a device).
+  bool machineMayBeLocked(String machineId) {
+    final state = machineStates[machineId];
+    // Offline as the phone's screens call it (`phoneMachineStatusOf`): its node says so.
+    return state != null &&
+        state.nodeOnline == false &&
+        runsHarnessOs(machineId);
+  }
 
   bool updateAvailable(String machineId) {
     final update = osStatus[machineId]?['update'];
@@ -6102,6 +6155,9 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     osStatus[machineId] = status;
+    if (status['harnessOs'] is bool) {
+      _rememberHarnessOs(machineId, status['harnessOs'] == true);
+    }
     notifyListeners();
   }
 
@@ -6113,11 +6169,8 @@ class AppNotifier extends ChangeNotifier {
     final machine = machineStates[machineId];
     if (machine == null || machine.needsLink) return {'error': 'UNAVAILABLE'};
     try {
-      return await _conn(machineId).request(
-        'connectors',
-        payload: payload,
-        timeout: timeout,
-      );
+      return await _conn(machineId)
+          .request('connectors', payload: payload, timeout: timeout);
     } catch (_) {
       return {'error': 'UNAVAILABLE'};
     }
@@ -6500,85 +6553,84 @@ class AppNotifier extends ChangeNotifier {
     String? detail,
     String machine, {
     Map<String, dynamic>? choices,
-  }) =>
-      switch (code) {
-        // A New Folder named after its first task (`projectNameMode:
-        // suggested`). A current machine numbers that name past a folder that
-        // exists (`robot-2`), so only one that predates the mode refuses it, and
-        // its sentence is written for a name somebody typed. The phone has no
-        // name field to change instead, so it says the way to a fresh folder.
-        'PROJECT_EXISTS' when choices?['projectNameMode'] == 'suggested' =>
-          'A folder named after this task already exists on $machine. '
-              'Choose it from your projects, or update Harness there to make '
-              'a new one.',
-        // Making the project folder (a new one, a clone, a worktree or a
-        // branch) before anything starts in it: `cli/src/lib/projectFolder.ts`
-        // and `gitProject.ts`. The machine's sentence says what to change: the
-        // URL, the branch, Worktree.
-        'INVALID_PROJECT_SOURCE' ||
-        'INVALID_REPOSITORY' ||
-        'PROJECT_PREPARATION_FAILED' ||
-        'PROJECT_EXISTS' ||
-        'CLONE_FAILED' ||
-        'CLONE_TIMEOUT' ||
-        'GIT_PROJECT_UNAVAILABLE' ||
-        'INVALID_BRANCH' ||
-        'BRANCH_SWITCH_FAILED' ||
-        'WORKTREE_FAILED' ||
-        'GIT_UNAVAILABLE' =>
-          detail ?? 'Could not prepare the project folder on $machine.',
-        'CWD_NOT_FOUND' || 'INVALID_CWD' =>
-          'The project folder is unavailable on $machine. '
-              'Choose another folder and try again.',
-        'TMUX_UNAVAILABLE' =>
-          'Harness needs tmux to start harnesses on $machine. '
-              'Install tmux there, then try again.',
-        // The machine's own sentence names the engine and the flag it lacks.
-        // Without one, the phone's Approvals names the way out.
-        'CODEX_CLI_TOO_OLD' =>
-          detail ??
-              'The installed Codex CLI on $machine is too old for '
-                  'Auto-approve. Update Codex there, or choose Ask first under '
-                  'Approvals.',
-        'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
-          'Update the harness CLI on this machine to create a harness',
-        'INVALID_DSH' =>
-          'This harness is not installed on $machine. '
-              '${detail ?? 'Install it there, then try again.'}',
-        'PROMPT_UNSUPPORTED' =>
-          'This engine cannot be opened with a first message on $machine.',
-        'PROMPT_TOO_LONG' =>
-          'This first task is too long for $machine. Shorten it and try again.',
-        'AGENT_UNSUPPORTED' =>
-          'This engine cannot be opened as a named agent on $machine.',
-        'INVALID_AGENT' =>
-          'This engine cannot be opened as that named agent on $machine.',
-        'INVALID_PERMISSION_MODE' =>
-          'This engine has no such permission mode on $machine.',
-        // A daemon older than the engine refuses it by name, with no detail;
-        // the fix is the update the UNSUPPORTED codes ask for. A detail is a
-        // reason of its own (the sample runs only Claude Code and Codex).
-        'INVALID_ENGINE' =>
-          detail ?? 'Update the harness CLI on $machine to start this agent.',
-        // Opening a conversation Harness did not start (`resumeSessionId`). The machine says what
-        // stopped it: open elsewhere, already a harness, gone.
-        'SESSION_OPEN_ELSEWHERE' ||
-        'SESSION_IN_HARNESS' ||
-        'SESSION_NOT_FOUND' ||
-        'SESSION_FOLDER_GONE' ||
-        'SESSION_BUSY_IN_TERMINAL' ||
-        'SESSION_STOP_FAILED' ||
-        'INVALID_SESSION' =>
-          detail ?? 'Could not open that conversation on $machine.',
-        // Not the machine's own sentence: it ends "Moving it here quits it
-        // there", written for the desktop's take-over button. A phone sends no
-        // `takeOver` and has no such button, so what it can offer is the way
-        // that works from here.
-        'SESSION_OPEN_IN_TERMINAL' =>
-          'It is open in a terminal on $machine. Close it there, then open '
-              'it here.',
-        _ => 'Create harness failed: ${detail ?? code}',
-      };
+  }) => switch (code) {
+    // A New Folder named after its first task (`projectNameMode:
+    // suggested`). A current machine numbers that name past a folder that
+    // exists (`robot-2`), so only one that predates the mode refuses it, and
+    // its sentence is written for a name somebody typed. The phone has no
+    // name field to change instead, so it says the way to a fresh folder.
+    'PROJECT_EXISTS' when choices?['projectNameMode'] == 'suggested' =>
+      'A folder named after this task already exists on $machine. '
+          'Choose it from your projects, or update Harness there to make '
+          'a new one.',
+    // Making the project folder (a new one, a clone, a worktree or a
+    // branch) before anything starts in it: `cli/src/lib/projectFolder.ts`
+    // and `gitProject.ts`. The machine's sentence says what to change: the
+    // URL, the branch, Worktree.
+    'INVALID_PROJECT_SOURCE' ||
+    'INVALID_REPOSITORY' ||
+    'PROJECT_PREPARATION_FAILED' ||
+    'PROJECT_EXISTS' ||
+    'CLONE_FAILED' ||
+    'CLONE_TIMEOUT' ||
+    'GIT_PROJECT_UNAVAILABLE' ||
+    'INVALID_BRANCH' ||
+    'BRANCH_SWITCH_FAILED' ||
+    'WORKTREE_FAILED' ||
+    'GIT_UNAVAILABLE' =>
+      detail ?? 'Could not prepare the project folder on $machine.',
+    'CWD_NOT_FOUND' || 'INVALID_CWD' =>
+      'The project folder is unavailable on $machine. '
+          'Choose another folder and try again.',
+    'TMUX_UNAVAILABLE' =>
+      'Harness needs tmux to start harnesses on $machine. '
+          'Install tmux there, then try again.',
+    // The machine's own sentence names the engine and the flag it lacks.
+    // Without one, the phone's Approvals names the way out.
+    'CODEX_CLI_TOO_OLD' =>
+      detail ??
+          'The installed Codex CLI on $machine is too old for '
+              'Auto-approve. Update Codex there, or choose Ask first under '
+              'Approvals.',
+    'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
+      'Update the harness CLI on this machine to create a harness',
+    'INVALID_DSH' =>
+      'This harness is not installed on $machine. '
+          '${detail ?? 'Install it there, then try again.'}',
+    'PROMPT_UNSUPPORTED' =>
+      'This engine cannot be opened with a first message on $machine.',
+    'PROMPT_TOO_LONG' =>
+      'This first task is too long for $machine. Shorten it and try again.',
+    'AGENT_UNSUPPORTED' =>
+      'This engine cannot be opened as a named agent on $machine.',
+    'INVALID_AGENT' =>
+      'This engine cannot be opened as that named agent on $machine.',
+    'INVALID_PERMISSION_MODE' =>
+      'This engine has no such permission mode on $machine.',
+    // A daemon older than the engine refuses it by name, with no detail;
+    // the fix is the update the UNSUPPORTED codes ask for. A detail is a
+    // reason of its own (the sample runs only Claude Code and Codex).
+    'INVALID_ENGINE' =>
+      detail ?? 'Update the harness CLI on $machine to start this agent.',
+    // Opening a conversation Harness did not start (`resumeSessionId`). The machine says what
+    // stopped it: open elsewhere, already a harness, gone.
+    'SESSION_OPEN_ELSEWHERE' ||
+    'SESSION_IN_HARNESS' ||
+    'SESSION_NOT_FOUND' ||
+    'SESSION_FOLDER_GONE' ||
+    'SESSION_BUSY_IN_TERMINAL' ||
+    'SESSION_STOP_FAILED' ||
+    'INVALID_SESSION' =>
+      detail ?? 'Could not open that conversation on $machine.',
+    // Not the machine's own sentence: it ends "Moving it here quits it
+    // there", written for the desktop's take-over button. A phone sends no
+    // `takeOver` and has no such button, so what it can offer is the way
+    // that works from here.
+    'SESSION_OPEN_IN_TERMINAL' =>
+      'It is open in a terminal on $machine. Close it there, then open '
+          'it here.',
+    _ => 'Create harness failed: ${detail ?? code}',
+  };
 
   /// Calls off a request the machine holds — the New form's Cancel request, the desktop's
   /// `cancelAgentCreation`. Null once the machine says it is cancelled; otherwise what to tell the
@@ -6883,6 +6935,20 @@ class AppNotifier extends ChangeNotifier {
     if (_newMachines.remove(machineId)) notifyListeners();
   }
 
+  /// New computers whose Start was pressed and is still bringing up their harness: their row drops
+  /// "new" and its Start spins.
+  final Set<String> _startingMachines = {};
+
+  bool machineStarting(String machineId) =>
+      _startingMachines.contains(machineId);
+
+  void setMachineStarting(String machineId, bool starting) {
+    final changed = starting
+        ? _startingMachines.add(machineId)
+        : _startingMachines.remove(machineId);
+    if (changed) notifyListeners();
+  }
+
   /// Renames a machine via `PATCH /api/machines/:machineId` (control-plane REST — the machine's
   /// `name` is backend-owned, unlike an agent's, which lives on the harness CLI). Returns null on
   /// success, or an error message to show inline in the caller's dialog.
@@ -6961,7 +7027,8 @@ class AppNotifier extends ChangeNotifier {
 
   Future<String?> _performDeleteMachine(String machineId) async {
     final revision = _authRevision;
-    final name = machineStates[machineId]?.machine.displayName ?? 'This computer';
+    final name =
+        machineStates[machineId]?.machine.displayName ?? 'This computer';
     final device = await _machineDeviceKey(machineId);
     // Signed out, or into another account, while the log was read: nothing here is theirs.
     if (!_authWorkCurrent(revision)) return null;
@@ -6978,7 +7045,8 @@ class AppNotifier extends ChangeNotifier {
       // Gone from the log already — another device signed it out after this phone read the log:
       // what this step was for is done.
       if (failure == 'NOT_IN_LOG') failure = null;
-      if (failure != null) return 'Couldn’t sign $name out ($failure). Try again.';
+      if (failure != null)
+        return 'Couldn’t sign $name out ($failure). Try again.';
       // The account let it go meanwhile (removed from another device): no record is left to delete.
       if (machineStates[machineId] == null) return null;
     }
@@ -7050,7 +7118,9 @@ class AppNotifier extends ChangeNotifier {
         return null;
       }().timeout(_machineKeyReadCap);
     } catch (error) {
-      debugPrint('devices: could not read the key of ${_shortId(machineId)}: $error');
+      debugPrint(
+        'devices: could not read the key of ${_shortId(machineId)}: $error',
+      );
       return null;
     }
   }
@@ -7462,6 +7532,16 @@ class AppNotifier extends ChangeNotifier {
     _desk.drop((machineId: machineId, agentId: agentId));
     notifyListeners();
     return null;
+  }
+
+  /// Takes a harness off this phone's lists while its computer does not answer, so `agent_delete`
+  /// cannot reach it: nothing is stopped there. Its desk tab keeps it, and the computer's own list
+  /// brings it back as soon as it answers again (`_replaceAgents`) if it is still there.
+  Future<void> forgetUnreachableAgent(String machineId, String agentId) async {
+    final machine = machineStates[machineId];
+    if (machine == null) return;
+    await _removeAgent(machine, agentId);
+    notifyListeners();
   }
 
   /// Bring a stopped agent back, so something can be opened on it.
@@ -10244,7 +10324,11 @@ class AppNotifier extends ChangeNotifier {
       case 'browser_open':
         final url = payload['url'];
         if (url is String && url.isNotEmpty) {
-          onBrowserOpen?.call(machineId, payload['agentId'] as String? ?? '', url);
+          onBrowserOpen?.call(
+            machineId,
+            payload['agentId'] as String? ?? '',
+            url,
+          );
         }
         return;
       // ⚠️ Everything else changed nothing here, so it must not redraw. The machine streams every
