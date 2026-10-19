@@ -62,7 +62,7 @@ The generator copies the round's Codex timings and geometry as literals, so a re
 ## Size
 
 No Wi-Fi: the Pro talks over the cable only, and the module's ESP32-C5 is held in reset. Fonts 42 and 56 carry masks
-only for `# > _ ?` (`test_fonts.py` fails on any other character drawn at those sizes). The image is about 1.87 MB;
+only for `# > _ ?`, and font 32 only for `> _` (`test_fonts.py` fails on any other character drawn at those sizes). The image is about 1.87 MB;
 `docs/size-baseline.txt` has the before and after.
 
 ## Layout
@@ -82,12 +82,14 @@ only for `# > _ ?` (`test_fonts.py` fails on any other character drawn at those 
 ## Daemon contract
 
 The device follows [docs/cable.md](docs/cable.md). A capability in the hello turns on extra daemon output; a daemon
-that predates one ignores it. The four capabilities:
+that predates one ignores it. The six capabilities:
 
 - `swarms: "members-v1"`: agent ids and members on each swarm tab.
 - `recap: "long-v1"`: the full answer text on a summary.
 - `activity: "steps-v1"`: step, action and elapsed time on turn activity.
+- `stats: "turn-v1"`: the counts on a finished turn (tests, commits, tokens).
 - `player: "library-v1"`: the paged player library request and reply.
+- `ota: "v1"`: the daemon may offer firmware over the cable.
 
 ## Further reading
 

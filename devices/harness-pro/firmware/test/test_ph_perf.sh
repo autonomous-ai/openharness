@@ -18,7 +18,7 @@ if [[ -n "${PRO_FONT:-}" ]]; then
     font_args=(--font "$PRO_FONT")
 fi
 python3 "$fw/scripts/gen_fonts.py" ${font_args[@]+"${font_args[@]}"} --out "$out/pro_fonts.c"
-cc -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O2 -DHT_FACE_PX=720 -I"$disp" -I"$fw/main" -I"$here/host_stubs" \
+cc -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O2 -DHT_FACE_PX=720 -I"$disp" -I"$fw/main" \
    -o "$out/pod_render" "$here/pod_render.c" "$fw"/main/pod/*.c "$fw"/main/pod/home/*.c \
    "$disp/pro_canvas.c" "$disp/terminal.c" "$out/pro_fonts.c"
 

@@ -106,7 +106,6 @@ pod_out_t pod_ui_roster(pod_ui_t *, const pod_roster_row_t *rows, int n);
 // `members` may be NULL (no agentIds); its i-th entry belongs to items[i].
 pod_out_t pod_ui_swarms(pod_ui_t *, const cable_swarm_t *items, int n, const cable_swarm_members_t *members,
                         const char *selected, const cable_tile_t *tiles, int tile_count);
-pod_out_t pod_ui_status(pod_ui_t *, const char *id, const char *status, uint32_t now_ms);
 pod_out_t pod_ui_turn(pod_ui_t *, const char *id, const char *kind, const char *text, int elapsed_s, uint32_t now_ms);
 // turn.stats for an agent (-1 leaves a field unknown); unknown agents are ignored.
 pod_out_t pod_ui_turn_stats(pod_ui_t *, const char *id, int32_t passed, int32_t failed, int32_t commits, int32_t tokens_in, int32_t tokens_out);

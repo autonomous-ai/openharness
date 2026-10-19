@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "last_words.h"
+#include "task_stacks.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -35,7 +36,7 @@ static const char *TAG = "cable";
 //
 // So the rule this file keeps: RX_BUF ≥ the largest number of bytes the peer may have in flight while
 // this task is blocked. The firmware transfer is the only sender that can saturate the link, and its
-// credit window is 16 KB (docs/specs/cable-protocol.md, "Firmware update"). 32 KB is that window twice
+// credit window is 16 KB (docs/cable.md, "Firmware update"). 32 KB is that window twice
 // over, for scheduling jitter. Changing either number without the other reintroduces exactly this bug.
 #define USJ_RX_BUF (32 * 1024)
 
@@ -69,15 +70,11 @@ static const char *TAG = "cable";
 // the screen.
 #define LOG_WRITE_WAIT_MS 5
 
-// Reader task stack. The frame callback runs on this task, so it carries whatever the message layer
-// eventually does — JSON parsing, LVGL updates, and during a firmware install esp_ota_write() plus a
-// SHA-256 over the image read back out of flash.
-//
-// 12 KiB. The host proxy (test_pro_cable.c) measured the parser at 6.9 KB on Linux clang-18 with sanitizers, past
-// the old 6 KiB; ram_telemetry_periodic() reports this task's real high-water mark by name ("cable_link"), and
-// that is the figure to tune from. The failure this margin is against is real — the OTA path on this board's own
-// earlier firmware overflowed an 8 KiB stack and shipped devices that could not update themselves.
-#define READER_STACK 12288
+// Reader task stack: STACK_CABLE_LINK (task_stacks.h). The frame callback runs on this task, so it carries whatever
+// the message layer does — JSON parsing, Pod's feeds, and during a firmware install esp_ota_write() plus a SHA-256
+// over the image read back out of flash. The host proxy (test_pro_cable.c) measured the parser at 6.9 KB on Linux
+// clang-18 with sanitizers; the failure the margin is against is real — the OTA path on this board's own earlier
+// firmware overflowed an 8 KiB stack and shipped devices that could not update themselves.
 
 // One log line's worth of formatted text. Anything longer is truncated rather than split: a log line is
 // diagnostic, and half of one that arrives is worth more than a mechanism that could deadlock producing
@@ -89,6 +86,7 @@ static cable_frame_cb  s_cb;
 static cable_tick_cb   s_tick;
 static void           *s_ctx;
 static atomic_bool     s_running;
+static atomic_uint     s_rx_bytes, s_frames_ok;   // written on the reader, read by the heartbeat
 
 // Serialises the shared encode buffer AND the write, so two tasks sending at once cannot interleave
 // halves of two frames onto the wire. A frame split down the middle by a second sender is not something
@@ -166,6 +164,13 @@ void cable_link_set_log_framing(bool on)
 
 // ── link ────────────────────────────────────────────────────────────────────────────────────────────
 
+// Counts each decoded frame, then hands it on.
+static void count_frame(uint8_t version, uint8_t type, const uint8_t *payload, size_t payload_len, void *ctx)
+{
+    atomic_fetch_add_explicit(&s_frames_ok, 1, memory_order_relaxed);
+    s_cb(version, type, payload, payload_len, ctx);
+}
+
 static void reader_task(void *arg)
 {
     (void)arg;
@@ -181,7 +186,8 @@ static void reader_task(void *arg)
         // Never fails and never rejects: everything arriving here is untrusted, starts mid-stream after
         // every boot, and the only useful response to a byte that makes no sense is to step over it.
         if (n > 0) {
-            cable_decoder_feed(&s_decoder, chunk, (size_t)n, s_cb, s_ctx);
+            atomic_fetch_add_explicit(&s_rx_bytes, (unsigned)n, memory_order_relaxed);
+            cable_decoder_feed(&s_decoder, chunk, (size_t)n, count_frame, s_ctx);
             last_rx_us = now;
         }
         if (s_tick) s_tick(s_ctx);
@@ -221,7 +227,7 @@ bool cable_link_start(cable_frame_cb cb, cable_tick_cb tick, void *ctx)
     // The new task may receive a welcome before xTaskCreate returns. Make the
     // installed driver/send path visible before that callback can run.
     s_running = true;
-    if (xTaskCreate(reader_task, "cable_link", READER_STACK, NULL, 5, NULL) != pdPASS) {
+    if (xTaskCreate(reader_task, "cable_link", STACK_CABLE_LINK, NULL, 5, NULL) != pdPASS) {
         s_running = false;
         ESP_LOGE(TAG, "reader task create failed — no link to the daemon");
         usb_serial_jtag_driver_uninstall();
@@ -285,7 +291,17 @@ void cable_link_counters(uint32_t *corrupt_frames, uint32_t *discarded_bytes)
     if (discarded_bytes) *discarded_bytes = s_decoder.discarded_bytes;
 }
 
-uint32_t cable_link_dropped_logs(void) { return atomic_load(&s_dropped_logs); }
+cable_link_stats_t cable_link_stats(void)
+{
+    // The decoder's two counters are plain words that only the reader writes; a 32-bit read is not torn.
+    return (cable_link_stats_t){
+        .rx_bytes = atomic_load_explicit(&s_rx_bytes, memory_order_relaxed),
+        .frames_ok = atomic_load_explicit(&s_frames_ok, memory_order_relaxed),
+        .corrupt_frames = s_decoder.corrupt_frames,
+        .discarded_bytes = s_decoder.discarded_bytes,
+        .dropped_logs = atomic_load_explicit(&s_dropped_logs, memory_order_relaxed),
+    };
+}
 
 void cable_link_reset_decoder(void)
 {

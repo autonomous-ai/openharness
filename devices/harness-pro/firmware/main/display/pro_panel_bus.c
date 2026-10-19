@@ -21,7 +21,6 @@ static const char *TAG = "pro_panel_bus";
 static esp_lcd_panel_io_handle_t s_io;
 static esp_lcd_dsi_bus_handle_t  s_bus;
 static esp_ldo_channel_handle_t  s_phy_pwr;
-static uint8_t                   s_level;
 
 /*
  * Backlight. An AP3032 boost drives the LED string and its feedback pin is what this PWM moves, so the
@@ -65,18 +64,8 @@ void pro_backlight_init(void)
 
 void pro_backlight_set(uint8_t level)
 {
-    s_level = level;
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL, (uint32_t)BL_MAX_DUTY * level / 255u);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL);
-}
-
-uint8_t pro_backlight_level(void) { return s_level; }
-
-void pro_backlight_log(void)
-{
-    ESP_LOGI(TAG, "backlight · BL_EN(GPIO%d)=%d · PWM GPIO%d · duty=%lu/%d · inverted",
-             BSP_LCD_BL_EN, gpio_get_level(BSP_LCD_BL_EN), BSP_LCD_BL_PWM,
-             (unsigned long)ledc_get_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL), BL_MAX_DUTY);
 }
 
 void pro_backlight_enable(bool on)

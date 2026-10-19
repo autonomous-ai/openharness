@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "board/board.h"
+#include "cJSON.h"
 #include "cable_features.h"
 #include "cable_frame.h"
 #include "cable_json_guard.h"
@@ -27,6 +28,7 @@
 #include "sys/device_mac.h"
 #include "sys/fw_update.h"
 #include "sys/last_words.h"
+#include "task_stacks.h"
 
 static const char *TAG = "pro_cable";
 
@@ -40,7 +42,7 @@ static const char *TAG = "pro_cable";
 #define SILENCE_MS       15000
 #define NOTIF_ROWS       16   // notif.replace items kept (the daemon sends at most 8)
 
-// Everything below runs on the cable_link task (6 KB stack) unless the comment says otherwise. Parsing therefore
+// Everything below runs on the cable_link task (12 KB stack) unless the comment says otherwise. Parsing therefore
 // goes into static scratch, never into a stack local over 1 KB (the host test caps every frame at 1024 B).
 _Static_assert(POD_RECAP_BYTES == PRO_RECAP_BYTES, "the recap buffers of pro_cable and Pod must agree");
 
@@ -892,7 +894,7 @@ void pro_cable_on_frame(uint8_t version, uint8_t type, const uint8_t *payload, s
         s_unknown++;
         return;
     }
-    // Parse straight from the bounded frame; the guard caps depth and token count so cJSON fits the 6 KB stack.
+    // Parse straight from the bounded frame; the guard caps depth and token count so cJSON fits the cable_link stack.
     if (!cable_json_guard(payload, payload_len)) { s_bad++; ESP_LOGW(TAG, "frame refused by the guard: %u B", (unsigned)payload_len); return; }
     const char *end = NULL;
     cJSON *root = cJSON_ParseWithLengthOpts((const char *)payload, payload_len, &end, false);
@@ -958,7 +960,7 @@ void pro_cable_start(void)
     s_upload_lock = xSemaphoreCreateMutex();
     if (!s_upload_lock) { ESP_LOGE(TAG, "no memory for the upload lock - link disabled"); return; }
     s_last_rx_us = esp_timer_get_time();
-    if (xTaskCreate(hello_task, "cable_hello", 4096, NULL, 4, &hello) != pdPASS) {
+    if (xTaskCreate(hello_task, "cable_hello", STACK_CABLE_HELLO, NULL, 4, &hello) != pdPASS) {
         ESP_LOGE(TAG, "hello task create failed - no handshake");
         return;
     }

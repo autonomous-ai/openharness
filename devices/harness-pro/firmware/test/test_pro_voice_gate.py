@@ -35,6 +35,7 @@ code = r'''
 #include "app/pro_voice.h"
 #include "audio/audio_capture.h"
 #include "audio/pro_recorder.h"
+#include "cable/cable_link.h"
 #include "cable/pro_cable.h"
 #include "pro_app_api.h"
 #include "pro_canvas.h"
@@ -108,6 +109,8 @@ bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); (void)id; CAB
 bool pro_cable_send_scroll(pro_scroll_phase_t p, int dy, int v) { CHECK(LOCK_DEPTH == 0); (void)p; (void)dy; (void)v; return true; }
 bool pro_cable_request_library(int offset, uint32_t request) { CHECK(LOCK_DEPTH == 0); (void)offset; (void)request; return true; }
 bool pro_cable_library_supported(void) { return false; }
+cable_link_stats_t cable_link_stats(void) { return (cable_link_stats_t){0}; }
+void pro_cable_counters(uint32_t *bad, uint32_t *unknown) { *bad = 0; *unknown = 0; }
 bool pro_cable_voice_cancel(const char *id) { CHECK(LOCK_DEPTH == 0); CAB.cancels++; snprintf(CAB.cancel_id, sizeof CAB.cancel_id, "%s", id); return true; }
 
 // The recorder: the capture and sender tasks are replaced by flags the test flips.
@@ -525,7 +528,7 @@ def check_sources():
 check_sources()
 cc = os.environ.get("CC", "cc")
 sanitize = "-fsanitize=" + os.environ.get("SANITIZERS", "undefined,bounds")
-include = ["-I", str(APP), "-I", str(MAIN), "-I", str(DISP), "-I", str(HERE / "host_esp"), "-I", str(HERE / "host_stubs"),
+include = ["-I", str(APP), "-I", str(MAIN), "-I", str(DISP), "-I", str(HERE / "host_esp"),
            "-I", str(POD)]
 failures = []
 with tempfile.TemporaryDirectory(prefix="harness-pro-voice-") as directory:
@@ -540,11 +543,11 @@ with tempfile.TemporaryDirectory(prefix="harness-pro-voice-") as directory:
     source.write_text(code)
     modules = sorted(POD.glob("*.c")) + sorted(POD.glob("*/*.c")) + [APP / "pod_glue.c", APP / "pro_app.c", APP / "pro_touch.c", AUDIO / "pro_voice.c", DISP / "scroll.c",
                                          DISP / "pro_canvas.c", DISP / "terminal.c", fonts]
-    # The voice state machine runs on the touch, render and cable_link tasks (6 KB stack): no frame past 1 KB.
+    # The voice state machine runs on the touch, render and cable_link tasks: no frame past 1 KB.
     subprocess.run([cc, "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror", "-Wframe-larger-than=1024", "-O1", "-DHT_FACE_PX=720",
                     "-DPRO_VOICE_TEST_HOOK", *include, "-c", str(AUDIO / "pro_voice.c"), "-o", os.devnull], check=True)
     executable = directory / "pro_voice_gate"
-    subprocess.run([cc, "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function", "-O1", "-g", sanitize,
+    subprocess.run([cc, "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror", "-O1", "-g", sanitize,
                     "-DHT_FACE_PX=720", "-DPRO_VOICE_TEST_HOOK", *include, str(source), *map(str, modules), "-lpthread", "-o", str(executable)],
                    check=True)
     result = subprocess.run([str(executable)], text=True, capture_output=True)

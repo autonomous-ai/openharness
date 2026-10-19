@@ -43,6 +43,11 @@ const PING_EVERY_MS = 5_000
 /** No bytes of any kind for this long → the handle is dead. Longer than the dial's own 15 s window, so a
  *  single late message cannot trip both sides at once and have each conclude the other left. */
 const SILENCE_MS = 20_000
+/** How often a connected port's traffic counters go to the dial's log. */
+const LINK_LOG_MS = 60_000
+/** Non-frame text kept per logging interval, and the shortest printable run worth keeping. */
+const NOISE_MAX = 200
+const NOISE_RUN_MIN = 4
 const REOPEN_EVERY_MS = 2_000
 // How long one attempt at opening the port may take before it is abandoned.
 //
@@ -563,6 +568,8 @@ const PET_TRANSIENT = new Set(['timeout', 'unreadable', 'memory', 'busy'])
 export class CableSession {
   private link: CablePort | null = null
   private decoder = new CableDecoder()
+  /** This port's traffic since it opened, logged once a minute and when it closes (see logLink). */
+  private traffic = { at: 0, tx: 0, txFrames: 0, rx: 0, rxFrames: 0, corrupt: 0, discarded: 0, run: '', noise: '' }
   private timer: NodeJS.Timeout | null = null
   private greetedMac: string | null = null
   /** This session has spoken with a real dial at least once. Never reset: a port that has been a dial
@@ -795,6 +802,7 @@ export class CableSession {
     if (this.stopped) return
     // The firmware beats once a minute; the gap is marked in the dial's own log, where it is read.
     this.dialLog.tick(this.isConnected)
+    if (this.isConnected && Date.now() - this.traffic.at >= LINK_LOG_MS) this.logLink('link')
     if (!this.link?.isOpen) {
       await this.tryOpen()
       return
@@ -938,6 +946,10 @@ export class CableSession {
     if (opened.path !== this.foreignPort) this.foreignPort = null
     this.bytesSinceOpen = 0
     this.framesSinceOpen = 0
+    this.traffic = {
+      at: Date.now(), tx: 0, txFrames: 0, rx: 0, rxFrames: 0,
+      corrupt: this.decoder.corruptFrames, discarded: this.decoder.discardedBytes, run: '', noise: '',
+    }
     this.link = opened
     // Leftover bytes belong to a session that has ended; carrying them across would put a stale
     // half-frame in front of the first real frame of the new one.
@@ -966,6 +978,7 @@ export class CableSession {
   }
 
   private onClosed(why: string): void {
+    if (this.traffic.rx || this.traffic.tx) this.logLink('link at close')
     this.log(`cable: closed (${why})`)
     this.cancelFormVoice()
     this.cancelSearchVoice()
@@ -1028,6 +1041,43 @@ export class CableSession {
   static readonly BUDGET = { garbageBytes: 64 * 1024, frames: 2_000, decodeMs: 500 }
   private budget = { since: 0, garbage: 0, frames: 0, ms: 0 }
 
+  /**
+   * This port's counters in the dial's log, to read beside the firmware's own `alive` line: a gap between
+   * what one side wrote and the other decoded is the lossy link. Plus the printable runs of the bytes the
+   * decoder stepped over (at most NOISE_MAX characters a minute), so a device panic's text is kept.
+   */
+  private logLink(label: string): void {
+    const t = this.traffic
+    this.keepRun()
+    this.log(`cable: ${label} · tx ${t.tx} B in ${t.txFrames} frames · rx ${t.rx} B in ${t.rxFrames} frames · corrupt ${this.decoder.corruptFrames - t.corrupt} · discarded ${this.decoder.discardedBytes - t.discarded} B${t.noise ? ` · non-frame text: ${t.noise}` : ''}`)
+    t.at = Date.now()
+    t.noise = ''
+  }
+
+  /** Close the current run of printable discarded bytes into the minute's text, if it is long enough to read. */
+  private keepRun(): void {
+    const t = this.traffic
+    if (t.run.length >= NOISE_RUN_MIN && t.noise.length < NOISE_MAX) {
+      t.noise = `${t.noise}${t.noise ? ' | ' : ''}${t.run}`.slice(0, NOISE_MAX)
+    }
+    t.run = ''
+  }
+
+  private noted = (bytes: Uint8Array): void => {
+    for (const b of bytes) {
+      if (b >= 0x20 && b < 0x7f) {
+        if (this.traffic.run.length < NOISE_MAX) this.traffic.run += String.fromCharCode(b)
+      } else this.keepRun()
+    }
+  }
+
+  /** One frame to the dial, counted. */
+  private async put(link: CablePort, bytes: Uint8Array): Promise<void> {
+    await link.write(bytes)
+    this.traffic.tx += bytes.length
+    this.traffic.txFrames++
+  }
+
   private onBytes(chunk: Buffer): void {
     const started = performance.now()
     const discarded = this.decoder.discardedBytes
@@ -1056,8 +1106,11 @@ export class CableSession {
   private decode(chunk: Buffer, counted: () => void): void {
     this.lastRx = Date.now()
     this.bytesSinceOpen += chunk.length
+    this.traffic.rx += chunk.length
+    this.decoder.onDiscard = this.noted
     this.decoder.feed(chunk, (frame) => {
       counted()
+      this.traffic.rxFrames++
       this.framesSinceOpen += 1
       if (frame.type === CableType.Json) {
         let msg: Message
@@ -1760,7 +1813,7 @@ export class CableSession {
       candidate.version,
       async (slice) => {
         if (!this.link?.isOpen) throw new Error('port closed mid-transfer')
-        await this.link.write(encodeCableFrame(CableType.Fw, slice))
+        await this.put(this.link, encodeCableFrame(CableType.Fw, slice))
       },
       (line) => this.log(line),
       { offsets: this.greetedBoard === 'pro' && this.greetedOta === 'v1' },
@@ -1869,7 +1922,7 @@ export class CableSession {
           id,
           async (slice) => {
             if (!this.link?.isOpen) throw new Error('port closed mid-transfer')
-            await this.link.write(encodeCableFrame(CableType.Pet, slice))
+            await this.put(this.link, encodeCableFrame(CableType.Pet, slice))
           },
           (line) => this.log(line.replace('firmware', 'pet')),
         ),
@@ -2197,7 +2250,7 @@ export class CableSession {
   private async send(msg: Message): Promise<boolean> {
     if (!this.link?.isOpen) return false
     try {
-      await this.link.write(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(msg), 'utf8')))
+      await this.put(this.link, encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(msg), 'utf8')))
       return true
     } catch (err) {
       this.log(`cable: write failed (${(err as Error).message})`)

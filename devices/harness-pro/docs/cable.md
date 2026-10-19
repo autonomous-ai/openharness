@@ -26,8 +26,11 @@ Full key list, in the order the Pro sends it:
 | `swarms` | `"members-v1"` | capability |
 | `recap` | `"long-v1"` | capability |
 | `activity` | `"steps-v1"` | capability |
+| `stats` | `"turn-v1"` | capability |
 | `player` | `"library-v1"` | capability |
+| `ota` | `"v1"` | capability: the Pro takes firmware offers |
 | `mac` | `aa:bb:...` | existing |
+| `settings` | object | existing: brightness, character, face, voiceLang, muted, quiet, straightTitle, focusFace, scrollReversed, round |
 
 Dropped from the branch's hello: `speech` (`pcm16-v1`). The Pro does not take speech output.
 

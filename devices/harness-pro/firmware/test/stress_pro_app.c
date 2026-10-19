@@ -12,6 +12,7 @@
 #include "app/pro_app.h"
 #include "app/pro_touch.h"
 #include "app/pro_voice.h"
+#include "cable/cable_link.h"
 #include "cable/pro_cable.h"
 #include "pro_app_api.h"
 #include "pro_canvas.h"
@@ -63,6 +64,8 @@ static int lib_req_offset = -1;
 static uint32_t lib_req_id;
 bool pro_cable_request_library(int offset, uint32_t request) { CHECK(LOCK_DEPTH == 0); lib_req_offset = offset; lib_req_id = request; return true; }
 bool pro_cable_library_supported(void) { return true; }
+cable_link_stats_t cable_link_stats(void) { return (cable_link_stats_t){0}; }
+void pro_cable_counters(uint32_t *bad, uint32_t *unknown) { *bad = 0; *unknown = 0; }
 void pro_voice_begin(const char *agent) { (void)agent; }
 void pro_voice_end(bool send) { (void)send; }
 bool pro_voice_open(void) { return false; }

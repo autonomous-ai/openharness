@@ -23,6 +23,7 @@
 #include "pod/pod_model.h"
 #include "pro_app_api.h"
 #include "sys/device_mac.h"
+#include "task_stacks.h"
 #include "sys/last_words.h"
 #include "board/board.h"
 #include "sys/config_store.h"
@@ -616,7 +617,7 @@ static void test_session_machines_library_voice(void)
 }
 
 // ---- the small stack -------------------------------------------------------------------------------------
-// pro_cable's parser runs on the cable_link task: 6 KB, shared with the reader loop and the decoder. This runs the
+// pro_cable's parser runs on the cable_link task: STACK_CABLE_LINK (12 KB), shared with the reader loop and the decoder. This runs the
 // heaviest frames on a thread whose stack is painted first, and measures how deep it went.
 #define PAINT 0xA5
 static size_t used_bytes;
@@ -661,9 +662,9 @@ static void *painted_entry(void *arg)
 
 static void pro_cable_test_small_stack(void)
 {
-    // (1) A real thread at the device's size: max(12288, PTHREAD_STACK_MIN). The OS minimum is 16 KB on macOS and
-    // glibc, so this proves the parser runs on a thread of that kind, not that 6 KB is enough.
-    size_t want = 12288 > (size_t)PTHREAD_STACK_MIN ? 12288 : (size_t)PTHREAD_STACK_MIN;
+    // (1) A real thread at the device's size: max(STACK_CABLE_LINK, PTHREAD_STACK_MIN). The OS minimum is 16 KB on macOS and
+    // glibc, so this proves the parser runs on a thread of that kind, not that the stack is enough.
+    size_t want = STACK_CABLE_LINK > (size_t)PTHREAD_STACK_MIN ? STACK_CABLE_LINK : (size_t)PTHREAD_STACK_MIN;
     pthread_attr_t attr;
     pthread_t th;
     CHECK(pthread_attr_init(&attr) == 0 && pthread_attr_setstacksize(&attr, want) == 0);
@@ -671,7 +672,7 @@ static void pro_cable_test_small_stack(void)
     pthread_attr_destroy(&attr);
 
     // (2) The real measurement: our own 64 KB stack, painted, and the deepest untouched byte read back. The parser
-    // plus the reader loop's own frames (decoder + 256 B read chunk, < 1.5 KB) must fit in READER_STACK (cable_link.c, 12288).
+    // plus the reader loop's own frames (decoder + 256 B read chunk, < 1.5 KB) must fit in STACK_CABLE_LINK (task_stacks.h).
     const size_t size = 64 * 1024 > (size_t)PTHREAD_STACK_MIN ? 64 * 1024 : (size_t)PTHREAD_STACK_MIN;   // 128 KB minimum on aarch64 glibc
     unsigned char *stack = NULL;
     CHECK(posix_memalign((void **)&stack, 4096, size) == 0);

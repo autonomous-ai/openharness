@@ -58,6 +58,9 @@ class LoopbackPort implements CablePort {
     this.onData(Buffer.from(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(msg), 'utf8'))))
   }
 
+  /** Bytes that are not (all) a frame, as the dial's boot ROM or panic handler writes them. */
+  raw(bytes: Buffer): void { this.onData(bytes) }
+
   pcm(bytes: Buffer): void {
     this.onData(Buffer.from(encodeCableFrame(CableType.Pcm, bytes)))
   }
@@ -3480,5 +3483,47 @@ describe('hello capabilities', () => {
       expect(port.sent[0].features).not.toContain('player.library')
       expect(port.types()).not.toContain('player.library')
     } finally { await session.stop() }
+  })
+
+  describe('link counters in the dial log', () => {
+    const linkLines = (log: DialLog) => readFileSync(log.currentPath, 'utf8').split('\n').filter((l) => l.includes('[daemon] link'))
+
+    it('logs bytes and frames both ways at close, and keeps the printable text of non-frame bytes', async () => {
+      const log = tmpLog()
+      const { session, port } = await connect(makeHost(), log)
+      try {
+        port.say({ t: 'hello', product: 'harness', fw: '0.1.0', proto: 1, mac: 'aa:bb' })
+        await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+        port.raw(Buffer.concat([Buffer.from('Guru Meditation Error: Core 0 panic\x00\x01ab\x02'), Buffer.from([0xa5])]))
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })   // a frame after the noise still decodes
+        await settle()
+        await port.close('unplugged')
+        await log.flush()
+      } finally { await session.stop() }
+      const [line] = linkLines(log)
+      const sentBytes = port.frames.reduce((n, f) => n + f.length, 0)
+      expect(line).toContain('link at close')
+      expect(line).toContain(`tx ${sentBytes} B in ${port.frames.length} frames`)
+      expect(line).toMatch(/rx \d+ B in 2 frames/)
+      expect(line).toMatch(/discarded \d+ B/)
+      expect(line).toContain('non-frame text: Guru Meditation Error: Core 0 panic')
+      expect(line).not.toContain('ab')   // a two-character run is not text worth keeping
+    })
+
+    it('logs once a minute while connected, and caps the text at 200 characters', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      const log = tmpLog()
+      const { session, port } = await connect(makeHost(), log)
+      try {
+        port.say({ t: 'hello', product: 'harness', fw: '0.1.0', proto: 1, mac: 'aa:bb' })
+        await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+        port.raw(Buffer.from('x'.repeat(500) + '\n'))
+        vi.setSystemTime(Date.now() + 61_000)
+        await vi.waitFor(async () => { await log.flush(); expect(linkLines(log).length).toBeGreaterThan(0) }, NEXT_TICKS)
+      } finally { vi.useRealTimers(); await session.stop() }
+      const [line] = linkLines(log)
+      expect(line).toMatch(/\] link · tx \d+ B in \d+ frames · rx \d+ B in 1 frames/)
+      expect(line.split('non-frame text: ')[1]).toHaveLength(200)
+    })
   })
 })

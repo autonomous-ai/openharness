@@ -1,7 +1,7 @@
 // What pro_cable tells the app. pro_cable parses the daemon's messages and calls these; pro_app (Task 6) implements
 // them, and test_pro_cable.c stubs them with a recorder.
 //
-// EVERY CALL RUNS ON THE cable_link TASK (6 KB stack). A pointer argument is valid only until the call returns:
+// EVERY CALL RUNS ON THE cable_link TASK (STACK_CABLE_LINK, 12 KB). A pointer argument is valid only until the call returns:
 // copy what must outlive it. A NULL string means "the daemon did not send that field" (an older daemon sends
 // less); "" means it sent an empty one. None of these is ever called with a string longer than its stated cap, and
 // every cut is on a UTF-8 boundary.

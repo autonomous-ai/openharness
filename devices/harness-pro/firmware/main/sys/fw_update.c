@@ -18,7 +18,7 @@
 
 static const char *TAG = "fw";
 
-// Read-back buffer for the hash. Small and static on purpose: this runs on the cable task (6 KB stack, whose
+// Read-back buffer for the hash. Small and static on purpose: this runs on the cable task (12 KB stack, whose
 // frames are capped at compile time), which also carries esp_ota_write().
 #define VERIFY_CHUNK 1024
 // No slice for this long ends the transfer. The daemon's keepalives prove the host is alive, not that an

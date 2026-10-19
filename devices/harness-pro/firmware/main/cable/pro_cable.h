@@ -5,8 +5,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "cJSON.h"
-
 // The second byte pair of the frame names the product; this names it again in the hello (cable_frame.h).
 #define CABLE_PRODUCT "harness"
 #define CABLE_PROTO_VERSION 3   // 3: + question.close (a question answered on another client)
@@ -41,7 +39,7 @@ bool pro_cable_library_supported(void);  // welcome.features names player.librar
 const char *pro_cable_fw_version(void);
 
 // ---- seams ----
-// Host-test only (nothing on the device reads them): messages dropped as malformed / ignored as unknown.
+// Messages dropped as malformed / ignored as unknown, cumulative (the heartbeat prints them; the host tests read them).
 void pro_cable_counters(uint32_t *bad, uint32_t *unknown);
 // cable_link's callbacks (also what test_pro_cable.c feeds). on_frame runs on the cable_link task.
 void pro_cable_on_frame(uint8_t version, uint8_t type, const uint8_t *payload, size_t payload_len, void *ctx);
