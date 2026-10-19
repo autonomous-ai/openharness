@@ -49,7 +49,7 @@ describe('the Windows release workflows', () => {
     expect(desktop).toMatch(/\n  build-test:\n    needs: mode\n    if: \$\{\{ needs\.mode\.outputs\.release != 'true' \}\}\n/)
     expect(desktop).toMatch(/\n  release-build:\n    needs: mode\n    if: \$\{\{ needs\.mode\.outputs\.release == 'true' \}\}\n/)
     expect(desktop).toMatch(/\n  release-staging:\n    needs: \[mode, release-build\]\n/)
-    expect(desktop).toContain('cancel-in-progress: "${{ !(inputs.release || startsWith(')
+    expect(desktop).toContain('cancel-in-progress: "${{ !inputs.release }}"')
     expect(desktop).toContain('C4.7 package smoke')
     expect(desktop).toContain('pwsh desktop/scripts/package-windows.ps1')
     expect(desktop).toContain('tar.exe')
@@ -65,5 +65,14 @@ describe('the Windows release workflows', () => {
     for (const existing of ['cargo test --locked --lib desktop', 'desktop_install', 'flutter test --no-pub', 'windows_test_baseline.py', 'windows_pipe_test.dart', 'windows_runner_test.dart']) {
       expect(desktop).toContain(existing)
     }
+  })
+
+  it('runs the Windows desktop workflow on demand only', () => {
+    const desktop = read('windows-desktop.yml')
+    expect(desktop).toMatch(/^on:\n(?:\s+#[^\n]*\n)*\s+workflow_dispatch:/m)
+    expect(desktop).not.toMatch(/^\s+push:/m)
+    expect(desktop).not.toContain('feat/windows-desktop')
+    expect(desktop).not.toContain('TEMPORARY')
+    expect(desktop).not.toContain('head_commit')
   })
 })

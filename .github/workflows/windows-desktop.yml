@@ -24,14 +24,11 @@ on:
         type: boolean
         required: false
         default: true
-  # TEMPORARY: remove before merging (workflow_dispatch needs the file on main)
-  push:
-    branches: [feat/windows-desktop]
 
 concurrency:
   # A release never cancels a test run and cannot be cancelled by a later run.
-  group: "windows-desktop-${{ github.ref }}-${{ (inputs.release || startsWith(github.event.head_commit.message, 'ci(windows): desktop staging ')) && github.run_id || 'test' }}"
-  cancel-in-progress: "${{ !(inputs.release || startsWith(github.event.head_commit.message, 'ci(windows): desktop staging ')) }}"
+  group: "windows-desktop-${{ github.ref }}-${{ inputs.release && github.run_id || 'test' }}"
+  cancel-in-progress: "${{ !inputs.release }}"
 
 permissions:
   contents: read
@@ -55,15 +52,9 @@ jobs:
           RELEASE: ${{ inputs.release }}
           VERSION: ${{ inputs.version }}
           DRY_RUN: ${{ inputs.dry_run }}
-          SUBJECT: ${{ github.event.head_commit.message }} # TEMPORARY: removed with the branch push trigger
         run: |
           set -euo pipefail
           release=${RELEASE:-false} version=${VERSION:-} dry_run=${DRY_RUN:-true}
-          subject=${SUBJECT%%$'\n'*} # TEMPORARY
-          if [[ "$subject" =~ ^ci\(windows\):\ desktop\ staging\ (release|dry\ run)\ ([^[:space:]]+)$ ]]; then # TEMPORARY
-            release=true version=${BASH_REMATCH[2]} dry_run=true
-            if [[ "${BASH_REMATCH[1]}" == release ]]; then dry_run=false; fi
-          fi
           if [[ "$release" == true && ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$ ]]; then
             echo "::error::version '$version' is not X.Y.Z[-prerelease]"
             exit 1
