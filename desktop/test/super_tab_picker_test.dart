@@ -21,7 +21,11 @@ import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 
 void main() {
-  setUpAll(loadPreviewFonts);
+  setUpAll(() async {
+    if (Platform.environment['SUPER_TAB_PICKER_SHOTS'] != null) {
+      await loadPreviewFonts();
+    }
+  });
   final input = find.byKey(const ValueKey('swarm-search-input'));
   final picture = GlobalKey();
 
@@ -110,7 +114,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('0 agents · 1 person'));
+    await tester.tap(find.byTooltip('0 agents · 1 person'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add agent'));
     await tester.pumpAndSettle();

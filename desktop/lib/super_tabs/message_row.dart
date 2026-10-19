@@ -60,6 +60,10 @@ class SuperTabMessageRow extends StatefulWidget {
         previous.text.length > 280 ||
         current.text.contains('\n') ||
         previous.text.contains('\n') ||
+        current.text.contains('?') ||
+        previous.text.contains('?') ||
+        current.text.contains('？') ||
+        previous.text.contains('？') ||
         current.authorId.isEmpty ||
         current.authorId != previous.authorId ||
         current.authorName != previous.authorName ||

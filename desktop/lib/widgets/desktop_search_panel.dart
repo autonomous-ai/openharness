@@ -117,7 +117,7 @@ class DesktopSearchPanel extends StatelessWidget {
                           message: purpose.title,
                           child: Text(
                             purpose.title,
-                            maxLines: 2,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: DesktopChrome.heading(),
                           ),
@@ -127,7 +127,7 @@ class DesktopSearchPanel extends StatelessWidget {
                           message: purpose.description,
                           child: Text(
                             purpose.description,
-                            maxLines: 2,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: DesktopChrome.text(
                               size: 13,

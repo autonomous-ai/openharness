@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync, type BigIntStats } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { CoreApi } from '../core/api.js'
 import { nativeTurnCursorIn, type NativeTurnCursor, type NativeTurnObservation } from '../lib/nativeTurnObservations.js'
@@ -18,6 +18,9 @@ interface RecordedAgent {
 }
 interface Journal { version: 1; machineId: string; agents: Record<string, RecordedAgent> }
 const MAX_BYTES = 8 * 1024 * 1024, MAX_EVENTS = 1024, CONTEXT_LEASE = 90_000
+// An unlinked file's inode can be reused immediately on Linux. Include change
+// metadata so replacement or an in-place edit cannot revive stale journal state.
+const journalIdentity = (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
 const eventId = (event: Event) => createHash('sha256').update(JSON.stringify(['native-event', event.contextId, event.turnId, event.kind])).digest('hex').slice(0, 24)
 export const nativeJournalFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `native-${machineId}.json`)
 const validIdOrNull = (value: unknown) => value === null || identifier(value)
@@ -53,9 +56,9 @@ export class NativeRecorder {
     this.journal = { version: 1, machineId, agents: {} }
     if (existsSync(`${this.file}.ready`) && !existsSync(this.file)) throw new Error('The terminal recording journal is missing. Restore it before reconnecting.')
     if (existsSync(this.file)) {
-      const stat = lstatSync(this.file)
+      const stat = lstatSync(this.file, { bigint: true })
       if (!stat.isFile() || stat.size > MAX_BYTES) throw new Error('The terminal recording journal is unavailable.')
-      this.identity = `${stat.dev}:${stat.ino}`
+      this.identity = journalIdentity(stat)
       const saved = object(JSON.parse(readFileSync(this.file, 'utf8')))
       if (saved.version !== 1 || saved.machineId !== machineId || !saved.agents || typeof saved.agents !== 'object' || Array.isArray(saved.agents)) throw new Error('Invalid terminal recording journal.')
       for (const [harnessId, value] of Object.entries(object(saved.agents))) {
@@ -87,8 +90,8 @@ export class NativeRecorder {
     if (this.stopped || this.core.daemon.machineId() !== this.machineId) throw new Error('This recording host disconnected.')
     if (existsSync(`${this.file}.ready`) && !existsSync(this.file)) throw new Error('The terminal recording journal is missing.')
     if (this.identity) {
-      const stat = lstatSync(this.file)
-      if (!stat.isFile() || `${stat.dev}:${stat.ino}` !== this.identity) throw new Error('The terminal recording journal was replaced.')
+      const stat = lstatSync(this.file, { bigint: true })
+      if (!stat.isFile() || journalIdentity(stat) !== this.identity) throw new Error('The terminal recording journal was replaced or changed.')
     }
   }
   private commit(change: (next: Journal) => void): void {
@@ -98,8 +101,8 @@ export class NativeRecorder {
     const raw = JSON.stringify(next)
     if (Buffer.byteLength(raw) > MAX_BYTES) throw new Error('Terminal recording is full. Reconnect after pending observations have synced.')
     this.write(this.file, raw)
-    const stat = lstatSync(this.file)
-    this.identity = `${stat.dev}:${stat.ino}`
+    const stat = lstatSync(this.file, { bigint: true })
+    this.identity = journalIdentity(stat)
     this.journal = next
   }
   private serial<T>(action: () => Promise<T>): Promise<T> {

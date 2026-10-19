@@ -776,7 +776,12 @@ class _SuperTabViewState extends State<SuperTabView> {
                 child: const Text('New group'),
               ),
               TextButton(
-                onPressed: c.snapshot != null ? widget.onInvite : null,
+                onPressed: c.snapshot != null
+                    ? () {
+                        _closeSidebar();
+                        widget.onInvite();
+                      }
+                    : null,
                 child: Text(c.isOwner ? 'Invite' : 'People'),
               ),
             ],
@@ -792,85 +797,117 @@ class _SuperTabViewState extends State<SuperTabView> {
     decoration: BoxDecoration(
       border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
     ),
-    child: Row(
-      children: [
-        if (narrow)
-          AppIconButton(
-            icon: AppIcons.columns2,
-            tooltip: 'Conversations',
-            onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
-          ),
-        Expanded(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                group?.title ?? 'Loading conversation…',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: DesktopChrome.text(medium: true),
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final people = c.snapshot?.people.length ?? 0;
+        final agents = group?.agentIds.length ?? 0;
+        final participants =
+            '$agents ${agents == 1 ? 'agent' : 'agents'} · $people ${people == 1 ? 'person' : 'people'}';
+        final compact =
+            constraints.maxWidth < MediaQuery.textScalerOf(context).scale(520);
+        return Row(
+          children: [
+            if (narrow)
+              AppIconButton(
+                icon: AppIcons.columns2,
+                tooltip: 'Conversations',
+                onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
               ),
-              if (group?.assignment?['status'] == 'needs_human')
-                TextButton.icon(
-                  onPressed: () => showSuperTabWork(context, c, group!.id),
-                  style: TextButton.styleFrom(
-                    foregroundColor: grid.AppPalette.warn,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 6,
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    group?.title ?? 'Loading conversation…',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.text(medium: true),
+                  ),
+                  if (group?.assignment?['status'] == 'needs_human')
+                    TextButton.icon(
+                      onPressed: () => showSuperTabWork(context, c, group!.id),
+                      style: TextButton.styleFrom(
+                        foregroundColor: grid.AppPalette.warn,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 6,
+                        ),
+                        minimumSize: const Size(0, 32),
+                      ),
+                      icon: const Icon(
+                        AppIcons.messageCircleQuestionMark,
+                        size: 16,
+                      ),
+                      label: const Text(
+                        'Needs a human',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                    minimumSize: const Size(0, 32),
-                  ),
-                  icon: const Icon(
-                    AppIcons.messageCircleQuestionMark,
-                    size: 16,
-                  ),
-                  label: const Text('Needs a human'),
-                ),
-            ],
-          ),
-        ),
-        if (group != null)
-          TextButton(
-            onPressed: () => unawaited(_participants(group)),
-            child: Text(
-              '${group.agentIds.length} ${group.agentIds.length == 1 ? 'agent' : 'agents'} · ${c.snapshot?.people.length ?? 0} ${(c.snapshot?.people.length ?? 0) == 1 ? 'person' : 'people'}',
-              style: DesktopChrome.metadata(),
+                ],
+              ),
             ),
-          ),
-        if (group != null)
-          PopupMenuButton<String>(
-            tooltip: 'Conversation options',
-            icon: const Icon(AppIcons.ellipsis, size: 18),
-            onSelected: (action) => unawaited(_groupAction(action, group)),
-            itemBuilder: (_) => [
-              const PopupMenuItem(value: 'work', child: Text('Work details')),
-              if (c.snapshot?.conversations.any((group) => group.archived) ==
-                  true)
-                const PopupMenuItem(
-                  value: 'archived',
-                  child: Text('Archived conversations'),
+            if (group != null)
+              Tooltip(
+                message: participants,
+                child: TextButton(
+                  onPressed: () => unawaited(_participants(group)),
+                  child: compact
+                      ? Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(AppIcons.users, size: 18),
+                            const SizedBox(width: 6),
+                            Text(
+                              '${agents + people}',
+                              semanticsLabel: participants,
+                              style: DesktopChrome.metadata(),
+                            ),
+                          ],
+                        )
+                      : Text(participants, style: DesktopChrome.metadata()),
                 ),
-              if (c.canWrite && !c.hasPendingAction && !c.saving) ...[
-                const PopupMenuItem(value: 'rename', child: Text('Rename')),
-                if (group.id != 'lead')
-                  PopupMenuItem(
-                    value: 'archive',
-                    enabled:
-                        group.assignment == null ||
-                        const [
-                          'done',
-                          'stopped',
-                        ].contains(group.assignment!['status']),
-                    child: Text(
-                      group.archived ? 'Reopen conversation' : 'Archive',
-                    ),
+              ),
+            if (group != null)
+              PopupMenuButton<String>(
+                tooltip: 'Conversation options',
+                icon: const Icon(AppIcons.ellipsis, size: 18),
+                onSelected: (action) => unawaited(_groupAction(action, group)),
+                itemBuilder: (_) => [
+                  const PopupMenuItem(
+                    value: 'work',
+                    child: Text('Work details'),
                   ),
-              ],
-            ],
-          ),
-      ],
+                  if (c.snapshot?.conversations.any(
+                        (group) => group.archived,
+                      ) ==
+                      true)
+                    const PopupMenuItem(
+                      value: 'archived',
+                      child: Text('Archived conversations'),
+                    ),
+                  if (c.canWrite && !c.hasPendingAction && !c.saving) ...[
+                    const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                    if (group.id != 'lead')
+                      PopupMenuItem(
+                        value: 'archive',
+                        enabled:
+                            group.assignment == null ||
+                            const [
+                              'done',
+                              'stopped',
+                            ].contains(group.assignment!['status']),
+                        child: Text(
+                          group.archived ? 'Reopen conversation' : 'Archive',
+                        ),
+                      ),
+                  ],
+                ],
+              ),
+          ],
+        );
+      },
     ),
   );
 
@@ -1370,7 +1407,9 @@ class _SuperTabViewState extends State<SuperTabView> {
     builder: (context, constraints) {
       grid.AppTheme.watch(context);
       final terminal = widget.terminal;
-      final narrow = constraints.maxWidth < (terminal == null ? 640 : 980);
+      final narrow =
+          constraints.maxWidth <
+          MediaQuery.textScalerOf(context).scale(terminal == null ? 640 : 980);
       if (narrow && terminal != null) {
         return Column(
           children: [

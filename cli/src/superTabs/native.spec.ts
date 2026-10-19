@@ -185,6 +185,17 @@ describe('durable native conversation recording', () => {
     host.stop(); await expect(host.prepare('tab', alpha)).rejects.toThrow('disconnected')
   })
 
+  it('refuses an in-place journal change even when the filesystem identity is unchanged', async () => {
+    const t = setup(), host = t.open()
+    await host.prepare('tab', alpha)
+    const original = readFileSync(t.file, 'utf8'), inode = statSync(t.file).ino
+    writeFileSync(t.file, `${original}\n`)
+    expect(statSync(t.file).ino).toBe(inode)
+    await expect(host.capture()).rejects.toThrow('changed')
+    await expect(host.prepare('tab', alpha, true)).rejects.toThrow('changed')
+    expect(t.sent).toEqual([])
+  })
+
   it('checks the exact execution machine, native support, cancellation and renewal', async () => {
     const t = setup(), host = t.open()
     await expect(host.prepare('../wrong', alpha)).rejects.toThrow('no longer')

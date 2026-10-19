@@ -146,7 +146,7 @@ void main() {
         }
 
         await shot('conversation');
-        await tester.tap(find.text('1 agent · 20 people'));
+        await tester.tap(find.byTooltip('1 agent · 20 people'));
         await tester.pumpAndSettle();
         expect(
           tester
@@ -165,6 +165,10 @@ void main() {
         await shot('people');
         await tester.tap(find.byTooltip('Close participants'));
         await tester.pumpAndSettle();
+        if (find.byTooltip('Conversations').evaluate().isNotEmpty) {
+          await tester.tap(find.byTooltip('Conversations'));
+          await tester.pumpAndSettle();
+        }
         await tester.tap(find.text('Invite'));
         await tester.pumpAndSettle();
         expect(

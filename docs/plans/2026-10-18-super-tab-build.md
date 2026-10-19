@@ -245,10 +245,11 @@ Implementation remains on `feat/super-tab`, draft PR #1405. Earlier pushes faile
 or timed out, leaving the implementation local. GitHub connectivity recovered on the conversation
 refinement pass: fetch confirmed the remote at `f2625cdafd` and main at `7476ac0303`.
 The implementation through `51a36295e5` was pushed successfully and the PR marked
-ready for automatic CI and review. The signed internal Desktop build is
+ready for automatic CI and review. The first signed internal Desktop build succeeded in
 [run 39181201156](https://github.com/autonomous-ai/openharness/actions/runs/39181201156).
-It uses the unchanged Desktop inputs from that head; the subsequent exact-message
-lookup correction affects backend/CLI only. This internal build is not a public release.
+It used the Desktop inputs from that head; the subsequent exact-message lookup
+correction affected backend/CLI only. The large-text fixes below change Desktop
+inputs and require a new review build. This internal build is not a public release.
 The original research worktree's merge remains untouched.
 
 ## Remaining implementation and acceptance
@@ -325,3 +326,43 @@ can still reconcile it. Verify machine unshare/re-share behavior as part of the 
 
 Measure implementation, validation, waiting, merge and publication separately from the user's
 original request. The current draft is an implementation checkpoint, not a release receipt.
+
+### CI corrections and review build, 18 October
+
+[Automatic CI at `0d1ee0815e`](https://github.com/autonomous-ai/openharness/actions/runs/39181485948)
+finished with failures in CLI shard 4 and Desktop shards 2/4. The remaining selected
+checks passed. The failed run is not passing evidence.
+
+- Two remote-device fixtures needed the explicit `accountOwner: false` field from
+  the verified authority change. The local-owner contract is unchanged.
+- Linux can immediately reuse an unlinked journal file's inode. Recording now
+  checks device, inode, size and nanosecond modification/change times, and refreshes
+  this identity after its own atomic writes. Replacement or an in-place change
+  refuses further recording instead of accepting stale memory. CLI typecheck and
+  all 29 affected device/recording/host tests passed in 1.59 seconds.
+- Both large-text layout failures reproduced locally with the deterministic test
+  font. The Add agent heading no longer consumes the result viewport; the selected
+  result stays fully visible. Compact headers show the participant count with full
+  details in accessibility/tooltip text. Text scale also informs sidebar collapse.
+  Opening Invite dismisses the compact sidebar before handing focus to the dialog.
+- The first combined follow-up passed 58 tests, failed one stale large-text Invite
+  navigation expectation, and could not load the shared picker test because its
+  Flutter test process failed the WebSocket handshake. After updating the navigation,
+  the complete delivery and shared-picker files passed all 40 tests in six seconds.
+  The original mixed command remains failed; no production assertion was removed.
+- All 11 picker/native-message checks also passed with real-font capture enabled.
+  Inspected the corrected 800×480, 200% text screenshots. Focused analysis and the
+  shared icon audit passed. The chat regression passed all eight tests, including
+  keeping question-marked updates separate from adjacent short posts.
+- The first official internal build completed signing, notarization, Gatekeeper
+  acceptance and verification of both macOS variants and all four downloads.
+  The downloaded copy launched as version 1.2.91; the installed app remains 1.2.90.
+  An empty creation page was inspected and its disposable tab closed. No instruction
+  was submitted to a live harness. Native UI automation did not activate either
+  the hidden shortcut or the ordinary Cmd-P command, so physical shortcut/IME
+  acceptance remains unverified. This is not evidence of a Super Tab-only failure.
+
+Publish the corrected head once, keep it stable through automatic CI, and run the
+required branch CLI end-to-end workflow. Rebuild the official internal Desktop
+artifact from the corrected inputs. Coordinated backend/daemon rollout remains
+necessary before the signed app can provide the full shared workflow.

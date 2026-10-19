@@ -240,6 +240,12 @@ void main() {
         ),
         {'message-2', 'message-3'},
       );
+      server.messages[1]['text'] = 'Should edits survive sign-out?';
+      expect(SuperTabMessageRow.groupsWith(message(1), message(0)), isFalse);
+      expect(SuperTabMessageRow.groupsWith(message(2), message(1)), isFalse);
+      server.messages[1]['text'] = '保留修改？';
+      expect(SuperTabMessageRow.groupsWith(message(1), message(0)), isFalse);
+      server.messages[1]['text'] = 'Second update';
       server.messages[1]['author'] = {
         'kind': 'agent',
         'id': 'owner',
