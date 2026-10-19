@@ -19,3 +19,7 @@ talk:fw:send 110
 inbox 210
 agent:fw:toast@2500 300
 recap:desk:toast@2500 237
+# 2026-10-19 Codex scene screens added, base values from 6acbd7a05 (measured 441, 418, 360 host us there; each number is 1.25 x that, as above).
+agent:be 551
+talk:be 523
+talk:be:send 450

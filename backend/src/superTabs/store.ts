@@ -8,7 +8,7 @@ import { applyCommand, operationSchema, type Command, type CommandContext } from
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import {
   activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState,
-  SuperTabError, type Actor, type Agent, type Author, type SuperTabState,
+  SuperTabError, type Actor, type Agent, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 
 type Transaction = Prisma.TransactionClient
@@ -247,20 +247,7 @@ export class SuperTabStore {
       await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: {
         revision, state: json(effects.state), ...indexes(effects.state),
       } })
-      for (const message of effects.messages) {
-        await tx.superTabMessage.create({ data: { id: message.id, tabId, conversationId: message.conversationId,
-          sequence: revision, author: json(message.author), text: message.text, replyTo: message.replyTo, recipientIds: message.recipients } })
-        for (const recipient of message.recipients) {
-          const target = agent(effects.state, recipient)
-          const group = conversation(effects.state, message.conversationId)
-          await tx.superTabDelivery.create({ data: { id: stableId(message.id, recipient), tabId,
-            conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
-            machineOwnerId: target.machineOwnerId,
-            assignmentId: activeWork(group) && group.assignment?.agentId === recipient ? group.assignment.id : null,
-            membershipGeneration: target.membershipGeneration, authorKind: message.author.kind,
-            authorId: message.author.id, authorGeneration: message.author.membershipGeneration } })
-        }
-      }
+      await this.writeMessages(tx, tabId, effects.state, effects.messages, revision)
       const revoked = [
         ...original.people.filter(p => !effects.state.people.some(n => n.id === p.id && n.generation === p.generation))
           .map(p => ({ authorKind: 'person', authorId: p.id, authorGeneration: p.generation })),
@@ -279,6 +266,24 @@ export class SuperTabStore {
         revision, result: json(effects.result) } })
       return { revision, result: effects.result }
     })
+  }
+
+  /** Records committed messages and one delivery per recipient, at the tab revision that carried them. */
+  private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], revision: number) {
+    for (const message of messages) {
+      await tx.superTabMessage.create({ data: { id: message.id, tabId, conversationId: message.conversationId,
+        sequence: revision, author: json(message.author), text: message.text, replyTo: message.replyTo, recipientIds: message.recipients } })
+      for (const recipient of message.recipients) {
+        const target = agent(state, recipient)
+        const group = conversation(state, message.conversationId)
+        await tx.superTabDelivery.create({ data: { id: stableId(message.id, recipient), tabId,
+          conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
+          machineOwnerId: target.machineOwnerId,
+          assignmentId: activeWork(group) && group.assignment?.agentId === recipient ? group.assignment.id : null,
+          membershipGeneration: target.membershipGeneration, authorKind: message.author.kind,
+          authorId: message.author.id, authorGeneration: message.author.membershipGeneration } })
+      }
+    }
   }
 
   async messages(user: AuthUser, tabId: string, conversationId: string, cursor: { after?: number; before?: number; messageId?: string }, asAgentId?: string) {
@@ -444,16 +449,31 @@ export class SuperTabStore {
       const id = stableId('stop', tabId, assignmentId)
       const prior = await tx.superTabStopReceipt.findUnique({ where: { id } })
       if (prior && prior.receipt !== receipt) fail('RECEIPT_CONFLICT', 'This stop already has a host receipt.')
+      const revision = row.revision + 1
+      const notices: MessageDraft[] = []
       if (group && activeWork(group)) {
         assignment.status = 'stopped'
         assignment.result = 'The execution host confirmed that this harness stopped.'
         await tx.superTabRun.deleteMany({ where: { tabId, assignmentId } })
         await tx.superTabDelivery.updateMany({ where: { tabId, assignmentId,
           status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled' } })
+        // No agent command closes this attempt, so nobody was told: in the two-account E2E of 2026-10-19
+        // the Lead learned of a stopped worker only by re-reading status. Say it in the group, as the
+        // worker's own Stopped update would, and deliver it to the Lead. A removed worker was removed
+        // on purpose by someone who already knows.
+        const worker = state.agents.find(a => a.id === assignment.agentId)
+        if (worker) {
+          const lead = group.leadId && group.leadId !== worker.id && group.agentIds.includes(group.leadId) ? group.leadId : null
+          notices.push({ id: stableId('stop-notice', tabId, assignmentId), conversationId: group.id,
+            author: { kind: 'agent', id: worker.id, name: worker.name, membershipGeneration: worker.membershipGeneration },
+            text: `Stopped\n\n${assignment.result} If this work should continue, assign a new attempt.`, replyTo: null, recipients: lead ? [lead] : [] })
+          group.lastMessageSequence = revision
+        }
       }
       await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: {
-        revision: { increment: 1 }, state: json(state), ...indexes(state),
+        revision, state: json(state), ...indexes(state),
       } })
+      await this.writeMessages(tx, tabId, state, notices, revision)
       if (!prior) await tx.superTabStopReceipt.create({ data: { id, tabId, assignmentId, ...execution, receipt } })
       return { confirmed: true }
     })

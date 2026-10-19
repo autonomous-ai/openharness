@@ -51,7 +51,13 @@ artifact: never commit it.
 
 `firmware/scripts/import_pets.sh <round-habitat-dir>` copies the round dial's `pets.c` and `pets.h` into
 `firmware/main/pod/`. It is a one-way copy, run only on request. It then runs `prune_pets.py`, which drops what Pod
-never plays (the relax and alert scenes, Codex's working and done loops).
+never plays (the alert scenes, the small working and done loops) and Codex's row.
+
+Codex is HD and is not imported: `firmware/scripts/upscale_codex.py` upscales the art into `firmware/assets/codex/hd`,
+`firmware/scripts/gen_pro_codex.py` turns that into `firmware/main/pod/pets_codex.c` (`pod_codex_pet`), and
+`pod_pet_for("codex")` returns it ahead of `ht_pets`. It is drawn at zoom 8 in the Agent room and on the voice screen; the cards, Inbox and Recap draw it below 1x, in sixteenths.
+The generator copies the round's Codex timings and geometry as literals, so a retime on the round does not propagate: update them by hand.
+`test/codex_size.py` holds its on-screen size.
 
 ## Size
 

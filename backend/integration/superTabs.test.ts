@@ -392,6 +392,23 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await db.superTabAttempt.findUnique({ where: { id: assignmentId } }))!.snapshot).toMatchObject({ assignment: { status: 'stopped', configuration: config } })
   })
 
+  it('tells the lead once when the host confirms its worker stopped', async () => {
+    const { tab, lead } = await fixture()
+    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Builder', configuration: config, lead: false })).result.agentId as string
+    await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Build it.', checks: [{ description: 'Test passes.', independent: false }] })
+    const assignmentId = (await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: worker })).result.assignmentId as string
+    const before = (await store.deliveries(host, tab, lead)).length
+    await store.stopped(host, tab, assignmentId, 'native-stop-receipt')
+    await store.stopped(host, tab, assignmentId, 'native-stop-receipt')
+    const notices = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.text.startsWith('Stopped'))
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toMatchObject({ author: { kind: 'agent', id: worker, name: 'Builder' },
+      text: 'Stopped\n\nThe execution host confirmed that this harness stopped. If this work should continue, assign a new attempt.' })
+    expect(await store.deliveries(host, tab, lead)).toHaveLength(before + 1)
+    expect((await store.read(owner, tab)).state.conversations[0]!.lastMessageSequence).toBe(notices[0]!.sequence)
+  })
+
   it('rejects unshared hosts and spoofed agent identities through the HTTP API', async () => {
     const { tab, lead } = await fixture()
     const headers = { authorization: `Bearer ${owner.sub}` }

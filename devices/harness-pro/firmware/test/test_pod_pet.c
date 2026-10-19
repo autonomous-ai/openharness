@@ -247,7 +247,7 @@ static void pet_test_cover_centre_exact(void)
 // drops them. The expectations below are hard-coded from the data before the first prune.
 static void pet_test_pruned(void)
 {
-    static const unsigned frames[3] = {9, 8, 18};   // the small pet's frames: idle + asking only (codex lost 4..7)
+    static const unsigned frames[3] = {9, 8, 18};   // the small pet's frames: idle + asking only (Codex: its own HD set, pets_codex.c, not pruned)
     static const unsigned steps[3] = {24, 24, 18};
     for (unsigned e = 0; e < 3; e++) {
         const ht_pet_t *p = pod_pet_for(engines[e]);
@@ -257,6 +257,7 @@ static void pet_test_pruned(void)
         CHECK(pod_pet_has(engines[e], POD_SCENE_WORK) && pod_pet_has(engines[e], POD_SCENE_LISTEN) &&
               pod_pet_has(engines[e], POD_SCENE_SEND));
         CHECK(ht_pet_steps(p) == steps[e]);
+        if (p == &pod_codex_pet) continue;
         // The frames idle and asking play are exactly 0 .. frames - 1: in range, none unused.
         unsigned seen[24] = {0}, max = 0;
         for (unsigned st = 0; st < HT_PET_STATES; st++) {
@@ -313,9 +314,9 @@ static bool drawn_same(const char *eng, pod_scene_t sc, uint32_t a, uint32_t b, 
 static void pet_test_next_step(void)
 {
     static const struct { const char *eng; pod_scene_t sc; } cases[] = {
-        {"claude", POD_SCENE_WORK}, {"claude", POD_SCENE_REST}, {"claude", POD_SCENE_ASK}, {"codex", POD_SCENE_WORK},
-        {"codex", POD_SCENE_REST}, {"muse", POD_SCENE_REST}, {"muse", POD_SCENE_ASK}, {"muse", POD_SCENE_WORK},
-        {"claude", POD_SCENE_RELAX}, {"codex", POD_SCENE_ASK}, {"fo", POD_SCENE_WORK}};
+        {"claude", POD_SCENE_WORK}, {"claude", POD_SCENE_REST}, {"codex", POD_SCENE_WORK},   // (ASK is not here: the room's bubble bobs, see pet_test_ask_bubble)
+        {"codex", POD_SCENE_REST}, {"muse", POD_SCENE_REST}, {"muse", POD_SCENE_WORK},
+        {"claude", POD_SCENE_RELAX}, {"fo", POD_SCENE_WORK}};
     for (int beat = 0; beat < 2; beat++)   // the clock's and the beat's: each next-step function matches its own draw
         for (unsigned c = 0; c < sizeof cases / sizeof cases[0]; c++)
             for (uint32_t t = 0; t < 4000; t += 13) {
@@ -414,7 +415,8 @@ static void pet_test_draw_2x(void)
             union_of(engines[e], two[k], 300, 300, 270, 16, &w2, &h2);
             int ink = pod_pet_ink_h(engines[e], two[k], 270, 16);
             printf("2x %s scene %u: 1x %dx%d, 2x %dx%d, ink_h %d\n", engines[e], (unsigned)two[k], w1, h1, w2, h2, ink);
-            CHECK(w2 >= 2 * w1 - 6 && w2 <= 2 * w1 + 6 && h2 >= 2 * h1 - 6 && h2 <= 2 * h1 + 6);
+            if (e == 1) CHECK(w2 >= w1 && h2 >= h1);   // Codex is HD: stored at the size it is shown, so the 2x square holds it at 8, not doubled
+            else CHECK(w2 >= 2 * w1 - 6 && w2 <= 2 * w1 + 6 && h2 >= 2 * h1 - 6 && h2 <= 2 * h1 + 6);
             CHECK(ink >= h2 - 4 && ink <= h2 + 4);
         }
     }
@@ -477,7 +479,7 @@ static void pet_test_work_alt(void)
     for (unsigned i = 0; i < b->steps; i++) {
         ht_scene_t s; ht_scene_clear(&s, 0);
         pod_pet_draw(&s, 0, 0, 270, "claude", POD_SCENE_WORK_ALT, i * POD_PH_ANIM_MS, 0, 16);
-        CHECK(s.count == 2 && s.runs[0].text[1] == 0 && s.runs[1].text[1] == 0);   // pod_cell, not pod_cell_smooth
+        CHECK(s.count == 2 && s.runs[0].text[1] == 0 && s.runs[1].text[1] == 0);   // pod_cell, as stored
         bodies |= frame_of(&s) == &b->frames[b->loop[i]];
         CHECK(frame_of(&s) == &b->frames[0] || frame_of(&s) == &b->frames[1]);
         CHECK(s.runs[1].bitmap.asset == &b->overlay->frames[b->overlay->loop[i]]);
@@ -491,8 +493,104 @@ static void pet_test_work_alt(void)
     CHECK(pod_pet_next_beat_ms("claude", POD_SCENE_WORK_ALT, 0, 0) >= 1 && pod_pet_ink_h("claude", POD_SCENE_WORK_ALT, 260, 8) > 0);
     CHECK(pod_pet_ink_h("claude", POD_SCENE_WORK_ALT, 260, 8) != pod_pet_ink_h("claude", POD_SCENE_WORK, 260, 8));
 }
+// Codex is HD (pets_codex.c): found before any ht_pets row of the same name (an import_pets.sh re-run restores one), and in the room and on the
+// voice screen (side 260, zoom8 16 as ph_room_pet draws, 13 as the voice screen once did) its main frame is drawn at exactly 8, never interpolated.
+static void pet_test_codex_is_hd(void)
+{
+    CHECK(pod_pet_for("codex") == &pod_codex_pet);
+    for (unsigned i = 0; i < ht_pet_count; i++) if (!strcmp(ht_pets[i].engine, "codex")) CHECK(pod_pet_for("codex") != &ht_pets[i]);
+}
+static void pet_test_codex_room_z8(void)
+{
+    static const pod_scene_t sc[] = {POD_SCENE_WORK, POD_SCENE_LISTEN, POD_SCENE_SEND, POD_SCENE_RELAX, POD_SCENE_REST, POD_SCENE_ASK};
+    static const unsigned zoom[] = {16, 13};
+    for (unsigned k = 0; k < 6; k++)
+        for (unsigned zi = 0; zi < 2; zi++)
+            for (uint32_t t = 0; t < 3000; t += 66) {
+                ht_scene_t s; ht_scene_clear(&s, 0);
+                pod_pet_draw(&s, 380 - 130, 400 - 130, 260, "codex", sc[k], t, 0, zoom[zi]);
+                const ht_cell_frame_t *f = s.runs[0].bitmap.asset;
+                CHECK(f && s.runs[0].pro_kind == POD_CELL && s.runs[0].w == f->cols * f->cell && s.runs[0].radius == 8);
+                for (int i = 0; i < s.count - (sc[k] == POD_SCENE_ASK); i++)   // (ASK's last run is the "?" bubble, popping in at its own zoom)
+                    if (s.runs[i].pro_kind == POD_CELL) CHECK(s.runs[i].radius <= 8 && s.runs[i].text[1] == 0);
+            }
+}
+// An HD scene is taller than 255 rows (the extent and the ink height must not wrap a byte): at side 260 and zoom8 16 the square is 520, the scene
+// fits at 1x, so its ink height is the tallest of its frames' rows.
+static void pet_test_codex_ink_h_tall(void)
+{
+    const ht_pet_scene_t *w = pod_codex_pet.working_scene;
+    int tall = 0;
+    for (unsigned i = 0; i < w->steps; i++) { int r = w->frames[w->loop[i]].rows; if (r > tall) tall = r; }
+    CHECK(tall > 255);
+    CHECK(pod_pet_ink_h("codex", POD_SCENE_WORK, 260, 16) == tall);
+}
+// ASK (the "asking" look): Claude and Codex play their own ask scene, Muse (and Fo) the small pet; in the room (zoom8 16) a "?" bubble is drawn over it.
+static int ask_run(const ht_scene_t *s) { return s->count - 1; }   // the bubble is the last run
+static void ask_draw(ht_scene_t *s, const char *engine, uint32_t t, unsigned zoom8)
+{
+    ht_scene_clear(s, 0);
+    pod_pet_draw(s, 380 - 130, 400 - 130, 260, engine, POD_SCENE_ASK, t, 0, zoom8);
+}
+static bool ask_has_bubble(const ht_scene_t *s) { return s->count > 0 && s->runs[ask_run(s)].bitmap.asset == &pod_ask_bubble; }
+static uint32_t ask_loop_ms(const char *engine)
+{
+    if (!strcmp(engine, "claude")) return pod_claude_ask.steps * pod_claude_ask.step_ms;
+    if (!strcmp(engine, "codex")) return pod_codex_ask.steps * pod_codex_ask.step_ms;
+    const ht_pet_t *p = pod_pet_for(engine);
+    return ht_pet_steps(p) * p->step_ms[HT_PET_ASKING];
+}
+static void pet_test_ask_bodies(void)
+{
+    ht_scene_t s;
+    CHECK(pod_codex_ask.frames == pod_codex_pet.sending_scene->frames && pod_codex_ask.steps == 10 && pod_codex_ask.step_ms == 140 && !pod_codex_ask.overlay);
+    CHECK(pod_claude_ask.steps == 12 && pod_claude_ask.step_ms == 120 && !pod_claude_ask.overlay);
+    for (unsigned i = 0; i < 12; i++) CHECK(pod_claude_ask.frames[pod_claude_ask.loop[i]].cols == 120 && pod_claude_ask.frames[pod_claude_ask.loop[i]].cell == 1);
+    for (uint32_t t = 0; t < 1500; t += 41) {
+        ask_draw(&s, "claude", t, 16);   // Claude: its own frame at the room's exact 2x
+        CHECK(s.count == 2 && s.runs[0].bitmap.asset == &pod_claude_ask.frames[pod_claude_ask.loop[t / 120 % 12]] &&
+              s.runs[0].radius == 16 && s.runs[0].text[1] == 0);
+        ask_draw(&s, "codex", t, 16);   // Codex: pxc_send's waving frames, drawn at 1x
+        CHECK(s.count == 2 && s.runs[0].bitmap.asset == &pod_codex_ask.frames[pod_codex_ask.loop[t / 140 % 10]] && s.runs[0].radius == 8);
+    }
+    const ht_pet_t *m = pod_pet_for("muse");   // Muse: today's small pet, still
+    ask_draw(&s, "muse", 0, 16);
+    CHECK(s.count == 2 && (const ht_cell_frame_t *)s.runs[0].bitmap.asset >= m->cells && (const ht_cell_frame_t *)s.runs[0].bitmap.asset < m->cells + 18);
+    CHECK(pod_pet_ink_h("claude", POD_SCENE_ASK, 260, 16) == 102 * 2 && pod_pet_ink_h("codex", POD_SCENE_ASK, 260, 16) == pod_codex_ask.h);
+}
+static void pet_test_ask_bubble(void)
+{
+    for (unsigned e = 0; e < 3; e++) {
+        ht_scene_t s, a, b, c;
+        const uint32_t L = ask_loop_ms(engines[e]);
+        for (uint32_t t = 0; t < 2 * L; t += 33) {
+            ask_draw(&s, engines[e], t, 16);
+            CHECK(ask_has_bubble(&s));
+            const ht_run_t *pet = &s.runs[0], *q = &s.runs[ask_run(&s)];
+            CHECK(q->y >= pet->y);                                                      // never above the pet's top
+            CHECK(q->x >= 120 && q->x + q->w <= 120 + 520 && q->y >= 120 && q->y + q->pro_height <= 120 + 520);   // inside the pet's (2x) square
+            CHECK(s.count == (int)pod_pet_runs(engines[e], POD_SCENE_ASK) + 1);
+        }
+        ask_draw(&s, engines[e], 0, 8); CHECK(!ask_has_bubble(&s) && s.count == (int)pod_pet_runs(engines[e], POD_SCENE_ASK));
+        ht_scene_clear(&s, 0); pod_pet_draw(&s, 250, 270, 260, engines[e], POD_SCENE_REST, 0, 0, 16); CHECK(!ask_has_bubble(&s));   // the room's other scenes: none
+        ask_draw(&a, engines[e], 0, 16); ask_draw(&b, engines[e], 400, 16); ask_draw(&c, engines[e], L, 16);
+        CHECK(a.runs[ask_run(&a)].w < b.runs[ask_run(&b)].w && c.runs[ask_run(&c)].w == a.runs[ask_run(&a)].w);   // pops in once a loop
+        CHECK(b.runs[ask_run(&b)].w == 64 && b.runs[ask_run(&b)].pro_height == 74);                                // then full, at its own 1:1 size
+        int lo = 9999, hi = -9999;
+        for (uint32_t t = 300; t < L; t += 33) { ask_draw(&s, engines[e], t, 16); int y = s.runs[ask_run(&s)].y - s.runs[0].y; if (y < lo) lo = y; if (y > hi) hi = y; }
+        CHECK(hi - lo >= 6 && hi - lo <= 9);   // bobs 4 px either way over the loop
+        for (uint32_t t = 0; t < 400; t += 33) { CHECK(pod_pet_next_beat_ms(engines[e], POD_SCENE_ASK, t, 0) <= POD_PH_ANIM_MS); CHECK(pod_pet_next_step_ms(engines[e], POD_SCENE_ASK, t, 0) >= 1); }
+    }
+    ht_scene_t s; ask_draw(&s, "claude", 0, 16);   // beside the pet: left edge = its right + 6, top = its top + 6 (+ bob 0 at the loop's start)
+    CHECK(s.runs[1].x == s.runs[0].x + s.runs[0].w + 6 && s.runs[1].y == s.runs[0].y + 6);
+}
 int main(void)
 {
+    pet_test_ask_bodies();
+    pet_test_ask_bubble();
+    pet_test_codex_is_hd();
+    pet_test_codex_ink_h_tall();
+    pet_test_codex_room_z8();
     pet_test_pruned();
     pet_test_work_alt();
     pet_test_runs_constant();
