@@ -69,6 +69,28 @@ afterAll(async () => {
 })
 
 describe('Super Tabs on a real Mongo replica set', () => {
+  it('resolves a reply beyond recent history without crossing conversation or membership boundaries', async () => {
+    const { tab, lead } = await fixture()
+    const question = (await run(tab, message('Should pending edits survive restart?'), host, lead)).result.messageId as string
+    for (let i = 0; i < 101; i++) await run(tab, message(`Later update ${i}`), host, lead)
+    expect((await store.messages(host, tab, 'lead', {}, lead)).messages.some(row => row.id === question)).toBe(false)
+    const url = `/api/super-tabs/${tab}/conversations/lead/messages?asAgentId=${lead}&messageId=${question}`
+    const headers = { authorization: `Bearer ${host.sub}` }
+    const original = await app.inject({ url, headers })
+    expect(original.statusCode).toBe(200)
+    expect(original.json().data.messages).toMatchObject([{ id: question, text: 'Should pending edits survive restart?' }])
+    expect(original.json().data.messages).toHaveLength(1)
+    expect((await app.inject({ url: `${url}&before=100`, headers })).statusCode).toBe(400)
+    const group = (await run(tab, { type: 'conversation.create', title: 'Other work', brief: '', checks: [] })).result.conversationId as string
+    expect((await store.messages(host, tab, group, { messageId: question }, lead)).messages).toEqual([])
+    expect((await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages?messageId=${question}`,
+      headers: { authorization: `Bearer ${peer.sub}` } })).statusCode).toBe(403)
+    await run(tab, { type: 'agent.remove', agentId: lead })
+    const removed = await app.inject({ url, headers })
+    expect(removed.statusCode).toBe(409)
+    expect(removed.json().error.code).toBe('AGENT_UNAVAILABLE')
+  })
+
   it('records native turns once, in order, with verified source metadata and no input echo', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)

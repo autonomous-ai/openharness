@@ -8,6 +8,7 @@ import { CapacityReservations, type ReservationBook } from './reservations.js'
 const HELP = {
   status: 'Read the shared tab roster and work.',
   messages: 'messages GROUP: read recent messages in a conversation.',
+  message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
   post: 'post GROUP TEXT OPERATION_ID: reply in that conversation. Use a unique ID per message and reuse it after an interrupted request.',
   start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine you can access. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
@@ -100,6 +101,9 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'status') return { ok: true, value: answer }
         if (payload.action === 'messages' && identifier(payload.conversationId)) {
           return { ok: true, value: await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}`) }
+        }
+        if (payload.action === 'message' && identifier(payload.conversationId) && identifier(payload.messageId)) {
+          return { ok: true, value: await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}&messageId=${payload.messageId}`) }
         }
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
           return { ok: true, operationId: payload.operationId, value: await backend(core, 'POST', `${path}/commands`,

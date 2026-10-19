@@ -320,7 +320,7 @@ export class SuperTabHost {
     const command = `${this.core.daemon.command} super-tab --port ${this.core.daemon.port} --machine ${shellQuote(this.machineId)} --tab ${shellQuote(entry.tabId)} --agent ${shellQuote(entry.agentId)}`
     const group = message.conversationId as string
     const reply = identifier(message.replyTo)
-      ? `In reply to message ${message.replyTo}. Read that message in this conversation before interpreting the answer.\n\n`
+      ? `In reply to message ${message.replyTo}. Read it before interpreting the answer: ${command} message ${shellQuote(group)} ${shellQuote(message.replyTo)}\n\n`
       : ''
     const source = object(message.source)
     const native = source.kind === 'native'

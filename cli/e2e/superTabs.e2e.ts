@@ -73,6 +73,10 @@ it('starts either engine once, posts to its captured group and delivers shared i
       return { data: { eventId } }
     }
     if (path === `/api/super-tabs/${TAB}`) return { data: { revision, state: { id: TAB, agents } } }
+    if (path === `/api/super-tabs/${TAB}/conversations/feature/messages`) {
+      expect(agents.some(agent => agent.id === url.searchParams.get('asAgentId'))).toBe(true)
+      return { data: { messages: [{ id: url.searchParams.get('messageId'), text: 'Should the offline queue survive restart?' }] } }
+    }
     if (path.startsWith(`/api/super-tabs/${TAB}/starts/`)) return { data: starts.get(path.split('/').at(-1)!) }
     if (path.endsWith('/commands')) {
       const command = object(body.command)
@@ -158,6 +162,10 @@ it('starts either engine once, posts to its captured group and delivers shared i
     const submitted = readFileSync(join(d.root, 'submitted-prompts'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as string)
     expect(submitted.filter(prompt => prompt.includes(`verify-super-tab-${engine}`))).toHaveLength(1)
     expect(submitted.find(prompt => prompt.includes(`verify-super-tab-${engine}`))).toContain(`In reply to message question-${engine}.`)
+    expect(submitted.find(prompt => prompt.includes(`verify-super-tab-${engine}`))).toContain(`message 'feature' 'question-${engine}'`)
+    const original = await run(['message', 'feature', `question-${engine}`], target)
+    expect(original.code, JSON.stringify(original.answer)).toBe(0)
+    expect(original.answer.value.messages).toEqual([{ id: `question-${engine}`, text: 'Should the offline queue survive restart?' }])
     const model = engine === 'claude' ? 'sonnet' : 'gpt-6-luna'
     // Wait for the native turn to settle before using the app's existing model controls.
     await until('worker idle before its model change', async () => {

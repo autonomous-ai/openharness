@@ -244,7 +244,11 @@ No production deployment has occurred.
 Implementation remains on `feat/super-tab`, draft PR #1405. Earlier pushes failed with connection resets
 or timed out, leaving the implementation local. GitHub connectivity recovered on the conversation
 refinement pass: fetch confirmed the remote at `f2625cdafd` and main at `7476ac0303`.
-The remaining local commits still need to be pushed and validated by automatic PR CI.
+The implementation through `51a36295e5` was pushed successfully and the PR marked
+ready for automatic CI and review. The signed internal Desktop build is
+[run 39181201156](https://github.com/autonomous-ai/openharness/actions/runs/39181201156).
+It uses the unchanged Desktop inputs from that head; the subsequent exact-message
+lookup correction affects backend/CLI only. This internal build is not a public release.
 The original research worktree's merge remains untouched.
 
 ## Remaining implementation and acceptance
@@ -299,6 +303,20 @@ production-backend acceptance.
   Super Tab E2E passed both Claude and Codex fixture paths in 34.17 seconds
   (48.42 seconds including bundle setup). Native delivery retains the reply ID,
   so a short answer is interpreted with the original question.
+- Review found that an older question could fall outside the agent CLI's recent
+  history. Exact-message lookup now uses the same tab/group and current caller
+  authorization. Backend and CLI typechecks passed; 23 focused CLI tests passed.
+  The replica-set run passed 19 tests and failed the new test's expected removal
+  status (404 versus the existing `AGENT_UNAVAILABLE` 409 contract). After fixing
+  that expectation, the complete new case passed: original beyond 100 messages,
+  conflicting filters, another group, non-member and withdrawn agent. The other
+  19 cases were filtered in that follow-up, not rerun. The real-daemon fixture
+  passed exact lookup through both engine paths in 36.06 seconds (49.83 seconds
+  including bundle setup). Desktop source and its validation remain unchanged.
+- The ordinary local macOS app was rebuilt successfully after the native fixture;
+  it is no longer the integration-test entrypoint. The signed internal workflow
+  and automatic CI are in progress. Full-app physical/live-engine acceptance and
+  coordinated backend/daemon rollout remain unverified.
 
 Keep the host's durable native delivery receipt separate from backend acknowledgement. A timeout
 does not prove an instruction was not executed. Check authority immediately before queued input

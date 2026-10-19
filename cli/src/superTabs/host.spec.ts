@@ -47,7 +47,7 @@ describe('Super Tab native delivery handoff', () => {
     const t = setup({ replyTo: 'question-2', text: 'Yes, keep them.' })
     await t.open().tick()
     expect(t.core.turns.deliver).toHaveBeenCalledWith('harness', expect.stringContaining(
-      'In reply to message question-2. Read that message in this conversation before interpreting the answer.'
+      'In reply to message question-2. Read it before interpreting the answer:'
     ), 'team:service:superTabs:delivery')
     expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Message message from Collaborator:\nYes, keep them.')
   })

@@ -7,9 +7,13 @@ it('keeps an explicit stable receipt for agent messages and arbitrary work comma
   expect(parseSuperTabArgs([...prefix, 'command', 'op-2', '{"type":"work.assign"}'], where).payload).toMatchObject({ command: { type: 'work.assign' } })
   expect(parseSuperTabArgs(['--port', '14002', '--machine', 'target', ...prefix, 'messages', 'lead'], where)).toMatchObject({ where: { port: 14002, machineId: 'target' }, payload: { conversationId: 'lead' } })
   expect(parseSuperTabArgs(['help'], where).payload.action).toBe('help')
+  expect(parseSuperTabArgs([...prefix, 'message', 'lead', 'old-question'], where).payload)
+    .toMatchObject({ action: 'message', conversationId: 'lead', messageId: 'old-question' })
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', '--tab', 'literal'], where).payload.command).toMatchObject({ text: '--tab' })
   expect(parseSuperTabArgs(['--tab', 'tab', 'status'], where).payload.agentId).toBe('')
-  for (const argv of [[], ['status'], [...prefix, 'post', 'lead', 'Ready'], [...prefix, 'messages', '../other'], ['--port', 'no', 'help'], ['--machine', '', 'help'], [...prefix, 'status', 'extra']]) {
+  for (const argv of [[], ['status'], [...prefix, 'post', 'lead', 'Ready'], [...prefix, 'messages', '../other'],
+    [...prefix, 'message', 'lead'], [...prefix, 'message', 'lead', '../other'], [...prefix, 'message', 'lead', 'id', 'extra'],
+    ['--port', 'no', 'help'], ['--machine', '', 'help'], [...prefix, 'status', 'extra']]) {
     expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
   }
 })

@@ -281,7 +281,7 @@ export class SuperTabStore {
     })
   }
 
-  async messages(user: AuthUser, tabId: string, conversationId: string, cursor: { after?: number; before?: number }, asAgentId?: string) {
+  async messages(user: AuthUser, tabId: string, conversationId: string, cursor: { after?: number; before?: number; messageId?: string }, asAgentId?: string) {
     return transaction(this.db, async tx => {
       const row = await this.row(tx, user, tabId)
       const state = stateOf(row)
@@ -289,6 +289,7 @@ export class SuperTabStore {
       conversation(state, conversationId)
       const forward = cursor.after !== undefined
       const rows = await tx.superTabMessage.findMany({ where: { tabId, conversationId,
+        ...(cursor.messageId ? { id: cursor.messageId } : {}),
         ...(forward ? { sequence: { gt: cursor.after } } : cursor.before !== undefined ? { sequence: { lt: cursor.before } } : {}) },
         orderBy: { sequence: forward ? 'asc' : 'desc' }, take: 101 })
       const page = rows.slice(0, 100)

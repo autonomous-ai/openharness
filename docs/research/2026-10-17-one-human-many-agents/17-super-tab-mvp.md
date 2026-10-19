@@ -237,3 +237,9 @@ updates can share a name visually, but agents should post useful decisions,
 questions and results rather than narrate every tool call. Replies are optional
 when ordinary conversation is already clear. There are no nested reply rooms,
 reaction systems or new global attention feeds in this pass.
+
+Reply context must also work at agent speed: the original question may already
+be outside the latest page of messages. Native delivery includes the exact
+`message GROUP MESSAGE_ID` lookup command. It reads within the same tab and group
+and rechecks the caller's current contribution; it does not depend on the
+original being in the latest 100 messages.
