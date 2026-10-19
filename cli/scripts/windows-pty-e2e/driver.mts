@@ -120,9 +120,12 @@ export class Client {
     throw new Error(`timeout (${ms} ms): ${what}; last=${JSON.stringify(last)}`)
   }
 
-  async open(agentId: string, cols = 120, rows = 40): Promise<Stream> {
+  async open(agentId: string, cols = 120, rows = 40, options: { passive?: boolean } = {}): Promise<Stream> {
     const requestId = randomUUID()
-    this.send('terminal_open', { requestId, agentId, cols, rows, protocolVersion: 3 })
+    this.send('terminal_open', {
+      requestId, agentId, cols, rows, protocolVersion: 3,
+      ...(options.passive ? { takeover: false, watch: true } : {}),
+    })
     const ready = await this.waitFor((f) => (f.type === 'terminal_ready' || f.type === 'terminal_error') && f.payload?.requestId === requestId, 20_000, 'terminal_ready')
     if (ready.type === 'terminal_error') throw new Error(`terminal_open → ${JSON.stringify(ready.payload)}`)
     const s: Stream = { streamId: ready.payload.streamId, agentId, output: '', keyframes: [], seq: -1, resizeSeq: 0 }

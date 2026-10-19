@@ -39,7 +39,7 @@ try {
       break
     }
     case 'screen': {
-      const s = await c.open(args[0], Number(args[1] ?? 120), Number(args[2] ?? 40))
+      const s = await c.open(args[0], Number(args[1] ?? 120), Number(args[2] ?? 40), { passive: true })
       await sleep(1500)
       console.log(tail(await c.screen(s), Number(args[3] ?? 40)))
       break
