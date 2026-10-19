@@ -81,7 +81,10 @@ void main() {
 
   setUp(() async {
     // Socket paths are capped near 104 bytes; the default temp dir is longer.
-    scratch = await Directory('/tmp').createTemp('hsock-');
+    scratch = await (Platform.isWindows
+            ? Directory.systemTemp
+            : Directory('/tmp'))
+        .createTemp('hsock-');
     socketPath = '${scratch.path}/daemon.sock';
     identityFile = File('${scratch.path}/computer-id')
       ..writeAsStringSync(_computerId);

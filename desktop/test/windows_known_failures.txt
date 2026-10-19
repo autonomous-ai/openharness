@@ -180,17 +180,11 @@ test/harness_cli_runner_test.dart::remote-password status invokes cli.js as dire
 test/harness_cli_runner_test.dart::uses the explicit legacy launcher before PATH
 test/harness_cli_runner_test.dart::uses the managed Node runtime and CLI bundle without a shell
 
-# POSIX-unix-socket-fixture (9)
-# test/local_daemon_transport_test.dart creates /tmp Unix sockets; the Windows fixture cannot create that POSIX root.
-test/local_daemon_transport_test.dart::REST goes over the socket, and back to the port once it is gone
-test/local_daemon_transport_test.dart::REST never sends a request for another address down the socket
-test/local_daemon_transport_test.dart::defaultDaemonSocketPath is never looked for under flutter test
-test/local_daemon_transport_test.dart::defaultDaemonSocketPath is the socket for the daemon's port in the CLI data directory
-test/local_daemon_transport_test.dart::discovery asks the socket first and keeps the port untouched
-test/local_daemon_transport_test.dart::discovery falls back to the port when there is no socket
-test/local_daemon_transport_test.dart::local WebSocket dials the socket when discovery chose it
+# POSIX-unix-socket-fixture (3)
+# test/local_daemon_transport_test.dart creates Unix sockets; Windows uses an authenticated named pipe and never sends the credential over TCP.
+test/local_daemon_transport_test.dart::local credential goes with REST over the port, never down the socket
+test/local_daemon_transport_test.dart::local credential goes with the local WebSocket over the port
 test/local_daemon_transport_test.dart::local WebSocket falls back to the port when the socket is not there
-test/local_daemon_transport_test.dart::local WebSocket goes back to the socket once it is there again
 
 # POSIX-updater-or-appimage (8)
 # These tests exercise macOS updater keys/staging, or Linux AppImage Exec/chmod/install behavior; Windows updater is added later in C4.

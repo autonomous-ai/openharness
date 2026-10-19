@@ -39,7 +39,10 @@ String? defaultDaemonSocketPath(
   bool? isWindows,
 }) {
   if (isWindows ?? Platform.isWindows) return null;
-  final dataDir = defaultDaemonDataDir(environment: environment);
+  final dataDir = defaultDaemonDataDir(
+    environment: environment,
+    isWindows: isWindows,
+  );
   if (dataDir == null) return null;
   final path = '$dataDir/${daemonSocketName(port)}';
   return utf8.encode(path).length <= _maxSocketPathBytes ? path : null;
