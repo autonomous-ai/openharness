@@ -22,6 +22,8 @@ export function shouldSkipAuth(url: string): boolean {
     path === '/api/health' ||
     // Explicitly enabled, credential-free setup totals; its own schema and workload budget apply.
     path === '/api/product-usage/setup' ||
+    // Hub totals the website's server forwards with cookies and auth stripped; same rules as setup.
+    path === '/api/product-usage/hub' ||
     // Web-driven SSO login (pre-session): /authorize returns the SSO URL, /exchange trades the code
     // for the SSO access token, /logout-url returns the SSO end-session URL. All fetched by web XHR.
     path === '/api/auth/authorize' ||
