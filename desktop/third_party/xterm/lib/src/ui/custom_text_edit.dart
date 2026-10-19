@@ -14,7 +14,6 @@ class CustomTextEdit extends StatefulWidget {
     required this.onComposing,
     required this.onAction,
     required this.onKeyEvent,
-    this.onInputDiagnostic,
     required this.focusNode,
     this.autofocus = false,
     this.readOnly = false,
@@ -37,9 +36,6 @@ class CustomTextEdit extends StatefulWidget {
   final void Function(TextInputAction) onAction;
 
   final KeyEventResult Function(FocusNode, KeyEvent) onKeyEvent;
-
-  /// Optional platform-input tracing; callers must not record typed content.
-  final void Function(String)? onInputDiagnostic;
 
   final FocusNode focusNode;
 
@@ -216,13 +212,6 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   }
 
   KeyEventResult _onKeyEvent(FocusNode focusNode, KeyEvent event) {
-    if (event is KeyDownEvent) {
-      widget.onInputDiagnostic?.call(
-        'key focus=${widget.focusNode.hasFocus} readonly=${widget.readOnly} '
-        'connection=$hasInputConnection character=${event.character?.isNotEmpty == true} '
-        'enter=${event.logicalKey == LogicalKeyboardKey.enter}',
-      );
-    }
     if (_currentEditingState.composing.isCollapsed) {
       return widget.onKeyEvent(focusNode, event);
     }
@@ -256,6 +245,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       _connection!.show();
     } else {
       final config = TextInputConfiguration(
+        viewId: View.of(context).viewId,
         inputType: widget.inputType,
         inputAction: widget.inputAction,
         keyboardAppearance: widget.keyboardAppearance,
@@ -357,10 +347,6 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   @override
   void updateEditingValue(TextEditingValue value) {
-    widget.onInputDiagnostic?.call(
-      'edit callback mutated=${value.text != _currentEditingState.text} '
-      'composing=${value.composing.isValid && !value.composing.isCollapsed}',
-    );
     if (_consumeActionEcho(value)) return;
     _applyEditingValue(
       value,

@@ -16,8 +16,6 @@ import 'package:xterm/xterm.dart';
 import '../clipboard/native_clipboard.dart';
 import '../core/models.dart';
 import '../core/runtime_platform.dart';
-import '../core/staging_build.dart';
-import '../logging/app_log.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import '../state/model_start_watch.dart';
@@ -1839,19 +1837,6 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// platform's exact one: Linux and Windows reserve Ctrl-V for the terminal program and paste with
   /// Ctrl-Shift-V.
   KeyEventResult _onTerminalKey(FocusNode node, KeyEvent event) {
-    if (kHarnessStagingBuild &&
-        !kIsWeb &&
-        defaultTargetPlatform == TargetPlatform.windows &&
-        event is KeyDownEvent) {
-      appLog.debug(
-        'win-input-diag',
-        'panel focus=${_focusNode.hasFocus} readonly=${widget.readOnly} '
-            'accepts=${widget.session.acceptsInput} blocked=$_inputBlocked '
-            'connection=${_laidOutTerminalView()?.hasInputConnection} '
-            'character=${event.character?.isNotEmpty == true} '
-            'enter=${event.logicalKey == LogicalKeyboardKey.enter}',
-      );
-    }
     if (_passageId != null && event.logicalKey == LogicalKeyboardKey.escape) {
       if (event is KeyDownEvent) _closePassage();
       return KeyEventResult.handled;
@@ -2312,14 +2297,6 @@ class _TerminalPanelState extends State<TerminalPanel>
                               // and resize the remote terminal unexpectedly.
                               textScaler: TextScaler.noScaling,
                               onKeyEvent: _onTerminalKey,
-                              onInputDiagnostic:
-                                  kHarnessStagingBuild &&
-                                      !kIsWeb &&
-                                      defaultTargetPlatform ==
-                                          TargetPlatform.windows
-                                  ? (event) =>
-                                        appLog.debug('win-input-diag', event)
-                                  : null,
                               onTapDown: _onLinkTapDown,
                               onTapUp: _onLinkTapUp,
                               mouseCursor:
