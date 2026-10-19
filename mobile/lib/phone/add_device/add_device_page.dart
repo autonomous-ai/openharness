@@ -90,6 +90,19 @@ class _AddDevicePageState extends State<AddDevicePage> {
   /// Unlocked from here: it is starting, and its hotspot comes back under the same name.
   bool _unlocked = false;
 
+  /// A device still locked that takes the whole setup with its password (protocol 2): its Wi-Fi is
+  /// chosen from the list its startup scanned, then the computer's password sends it all in one stay
+  /// on its hotspot — set up before or not, and whatever account it was on.
+  bool _lockedSetup = false;
+
+  /// Asked for by Look again on a locked device's list: scanned again beside its hotspot.
+  bool _rescan = false;
+
+  /// The device found online after a locked setup: it said no computer id while locked, so it is told
+  /// apart in the account instead — new there, or offline when the password was sent ([_sentAt]).
+  Machine? _found;
+  Map<String, String>? _sentAt;
+
   /// After an unlock: the account's computers that were not online then. One of them online now is
   /// the one just unlocked, set up before — on its own Wi-Fi, signed in, with no hotspot to come
   /// back ([_Step.back]).
@@ -221,7 +234,9 @@ class _AddDevicePageState extends State<AddDevicePage> {
     if (SetupHotspot.joinsByItself) {
       // The same device again once it has started: only its own name in Android's list.
       final joined = await _hotspot.join(
-        name: _unlocked ? _device['hotspot'] as String? : null,
+        // Back after a locked setup that did not come online: the same device, on setup.py's
+        // hotspot now, with why.
+        name: _unlocked || _lockedSetup ? _device['hotspot'] as String? : null,
       );
       if (!mounted) return;
       if (joined.state == 'joined') {
@@ -262,10 +277,29 @@ class _AddDevicePageState extends State<AddDevicePage> {
       _retrying = false;
       if (info['locked'] == true) {
         _secret.clear();
+        if (((info['protocol'] as num?)?.toInt() ?? 1) >= 2) {
+          // The whole setup while it is locked: its Wi-Fi first, from its startup's list.
+          _lockedSetup = true;
+          setState(() => _progress = _Progress.reading);
+          final rescan = _rescan;
+          _rescan = false;
+          final networks = await _hotspot.networks(rescan: rescan);
+          if (!mounted) return;
+          setState(() {
+            _networks = networks;
+            _step = _Step.networks;
+            _error = '';
+            _busy = false;
+          });
+          return;
+        }
         _show(_Step.unlock);
         return;
       }
       _unlocked = false;
+      // Started: the page setup.py hosts, which says what it is (its computer id) and why a try failed.
+      _lockedSetup = false;
+      _found = null;
       // A failed try before this one: the device says why, once the phone is back on its hotspot.
       final last = info['result'];
       final why =
@@ -306,9 +340,24 @@ class _AddDevicePageState extends State<AddDevicePage> {
       return;
     }
     setState(() => _busy = true);
+    // The whole setup with it: a new ticket for a try after one that was handed over already.
+    if (_lockedSetup && _ticketSent && !await _freshTicket()) return;
+    final ssid = _ssid.text.trim();
+    final secure = _chosen?.secure ?? _password.text.isNotEmpty;
+    final Map<String, Object?>? setup = _lockedSetup
+        ? {
+            'ssid': ssid,
+            if (secure) 'password': _password.text,
+            if (_chosen != null) 'security': _chosen!.security,
+            'ticket': _ticket,
+            'account': ?_app.currentUser?.id,
+          }
+        : null;
+    // The account as it is now: the device is told apart in it once online, having given no id.
+    _sentAt = {for (final m in _app.machines) m.machineId: m.status ?? ''};
     final String? why;
     try {
-      why = await _hotspot.unlock(secret);
+      why = await _hotspot.unlock(secret, setup: setup);
     } on SetupException catch (e) {
       _show(_Step.unlock, error: e.message);
       return;
@@ -316,6 +365,15 @@ class _AddDevicePageState extends State<AddDevicePage> {
     _secret.clear();
     if (why != null) {
       _show(_Step.unlock, error: why);
+      return;
+    }
+    if (_lockedSetup) {
+      // Opened, with its Wi-Fi and ticket: it joins and signs in as it starts. No second hotspot.
+      _ticketSent = true;
+      _alreadyHere = false;
+      _wasRunning = false;
+      await _hotspot.leave();
+      _wait(ssid);
       return;
     }
     // It starts now. Its hotspot goes, and comes back under the same name for the rest of the
@@ -420,6 +478,12 @@ class _AddDevicePageState extends State<AddDevicePage> {
       _show(_Step.password, error: 'A Wi-Fi password has 8 to 63 characters.');
       return;
     }
+    if (_lockedSetup) {
+      // Still locked: the computer's password next, and the Wi-Fi goes with it.
+      _secret.clear();
+      _show(_Step.unlock);
+      return;
+    }
     setState(() => _busy = true);
     // Signed in already: only its Wi-Fi changes, so it keeps its name and is not new. One signed out
     // is set up afresh, even if its old record is still in the account.
@@ -450,11 +514,37 @@ class _AddDevicePageState extends State<AddDevicePage> {
   // -- 4. the device on the Internet, in this account --
 
   Machine? get _machine {
-    if (_computerId.isEmpty) return null;
+    if (_computerId.isEmpty) return _lockedSetup ? _foundOnline() : null;
     for (final machine in _app.machines) {
       if (_bare(machine.computerId ?? '') == _computerId) return machine;
     }
     return null;
+  }
+
+  /// After a locked setup: the computer online in the account now that was not when the password
+  /// went — new there, or offline then. The one named after the hotspot first, when there are more.
+  /// Kept once found, for its name and Start.
+  Machine? _foundOnline() {
+    final found = _found;
+    if (found != null) {
+      return _app.machines
+              .where((m) => m.machineId == found.machineId)
+              .firstOrNull ??
+          found;
+    }
+    final before = _sentAt;
+    if (before == null) return null;
+    final back = [
+      for (final m in _app.machines)
+        if (m.status == 'running' && before[m.machineId] != 'running') m,
+    ];
+    if (back.isEmpty) return null;
+    final hotspot = _device['hotspot'] as String?;
+    final machine =
+        back.where((m) => m.displayName == hotspot).firstOrNull ?? back.first;
+    // One the account had before: set up before, so it keeps its name and is not new.
+    _alreadyHere = before.containsKey(machine.machineId);
+    return _found = machine;
   }
 
   // -- 5. its name, then Computers with it marked new --
@@ -485,7 +575,10 @@ class _AddDevicePageState extends State<AddDevicePage> {
 
   void _wait(String ssid) {
     _show(_Step.waiting);
-    final deadline = DateTime.now().add(_comeOnline);
+    // A locked one starts first: its disk opens, then the system, then the Wi-Fi and the sign-in.
+    final deadline = DateTime.now().add(
+      _lockedSetup ? _comeOnline * 2 : _comeOnline,
+    );
     _poll?.cancel();
     _poll = Timer.periodic(const Duration(seconds: 3), (_) async {
       if (!mounted || _step != _Step.waiting) return;
@@ -651,8 +744,11 @@ class _AddDevicePageState extends State<AddDevicePage> {
       case _Step.unlock:
         return [
           say(
-            '$name is locked. Enter the computer\'s password — the one set when it was installed — '
-            'to start it.',
+            _lockedSetup
+                ? 'Last, the computer\'s password — the one set when it was installed. $name '
+                      'starts with it, joins "${_ssid.text.trim()}" and signs in to your account.'
+                : '$name is locked. Enter the computer\'s password — the one set when it was '
+                      'installed — to start it.',
           ),
           const SizedBox(height: 8),
           TtyField(
@@ -818,17 +914,25 @@ class _AddDevicePageState extends State<AddDevicePage> {
         return [
           TtyPrimaryButton(
             key: const Key('add-device-unlock'),
-            label: 'Unlock',
+            label: _lockedSetup ? 'Unlock and set up' : 'Unlock',
             busy: _busy,
             busyLabel: 'Unlocking…',
             onPressed: () => unawaited(_unlock()),
           ),
+          if (_lockedSetup)
+            TtyTextButton(
+              key: const Key('add-device-unlock-back'),
+              label: 'Choose another Wi-Fi',
+              onPressed: () => _show(_Step.networks),
+            ),
         ];
       case _Step.networks:
         return [
           TtyTextButton(
             label: 'Look again',
             onPressed: () {
+              // A locked device scans again beside its hotspot; a started one rescans anyway.
+              _rescan = _lockedSetup;
               _show(_Step.join);
               unawaited(_reach());
             },
@@ -838,7 +942,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
         return [
           TtyPrimaryButton(
             key: const Key('add-device-connect'),
-            label: 'Connect',
+            label: _lockedSetup ? 'Next' : 'Connect',
             busy: _busy,
             busyLabel: 'Sending…',
             onPressed: () => unawaited(_send()),

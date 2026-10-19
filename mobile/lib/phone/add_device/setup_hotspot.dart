@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -79,8 +80,13 @@ class SetupHotspot {
   }
 
   /// The Wi-Fi the DEVICE sees: `[{ssid, signal, security}]`, strongest first.
-  Future<List<SetupNetwork>> networks() async {
-    final res = await _dio.get('/setup/networks');
+  /// [rescan]: a device still locked lists the Wi-Fi of its startup's scan; asked to, it scans again
+  /// beside its hotspot, where its card allows that.
+  Future<List<SetupNetwork>> networks({bool rescan = false}) async {
+    final res = await _dio.get(
+      rescan ? '/setup/networks?rescan=1' : '/setup/networks',
+      options: Options(receiveTimeout: const Duration(seconds: 20)),
+    );
     final list = (res.data is Map ? (res.data as Map)['networks'] : null);
     if (res.statusCode != 200 || list is! List) {
       throw const SetupException('The device did not send its Wi-Fi list.');
@@ -92,19 +98,29 @@ class SetupHotspot {
             ssid: row['ssid'] as String,
             signal: (row['signal'] as num?)?.toInt() ?? 0,
             secure: (row['security'] as String? ?? '').isNotEmpty,
+            security: row['security'] as String? ?? '',
           ),
     ];
   }
 
   /// The computer's password, for a device still locked as it starts: its disk opens with it, and
   /// it goes on starting. Null when it opened; otherwise why not (a wrong password, too many tries).
-  Future<String?> unlock(String password) async {
+  ///
+  /// [setup]: the rest of the setup with it, for a device that takes it (protocol 2) — the Wi-Fi, its
+  /// password, the ticket, this phone's account — joined and signed in as it starts, with no second
+  /// stay on its hotspot. It follows the password in the body, its length in a header.
+  Future<String?> unlock(String password, {Map<String, Object?>? setup}) async {
+    final rest = setup == null ? '' : jsonEncode(setup);
     final Response<dynamic> res;
     try {
       res = await _dio.post(
         '/setup/unlock',
-        data: password,
+        data: password + rest,
         options: Options(
+          headers: {
+            if (rest.isNotEmpty)
+              'X-Harness-Setup-Length': '${utf8.encode(rest).length}',
+          },
           contentType: 'text/plain; charset=utf-8',
           // Opening the disk takes a few seconds: the password is checked slowly on purpose.
           receiveTimeout: const Duration(seconds: 50),
@@ -162,11 +178,15 @@ class SetupNetwork {
     required this.ssid,
     required this.signal,
     required this.secure,
+    this.security = '',
   });
 
   final String ssid;
   final int signal;
   final bool secure;
+
+  /// As the device read it (`WPA2`, `WPA3`, `WPA2 WPA3`, empty for open): how it joins.
+  final String security;
 }
 
 class SetupException implements Exception {

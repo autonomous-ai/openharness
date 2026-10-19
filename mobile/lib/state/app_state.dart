@@ -7045,8 +7045,9 @@ class AppNotifier extends ChangeNotifier {
       // Gone from the log already — another device signed it out after this phone read the log:
       // what this step was for is done.
       if (failure == 'NOT_IN_LOG') failure = null;
-      if (failure != null)
+      if (failure != null) {
         return 'Couldn’t sign $name out ($failure). Try again.';
+      }
       // The account let it go meanwhile (removed from another device): no record is left to delete.
       if (machineStates[machineId] == null) return null;
     }
