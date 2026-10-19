@@ -52,6 +52,7 @@ class TerminalView extends StatefulWidget {
     this.deleteDetection = false,
     this.shortcuts,
     this.onKeyEvent,
+    this.onInputDiagnostic,
     this.readOnly = false,
     this.hardwareKeyboardOnly = false,
     this.simulateScroll = true,
@@ -154,6 +155,9 @@ class TerminalView extends StatefulWidget {
   /// Keyboard event handler of the terminal. This has higher priority than
   /// [shortcuts] and input handler of the terminal.
   final FocusOnKeyEventCallback? onKeyEvent;
+
+  /// Optional content-free trace of the native text input route.
+  final void Function(String)? onInputDiagnostic;
 
   /// True if no input should send to the terminal.
   final bool readOnly;
@@ -328,6 +332,7 @@ class TerminalViewState extends State<TerminalView> {
         keyboardAppearance: widget.keyboardAppearance,
         deleteDetection: widget.deleteDetection,
         onInsert: _onInsert,
+        onInputDiagnostic: widget.onInputDiagnostic,
         onDelete: (count) {
           _scrollToBottom();
           for (var index = 0; index < count; index++) {
@@ -456,6 +461,7 @@ class TerminalViewState extends State<TerminalView> {
 
   void _onInsert(String text) {
     if (text.isEmpty) return;
+    widget.onInputDiagnostic?.call('insert callback');
 
     final key = charToTerminalKey(text.trim());
 

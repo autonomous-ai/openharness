@@ -10,6 +10,8 @@ import 'package:flutter/services.dart';
 import 'agent_alerts.dart';
 import 'alert_sounds.dart';
 import 'browser_notifier.dart';
+import '../core/staging_build.dart';
+import '../logging/app_log.dart';
 
 /// Whether an agent's news is ALSO handed to the operating system, so it reaches
 /// somebody whose window is behind their editor, on another desktop, or minimised.
@@ -313,8 +315,23 @@ class WindowsSystemNotifier implements SystemNotifier {
       'Allow it in Windows Settings ▸ System ▸ Notifications ▸ Harness.';
 
   @override
-  Future<NotificationPermission> authorize() =>
-      _askNotifications(_channel, 'authorize', null);
+  Future<NotificationPermission> authorize() async {
+    final permission = await _askNotifications(_channel, 'authorize', null);
+    if (kHarnessStagingBuild && !kIsWeb && Platform.isWindows) {
+      try {
+        final diagnostic = await _channel.invokeMethod<String>(
+          'diagnose_authorize',
+        );
+        appLog.info(
+          'win-toast-diag',
+          'permission=${permission.name} diagnostic=${diagnostic ?? 'null'}',
+        );
+      } catch (_) {
+        appLog.info('win-toast-diag', 'probe unavailable');
+      }
+    }
+    return permission;
+  }
 
   @override
   Future<NotificationPermission> show({

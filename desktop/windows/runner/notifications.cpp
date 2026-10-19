@@ -76,6 +76,22 @@ std::wstring LaunchLink(const std::string* launch) {
   return Utf16FromUtf8(*launch);
 }
 
+// Temporary, content-free staging probe of the same WinRT authorization call.
+std::string DiagnoseAuthorization() {
+  const char* phase = "create";
+  try {
+    auto notifier = ToastNotificationManager::CreateToastNotifier(kAppUserModelId);
+    phase = "setting";
+    return std::string("setting:") +
+           std::to_string(static_cast<int>(notifier.Setting()));
+  } catch (const winrt::hresult_error& error) {
+    return std::string("error:") + phase + ":" +
+           std::to_string(error.code().value);
+  } catch (...) {
+    return std::string("error:") + phase + ":unknown";
+  }
+}
+
 }  // namespace
 
 HarnessNotifications::HarnessNotifications(flutter::BinaryMessenger* messenger)
@@ -87,6 +103,10 @@ HarnessNotifications::HarnessNotifications(flutter::BinaryMessenger* messenger)
     const auto* arguments = std::get_if<flutter::EncodableMap>(call.arguments());
     if (method == "authorize") {
       result->Success(flutter::EncodableValue(Authorize()));
+      return;
+    }
+    if (method == "diagnose_authorize") {
+      result->Success(flutter::EncodableValue(DiagnoseAuthorization()));
       return;
     }
     const std::string* tag = StringArgument(arguments, "tag");
