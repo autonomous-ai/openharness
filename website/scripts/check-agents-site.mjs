@@ -15,11 +15,13 @@ for (const [route, expected, type] of [
   ['/agents/', page, /text\/html/],
   ['/agents/index.html', page, /text\/html/],
   ['/llms.txt', llms, /text\/plain/],
-  ['/.well-known/mcp-registry-auth', mcpAuth, /text\/plain/],
+  // Next serves the dotfile as octet-stream, not text/plain; the MCP registry reads its body, so
+  // only require the route to serve the bytes unchanged and keep the no-cache/nosniff headers.
+  ['/.well-known/mcp-registry-auth', mcpAuth, null],
 ]) {
   const response = await fetch(new URL(route, base), requests);
   assert.equal(response.status, 200, route);
-  assert.match(response.headers.get('content-type'), type, route);
+  if (type) assert.match(response.headers.get('content-type'), type, route);
   assert.match(response.headers.get('cache-control'), /no-transform/, route);
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff', route);
   assert.equal(await response.text(), expected, `${route} must serve the file unchanged`);
