@@ -602,7 +602,7 @@ class SwarmSearchCatalog {
           detail: [
             'Machine',
             if (machine.machine.machineShare case final share?)
-              'Guest · shared by ${share.owner}',
+              'Shared by ${share.owner}',
             _countLabel(members.length, 'harness'),
             if (machine.needsLink)
               'Link required'
@@ -981,7 +981,12 @@ Future<bool> _activateSwarmSearchSelection(
     final openedTab = target;
     await Future.wait([
       for (final row in members)
-        _attachSearchHarness(app, row.machineId!, row.agentId!, swarmId: openedTab.id),
+        _attachSearchHarness(
+          app,
+          row.machineId!,
+          row.agentId!,
+          swarmId: openedTab.id,
+        ),
     ]);
     return app.swarms.contains(openedTab) &&
         members.every(
@@ -1115,7 +1120,12 @@ Future<bool> _activateSwarmSearchSelection(
       }
       await Future.wait([
         for (final row in members)
-          _attachSearchHarness(app, row.machineId!, row.agentId!, swarmId: openedTab.id),
+          _attachSearchHarness(
+            app,
+            row.machineId!,
+            row.agentId!,
+            swarmId: openedTab.id,
+          ),
       ]);
       return members.every(
         (row) => openedTab.panes.any(
@@ -1742,9 +1752,7 @@ Future<bool> activateSwarmDestination(
     return false;
   }
   await _resumeStoppedDestination(app, destination);
-  var target = app.swarms
-      .where((s) => s.id == destinationSwarmId)
-      .firstOrNull;
+  var target = app.swarms.where((s) => s.id == destinationSwarmId).firstOrNull;
   if (target == null) return false;
   if (target.isSuperTab && target.superTabId != null) {
     app.newSwarm();

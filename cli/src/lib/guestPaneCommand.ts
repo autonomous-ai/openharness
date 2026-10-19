@@ -29,7 +29,7 @@ const APPROVE_ALL: Record<GuestLaunchEngine, string> = {
 export const GUEST_PANE_BOOTSTRAP = [
   'helper=$1 user=$2 work=$3 engine=$4; shift 4',
   'if ! sudo -n "$helper" run "$user" --cwd "$work" -- /bin/sh -c \'command -v "$0" >/dev/null\' "$engine" 2>/dev/null; then',
-  '  sudo -n "$helper" install "$user" "$engine" || { printf \'\\nCould not install %s for this guest.\\n\' "$engine"; exit 1; }',
+  '  sudo -n "$helper" install "$user" "$engine" || { printf \'\\nCould not install %s.\\n\' "$engine"; exit 1; }',
   'fi',
   'exec "$@"',
 ].join('\n')

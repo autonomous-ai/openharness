@@ -679,7 +679,7 @@ export interface SharedMachinesCorePort {
 
 /** What a guest's New Harness is told while shared machines is off or failing. */
 export const GUEST_LAUNCH_UNAVAILABLE: GuestLaunch = {
-  ok: false, error: 'GUEST_UNAVAILABLE', detail: 'Guest access is not running on this computer right now. Try again in a moment.',
+  ok: false, error: 'GUEST_UNAVAILABLE', detail: 'Sharing isn\'t running on this computer right now. Try again in a moment.',
 }
 export const SHARED_MACHINES_FALLBACKS: PortFallbacks<SharedMachinesCorePort> = { guestLaunch: later(GUEST_LAUNCH_UNAVAILABLE), stop: undefined }
 /** What the core calls while `ports.sharedMachines` is null. */

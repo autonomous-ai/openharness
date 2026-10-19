@@ -15,6 +15,8 @@ import type { TmuxRuntimeRef } from '../../lib/terminalTypes.js'
 import { bypassPermissionActive, resolvePaneEngineProcess } from '../../lib/tmux.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
+import type { StopAgentServiceDeps } from '../../lib/stopAgentService.js'
+import { paneReadIdentity } from '../transcripts/readIdentity.js'
 
 export interface PaneSwapDeps {
   restartJobs?: AgentRestartCoordinator
@@ -24,12 +26,14 @@ export interface PaneSwapDeps {
   prepareSessionResume: (session: RegisteredSession) => void
   /** Keeps a conversation a swap had to leave for a new one as a stopped harness (lib/keepAbandonedConversation.ts). */
   keepAbandonedConversation: (left: RegisteredSession) => void
+  /** Release the conversation on its engine's server before replacing the terminal client. */
+  stopNative: StopAgentServiceDeps['stopNative']
 }
 
 /** How long a relaunched engine must stay running before a restart counts it as come up (`waitForProcess`). */
 export const SWAP_SETTLE_MS = 500
 
-export function createPaneSwap({ byAgent, tmuxBackend, prepareSessionResume, keepAbandonedConversation, restartJobs = new AgentRestartCoordinator() }: PaneSwapDeps) {
+export function createPaneSwap({ byAgent, tmuxBackend, prepareSessionResume, keepAbandonedConversation, stopNative, restartJobs = new AgentRestartCoordinator() }: PaneSwapDeps) {
   /**
    * The dependencies a pane-process swap needs, for both callers that do one.
    *
@@ -53,81 +57,96 @@ export function createPaneSwap({ byAgent, tmuxBackend, prepareSessionResume, kee
      *  stopped taking its flag and the caller dropped it (`dropPermissionFlagIfUnsupported`). */
     permissionMode: string | null = session.permissionMode ?? null,
     current?: () => boolean,
-  ): RestartAgentDeps => ({
-    ...(current ? { isCurrent: current } : {}),
-    prepareResume: () => prepareSessionResume(session),
-    // The row as the swap found it: the conversation a fallback to a fresh start leaves behind.
-    keepAbandoned: () => keepAbandonedConversation(session),
-    respawnRefusal: () => tmuxBackend!.respawnRefusal(launch.env ? { env: launch.env } : {}),
-    holdOpen: async () => {
-      const result = await tmuxBackend!.holdOpen(runtime, current)
-      return result.state === 'succeeded'
-        ? { ok: true }
-        : { ok: false, reason: 'reason' in result ? result.reason : 'could not re-arm remain-on-exit' }
-    },
-    terminate: (checkAfterMs) => terminateDeletedAgent(session, {
-      checkRuntime: checkPidRuntime,
-      kill: (pid, signal) => process.kill(pid, signal),
-      sleep: (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.() }),
-      log: (message) => console.log(message),
-      ...(current ? { current } : {}),
-    }, checkAfterMs),
-    respawn: async (argv) => {
-      const result = await tmuxBackend!.respawn(runtime, {
-        command: argv,
-        ...(current ? { current } : {}),
-        cwd: homedir(),
-        ...(launch.env ? { env: launch.env } : {}),
-      })
-      return result.state === 'succeeded'
-        ? { ok: true }
-        : { ok: false, reason: 'reason' in result ? result.reason : 'tmux respawn-pane did not complete' }
-    },
-    waitForProcess: async () => {
-      // Mirrors onCreateAgent's own discovery budget/backoff shape for the same reason: the engine's
-      // interactive-login-shell startup, not the tmux call, is the slow half.
-      const SWAP_DISCOVERY_BUDGET_MS = 8_000
-      let delayMs = 150
-      let waited = 0
-      while (waited < SWAP_DISCOVERY_BUDGET_MS) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs))
-        waited += delayMs
-        const found = await resolvePaneEngineProcess(runtime.paneId, session.engine)
-        if (found) {
-          // Up means still up a moment later: a launch the engine refuses (`codex resume` after an update
-          // dropped it) runs for an instant, and seen then, the restart said "resumed" and never fell back
-          // to a fresh start (e2e/updates.e2e.ts on Linux, whose faster start put it in the first look).
-          await new Promise((resolve) => setTimeout(resolve, SWAP_SETTLE_MS))
-          waited += SWAP_SETTLE_MS
-          const still = await resolvePaneEngineProcess(runtime.paneId, session.engine)
-          if (sameProcessIdentity(still, found)) return found
+  ): RestartAgentDeps => {
+    const target = { ...session, processIdentity: session.processIdentity && { ...session.processIdentity } }
+    const identity = paneReadIdentity(target)
+    const ownsOriginal = () => current?.() !== false && sameRestartTarget(target)
+      && paneReadIdentity(byAgent(target.agentId)) === identity
+    return {
+      ...(current ? { isCurrent: current } : {}),
+      prepareResume: () => prepareSessionResume(session),
+      // The row as the swap found it: the conversation a fallback to a fresh start leaves behind.
+      keepAbandoned: () => keepAbandonedConversation(session),
+      respawnRefusal: () => tmuxBackend!.respawnRefusal(launch.env ? { env: launch.env } : {}),
+      holdOpen: async () => {
+        const result = await tmuxBackend!.holdOpen(runtime, current)
+        return result.state === 'succeeded'
+          ? { ok: true }
+          : { ok: false, reason: 'reason' in result ? result.reason : 'could not re-arm remain-on-exit' }
+      },
+      terminate: async (checkAfterMs) => {
+        if (!ownsOriginal()) return 'not-ours'
+        // Restart used to kill only Codex's terminal client. Its shared app-server kept the writer
+        // lock after a failed turn, so the replacement stayed alive on "open in another app" and
+        // was reported resumed (2026-10-19). Use Stop Harness's conversation cleanup before any
+        // signal, for restart and retarget alike. A refusal leaves the original client running.
+        await stopNative(target, ownsOriginal)
+        if (!ownsOriginal()) return 'not-ours'
+        return terminateDeletedAgent(target, {
+          checkRuntime: checkPidRuntime,
+          kill: (pid, signal) => process.kill(pid, signal),
+          sleep: (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.() }),
+          log: (message) => console.log(message),
+          current: ownsOriginal,
+        }, checkAfterMs)
+      },
+      respawn: async (argv) => {
+        const result = await tmuxBackend!.respawn(runtime, {
+          command: argv,
+          ...(current ? { current } : {}),
+          cwd: homedir(),
+          ...(launch.env ? { env: launch.env } : {}),
+        })
+        return result.state === 'succeeded'
+          ? { ok: true }
+          : { ok: false, reason: 'reason' in result ? result.reason : 'tmux respawn-pane did not complete' }
+      },
+      waitForProcess: async () => {
+        // Mirrors onCreateAgent's own discovery budget/backoff shape for the same reason: the engine's
+        // interactive-login-shell startup, not the tmux call, is the slow half.
+        const SWAP_DISCOVERY_BUDGET_MS = 8_000
+        let delayMs = 150
+        let waited = 0
+        while (waited < SWAP_DISCOVERY_BUDGET_MS) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs))
+          waited += delayMs
+          const found = await resolvePaneEngineProcess(runtime.paneId, session.engine)
+          if (found) {
+            // Up means still up a moment later: a launch the engine refuses (`codex resume` after an update
+            // dropped it) runs for an instant, and seen then, the restart said "resumed" and never fell back
+            // to a fresh start (e2e/updates.e2e.ts on Linux, whose faster start put it in the first look).
+            await new Promise((resolve) => setTimeout(resolve, SWAP_SETTLE_MS))
+            waited += SWAP_SETTLE_MS
+            const still = await resolvePaneEngineProcess(runtime.paneId, session.engine)
+            if (sameProcessIdentity(still, found)) return found
+          }
+          delayMs = Math.min(delayMs * 2, 750)
         }
-        delayMs = Math.min(delayMs * 2, 750)
-      }
-      return null
-    },
-    buildArgv: (opts) => buildEngineLaunchArgv(session.engine, {
-      ...opts,
-      ...(launch.native ? { native: launch.native } : {}),
-      // The mode picked at create outranks what the live argv said: `bypassPermission` is a yes/no, and
-      // Plan or Accept edits would come back as Ask without it.
-      ...(permissionMode ? { permissionMode } : {}),
-      ...(session.cwd ? { cwd: session.cwd } : {}),
-      ...(launch.extraArgs?.length ? { extraArgs: launch.extraArgs } : {}),
-      // A pane swap onto a grid has to clear the same vendor credentials a fresh create does, for the
-      // same reason and against the same failure: an engine re-exec'd with the grid's variables still
-      // sees whatever else the pane inherited, and picks its provider from all of it. This was the
-      // gap — a create cleared them, then moving that agent onto a grid from the pane header put them
-      // straight back, so the engine came up on Anthropic with a grid selected above it.
-      //
-      // Named by the caller (`buildLaunchOverrides` derives it from what the grid launch provides), so
-      // a swap that sets no grid — back to the engine's own login, or a Codex profile's CODEX_HOME —
-      // clears nothing. There the user's own variables are the point.
-      ...(launch.clearEnv?.length ? { clearEnv: launch.clearEnv } : {}),
-      ...(launch.env?.HARNESS_DSH ? { harnessNode: true } : {}),
-    }),
-    log: (message) => console.log(message),
-  })
+        return null
+      },
+      buildArgv: (opts) => buildEngineLaunchArgv(session.engine, {
+        ...opts,
+        ...(launch.native ? { native: launch.native } : {}),
+        // The mode picked at create outranks what the live argv said: `bypassPermission` is a yes/no, and
+        // Plan or Accept edits would come back as Ask without it.
+        ...(permissionMode ? { permissionMode } : {}),
+        ...(session.cwd ? { cwd: session.cwd } : {}),
+        ...(launch.extraArgs?.length ? { extraArgs: launch.extraArgs } : {}),
+        // A pane swap onto a grid has to clear the same vendor credentials a fresh create does, for the
+        // same reason and against the same failure: an engine re-exec'd with the grid's variables still
+        // sees whatever else the pane inherited, and picks its provider from all of it. This was the
+        // gap — a create cleared them, then moving that agent onto a grid from the pane header put them
+        // straight back, so the engine came up on Anthropic with a grid selected above it.
+        //
+        // Named by the caller (`buildLaunchOverrides` derives it from what the grid launch provides), so
+        // a swap that sets no grid — back to the engine's own login, or a Codex profile's CODEX_HOME —
+        // clears nothing. There the user's own variables are the point.
+        ...(launch.clearEnv?.length ? { clearEnv: launch.clearEnv } : {}),
+        ...(launch.env?.HARNESS_DSH ? { harnessNode: true } : {}),
+      }),
+      log: (message) => console.log(message),
+    }
+  }
 
   /** The bypass-permission flag the LIVE process was launched with. The fallback behind
    *  `bypassPermissionFor` for a row that recorded neither a mode nor the flag (written before either

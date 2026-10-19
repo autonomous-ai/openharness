@@ -39,9 +39,9 @@ export interface GuestLaunches {
 }
 
 const HELPER_REQUIRED: Record<Exclude<GuestHelperState, 'ready'>, string> = {
-  missing: 'The owner of this computer has not turned guest access on yet.',
-  outdated: 'The owner of this computer has to turn guest access on again after an update.',
-  'not-authorized': 'The owner of this computer has to turn guest access on again.',
+  missing: 'The owner of this computer hasn\'t finished turning on sharing yet.',
+  outdated: 'The owner of this computer needs to turn sharing back on after an update.',
+  'not-authorized': 'The owner of this computer needs to turn sharing back on.',
 }
 
 /** Whether [path] (resolved) is [folder] or inside it. */
@@ -78,7 +78,7 @@ export function createGuestLaunches(deps: GuestLaunchesDeps): GuestLaunches {
       const guest = email.trim().toLowerCase()
       if (!guest) return { ok: false, error: 'NOT_YOUR_HARNESS', detail: 'This computer does not know whom it is shared with here.' }
       if (!GUEST_LAUNCH_ENGINES.includes(engine)) {
-        return { ok: false, error: 'GUEST_ENGINE_UNSUPPORTED', detail: 'A guest can start Claude Code or Codex on this computer.' }
+        return { ok: false, error: 'GUEST_ENGINE_UNSUPPORTED', detail: 'You can start Claude Code or Codex on this computer.' }
       }
       const state = await deps.helperState()
       if (state !== 'ready') return { ok: false, error: 'GUEST_HELPER_REQUIRED', detail: HELPER_REQUIRED[state] }

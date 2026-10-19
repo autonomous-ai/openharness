@@ -1061,10 +1061,10 @@ describe('agent_create, from a guest', () => {
   })
 
   it('records a refusal as the outcome, with its words', async () => {
-    const guestCreate = vi.fn(async () => ({ ok: false as const, error: 'GUEST_UNSUPPORTED', detail: 'A guest starts a new conversation.' }))
+    const guestCreate = vi.fn(async () => ({ ok: false as const, error: 'GUEST_UNSUPPORTED', detail: 'On a computer shared with you, start a new conversation.' }))
     const run = setup({ guestCreate: () => guestCreate })
     await guestAsk(run, { creationId: CREATION, engine: 'claude' })
-    await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ creationId: CREATION, state: 'failed', failure: { code: 'GUEST_UNSUPPORTED', detail: 'A guest starts a new conversation.' } }))
+    await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ creationId: CREATION, state: 'failed', failure: { code: 'GUEST_UNSUPPORTED', detail: 'On a computer shared with you, start a new conversation.' } }))
     guestCreate.mockResolvedValueOnce({ ok: false, error: 'TMUX_UNAVAILABLE' } as never)
     await guestAsk(run, { creationId: 'creation-fedcba9876543210', engine: 'claude' })
     await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ creationId: 'creation-fedcba9876543210', state: 'failed', failure: { code: 'TMUX_UNAVAILABLE' } }))

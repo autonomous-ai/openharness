@@ -400,8 +400,8 @@ describe('shared machines', () => {
           expect(ownerFolderProblem(join(home, 'missing'), home, guests, uid)).toMatch(/^No such folder on this computer/)
           expect(ownerFolderProblem(join(home, 'notes.txt'), home, guests, uid)).toMatch(/^Not a folder/)
           expect(ownerFolderProblem(home, home, guests, uid)).toMatch(/whole home folder/)
-          expect(ownerFolderProblem(join(guests, 'hg_0123456789ab'), home, guests, uid)).toMatch(/guest's home/)
-          expect(ownerFolderProblem(guests, home, guests, uid)).toMatch(/guest's home/)
+          expect(ownerFolderProblem(join(guests, 'hg_0123456789ab'), home, guests, uid)).toMatch(/belongs to someone you share with/)
+          expect(ownerFolderProblem(guests, home, guests, uid)).toMatch(/belongs to someone you share with/)
           expect(ownerFolderProblem(join(home, 'code'), home, guests, uid + 1)).toMatch(/your own folders/)
           // A platform with no uids checks the rest; the defaults are this account's.
           expect(ownerFolderProblem(join(home, 'code'), home, guests, undefined)).toBeNull()

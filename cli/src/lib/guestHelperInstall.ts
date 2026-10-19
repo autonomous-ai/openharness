@@ -128,7 +128,7 @@ export interface GuestHelperInstallOptions {
 export async function installGuestHelper(options: GuestHelperInstallOptions = {}): Promise<GuestHelperInstallResult> {
   const platform = options.platform ?? process.platform
   if (platform !== 'darwin' && platform !== 'linux') {
-    return { ok: false, code: 'UNSUPPORTED', message: 'Sharing a computer with guests needs macOS or Linux.' }
+    return { ok: false, code: 'UNSUPPORTED', message: 'Sharing this computer needs macOS or Linux.' }
   }
   const runner = options.runner ?? runGuestCommand
   const owner = options.owner ?? userInfo().username
@@ -170,7 +170,7 @@ export async function installGuestHelper(options: GuestHelperInstallOptions = {}
     }
     if (result.code !== 0) {
       const said = result.stderr.trim().split('\n').pop()?.replace(/^.*harness: /, '') ?? ''
-      return { ok: false, code: 'FAILED', message: said || 'The guest helper could not be installed.' }
+      return { ok: false, code: 'FAILED', message: said || 'Sharing could not be set up on this computer.' }
     }
     return { ok: true }
   } finally {

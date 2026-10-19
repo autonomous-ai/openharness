@@ -106,7 +106,7 @@ export function ownerFolderProblem(path: string, home = homedir(), guests = gues
   try { info = statSync(path) } catch { return `No such folder on this computer: ${path}` }
   if (!info.isDirectory()) return `Not a folder: ${path}`
   if (resolve(path) === resolve(home)) return 'Your whole home folder cannot be shared. Choose a folder in it.'
-  if (path === guests || path.startsWith(`${guests}/`)) return `A guest's home cannot be shared: ${path}`
+  if (path === guests || path.startsWith(`${guests}/`)) return `This folder belongs to someone you share with and can't be shared: ${path}`
   if (uid !== undefined && info.uid !== uid) return `Only your own folders can be shared: ${path}`
   return null
 }

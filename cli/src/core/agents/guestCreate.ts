@@ -34,9 +34,9 @@ export interface GuestCreateDeps {
 
 /** What a guest's New Harness may not ask for, each with why. */
 const NOT_FOR_GUESTS: ReadonlyArray<readonly [string, string]> = [
-  ['dsh', 'A guest starts Claude Code or Codex; harnesses from the Store are not available to guests.'],
-  ['resumeSessionId', 'A guest starts a new conversation.'],
-  ['agent', 'A guest starts the engine itself, not a named agent.'],
+  ['dsh', 'On a computer shared with you, you can start Claude Code or Codex, not harnesses from the Store.'],
+  ['resumeSessionId', 'On a computer shared with you, start a new conversation.'],
+  ['agent', 'On a computer shared with you, start Claude Code or Codex itself, not a named agent.'],
 ]
 
 export function createGuestCreate(deps: GuestCreateDeps) {

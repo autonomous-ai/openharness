@@ -123,6 +123,7 @@ void main() {
     WidgetTester tester,
     _SharingApp app, {
     Brightness brightness = Brightness.dark,
+    Future<String?> Function(BuildContext context)? chooseFolder,
   }) async {
     // The app's tokens follow their own brightness (main.dart's _GridTokenScope), not the theme's.
     final saved = grid.AppTheme.brightness.value;
@@ -158,6 +159,7 @@ void main() {
                         closed = message;
                       },
                       onFocusChanged: (_) {},
+                      chooseFolder: chooseFolder,
                     ),
                   ),
                 ),
@@ -200,7 +202,9 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('machine-sharing:add')));
       await tester.pumpAndSettle();
       expect(
-        find.text('“bitcoinbuilder.ai@!gmail.com” is not an email address.'),
+        find.text(
+          '“bitcoinbuilder.ai@!gmail.com” isn’t a valid email address.',
+        ),
         findsOneWidget,
       );
       expect(app.sets, isEmpty);
@@ -228,15 +232,15 @@ void main() {
       expect(app.sets.last.emails, ['ann@gmail.com', 'kim@acme.io']);
       // A share that went through says nothing: the list shows it.
       expect(find.text('Shared with 2 people.'), findsNothing);
-      expect(find.text('Using it'), findsOneWidget);
-      expect(find.text('Invited · not using it yet'), findsOneWidget);
+      expect(find.text('Joined'), findsOneWidget);
+      expect(find.text('Invited'), findsOneWidget);
 
       // Everyone at the domain: the switch applies at once.
       await tester.tap(find.byKey(const ValueKey('machine-sharing:domain')));
       await tester.pumpAndSettle();
       expect(app.sets.last.sameDomain, isTrue);
       expect(
-        find.text('Anyone with an @autonomous.ai address can use it.'),
+        find.text('Anyone with an @autonomous.ai email can use it.'),
         findsOneWidget,
       );
       await _snap(tester, boundary, 'share-people-dark');
@@ -260,7 +264,7 @@ void main() {
       await tester.pump();
       await tester.tap(find.byKey(const ValueKey('machine-sharing:add')));
       await tester.pumpAndSettle();
-      expect(find.text('Already shared with kim@acme.io.'), findsOneWidget);
+      expect(find.text('kim@acme.io already has access.'), findsOneWidget);
       expect(app.sets.last.emails, ['kim@acme.io']);
 
       // A refusal says why and changes nothing.
@@ -303,14 +307,12 @@ void main() {
       expect(find.textContaining('full access'), findsNothing);
       expect(
         find.textContaining(
-          'Guests get their own space on this machine and can use your Claude and ChatGPT plans.',
+          'People you invite get their own private space here and use your Claude and ChatGPT plans.',
         ),
         findsOneWidget,
       );
       expect(
-        find.textContaining(
-          'Sharing asks for an admin password on this machine once.',
-        ),
+        find.textContaining('You’ll enter your password once to set this up.'),
         findsOneWidget,
       );
 
@@ -334,7 +336,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(app.enables, 2);
       expect(app.sets.single.sameDomain, isTrue);
-      expect(find.textContaining('admin password'), findsNothing);
+      expect(find.textContaining('enter your password'), findsNothing);
       await tester.enterText(
         find.byKey(const ValueKey('machine-sharing-email')),
         'kim@acme.io',
@@ -348,76 +350,81 @@ void main() {
   );
 
   testWidgets(
-    'shares folders with guests, read only until the switch lets them edit, and says why one cannot be',
+    'shares folders chosen on that machine, view only until Can edit, and says why one cannot be',
     (tester) async {
       final app = _SharingApp();
-      final (closed, _) = await open(tester, app);
-      expect(
-        find.textContaining('They can read anything inside, secrets too.'),
-        findsOneWidget,
+      final picks = <String?>[];
+      var asked = 0;
+      final (closed, boundary) = await open(
+        tester,
+        app,
+        chooseFolder: (_) async {
+          asked++;
+          return picks.removeAt(0);
+        },
       );
-      final field = find.byKey(const ValueKey('machine-sharing-folder'));
-      final add = find.byKey(const ValueKey('machine-sharing:folder-add'));
+      expect(find.textContaining('even passwords and keys.'), findsOneWidget);
+      // Nothing to type: Add Folder chooses one on that machine.
+      expect(
+        find.byKey(const ValueKey('machine-sharing-folder')),
+        findsNothing,
+      );
+      final add = find.byKey(const ValueKey('machine-sharing:folder-choose'));
+      expect(find.text('Add Folder…'), findsOneWidget);
 
-      // A path that is not a full one is named, and nothing is sent.
-      await tester.enterText(field, 'code/app');
-      await tester.pump();
+      // Cancelled, by click and then by Enter on the button it leaves focused: nothing changes.
+      picks.addAll([null, null]);
       await tester.tap(add);
       await tester.pumpAndSettle();
-      expect(
-        find.text(
-          'Enter the folder’s full path on this machine, like /Users/you/project.',
-        ),
-        findsOneWidget,
-      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(asked, 2);
       expect(app.folderSets, isEmpty);
 
-      // Shared read only.
-      await tester.enterText(field, '/Users/dee/code/app/');
-      await tester.pump();
+      // Chosen: shared view only, named by the folder with where it is beneath.
+      picks.add('/Users/dee/code/app/');
       await tester.tap(add);
       await tester.pumpAndSettle();
       expect(app.folderSets.last, [
         (path: '/Users/dee/code/app', write: false),
       ]);
-      expect(find.text('/Users/dee/code/app'), findsOneWidget);
-      expect(find.text('Read only'), findsOneWidget);
+      expect(find.text('app'), findsOneWidget);
+      expect(find.text('/Users/dee/code'), findsOneWidget);
+      expect(find.text('Can view'), findsOneWidget);
+      await _snap(tester, boundary, 'share-folders-dark');
 
       // Once is enough.
-      await tester.enterText(field, '/Users/dee/code/app');
-      await tester.pump();
+      picks.add('/Users/dee/code/app');
       await tester.tap(add);
       await tester.pumpAndSettle();
-      expect(
-        find.text('Guests can already use /Users/dee/code/app.'),
-        findsOneWidget,
-      );
+      expect(find.text('app is already shared.'), findsOneWidget);
       expect(app.folderSets, hasLength(1));
 
-      // The switch lets them edit it.
+      // Can edit, from the folder's access menu.
       await tester.tap(
         find.byKey(
           const ValueKey('machine-sharing:folder-write:/Users/dee/code/app'),
         ),
       );
       await tester.pumpAndSettle();
+      expect(find.text('Also change, add and delete files'), findsOneWidget);
+      await tester.tap(find.text('Can edit').last);
+      await tester.pumpAndSettle();
       expect(app.folderSets.last, [(path: '/Users/dee/code/app', write: true)]);
-      expect(find.text('Guests can edit it'), findsOneWidget);
+      expect(find.text('Can edit'), findsOneWidget);
 
       // The machine refuses one that is not the owner's, in words, and nothing changes.
       app.folderRefusal = {
         'error': 'BAD_REQUEST',
         'message': 'Only your own folders can be shared: /Users/kim',
       };
-      await tester.enterText(field, '/Users/kim');
-      await tester.pump();
+      picks.add('/Users/kim');
       await tester.tap(add);
       await tester.pumpAndSettle();
       expect(
         find.text('Only your own folders can be shared: /Users/kim'),
         findsOneWidget,
       );
-      // Kept in the field to correct, never listed.
       expect(
         find.byKey(const ValueKey('machine-sharing-folder:/Users/kim')),
         findsNothing,
@@ -432,7 +439,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(app.folderSets.last, isEmpty);
-      expect(find.text('/Users/dee/code/app'), findsNothing);
+      expect(find.text('app'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('machine-sharing:back')));
       await tester.pump();
       expect(closed(), 'Not shared.');
@@ -450,11 +457,10 @@ void main() {
           'members': <Map<String, dynamic>>[],
           'guestAccess': 'outdated',
         };
-      await open(tester, app);
+      final (_, boundary) = await open(tester, app);
+      await _snap(tester, boundary, 'share-guests-off-dark');
       expect(
-        find.text(
-          'Guests cannot start harnesses until you turn guest access on again after the update.',
-        ),
+        find.text('People you added can’t use it since the update.'),
         findsOneWidget,
       );
       await tester.tap(find.byKey(const ValueKey('machine-sharing:guests-on')));
@@ -490,7 +496,7 @@ void main() {
       // members hold the whole domain, and none of them is a row of their own.
       expect(find.text('lee@autonomous.ai'), findsNothing);
       expect(find.textContaining('added from'), findsNothing);
-      expect(find.text('Using it'), findsOneWidget);
+      expect(find.text('Joined'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('machine-sharing:remove:ann@gmail.com')),
         findsOneWidget,

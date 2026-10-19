@@ -63,7 +63,7 @@ describe('what a guest may ask', () => {
   })
 
   it('says why in words', () => {
-    expect(GUEST_REFUSALS.GUEST_NOT_ALLOWED).toMatch(/guest/)
+    expect(GUEST_REFUSALS.GUEST_NOT_ALLOWED).toMatch(/shared with you/)
     expect(GUEST_REFUSALS.NOT_YOUR_HARNESS).toMatch(/not yours/)
   })
 })

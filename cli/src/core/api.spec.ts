@@ -425,7 +425,7 @@ describe('the core API services stand on', () => {
 
   it('answers a guest\'s New Harness while shared machines is off: guest access unavailable, in words, and nothing to stop', async () => {
     expect(await SHARED_MACHINES_OFF.guestLaunch({ email: 'kim@acme.io', engine: 'claude', bypassPermission: true }))
-      .toEqual({ ok: false, error: 'GUEST_UNAVAILABLE', detail: expect.stringMatching(/Guest access/) })
+      .toEqual({ ok: false, error: 'GUEST_UNAVAILABLE', detail: expect.stringMatching(/Sharing isn't running/) })
     expect(SHARED_MACHINES_OFF.stop()).toBeUndefined()
     expect(SHARED_MACHINES_FALLBACKS.stop).toBeUndefined()
     expect(LONG_ANSWERS.sharedMachines).toEqual({ guestLaunch: 2 * 60_000, shared_machines: 11 * 60_000 })

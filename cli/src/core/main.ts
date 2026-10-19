@@ -2546,6 +2546,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     tmuxBackend,
     prepareSessionResume,
     keepAbandonedConversation,
+    stopNative: (session, current) => nativeControls.stop(session, current),
   })
   // A message sent while an engine is being replaced waits for the new one instead of being refused.
   terminals.whileChanging((agentId) => restorePanes.busy(agentId) || restartJobs.busy(agentId))

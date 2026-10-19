@@ -265,7 +265,7 @@ void main() {
     for (final code in ['GUEST_NOT_ALLOWED', 'GUEST_HARNESS']) {
       expect(
         retargetRefusalMessage(code, engineLabel: 'Claude Code'),
-        'A guest’s harness keeps the model it started with. Start a new one to use another.',
+        'On a computer shared with you, a harness keeps the model it started with. Start a new one to use another.',
       );
     }
   });
@@ -287,7 +287,7 @@ void main() {
     expect(resumed.retryable, isFalse);
     expect(
       await app.changeAgent('dee', 'mine', 'codex'),
-      'A guest’s harness keeps the agent it started with. Start a new one.',
+      'On a computer shared with you, a harness keeps the agent it started with. Start a new one.',
     );
   });
 }

@@ -1689,7 +1689,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         if (machine.isLocalMachine) 'This computer',
         if (machine.machine.isShared) 'View only',
         if (machine.machine.machineShare case final share?)
-          'Guest · shared by ${share.owner}',
+          'Shared by ${share.owner}',
       ].join(' · '),
       '',
       // A guest's harnesses run as their own account there, on the owner's plans
@@ -2081,6 +2081,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                         onClose: _closeMachineForm,
                         onFocusChanged: widget.search.setManaging,
                         onSwitchPane: _switchPane,
+                        onModalChanged: widget.onModalChanged,
                       )
                     : _editingMachine
                     ? MachinePickerForm(

@@ -74,7 +74,7 @@ describe('a guest\'s harness, as shared machines builds it', () => {
   })
 
   it('asks the owner to turn guest access on, in words, until the helper is ready', async () => {
-    for (const [state, words] of [['missing', /not turned guest access on/], ['outdated', /after an update/], ['not-authorized', /on again/]] as const) {
+    for (const [state, words] of [['missing', /finished turning on sharing/], ['outdated', /after an update/], ['not-authorized', /sharing back on\./]] as const) {
       const { launches } = setup({ state })
       expect(await launches.launch(input)).toEqual({ ok: false, error: 'GUEST_HELPER_REQUIRED', detail: expect.stringMatching(words) })
     }

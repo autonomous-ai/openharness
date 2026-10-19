@@ -13338,7 +13338,7 @@ class AppNotifier extends ChangeNotifier {
       'Update the harness CLI on $machine to open this kind of pane.',
     // A guest's harness: its owner turns guest access on, and only Claude Code or Codex start.
     'GUEST_NOT_ALLOWED' =>
-      'As a guest on $machine you can start Claude Code or Codex.',
+      'You can only start Claude Code or Codex on $machine.',
     'GUEST_UNSUPPORTED' ||
     'GUEST_HELPER_REQUIRED' ||
     'GUEST_UNAVAILABLE' ||
@@ -14497,7 +14497,7 @@ class AppNotifier extends ChangeNotifier {
     if (stateOf(machineId)?.machine.isSharedMachine == true) {
       return Future.value(
         const RestartAgentResult(
-          error: 'A guest’s harness is not restarted, resumed or forked. Start a new one.',
+          error: 'On a computer shared with you, harnesses can’t be restarted, resumed or forked. Start a new one.',
           retryable: false,
         ),
       );
@@ -14575,7 +14575,7 @@ class AppNotifier extends ChangeNotifier {
     // Relaunched, a guest's harness would run the owner's way, as the owner: the daemon refuses it.
     if (machine.machine.isSharedMachine) {
       return const RestartAgentResult(
-        error: 'A guest’s harness is not restarted, resumed or forked. Start a new one.',
+        error: 'On a computer shared with you, harnesses can’t be restarted, resumed or forked. Start a new one.',
         retryable: false,
       );
     }
@@ -14974,7 +14974,7 @@ class AppNotifier extends ChangeNotifier {
     }
     if (stateOf(machineId)?.machine.isSharedMachine == true) {
       return Future.value(
-        'A guest’s harness keeps the agent it started with. Start a new one.',
+        'On a computer shared with you, a harness keeps the agent it started with. Start a new one.',
       );
     }
     if (!agentSwitchEngines(machineId, source).contains(engine)) {
@@ -15369,7 +15369,7 @@ class AppNotifier extends ChangeNotifier {
     }
     if (machine.machine.isSharedMachine) {
       return const ForkAgentResult(
-        error: 'A guest’s harness is not restarted, resumed or forked. Start a new one.',
+        error: 'On a computer shared with you, harnesses can’t be restarted, resumed or forked. Start a new one.',
       );
     }
     if (!attempt.awaitingConfirmation) {

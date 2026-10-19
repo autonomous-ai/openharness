@@ -1,12 +1,15 @@
 import 'dart:async';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/desktop_window.dart';
 import '../core/guest_folders.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
+import '../shared/widgets/app_select_field.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../state/app_state.dart';
@@ -15,6 +18,7 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import 'box_chrome.dart' show ReadlineKeys;
 import 'desktop_chrome.dart';
+import 'remote_folder_picker.dart';
 import 'terminal_text_action.dart';
 
 /// The most addresses one machine is shared with (CLI services/sharedMachines.ts `SHARE_EMAILS_MAX`).
@@ -48,12 +52,23 @@ class MachineSharingForm extends StatefulWidget {
     required this.onClose,
     required this.onFocusChanged,
     this.onSwitchPane,
+    this.onModalChanged,
+    this.chooseFolder,
   });
   final AppNotifier app;
   final String machineId;
   final ValueChanged<String?> onClose;
   final ValueChanged<bool> onFocusChanged;
   final VoidCallback? onSwitchPane;
+
+  /// Told when a dialog of the form's opens over the workspace (true) and closes (false): a picker
+  /// that hosts the form steps aside meanwhile instead of closing, which would drop the folder picked.
+  final ValueChanged<bool>? onModalChanged;
+
+  /// Picks a folder on the machine being shared, or null when cancelled. Defaults to the macOS
+  /// folder panel on this computer and the folder browser on any other (a panel there would browse
+  /// this Mac and hand back a path that is not on that machine); tests pass their own.
+  final Future<String?> Function(BuildContext context)? chooseFolder;
 
   @override
   State<MachineSharingForm> createState() => MachineSharingFormState();
@@ -72,7 +87,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
   String? _unavailable;
 
   /// What is wrong with what was typed, said under the field it was typed in ([_fieldIsError]: in
-  /// error ink; otherwise a quiet note, "Already shared with …").
+  /// error ink; otherwise a quiet note, "… already has access").
   String? _fieldError;
   bool _fieldIsError = true;
 
@@ -99,6 +114,9 @@ class MachineSharingFormState extends State<MachineSharingForm> {
   /// What is wrong with the folder typed, said under its field.
   String? _folderError;
 
+  /// A folder picker is open: a second press waits for it.
+  bool _choosing = false;
+
   AppNotifier get app => widget.app;
 
   /// Whether it is shared with anyone now.
@@ -106,10 +124,16 @@ class MachineSharingFormState extends State<MachineSharingForm> {
 
   /// What a guest gets, and, until it is on, what sharing will ask of the owner.
   String get _guestNote => _approving
-      ? 'Approve the prompt on $_name: it lets each guest run as their own account there.'
-      : 'Guests get their own space on $_name and can use your Claude and ChatGPT plans. '
-            'They cannot see your files or harnesses.'
-            '${_guestAccess == null || _guestAccess == 'ready' ? '' : ' Sharing asks for an admin password on $_name once.'}';
+      ? 'Enter your password on $_name to finish setting up.'
+      : 'People you invite get their own private space here and use your Claude and '
+            'ChatGPT plans. They can’t see your files or harnesses.'
+            // Shared already, the notice under this says it (_guestsOffNote).
+            '${_guestAccess == null || _guestAccess == 'ready' || _sharing ? '' : ' You’ll enter your password once to set this up.'}';
+
+  /// Why guests cannot use it yet, beside the button that fixes it.
+  String get _guestsOffNote => _guestAccess == 'outdated'
+      ? 'People you added can’t use it since the update.'
+      : 'People you added can’t use it yet.';
   String get _name =>
       app.stateOf(widget.machineId)?.machine.displayName ?? 'this machine';
   bool get _composing =>
@@ -158,7 +182,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     } catch (error) {
       answer = {
         'error': 'UNAVAILABLE',
-        'message': 'Could not reach $_name. Check that it is online.',
+        'message': 'Can’t reach $_name. Make sure it’s on and online.',
       };
     }
     if (!mounted) return;
@@ -168,8 +192,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
       if (error != null) {
         _unavailable = error == 'UNSUPPORTED'
             ? 'Update Harness on $_name to share it.'
-            : answer['message'] as String? ??
-                  'Could not read its sharing ($error).';
+            : answer['message'] as String? ?? 'Couldn’t load sharing ($error).';
       } else {
         _show(answer);
       }
@@ -248,7 +271,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     } catch (error) {
       answer = {
         'error': 'UNAVAILABLE',
-        'message': 'Could not reach $_name. Nothing changed.',
+        'message': 'Can’t reach $_name. Nothing changed.',
       };
     }
     if (!mounted) return false;
@@ -259,7 +282,8 @@ class MachineSharingFormState extends State<MachineSharingForm> {
         _show(answer);
       } else {
         _status =
-            answer['message'] as String? ?? 'Could not share it ($error).';
+            answer['message'] as String? ??
+            'Couldn’t save the change ($error).';
       }
     });
     if (error != null) return false;
@@ -285,7 +309,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     } catch (error) {
       enabled = {
         'error': 'UNAVAILABLE',
-        'message': 'Could not reach $_name. Nothing changed.',
+        'message': 'Can’t reach $_name. Nothing changed.',
       };
     }
     if (!mounted) return false;
@@ -296,7 +320,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
         _busy = false;
         _status =
             enabled['message'] as String? ??
-            'Guest access was not turned on ($refused).';
+            'Couldn’t turn on sharing ($refused).';
       } else {
         _guestAccess = enabled['guestAccess'] as String? ?? 'ready';
       }
@@ -339,7 +363,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
         .where((email) => !_emailPattern.hasMatch(email))
         .firstOrNull;
     if (bad != null) {
-      _fieldSays('“$bad” is not an email address.');
+      _fieldSays('“$bad” isn’t a valid email address.');
       _input.requestFocus();
       return;
     }
@@ -348,16 +372,14 @@ class MachineSharingFormState extends State<MachineSharingForm> {
       _value.clear();
       _fieldSays(
         typed.length == 1
-            ? 'Already shared with ${typed.single}.'
-            : 'Already shared with them.',
+            ? '${typed.single} already has access.'
+            : 'They already have access.',
         error: false,
       );
       return;
     }
     if (_emails.length + fresh.length > machineShareEmailsMax) {
-      _fieldSays(
-        'A machine can be shared with up to $machineShareEmailsMax people.',
-      );
+      _fieldSays('You can invite up to $machineShareEmailsMax people.');
       return;
     }
     final added = await _apply([..._emails, ...fresh], _sameDomain);
@@ -389,7 +411,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     } catch (error) {
       answer = {
         'error': 'UNAVAILABLE',
-        'message': 'Could not reach $_name. Nothing changed.',
+        'message': 'Can’t reach $_name. Nothing changed.',
       };
     }
     if (!mounted) return false;
@@ -401,7 +423,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
       } else {
         _status =
             answer['message'] as String? ??
-            'Could not share the folder ($error).';
+            'Couldn’t share the folder ($error).';
       }
     });
     if (error != null) return false;
@@ -409,12 +431,61 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     return true;
   }
 
-  /// The folder typed, shared read only: a guest's harness may read it, and the switch lets it edit.
-  Future<void> _addFolder() async {
-    if (_busy || _loading) return;
+  /// A folder picked on that machine, shared as one typed would be.
+  Future<void> _chooseFolder() async {
+    if (_busy || _loading || _choosing) return;
+    setState(() => _choosing = true);
+    String? picked;
+    try {
+      picked = await (widget.chooseFolder ?? _pickFolder)(context);
+    } finally {
+      if (mounted) setState(() => _choosing = false);
+    }
+    if (!mounted) return;
+    if (picked == null || picked.trim().isEmpty) {
+      _focusFolders();
+      return;
+    }
+    await _addFolder(picked.trim());
+  }
+
+  Future<String?> _pickFolder(BuildContext context) {
     final typed = _folderValue.text.trim();
+    final start = typed.startsWith('/') ? typed : null;
+    return app.stateOf(widget.machineId)?.isLocalMachine == true
+        ? whileNativePicker(
+            () => getDirectoryPath(
+              initialDirectory: start,
+              confirmButtonText: 'Share',
+            ),
+          )
+        : _modal(
+            () => showRemoteFolderPicker(
+              context,
+              notifier: app,
+              machineId: widget.machineId,
+              initialPath: start,
+              desktop: true,
+            ),
+          );
+  }
+
+  Future<T> _modal<T>(Future<T> Function() dialog) async {
+    widget.onModalChanged?.call(true);
+    try {
+      return await dialog();
+    } finally {
+      widget.onModalChanged?.call(false);
+    }
+  }
+
+  /// The folder typed (or [chosen]), shared read only: a guest's harness may read it, and the
+  /// switch lets it edit. Nothing typed opens the picker.
+  Future<void> _addFolder([String? chosen]) async {
+    if (_busy || _loading) return;
+    final typed = chosen ?? _folderValue.text.trim();
     if (typed.isEmpty) {
-      _folderInput.requestFocus();
+      await _chooseFolder();
       return;
     }
     final path = typed.length > 1 && typed.endsWith('/')
@@ -425,21 +496,28 @@ class MachineSharingFormState extends State<MachineSharingForm> {
       problem =
           'Enter the folder’s full path on $_name, like /Users/you/project.';
     } else if (_folders.any((folder) => folder.path == path)) {
-      problem = 'Guests can already use $path.';
+      problem = '${_folderName(path)} is already shared.';
     } else if (_folders.length >= machineSharedFoldersMax) {
-      problem = 'Guests can use up to $machineSharedFoldersMax folders.';
+      problem = 'You can share up to $machineSharedFoldersMax folders.';
     }
     if (problem != null) {
       setState(() => _folderError = problem);
-      _folderInput.requestFocus();
+      _focusFolders();
       return;
     }
     final added = await _applyFolders([
       ..._folders,
       GuestFolder(path: path, write: false),
     ]);
-    if (added) _folderValue.clear();
-    if (mounted) _folderInput.requestFocus();
+    if (added && chosen == null) _folderValue.clear();
+    if (mounted) _focusFolders();
+  }
+
+  /// Back to where folders are added: Add Folder on the desktop, the path field in the terminal look.
+  void _focusFolders() {
+    if (!mounted) return;
+    (DesktopChrome.of(context) ? _node('folder-choose') : _folderInput)
+        .requestFocus();
   }
 
   Future<void> _toggleFolderWrite(String path) => _applyFolders([
@@ -462,6 +540,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
   /// The editor's stops, in reading order: Back, the domain switch, (the field,) Share, each person's
   /// remove (or Back and Retry when the sharing could not be read).
   List<({String id, VoidCallback? run})> get _stops {
+    final desktop = DesktopChrome.of(context);
     if (_loading || _unavailable != null) {
       return [
         (id: 'back', run: _done),
@@ -474,23 +553,25 @@ class MachineSharingFormState extends State<MachineSharingForm> {
         (id: 'guests-on', run: _busy ? null : () => unawaited(_turnGuestsOn())),
       if (_domain != null)
         (id: 'domain', run: _busy ? null : () => unawaited(_toggleDomain())),
-      (
-        id: 'add',
-        run: _busy || _value.text.trim().isEmpty
-            ? null
-            : () => unawaited(_add()),
-      ),
+      // Invite and Add Folder are buttons on the desktop only; the terminal look takes Enter in its
+      // fields instead, and a stop with nothing drawn would hold the focus nowhere.
+      if (desktop)
+        (
+          id: 'add',
+          run: _busy || _value.text.trim().isEmpty
+              ? null
+              : () => unawaited(_add()),
+        ),
       for (final person in _people)
         (
           id: 'remove:${person.email}',
           run: _busy ? null : () => unawaited(_remove(person.email)),
         ),
-      (
-        id: 'folder-add',
-        run: _busy || _folderValue.text.trim().isEmpty
-            ? null
-            : () => unawaited(_addFolder()),
-      ),
+      if (desktop)
+        (
+          id: 'folder-choose',
+          run: _busy || _choosing ? null : () => unawaited(_chooseFolder()),
+        ),
       for (final folder in _folders) ...[
         (
           id: 'folder-write:${folder.path}',
@@ -510,6 +591,8 @@ class MachineSharingFormState extends State<MachineSharingForm> {
   List<FocusNode> get _nodes {
     final stops = _stops.where((stop) => stop.run != null).toList();
     final field = !_loading && _unavailable == null && !_busy;
+    // The desktop adds folders with Add Folder; only the terminal look has a path field.
+    final pathField = field && !DesktopChrome.of(context);
     const beforeField = {'back', 'guests-on', 'domain'};
     bool folders(String id) => id.startsWith('folder-');
     return [
@@ -518,7 +601,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
       if (field) _input,
       for (final stop in stops)
         if (!beforeField.contains(stop.id) && !folders(stop.id)) _node(stop.id),
-      if (field) _folderInput,
+      if (pathField) _folderInput,
       for (final stop in stops)
         if (folders(stop.id)) _node(stop.id),
     ];
@@ -637,8 +720,8 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     );
   }
 
-  /// The person's mark: the first letter of their address, in a neutral disc.
-  Widget _avatar(String email) => Container(
+  /// A row's mark in a neutral disc: a person's first letter, or a symbol for the domain and folders.
+  Widget _disc({String? letter, IconData? icon}) => Container(
     width: 28,
     height: 28,
     alignment: Alignment.center,
@@ -647,10 +730,14 @@ class MachineSharingFormState extends State<MachineSharingForm> {
       shape: BoxShape.circle,
       border: Border.all(color: DesktopChrome.rim),
     ),
-    child: Text(
-      email.isEmpty ? '?' : email.characters.first.toUpperCase(),
-      style: DesktopChrome.control(medium: true),
-    ),
+    child: icon != null
+        ? Icon(icon, size: 14, color: DesktopChrome.muted)
+        : Text(
+            letter == null || letter.isEmpty
+                ? '?'
+                : letter.characters.first.toUpperCase(),
+            style: DesktopChrome.control(medium: true),
+          ),
   );
 
   Widget _spinner() => SizedBox(
@@ -706,20 +793,91 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     );
 
     // What sharing gives, said once and plainly: guests get a space of their own, never the owner's.
-    final access = Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(top: 2),
-          child: Icon(
-            AppIcons.shield,
+    final access = Text(_guestNote, style: muted13);
+
+    // Shared, but guests cannot start anything until guest access is on: said once, beside the fix.
+    final guestsOff = Container(
+      key: const ValueKey('machine-sharing:guests-off'),
+      decoration: inset,
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      child: Row(
+        children: [
+          Icon(
+            AppIcons.circleAlert,
             size: AppIcons.inlineSize,
             color: DesktopChrome.muted,
           ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(_guestsOffNote, style: DesktopChrome.text(size: 13)),
+          ),
+          const SizedBox(width: DesktopChrome.controlGap),
+          FilledButton(
+            key: const ValueKey('machine-sharing:guests-on'),
+            focusNode: _node('guests-on'),
+            onPressed: _busy ? null : () => unawaited(_turnGuestsOn()),
+            child: const Text('Turn On Sharing'),
+          ),
+        ],
+      ),
+    );
+
+    Widget section(String title, {String? detail}) => Padding(
+      padding: const EdgeInsets.only(bottom: DesktopChrome.controlGap),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: DesktopChrome.control(medium: true)),
+          if (detail != null) ...[
+            const SizedBox(height: 4),
+            Text(detail, style: muted13),
+          ],
+        ],
+      ),
+    );
+
+    // One list anatomy for people, the domain and folders: a mark, the name, a line of context,
+    // then the controls at the right edge.
+    Widget listRow({
+      required Key key,
+      required Widget mark,
+      required String title,
+      required Widget subtitle,
+      required List<Widget> trailing,
+      String? tooltip,
+    }) {
+      Widget name = Text(
+        title,
+        style: DesktopChrome.control(medium: true),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      );
+      if (tooltip != null) name = Tooltip(message: tooltip, child: name);
+      return Padding(
+        key: key,
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            mark,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [name, const SizedBox(height: 2), subtitle],
+              ),
+            ),
+            const SizedBox(width: 8),
+            ...trailing,
+          ],
         ),
-        const SizedBox(width: 8),
-        Expanded(child: Text(_guestNote, style: muted13)),
-      ],
+      );
+    }
+
+    Widget quiet(String text) => Text(
+      text,
+      style: DesktopChrome.metadata(),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
     );
 
     Widget domainRow(String domain) => MergeSemantics(
@@ -730,44 +888,23 @@ class MachineSharingFormState extends State<MachineSharingForm> {
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           canRequestFocus: false,
           onTap: _busy ? null : () => unawaited(_toggleDomain()),
-          child: Ink(
-            decoration: inset,
-            padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-            child: Row(
-              children: [
-                Icon(
-                  AppIcons.globe,
-                  size: AppIcons.inlineSize,
-                  color: DesktopChrome.muted,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Everyone at $domain',
-                        style: DesktopChrome.control(medium: true),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        _sameDomain
-                            ? 'Anyone with an @$domain address can use it.'
-                            : 'Let anyone with an @$domain address use it.',
-                        style: DesktopChrome.metadata(),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Switch(
-                  key: const ValueKey('machine-sharing:domain'),
-                  focusNode: _node('domain'),
-                  value: _sameDomain,
-                  onChanged: _busy ? null : (_) => unawaited(_toggleDomain()),
-                ),
-              ],
+          child: listRow(
+            key: const ValueKey('machine-sharing-domain'),
+            mark: _disc(icon: AppIcons.globe),
+            title: 'Everyone at $domain',
+            subtitle: quiet(
+              _sameDomain
+                  ? 'Anyone with an @$domain email can use it.'
+                  : 'Let anyone with an @$domain email use it.',
             ),
+            trailing: [
+              Switch(
+                key: const ValueKey('machine-sharing:domain'),
+                focusNode: _node('domain'),
+                value: _sameDomain,
+                onChanged: _busy ? null : (_) => unawaited(_toggleDomain()),
+              ),
+            ],
           ),
         ),
       ),
@@ -789,7 +926,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
         style: DesktopChrome.text(size: 13),
         cursorColor: DesktopChrome.accent,
         decoration: InputDecoration(
-          hintText: 'Add people by email',
+          hintText: 'Email address',
           hintStyle: muted13,
           prefixIcon: Icon(
             AppIcons.user,
@@ -832,182 +969,113 @@ class MachineSharingFormState extends State<MachineSharingForm> {
           onPressed: !_busy && _value.text.trim().isNotEmpty
               ? () => unawaited(_add())
               : null,
-          child: const Text('Share'),
+          child: const Text('Invite'),
         ),
       ],
     );
 
-    final folderAddRow = Row(
-      children: [
-        Expanded(
-          child: ReadlineKeys(
-            controller: _folderValue,
-            enabled: !_busy,
-            onChanged: (_) {},
-            child: TextField(
-              key: const ValueKey('machine-sharing-folder'),
-              controller: _folderValue,
-              focusNode: _folderInput,
-              readOnly: _busy,
-              onTapOutside: (_) {},
-              enableSuggestions: false,
-              autocorrect: false,
-              style: DesktopChrome.text(size: 13),
-              cursorColor: DesktopChrome.accent,
-              decoration: InputDecoration(
-                hintText: 'Add a folder by its full path',
-                hintStyle: muted13,
-                prefixIcon: Icon(
-                  AppIcons.folder,
-                  size: AppIcons.inlineSize,
-                  color: DesktopChrome.muted,
-                ),
-                prefixIconConstraints: const BoxConstraints(minWidth: 36),
-                border: fieldBorder,
-                enabledBorder: _folderError == null
-                    ? fieldBorder
-                    : fieldBorder.copyWith(
-                        borderSide: BorderSide(color: error),
-                      ),
-                disabledBorder: fieldBorder,
-                focusedBorder: fieldBorder.copyWith(
-                  borderSide: BorderSide(
-                    color: _folderError == null
-                        ? DesktopChrome.focusRing
-                        : error,
-                    width: grid.AppDesktop.focusWidth,
-                  ),
-                ),
-                filled: true,
-                fillColor: DesktopChrome.field,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 11,
-                ),
-              ),
-              onEditingComplete: () {},
-            ),
-          ),
-        ),
-        const SizedBox(width: DesktopChrome.controlGap),
-        FilledButton(
-          key: const ValueKey('machine-sharing:folder-add'),
-          focusNode: _node('folder-add'),
-          onPressed: !_busy && _folderValue.text.trim().isNotEmpty
-              ? () => unawaited(_addFolder())
-              : null,
-          child: const Text('Add'),
-        ),
-      ],
+    // Adding a folder is choosing one: the macOS panel here, the folder browser on another machine.
+    // Both still take a typed path (⇧⌘G in the panel, the path field in the browser).
+    final addFolder = OutlinedButton.icon(
+      key: const ValueKey('machine-sharing:folder-choose'),
+      focusNode: _node('folder-choose'),
+      onPressed: !_busy && !_choosing ? () => unawaited(_chooseFolder()) : null,
+      icon: const Icon(AppIcons.plus, size: AppIcons.inlineSize),
+      label: const Text('Add Folder…'),
     );
 
-    Widget folderRow(GuestFolder folder) => Padding(
+    // How much a guest may do in a folder, the way a Mac's File Sharing says it.
+    Widget accessMenu(GuestFolder folder) => AppSelectField<bool>(
+      key: ValueKey('machine-sharing:folder-write:${folder.path}'),
+      focusNode: _node('folder-write:${folder.path}'),
+      value: folder.write,
+      width: 112,
+      menuWidth: 232,
+      menuAlignedToEnd: true,
+      semanticLabel: 'Access to ${_folderName(folder.path)}',
+      options: const [
+        SelectOption(
+          value: false,
+          label: 'Can view',
+          detail: 'Open and read files',
+        ),
+        SelectOption(
+          value: true,
+          label: 'Can edit',
+          detail: 'Also change, add and delete files',
+        ),
+      ],
+      onChanged: (write) {
+        if (_busy || write == folder.write) return;
+        unawaited(_toggleFolderWrite(folder.path));
+      },
+    );
+
+    Widget folderRow(GuestFolder folder) => listRow(
       key: ValueKey('machine-sharing-folder:${folder.path}'),
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
+      mark: _disc(icon: AppIcons.folder),
+      title: _folderName(folder.path),
+      tooltip: folder.path,
+      subtitle: quiet(_folderParent(folder.path)),
+      trailing: [
+        accessMenu(folder),
+        const SizedBox(width: 4),
+        AppIconButton(
+          key: ValueKey('machine-sharing:folder-remove:${folder.path}'),
+          icon: AppIcons.close,
+          tooltip: 'Stop sharing ${_folderName(folder.path)}',
+          destructive: true,
+          focusNode: _node('folder-remove:${folder.path}'),
+          onPressed: _busy ? null : () => unawaited(_removeFolder(folder.path)),
+        ),
+      ],
+    );
+
+    Widget personRow(_Person person) => listRow(
+      key: ValueKey('machine-sharing-person:${person.email}'),
+      mark: _disc(letter: person.email),
+      title: person.email,
+      subtitle: Row(
         children: [
-          Icon(
-            AppIcons.folder,
-            size: AppIcons.inlineSize,
-            color: DesktopChrome.muted,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  folder.path,
-                  style: DesktopChrome.control(medium: true),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  folder.write ? 'Guests can edit it' : 'Read only',
-                  style: DesktopChrome.metadata(),
-                ),
-              ],
+          // Colour is never the only signal: the words say it too.
+          if (person.usingIt) ...[
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(
+                color: grid.AppPalette.online,
+                shape: BoxShape.circle,
+              ),
             ),
-          ),
-          Text('Can edit', style: DesktopChrome.metadata()),
-          const SizedBox(width: 6),
-          Switch(
-            key: ValueKey('machine-sharing:folder-write:${folder.path}'),
-            focusNode: _node('folder-write:${folder.path}'),
-            value: folder.write,
-            onChanged: _busy
-                ? null
-                : (_) => unawaited(_toggleFolderWrite(folder.path)),
-          ),
-          AppIconButton(
-            key: ValueKey('machine-sharing:folder-remove:${folder.path}'),
-            icon: AppIcons.close,
-            tooltip: 'Stop sharing ${folder.path}',
-            destructive: true,
-            focusNode: _node('folder-remove:${folder.path}'),
-            onPressed: _busy
-                ? null
-                : () => unawaited(_removeFolder(folder.path)),
-          ),
+            const SizedBox(width: 6),
+          ],
+          Flexible(child: quiet(person.usingIt ? 'Joined' : 'Invited')),
         ],
       ),
+      trailing: [
+        AppIconButton(
+          key: ValueKey('machine-sharing:remove:${person.email}'),
+          icon: AppIcons.close,
+          tooltip: 'Remove ${person.email}',
+          destructive: true,
+          focusNode: _node('remove:${person.email}'),
+          onPressed: _busy ? null : () => unawaited(_remove(person.email)),
+        ),
+      ],
     );
 
-    Widget personRow(_Person person) => Padding(
-      key: ValueKey('machine-sharing-person:${person.email}'),
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          _avatar(person.email),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  person.email,
-                  style: DesktopChrome.control(medium: true),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    // Colour is never the only signal: the words say it too.
-                    if (person.usingIt) ...[
-                      Container(
-                        width: 6,
-                        height: 6,
-                        decoration: BoxDecoration(
-                          color: grid.AppPalette.online,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                    ],
-                    Flexible(
-                      child: Text(
-                        person.usingIt
-                            ? 'Using it'
-                            : 'Invited · not using it yet',
-                        style: DesktopChrome.metadata(),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+    Widget problem(String text, Key key, {bool isError = true}) => Padding(
+      padding: const EdgeInsets.only(top: 6, left: 2),
+      child: Semantics(
+        liveRegion: true,
+        child: Text(
+          text,
+          key: key,
+          style: DesktopChrome.text(
+            size: 12,
+            color: isError ? error : DesktopChrome.muted,
           ),
-          AppIconButton(
-            key: ValueKey('machine-sharing:remove:${person.email}'),
-            icon: AppIcons.close,
-            tooltip: 'Stop sharing with ${person.email}',
-            destructive: true,
-            focusNode: _node('remove:${person.email}'),
-            onPressed: _busy ? null : () => unawaited(_remove(person.email)),
-          ),
-        ],
+        ),
       ),
     );
 
@@ -1062,7 +1130,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
           children: [
             _spinner(),
             const SizedBox(width: 8),
-            Text('Reading who it is shared with…', style: muted13),
+            Text('Loading…', style: muted13),
           ],
         ),
       ];
@@ -1091,71 +1159,29 @@ class MachineSharingFormState extends State<MachineSharingForm> {
         heading,
         small,
         access,
-        if (_guestsOff && _sharing) ...[
-          small,
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  _guestAccess == 'outdated'
-                      ? 'Guests cannot start harnesses until you turn guest access on again after the update.'
-                      : 'Guests cannot start harnesses until you turn guest access on.',
-                  style: DesktopChrome.text(size: 13),
-                ),
-              ),
-              const SizedBox(width: DesktopChrome.controlGap),
-              FilledButton(
-                key: const ValueKey('machine-sharing:guests-on'),
-                focusNode: _node('guests-on'),
-                onPressed: _busy ? null : () => unawaited(_turnGuestsOn()),
-                child: const Text('Turn on'),
-              ),
-            ],
-          ),
-        ],
+        if (_guestsOff && _sharing) ...[gap, guestsOff],
         gap,
-        if (_domain case final domain?) ...[domainRow(domain), gap],
-        Text('People', style: DesktopChrome.control(medium: true)),
-        small,
+        section('People'),
         addRow,
-        if (_fieldError case final problem?)
-          Padding(
-            padding: const EdgeInsets.only(top: 6, left: 2),
-            child: Semantics(
-              liveRegion: true,
-              child: Text(
-                problem,
-                key: const ValueKey('machine-sharing:field-error'),
-                style: DesktopChrome.text(
-                  size: 12,
-                  color: _fieldIsError ? error : DesktopChrome.muted,
-                ),
-              ),
-            ),
+        if (_fieldError case final said?)
+          problem(
+            said,
+            const ValueKey('machine-sharing:field-error'),
+            isError: _fieldIsError,
           ),
-        if (people.isNotEmpty) ...[small, ...people.map(personRow)],
+        if (people.isNotEmpty || _domain != null) small,
+        ...people.map(personRow),
+        if (_domain case final domain?) domainRow(domain),
         gap,
-        Text('Folders', style: DesktopChrome.control(medium: true)),
-        small,
-        Text(
-          'Guests can open these in their harnesses. They can read anything inside, secrets too.',
-          style: muted13,
+        section(
+          'Folders',
+          detail: 'People you share with see everything inside, even passwords and keys.',
         ),
-        small,
-        folderAddRow,
-        if (_folderError case final problem?)
-          Padding(
-            padding: const EdgeInsets.only(top: 6, left: 2),
-            child: Semantics(
-              liveRegion: true,
-              child: Text(
-                problem,
-                key: const ValueKey('machine-sharing:folder-error'),
-                style: DesktopChrome.text(size: 12, color: error),
-              ),
-            ),
-          ),
-        if (_folders.isNotEmpty) ...[small, ..._folders.map(folderRow)],
+        ..._folders.map(folderRow),
+        if (_folders.isNotEmpty) small,
+        Align(alignment: AlignmentDirectional.centerStart, child: addFolder),
+        if (_folderError case final said?)
+          problem(said, const ValueKey('machine-sharing:folder-error')),
       ];
     }
 
@@ -1210,7 +1236,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
           ),
           gap,
           if (_loading)
-            line('Reading who it is shared with…', color: theme.muted)
+            line('Loading…', color: theme.muted)
           else if (_unavailable case final reason?) ...[
             line(reason, color: theme.yellow),
             gap,
@@ -1220,7 +1246,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
             if (_guestsOff && _sharing)
               action(
                 'guests-on',
-                'Turn guest access on',
+                'Turn on sharing',
                 _busy ? null : () => unawaited(_turnGuestsOn()),
               ),
             gap,
@@ -1274,7 +1300,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
                 children: [
                   Expanded(
                     child: line(
-                      '${person.email}  ${person.usingIt ? 'using it' : 'invited'}',
+                      '${person.email}  ${person.usingIt ? 'joined' : 'invited'}',
                     ),
                   ),
                   action(
@@ -1286,7 +1312,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
               ),
             gap,
             line(
-              'Folders guests can open. They can read anything inside, secrets too.',
+              'Folders they can open. They see everything inside, including passwords or keys.',
               color: theme.muted,
             ),
             Row(
@@ -1358,4 +1384,16 @@ class MachineSharingFormState extends State<MachineSharingForm> {
       ),
     );
   }
+}
+
+/// A folder's own name: what a person recognises it by.
+String _folderName(String path) {
+  final parts = path.split('/').where((part) => part.isNotEmpty);
+  return parts.isEmpty ? '/' : parts.last;
+}
+
+/// Where it is: the folder that holds it.
+String _folderParent(String path) {
+  final cut = path.lastIndexOf('/');
+  return cut <= 0 ? '/' : path.substring(0, cut);
 }

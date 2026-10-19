@@ -33,6 +33,7 @@ function setup(row: RegisteredSession | null = session()) {
     tmuxBackend: tmuxBackend as unknown as PaneSwapDeps['tmuxBackend'],
     prepareSessionResume: vi.fn(),
     keepAbandonedConversation: vi.fn(),
+    stopNative: vi.fn(async () => {}),
   }
   return { deps, tmuxBackend, swap: createPaneSwap(deps) }
 }
@@ -61,13 +62,17 @@ describe('the pane-process swap', () => {
 
   it('passes revocable ownership into the final signal and tmux dispatch boundaries', async () => {
     const { swap, tmuxBackend } = setup()
-    const current = () => false
+    let allowed = true
+    const current = () => allowed
     const prepared = swap.paneSwapDeps(session(), runtime, {}, null, current)
-    expect(prepared.isCurrent?.()).toBe(false)
+    expect(prepared.isCurrent?.()).toBe(true)
     await prepared.holdOpen()
     expect(tmuxBackend.holdOpen).toHaveBeenCalledWith(runtime, current)
     await prepared.terminate()
-    expect(vi.mocked(terminateDeletedAgent).mock.lastCall?.[1].current).toBe(current)
+    const signalCurrent = vi.mocked(terminateDeletedAgent).mock.lastCall?.[1].current
+    expect(signalCurrent?.()).toBe(true)
+    allowed = false
+    expect(signalCurrent?.()).toBe(false)
     await prepared.respawn(['fixture-engine'])
     expect(tmuxBackend.respawn).toHaveBeenCalledWith(runtime, expect.objectContaining({ current }))
   })
@@ -118,6 +123,53 @@ describe('the pane-process swap', () => {
     await used.sleep?.(1)
     used.log?.('stopping')
     expect(log).toHaveBeenCalledWith('stopping')
+  })
+
+  it('releases the conversation on its native server before signalling the terminal client', async () => {
+    const { deps, swap } = setup(session({ engine: 'codex' }))
+    let release!: () => void
+    vi.mocked(deps.stopNative).mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve }))
+    const stopping = swap.paneSwapDeps(session({ engine: 'codex' }), runtime).terminate()
+    expect(deps.stopNative).toHaveBeenCalledWith(session({ engine: 'codex' }), expect.any(Function))
+    expect(terminateDeletedAgent).not.toHaveBeenCalled()
+    release()
+    await stopping
+    expect(terminateDeletedAgent).toHaveBeenCalledOnce()
+  })
+
+  it('leaves the terminal client running when its native server cannot release the conversation', async () => {
+    const { deps, swap } = setup()
+    vi.mocked(deps.stopNative).mockRejectedValueOnce(new Error('Could not confirm the conversation stopped'))
+    await expect(swap.paneSwapDeps(session(), runtime).terminate()).rejects.toThrow('Could not confirm')
+    expect(terminateDeletedAgent).not.toHaveBeenCalled()
+  })
+
+  it('does nothing when the swap was cancelled before releasing its conversation', async () => {
+    const { deps, swap } = setup()
+    expect(await swap.paneSwapDeps(session(), runtime, {}, null, () => false).terminate()).toBe('not-ours')
+    expect(deps.stopNative).not.toHaveBeenCalled()
+    expect(terminateDeletedAgent).not.toHaveBeenCalled()
+  })
+
+  it.each(['cancelled', 'conversation', 'profile', 'process', 'registration', 'removed'] as const)('revokes the native stop and the terminal signal when %s while the server answers', async change => {
+    const row = session({ engine: 'codex', processIdentity: { pid: 42, executable: 'codex', startMarker: 'before' } })
+    const { deps, swap } = setup(row)
+    let allowed = true
+    const prepared = swap.paneSwapDeps(row, runtime, {}, null, () => allowed)
+    vi.mocked(deps.stopNative).mockImplementationOnce(async (target, current) => {
+      expect(current()).toBe(true)
+      if (change === 'cancelled') allowed = false
+      if (change === 'conversation') row.sessionId = 'new-conversation'
+      if (change === 'profile') row.codexHome = '/new-profile'
+      if (change === 'process') row.processIdentity!.startMarker = 'replacement'
+      if (change === 'registration') row.registeredAt++
+      if (change === 'removed') vi.mocked(deps.byAgent).mockReturnValue(undefined)
+      expect(target.sessionId).toBe('s1')
+      expect(target.processIdentity!.startMarker).toBe('before')
+      expect(current()).toBe(false)
+    })
+    expect(await prepared.terminate()).toBe('not-ours')
+    expect(terminateDeletedAgent).not.toHaveBeenCalled()
   })
 
   it('waits for the new process with growing pauses, and gives up once eight seconds have passed', async () => {

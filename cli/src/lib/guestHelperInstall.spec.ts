@@ -128,7 +128,7 @@ describe('installing the helper', () => {
       .toEqual({ ok: false, code: 'FAILED', message: '/usr/local is not owned by root (6)' })
     const silent = vi.fn<GuestRunner>(async () => ({ code: 1, stdout: '', stderr: '' }))
     expect(await installGuestHelper({ owner: 'ann', runner: silent, platform: 'darwin', nodeRuntimeDir: null, hookScript: null }))
-      .toEqual({ ok: false, code: 'FAILED', message: 'The guest helper could not be installed.' })
+      .toEqual({ ok: false, code: 'FAILED', message: 'Sharing could not be set up on this computer.' })
   })
 
   it('uses pkexec on a Linux desktop and sudo in a terminal', async () => {

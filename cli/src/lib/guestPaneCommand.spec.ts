@@ -106,7 +106,7 @@ describe('the pane\'s first moments', () => {
   it('says so and stops when the install fails', () => {
     const { log, out, code } = run(false, false)
     expect(code).toBe(1)
-    expect(out).toContain('Could not install claude for this guest.')
+    expect(out).toContain('Could not install claude.')
     expect(log.at(-1)).toBe('-n /helper install hg_0123456789ab claude')
   })
 })

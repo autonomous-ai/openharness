@@ -81,11 +81,11 @@ export function eventAgentId(frame: { agentId?: unknown; payload?: unknown }): s
  * keys, in a folder the owner may only read. A guest starts a new harness instead.
  */
 export const GUEST_HARNESS_REFUSAL = {
-  ok: false, error: 'GUEST_HARNESS', detail: 'A guest\'s harness is not restarted, resumed, moved or forked. Start a new one.',
+  ok: false, error: 'GUEST_HARNESS', detail: 'On a computer shared with you, harnesses can\'t be restarted, resumed, moved or forked. Start a new one.',
 } as const
 
 /** What a guest is told when it is refused. */
 export const GUEST_REFUSALS: Record<'GUEST_NOT_ALLOWED' | 'NOT_YOUR_HARNESS', string> = {
-  GUEST_NOT_ALLOWED: 'A guest on this computer cannot do that.',
+  GUEST_NOT_ALLOWED: 'That isn\'t available on a computer shared with you.',
   NOT_YOUR_HARNESS: 'That harness is not yours.',
 }

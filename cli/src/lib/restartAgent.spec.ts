@@ -104,6 +104,13 @@ describe('restartAgent', () => {
     expect(d.calls).toEqual(['holdOpen', 'terminate'])
   })
 
+  it.each([new Error('The conversation is still held on its server'), 'server unavailable'])('reports a refused native stop without respawning or falling back: %s', async error => {
+    const d = deps({ terminate: async () => { throw error } })
+    const outcome = await restartAgent({ engine: 'codex', sessionId: 's1' }, false, d)
+    expect(outcome).toEqual({ ok: false, detail: `could not stop the running codex session: ${error instanceof Error ? error.message : error}` })
+    expect(d.calls).toEqual(['holdOpen', 'terminate'])
+  })
+
   it('treats "gone" (the process had already exited) as a confirmed kill, safe to respawn over', async () => {
     const d = deps({ terminate: async () => 'gone' })
     const outcome = await restartAgent({ engine: 'claude', sessionId: 's1' }, false, d)
