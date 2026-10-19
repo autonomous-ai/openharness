@@ -247,6 +247,8 @@ void main() {
         f.app.stateOf('m')!.agents.single.sessionId,
         'saved-native-conversation',
       );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.byType(TerminalPanel), findsOneWidget);
       await shot('resumed-terminal');
       await tester.pumpWidget(const SizedBox());
       await c.flush();
