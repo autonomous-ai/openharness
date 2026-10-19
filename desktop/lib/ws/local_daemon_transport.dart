@@ -26,6 +26,15 @@ String daemonSocketName(int port) => 'daemon-$port.sock';
 /// the app look for one.
 const _maxSocketPathBytes = 96;
 
+/// The daemon's data folder: `$ADAPTER_DATA_DIR`, by default
+/// `~/.harness/cli/data` — or null with no home to put it in.
+String? defaultDaemonDataDir({Map<String, String>? environment}) {
+  final env = environment ?? Platform.environment;
+  final home = env['HOME'] ?? env['USERPROFILE'];
+  return env['ADAPTER_DATA_DIR'] ??
+      (home == null || home.isEmpty ? null : '$home/.harness/cli/data');
+}
+
 /// Where the socket of the daemon on [port] would be —
 /// `$ADAPTER_DATA_DIR/daemon-<port>.sock`, by default
 /// `~/.harness/cli/data/daemon-<port>.sock` — or null where there is none
@@ -36,14 +45,30 @@ String? defaultDaemonSocketPath(
   bool? isWindows,
 }) {
   if (isWindows ?? Platform.isWindows) return null;
-  final env = environment ?? Platform.environment;
-  final home = env['HOME'];
-  final dataDir =
-      env['ADAPTER_DATA_DIR'] ??
-      (home == null || home.isEmpty ? null : '$home/.harness/cli/data');
+  final dataDir = defaultDaemonDataDir(environment: environment);
   if (dataDir == null) return null;
   final path = '$dataDir/${daemonSocketName(port)}';
   return utf8.encode(path).length <= _maxSocketPathBytes ? path : null;
+}
+
+/// The header a call to the daemon's loopback PORT carries its local
+/// credential in (CLI `lib/localCredential.ts`).
+const daemonCredentialHeader = 'X-Harness-Local';
+
+/// The daemon's local credential: its `hook-credential` file, 0600 and this
+/// user's, in [defaultDaemonDataDir]. The loopback port takes any OS user's
+/// process — another account's harness running as its own user on this
+/// computer included — so every call over the port shows it; the socket needs
+/// none. Null where it cannot be read.
+String? readDaemonCredential({Map<String, String>? environment}) {
+  final dataDir = defaultDaemonDataDir(environment: environment);
+  if (dataDir == null) return null;
+  try {
+    final value = File('$dataDir/hook-credential').readAsStringSync().trim();
+    return RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(value) ? value : null;
+  } on FileSystemException {
+    return null;
+  }
 }
 
 /// An [HttpClient] whose every connection goes to the socket at [path],
@@ -57,17 +82,31 @@ HttpClient unixHttpClient(String path) => HttpClient()
 /// Which way the app currently reaches the daemon. One instance is shared by
 /// discovery, REST and the local WebSocket so they agree.
 class LocalDaemonTransport {
-  LocalDaemonTransport({this.candidate});
+  LocalDaemonTransport({this.candidate, this.credential});
 
   /// The transport to the daemon at [daemonBase] (the loopback address the app
-  /// would otherwise dial): the socket named for its port, except under
-  /// `flutter test`, where a real daemon's socket must never be reached.
+  /// would otherwise dial): the socket named for its port, and the credential
+  /// the port wants — except under `flutter test`, where a real daemon must
+  /// never be reached.
   factory LocalDaemonTransport.detect(Uri daemonBase) => LocalDaemonTransport(
     candidate: kUnderTest ? null : defaultDaemonSocketPath(daemonBase.port),
+    credential: kUnderTest ? null : readDaemonCredential,
   );
 
   /// Where the socket would be, or null when this app never uses one.
   final String? candidate;
+
+  /// Reads the daemon's local credential, or null when this app never shows
+  /// one (tests).
+  final String? Function()? credential;
+
+  /// What a call over the loopback PORT adds: the daemon's local credential,
+  /// read each time so a daemon that made a new one is not refused. Empty when
+  /// there is none to read.
+  Map<String, String> tcpHeaders() {
+    final value = credential?.call();
+    return value == null ? const {} : {daemonCredentialHeader: value};
+  }
 
   String? _active;
 
@@ -138,9 +177,13 @@ class LocalDaemonHttpAdapter implements HttpClientAdapter {
         uri.scheme == daemonBase.scheme &&
         uri.host == daemonBase.host &&
         uri.port == daemonBase.port;
-    if (path == null || !toDaemon) {
+    // Over the port, the daemon wants its local credential.
+    Future<ResponseBody> overPort() {
+      if (toDaemon) options.headers.addAll(transport.tcpHeaders());
       return _tcp.fetch(options, requestStream, cancelFuture);
     }
+
+    if (path == null || !toDaemon) return overPort();
     try {
       return await _unixFor(path).fetch(options, requestStream, cancelFuture);
     } catch (error) {
@@ -148,7 +191,7 @@ class LocalDaemonHttpAdapter implements HttpClientAdapter {
       // Nothing was sent: the socket could not be opened. The port can still
       // serve this request, and discovery will find the socket again later.
       transport.useTcp();
-      return _tcp.fetch(options, requestStream, cancelFuture);
+      return overPort();
     }
   }
 

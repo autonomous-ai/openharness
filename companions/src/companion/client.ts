@@ -27,7 +27,11 @@ export interface PairClientDeps {
   port: number
   /** This computer's machine id, as its daemon knows it; resolved from /api/status when absent. */
   machineId: () => Promise<string | null>
-  connect: (url: string) => PairSocket
+  /** A loopback socket to the daemon carrying [headers]: its local credential, which a TCP connection
+   *  must show (cli/src/lib/localCredential.ts). */
+  connect: (url: string, headers: Record<string, string>) => PairSocket
+  /** The daemon's local credential, read by the caller from its data dir (`hook-credential`). */
+  localCredential?: string | null
   env: NodeJS.ProcessEnv
   tokenFile?: string | null
   timeoutMs?: number
@@ -39,7 +43,7 @@ export async function pairRequest(deps: PairClientDeps, payload: Record<string, 
   if (!machineId) throw new Error('Harness is not running on this computer. Start it with `harness start`.')
   const token = presentedToken(deps.env, deps.tokenFile)
   return new Promise((resolve, reject) => {
-    const socket = deps.connect(`ws://127.0.0.1:${deps.port}/api/local-ws`)
+    const socket = deps.connect(`ws://127.0.0.1:${deps.port}/api/local-ws`, deps.localCredential ? { 'X-Harness-Local': deps.localCredential } : {})
     const requestId = randomUUID()
     let settled = false
     const finish = (error: Error | null, reply?: Record<string, unknown>): void => {

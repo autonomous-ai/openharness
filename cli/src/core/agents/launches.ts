@@ -34,6 +34,7 @@ import { parentAgentIdOf, type RegisteredSession } from '../../lib/registry.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPreparation.js'
 import { createPendingLaunches } from './pendingLaunches.js'
+import type { GuestCreate } from './guestCreate.js'
 
 /** Creates an agent (core/agents/create.ts). The orchestrator creates through the same one. */
 export type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
@@ -70,12 +71,14 @@ export interface LaunchRequestDeps {
    *  machine (core/api.ts `ModelsPort.launchTarget`). Null or a rejection holds a durable model request;
    *  resolving the semantic choice may renew service-owned credentials, but never dispatches a launch. */
   modelTarget: (selection: NewAgentModel) => Promise<GridLaunchOverride | null>
+  /** A guest's New Harness, as the guest's own OS user (core/agents/guestCreate.ts); null where there is none. */
+  guestCreate?: () => GuestCreate | null
 }
 
 type Reply = (result: Record<string, unknown>) => void
 type CreateInput = Parameters<CreateAgent>[0]
 
-export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget }: LaunchRequestDeps) {
+export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget, guestCreate }: LaunchRequestDeps) {
   const validateInstalled = async (input: CreateInput, known?: ReturnType<typeof installedDsh>): Promise<{ error: string; detail: string } | null> => {
     if (input.dsh) {
       const installed = known ?? installedDsh(input.dsh)
@@ -259,8 +262,36 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     }
   }
 
-  /** Answers `agent_create`. `asker.local` says the frame came from this machine. */
-  const create = async (payload: Record<string, unknown>, asker: { local: boolean }, reply: Reply): Promise<void> => {
+  /** A guest's `agent_create`: its own launch, never the owner's (core/agents/guestCreate.ts). A `creationId` keeps a
+   *  receipt as the owner's launches do, so a status check or a retry finds the same harness. */
+  const createForGuest = async (payload: Record<string, unknown>, guest: string, reply: Reply): Promise<void> => {
+    const launch = guestCreate?.()
+    if (!launch) { reply({ error: 'GUEST_NOT_ALLOWED' }); return }
+    const creationId = payload.creationId
+    if (creationId !== undefined && !validCreationId(creationId)) { reply({ error: 'INVALID_CREATION_ID' }); return }
+    if (creationId === undefined) {
+      const result = await launch(payload, guest)
+      reply(result.ok ? { agent: await toProject(result.session) } : { error: result.error, ...(result.detail ? { detail: result.detail } : {}) })
+      return
+    }
+    try {
+      const fingerprint = creationFingerprint({ guest, engine: payload.engine, name: payload.name })
+      void receipts.run(creationId, fingerprint, async () => {
+        const result = await launch(payload, guest)
+        return result.ok ? { state: 'created', agentId: result.session.agentId }
+          : { state: 'failed', error: result.error, ...(result.detail ? { detail: result.detail } : {}) }
+      }).then(async (status) => {
+        reply({ creationId, ...await creationStatusPayload(status) })
+      }).catch(() => reply({ error: 'INTERNAL' }))
+    } catch (error) {
+      reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
+    }
+  }
+
+  /** Answers `agent_create`. `asker.local` says the frame came from this machine; `asker.guest`, that a guest
+   *  of a machine shared with them asks (core/guestPolicy.ts). */
+  const create = async (payload: Record<string, unknown>, asker: { local: boolean; guest?: string }, reply: Reply): Promise<void> => {
+    if (asker.guest !== undefined) { await createForGuest(payload, asker.guest, reply); return }
     const engine = payload.engine as AgentEngine | undefined
     const cwd = payload.cwd
     if (typeof engine !== 'string' || !ENGINES.includes(engine)) { reply({ error: 'INVALID_ENGINE' }); return }

@@ -575,7 +575,13 @@ class LocalCliDiscovery {
   }) async {
     final Map<String, dynamic>? body;
     try {
-      final response = await dio.getUri<Map<String, dynamic>>(statusUri);
+      final response = await dio.getUri<Map<String, dynamic>>(
+        statusUri,
+        // Over the port, the whole status wants the daemon's local credential.
+        options: socketPath == null
+            ? Options(headers: transport.tcpHeaders())
+            : null,
+      );
       body = response.data;
     } on DioException catch (error) {
       switch (error.type) {

@@ -191,7 +191,7 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     holdRequests: () => { requestsOpen = false; send('hold') },
     openRequests: () => { requestsOpen = true; send('open') },
     connected: () => up && linkUp,
-    broadcast: (frame) => { bulk('broadcast', { frame }) },
+    broadcast: (frame, guest) => { bulk('broadcast', guest ? { frame, guest } : { frame }) },
     commander: (frame) => { bulk('commander', { frame }) },
     user: (frame) => { send('user', { frame }) },
     reply: (connId, type, requestId, payload) => { send('reply', { connId, type, requestId, payload }) },

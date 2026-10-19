@@ -1026,3 +1026,69 @@ describe('agent_fork', () => {
     await vi.waitFor(() => expect(frameless.replies).toStrictEqual([{ error: 'INTERNAL' }]))
   })
 })
+
+describe('agent_create, from a guest', () => {
+  // A guest's New Harness never reaches the owner's launch: it is built as the guest's own OS user
+  // (core/agents/guestCreate.ts, docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+  const guestAsk = async (run: ReturnType<typeof setup>, payload: Record<string, unknown>, guest = 'kim@acme.io') => {
+    await run.requests.create(payload, { local: false, guest }, (result) => { run.replies.push(result) })
+    return run.replies.at(-1)
+  }
+
+  it('is the guest\'s own launch, never the owner\'s, answered as the owner\'s are', async () => {
+    const guestCreate = vi.fn(async () => ({ ok: true as const, session: session('guest-agent', { guest: 'kim@acme.io' }) }))
+    const run = setup({ guestCreate: () => guestCreate })
+    expect(await guestAsk(run, { engine: 'claude', cwd: '/Users/owner' })).toEqual({ agent: { id: 'guest-agent' } })
+    expect(guestCreate).toHaveBeenCalledWith({ engine: 'claude', cwd: '/Users/owner' }, 'kim@acme.io')
+    expect(run.create).not.toHaveBeenCalled()
+    guestCreate.mockResolvedValueOnce({ ok: false, error: 'GUEST_HELPER_REQUIRED', detail: 'Turn it on.' } as never)
+    expect(await guestAsk(run, { engine: 'claude' })).toEqual({ error: 'GUEST_HELPER_REQUIRED', detail: 'Turn it on.' })
+    guestCreate.mockResolvedValueOnce({ ok: false, error: 'TMUX_UNAVAILABLE' } as never)
+    expect(await guestAsk(run, { engine: 'claude' })).toEqual({ error: 'TMUX_UNAVAILABLE' })
+  })
+
+  it('keeps a receipt under its creationId, so a retry finds the same harness and a status check what became of it', async () => {
+    const guestCreate = vi.fn(async () => ({ ok: true as const, session: session('guest-agent', { guest: 'kim@acme.io' }) }))
+    const run = setup({ guestCreate: () => guestCreate, byAgent: (id) => id === 'guest-agent' ? session('guest-agent') : undefined })
+    await guestAsk(run, { creationId: CREATION, engine: 'claude' })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ creationId: CREATION, state: 'created', agent: { id: 'guest-agent' } }))
+    await guestAsk(run, { creationId: CREATION, engine: 'claude' })
+    await vi.waitFor(() => expect(run.replies).toHaveLength(2))
+    expect(guestCreate).toHaveBeenCalledTimes(1)
+    // The same id for another launch is a conflict, not a second harness.
+    await guestAsk(run, { creationId: CREATION, engine: 'codex' })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ error: 'CREATION_CONFLICT' }))
+  })
+
+  it('records a refusal as the outcome, with its words', async () => {
+    const guestCreate = vi.fn(async () => ({ ok: false as const, error: 'GUEST_UNSUPPORTED', detail: 'A guest starts a new conversation.' }))
+    const run = setup({ guestCreate: () => guestCreate })
+    await guestAsk(run, { creationId: CREATION, engine: 'claude' })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ creationId: CREATION, state: 'failed', failure: { code: 'GUEST_UNSUPPORTED', detail: 'A guest starts a new conversation.' } }))
+    guestCreate.mockResolvedValueOnce({ ok: false, error: 'TMUX_UNAVAILABLE' } as never)
+    await guestAsk(run, { creationId: 'creation-fedcba9876543210', engine: 'claude' })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toEqual({ creationId: 'creation-fedcba9876543210', state: 'failed', failure: { code: 'TMUX_UNAVAILABLE' } }))
+  })
+
+  it('starts nothing on a machine that cannot start a guest\'s harness, or for an id that is not one', async () => {
+    expect(await guestAsk(setup(), { engine: 'claude' })).toEqual({ error: 'GUEST_NOT_ALLOWED' })
+    expect(await guestAsk(setup({ guestCreate: () => null }), { engine: 'claude' })).toEqual({ error: 'GUEST_NOT_ALLOWED' })
+    const guestCreate = vi.fn()
+    expect(await guestAsk(setup({ guestCreate: () => guestCreate }), { creationId: 'short', engine: 'claude' })).toEqual({ error: 'INVALID_CREATION_ID' })
+    expect(guestCreate).not.toHaveBeenCalled()
+  })
+
+  it('answers INTERNAL when its receipt cannot be kept or its answer cannot be built', async () => {
+    const guestCreate = vi.fn(async () => ({ ok: true as const, session: session('guest-agent') }))
+    const broken = setup({ guestCreate: () => guestCreate })
+    vi.spyOn(broken.deps.receipts, 'run').mockImplementation(() => { throw new Error('disk full') })
+    expect(await guestAsk(broken, { creationId: CREATION, engine: 'claude' })).toEqual({ error: 'INTERNAL' })
+    const conflict = setup({ guestCreate: () => guestCreate })
+    vi.spyOn(conflict.deps.receipts, 'run').mockImplementation(() => { throw new AgentCreationReceiptError('CREATION_CONFLICT') })
+    expect(await guestAsk(conflict, { creationId: CREATION, engine: 'claude' })).toEqual({ error: 'CREATION_CONFLICT' })
+    const unbuilt = setup({ guestCreate: () => guestCreate, toProject: async () => { throw new Error('gone') }, byAgent: () => session('guest-agent') })
+    vi.spyOn(unbuilt.deps.receipts, 'run').mockResolvedValue({ state: 'created', agentId: 'guest-agent' })
+    await guestAsk(unbuilt, { creationId: CREATION, engine: 'claude' })
+    await vi.waitFor(() => expect(unbuilt.replies.at(-1)).toEqual({ error: 'INTERNAL' }))
+  })
+})

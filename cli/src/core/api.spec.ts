@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
+import { CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
@@ -335,7 +335,7 @@ describe('the core API services stand on', () => {
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null })
+    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null, sharedMachines: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 
@@ -421,5 +421,13 @@ describe('the core API services stand on', () => {
   it('answers the monitor\'s fallbacks while it is off: no readings, nothing measured to forget', async () => {
     await expect(MONITOR_OFF.resources()).rejects.toThrow('the monitor service is unavailable')
     expect(await MONITOR_OFF.storage([], true)).toEqual(new Map())
+  })
+
+  it('answers a guest\'s New Harness while shared machines is off: guest access unavailable, in words, and nothing to stop', async () => {
+    expect(await SHARED_MACHINES_OFF.guestLaunch({ email: 'kim@acme.io', engine: 'claude', bypassPermission: true }))
+      .toEqual({ ok: false, error: 'GUEST_UNAVAILABLE', detail: expect.stringMatching(/Guest access/) })
+    expect(SHARED_MACHINES_OFF.stop()).toBeUndefined()
+    expect(SHARED_MACHINES_FALLBACKS.stop).toBeUndefined()
+    expect(LONG_ANSWERS.sharedMachines).toEqual({ guestLaunch: 2 * 60_000, shared_machines: 11 * 60_000 })
   })
 })

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/guest_folders.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
@@ -18,6 +19,9 @@ import 'terminal_text_action.dart';
 
 /// The most addresses one machine is shared with (CLI services/sharedMachines.ts `SHARE_EMAILS_MAX`).
 const int machineShareEmailsMax = 100;
+
+/// The most folders guests may use there (CLI services/sharedMachines.ts `SHARED_FOLDERS_MAX`).
+const int machineSharedFoldersMax = 20;
 
 /// The backend's own rule for an address (zod's `email()`): one it would refuse is refused as it is
 /// typed, by name, never as a failed save of the whole list.
@@ -58,8 +62,10 @@ class MachineSharingForm extends StatefulWidget {
 class MachineSharingFormState extends State<MachineSharingForm> {
   final _scope = FocusNode(debugLabel: 'Machine sharing');
   final _input = FocusNode(debugLabel: 'Share email');
+  final _folderInput = FocusNode(debugLabel: 'Share folder');
   final _buttons = <String, FocusNode>{};
   final _value = TextEditingController();
+  final _folderValue = TextEditingController();
   bool _loading = true, _busy = false;
 
   /// Why the sharing could not be read at all; the form offers Retry instead of its controls.
@@ -80,7 +86,30 @@ class MachineSharingFormState extends State<MachineSharingForm> {
   String? _domain;
   List<Map<String, dynamic>> _members = const [];
 
+  /// Whether guests can start harnesses there (`ready`), or what turning it on takes (`missing`,
+  /// `outdated`, `not-authorized`); null from a CLI that predates guests.
+  String? _guestAccess;
+
+  /// Waiting on the admin prompt on that computer, which the first share shows.
+  bool _approving = false;
+
+  /// The owner's folders guests may work in there, read only or editable.
+  List<GuestFolder> _folders = const [];
+
+  /// What is wrong with the folder typed, said under its field.
+  String? _folderError;
+
   AppNotifier get app => widget.app;
+
+  /// Whether it is shared with anyone now.
+  bool get _sharing => _emails.isNotEmpty || _sameDomain;
+
+  /// What a guest gets, and, until it is on, what sharing will ask of the owner.
+  String get _guestNote => _approving
+      ? 'Approve the prompt on $_name: it lets each guest run as their own account there.'
+      : 'Guests get their own space on $_name and can use your Claude and ChatGPT plans. '
+            'They cannot see your files or harnesses.'
+            '${_guestAccess == null || _guestAccess == 'ready' ? '' : ' Sharing asks for an admin password on $_name once.'}';
   String get _name =>
       app.stateOf(widget.machineId)?.machine.displayName ?? 'this machine';
   bool get _composing =>
@@ -90,14 +119,18 @@ class MachineSharingFormState extends State<MachineSharingForm> {
   void initState() {
     super.initState();
     _value.addListener(_typed);
+    _folderValue.addListener(_typed);
     unawaited(_load());
   }
 
   @override
   void dispose() {
     _value.removeListener(_typed);
+    _folderValue.removeListener(_typed);
     _scope.dispose();
     _input.dispose();
+    _folderInput.dispose();
+    _folderValue.dispose();
     for (final node in _buttons.values) {
       node.dispose();
     }
@@ -110,6 +143,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     if (!mounted) return;
     setState(() {
       _fieldError = null;
+      _folderError = null;
     });
   }
 
@@ -151,6 +185,8 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     ];
     _sameDomain = answer['sameDomain'] == true;
     _domain = answer['domain'] as String?;
+    _guestAccess = answer['guestAccess'] as String? ?? _guestAccess;
+    _folders = GuestFolders.fromJson(answer).folders;
     _members = [
       for (final member in answer['members'] as List? ?? const [])
         if (member is Map) Map<String, dynamic>.from(member),
@@ -191,12 +227,17 @@ class MachineSharingFormState extends State<MachineSharingForm> {
 
   /// Make the machine's sharing [emails] and [sameDomain], at once. While it is written nothing else
   /// can change; a refusal leaves the sharing as it was and says why.
+  ///
+  /// The first share turns guest access on first: each guest's harnesses run as their own account
+  /// there, which takes one admin prompt on that computer (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
   Future<bool> _apply(List<String> emails, bool sameDomain) async {
     if (_busy) return false;
     setState(() {
       _busy = true;
       _status = null;
     });
+    final sharing = emails.isNotEmpty || sameDomain;
+    if (sharing && _guestsOff && !await _enableGuests()) return false;
     Map<String, dynamic> answer;
     try {
       answer = await app.setMachineSharing(
@@ -224,6 +265,49 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     if (error != null) return false;
     _changed = true;
     return true;
+  }
+
+  /// Guest access is off there: the helper is missing, or older than this CLI's (an update), or no longer
+  /// allowed. Null (a CLI from before guests) is not off.
+  bool get _guestsOff => _guestAccess != null && _guestAccess != 'ready';
+
+  /// Turn guest access on there, behind its admin prompt; false, with the reason said, when it was not.
+  /// Called with the form busy, or busies it while it waits.
+  Future<bool> _enableGuests() async {
+    setState(() {
+      _busy = true;
+      _status = null;
+      _approving = true;
+    });
+    Map<String, dynamic> enabled;
+    try {
+      enabled = await app.enableMachineGuests(widget.machineId);
+    } catch (error) {
+      enabled = {
+        'error': 'UNAVAILABLE',
+        'message': 'Could not reach $_name. Nothing changed.',
+      };
+    }
+    if (!mounted) return false;
+    final refused = enabled['error'];
+    setState(() {
+      _approving = false;
+      if (refused != null) {
+        _busy = false;
+        _status =
+            enabled['message'] as String? ??
+            'Guest access was not turned on ($refused).';
+      } else {
+        _guestAccess = enabled['guestAccess'] as String? ?? 'ready';
+      }
+    });
+    return refused == null;
+  }
+
+  /// Turn on, on its own: shared already, but guests cannot start harnesses until it is on again.
+  Future<void> _turnGuestsOn() async {
+    if (_busy) return;
+    if (await _enableGuests() && mounted) setState(() => _busy = false);
   }
 
   /// Done: closes, and says where the sharing now stands when it changed here.
@@ -291,6 +375,88 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     await _apply(_emails, !_sameDomain);
   }
 
+  /// Make the folders guests may use [folders], at once; a refusal (a folder that is not the owner's,
+  /// or not there) leaves them as they were and says why.
+  Future<bool> _applyFolders(List<GuestFolder> folders) async {
+    if (_busy) return false;
+    setState(() {
+      _busy = true;
+      _status = null;
+    });
+    Map<String, dynamic> answer;
+    try {
+      answer = await app.setMachineGuestFolders(widget.machineId, folders);
+    } catch (error) {
+      answer = {
+        'error': 'UNAVAILABLE',
+        'message': 'Could not reach $_name. Nothing changed.',
+      };
+    }
+    if (!mounted) return false;
+    final error = answer['error'];
+    setState(() {
+      _busy = false;
+      if (error == null) {
+        _show(answer);
+      } else {
+        _status =
+            answer['message'] as String? ??
+            'Could not share the folder ($error).';
+      }
+    });
+    if (error != null) return false;
+    _changed = true;
+    return true;
+  }
+
+  /// The folder typed, shared read only: a guest's harness may read it, and the switch lets it edit.
+  Future<void> _addFolder() async {
+    if (_busy || _loading) return;
+    final typed = _folderValue.text.trim();
+    if (typed.isEmpty) {
+      _folderInput.requestFocus();
+      return;
+    }
+    final path = typed.length > 1 && typed.endsWith('/')
+        ? typed.substring(0, typed.length - 1)
+        : typed;
+    String? problem;
+    if (!path.startsWith('/')) {
+      problem =
+          'Enter the folder’s full path on $_name, like /Users/you/project.';
+    } else if (_folders.any((folder) => folder.path == path)) {
+      problem = 'Guests can already use $path.';
+    } else if (_folders.length >= machineSharedFoldersMax) {
+      problem = 'Guests can use up to $machineSharedFoldersMax folders.';
+    }
+    if (problem != null) {
+      setState(() => _folderError = problem);
+      _folderInput.requestFocus();
+      return;
+    }
+    final added = await _applyFolders([
+      ..._folders,
+      GuestFolder(path: path, write: false),
+    ]);
+    if (added) _folderValue.clear();
+    if (mounted) _folderInput.requestFocus();
+  }
+
+  Future<void> _toggleFolderWrite(String path) => _applyFolders([
+    for (final folder in _folders)
+      folder.path == path
+          ? GuestFolder(path: path, write: !folder.write)
+          : folder,
+  ]);
+
+  Future<void> _removeFolder(String path) async {
+    await _applyFolders([
+      for (final folder in _folders)
+        if (folder.path != path) folder,
+    ]);
+    if (mounted) focus();
+  }
+
   // ── keys ──────────────────────────────────────────────────────────────────────────────────────
 
   /// The editor's stops, in reading order: Back, the domain switch, (the field,) Share, each person's
@@ -304,6 +470,8 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     }
     return [
       (id: 'back', run: _done),
+      if (_guestsOff && _sharing)
+        (id: 'guests-on', run: _busy ? null : () => unawaited(_turnGuestsOn())),
       if (_domain != null)
         (id: 'domain', run: _busy ? null : () => unawaited(_toggleDomain())),
       (
@@ -317,6 +485,22 @@ class MachineSharingFormState extends State<MachineSharingForm> {
           id: 'remove:${person.email}',
           run: _busy ? null : () => unawaited(_remove(person.email)),
         ),
+      (
+        id: 'folder-add',
+        run: _busy || _folderValue.text.trim().isEmpty
+            ? null
+            : () => unawaited(_addFolder()),
+      ),
+      for (final folder in _folders) ...[
+        (
+          id: 'folder-write:${folder.path}',
+          run: _busy ? null : () => unawaited(_toggleFolderWrite(folder.path)),
+        ),
+        (
+          id: 'folder-remove:${folder.path}',
+          run: _busy ? null : () => unawaited(_removeFolder(folder.path)),
+        ),
+      ],
     ];
   }
 
@@ -326,13 +510,17 @@ class MachineSharingFormState extends State<MachineSharingForm> {
   List<FocusNode> get _nodes {
     final stops = _stops.where((stop) => stop.run != null).toList();
     final field = !_loading && _unavailable == null && !_busy;
-    const beforeField = {'back', 'domain'};
+    const beforeField = {'back', 'guests-on', 'domain'};
+    bool folders(String id) => id.startsWith('folder-');
     return [
       for (final stop in stops)
         if (beforeField.contains(stop.id)) _node(stop.id),
       if (field) _input,
       for (final stop in stops)
-        if (!beforeField.contains(stop.id)) _node(stop.id),
+        if (!beforeField.contains(stop.id) && !folders(stop.id)) _node(stop.id),
+      if (field) _folderInput,
+      for (final stop in stops)
+        if (folders(stop.id)) _node(stop.id),
     ];
   }
 
@@ -365,6 +553,10 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     if (_composing) return;
     if (_input.hasFocus) {
       unawaited(_add());
+      return;
+    }
+    if (_folderInput.hasFocus) {
+      unawaited(_addFolder());
       return;
     }
     final stop = _stops
@@ -513,7 +705,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
       ),
     );
 
-    // What sharing gives, said once and plainly: these people get the owner's own rights.
+    // What sharing gives, said once and plainly: guests get a space of their own, never the owner's.
     final access = Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -526,12 +718,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
           ),
         ),
         const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            'People you share it with get full access: they can run harnesses, open terminals and read files on it.',
-            style: muted13,
-          ),
-        ),
+        Expanded(child: Text(_guestNote, style: muted13)),
       ],
     );
 
@@ -648,6 +835,123 @@ class MachineSharingFormState extends State<MachineSharingForm> {
           child: const Text('Share'),
         ),
       ],
+    );
+
+    final folderAddRow = Row(
+      children: [
+        Expanded(
+          child: ReadlineKeys(
+            controller: _folderValue,
+            enabled: !_busy,
+            onChanged: (_) {},
+            child: TextField(
+              key: const ValueKey('machine-sharing-folder'),
+              controller: _folderValue,
+              focusNode: _folderInput,
+              readOnly: _busy,
+              onTapOutside: (_) {},
+              enableSuggestions: false,
+              autocorrect: false,
+              style: DesktopChrome.text(size: 13),
+              cursorColor: DesktopChrome.accent,
+              decoration: InputDecoration(
+                hintText: 'Add a folder by its full path',
+                hintStyle: muted13,
+                prefixIcon: Icon(
+                  AppIcons.folder,
+                  size: AppIcons.inlineSize,
+                  color: DesktopChrome.muted,
+                ),
+                prefixIconConstraints: const BoxConstraints(minWidth: 36),
+                border: fieldBorder,
+                enabledBorder: _folderError == null
+                    ? fieldBorder
+                    : fieldBorder.copyWith(
+                        borderSide: BorderSide(color: error),
+                      ),
+                disabledBorder: fieldBorder,
+                focusedBorder: fieldBorder.copyWith(
+                  borderSide: BorderSide(
+                    color: _folderError == null
+                        ? DesktopChrome.focusRing
+                        : error,
+                    width: grid.AppDesktop.focusWidth,
+                  ),
+                ),
+                filled: true,
+                fillColor: DesktopChrome.field,
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 11,
+                ),
+              ),
+              onEditingComplete: () {},
+            ),
+          ),
+        ),
+        const SizedBox(width: DesktopChrome.controlGap),
+        FilledButton(
+          key: const ValueKey('machine-sharing:folder-add'),
+          focusNode: _node('folder-add'),
+          onPressed: !_busy && _folderValue.text.trim().isNotEmpty
+              ? () => unawaited(_addFolder())
+              : null,
+          child: const Text('Add'),
+        ),
+      ],
+    );
+
+    Widget folderRow(GuestFolder folder) => Padding(
+      key: ValueKey('machine-sharing-folder:${folder.path}'),
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Icon(
+            AppIcons.folder,
+            size: AppIcons.inlineSize,
+            color: DesktopChrome.muted,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  folder.path,
+                  style: DesktopChrome.control(medium: true),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  folder.write ? 'Guests can edit it' : 'Read only',
+                  style: DesktopChrome.metadata(),
+                ),
+              ],
+            ),
+          ),
+          Text('Can edit', style: DesktopChrome.metadata()),
+          const SizedBox(width: 6),
+          Switch(
+            key: ValueKey('machine-sharing:folder-write:${folder.path}'),
+            focusNode: _node('folder-write:${folder.path}'),
+            value: folder.write,
+            onChanged: _busy
+                ? null
+                : (_) => unawaited(_toggleFolderWrite(folder.path)),
+          ),
+          AppIconButton(
+            key: ValueKey('machine-sharing:folder-remove:${folder.path}'),
+            icon: AppIcons.close,
+            tooltip: 'Stop sharing ${folder.path}',
+            destructive: true,
+            focusNode: _node('folder-remove:${folder.path}'),
+            onPressed: _busy
+                ? null
+                : () => unawaited(_removeFolder(folder.path)),
+          ),
+        ],
+      ),
     );
 
     Widget personRow(_Person person) => Padding(
@@ -787,6 +1091,28 @@ class MachineSharingFormState extends State<MachineSharingForm> {
         heading,
         small,
         access,
+        if (_guestsOff && _sharing) ...[
+          small,
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _guestAccess == 'outdated'
+                      ? 'Guests cannot start harnesses until you turn guest access on again after the update.'
+                      : 'Guests cannot start harnesses until you turn guest access on.',
+                  style: DesktopChrome.text(size: 13),
+                ),
+              ),
+              const SizedBox(width: DesktopChrome.controlGap),
+              FilledButton(
+                key: const ValueKey('machine-sharing:guests-on'),
+                focusNode: _node('guests-on'),
+                onPressed: _busy ? null : () => unawaited(_turnGuestsOn()),
+                child: const Text('Turn on'),
+              ),
+            ],
+          ),
+        ],
         gap,
         if (_domain case final domain?) ...[domainRow(domain), gap],
         Text('People', style: DesktopChrome.control(medium: true)),
@@ -808,6 +1134,28 @@ class MachineSharingFormState extends State<MachineSharingForm> {
             ),
           ),
         if (people.isNotEmpty) ...[small, ...people.map(personRow)],
+        gap,
+        Text('Folders', style: DesktopChrome.control(medium: true)),
+        small,
+        Text(
+          'Guests can open these in their harnesses. They can read anything inside, secrets too.',
+          style: muted13,
+        ),
+        small,
+        folderAddRow,
+        if (_folderError case final problem?)
+          Padding(
+            padding: const EdgeInsets.only(top: 6, left: 2),
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                problem,
+                key: const ValueKey('machine-sharing:folder-error'),
+                style: DesktopChrome.text(size: 12, color: error),
+              ),
+            ),
+          ),
+        if (_folders.isNotEmpty) ...[small, ..._folders.map(folderRow)],
       ];
     }
 
@@ -868,10 +1216,13 @@ class MachineSharingFormState extends State<MachineSharingForm> {
             gap,
             action('retry', 'Retry', () => unawaited(_load())),
           ] else ...[
-            line(
-              'People you share it with get full access: harnesses, terminals and files.',
-              color: theme.muted,
-            ),
+            line(_guestNote, color: theme.muted),
+            if (_guestsOff && _sharing)
+              action(
+                'guests-on',
+                'Turn guest access on',
+                _busy ? null : () => unawaited(_turnGuestsOn()),
+              ),
             gap,
             if (_domain case final domain?) ...[
               action(
@@ -933,6 +1284,68 @@ class MachineSharingFormState extends State<MachineSharingForm> {
                   ),
                 ],
               ),
+            gap,
+            line(
+              'Folders guests can open. They can read anything inside, secrets too.',
+              color: theme.muted,
+            ),
+            Row(
+              children: [
+                SizedBox(
+                  width: cell.width * 8,
+                  child: Text(
+                    'folder >',
+                    style: terminalContentStyle(color: theme.muted),
+                  ),
+                ),
+                Expanded(
+                  child: ReadlineKeys(
+                    controller: _folderValue,
+                    enabled: !_busy,
+                    onChanged: (_) {},
+                    child: TextField(
+                      key: const ValueKey('machine-sharing-folder'),
+                      controller: _folderValue,
+                      focusNode: _folderInput,
+                      readOnly: _busy,
+                      onTapOutside: (_) {},
+                      enableSuggestions: false,
+                      autocorrect: false,
+                      style: terminalContentStyle(color: theme.foreground),
+                      cursorColor: theme.foreground,
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        isDense: true,
+                        isCollapsed: true,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      onEditingComplete: () {},
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            for (final folder in _folders)
+              Row(
+                children: [
+                  Expanded(child: line(folder.path)),
+                  action(
+                    'folder-write:${folder.path}',
+                    '[${folder.write ? 'x' : ' '}] can edit',
+                    _busy
+                        ? null
+                        : () => unawaited(_toggleFolderWrite(folder.path)),
+                  ),
+                  SizedBox(width: cell.width),
+                  action(
+                    'folder-remove:${folder.path}',
+                    'Remove',
+                    _busy ? null : () => unawaited(_removeFolder(folder.path)),
+                  ),
+                ],
+              ),
+            if (_folderError case final problem?)
+              line(problem, color: theme.yellow),
           ],
           if (_fieldError case final problem?)
             line(problem, color: _fieldIsError ? theme.yellow : theme.muted),

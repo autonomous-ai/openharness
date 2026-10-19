@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runServiceProcess, type ServiceProcessOptions } from './process.js'
 import { runSharedMachinesService } from './sharedMachinesProcess.js'
 import type { SharedMachinesDeps } from './sharedMachines.js'
-import type { CoreApi } from '../core/api.js'
+import { GUEST_LAUNCH_UNAVAILABLE, type CoreApi } from '../core/api.js'
 
 // The real default reaches a real socket: never in a test.
 vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
@@ -53,12 +53,34 @@ describe('shared machines in their own process', () => {
     expect(await port.shared()).toMatchObject({ failed: expect.any(Object) })
   })
 
+  it('builds a guest\'s harness when the core asks, from the port its service filled, and nothing from what is not one', async () => {
+    let options: ServiceProcessOptions | null = null
+    const guestLaunch = vi.fn(async () => ({ ok: true as const, workspace: '/g/work', argv: ['sh'], env: {} }))
+    runSharedMachinesService({
+      dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
+      run: (o) => { options = o; return { stop: vi.fn() } },
+      start: (_api, overrides = {}) => { overrides.ports!.sharedMachines = { guestLaunch, stop: vi.fn() }; return { shared_machines: async () => ({}) } },
+    })
+    const core = { local: false, owner: false }
+    const input = { email: 'kim@acme.io', engine: 'claude', bypassPermission: true }
+    expect(await options!.requests.guestLaunch!(input, core)).toEqual({ ok: true, workspace: '/g/work', argv: ['sh'], env: {} })
+    expect(guestLaunch).toHaveBeenCalledWith(input)
+    expect(await options!.requests.guestLaunch!({ email: 'kim@acme.io' }, core)).toEqual(GUEST_LAUNCH_UNAVAILABLE)
+    // A service that filled no port builds nothing.
+    runSharedMachinesService({
+      dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't',
+      run: (o) => { options = o; return { stop: vi.fn() } },
+      start: () => ({ shared_machines: async () => ({}) }),
+    })
+    expect(await options!.requests.guestLaunch!(input, core)).toEqual(GUEST_LAUNCH_UNAVAILABLE)
+  })
+
   it('runs as a real service by default', () => {
     const stopTimers = vi.useFakeTimers()
     runSharedMachinesService({ dataDir: '/nonexistent', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     expect(runServiceProcess).toHaveBeenCalledWith(expect.objectContaining({ name: 'sharedMachines' }))
     const requests = vi.mocked(runServiceProcess).mock.calls[0][0].requests
-    expect(Object.keys(requests)).toEqual(['shared_machines'])
+    expect(Object.keys(requests)).toEqual(['shared_machines', 'guest_folders', 'guestLaunch'])
     stopTimers.useRealTimers()
   })
 })

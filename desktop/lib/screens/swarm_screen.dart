@@ -7330,9 +7330,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (id == 'agent.share' || id == 'pane.toggle_viewer') {
       final focused = WorkspacePaneContext.focused(app);
       final agent = focused?.agent;
+      final machine = app.stateOf(focused?.pane.machineId ?? '')?.machine;
       return focused != null &&
           agent != null &&
-          app.stateOf(focused.pane.machineId)?.machine.isShared == false &&
+          machine?.isShared == false &&
+          // A guest shares nothing of a machine shared with it.
+          (id != 'agent.share' || !machine!.isSharedMachine) &&
           (id == 'agent.share' ||
               agent.viewerUrl != null ||
               agent.viewerError != null);
@@ -7373,6 +7376,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // again, only a fork needs the engine to carry a conversation over.
       return machine != null &&
           !machine.machine.isShared &&
+          // A guest's harness is never relaunched or forked: either would run the
+          // owner's way, as the owner (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+          (!machine.machine.isSharedMachine ||
+              (id != 'agent.fork' && id != 'agent.restart')) &&
           (id != 'agent.fork' || _focusedAgent?.canFork == true) &&
           (id != 'agent.clone' || _focusedAgent?.canClone == true) &&
           ((id != 'agent.restart' && id != 'agent.clone') ||

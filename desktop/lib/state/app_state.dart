@@ -2,6 +2,7 @@ import '../measurement/product_measurement.dart';
 import '../measurement/product_runtime_health.dart';
 import '../measurement/product_connections.dart';
 import '../core/crash_log.dart';
+import '../core/guest_folders.dart';
 import '../measurement/desktop_setup_report.dart';
 import 'attached_task_delivery.dart';
 import 'harness_attachments.dart';
@@ -979,6 +980,8 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed || (_pool == null && connectionForTest == null)) return false;
     final machine = machineStates[key.machineId];
     return machine != null &&
+        // A guest is read no conversation there (`agent_recent` is the owner's).
+        !machine.machine.isSharedMachine &&
         machine.nodeOnline != false &&
         !machine.needsLink &&
         (machine.connectionStatus == ConnectionStatus.connected ||
@@ -7778,6 +7781,44 @@ class AppNotifier extends ChangeNotifier {
     'sameDomain': sameDomain,
   });
 
+  /// Turn guest access on at [machineId]: the helper that runs each guest's harnesses as their own
+  /// account there (CLI lib/guestHelperInstall.ts), installed behind one admin prompt on that
+  /// computer. Waits for the person at the prompt. `{ok, guestAccess}`, or `{error, message}`
+  /// (`CANCELLED` when the prompt was dismissed).
+  Future<Map<String, dynamic>> enableMachineGuests(String machineId) =>
+      _sharedMachines(machineId, {
+        'action': 'enable_guests',
+      }, timeout: const Duration(minutes: 11));
+
+  /// The folders guests may work in on [machineId], read only or editable (CLI services/sharedMachines.ts
+  /// `set_folders`). The view as it is now, or `{error, message}`.
+  Future<Map<String, dynamic>> setMachineGuestFolders(
+    String machineId,
+    List<GuestFolder> folders,
+  ) => _sharedMachines(machineId, {
+    'action': 'set_folders',
+    'folders': [
+      for (final folder in folders)
+        {'path': folder.path, 'write': folder.write},
+    ],
+  });
+
+  /// Where this account, a guest on [machineId], may start a harness: its workspace and the folders
+  /// the machine's owner shares (`guest_folders`). Null when the machine cannot say (an older CLI).
+  Future<GuestFolders?> guestFolders(String machineId) async {
+    try {
+      return GuestFolders.fromJson(
+        await _conn(machineId).request(
+          'guest_folders',
+          payload: const {},
+          timeout: const Duration(seconds: 15),
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Add a machine shared with this account's domain to its machines, or take one back out
   /// ([remove]). Asked of this computer's daemon, which pins the machine's key; null when done, else
   /// what went wrong.
@@ -7811,14 +7852,12 @@ class AppNotifier extends ChangeNotifier {
   /// never got one is "could not reach".
   Future<Map<String, dynamic>> _sharedMachines(
     String machineId,
-    Map<String, dynamic> payload,
-  ) async {
+    Map<String, dynamic> payload, {
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
     try {
-      return await _conn(machineId).request(
-        'shared_machines',
-        payload: payload,
-        timeout: const Duration(seconds: 30),
-      );
+      return await _conn(machineId)
+          .request('shared_machines', payload: payload, timeout: timeout);
     } on WsRequestFailure catch (failure) {
       return {...failure.payload, 'error': failure.code};
     }
@@ -13260,6 +13299,17 @@ class AppNotifier extends ChangeNotifier {
     // fix is the same one the other UNSUPPORTED codes ask for.
     'INVALID_ENGINE' =>
       'Update the harness CLI on $machine to open this kind of pane.',
+    // A guest's harness: its owner turns guest access on, and only Claude Code or Codex start.
+    'GUEST_NOT_ALLOWED' =>
+      'As a guest on $machine you can start Claude Code or Codex.',
+    'GUEST_UNSUPPORTED' ||
+    'GUEST_HELPER_REQUIRED' ||
+    'GUEST_UNAVAILABLE' ||
+    'GUEST_ENGINE_UNSUPPORTED' ||
+    'GUEST_INVALID' ||
+    'GUEST_HELPER_MISSING' ||
+    'GUEST_HELPER_NOT_AUTHORIZED' ||
+    'GUEST_RELAY_FAILED' => detail ?? 'Could not start a harness on $machine.',
     _ => 'Could not start harness: ${detail ?? code}',
   };
 
@@ -13563,6 +13613,17 @@ class AppNotifier extends ChangeNotifier {
         'SESSION_BUSY_IN_TERMINAL',
         'SESSION_STOP_FAILED',
         'INVALID_SESSION',
+        // A guest on a machine shared with this account, refused before anything starts
+        // (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+        'GUEST_NOT_ALLOWED',
+        'GUEST_UNSUPPORTED',
+        'GUEST_HELPER_REQUIRED',
+        'GUEST_UNAVAILABLE',
+        'GUEST_ENGINE_UNSUPPORTED',
+        'GUEST_INVALID',
+        'GUEST_HELPER_MISSING',
+        'GUEST_HELPER_NOT_AUTHORIZED',
+        'GUEST_RELAY_FAILED',
       };
       // A cloud agent's service refuses in words a person reads ("Add your
       // Devin API key…"), and a retry of the same New Harness gets the same
@@ -14396,6 +14457,14 @@ class AppNotifier extends ChangeNotifier {
 
   /// Attach to a running harness or resume its saved conversation immediately.
   Future<RestartAgentResult> resumeAgent(String machineId, String agentId) {
+    if (stateOf(machineId)?.machine.isSharedMachine == true) {
+      return Future.value(
+        const RestartAgentResult(
+          error: 'A guest’s harness is not restarted, resumed or forked. Start a new one.',
+          retryable: false,
+        ),
+      );
+    }
     if (pendingAgentPause(machineId, agentId) != null) {
       return Future.value(
         const RestartAgentResult(
@@ -14463,6 +14532,13 @@ class AppNotifier extends ChangeNotifier {
     if (machine.machine.isShared) {
       return const RestartAgentResult(
         error: 'Shared harnesses are view-only.',
+        retryable: false,
+      );
+    }
+    // Relaunched, a guest's harness would run the owner's way, as the owner: the daemon refuses it.
+    if (machine.machine.isSharedMachine) {
+      return const RestartAgentResult(
+        error: 'A guest’s harness is not restarted, resumed or forked. Start a new one.',
         retryable: false,
       );
     }
@@ -14859,6 +14935,11 @@ class AppNotifier extends ChangeNotifier {
     if (stateOf(machineId)?.machine.isShared != false) {
       return Future.value('Shared harnesses are view-only.');
     }
+    if (stateOf(machineId)?.machine.isSharedMachine == true) {
+      return Future.value(
+        'A guest’s harness keeps the agent it started with. Start a new one.',
+      );
+    }
     if (!agentSwitchEngines(machineId, source).contains(engine)) {
       return Future.value(
         'This agent is not supported by the installed harness.',
@@ -15248,6 +15329,11 @@ class AppNotifier extends ChangeNotifier {
     }
     if (machine.machine.isShared) {
       return const ForkAgentResult(error: 'Shared harnesses are view-only.');
+    }
+    if (machine.machine.isSharedMachine) {
+      return const ForkAgentResult(
+        error: 'A guest’s harness is not restarted, resumed or forked. Start a new one.',
+      );
     }
     if (!attempt.awaitingConfirmation) {
       if (!_forkSourceCurrent(attempt)) {

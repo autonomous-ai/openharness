@@ -602,7 +602,7 @@ class SwarmSearchCatalog {
           detail: [
             'Machine',
             if (machine.machine.machineShare case final share?)
-              'Shared by ${share.owner}',
+              'Guest · shared by ${share.owner}',
             _countLabel(members.length, 'harness'),
             if (machine.needsLink)
               'Link required'

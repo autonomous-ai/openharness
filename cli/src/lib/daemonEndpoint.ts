@@ -1,4 +1,5 @@
 import { request } from 'node:http'
+import { localCredentialHeaders } from './localCredential.js'
 import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { localSocketPath } from './localSocket.js'
@@ -62,10 +63,12 @@ export async function localDaemonStatus(dataDir: string, configuredPort: number)
 /** Read-only compatibility for CLI status on Windows and older daemons without a Unix socket.
  * Native hn connections must use localDaemonStatus instead. Never accept another daemon's status.
  */
-export async function legacyDaemonStatus(port: number, pid: number | null, computerId: string): Promise<Record<string, unknown> | null> {
+export async function legacyDaemonStatus(port: number, pid: number | null, computerId: string, dataDir?: string): Promise<Record<string, unknown> | null> {
   if (!pid || !computerId) return null
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(1_500) })
+    // With the daemon's local credential, the whole status; without it, only who the daemon is.
+    const headers = dataDir ? localCredentialHeaders(dataDir) : {}
+    const response = await fetch(`http://127.0.0.1:${port}/api/status`, { headers, signal: AbortSignal.timeout(1_500) })
     if (!response.ok) return null
     const value: unknown = await response.json()
     if (value === null || typeof value !== 'object' || Array.isArray(value)) return null

@@ -65,6 +65,7 @@ import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
 import { gridSetupCommand } from './lib/gridSetupCommand.js'
+import { localCredentialHeaders } from './lib/localCredential.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import { describeMasterStatus, readStatusFile } from './harnessd/master.js'
 import { namedNode } from './harnessd/processName.js'
@@ -1291,7 +1292,7 @@ async function runningDaemonStatus(): Promise<{
 } | null> {
   try {
     const body = await localDaemonStatus(env.ADAPTER_DATA_DIR, env.PORT)
-      ?? await legacyDaemonStatus(daemonPort(), readPid(), computerId())
+      ?? await legacyDaemonStatus(daemonPort(), readPid(), computerId(), env.ADAPTER_DATA_DIR)
     if (!body) return null
     const status = body as {
       version?: unknown; sessions?: unknown; machineId?: unknown; connected?: unknown
@@ -1606,12 +1607,18 @@ async function resetCommand(): Promise<void> {
   process.exit(0)
 }
 
+/** What every call to this daemon's loopback API carries: the CSRF mark its writes want, and the local
+ *  credential every TCP call wants (lib/localCredential.ts). */
+function daemonHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return { 'x-adapter-local': '1', ...localCredentialHeaders(env.ADAPTER_DATA_DIR), ...extra }
+}
+
 /** Call the running daemon's localhost control API. Exits with a friendly message if it's not up. */
 async function daemonCall(method: 'GET' | 'POST', path: string, body?: unknown): Promise<{ res: Response; json: Record<string, unknown> }> {
   const url = `http://127.0.0.1:${daemonPort()}${path}`
   let res: Response
   try {
-    const headers: Record<string, string> = { 'x-adapter-local': '1' } // passes the local API's CSRF gate
+    const headers: Record<string, string> = daemonHeaders() // the local API's CSRF gate and credential
     if (body) headers['content-type'] = 'application/json'
     res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined })
   } catch (error) {
@@ -1792,7 +1799,7 @@ async function remotePasswordSetCommand(json: boolean, stdin: boolean): Promise<
   try {
     const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/remote-password/set`, {
       method: 'POST',
-      headers: { 'x-adapter-local': '1', 'content-type': 'application/json' },
+      headers: daemonHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ password }),
     })
     if (res.ok) {
@@ -1821,7 +1828,7 @@ async function remotePasswordClearCommand(json: boolean): Promise<void> {
   try {
     const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/remote-password/clear`, {
       method: 'POST',
-      headers: { 'x-adapter-local': '1' },
+      headers: daemonHeaders(),
     })
     if (res.ok) cleared = true
   } catch { /* fall back to the disk-backed store below */ }
@@ -1840,7 +1847,7 @@ async function remotePasswordClearCommand(json: boolean): Promise<void> {
 async function remotePasswordStatusCommand(json: boolean): Promise<void> {
   let status: { hasPassword: boolean; fingerprint: string | null; setAt: number | null } | null = null
   try {
-    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/remote-password/status`, { headers: { 'x-adapter-local': '1' } })
+    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/remote-password/status`, { headers: daemonHeaders() })
     if (res.ok) {
       const body = (await res.json().catch(() => null)) as { hasPassword?: unknown; fingerprint?: unknown; setAt?: unknown } | null
       if (typeof body?.hasPassword === 'boolean') {
@@ -2004,7 +2011,7 @@ async function trustLinkedMachine(peer: LinkedPeer): Promise<void> {
   try {
     const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/link/trust-peer`, {
       method: 'POST',
-      headers: { 'x-adapter-local': '1', 'content-type': 'application/json' },
+      headers: daemonHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify(peer),
     })
     if (res.ok) return
@@ -2053,7 +2060,7 @@ async function daemonGroupRemove(selector: string): Promise<boolean> {
   try {
     const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/group/remove`, {
       method: 'POST',
-      headers: { 'x-adapter-local': '1', 'content-type': 'application/json' },
+      headers: daemonHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ selector }),
     })
     return res.ok
@@ -2081,7 +2088,7 @@ async function groupCommand(sub: string | undefined, arg: string | undefined, js
   }
   if (sub === 'sync') {
     try {
-      const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/group/sync`, { method: 'POST', headers: { 'x-adapter-local': '1' } })
+      const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/group/sync`, { method: 'POST', headers: daemonHeaders() })
       if (!res.ok) throw new Error(String(res.status))
     } catch (error) {
       console.error(`\n  ✗ ${daemonUnreachableText((error as { cause?: unknown }).cause ?? error)}\n`)
@@ -2632,7 +2639,7 @@ switch (cmd) {
     runDevicesCommand(rest, {
       port: daemonPort(),
       machineId: async () => (await runningDaemonStatus())?.machineId ?? null,
-      connect: (url) => new NewCommandSocket(url),
+      connect: (url, headers) => new NewCommandSocket(url, { headers }),
     }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'pair':
@@ -2654,7 +2661,7 @@ switch (cmd) {
         port: daemonPort(),
         localMachineId: wantedDaemonIdentity(),
         daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
-        connect: (url) => new NewCommandSocket(url),
+        connect: (url) => new NewCommandSocket(url, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }),
         output: (line) => console.log(line),
         error: (line) => console.error(line),
       }).then((code) => { process.exitCode = code }).catch(onError)
@@ -2689,7 +2696,7 @@ switch (cmd) {
       localMachineId: wantedDaemonIdentity(),
       daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
       listMachines: usableMachines,
-      connect: (url) => new NewCommandSocket(url),
+      connect: (url) => new NewCommandSocket(url, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }),
       output: (line) => console.log(line),
       error: (line) => console.error(line),
       origin: () => agentOrigin(),

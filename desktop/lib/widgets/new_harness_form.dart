@@ -132,7 +132,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               !_advancedRows.contains(row) ||
               box.advancedOpen) &&
           (row != _Row.profile || box.usesProfile) &&
-          (row != _Row.model || !box.isTerminal) &&
+          (row != _Row.model || (!box.isTerminal && !box.asGuest)) &&
           (row != _Row.approvals || box.hasModes))
         row,
   ];
@@ -1777,11 +1777,17 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   Widget _desktopHeader() {
     final folder = box.project.folder;
-    final projectName =
-        box.project.name ??
-        folder?.split(RegExp(r'[/\\]')).where((p) => p.isNotEmpty).lastOrNull ??
-        box.project.repository?.name ??
-        'Choose repo';
+    final lastPart = folder
+        ?.split(RegExp(r'[/\\]'))
+        .where((p) => p.isNotEmpty)
+        .lastOrNull;
+    // A guest starts in its workspace or a folder the owner shares (NewHarnessController.asGuest).
+    final projectName = box.asGuest
+        ? lastPart ?? 'My workspace'
+        : box.project.name ??
+              lastPart ??
+              box.project.repository?.name ??
+              'Choose repo';
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1848,7 +1854,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 ),
               // Fo takes no repository; a cloud coding agent works on the chosen
               // repository's GitHub copy, never on this computer's folder.
-              if (!box.isCloud || cloudAgentTakesRepository(box.engine))
+              if ((!box.isCloud || cloudAgentTakesRepository(box.engine)) &&
+                  (!box.asGuest ||
+                      box.fields.contains(NewHarnessField.projectMenu)))
                 _desktopField(
                   order: 3,
                   anchor: _desktopAnchors[_Row.project]!,
@@ -2048,7 +2056,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         mainAxisSize: MainAxisSize.min,
         spacing: 2,
         children: [
-          if (!box.isTerminal && !box.isCloud)
+          // A guest's harness runs on the owner's subscription: no model or
+          // account of its own to pick.
+          if (!box.isTerminal && !box.isCloud && !box.asGuest)
             _desktopField(
               order: 5,
               anchor: _desktopAnchors[_Row.model]!,

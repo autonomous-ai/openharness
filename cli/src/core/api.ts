@@ -593,6 +593,8 @@ export interface Asker {
    * Established by the gateway's pairing record, never by the request payload.
    * Absent in older transports; a local owner remains authoritative. */
   accountOwner?: boolean
+  /** A guest's session (RemoteClient.guest): the account it is shared with. Never `owner`. */
+  guest?: string
   /** The connection it came over (a window's, a remote client's), as the core names it, and the id it
    *  asked under: what a service keys work by that belongs to one connection (the Model Manager's grid
    *  commands, which a cancel on the same connection stops; a limit on how many at once per connection).
@@ -650,7 +652,38 @@ export const HANDOFF_REQUESTS = ['agent_handoff_prepare'] as const
 export const CONNECTORS_REQUESTS = ['connectors'] as const
 /** Sharing this machine with other accounts, and adding machines shared with this one, in the edge host
  *  (services/sharedMachines.ts). */
-export const SHARED_MACHINES_REQUESTS = ['shared_machines'] as const
+export const SHARED_MACHINES_REQUESTS = ['shared_machines', 'guest_folders'] as const
+
+/** What the core asks to start a guest's harness: whose (the email the gateway named the session by), which
+ *  engine, and whether it works without asking for each command. */
+export interface GuestLaunchInput { email: string; engine: string; bypassPermission: boolean; prompt?: string
+  /** The engine's own flags for the permission mode asked for (lib/engineLaunch.ts `permissionModeFlags`), as an
+   *  owner's launch passes them; absent, `bypassPermission` alone decides. */
+  permissionFlags?: string[]
+  /** A folder the owner shares to start in; the guest's workspace when absent or not shared. */
+  cwd?: string }
+/** A guest's harness as shared machines builds it (services/guestLaunches.ts): the pane's command, which runs
+ *  the engine as the guest's own OS user on the owner's subscription, the variables to set on the pane, and
+ *  `workspace`, where it starts (the guest's workspace or a folder the owner shares). The core opens it and
+ *  records whose it is (core/agents/guestCreate.ts). */
+export type GuestLaunch =
+  | { ok: true; workspace: string; argv: string[]; env: Record<string, string> }
+  | { ok: false; error: string; detail?: string }
+
+/** The core's call into shared machines: a guest's launch (docs/plans/2026-10-19-guest-machine-sharing-plan.md). */
+export interface SharedMachinesCorePort {
+  guestLaunch(input: GuestLaunchInput): Promise<GuestLaunch>
+  /** The service stopping: its subscription relay closes. */
+  stop(): Promise<void> | void
+}
+
+/** What a guest's New Harness is told while shared machines is off or failing. */
+export const GUEST_LAUNCH_UNAVAILABLE: GuestLaunch = {
+  ok: false, error: 'GUEST_UNAVAILABLE', detail: 'Guest access is not running on this computer right now. Try again in a moment.',
+}
+export const SHARED_MACHINES_FALLBACKS: PortFallbacks<SharedMachinesCorePort> = { guestLaunch: later(GUEST_LAUNCH_UNAVAILABLE), stop: undefined }
+/** What the core calls while `ports.sharedMachines` is null. */
+export const SHARED_MACHINES_OFF: SharedMachinesCorePort = { guestLaunch: async () => GUEST_LAUNCH_UNAVAILABLE, stop: () => {} }
 /** A Harness OS computer managed from the owner's phone: whether it runs Harness OS, its update, and its Wi-Fi,
  *  in the edge host (services/osDevice.ts). */
 export const OS_DEVICE_REQUESTS = ['os_device'] as const
@@ -702,6 +735,9 @@ export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, numbe
   // A cloud agent's maker answers on its own time: Fo's reply waits 40 s, and a busy Fo is retried for half a
   // minute more. A wait shorter than that said "not running" of words that were then sent anyway.
   cloud: { create: 3 * MINUTE, deliver: 3 * MINUTE, answer: 3 * MINUTE, stopHarness: 2 * MINUTE, cloud_send: 3 * MINUTE },
+  // A guest's first harness makes their OS account (`dscl`, a home); turning guest access on waits on the
+  // owner at the admin prompt, which gives up after ten minutes (lib/guestHelperInstall.ts).
+  sharedMachines: { guestLaunch: 2 * MINUTE, shared_machines: 11 * MINUTE },
 }
 
 /** The orchestrator (services/orchestrator.ts): its projects, for the apps and for the agents it runs. */
@@ -1330,6 +1366,10 @@ export type RemoteRole = 'web' | 'device'
 export interface RemoteClient {
   role: RemoteRole
   accountOwner?: boolean
+  /** Set for a session trusted only because this machine is shared with another account: that account's
+   *  email ('' when an older store did not record it). A guest uses its own space and nothing of the
+   *  owner's (docs/plans/2026-10-19-guest-machine-sharing-plan.md, core/guestPolicy.ts). */
+  guest?: string
   label: string | null
   identity: string
   direct: boolean
@@ -1366,8 +1406,8 @@ export interface GatewayPort {
   /** Whether the backend link is up. */
   connected(): boolean
   /** A frame for the web audience: sealed under the group key when it carries content, queued while the
-   *  link is down. */
-  broadcast(frame: Record<string, unknown>): void
+   *  link is down. [guest]: the guest whose harness it is about, whose sessions get it sealed for each. */
+  broadcast(frame: Record<string, unknown>, guest?: string): void
   /** A frame for the devices (the commander audience), sealed the same way. */
   commander(frame: Record<string, unknown>): void
   /** A notification for every browser signed in to the account (the user audience). */
@@ -1634,10 +1674,11 @@ export interface CorePorts {
   agentCleanup: AgentCleanupPort | null
   cloud: CloudPort | null
   superTabs: SuperTabsPort | null
+  sharedMachines: SharedMachinesCorePort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null }
+  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, superTabs: null, sharedMachines: null }
 }
 
 export interface CoreApiDeps {

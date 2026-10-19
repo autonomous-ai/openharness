@@ -104,6 +104,10 @@ export const LAUNCH_ERROR_CODES = [
   'restart_failed', 'restart_unsupported_backend', 'retarget_unsupported_backend', 'fork_on_grid_unsupported',
   'no_active_process', 'opencode_sqlite_missing', 'unavailable', 'missing_name', 'missing_update',
   'invalid_close_request', 'invalid_delete_request', 'close_failed', 'delete_failed',
+  // A guest on a machine shared with it (core/guestPolicy.ts, core/agents/guestCreate.ts, services/guestLaunches.ts).
+  'guest_not_allowed', 'guest_unsupported', 'guest_harness', 'guest_unavailable', 'guest_helper_required',
+  'guest_engine_unsupported', 'guest_relay_failed', 'guest_folder_unavailable', 'guest_invalid', 'guest_helper_missing',
+  'guest_helper_not_authorized', 'guest_helper_failed',
   'unlisted', 'none',
 ] as const
 export type LaunchErrorCode = typeof LAUNCH_ERROR_CODES[number]

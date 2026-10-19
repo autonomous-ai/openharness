@@ -167,7 +167,13 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
       case 'thisComputerOnly': port.serveThisComputerOnly(); return
       case 'hold': port.holdRequests(); return
       case 'open': port.openRequests(); return
-      case 'broadcast': port.broadcast(record(payload.frame)); return
+      case 'broadcast': {
+        // A guest's harness's event goes to the group (which cannot open it) and sealed to that guest's sessions.
+        const guest = text(payload.guest)
+        if (guest) port.broadcast(record(payload.frame), guest)
+        else port.broadcast(record(payload.frame))
+        return
+      }
       case 'commander': port.commander(record(payload.frame)); return
       case 'user': port.user(record(payload.frame)); return
       case 'reply': port.reply(connId, text(payload.type), payload.requestId, record(payload.payload)); return

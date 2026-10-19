@@ -168,6 +168,46 @@ describe('local CLI WebSocket', () => {
     }
   })
 
+  // The port takes any OS user's process — a guest's harness running as its own user
+  // (docs/plans/2026-10-19-guest-machine-sharing-plan.md); only this user can read the 0600 credential.
+  it('takes a TCP upgrade only with the daemon\'s local credential, by header or bearer', async () => {
+    const credential = 'c'.repeat(43)
+    const url = await start(new FakeBackend(), { localCredential: credential })
+    const refused = async (headers: Record<string, string>): Promise<number> => {
+      const ws = new WebSocket(url, { headers })
+      return new Promise<number>((resolve) => ws.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)))
+    }
+    expect(await refused({})).toBe(401)
+    expect(await refused({ 'x-harness-local': 'w'.repeat(43) })).toBe(401)
+    for (const headers of [{ 'x-harness-local': credential }, { authorization: `Bearer ${credential}` }]) {
+      const ws = new WebSocket(url, { headers })
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+      expect(await connected).toMatchObject({ type: 'connected', payload: { machineId } })
+      ws.close()
+    }
+  })
+
+  it('takes an upgrade over the daemon\'s socket with no credential, the TCP port still wanting one', async () => {
+    const dir = mkdtempSync('/tmp/lws-cred-')
+    const socketPath = join(dir, 'daemon.sock')
+    const unix = await listenLocalSocket((_req, res) => { res.statusCode = 404; res.end() }, socketPath)
+    const tcp = await start(new FakeBackend(), { localSocketServer: unix.server, localCredential: 'c'.repeat(43) })
+    try {
+      const ws = new WebSocket(`ws+unix://${socketPath}:/api/local-ws`)
+      await onceOpen(ws)
+      ws.close()
+      const refused = new WebSocket(tcp)
+      expect(await new Promise<number>((resolve) => refused.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)))).toBe(401)
+    } finally {
+      await local?.close()
+      local = null
+      await unix.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('refuses an upgrade whose Host is not a loopback name for this port', async () => {
     const url = await start(new FakeBackend())
     const ws = new WebSocket(url, { headers: { host: 'rebind.evil.example:' + new URL(url).port } })

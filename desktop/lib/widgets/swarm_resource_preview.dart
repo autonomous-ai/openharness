@@ -1689,11 +1689,14 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         if (machine.isLocalMachine) 'This computer',
         if (machine.machine.isShared) 'View only',
         if (machine.machine.machineShare case final share?)
-          'Shared by ${share.owner}',
+          'Guest · shared by ${share.owner}',
       ].join(' · '),
       '',
+      // A guest's harnesses run as their own account there, on the owner's plans
+      // (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
       if (machine.machine.machineShare case final share?) ...[
-        'You use it as your own. Only ${share.owner} can rename, remove or share it.',
+        'You have your own space on it and use ${share.owner}’s Claude and ChatGPT plans. '
+            'You see only the harnesses you start there.',
         '',
       ],
       if (resources?.cpuPercent case final cpu?) 'CPU ${cpu.round()}%',

@@ -2,6 +2,7 @@ import { createServer } from 'node:http'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { loadOrCreateHookCredential } from './hookAuth.js'
 import { legacyDaemonStatus, localDaemonStatus, saveDaemonPort, savedDaemonPort } from './daemonEndpoint.js'
 import { listenLocalSocket, localSocketPath } from './localSocket.js'
 
@@ -81,5 +82,19 @@ describe('per-user daemon discovery', () => {
     expect(await legacyDaemonStatus(port, 43211, 'this-user')).toBeNull()
     expect(await legacyDaemonStatus(port, 43210, 'other-user')).toBeNull()
     expect(await legacyDaemonStatus(port, 43210, 'this-user')).toEqual(status)
+  })
+
+  it('shows legacy status this OS user\'s local credential when it is given the data dir', async () => {
+    const status = { pid: 43210, computerId: 'this-user' }
+    const seen: Array<string | undefined> = []
+    const server = createServer((req, res) => { seen.push(req.headers['x-harness-local'] as string | undefined); res.end(JSON.stringify(status)) })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    cleanup.push(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) }))
+    const port = (server.address() as { port: number }).port
+    const dataDir = directory()
+    const credential = loadOrCreateHookCredential(dataDir)
+    expect(await legacyDaemonStatus(port, 43210, 'this-user', dataDir)).toEqual(status)
+    expect(await legacyDaemonStatus(port, 43210, 'this-user')).toEqual(status)
+    expect(seen).toEqual([credential, undefined])
   })
 })

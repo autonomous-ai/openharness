@@ -42,7 +42,8 @@ pub const INSTALL: &str = "curl -fsSL https://cdn.autonomous.ai/harness/cli/inst
 pub const LOGIN: &str = "harness login";
 pub const START: &str = "harness start && harness remote-password set";
 /// What sharing this computer gives (machine_sharing_form.dart's intro).
-const SHARE_ACCESS: &str = "People you share it with get full access: they can run harnesses, open terminals and read files on it.";
+/// What a guest gets (docs/plans/2026-10-19-guest-machine-sharing-plan.md): Guest is the only level.
+const SHARE_ACCESS: &str = "Guests get their own space here and can use your Claude and ChatGPT plans. They cannot see your files or harnesses.";
 
 /// Where the Add Phone QR points (add_phone_dialog.dart `phonePairLink`): the phone parses exactly
 /// this, so the TUI's code is the app's, byte for byte.
@@ -131,6 +132,8 @@ pub enum Entry {
     Rename { machine: String, name: String },
     /// An address to share this computer with (services/sharedMachines.ts).
     ShareEmail,
+    /// A folder of this computer's for guests to open in their harnesses; [write]: they may change it.
+    ShareFolder { write: bool },
 }
 
 /// What a yes does.
@@ -149,6 +152,8 @@ pub enum Act {
     Share { emails: Vec<String>, same_domain: bool, said: String },
     /// A machine shared with this account's domain added to its machines (an older backend lists one to add).
     AddShared { machine: String, name: String },
+    /// The folders guests may open here, each read only or editable (`set_folders`); [said] as for Share.
+    ShareFolders { folders: Vec<(String, bool)>, said: String },
 }
 
 /// The panel is asking, in a dialog over it: a line to type (a password shown as dots; the caret
@@ -271,7 +276,9 @@ pub fn ask(app: &mut App, req: Req, line: Option<fn(&mut App, &str)>, then: impl
         Req::Rpc { ty, payload } => {
             let here = app.fleet.local_id.clone();
             let Some(link) = app.link(&here) else { return then(app, Reply::Rpc(Err(("DAEMON_DOWN".into(), "Harness is not running on this computer.".into())))) };
-            app.spawn(async move { Reply::Rpc(link.rpc(ty, payload, Duration::from_secs(30)).await.map_err(|e| (e.code, e.detail))) }, then)
+            // Turning guest access on waits on the person at this computer's admin prompt, which gives up after ten minutes.
+            let wait = Duration::from_secs(if payload.get("action").and_then(Value::as_str) == Some("enable_guests") { 660 } else { 30 });
+            app.spawn(async move { Reply::Rpc(link.rpc(ty, payload, wait).await.map_err(|e| (e.code, e.detail))) }, then)
         }
         Req::Copy(text) => { crate::clipboard::store(&text); then(app, Reply::Done) }
         Req::Wait(d) => app.spawn(async move { tokio::time::sleep(d).await; Reply::Done }, then),
@@ -803,9 +810,36 @@ fn run_act(app: &mut App, act: Act) {
             });
         }
         Act::Share { emails, same_domain, said } => {
+            // The first share turns guest access on: each guest runs as their own account here, which takes one
+            // admin prompt on this computer. A CLI from before guests says nothing of it, and is not asked.
+            let access = app.devices.sharing.as_ref().and_then(|s| s.as_ref().ok()).and_then(|v| v.get("guestAccess")).and_then(Value::as_str).map(str::to_string);
+            if (!emails.is_empty() || same_domain) && access.as_deref().is_some_and(|a| a != "ready") {
+                note(app, "Approve the prompt on this computer: it lets each guest run as their own account.");
+                ask(app, Req::Rpc { ty: "shared_machines", payload: json!({ "action": "enable_guests" }) }, None, move |app, reply| {
+                    match shared_answer(reply) {
+                        Ok(v) => {
+                            if let Some(Ok(sharing)) = app.devices.sharing.as_mut() { sharing["guestAccess"] = v.get("guestAccess").cloned().unwrap_or(json!("ready")) }
+                            run_act(app, Act::Share { emails, same_domain, said })
+                        }
+                        Err(message) => { fail(app, message); again(app) }
+                    }
+                });
+                return;
+            }
             note(app, "Saving…");
             let payload = json!({ "action": "set", "emails": emails, "sameDomain": same_domain });
             ask(app, Req::Rpc { ty: "shared_machines", payload }, None, move |app, reply| {
+                match shared_answer(reply) {
+                    Ok(v) => { app.devices.sharing = Some(Ok(v)); note(app, said) }
+                    Err(message) => fail(app, message),
+                }
+                again(app);
+            });
+        }
+        Act::ShareFolders { folders, said } => {
+            note(app, "Saving…");
+            let folders: Vec<Value> = folders.into_iter().map(|(path, write)| json!({ "path": path, "write": write })).collect();
+            ask(app, Req::Rpc { ty: "shared_machines", payload: json!({ "action": "set_folders", "folders": folders }) }, None, move |app, reply| {
                 match shared_answer(reply) {
                     Ok(v) => { app.devices.sharing = Some(Ok(v)); note(app, said) }
                     Err(message) => fail(app, message),
@@ -986,8 +1020,21 @@ fn submit(app: &mut App, what: Entry, value: String) {
             if new.is_empty() { return note(app, "Already shared with them") }
             emails.extend(new.iter().cloned());
             let here = app.fleet.local_machine_name();
-            confirm(app, format!("Share {here} with {}? They use it as their own: its harnesses, terminals and files.", new.join(", ")),
+            confirm(app, format!("Share {here} with {}? They get their own space, as guests, and use your Claude and ChatGPT plans.", new.join(", ")),
                 Act::Share { emails, same_domain, said: format!("Shared with {}", new.join(", ")) });
+        }
+        Entry::ShareFolder { write } => {
+            let typed = value.trim();
+            let path = if typed.len() > 1 { typed.trim_end_matches('/') } else { typed }.to_string();
+            if path.is_empty() { return note(app, "Nothing changed") }
+            let label = if write { "Folder guests can edit" } else { "Folder guests can read" };
+            if !path.starts_with('/') { entry(app, Entry::ShareFolder { write }, label, &value, false); return fail(app, "Enter the folder's full path, like /Users/you/project") }
+            let mut folders = sharing_folders(app);
+            if folders.iter().any(|(p, _)| *p == path) { return note(app, format!("Guests can already use {path}")) }
+            folders.push((path.clone(), write));
+            let what = if write { "read and change" } else { "read" };
+            confirm(app, format!("Let guests {what} {path}? They can read anything in it, secrets too."),
+                Act::ShareFolders { folders, said: format!("Guests can use {path}") });
         }
         Entry::Rename { machine, name } => {
             let new = value.trim().to_string();
@@ -1221,7 +1268,7 @@ fn share_action(app: &mut App, rest: &str) {
             if same_domain {
                 run_act(app, Act::Share { emails, same_domain: false, said: format!("No longer shared with everyone at @{domain}") })
             } else {
-                confirm(app, format!("Share {here} with everyone at @{domain}? They use it as their own: its harnesses, terminals and files."),
+                confirm(app, format!("Share {here} with everyone at @{domain}? They get their own space, as guests, and use your Claude and ChatGPT plans."),
                     Act::Share { emails, same_domain: true, said: format!("Shared with everyone at @{domain}") })
             }
         }
@@ -1229,8 +1276,38 @@ fn share_action(app: &mut App, rest: &str) {
             let rest: Vec<String> = emails.into_iter().filter(|e| e != email).collect();
             confirm(app, format!("Stop sharing {here} with {email}?"), Act::Share { emails: rest, same_domain, said: format!("No longer shared with {email}") })
         }
+        ("guests-on", _) => {
+            note(app, "Approve the prompt on this computer: it lets each guest run as their own account.");
+            ask(app, Req::Rpc { ty: "shared_machines", payload: json!({ "action": "enable_guests" }) }, None, move |app, reply| {
+                match shared_answer(reply) {
+                    Ok(v) => {
+                        if let Some(Ok(sharing)) = app.devices.sharing.as_mut() { sharing["guestAccess"] = v.get("guestAccess").cloned().unwrap_or(json!("ready")) }
+                        note(app, "Guest access is on")
+                    }
+                    Err(message) => fail(app, message),
+                }
+                again(app);
+            });
+        }
+        ("folder-read", _) => entry(app, Entry::ShareFolder { write: false }, "Folder guests can read", "", false),
+        ("folder-write", _) => entry(app, Entry::ShareFolder { write: true }, "Folder guests can edit", "", false),
+        ("folder", path) => {
+            let rest: Vec<(String, bool)> = sharing_folders(app).into_iter().filter(|(p, _)| p != path).collect();
+            confirm(app, format!("Stop sharing {path} with guests?"), Act::ShareFolders { folders: rest, said: format!("Guests can no longer use {path}") })
+        }
         _ => {}
     }
+}
+
+/// Whether guests may start harnesses here (`ready`), or what turning it on takes; None from a CLI before guests.
+fn guest_access(app: &App) -> Option<String> {
+    app.devices.sharing.as_ref().and_then(|s| s.as_ref().ok()).and_then(|v| v.get("guestAccess")).and_then(Value::as_str).map(str::to_string)
+}
+
+/// The folders guests may open here, as this computer last said: (path, whether they may change it).
+fn sharing_folders(app: &App) -> Vec<(String, bool)> {
+    app.devices.sharing.as_ref().and_then(|s| s.as_ref().ok()).and_then(|v| v.get("folders")).and_then(Value::as_array).into_iter().flatten()
+        .filter_map(|f| Some((f.get("path")?.as_str()?.to_string(), f.get("write") == Some(&Value::Bool(true))))).collect()
 }
 
 /// Whether [text] is an address the backend takes (zod's `email()`, by hand: this regex has no
@@ -1378,7 +1455,7 @@ fn machines_rows(app: &App) -> Vec<Row> {
             _ => "…".into(),
         };
         rows.push(Row::new("share:", "Share this computer…").group(here).extra("share sharing people team domain").lead(dot("⇆", theme::TEAL))
-            .detail(vec![span("with people you choose; they use it as their own", fg(theme::MUTED))]).right(state));
+            .detail(vec![span("with people you choose, as guests", fg(theme::MUTED))]).right(state));
     }
 
     let yours = "Your machines";
@@ -1397,7 +1474,7 @@ fn machines_rows(app: &App) -> Vec<Row> {
         let (glyph, color, word) = reach(app, m);
         let rtt = app.rtt.get(&m.id).filter(|_| m.usable()).map(|d| format!("{}ms  ", d.as_millis())).unwrap_or_default();
         rows.push(Row::new(format!("m:{}", m.id), m.name.clone()).group(with_you).extra(format!("{} {} {}", m.id, share.owner, share.email)).lead(dot(glyph, color))
-            .detail(vec![span(format!("shared by {} · ", share.owner), fg(theme::MUTED)), span(word, fg(color))]).right(format!("{rtt}{}", counts(app, &m.id))));
+            .detail(vec![span(format!("guest · shared by {} · ", share.owner), fg(theme::MUTED)), span(word, fg(color))]).right(format!("{rtt}{}", counts(app, &m.id))));
     }
     // Shared with this account's domain: Enter adds one.
     let team = "Shared with your team";
@@ -1456,7 +1533,7 @@ fn action_rows(app: &App, id: &str) -> Vec<Row> {
 /// This computer's sharing: everyone at its domain, the addresses, and who uses it now.
 fn share_rows(app: &App) -> Vec<Row> {
     let here = format!("Share {}", app.fleet.local_machine_name());
-    let mut rows = vec![info("share-what", "People you share it with get full access.", &here)];
+    let mut rows = vec![info("share-what", "Guests get their own space here.", &here)];
     let Some((emails, same_domain, domain)) = sharing_now(app) else {
         match &app.devices.sharing {
             Some(Err(message)) => {
@@ -1467,9 +1544,15 @@ fn share_rows(app: &App) -> Vec<Row> {
         }
         return rows;
     };
+    // Shared already, but guests start nothing until guest access is on (again, after an update).
+    let access = guest_access(app);
+    if (!emails.is_empty() || same_domain) && access.as_deref().is_some_and(|a| a != "ready") {
+        rows.push(Row::new("shr:guests-on", "Turn guest access on…").group(here.clone()).extra("guest access admin").lead(dot("!", theme::WARN))
+            .detail(vec![span(if access.as_deref() == Some("outdated") { "again, after the update" } else { "guests cannot start harnesses yet" }, fg(theme::MUTED))]));
+    }
     if let Some(domain) = &domain {
         rows.push(Row::new("shr:domain", format!("Everyone at @{domain}")).group(here.clone()).extra("domain team company").lead(dot(if same_domain { "✓" } else { "·" }, if same_domain { theme::ONLINE } else { theme::MUTED }))
-            .detail(vec![span("they use it as their own", fg(theme::MUTED))]).right(if same_domain { "on" } else { "off" }));
+            .detail(vec![span("as guests", fg(theme::MUTED))]).right(if same_domain { "on" } else { "off" }));
     }
     rows.push(Row::new("shr:add", "Add an email…").group(here.clone()).extra("add email person").lead(dot("+", theme::TEAL)).detail(vec![span("they see it in their Machines", fg(theme::MUTED))]));
     for email in &emails {
@@ -1477,6 +1560,14 @@ fn share_rows(app: &App) -> Vec<Row> {
     }
     let using = using_by_email(app);
     if !using.is_empty() { rows.push(info("share-using", format!("Using it now: {}", using.join(", ")), &here)) }
+    // The folders guests may open in their harnesses (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+    let folders = "Folders guests can open";
+    rows.push(Row::new("shr:folder-read", "Share a folder (read only)…").group(folders).extra("folder share read").lead(dot("+", theme::TEAL)));
+    rows.push(Row::new("shr:folder-write", "Share a folder guests can edit…").group(folders).extra("folder share edit write").lead(dot("+", theme::TEAL)));
+    for (path, write) in sharing_folders(app) {
+        rows.push(Row::new(format!("shr:folder:{path}"), path.clone()).group(folders).extra("folder remove").lead(dot("·", theme::MUTED))
+            .right(if write { "can edit" } else { "read only" }));
+    }
     rows
 }
 
@@ -1589,7 +1680,7 @@ pub fn preview(app: &App, view: View, id: &str) -> Vec<Line<'static>> {
         "addshared" => {
             let Some((_, name, share)) = app.fleet.to_add.iter().find(|(id, ..)| id == rest) else { return vec![] };
             let mut out = vec![bold(name.clone()).into(), Line::raw(""), kv("shared by", owner_of(share)), Line::raw(""),
-                Line::raw(format!("{} shared it with everyone at your company. Added, it is one of your machines: its harnesses, terminals and files.", share.owner))];
+                Line::raw(format!("{} shared it with everyone at your company. Added, you get your own space on it and use their Claude and ChatGPT plans.", share.owner))];
             out.extend(enter_does("adds it to your machines"));
             out
         }
@@ -1672,13 +1763,13 @@ fn share_preview(app: &App, rest: &str) -> Vec<Line<'static>> {
         ("domain", _) => {
             let Some(d) = domain else { return vec![] };
             let mut out = vec![bold(format!("Everyone at @{d}")).into(), Line::raw(""),
-                Line::raw(format!("Anyone with an @{d} address can use it as their own: its harnesses, terminals and files.")), Line::raw(""),
+                Line::raw(format!("Anyone with an @{d} address can use it as a guest: their own space, on your Claude and ChatGPT plans.")), Line::raw(""),
                 kv("now", if same_domain { "on" } else { "off" })];
             out.extend(enter_does(if same_domain { format!("stops sharing with everyone at @{d}; people you added by email keep it") } else { "asks y/n, then shares it with them".into() }));
             out
         }
         ("add", _) => {
-            let mut out = vec![bold("Add people").into(), Line::raw(""), Line::raw("They see it in their Machines and use it as their own: its harnesses, terminals and files."),
+            let mut out = vec![bold("Add people").into(), Line::raw(""), Line::raw("They see it in their Machines and use it as guests: their own space, on your Claude and ChatGPT plans."),
                 Line::raw(""), dim("Several at once: separate the addresses with commas or spaces.").into()];
             out.extend(enter_does("asks for their email addresses, then y/n"));
             out
@@ -1687,6 +1778,26 @@ fn share_preview(app: &App, rest: &str) -> Vec<Line<'static>> {
             let using = members.iter().any(|(e, _)| e == email);
             let mut out = vec![bold(email.to_string()).into(), Line::raw(""), kv("status", if using { "using it" } else { "invited · not using it yet" })];
             out.extend(enter_does("asks y/n, then stops sharing with them — they lose access at once"));
+            out
+        }
+        ("guests-on", _) => {
+            let mut out = vec![bold("Turn guest access on").into(), Line::raw(""),
+                Line::raw("Each guest's harnesses run as their own account on this computer, so they cannot see your files. That takes one admin password here.")];
+            out.extend(enter_does("shows this computer's admin prompt"));
+            out
+        }
+        ("folder-read" | "folder-write", _) => {
+            let write = rest == "folder-write";
+            let mut out = vec![bold(if write { "Share a folder guests can edit" } else { "Share a folder" }).into(), Line::raw(""),
+                Line::raw(if write { "Guests' harnesses can open it, and read and change what is in it." } else { "Guests' harnesses can open it and read what is in it." }),
+                Line::raw(""), Line::styled("They can read anything inside, secrets too.", fg(theme::WARN))];
+            out.extend(enter_does("asks for the folder's full path, then y/n"));
+            out
+        }
+        ("folder", path) => {
+            let write = sharing_folders(app).iter().any(|(p, w)| p == path && *w);
+            let mut out = vec![bold(path.to_string()).into(), Line::raw(""), kv("guests", if write { "can read and change it" } else { "can read it" })];
+            out.extend(enter_does("asks y/n, then stops sharing it with guests"));
             out
         }
         _ => vec![],
@@ -1823,7 +1934,8 @@ fn ask_title(app: &App, ask: &Ask) -> String {
         Ask::Confirm { act: Act::Remove { name, .. }, .. } => format!("Remove from Account · {name}"),
         Ask::Confirm { act: Act::Unpair { name, .. }, .. } => format!("Remove Access · {name}"),
         Ask::Confirm { act: Act::ArmPhone, .. } => "Add Your Phone".into(),
-        Ask::Entry { what: Entry::ShareEmail, .. } | Ask::Confirm { act: Act::Share { .. }, .. } => format!("Share · {}", app.fleet.local_machine_name()),
+        Ask::Entry { what: Entry::ShareEmail | Entry::ShareFolder { .. }, .. } | Ask::Confirm { act: Act::Share { .. } | Act::ShareFolders { .. }, .. } =>
+            format!("Share · {}", app.fleet.local_machine_name()),
         Ask::Confirm { act: Act::AddShared { name, .. }, .. } => format!("Add to My Machines · {name}"),
     }
 }
@@ -1835,7 +1947,7 @@ fn action(ask: &Ask, room: u16) -> &'static str {
         Ask::Confirm { .. } => return "Yes",
         Ask::Entry { what: Entry::Link { .. }, .. } => "Connect",
         Ask::Entry { what: Entry::Rename { .. }, .. } => "Save",
-        Ask::Entry { what: Entry::ShareEmail, .. } => "Add",
+        Ask::Entry { what: Entry::ShareEmail | Entry::ShareFolder { .. }, .. } => "Add",
         Ask::Entry { .. } => "Continue",
     };
     if "[ Cancel ]  [  ]".width() + word.width() > room as usize { "Next" } else { word }
@@ -2079,7 +2191,34 @@ mod tests {
                     p["sameDomain"] = payload["sameDomain"].clone();
                     p.clone()
                 }
+                Some("set_folders") => {
+                    let mut p = policy.lock().unwrap();
+                    p["folders"] = payload["folders"].clone();
+                    p.clone()
+                }
                 _ => json!({ "ok": true }),
+            })))
+        }));
+        log
+    }
+    /// Guest access off at first: the first share turns it on behind this computer's admin prompt, unless the
+    /// person cancels it there ([cancel]).
+    fn guest_world(app: &mut App, cancel: bool) -> Arc<Mutex<Vec<Req>>> {
+        guest_world_from(app, cancel, json!({ "emails": [], "sameDomain": false, "domain": "acme.io", "members": [], "guestAccess": "missing" }))
+    }
+    fn guest_world_from(app: &mut App, cancel: bool, policy: Value) -> Arc<Mutex<Vec<Req>>> {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let seen = log.clone();
+        let policy = Arc::new(Mutex::new(policy));
+        app.devices.runner = Some(Box::new(move |req: &Req| {
+            seen.lock().unwrap().push(req.clone());
+            let Req::Rpc { ty: "shared_machines", payload } = req else { return world(req) };
+            let mut p = policy.lock().unwrap();
+            Some(Reply::Rpc(Ok(match payload["action"].as_str() {
+                Some("enable_guests") if cancel => json!({ "error": "CANCELLED", "message": "Sharing was not turned on: the admin prompt was cancelled." }),
+                Some("enable_guests") => { p["guestAccess"] = json!("ready"); json!({ "ok": true, "guestAccess": "ready" }) }
+                Some("set") => { p["emails"] = payload["emails"].clone(); p["sameDomain"] = payload["sameDomain"].clone(); p.clone() }
+                _ => p.clone(),
             })))
         }));
         log
@@ -2138,14 +2277,14 @@ mod tests {
         assert_eq!(row_of(&app, "share:").map(|r| r.right.clone()), Some("off".into()));
         go_to(&mut app, "share:");
         press(&mut app, KeyCode::Enter);
-        assert_eq!(ids(&app)[1..], ["shr:domain", "shr:add"]);
+        assert_eq!(ids(&app)[1..], ["shr:domain", "shr:add", "shr:folder-read", "shr:folder-write"]);
 
         go_to(&mut app, "shr:domain");
         press(&mut app, KeyCode::Enter);
         assert!(app.devices.ask.is_some(), "everyone at the domain is asked first");
         // They use it straight away, as people named by email do: nothing to add first.
         assert!(matches!(&app.devices.ask, Some(Ask::Confirm { question, .. })
-            if question.ends_with("with everyone at @acme.io? They use it as their own: its harnesses, terminals and files.")), "{:?}", app.devices.ask);
+            if question.ends_with("with everyone at @acme.io? They get their own space, as guests, and use your Claude and ChatGPT plans.")), "{:?}", app.devices.ask);
         press(&mut app, KeyCode::Char('Y'));
         assert!(has(&log, &rpc("set", json!({ "emails": [], "sameDomain": true }))));
         assert_eq!(row_of(&app, "shr:domain").map(|r| r.right.clone()), Some("on".into()));
@@ -2177,6 +2316,115 @@ mod tests {
         assert_eq!(match &app.modal { Some(Modal::Picker { picker, .. }) => picker.current_id(), _ => None }.as_deref(), Some("share:"));
     }
 
+    #[test]
+    fn the_first_share_turns_guest_access_on_behind_this_computers_admin_prompt_and_a_cancel_shares_nothing() {
+        let mut cancelled = app((150, 42));
+        let log = guest_world(&mut cancelled, true);
+        open(&mut cancelled, View::Machines);
+        go_to(&mut cancelled, "share:");
+        press(&mut cancelled, KeyCode::Enter);
+        go_to(&mut cancelled, "shr:domain");
+        press(&mut cancelled, KeyCode::Enter);
+        press(&mut cancelled, KeyCode::Char('Y'));
+        assert!(has(&log, &rpc("enable_guests", json!({}))));
+        assert!(!log.lock().unwrap().iter().any(|r| matches!(r, Req::Rpc { payload, .. } if payload["action"] == "set")), "nothing shared without it");
+        assert!(cancelled.devices.footer.as_ref().is_some_and(|(t, err, _)| *err && t.contains("admin prompt was cancelled")));
+
+        let mut app = app((150, 42));
+        let log = guest_world(&mut app, false);
+        open(&mut app, View::Machines);
+        go_to(&mut app, "share:");
+        press(&mut app, KeyCode::Enter);
+        go_to(&mut app, "shr:domain");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('Y'));
+        let asked: Vec<String> = log.lock().unwrap().iter().filter_map(|r| match r { Req::Rpc { payload, .. } => payload["action"].as_str().map(str::to_string), _ => None }).collect();
+        assert_eq!(asked.iter().filter(|a| *a != "get").cloned().collect::<Vec<_>>(), ["enable_guests", "set"]);
+        assert_eq!(row_of(&app, "shr:domain").map(|r| r.right.clone()), Some("on".into()));
+        // On now: the next share asks nothing more of the person.
+        go_to(&mut app, "shr:add");
+        press(&mut app, KeyCode::Enter);
+        typed(&mut app, "ann@gmail.com");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('Y'));
+        assert_eq!(log.lock().unwrap().iter().filter(|r| matches!(r, Req::Rpc { payload, .. } if payload["action"] == "enable_guests")).count(), 1);
+        assert!(has(&log, &rpc("set", json!({ "emails": ["ann@gmail.com"], "sameDomain": true }))));
+    }
+
+    #[test]
+    fn shared_already_it_says_guests_wait_on_guest_access_and_turns_it_on() {
+        // Not shared yet: nothing to say.
+        let mut app = app((150, 42));
+        guest_world(&mut app, false);
+        open(&mut app, View::Machines);
+        go_to(&mut app, "share:");
+        press(&mut app, KeyCode::Enter);
+        assert!(row_of(&app, "shr:guests-on").is_none());
+
+        let mut app = self::app((150, 42));
+        let log = guest_world_from(&mut app, false, json!({ "emails": ["kim@acme.io"], "sameDomain": false, "domain": "acme.io", "members": [], "guestAccess": "outdated" }));
+        open(&mut app, View::Machines);
+        go_to(&mut app, "share:");
+        press(&mut app, KeyCode::Enter);
+        assert!(row_of(&app, "shr:guests-on").is_some_and(|r| r.detail.iter().any(|s| s.content.contains("after the update"))));
+        go_to(&mut app, "shr:guests-on");
+        press(&mut app, KeyCode::Enter);
+        assert!(has(&log, &rpc("enable_guests", json!({}))));
+        assert!(app.devices.footer.as_ref().is_some_and(|(t, err, _)| !err && t == "Guest access is on"));
+        assert!(row_of(&app, "shr:guests-on").is_none());
+    }
+
+    #[test]
+    fn folders_are_shared_with_guests_read_only_or_editable_each_after_a_yes_and_taken_back_the_same_way() {
+        let mut app = app((150, 42));
+        let log = sharing_world(&mut app);
+        open(&mut app, View::Machines);
+        go_to(&mut app, "share:");
+        press(&mut app, KeyCode::Enter);
+
+        // A path that is not a full one is refused, by name, and nothing is sent.
+        go_to(&mut app, "shr:folder-read");
+        press(&mut app, KeyCode::Enter);
+        typed(&mut app, "code/app");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.devices.footer.as_ref().is_some_and(|(t, err, _)| *err && t.contains("full path")));
+        press(&mut app, KeyCode::Esc);
+
+        go_to(&mut app, "shr:folder-read");
+        press(&mut app, KeyCode::Enter);
+        typed(&mut app, "/Users/dee/docs/");
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(&app.devices.ask, Some(Ask::Confirm { question, .. }) if question.contains("secrets too")), "{:?}", app.devices.ask);
+        press(&mut app, KeyCode::Char('Y'));
+        assert!(has(&log, &rpc("set_folders", json!({ "folders": [{ "path": "/Users/dee/docs", "write": false }] }))));
+        assert_eq!(row_of(&app, "shr:folder:/Users/dee/docs").map(|r| r.right.clone()), Some("read only".into()));
+
+        go_to(&mut app, "shr:folder-write");
+        press(&mut app, KeyCode::Enter);
+        typed(&mut app, "/Users/dee/code/app");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('Y'));
+        assert!(has(&log, &rpc("set_folders", json!({ "folders": [{ "path": "/Users/dee/docs", "write": false }, { "path": "/Users/dee/code/app", "write": true }] }))));
+        assert_eq!(row_of(&app, "shr:folder:/Users/dee/code/app").map(|r| r.right.clone()), Some("can edit".into()));
+
+        // Once is enough.
+        go_to(&mut app, "shr:folder-read");
+        press(&mut app, KeyCode::Enter);
+        typed(&mut app, "/Users/dee/docs");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.devices.footer.as_ref().is_some_and(|(t, err, _)| !err && t.contains("already")));
+
+        // Taken back after a yes.
+        go_to(&mut app, "shr:folder:/Users/dee/docs");
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('Y'));
+        assert!(has(&log, &rpc("set_folders", json!({ "folders": [{ "path": "/Users/dee/code/app", "write": true }] }))));
+        assert!(row_of(&app, "shr:folder:/Users/dee/docs").is_none());
+        let text = |id: &str| preview(&app, View::Machines, id).iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect::<Vec<_>>().join("\n");
+        assert!(text("shr:folder-write").contains("secrets too"));
+        assert!(text("shr:folder:/Users/dee/code/app").contains("can read and change it"));
+    }
+
     // Seen 2026-10-16: the list is about fifty columns, so the sharing rows were cut short, and
     // the side beside them, where a row says the rest, was empty.
     #[test]
@@ -2197,11 +2445,11 @@ mod tests {
 
         assert!(text("account").starts_with("Signed in as ann@acme.io."), "{}", text("account"));
         let share = text("share:");
-        for said in ["get full access", "everyone at @acme.io · on", "kim@x.io", "lee@y.io", "using it  kim@x.io"] { assert!(share.contains(said), "{said}: {share}") }
+        for said in ["Guests get their own space", "everyone at @acme.io · on", "kim@x.io", "lee@y.io", "using it  kim@x.io"] { assert!(share.contains(said), "{said}: {share}") }
         // Everyone at the domain may use it, and is the domain row: nobody at it is named one by one.
         assert!(!share.contains("bo@acme.io"), "{share}");
         let domain = text("shr:domain");
-        assert!(domain.contains("Anyone with an @acme.io address can use it as their own: its harnesses, terminals and files."), "{domain}");
+        assert!(domain.contains("Anyone with an @acme.io address can use it as a guest: their own space, on your Claude and ChatGPT plans."), "{domain}");
         assert!(!domain.contains("bo@acme.io") && !domain.contains("add it from"), "{domain}");
         assert!(domain.contains("people you added by email keep it"));
         assert!(text("shr:rm:kim@x.io").contains("using it") && text("shr:rm:lee@y.io").contains("invited · not using it yet"));
@@ -2215,7 +2463,7 @@ mod tests {
         go_to(&mut app, "share:");
         press(&mut app, KeyCode::Enter);
         assert!(row_of(&app, "share-what").is_some_and(|r| r.label.chars().count() <= 44));
-        assert!(row_of(&app, "shr:domain").is_some_and(|r| r.detail.iter().any(|s| s.content == "they use it as their own")));
+        assert!(row_of(&app, "shr:domain").is_some_and(|r| r.detail.iter().any(|s| s.content == "as guests")));
         assert_eq!(row_of(&app, "share-using").map(|r| r.label.as_str()), Some("Using it now: kim@x.io"));
     }
 

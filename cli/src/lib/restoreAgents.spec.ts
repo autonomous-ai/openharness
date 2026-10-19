@@ -646,6 +646,13 @@ describe('restoreAgents — which agents get a pane back', () => {
     expect(h.paneCreates).toBe(0)
   })
 
+  it('leaves a guest\'s harness stopped: rebuilt here it would run as the owner, with the owner\'s keys', async () => {
+    const h = harness([row({ agentId: 'guests', guest: 'kim@acme.io' })])
+    const summary = await restoreAgents(h.deps)
+    expect(summary.skipped).toEqual([{ agentId: 'guests', reason: 'a guest\'s harness' }])
+    expect(h.paneCreates).toBe(0); expect(h.respawns).toBe(0)
+  })
+
   it('puts a grid agent back on its grid, key and all, when the row kept its launch', async () => {
     const h = harness([row({ agentId: 'gridded', grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: GRID })])
     h.probes.set('%0', [identity(7)])

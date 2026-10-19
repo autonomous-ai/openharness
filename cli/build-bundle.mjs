@@ -64,6 +64,9 @@ const options = {
     __DEVICES_BUNDLE__: JSON.stringify(devicesBundle),
     __HARNESS_MONITOR_BUNDLE__: JSON.stringify(harnessMonitorBundle),
     __MEMORIES_BUNDLE__: JSON.stringify(memoriesBundle),
+    // The guest helper and its sudoers drop-in (src/lib/guestHelperAssets.ts): the installed CLI is cli.js alone.
+    __GUEST_HELPER__: JSON.stringify(readFileSync('assets/guest-helper/guest-helper.sh', 'utf8')),
+    __GUEST_SUDOERS__: JSON.stringify(readFileSync('assets/guest-helper/sudoers', 'utf8')),
     __BUILTIN_REVISIONS__: JSON.stringify(builtinRevisions),
     __DARWIN_PROCESS_IMAGES__: processImages ? JSON.stringify(processImages) : 'undefined',
   },

@@ -228,7 +228,7 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       catch (error) { log(`[service ${options.name}] binary frame failed · ${describe(error)}`) }
       return
     }
-    let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown; accountOwner?: unknown; connection?: unknown; requestId?: unknown } }
+    let frame: { type?: unknown; payload?: Payload; asker?: { local?: unknown; owner?: unknown; accountOwner?: unknown; guest?: unknown; connection?: unknown; requestId?: unknown } }
     try { frame = JSON.parse(raw.toString()) as typeof frame } catch { return }
     const payload = frame.payload ?? {}
     if (frame.type === 'connected') {
@@ -271,6 +271,8 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       local: frame.asker?.local === true,
       owner: frame.asker?.owner === true,
       ...(typeof frame.asker?.accountOwner === 'boolean' ? { accountOwner: frame.asker.accountOwner } : {}),
+      // A guest's session (core/guestPolicy.ts): whose guest it is, for the few requests a guest may make here.
+      ...(typeof frame.asker?.guest === 'string' ? { guest: frame.asker.guest } : {}),
       ...(typeof frame.asker?.connection === 'string' ? { connection: frame.asker.connection } : {}),
       ...(typeof frame.asker?.requestId === 'string' ? { requestId: frame.asker.requestId } : {}),
     }

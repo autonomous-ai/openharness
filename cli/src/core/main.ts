@@ -171,7 +171,7 @@ import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn
 import { createCursorDiscovery } from './engines/cursorDiscovery.js'
 import { createCursorTaskHooks, loadPendingCursorTasks } from './engines/cursorTasks.js'
 import { databaseHistory, hermesDb } from './transcripts/databaseHistory.js'
-import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_REQUESTS, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
+import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { SUPER_TAB_REQUESTS, SUPER_TAB_FALLBACKS } from './api.js'
 import { startStalls } from './stall.js'
@@ -180,6 +180,8 @@ import { createViewerStreams } from './viewerStreams.js'
 import { createViewersLink } from './viewersLink.js'
 import { createWorkspacesLink } from './workspacesLink.js'
 import { createMonitorLink } from './monitorLink.js'
+import { createSharedMachinesLink } from './sharedMachinesLink.js'
+import { createGuestCreate } from './agents/guestCreate.js'
 import { createStoreLink } from './storeLink.js'
 import { createModelsLink } from './modelsLink.js'
 import { createRecapsLink } from './recapsLink.js'
@@ -213,6 +215,7 @@ import { createViewersWake, VIEWERS_ON_DEMAND, wakeViewers } from './viewersWake
 import { createWifiLink } from './wifiLink.js'
 import { wifiDoors } from './wifiAgents.js'
 import { autonomousDeviceLocalRequest } from '../lib/deviceManagementHttp.js'
+import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
 import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '../localWsServer.js'
 import { TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
 import { isLoopbackRequest, loopbackHosts } from '../lib/loopbackRequest.js'
@@ -1280,6 +1283,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     harnessResourcesReader: () => (ports.monitor ?? MONITOR_OFF).resources(), harnessStorageReader: (agents, invalidate) => (ports.monitor ?? MONITOR_OFF).storage(agents, invalidate),
     cloudFrames: () => cloud.frames(),
   }).agentsList
+  backend.agentGuest = (agentId) => registry.resolve(agentId)?.guest ?? null
   const questionWatcher = asking.questionWatcher
 
 
@@ -1566,8 +1570,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Connected services' MCP bridge and the Connectors screen (services/connectors.ts): here, or in the edge host.
   if (!outOfProcess.has('connectors')) serviceHost.serve('connectors', inline!.startConnectors, coreApi, CONNECTORS_REQUESTS)
   // Sharing this machine with other accounts, and the machines shared with this one (services/sharedMachines.ts).
-  if (!outOfProcess.has('sharedMachines')) serviceHost.serve('sharedMachines', (core) => inline!.startSharedMachines(core,
-    { port: inlineSharedMachinesPort(sharedMachinesAccount, core.account.signedIn()) }), coreApi, SHARED_MACHINES_REQUESTS)
+  // Its port builds a guest's harness (core/agents/guestCreate.ts), asked of the edge host (core/sharedMachinesLink.ts).
+  if (outOfProcess.has('sharedMachines')) ports.sharedMachines = createSharedMachinesLink((type, payload) => serviceLinks.call('sharedMachines', type, payload))
+  else serviceHost.start('sharedMachines', (core, staged) => inline!.startSharedMachines(core,
+    { port: inlineSharedMachinesPort(sharedMachinesAccount, core.account.signedIn()), ports: staged }), coreApi, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_REQUESTS)
   // A Harness OS computer managed from the owner's phone: its update and its Wi-Fi (services/osDevice.ts): here, or in the edge host.
   if (!outOfProcess.has('osDevice')) serviceHost.serve('osDevice', inline!.startOsDevice, coreApi, OS_DEVICE_REQUESTS)
   // The recaps: in this process, or in the edge host (services/recapsProcess.ts), told each turn's lifecycle.
@@ -2028,6 +2034,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   const localWsServer = attachLocalWsServer(hookServer, {
     localSocketServer: localSocket?.server ?? null,
+    // Over TCP the window, the CLI or a tool shows this user's 0600 credential (lib/localCredential.ts).
+    localCredential: loadOrCreateHookCredential(env.ADAPTER_DATA_DIR),
     services: serviceLinks,
     // A window's answer to a bridge's ask, and its comings and goings: the window bridges are the devices'.
     onSelectionReply: (connId, machineId, payload) => ports.devices?.windowReply('selection', connId, machineId, payload),
@@ -2645,6 +2653,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     paneSwapDeps,
     restartHeld: (agentId) => heldLaunches.restartHeld(agentId),
   })
+  const guestCreate = createGuestCreate({
+    launch: (input) => (ports.sharedMachines ?? SHARED_MACHINES_OFF).guestLaunch(input),
+    tmuxBackend: () => tmuxBackend, registry, announceSession, watchNewPane,
+  })
   // The requests that start an agent's process, and the receipts of those asked with a creationId
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.
   const launches = createLaunchRequests({
@@ -2654,6 +2666,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     resumeAgent: () => lifecycle.resumeAgent, restartAgent: () => restartAgent,
     byAgent: (id) => registry.byAgent(id), toProject: (s) => backend.toProject(s),
     modelTarget: (selection) => (ports.models ?? MODELS_OFF).launchTarget(selection),
+    // A guest's New Harness: built by shared machines, as the guest's own OS user (core/agents/guestCreate.ts).
+    guestCreate: () => guestCreate,
   })
   // A cloud agent is made by its service (core/agents/cloud.ts); every other engine launches here.
   // Answered when the service answers, never in the connection's line: the window's next requests go on.

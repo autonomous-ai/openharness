@@ -619,6 +619,9 @@ pub struct App {
     /// Each machine's last measured round trip (the live roster request), for `@`.
     pub rtt: HashMap<String, Duration>,
     pub homes: HashMap<String, String>,
+    /// On a machine shared with this account, the folders its owner shares with guests (path, editable),
+    /// as it last said (`guest_folders`); the guest's workspace stands as its home in [homes].
+    pub guest_folders: HashMap<String, Vec<(String, bool)>>,
     last_focus_sent: Option<(String, String)>,
     /// The mouse event of the key whose commands are running (tmux's item event): `-t =`, the
     /// commands' target, send-keys -M and the mouse_* formats read it.
@@ -1105,6 +1108,7 @@ impl App {
             shell_context: crate::shell_context::State::load(),
             rtt: HashMap::new(),
             homes: HashMap::new(),
+            guest_folders: HashMap::new(),
             last_focus_sent: None,
             mouse_ev: None,
             mouse_state: Default::default(),
@@ -1508,8 +1512,12 @@ impl App {
                 if machine_id == self.fleet.local_id && !crate::local::is_local(&machine_id) { self.daemon_down = false; crate::dial::reconnected(self) }
                 self.relist(&machine_id);
                 self.push_theme();
-                // Its home folder, so its paths read `~/…` like this machine's do.
-                if !self.homes.contains_key(&machine_id) {
+                // A guest there has no home of the owner's to read: its workspace stands for it, beside the
+                // folders the owner shares (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+                if self.fleet.shares.contains_key(&machine_id) {
+                    crate::input::load_guest_folders(self, machine_id.clone());
+                } else if !self.homes.contains_key(&machine_id) {
+                    // Its home folder, so its paths read `~/…` like this machine's do.
                     if let Some(link) = self.link(&machine_id) {
                         let id = machine_id.clone();
                         let generation = link.generation;

@@ -253,6 +253,13 @@ export interface RegisteredSession {
    * new harness beside the one that started it and say so in its header (docs/design/2026-10-11-agent-client.md).
    */
   parentAgentId?: string
+  /**
+   * The guest (email) this harness was started for: a session of an account the owner shares this machine
+   * with. Its process runs as that guest's OS user, and only that guest's sessions may see or drive it
+   * (core/guestPolicy.ts, docs/plans/2026-10-19-guest-machine-sharing-plan.md). Absent for the owner's own.
+   * Recorded once at creation and never changed.
+   */
+  guest?: string
   /** Legacy launcher-owned snapshots may still contain this field. New records never write it. */
   launcherId?: string
   transcriptPath: string | null
@@ -1322,6 +1329,8 @@ class Registry {
           ...(raw.terminalHost === true || engine === 'terminal' ? { terminalHost: true } : {}),
           ...(raw.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
           ...normalizedParent(raw.startedBy, raw.parentAgentId),
+          // Rehydrated explicitly (see above): dropped, a guest's harness would read as the owner's.
+          ...(typeof raw.guest === 'string' && raw.guest ? { guest: raw.guest } : {}),
           transcriptPath,
           defaultName: normalizedDefaultName(raw.defaultName),
           title: titleDisplayName(typeof raw.title === 'string' ? raw.title : null),
@@ -1629,6 +1638,8 @@ class Registry {
     startedBy?: StartedBy | null
     /** The harness here that started it — see RegisteredSession.parentAgentId. Kept only with `startedBy: 'agent'`. */
     parentAgentId?: string | null
+    /** The guest it is started for — see RegisteredSession.guest. */
+    guest?: string | null
   }): RegisteredSession | null {
     if (this.writeBlocked) return null
     const externalResume = input.externalResume === undefined ? undefined : parseExternalResume(input.externalResume)
@@ -1667,6 +1678,7 @@ class Registry {
       ...normalizedForkedFrom(input.forkedFrom),
       ...(input.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
       ...normalizedParent(input.startedBy, input.parentAgentId),
+      ...(input.guest ? { guest: input.guest } : {}),
       transcriptPath: null,
       projectDir: basename(input.cwd ?? '') || agentId,
       cwd: input.cwd ?? null,
@@ -2014,6 +2026,8 @@ class Registry {
       ...(existing?.startedBy ? { startedBy: existing.startedBy } : {}),
       // And who it was, for the same reason: dropped at the first hook, the windows lost which harness started it.
       ...(existing?.parentAgentId ? { parentAgentId: existing.parentAgentId } : {}),
+      // Whose guest's it is: dropped at the first hook, the guest would lose its own harness to the owner.
+      ...(existing?.guest ? { guest: existing.guest } : {}),
       ...(existing?.bypassPermission ? { bypassPermission: true } : {}),
       ...(existing?.permissionMode ? { permissionMode: existing.permissionMode } : {}),
       ...(existing?.resumeOnly ? { resumeOnly: true, launch: { state: 'ready' as const } } : {}),

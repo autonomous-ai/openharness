@@ -6,6 +6,7 @@
  * the paired relay (`machine_select` naming it).
  */
 import { randomUUID } from 'node:crypto'
+import { localCredentialHeaders } from '../lib/localCredential.js'
 import { existsSync } from 'node:fs'
 import { WebSocket } from 'ws'
 import { env } from '../config/env.js'
@@ -56,10 +57,13 @@ export function whereFor(pane: string | undefined, owner: typeof paneOwner = pan
   return { port: found?.port ?? env.PORT, dataDir: found?.dataDir ?? env.ADAPTER_DATA_DIR, machineId, harnessPane: !!found }
 }
 
-/** The Unix socket when the daemon has one (file permissions are its lock), else loopback TCP. */
+/** The Unix socket when the daemon has one (file permissions are its lock), else loopback TCP with the
+ *  daemon's local credential (lib/localCredential.ts). */
 export const connectSocket: Connect = (where) => {
   const path = localSocketPath(where.dataDir, where.port)
-  return path && existsSync(path) ? new WebSocket(`ws+unix://${path}:/api/local-ws`) : new WebSocket(`ws://127.0.0.1:${where.port}/api/local-ws`)
+  return path && existsSync(path)
+    ? new WebSocket(`ws+unix://${path}:/api/local-ws`)
+    : new WebSocket(`ws://127.0.0.1:${where.port}/api/local-ws`, { headers: localCredentialHeaders(where.dataDir) })
 }
 
 export const DEFAULT_TIMEOUT_MS = 20_000

@@ -68,6 +68,24 @@ describe('hub fan-out backpressure', () => {
   })
 })
 
+describe('a guest on a shared machine', () => {
+  // A guest hears only what the machine addresses to it, never the owner's broadcasts
+  // (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+  it('is sent no broadcast, only the frames addressed to its own connection', () => {
+    const machineId = `hub-guest-${Date.now()}`
+    const ownerOut: string[] = []
+    const guestOut: string[] = []
+    const owner = attachHubClient(socket(ownerOut), machineId, 'web')
+    const guest = attachHubClient(socket(guestOut), machineId, 'web', { guest: true })
+    deliverUpLocal(machineId, { webEligible: true, commanderEligible: false, frame: { type: 'agent_synced', payload: { agent: { id: 'owners' } } } })
+    deliverUpLocal(machineId, { webEligible: true, commanderEligible: false, targetConnId: guest.connId, frame: { type: 'agent_synced', payload: { sealed: true } } })
+    expect(ownerOut).toHaveLength(1)
+    expect(guestOut).toHaveLength(1)
+    expect(guestOut[0]).toContain('sealed')
+    owner.detach(); guest.detach()
+  })
+})
+
 describe('sendClientsControl coalescing', () => {
   beforeEach(async () => {
     await flush() // let any attach/detach flush from the previous describe land first

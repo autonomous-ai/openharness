@@ -54,6 +54,9 @@ String retargetRefusalMessage(
       "This machine's Local models could not be resolved. Sign in again on it.",
     'UNSUPPORTED_ON_REMOTE' ||
     'UNSUPPORTED' => 'Update the harness CLI on this machine to change models.',
+    // A guest's harness runs on its owner's plans and is never relaunched
+    // (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+    'GUEST_NOT_ALLOWED' || 'GUEST_HARNESS' => 'A guest’s harness keeps the model it started with. Start a new one to use another.',
     _ => "Couldn't change this harness's model.",
   };
 }
