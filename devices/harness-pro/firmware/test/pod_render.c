@@ -355,6 +355,7 @@ int main(int argc, char **argv)
             if (!strcmp(suffix, "unreadfail")) ((pod_unread_t *)pod_model_unread_find(&M, id))->kind = POD_UNREAD_FAILED;
         }
         if (suffix && !strcmp(suffix, "long")) pod_model_recap(&M, id, "I went through the whole checkout flow and fixed the failing test first, then tidied the fixtures, renamed two helpers, rewrote the retry loop so it backs off properly, added a regression test for the double charge, updated the docs and the changelog, and re-ran the full suite twice to be sure nothing else moved. Everything is green now and the branch is ready for review whenever you are.", false);
+        if (suffix && !strcmp(suffix, "ask")) pod_model_question(&M, id, "Run the migration on the dev database now?");   // agent:<id>:ask, any agent asking (fw is Claude, web is Muse; cli asks already)
         if (suffix && !strcmp(suffix, "short")) pod_model_recap(&M, id, "All green.", false);
         if (suffix && !strcmp(suffix, "medium")) pod_model_recap(&M, id, "Fixed the checkout test and tidied the fixtures. I also renamed two helpers.", false);
         if (suffix && !strcmp(suffix, "viet")) pod_model_recap(&M, id, "Tôi đã sửa lỗi thanh toán ở bước cuối, chỉnh lại vòng lặp thử lại và thêm kiểm thử cho trường hợp trụ hai lần. Tệp chính nằm ở /Users/duynguyen/go/src/github.com/autonomous-ai/autonomous-harness/devices/harness-pro/firmware/main/pod/home/ph_recap.c. Mọi thứ đều xanh, nhánh này sẵn sàng để xem lại khi bạn rảnh. Cứ gọi tôi nếu cần thêm gì nữa.", false);

@@ -150,12 +150,6 @@ pod_out_t pod_ui_swarms(pod_ui_t *u, const cable_swarm_t *items, int n, const ca
     return synced(u);
 }
 
-pod_out_t pod_ui_status(pod_ui_t *u, const char *id, const char *status, uint32_t now_ms)
-{
-    pod_model_library_status(&u->model, id, status, now_ms);
-    return synced(u);
-}
-
 pod_out_t pod_ui_turn(pod_ui_t *u, const char *id, const char *kind, const char *text, int elapsed_s, uint32_t now_ms)
 {
     pod_model_turn(&u->model, id, kind, text, elapsed_s, now_ms);
@@ -394,7 +388,7 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
             u->anchor_y = y;
             if (host_scrolls(u) && u->scroll_emit) {
                 if (!u->scroll_begun) {   // from the DOWN's point and time, so the first MOVE carries the travel so far
-                    ht_scroll_begin(&u->scroll, u->start_x, u->start_y, u->down_ms, u->scroll_reversed, false, u->scroll_emit,
+                    ht_scroll_begin(&u->scroll, u->start_x, u->start_y, u->down_ms, u->scroll_reversed, u->scroll_emit,
                                     u->scroll_ctx);
                     u->scroll_begun = true;
                 }

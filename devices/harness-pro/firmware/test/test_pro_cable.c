@@ -23,7 +23,9 @@
 #include "pod/pod_model.h"
 #include "pro_app_api.h"
 #include "sys/device_mac.h"
+#include "task_stacks.h"
 #include "sys/last_words.h"
+#include "esp_task_wdt.h"
 #include "board/board.h"
 #include "sys/config_store.h"
 #include "sys/fw_update.h"
@@ -132,12 +134,18 @@ bool cable_link_send_nowait(uint8_t type, const uint8_t *payload, size_t len)
 }
 bool cable_link_start(cable_frame_cb cb, cable_tick_cb tick, void *ctx) { (void)cb; (void)tick; (void)ctx; return true; }
 void cable_link_set_log_framing(bool on) { (void)on; }
+static int decoder_resets;
+void cable_link_reset_decoder(void) { decoder_resets++; }
 static int64_t now_us = 1000000;
 int64_t esp_timer_get_time(void) { return now_us; }
 const esp_app_desc_t *esp_app_get_description(void) { static const esp_app_desc_t d = { .version = "0.0.0" }; return &d; }
 const board_t *board(void) { static const board_t b = { .name = "stub" }; return &b; }
 bool device_mac_str(char *o, size_t n) { snprintf(o, n, "aa"); return true; }
 void last_words_report(void) {}
+void last_words_phase(lw_task_t t, const char *p) { (void)t; (void)p; }
+void last_words_rx(uint32_t ms) { (void)ms; }
+esp_err_t esp_task_wdt_add(void *t) { (void)t; return ESP_OK; }
+esp_err_t esp_task_wdt_reset(void) { return ESP_OK; }
 struct host_mutex { pthread_mutex_t m; };
 SemaphoreHandle_t xSemaphoreCreateMutex(void) { struct host_mutex *m = malloc(sizeof *m); pthread_mutex_init(&m->m, NULL); return m; }
 BaseType_t xSemaphoreTake(SemaphoreHandle_t m, TickType_t w) { (void)w; pthread_mutex_lock(&m->m); return pdTRUE; }
@@ -167,12 +175,14 @@ bool pro_voice_open(void) { return voice_is_open; }
 static struct { int offers, slices, aborts, ticks; char version[32], sha[80], why[32]; int size; bool busy; size_t slice_len; uint8_t first; uint32_t now; } fw;
 // What the gate says, how long the stubbed fw_update_* "block" (the slot erase, the read-back hash), what they answer.
 static bool gate_ok = true, offer_accepts, offer_active;
-static int gate_begins, gate_ends, confirms, notes;
+static int gate_begins, gate_ends, confirms, confirm_downs, notes;
+static uint32_t confirm_at;
 static int64_t block_us;
 bool pro_app_begin_update_gate(void) { gate_begins++; return gate_ok; }
 void pro_app_end_update_gate(void) { gate_ends++; }
 void pro_app_note_update(void) { notes++; }
-bool fw_confirm_session_up(void) { confirms++; return confirms == 1; }
+void fw_confirm_session_up(uint32_t ms) { confirms++; confirm_at = ms; }
+void fw_confirm_session_down(void) { confirm_downs++; }
 bool fw_update_active(void) { return offer_active; }
 bool fw_update_offer(const char *v, int size, const char *sha, bool busy)
 {
@@ -616,7 +626,7 @@ static void test_session_machines_library_voice(void)
 }
 
 // ---- the small stack -------------------------------------------------------------------------------------
-// pro_cable's parser runs on the cable_link task: 6 KB, shared with the reader loop and the decoder. This runs the
+// pro_cable's parser runs on the cable_link task: STACK_CABLE_LINK (12 KB), shared with the reader loop and the decoder. This runs the
 // heaviest frames on a thread whose stack is painted first, and measures how deep it went.
 #define PAINT 0xA5
 static size_t used_bytes;
@@ -661,9 +671,9 @@ static void *painted_entry(void *arg)
 
 static void pro_cable_test_small_stack(void)
 {
-    // (1) A real thread at the device's size: max(12288, PTHREAD_STACK_MIN). The OS minimum is 16 KB on macOS and
-    // glibc, so this proves the parser runs on a thread of that kind, not that 6 KB is enough.
-    size_t want = 12288 > (size_t)PTHREAD_STACK_MIN ? 12288 : (size_t)PTHREAD_STACK_MIN;
+    // (1) A real thread at the device's size: max(STACK_CABLE_LINK, PTHREAD_STACK_MIN). The OS minimum is 16 KB on macOS and
+    // glibc, so this proves the parser runs on a thread of that kind, not that the stack is enough.
+    size_t want = STACK_CABLE_LINK > (size_t)PTHREAD_STACK_MIN ? STACK_CABLE_LINK : (size_t)PTHREAD_STACK_MIN;
     pthread_attr_t attr;
     pthread_t th;
     CHECK(pthread_attr_init(&attr) == 0 && pthread_attr_setstacksize(&attr, want) == 0);
@@ -671,7 +681,7 @@ static void pro_cable_test_small_stack(void)
     pthread_attr_destroy(&attr);
 
     // (2) The real measurement: our own 64 KB stack, painted, and the deepest untouched byte read back. The parser
-    // plus the reader loop's own frames (decoder + 256 B read chunk, < 1.5 KB) must fit in READER_STACK (cable_link.c, 12288).
+    // plus the reader loop's own frames (decoder + 256 B read chunk, < 1.5 KB) must fit in STACK_CABLE_LINK (task_stacks.h).
     const size_t size = 64 * 1024 > (size_t)PTHREAD_STACK_MIN ? 64 * 1024 : (size_t)PTHREAD_STACK_MIN;   // 128 KB minimum on aarch64 glibc
     unsigned char *stack = NULL;
     CHECK(posix_memalign((void **)&stack, 4096, size) == 0);
@@ -910,17 +920,18 @@ static void fw_offer_gate(void)
     end_session();
 }
 
-// H3: the first welcome asks fw to confirm the image (once per session-up), and announces the update only if it did.
+// H3: the welcome starts the clock a fresh image is confirmed on (once per session-up), and the end of the session stops it.
 static void fw_confirms_on_welcome(void)
 {
-    confirms = notes = 0;
+    confirms = confirm_downs = notes = 0;
     welcome();
-    CHECK(confirms == 1 && notes == 1);
+    CHECK(confirms == 1 && confirm_at == (uint32_t)(now_us / 1000) && notes == 0);
     welcome();                          // a repeat welcome on a live session is not a new session
-    CHECK(confirms == 1 && notes == 1);
+    CHECK(confirms == 1 && confirm_downs == 0);
     end_session();
-    welcome();                          // a new session asks again, but nothing confirmed this time
-    CHECK(confirms == 2 && notes == 1);
+    CHECK(confirm_downs == 1);
+    welcome();                          // a new session starts the clock again
+    CHECK(confirms == 2);
     end_session();
 }
 
@@ -951,19 +962,69 @@ static void send_shapes(void)
     CHECK(nsent == 1 && !strcmp(sent[0], "{\"t\":\"fw.progress\",\"written\":4096,\"resend\":true}"));
 }
 
-// A frame lost on the way in outside a transfer: ask for both lists once, not again within 5 s, never mid-transfer.
-static void link_resync(void)
+// A frame lost on the way in outside a transfer: ask for the snapshot once, not again within 2 s, never mid-transfer.
+// A welcome that advertises `resync` gets the one request; an older daemon's gets the old swarms.list + agents.list.
+static void link_resync_with(const char *welcome_json, bool new_daemon)
 {
-    welcome(); reset();
+    feed(welcome_json); reset();
+    now_us += 10000 * 1000;   // clear the previous window
     pro_cable_tick(NULL); CHECK(nsent == 0);                  // counter unchanged
     link_corrupt++; pro_cable_tick(NULL);
-    CHECK(nsent == 2 && strstr(sent[0], "swarms.list") && strstr(sent[1], "agents.list"));
-    reset(); link_corrupt++; now_us += 4999 * 1000; pro_cable_tick(NULL); CHECK(nsent == 0);
-    now_us += 1000 * 1000; pro_cable_tick(NULL);               // 5 s on: the pending loss is answered
-    CHECK(nsent == 2);
+    if (new_daemon) CHECK(nsent == 1 && !strcmp(sent[0], "{\"t\":\"resync\"}"));
+    else CHECK(nsent == 2 && strstr(sent[0], "swarms.list") && strstr(sent[1], "agents.list"));
+    const int per = nsent;
+    reset(); link_corrupt++; now_us += 1999 * 1000; pro_cable_tick(NULL); CHECK(nsent == 0);
+    now_us += 1000 * 1000; pro_cable_tick(NULL);               // past 2 s: the pending loss is answered
+    CHECK(nsent == per);
     reset(); offer_active = true; link_corrupt++; now_us += 6000 * 1000; pro_cable_tick(NULL);
     CHECK(nsent == 0);                                        // a transfer covers it with resend
     offer_active = false; pro_cable_tick(NULL); CHECK(nsent == 0);   // and the loss during it is not replayed
+    end_session();
+}
+static void link_resync(void)
+{
+    link_resync_with("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[\"resync\"]}", true);
+    link_resync_with("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[\"player.library\"]}", false);
+}
+
+// The daemon's `seq`: contiguous frames are silent; a hole counts and asks for a resync (rate-limited); a welcome
+// restarts the count; frames without seq (round-style, old daemon) change nothing; ending the session clears it.
+static void seq_gaps(void)
+{
+    now_us += 10000 * 1000;   // clear link_resync's window
+    feed("{\"t\":\"welcome\",\"seq\":0,\"machine\":{\"id\":\"m\",\"name\":\"M\"},\"features\":[\"resync\"]}");
+    reset();
+    const uint32_t g0 = pro_cable_seq_gaps();
+    feed("{\"t\":\"ping\",\"seq\":1}"); feed("{\"t\":\"ping\",\"seq\":2}"); feed("{\"t\":\"ping\"}");
+    pro_cable_tick(NULL);
+    CHECK(pro_cable_seq_gaps() == g0);
+    for (int i = 0; i < nsent; i++) CHECK(!strstr(sent[i], "resync"));
+    reset();
+    feed("{\"t\":\"ping\",\"seq\":4}");                 // 3 never arrived
+    CHECK(pro_cable_seq_gaps() == g0 + 1);
+    reset(); pro_cable_tick(NULL);
+    CHECK(nsent == 1 && strstr(sent[0], "resync"));
+    reset(); feed("{\"t\":\"ping\",\"seq\":5}"); pro_cable_tick(NULL);
+    for (int i = 0; i < nsent; i++) CHECK(!strstr(sent[i], "resync"));   // 5 follows 4: back in step
+    CHECK(pro_cable_seq_gaps() == g0 + 1);
+    reset();
+    feed("{\"t\":\"ping\",\"seq\":9}"); pro_cable_tick(NULL);        // a second hole inside the 2 s window
+    CHECK(pro_cable_seq_gaps() == g0 + 2);
+    int resyncs = 0;
+    for (int i = 0; i < nsent; i++) resyncs += strstr(sent[i], "resync") != NULL;
+    CHECK(resyncs == 0);
+    reset(); now_us += 2000 * 1000; pro_cable_tick(NULL);
+    CHECK(nsent == 1 && strstr(sent[0], "resync"));   // answered once the window passes
+    reset();
+    feed("{\"t\":\"welcome\",\"seq\":0,\"machine\":{\"id\":\"m\",\"name\":\"M\"},\"features\":[\"resync\"]}");   // the count starts over
+    feed("{\"t\":\"ping\",\"seq\":1}");
+    CHECK(pro_cable_seq_gaps() == g0 + 2);
+    end_session();
+    CHECK(decoder_resets >= 1);                               // the session ended: no half-frame carried over
+    reset();
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m\",\"name\":\"M\"}}");   // a daemon without seq
+    feed("{\"t\":\"ping\"}"); feed("{\"t\":\"ping\",\"seq\":40}");
+    CHECK(pro_cable_seq_gaps() == g0 + 2);                    // a welcome without seq turns the check off for the session
     end_session();
 }
 
@@ -989,6 +1050,7 @@ int main(void)
     session_down_aborts_then_new_offer_ok();
     send_shapes();
     link_resync();
+    seq_gaps();
     printf("test_pro_cable: %d checks passed\n", checks);
     return 0;
 }

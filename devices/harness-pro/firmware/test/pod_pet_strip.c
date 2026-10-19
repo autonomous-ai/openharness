@@ -1,7 +1,7 @@
 // Dev helper (not run by run.sh): rasters each scene of claude, codex and muse at 4 clock points to a PPM.
 // Build and run from devices/harness-pro/firmware, with fonts from scripts/gen_fonts.py --out $g:
 //   h=main/display; p=main/pod; g=/tmp/pro_fonts.c
-//   cc -std=c11 -O1 -DHT_FACE_PX=720 -I $h -I main -I test/host_stubs \
+//   cc -std=c11 -O1 -DHT_FACE_PX=720 -I $h -I main \
 //      -o /tmp/claude-503/pod_pet_strip test/pod_pet_strip.c $p/{engine_logos,pets,pod_draw,pod_pet}.c \
 //      $h/{pro_canvas,terminal}.c $g
 //   /tmp/claude-503/pod_pet_strip /tmp/claude-503/pod_pets.ppm

@@ -25,6 +25,28 @@ static const ht_run_t *text_prefix(const char *p) { for (int i = 0; i < S.count;
 static const pod_hit_t *nth_hit(pod_action_t a, int n) { for (int i = 0; i < F.hit_count; i++) if (F.hits[i].action == a && n-- == 0) return &F.hits[i]; return NULL; }
 static int hits_of(pod_action_t a) { int n = 0; for (int i = 0; i < F.hit_count; i++) n += F.hits[i].action == a; return n; }
 
+// The scene in S, rastered from empty: every below-1x frame marked for baking (a Codex face or recap pet) got its arena entry (none dropped for want of
+// room: a dropped one is resampled every frame), and the arena use is exactly those entries' pixels, within BAKE_ARENA_PX (360 K, pod_draw.c).
+static void check_baked(void)
+{
+    static uint16_t shot[720 * 720];
+    pod_cell_bake_reset();
+    ht_raster(&S, (ht_rect_t){0, 0, 720, 720}, shot);
+    unsigned flat = 0, px = 0;
+    for (int i = 0; i < S.count; i++) {
+        const ht_run_t *r = &S.runs[i];
+        if (r->pro_kind != POD_CELL || r->text[0] != 1) continue;
+        bool again = false;
+        for (int j = 0; j < i; j++) {
+            const ht_run_t *o = &S.runs[j];
+            again |= o->pro_kind == POD_CELL && o->text[0] == 1 && o->bitmap.asset == r->bitmap.asset && o->w == r->w && o->pro_height == r->pro_height &&
+                     o->radius == r->radius && o->text[1] == r->text[1] && o->fg == r->fg;
+        }
+        if (!again) { flat++; px += (unsigned)r->w * (unsigned)r->pro_height; }
+    }
+    CHECK(flat > 0 && pod_cell_bakes() == flat && pod_cell_bake_px() == px && px <= 360u * 1024u);
+}
+
 // Page dots (a small anti-aliased pill in the bottom band, y >= 660): Pets has none on any page.
 static int dot_runs(void) { int n = 0; for (int i = 0; i < S.count; i++) n += S.runs[i].pro_kind == K_RECT_AA && (S.runs[i].w == 12 || S.runs[i].w == 11 || S.runs[i].w == 32) && S.runs[i].pro_height <= 12 && S.runs[i].y >= 660; return n; }
 // The run holding the name/title: centred on x 360 within 2 px.
@@ -634,7 +656,9 @@ int main(void) {
                     CHECK(ph_runs(&F) <= HT_RUNS);
                     if (!v) printf("runs recap %d\n", ph_runs(&F));
                 }
-                ROOM("b", POD_V_RECAP);
+                ROOM("b", POD_V_RECAP);   // Codex's Recap pet (HD, below 1x): baked, inside the arena
+                fresh(); ph_view_recap(&F, &RN, &R, r0);
+                check_baked();
                 CHECK(pod_scroll_max(&RN, &R) == 0 && pod_scroll_pitch(&RN) == 0);
                 // a long recap is fitted into the bubble: wrapped, the last visible row cut with an ellipsis, no scrolling
                 char big[1000];
@@ -993,6 +1017,14 @@ int main(void) {
             }
             pod_model_unread_clear(&M);
         }
+
+        // Codex's Inbox faces (HD, below 1x): all baked, inside the arena
+        pod_model_unread_clear(&M);
+        pod_model_unread_add(&M, "q", "harness-cli", "Asked about the retry.", 40, now - 60000u);
+        pod_model_unread_add(&M, "f", "api-retry", "Picked the blue hero image.", 40, now - 90000u);
+        fresh(); ph_view_inbox(&F, &N, &M, now);
+        check_baked();
+        pod_model_unread_clear(&M);
 
         // notices_empty
         pod_model_unread_clear(&M);

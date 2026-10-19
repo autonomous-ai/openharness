@@ -132,7 +132,7 @@ static int make_room(pod_model_t *m, const rank_t *newcomer) {
 }
 
 // ── change detection ─────────────────────────────────────────────────────────────────────────────────
-// These feeds run on the cable_link task (6 KB stack): a pod_agent_t is ~2.7 KB (recap[]), so a feed must not
+// These feeds run on the cable_link task (12 KB stack, the parser takes ~7 of it): a pod_agent_t is ~2.7 KB (recap[]), so a feed must not
 // hold a copy of one to see whether it changed anything. It takes a 64-bit FNV-1a signature of the agent's
 // visible fields before and after instead. Left out: seen, lib_seen, src and age_s (sweep bookkeeping that is
 // never a visible change); event_ms only when `with_event` is false (a fresh stamp alone is not one).
@@ -360,8 +360,8 @@ void pod_model_swarms(pod_model_t *m, const cable_swarm_t *items, const char *co
 void pod_model_swarms_meta(pod_model_t *m, const cable_swarm_t *items, const char *const *agent_ids[],
                            const uint8_t agent_id_counts[], int n, const char *selected,
                            const cable_tile_t *tiles, int tile_count, const pod_member_meta_t (*meta)[POD_PANES_MAX]) {
-    // ~9.7 KB: far over the cable_link task's 6 KB stack, so it is file-static. Every model feed is single-writer
-    // (the cable task, under display_lock), so one scratch is never used by two callers at once.
+    // ~9.7 KB: far over the cable_link task's 12 KB stack, so it is file-static. Every model feed is single-writer
+    // (the cable task, under pro_app_lock), so one scratch is never used by two callers at once.
     static EXT_RAM_BSS_ATTR pod_tab_t nt[POD_TABS_MAX];
     memset(nt, 0, sizeof nt);
     if (n < 0 || !items) n = 0;

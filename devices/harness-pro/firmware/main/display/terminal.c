@@ -90,7 +90,8 @@ static const char *display_fallback(uint32_t cp, char scratch[12])
     }
     // An explicit, lossless identifier is preferable to inventing a meaning or
     // showing '?' (which could be part of the author's actual message).
-    snprintf(scratch, 12, "[U+%04lX]", (unsigned long)cp);
+    // Unicode tops out at U+10FFFF (6 hex digits), which fits; the mask lets GCC see that too (-Wformat-truncation).
+    snprintf(scratch, 12, "[U+%04lX]", (unsigned long)(cp & 0x1FFFFF));
     return scratch;
 }
 typedef struct {

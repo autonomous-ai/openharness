@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory() as d:
     src = Path(d) / "hello.c"
     src.write_text(code)
     exe = Path(d) / "hello"
-    subprocess.run(["cc", "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Werror", "-Wno-unused-function", "-o", str(exe), str(src)], check=True)
+    subprocess.run(["cc", "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Werror", "-o", str(exe), str(src)], check=True)
     lines = subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout.split()
 
 # The settings object: every key the app's DeviceSettings.fromJson requires, with its JSON type. Otherwise the app

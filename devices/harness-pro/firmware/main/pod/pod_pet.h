@@ -10,6 +10,12 @@ typedef enum { POD_SCENE_REST, POD_SCENE_WORK, POD_SCENE_ASK, POD_SCENE_RELAX, P
 
 // The engine's pet, or NULL when it has none (the player then shows its mark on a pale rounded box).
 const ht_pet_t *pod_pet_for(const char *engine);
+extern const ht_pet_t pod_codex_pet;   // the HD Codex (pets_codex.c, scripts/gen_pro_codex.py)
+// The asking look: ASK plays pod_claude_ask (pets_ask.c, scripts/gen_pro_ask.py) for Claude and pod_codex_ask (pets_codex.c; it shares the send scene's
+// frames) for Codex, the small pet's asking loop for the others. In the Agent room (zoom8 16) pod_ask_bubble, a "?" bubble, is drawn over the pet as one
+// extra run: beside its head, popping in over 250 ms at each loop's start and bobbing 4 px once a loop. Cards, Inbox and Recap (zoom8 8) have none.
+extern const ht_pet_scene_t pod_claude_ask, pod_codex_ask;
+extern const ht_cell_frame_t pod_ask_bubble;
 // Whether the engine has this scene of its own: REST and ASK need a pet; WORK, RELAX, LISTEN and SEND need the
 // pet to carry that scene. pod_pet_draw falls back to REST for a scene the pet lacks.
 bool pod_pet_has(const char *engine, pod_scene_t scene);
@@ -51,9 +57,8 @@ int pod_logo_cover_size(int side);
 // logo; nothing is added then. The chip draws POD_LOGO_CHIP; covers draw pod_logo_cover_size(side).
 bool pod_logo_draw(ht_scene_t *s, int x, int y, int size, const char *engine);
 bool pod_logo_draw_faded(ht_scene_t *s, int x, int y, int size, const char *engine, unsigned opacity);   // 1..254 of 255
-// The mark for an engine that has none (an unknown engine, an agent the roster has not named): a 34 x 34 rounded
-// outline square with ">_" in it (ht_pro_24 does not fit a 27 px one), on `ground` inside; it fits the 36 px chip slot.
+// The mark for an engine that has none (an unknown engine, an agent the roster has not named): a rounded outline
+// square with ">_" in it, on `ground` inside; at the 34 px minimum it fits the 36 px chip slot.
 // POD_DEFAULT_MARK_RUNS runs.
 enum { POD_DEFAULT_MARK_RUNS = 3, POD_DEFAULT_MARK_SIDE = 34 };
-void pod_mark_default(ht_scene_t *s, int x, int y, uint16_t ground);
 void pod_mark_default_big(ht_scene_t *s, int x, int y, int size, uint16_t ground);   // the same at any size (the update screen's)

@@ -43,6 +43,11 @@ const PING_EVERY_MS = 5_000
 /** No bytes of any kind for this long → the handle is dead. Longer than the dial's own 15 s window, so a
  *  single late message cannot trip both sides at once and have each conclude the other left. */
 const SILENCE_MS = 20_000
+/** How often a connected port's traffic counters go to the dial's log. */
+const LINK_LOG_MS = 60_000
+/** Non-frame text kept per logging interval, and the shortest printable run worth keeping. */
+const NOISE_MAX = 200
+const NOISE_RUN_MIN = 4
 const REOPEN_EVERY_MS = 2_000
 // How long one attempt at opening the port may take before it is abandoned.
 //
@@ -563,6 +568,8 @@ const PET_TRANSIENT = new Set(['timeout', 'unreadable', 'memory', 'busy'])
 export class CableSession {
   private link: CablePort | null = null
   private decoder = new CableDecoder()
+  /** This port's traffic since it opened, logged once a minute and when it closes (see logLink). */
+  private traffic = { at: 0, tx: 0, txFrames: 0, rx: 0, rxFrames: 0, corrupt: 0, discarded: 0, run: '', noise: '' }
   private timer: NodeJS.Timeout | null = null
   private greetedMac: string | null = null
   /** This session has spoken with a real dial at least once. Never reset: a port that has been a dial
@@ -598,6 +605,11 @@ export class CableSession {
   private playerLibraryKey = ''
   private playerLibraryAt = 0
   private swarmsTrimmedKey = ''
+  /** `hello.board === 'pro'`: every JSON frame to it carries a `seq` (a USB loss on its path is silent, and a hole in
+   *  the count is how it notices). Per session: each welcome restarts it at 0. A round dial's frames stay as they were. */
+  private seqOn = false
+  private seq = 0
+  private resyncAt = 0
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
@@ -608,6 +620,9 @@ export class CableSession {
 
   private resetCapabilities(): void {
     this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = false
+    this.seqOn = false
+    this.seq = 0
+    this.resyncAt = 0
     this.playerOffset = this.playerRequest = 0
     this.playerLibraryKey = ''
     this.playerLibraryAt = 0
@@ -795,6 +810,7 @@ export class CableSession {
     if (this.stopped) return
     // The firmware beats once a minute; the gap is marked in the dial's own log, where it is read.
     this.dialLog.tick(this.isConnected)
+    if (this.isConnected && Date.now() - this.traffic.at >= LINK_LOG_MS) this.logLink('link')
     if (!this.link?.isOpen) {
       await this.tryOpen()
       return
@@ -938,6 +954,10 @@ export class CableSession {
     if (opened.path !== this.foreignPort) this.foreignPort = null
     this.bytesSinceOpen = 0
     this.framesSinceOpen = 0
+    this.traffic = {
+      at: Date.now(), tx: 0, txFrames: 0, rx: 0, rxFrames: 0,
+      corrupt: this.decoder.corruptFrames, discarded: this.decoder.discardedBytes, run: '', noise: '',
+    }
     this.link = opened
     // Leftover bytes belong to a session that has ended; carrying them across would put a stale
     // half-frame in front of the first real frame of the new one.
@@ -966,6 +986,7 @@ export class CableSession {
   }
 
   private onClosed(why: string): void {
+    if (this.traffic.rx || this.traffic.tx) this.logLink('link at close')
     this.log(`cable: closed (${why})`)
     this.cancelFormVoice()
     this.cancelSearchVoice()
@@ -1028,6 +1049,43 @@ export class CableSession {
   static readonly BUDGET = { garbageBytes: 64 * 1024, frames: 2_000, decodeMs: 500 }
   private budget = { since: 0, garbage: 0, frames: 0, ms: 0 }
 
+  /**
+   * This port's counters in the dial's log, to read beside the firmware's own `alive` line: a gap between
+   * what one side wrote and the other decoded is the lossy link. Plus the printable runs of the bytes the
+   * decoder stepped over (at most NOISE_MAX characters a minute), so a device panic's text is kept.
+   */
+  private logLink(label: string): void {
+    const t = this.traffic
+    this.keepRun()
+    this.log(`cable: ${label} · tx ${t.tx} B in ${t.txFrames} frames · rx ${t.rx} B in ${t.rxFrames} frames · corrupt ${this.decoder.corruptFrames - t.corrupt} · discarded ${this.decoder.discardedBytes - t.discarded} B${t.noise ? ` · non-frame text: ${t.noise}` : ''}`)
+    t.at = Date.now()
+    t.noise = ''
+  }
+
+  /** Close the current run of printable discarded bytes into the minute's text, if it is long enough to read. */
+  private keepRun(): void {
+    const t = this.traffic
+    if (t.run.length >= NOISE_RUN_MIN && t.noise.length < NOISE_MAX) {
+      t.noise = `${t.noise}${t.noise ? ' | ' : ''}${t.run}`.slice(0, NOISE_MAX)
+    }
+    t.run = ''
+  }
+
+  private noted = (bytes: Uint8Array): void => {
+    for (const b of bytes) {
+      if (b >= 0x20 && b < 0x7f) {
+        if (this.traffic.run.length < NOISE_MAX) this.traffic.run += String.fromCharCode(b)
+      } else this.keepRun()
+    }
+  }
+
+  /** One frame to the dial, counted. */
+  private async put(link: CablePort, bytes: Uint8Array): Promise<void> {
+    await link.write(bytes)
+    this.traffic.tx += bytes.length
+    this.traffic.txFrames++
+  }
+
   private onBytes(chunk: Buffer): void {
     const started = performance.now()
     const discarded = this.decoder.discardedBytes
@@ -1056,8 +1114,11 @@ export class CableSession {
   private decode(chunk: Buffer, counted: () => void): void {
     this.lastRx = Date.now()
     this.bytesSinceOpen += chunk.length
+    this.traffic.rx += chunk.length
+    this.decoder.onDiscard = this.noted
     this.decoder.feed(chunk, (frame) => {
       counted()
+      this.traffic.rxFrames++
       this.framesSinceOpen += 1
       if (frame.type === CableType.Json) {
         let msg: Message
@@ -1117,6 +1178,8 @@ export class CableSession {
         this.stepsActivity = str('activity') === 'steps-v1'
         this.statsTurn = str('stats') === 'turn-v1'
         this.playerCapable = str('player') === 'library-v1'
+        this.seqOn = str('board') === 'pro'
+        this.seq = 0
         const mac = str('mac') ?? ''
         // Rule 1: every greeting is answered, but only an unfamiliar dial gets the full state.
         await this.send({
@@ -1136,6 +1199,8 @@ export class CableSession {
             'voice.draft',
             'agents.refresh',
             ...(this.playerCapable && this.host.playerLibrary ? ['player.library'] : []),
+            // Only a Pro numbers its frames and asks for `resync`; a round dial's feature list stays as it was.
+            ...(this.seqOn ? ['resync'] : []),
             ...(this.host.form ? ['form'] : []),
             ...(this.host.selectPassage ? ['selection'] : []),
             ...(this.host.visit ? ['visit'] : []),
@@ -1209,6 +1274,9 @@ export class CableSession {
         return
       case 'swarms.list':
         await this.syncSwarms(true)
+        return
+      case 'resync':
+        await this.resync()
         return
       case 'swarm.select':
         // Not answered here: the window switches, its desk changes, and the new `swarms` and ring
@@ -1760,7 +1828,7 @@ export class CableSession {
       candidate.version,
       async (slice) => {
         if (!this.link?.isOpen) throw new Error('port closed mid-transfer')
-        await this.link.write(encodeCableFrame(CableType.Fw, slice))
+        await this.put(this.link, encodeCableFrame(CableType.Fw, slice))
       },
       (line) => this.log(line),
       { offsets: this.greetedBoard === 'pro' && this.greetedOta === 'v1' },
@@ -1869,7 +1937,7 @@ export class CableSession {
           id,
           async (slice) => {
             if (!this.link?.isOpen) throw new Error('port closed mid-transfer')
-            await this.link.write(encodeCableFrame(CableType.Pet, slice))
+            await this.put(this.link, encodeCableFrame(CableType.Pet, slice))
           },
           (line) => this.log(line.replace('firmware', 'pet')),
         ),
@@ -2197,7 +2265,8 @@ export class CableSession {
   private async send(msg: Message): Promise<boolean> {
     if (!this.link?.isOpen) return false
     try {
-      await this.link.write(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(msg), 'utf8')))
+      const framed = this.seqOn ? { ...msg, seq: this.seq++ } : msg
+      await this.put(this.link, encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(framed), 'utf8')))
       return true
     } catch (err) {
       this.log(`cable: write failed (${(err as Error).message})`)
@@ -2409,6 +2478,24 @@ export class CableSession {
     // …and the drawer, which is the one thing a dial that has just greeted us is KNOWN to have lost:
     // its rows live in RAM. Last, because it names agents the pushes above put on the carousel.
     await this.replaceNotifications(this.host.listUnread())
+  }
+
+  /**
+   * A Pro saw a hole in `seq` (or a frame that failed its CRC): resend what a lost frame could have carried. The attach
+   * push minus the history replay, plus the open questions — a replayed `summary` is heavy, and a second burst on a link
+   * that just dropped bytes is what the rate limit (once per 2 s, here and on the device) is there to avoid.
+   */
+  private async resync(): Promise<void> {
+    const now = Date.now()
+    if (now - this.resyncAt < 2_000) return
+    this.resyncAt = now
+    await this.syncMachines(true)
+    await this.syncSwarms(true)
+    await this.syncAgents(true)
+    await this.replaceNotifications(this.host.listUnread())
+    for (const { agentId, id, questions } of this.questionInbox.open()) {
+      if (this.liveTurns.get(agentId) === 'question') await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
+    }
   }
 
   // ── swarms ────────────────────────────────────────────────────────────────────────────────────────

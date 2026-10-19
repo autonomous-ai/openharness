@@ -29,7 +29,7 @@ const manifest = json("cli", "packages", "harness-mcp", "mcpb", "manifest.json")
 
 /** What the registry checks beyond the schema when it publishes (its internal/validators, read on 2026-10-11). */
 function registryRules(entry: Server) {
-  expect(entry.name).toBe("io.github.autonomous-ai/harness");
+  expect(entry.name).toBe("ai.autonomous.harness/harness");
   expect(entry.packages.map((pkg) => pkg.registryType).sort()).toEqual(["mcpb", "npm"]);
   for (const pkg of entry.packages) expect(pkg.transport).toEqual({ type: "stdio" });
   const npm = entry.packages.find((pkg) => pkg.registryType === "npm")!;

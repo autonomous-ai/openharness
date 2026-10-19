@@ -35,6 +35,14 @@
       "description": "The harnesses on this machine: name, agent, state, who started each, when it was last active, its folder, and what it is about."
     },
     {
+      "name": "harness_search",
+      "description": "Search the conversations on this computer for the words that say them: every turn of every harness, live or stopped."
+    },
+    {
+      "name": "harness_machines",
+      "description": "The machines on this account: name, status, and which is this one, to run a harness on another of the person's machines."
+    },
+    {
       "name": "harness_start",
       "description": "Start a new harness: an agent in a session of its own, working on a task in a folder, or in a new project Harness makes for it. Returns at once."
     },

@@ -64,33 +64,6 @@ void *ram_psram_alloc(size_t bytes, const char *owner)
     return ptr;
 }
 
-void *ram_psram_calloc(size_t count, size_t size, const char *owner)
-{
-    if (count && size > SIZE_MAX / count) {
-        note_psram_failure(owner, SIZE_MAX);
-        return NULL;
-    }
-    void *ptr = heap_caps_calloc(count, size, APP_PSRAM_CAPS);
-    if (!ptr && count && size) note_psram_failure(owner, count * size);
-    return ptr;
-}
-
-void *ram_psram_realloc(void *ptr, size_t bytes, const char *owner)
-{
-    void *next = heap_caps_realloc(ptr, bytes, APP_PSRAM_CAPS);
-    if (!next && bytes) note_psram_failure(owner, bytes);
-    return next;
-}
-
-char *ram_psram_strdup(const char *src, const char *owner)
-{
-    if (!src) return NULL;
-    size_t bytes = strlen(src) + 1;
-    char *dst = ram_psram_alloc(bytes, owner);
-    if (dst) memcpy(dst, src, bytes);
-    return dst;
-}
-
 static void log_task_stack(const char *name)
 {
     TaskHandle_t task = xTaskGetHandle(name);
