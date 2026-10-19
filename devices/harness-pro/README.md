@@ -43,6 +43,9 @@ Golden screens: `firmware/test/golden.sh --check` renders every Pod screen at fi
 `test/golden.txt` (or `golden-liberation.txt` when `PRO_FONT` is Liberation). Run it after any change to drawing or
 assets; it must match. Rewrite the baseline (`golden.sh` without `--check`) only for an intended visual change.
 
+PR CI runs these host tests, the golden check (Liberation baseline) and a real ESP-IDF v5.5.4 build that fails
+when `harness_pro.bin` outgrows the `ota_0` partition, for any change under `devices/harness-pro/`.
+
 Fonts: the generator uses Helvetica on macOS and the bundled Liberation Sans elsewhere. Tests and CI set
 `PRO_FONT=devices/harness-pro/firmware/fonts/LiberationSans-Regular.ttf`. The generated `pro_fonts.c` is a build
 artifact: never commit it.

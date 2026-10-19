@@ -15,9 +15,10 @@ import subprocess
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
 EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons"}
-SUITES = CORE | EXTRA
+SUITES = CORE | EXTRA | {"pro"}
 JOBS = {
     "cli": {"cli-typecheck", "cli-tests"},
+    "pro": {"pro-firmware-build", "pro-golden"},
     "desktop": {"desktop-tests"},
     "tui": {"tui-test"}, "backend": {"backend-desk"}, "companions": {"companion-subsystems"},
     **{name: {name + "-checks"} for name in EXTRA},
@@ -28,6 +29,8 @@ MANUAL = {"full": CORE, "all": SUITES, "process": set(), **{name: {name} for nam
 COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", "backend": "backend",
               "companions": "companions", "website": "website", "os": "os", "provider": "provider",
               "devices": "firmware", "mobile": "mobile", "daemons": "daemons"}
+# Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
+SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
 
 def git(root, *args):
@@ -47,6 +50,7 @@ def select(paths):
             raise ValueError("invalid changed path")
         suite = COMPONENTS.get(path.split("/", 1)[0])
         scopes = {suite} if suite else set()
+        scopes |= {extra for prefix, extra in SUBCOMPONENTS.items() if path.startswith(prefix)}
         selected |= scopes
         reasons[path] = sorted(scopes)
     return selected, reasons
