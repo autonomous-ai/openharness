@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import 'host_platform.dart';
+import 'posix_file_mode.dart';
 import 'viewer_mode.dart';
 import 'local_key_value_store.dart';
 
@@ -28,6 +31,12 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
 
   static final HarnessFileStore shared = HarnessFileStore();
   static final Map<String, Future<void>> _pathTails = {};
+
+  /// Starts `/bin/chmod` where libc's is not bound ([PosixFileMode.supported]
+  /// is false). A test replaces it to prove macOS and Linux start none.
+  @visibleForTesting
+  static Future<ProcessResult> Function(String executable, List<String> args)
+  runProcess = Process.run;
 
   final Directory directory;
 
@@ -163,6 +172,12 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
     final suffix = '${pid}_${DateTime.now().microsecondsSinceEpoch}';
     final temporary = File(_join(directory.path, '.$fileName.$suffix.tmp'));
     try {
+      // Created 0600 before anything is written to it, so no mode needs
+      // changing afterwards. Created by `writeAsString` (0644), every write
+      // started `/bin/chmod` on the UI isolate (see PosixFileMode).
+      if (PosixFileMode.supported) {
+        PosixFileMode.createExclusive(temporary.path, 0x180);
+      }
       await temporary.writeAsString(
         '${const JsonEncoder.withIndent('  ').convert({'version': schemaVersion, 'values': values})}\n',
         flush: true,
@@ -210,7 +225,11 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
     final expected = int.parse(mode, radix: 8);
     final actual = (await FileStat.stat(path)).mode;
     if ((actual & 0xfff) == expected) return;
-    final result = await Process.run('/bin/chmod', [mode, path]);
+    if (PosixFileMode.supported) {
+      PosixFileMode.chmod(path, expected);
+      return;
+    }
+    final result = await runProcess('/bin/chmod', [mode, path]);
     if (result.exitCode != 0) {
       throw FileSystemException('Could not set mode $mode', path);
     }

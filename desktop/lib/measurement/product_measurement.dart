@@ -77,7 +77,16 @@ class ProductMeasurement extends ChangeNotifier {
   final String surface;
   ProductUsageContext? context;
   bool get healthEnabled => surface == 'desktop' && context != null;
+
+  /// The counter vocabulary the local CLI's report proxy announced on its
+  /// latest answer (`x-harness-usage-vocabulary`): 1, the names every proxy
+  /// knows, until one says more. A health measure newer than it is not
+  /// counted ([ProductHealthMeasure.vocabulary]).
+  int proxyVocabulary = 1;
   String? _coverageDay;
+  // The day each once-a-day measure was last counted; cleared with
+  // collector_days' own day so the two stay comparable.
+  final _countedOn = <ProductHealthMeasure, String>{};
   final _funnelSeen = <String, Set<ProductHealthMeasure>>{};
   final _funnelStarted = <String, DateTime>{};
   final _expires = <Object, DateTime>{};
@@ -270,7 +279,10 @@ class ProductMeasurement extends ChangeNotifier {
     }
     _funnelSeen.remove(channel);
     _funnelStarted.remove(channel);
-    if (channel == 'ui') _coverageDay = null;
+    if (channel == 'ui') {
+      _coverageDay = null;
+      _countedOn.clear();
+    }
   }
 
   void _coverage() {
@@ -284,12 +296,26 @@ class ProductMeasurement extends ChangeNotifier {
   /// Only fixed enum scalars enter the queue. Called after checking the account choice.
   void health(ProductHealthMeasure measure) {
     if (!healthEnabled || !sharing || _disposed) return;
+    // A proxy older than this name would refuse every report carrying it.
+    if (measure.vocabulary > proxyVocabulary) return;
     _coverage();
     _count(
       'ui',
       _now().toUtc().toIso8601String().substring(0, 10),
       'health_desktop_${measure.wire}',
     );
+  }
+
+  /// [measure] at most once per UTC day of this collector, like
+  /// collector_days, so its total reads against collector_days: how many
+  /// collector days had one, not how many there were.
+  void healthOncePerDay(ProductHealthMeasure measure) {
+    if (!healthEnabled || !sharing || _disposed) return;
+    if (measure.vocabulary > proxyVocabulary) return;
+    final day = _now().toUtc().toIso8601String().substring(0, 10);
+    if (_countedOn[measure] == day) return;
+    _countedOn[measure] = day;
+    health(measure);
   }
 
   /// Observed readiness since process launch; only its coarse duration is kept.

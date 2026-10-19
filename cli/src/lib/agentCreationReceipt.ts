@@ -6,7 +6,7 @@ import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
 
 export type AgentCreationOutcome =
   | { state: 'created'; agentId: string; level?: 'native' | 'handoff'; resumed?: boolean }
-  | { state: 'failed'; error: string; detail?: string; preparedFolder?: string }
+  | { state: 'failed'; error: string; detail?: string; preparedFolder?: string; existingFolder?: string }
   | { state: 'unconfirmed' }
 
 export type AgentCreationStatus = AgentCreationOutcome
