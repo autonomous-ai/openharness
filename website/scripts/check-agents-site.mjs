@@ -8,12 +8,14 @@ const base = new URL(process.argv[2] || 'http://127.0.0.1:3000');
 const requests = { signal: AbortSignal.timeout(20_000) };
 const page = await readFile(new URL('../public/agents/index.html', import.meta.url), 'utf8');
 const llms = await readFile(new URL('../public/llms.txt', import.meta.url), 'utf8');
+const mcpAuth = await readFile(new URL('../public/.well-known/mcp-registry-auth', import.meta.url), 'utf8');
 
 for (const [route, expected, type] of [
   ['/agents', page, /text\/html/],
   ['/agents/', page, /text\/html/],
   ['/agents/index.html', page, /text\/html/],
   ['/llms.txt', llms, /text\/plain/],
+  ['/.well-known/mcp-registry-auth', mcpAuth, /text\/plain/],
 ]) {
   const response = await fetch(new URL(route, base), requests);
   assert.equal(response.status, 200, route);
@@ -22,4 +24,4 @@ for (const [route, expected, type] of [
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff', route);
   assert.equal(await response.text(), expected, `${route} must serve the file unchanged`);
 }
-console.log('Harness /agents and /llms.txt: every entry path serves the static source unchanged.');
+console.log('Harness /agents, /llms.txt and /.well-known/mcp-registry-auth: every entry path serves the static source unchanged.');
