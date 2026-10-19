@@ -339,6 +339,7 @@ void main() {
         onEvent: (_) {},
         onStatus: (_) {},
         transportKind: WsTransportKind.localPlaintext,
+        allowLocalTcpFixture: true,
         localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
       );
       await conn!.connect();
@@ -370,6 +371,7 @@ void main() {
         onEvent: (_) {},
         onStatus: (_) {},
         transportKind: WsTransportKind.localPlaintext,
+        allowLocalTcpFixture: true,
         localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
       );
       final app = createApp(connected: true, connectionForTest: (_) => conn!);
@@ -406,6 +408,7 @@ void main() {
       onEvent: (_) {},
       onStatus: (_) {},
       transportKind: WsTransportKind.localPlaintext,
+      allowLocalTcpFixture: true,
       localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
     );
     await conn!.connect();
@@ -491,6 +494,7 @@ void main() {
       onEvent: (_) {},
       onStatus: (status) => calls.add('onStatus:$status'),
       transportKind: WsTransportKind.localPlaintext,
+      allowLocalTcpFixture: true,
       localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
     );
     await conn!.connect();
@@ -529,6 +533,7 @@ void main() {
           if (status == ConnectionStatus.reconnecting) reconnecting++;
         },
         transportKind: WsTransportKind.localPlaintext,
+        allowLocalTcpFixture: true,
         localWsUri: Uri.parse('ws://127.0.0.1:${server.port}/api/local-ws'),
         fixedReconnectDelay: const Duration(milliseconds: 100),
       );
@@ -559,6 +564,7 @@ void main() {
       onEvent: (_) {},
       onStatus: statuses.add,
       transportKind: WsTransportKind.localPlaintext,
+        allowLocalTcpFixture: true,
       localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
     );
     await conn!.connect();

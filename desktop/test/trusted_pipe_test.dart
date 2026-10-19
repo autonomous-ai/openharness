@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/e2ee/primitives.dart' show hmacSha256;
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
+import 'package:harness/companions/coding_memory_connection.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/ws/daemon_pipe_record.dart';
@@ -689,6 +690,34 @@ void main() {
         expect(tcp.selects, 0);
         expect(daemon.selects, 1);
         expect(conn.trustedPipeMissing, isFalse);
+      });
+
+      test('owner memories use the injected proven pipe', () async {
+        final tcp = await start(PipeDaemon.tcp());
+        final daemon = await start(PipeDaemon.pipe(dir, _token));
+        writeDaemonRecord(dir, _port, daemon.path, _token);
+        final connection = LocalCodingMemoryConnection(
+          endpoint: LocalCliEndpoint(
+            computerId: 'm1',
+            wsUri: Uri(
+              scheme: 'ws',
+              host: '127.0.0.1',
+              port: tcp.server.port,
+              path: '/api/local-ws',
+            ),
+            socketPath: null,
+            protocolVersion: 1,
+            terminalProtocolVersion: 1,
+          ),
+          machineId: 'm1',
+          localTransport: LocalDaemonTransport(trustedPipe: trustedPipe()),
+          isCurrent: () => true,
+          onClosed: () {},
+        );
+        addTearDown(connection.dispose);
+        expect((await connection.request({'action': 'status'}))['ok'], isTrue);
+        expect(daemon.selects, 1);
+        expect(tcp.selects, 0);
       });
 
       test('a missing pipe never falls back to a stale port', () async {

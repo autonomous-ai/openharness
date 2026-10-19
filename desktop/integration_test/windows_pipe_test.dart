@@ -392,6 +392,8 @@ void main() {
             onEvent: (_) {},
             onStatus: (_) {},
             transportKind: WsTransportKind.localPlaintext,
+            // Only the explicit untrusted fixture reaches the loopback port.
+            allowLocalTcpFixture: !trusted,
             localWsUri: Uri.parse('ws://127.0.0.1:$tcpPort/api/local-ws'),
             localTransport: transport,
             trustedLocal: trusted,
@@ -498,23 +500,17 @@ void main() {
 
         final fallback = conn(transport);
         addTearDown(fallback.close);
-        unawaited(fallback.connect());
-        await ready(fallback);
+        await fallback.connect();
+        expect(fallback.isReady, isFalse);
         expect(fallback.trustedPipeMissing, isTrue);
 
         recordNames(pipePath);
         expect(await pipe.probe(), isTrue);
         expect((await client.phoneSignInCode())?.code, 'hnh_pipe_test');
         expect(client.phoneSignInUnavailable, isFalse);
-        // Reuse the window's one connection, as AppNotifier does on a trusted send.
-        await fallback.moveToTrustedPipe();
-        final deadline = DateTime.now().add(const Duration(seconds: 20));
-        while (fallback.trustedPipeMissing || !fallback.isReady) {
-          if (DateTime.now().isAfter(deadline)) {
-            fail('the existing window connection did not return to the pipe');
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 20));
-        }
+        // The same window connection finds the new pipe on its next retry.
+        await ready(fallback);
+        expect(fallback.trustedPipeMissing, isFalse);
         expect(await actRefusal(fallback), 'UNSUPPORTED');
       });
 

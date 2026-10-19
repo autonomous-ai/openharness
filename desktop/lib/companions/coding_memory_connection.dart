@@ -4,10 +4,11 @@ import 'package:flutter/foundation.dart';
 
 import '../core/models.dart' show ConnectionStatus;
 import '../ws/local_cli_discovery.dart';
+import '../ws/local_daemon_transport.dart';
 import '../ws/ws_conn.dart';
 
-/// Owner controls use a separate, persistent TCP connection so the host can
-/// verify the OS peer. Agent terminals and ordinary Unix transport are unchanged.
+/// Owner controls use a separate, persistent local connection. On Windows it
+/// shares the daemon's proven pipe; elsewhere it uses the discovered transport.
 abstract class CodingMemoryConnection extends ChangeNotifier {
   bool get valid;
   int get epoch;
@@ -19,6 +20,8 @@ class LocalCodingMemoryConnection extends CodingMemoryConnection {
   LocalCodingMemoryConnection({
     required LocalCliEndpoint endpoint,
     required String machineId,
+    LocalDaemonTransport? localTransport,
+    bool allowLocalTcpFixtureForTest = false,
     required this.isCurrent,
     required this.onClosed,
   }) {
@@ -36,6 +39,8 @@ class LocalCodingMemoryConnection extends CodingMemoryConnection {
       },
       transportKind: WsTransportKind.localPlaintext,
       localWsUri: endpoint.wsUri,
+      localTransport: localTransport,
+      allowLocalTcpFixture: allowLocalTcpFixtureForTest,
       localProtocolVersion: endpoint.protocolVersion,
       localToolClient: true,
     );

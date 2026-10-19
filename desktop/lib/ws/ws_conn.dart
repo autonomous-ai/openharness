@@ -94,6 +94,11 @@ class WsConn {
   /// falls back to the port. Windows uses only the authenticated pipe.
   final LocalDaemonTransport? localTransport;
 
+  /// A loopback WebSocket fixture has no daemon pipe. This opt-in works only
+  /// under flutter test; installed Windows builds always require the pipe.
+  @visibleForTesting
+  final bool allowLocalTcpFixture;
+
   /// Retained only for fixture constructor compatibility. Local transport ignores it.
   final String? localApiKey;
   final String? observerShareId;
@@ -220,6 +225,7 @@ class WsConn {
     this.transportKind = WsTransportKind.cloudE2ee,
     this.localWsUri,
     this.localTransport,
+    this.allowLocalTcpFixture = false,
     this.localApiKey,
     this.observerShareId,
     this.observerLink = false,
@@ -282,7 +288,7 @@ class WsConn {
   /// The local WebSocket over the daemon's loopback port, showing its local
   /// credential: the port takes any OS user's process, the socket only ours.
   WebSocketChannel _connectLocalPort(Uri uri) {
-    if (Platform.isWindows) {
+    if (Platform.isWindows && !(kUnderTest && allowLocalTcpFixture)) {
       throw StateError('The local daemon pipe is unavailable');
     }
     final transport =

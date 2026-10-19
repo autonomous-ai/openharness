@@ -845,6 +845,7 @@ class AppNotifier extends ChangeNotifier {
     connection = LocalCodingMemoryConnection(
       endpoint: endpoint,
       machineId: id,
+      localTransport: localDaemonTransport,
       isCurrent: () =>
           _authWorkCurrent(auth) &&
           currentUser?.id == owner &&

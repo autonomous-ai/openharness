@@ -160,6 +160,13 @@ class PipeDaemon {
                 },
               }),
             );
+          case 'pair':
+            ws.add(
+              jsonEncode({
+                'type': 'pair_result',
+                'payload': {'requestId': payload['requestId'], 'ok': true},
+              }),
+            );
         }
       });
       return;
