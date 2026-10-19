@@ -81,6 +81,7 @@ class ConversationServer {
           command['text'] as String,
           conversationId: command['conversationId'] as String,
         );
+        messages.last['replyTo'] = command['replyTo'];
         output['messageId'] = 'message-$revision';
       } else if (command['type'] == 'conversation.create') {
         revision++;

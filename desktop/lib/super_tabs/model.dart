@@ -96,6 +96,7 @@ class SuperTabMessage {
     : id = _text(row, 'id'),
       conversationId = _text(row, 'conversationId'),
       text = _text(row, 'text'),
+      replyTo = row['replyTo'] as String?,
       sequence = (row['sequence'] as num).toInt(),
       author = Map.unmodifiable(superTabMap(row['author'])),
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
@@ -105,6 +106,7 @@ class SuperTabMessage {
         (d) => Map<String, dynamic>.unmodifiable(d),
       );
   final String id, conversationId, text;
+  final String? replyTo;
   final int sequence;
   final Map<String, dynamic> author;
   final Map<String, dynamic> source;

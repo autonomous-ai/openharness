@@ -44,8 +44,8 @@ This is a new tab type. Existing tabs and running sessions are not converted.
 The desktop surface is connected, but the complete workflow is not ready. Scoped autonomous
 agent starts and capacity checks are connected through the existing native creation protocol.
 Terminal access, native stop reconciliation and explicit uncertain-delivery recovery are connected.
-Shared recording of native interventions is connected and covered by isolated fixtures. The PR stays a draft
-until the complete workflow is tested and reviewed.
+Shared recording of native interventions is connected and covered by isolated fixtures. The
+implementation can enter automatic PR CI and review; rollout still requires the acceptance below.
 
 ## Validation plan
 
@@ -241,20 +241,64 @@ Broad component runs and their targeted corrections are recorded above. Real-eng
 acceptance, full-app visual inspection, final review, CI, merge, official build and release remain.
 No production deployment has occurred.
 
-Implementation remains on `feat/super-tab`, draft PR #1405. Earlier pushes failed with connection resets.
-The latest push exceeded its 45-second bound and was terminated; a remote-head lookup also timed out after
-25 seconds. A subsequent bounded IPv4 request to the GitHub API failed during its TLS handshake.
-Upload of the local commits is unconfirmed, and no extra CI run has been requested.
-Local commits and validation are preserved. The original research worktree's merge remains untouched.
+Implementation remains on `feat/super-tab`, draft PR #1405. Earlier pushes failed with connection resets
+or timed out, leaving the implementation local. GitHub connectivity recovered on the conversation
+refinement pass: fetch confirmed the remote at `f2625cdafd` and main at `7476ac0303`.
+The remaining local commits still need to be pushed and validated by automatic PR CI.
+The original research worktree's merge remains untouched.
 
 ## Remaining implementation and acceptance
 
 - Review the final stable head. Preserve the broad-suite
   results and targeted corrections above; CI must still validate the pushed head before merge.
-- Once the Mac is unlocked, finish native terminal, physical shortcut/IME and full-app visual acceptance on an official review build.
+- Finish physical shortcut/IME and full-app visual acceptance on an official review build.
   Publish only after the remaining implementation and validation pass, following the normal release schedule.
 
 ## Follow-through
+
+### Conversation refinement validation plan, 18 October
+
+The Slack/Discord study and implementation choices are in the MVP's conversation
+craft section. This pass changes Desktop message presentation, reply parsing,
+the visible read boundary and the CLI host's native delivery text. It preserves
+the existing coordination protocol and backend reply routing.
+Run the affected Super Tab widget/controller tests, Markdown safety and keyboard
+tests, and the icon audit. Inspect system-font renders in both appearances and
+at 200% text, including a busy agent group and an active human question. Run the
+isolated macOS workspace/terminal fixture, then restore the ordinary app entrypoint.
+The new pure Flutter Markdown dependency invalidates previous Desktop build inputs;
+the final automatic Desktop CI suite and official build must use the new lockfile.
+Earlier backend/CLI evidence remains applicable to unchanged source. Run CLI
+typecheck, the host tests and the real-daemon Super Tab fixture for the changed
+native prompt, including both supported engine paths.
+
+GitHub connectivity and an unlocked Mac were verified on the resumed pass. Native
+rendering now works. The fixture's original animation settle timed out; a bounded
+protocol-readiness wait then exposed incorrect fixture capability/agent data.
+Increasing its timeout alone did not solve it. The fixture now uses the actual
+`terminal.available` wire shape and native capability response. The real macOS
+window test passes, including 20 participants, the shared conversation, the actual
+native terminal stream and its group input context. Its accounts, server and
+engine output are isolated fixtures; it does not establish live subscription or
+production-backend acceptance.
+
+- Final affected Desktop batch: 49 tests passed in about six seconds, covering
+  keyboard replies, preserved reply context, access revocation, human requests
+  scoped to their group, safe Markdown rendering, read boundaries, native launch
+  recovery, delivery decisions and workspace terminal restoration. The earlier
+  mixed batch was interrupted after a test-cleanup hang; it was not a passing run.
+- The first catch-up check found a variable-height list stopping above the actual
+  last message. The corrected follow-to-end behavior passes the regression and
+  preserves the position of someone reading older messages.
+- Dark, light and 200% system-font renders were inspected, with agent and human
+  identities, readable code, an explicit reply and a local human question. The
+  real macOS conversation and adjacent terminal captures were also inspected.
+  Focused Dart analysis found no issues. The shared icon audit passed (668 Dart
+  files, 160 catalogue symbols and 603 references).
+- CLI host: all 14 focused tests passed; CLI typecheck passed. The real-daemon
+  Super Tab E2E passed both Claude and Codex fixture paths in 34.17 seconds
+  (48.42 seconds including bundle setup). Native delivery retains the reply ID,
+  so a short answer is interpreted with the original question.
 
 Keep the host's durable native delivery receipt separate from backend acknowledgement. A timeout
 does not prove an instruction was not executed. Check authority immediately before queued input

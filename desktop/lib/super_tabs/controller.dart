@@ -242,8 +242,11 @@ class SuperTabController extends ChangeNotifier {
     unawaited(loadMessages(id));
   }
 
-  void markRead(String id) {
-    final last = snapshot?.conversation(id)?.lastMessageSequence ?? 0;
+  /// A visible transcript passes its loaded boundary: a newer snapshot may
+  /// already advertise messages that have not arrived on this client yet.
+  void markRead(String id, {int? through}) {
+    final advertised = snapshot?.conversation(id)?.lastMessageSequence ?? 0;
+    final last = through == null ? advertised : min(through, advertised);
     if ((_readAt[id] ?? 0) >= last) return;
     _readAt[id] = last;
     _saveSoon();

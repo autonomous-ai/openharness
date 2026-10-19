@@ -207,3 +207,33 @@ Implementation references: [creation entry rules](../../../desktop/design/new-ha
 | Additive adoption | Existing tabs keep working; attaching a running agent preserves its identity and context and clearly grants access to its selected session. Exercise the full work loop in disposable sessions. |
 
 Implementation is authorized. A review build and rollout still require the acceptance evidence above; a new Super Tab does not replace or convert an existing tab automatically.
+
+## Conversation craft: Slack and Discord study, 18 October
+
+The primary workflow is agents coordinating in shared groups. People read, direct,
+review and answer in those same conversations. The useful benchmark is how quickly
+someone can identify speakers, recover context and contribute without losing their
+place. This study uses the products' published interaction and accessibility guides;
+it does not establish user-count rankings or a comparative usability score.
+
+| What the references get right | Super Tab decision |
+| --- | --- |
+| [Slack's message display](https://slack.com/help/articles/213893898-Change-how-messages-are-displayed) separates speaker identity from message content. [Discord's spacing](https://discord.com/blog/making-discord-on-desktop-look-just-right-display-settings-to-ease-the-eyes) groups consecutive posts from one speaker and separates speaker changes. | Give both people and agents a name and identity: account initials for people, existing engine marks for agents. At most three short, single-line updates by the same author can share a header within five minutes. Reports, replies, source changes and dates retain their own header. This only reduces repeated visual noise; messages keep their own IDs and actions. Keep system typography and the Harness palette. |
+| [Discord replies](https://support.discord.com/hc/en-us/articles/360057382374-Replies-FAQ) retain the original message's context. | A person's “yes” must identify the agent's exact question; review feedback must identify the result being reviewed. Show an inline excerpt and author in the same flat group. A reply to an agent routes to that agent while it is still a participant; native delivery includes the original message reference and asks the agent to read it. The relationship survives sending and reopening. An unloaded original is labeled explicitly. |
+| [Slack unread handling](https://slack.com/help/articles/226410907-View-all-your-unread-messages) supports catching up separately from incoming activity. | Reading history must not jump as agents post. Show a new-message control and retain the reading position. Following the latest messages remains automatic when already at the end. |
+| [Slack notification controls](https://slack.com/help/articles/201355156-Configure-your-Slack-notifications) distinguish ordinary traffic from directed attention. | Routine agent traffic stays quiet. A recorded human request is visible in its originating group and clears when its work state changes. No global queue or new notification settings in this pass. |
+| [Discord keyboard navigation](https://support.discord.com/hc/en-us/articles/1500000056121-Keyboard-Navigation-FAQ) exposes message actions and clear focus without requiring a mouse. | Message actions appear on hover or focus. Keep a keyboard reply path, Escape back to the composer, existing app shortcuts, per-group drafts and IME-safe sending. |
+
+Code, lists and linked evidence should be readable as part of a conversation.
+Render Markdown with the existing type/color roles; retain selectable text and
+copyable source. Shared message content must not automatically fetch images,
+read local files or execute commands. Web links open only after a person clicks.
+Full model, effort and machine information belongs in identity details rather than
+being repeated as a dashboard on every message. Typing or working indicators must
+come from recorded activity, never invented timers.
+
+These are coordination decisions, not a social-chat feature checklist. Short
+updates can share a name visually, but agents should post useful decisions,
+questions and results rather than narrate every tool call. Replies are optional
+when ordinary conversation is already clear. There are no nested reply rooms,
+reaction systems or new global attention feeds in this pass.

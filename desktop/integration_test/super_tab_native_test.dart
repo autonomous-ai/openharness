@@ -13,13 +13,15 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/super_tabs/workspace.dart';
 import 'package:harness/widgets/pane_grid.dart';
 
-import '../test/super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import '../test/super_tab_launch_test.dart'
+    show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
 
 /// A real Flutter/macOS surface with in-memory accounts and native protocol
 /// fixtures. It never opens a production daemon, account, harness or database.
 void main() {
   if (!kUnderTest) throw StateError('Requires FLUTTER_TEST=1');
-  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized()
+    ..framePolicy = LiveTestWidgetsFlutterBindingFramePolicy.onlyPumps;
   testWidgets(
     'native Super Tab keeps group context, people and terminal in one workspace',
     (tester) async {
@@ -34,6 +36,7 @@ void main() {
       await windowManager.focus().timeout(const Duration(seconds: 10));
       debugPrint('Super Tab fixture: create lead');
       final f = SuperTabLaunchFixture();
+      f.connection.nativeSurface = true;
       f.app.machineStates['m']!.terminalCapabilityAvailable = true;
       await tester.runAsync(() async {
         final box = await f.box(engine: 'claude');
@@ -80,16 +83,23 @@ void main() {
         return controller;
       });
       expect(c, isNotNull);
-      debugPrint('Super Tab fixture: render first frame');
+      debugPrint(
+        'Super Tab fixture: render first frame '
+        '(lifecycle=${binding.lifecycleState}, '
+        'framesEnabled=${binding.framesEnabled}, '
+        'visible=${await windowManager.isVisible()}, '
+        'minimized=${await windowManager.isMinimized()}, '
+        'focused=${await windowManager.isFocused()})',
+      );
       final boundary = GlobalKey();
       await tester.pumpWidget(
-        MaterialApp(
-          debugShowCheckedModeBanner: false,
-          theme: grid.buildAppTheme(brightness: Brightness.dark),
-          home: Scaffold(
-            body: RepaintBoundary(
-              key: boundary,
-              child: ListenableBuilder(
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: Brightness.dark),
+            home: Scaffold(
+              body: ListenableBuilder(
                 listenable: f.app,
                 builder: (context, _) => SuperTabWorkspace(
                   app: f.app,
@@ -101,7 +111,13 @@ void main() {
           ),
         ),
       );
-      await tester.pumpAndSettle();
+      debugPrint('Super Tab fixture: first frame painted');
+      await tester.pumpAndSettle(
+        const Duration(milliseconds: 100),
+        EnginePhase.sendSemanticsUpdate,
+        const Duration(seconds: 10),
+      );
+      debugPrint('Super Tab fixture: conversation settled');
       expect(find.text('1 agent · 20 people'), findsOneWidget);
       expect(find.text('CHATS'), findsNothing);
       expect(find.text('New group'), findsOneWidget);
@@ -121,16 +137,43 @@ void main() {
       }
 
       await shot('conversation');
+      debugPrint('Super Tab fixture: open participants');
       await tester.tap(find.text('1 agent · 20 people'));
+      debugPrint('Super Tab fixture: participants tapped');
       await tester.pumpAndSettle();
+      debugPrint('Super Tab fixture: participants settled');
       expect(find.text('Lead'), findsWidgets);
       expect(find.text('Open terminal'), findsOneWidget);
       await tester.tap(find.text('Open terminal'));
+      debugPrint('Super Tab fixture: terminal requested');
       for (var i = 0; i < 30 && f.app.activeSwarm.panes.isEmpty; i++) {
         await tester.pump(const Duration(milliseconds: 50));
       }
       expect(f.app.activeSwarm.panes, hasLength(1));
-      await tester.pumpAndSettle();
+      final machine = f.app.machineStates['m']!;
+      debugPrint(
+        'Super Tab fixture: native prerequisites '
+        'online=${machine.nodeOnline} capability=${machine.terminalCapabilityAvailable} '
+        'agents=${machine.agents.map((a) => '${a.id}:${a.terminalAvailable}').join(',')} '
+        'session=${f.app.activeSwarm.panes.single.session?.status}',
+      );
+      // A live terminal keeps its cursor animated. Wait for the protocol's
+      // readiness, not for the entire window to stop scheduling frames.
+      for (
+        var i = 0;
+        i < 120 && f.app.activeSwarm.panes.single.session?.streamId == null;
+        i++
+      ) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(
+        f.app.activeSwarm.panes.single.session?.streamId,
+        SuperTabFixtureConnection.streamId,
+        reason: 'Native terminal did not attach: ${f.connection.terminalCalls}',
+      );
+      expect(f.app.activeSwarm.panes.single.inputContext, isNotNull);
+      await tester.pump(const Duration(milliseconds: 100));
+      debugPrint('Super Tab fixture: terminal ready');
       await shot('terminal');
       expect(find.byType(PaneGrid), findsOneWidget);
       await tester.pumpWidget(const SizedBox());

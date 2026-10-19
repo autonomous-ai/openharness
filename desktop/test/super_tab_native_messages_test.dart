@@ -20,6 +20,9 @@ void main() {
     for (final family in ['.AppleSystemUIFont', 'Roboto']) {
       await (FontLoader(family)..addFont(Future.value(bytes))).load();
     }
+    await (FontLoader(grid.AppType.monoFamily)
+          ..addFont(rootBundle.load('assets/fonts/roboto-mono/RobotoMono.ttf')))
+        .load();
     await (FontLoader('packages/lucide_icons_flutter/Lucide400')..addFont(
           rootBundle.load(
             'packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf',
@@ -70,10 +73,31 @@ void main() {
             'contributorId': 'owner',
             'configuration': {'engine': 'claude'},
           },
+          for (final name in ['Builder', 'Reviewer'])
+            {
+              'id': name.toLowerCase(),
+              'name': name,
+              'machineId': 'm',
+              'harnessId': name.toLowerCase(),
+              'contributorId': 'leo',
+              'configuration': {
+                'engine': name == 'Builder' ? 'codex' : 'claude',
+              },
+            },
         ];
-        (server.state['conversations'] as List)[0]['agentIds'] = ['lead-agent'];
-        (server.state['conversations'] as List)[0]['leadId'] = 'lead-agent';
-        server.append('Keep the first version focused on the lampOS workflow.');
+        final group = (server.state['conversations'] as List)[1] as Map;
+        group['agentIds'] = ['lead-agent', 'builder', 'reviewer'];
+        group['leadId'] = 'lead-agent';
+        group['assignment'] = {
+          'id': 'attempt',
+          'agentId': 'builder',
+          'status': 'needs_human',
+          'result': 'Can someone verify offline editing on a real device?',
+        };
+        server.append(
+          'Verify offline edits through a restart and reconnect.',
+          conversationId: 'offline',
+        );
         server.messages.last['author'] = {
           'kind': 'agent',
           'id': 'lead-agent',
@@ -86,7 +110,8 @@ void main() {
         };
         if (profile.scale == 1) {
           server.append(
-            'I’ll reuse the existing creation form and keep collaboration inside this tab.',
+            '@Builder, check persistence. @Reviewer, check account switching.',
+            conversationId: 'offline',
           );
           server.messages.last['author'] = {
             'kind': 'agent',
@@ -97,8 +122,55 @@ void main() {
             'kind': 'native',
             'phase': 'answer',
           };
+          server.append(
+            '**Checks passed**\n'
+            '- Restart preserves pending edits.\n'
+            '- Reconnect syncs once, including interrupted writes.\n\n'
+            '\u0060await queue.flush();\u0060',
+            conversationId: 'offline',
+          );
+          server.messages.last['author'] = {
+            'kind': 'agent',
+            'id': 'builder',
+            'name': 'Builder',
+          };
+          server.append(
+            'Should pending edits survive sign-out?',
+            conversationId: 'offline',
+          );
+          server.messages.last['author'] = {
+            'kind': 'agent',
+            'id': 'builder',
+            'name': 'Builder',
+          };
+          final question = server.messages.last['id'];
+          server.append(
+            'Yes. Keep them on the device; ask before syncing to another account.',
+            conversationId: 'offline',
+          );
+          server.messages.last['author'] = {
+            'kind': 'person',
+            'id': 'leo',
+            'name': 'Leo',
+          };
+          server.messages.last['replyTo'] = question;
+          server.append(
+            'Can someone verify offline editing on a real device? The software checks passed.',
+            conversationId: 'offline',
+          );
+          server.messages.last['author'] = {
+            'kind': 'agent',
+            'id': 'lead-agent',
+            'name': 'Lead',
+          };
         }
-        final controller = server.controller();
+        final controller = server.controller(
+          initial: {
+            'tabId': 'tab',
+            'accountId': 'owner',
+            'selectedId': 'offline',
+          },
+        );
         await controller.refresh();
         final boundary = GlobalKey();
         await tester.pumpWidget(
@@ -135,6 +207,13 @@ void main() {
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         if (capture != null) {
+          await tester.runAsync(
+            () => precacheImage(
+              const AssetImage('assets/engine-icons/codex.png'),
+              tester.element(find.byType(SuperTabView)),
+            ),
+          );
+          await tester.pump();
           final render =
               boundary.currentContext!.findRenderObject()!
                   as RenderRepaintBoundary;

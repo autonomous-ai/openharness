@@ -1,86 +1,86 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import '../core/open_in_browser.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 
-/// Shared messages are selectable text. Only explicit web links are opened,
-/// using the app's existing browser path; messages never execute local paths.
-class SuperTabMessageText extends StatefulWidget {
+/// Shared content is selectable, never executable. Markdown images are labels,
+/// not automatic network requests or reads from a collaborator's local disk.
+class SuperTabMessageText extends StatelessWidget {
   const SuperTabMessageText(this.text, {super.key});
   final String text;
-  @override
-  State<SuperTabMessageText> createState() => _SuperTabMessageTextState();
-}
 
-class _SuperTabMessageTextState extends State<SuperTabMessageText> {
-  final _links = <TapGestureRecognizer>[];
-  List<InlineSpan> _spans = [];
-  Color? _accent;
-  static final _web = RegExp(r'https?://[^\s<>"\x00-\x1f]+');
-
-  @override
-  void initState() {
-    super.initState();
-    _read();
-  }
-
-  @override
-  void didUpdateWidget(SuperTabMessageText oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.text != widget.text) _read();
-  }
-
-  void _read() {
-    _accent = DesktopChrome.accent;
-    for (final link in _links) {
-      link.dispose();
-    }
-    _links.clear();
-    _spans = [];
-    var offset = 0;
-    for (final match in _web.allMatches(widget.text)) {
-      final raw = match.group(0)!;
-      final link = raw.replaceFirst(RegExp(r'[.,;!?\]\)]+$'), '');
-      final uri = Uri.tryParse(link);
-      if (uri == null || uri.host.isEmpty) continue;
-      _spans.add(TextSpan(text: widget.text.substring(offset, match.start)));
-      final recognizer = TapGestureRecognizer()
-        ..onTap = () {
-          openInBrowser(uri);
-        };
-      _links.add(recognizer);
-      _spans.add(
-        TextSpan(
-          text: link,
-          recognizer: recognizer,
-          style: TextStyle(
-            color: DesktopChrome.accent,
-            decoration: TextDecoration.underline,
-          ),
-        ),
-      );
-      offset = match.start + link.length;
-    }
-    _spans.add(TextSpan(text: widget.text.substring(offset)));
-  }
-
-  @override
-  void dispose() {
-    for (final link in _links) {
-      link.dispose();
-    }
-    super.dispose();
+  static Uri? webLink(String? href) {
+    final uri = href == null ? null : Uri.tryParse(href);
+    return uri != null &&
+            (uri.scheme == 'https' || uri.scheme == 'http') &&
+            uri.host.isNotEmpty
+        ? uri
+        : null;
   }
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    if (_accent != DesktopChrome.accent) _read();
-    return SelectableText.rich(
-      TextSpan(children: _spans),
-      style: DesktopChrome.text(),
+    final body = DesktopChrome.text();
+    final heading = body.copyWith(fontWeight: FontWeight.w600);
+    return MarkdownBody(
+      data: text,
+      selectable: true,
+      softLineBreak: true,
+      styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+        p: body,
+        a: TextStyle(
+          color: DesktopChrome.accent,
+          decoration: TextDecoration.underline,
+        ),
+        h1: heading.copyWith(fontSize: 17),
+        h2: heading.copyWith(fontSize: 16),
+        h3: heading,
+        h4: heading,
+        h5: heading,
+        h6: heading,
+        strong: const TextStyle(fontWeight: FontWeight.w600),
+        code: grid.AppType.mono(
+          color: DesktopChrome.foreground,
+          height: 1.5,
+        ).copyWith(backgroundColor: DesktopChrome.field),
+        blockSpacing: 8,
+        listIndent: 20,
+        listBullet: body,
+        blockquote: body.copyWith(color: DesktopChrome.muted),
+        blockquotePadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 4,
+        ),
+        blockquoteDecoration: BoxDecoration(
+          border: Border(left: BorderSide(color: DesktopChrome.rim, width: 2)),
+        ),
+        codeblockPadding: const EdgeInsets.all(12),
+        codeblockDecoration: BoxDecoration(
+          color: DesktopChrome.field,
+          borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
+        ),
+        tableHead: heading,
+        tableBody: body,
+        tableBorder: TableBorder.all(color: DesktopChrome.rim),
+        tableCellsPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 8,
+        ),
+        horizontalRuleDecoration: BoxDecoration(
+          border: Border(top: BorderSide(color: DesktopChrome.rim)),
+        ),
+      ),
+      onTapLink: (_, href, _) {
+        final uri = webLink(href);
+        if (uri != null) openInBrowser(uri);
+      },
+      imageBuilder: (uri, title, alt) => Text(
+        alt?.isNotEmpty == true ? 'Image: $alt' : 'Image',
+        style: DesktopChrome.metadata(),
+      ),
     );
   }
 }

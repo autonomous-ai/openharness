@@ -63,6 +63,7 @@ abstract final class AppIcons {
   static const copy = LucideIcons.copy400;
   static const copyPlus = LucideIcons.copyPlus400;
   static const cornerDownLeft = LucideIcons.cornerDownLeft400;
+  static const reply = LucideIcons.reply400;
   static const cpu = LucideIcons.cpu400;
   static const database = LucideIcons.database400;
   static const dot = LucideIcons.dot400;

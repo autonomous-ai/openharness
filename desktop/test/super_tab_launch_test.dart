@@ -36,6 +36,7 @@ class SuperTabFixtureConnection extends WsConn {
   final joins = <Map<String, dynamic>>[];
   bool loseCreate = false, loseJoin = false;
   bool failNative = false;
+  bool nativeSurface = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
   late AppNotifier app;
   final sentFiles = <Uint8List>[];
@@ -110,6 +111,14 @@ class SuperTabFixtureConnection extends WsConn {
     Duration timeout = const Duration(seconds: 20),
   }) async {
     calls.add((type, Map.of(payload)));
+    if (nativeSurface && type == 'terminal_capabilities') {
+      return {'protocolVersion': 3, 'backend': 'tmux', 'available': true};
+    }
+    if (nativeSurface && type == 'agents_list') {
+      return {
+        'agents': [if (native != null) native],
+      };
+    }
     if (type == 'super_tabs') {
       if (payload['action'] == 'wake') return {'ok': true};
       if (payload['action'] == 'prepareNative' ||
@@ -177,7 +186,7 @@ class SuperTabFixtureConnection extends WsConn {
         'id': 'native-lead',
         'name': 'Lead',
         'engine': payload['engine'],
-        'terminalAvailable': true,
+        'terminal': {'available': true},
         'project': {'cwd': '/work/project', 'label': 'Project'},
       };
       if (loseCreate) {
