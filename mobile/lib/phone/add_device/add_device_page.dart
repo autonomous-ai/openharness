@@ -167,6 +167,36 @@ class _AddDevicePageState extends State<AddDevicePage> {
     await _join();
   }
 
+  /// A ticket handed to the device already: the next try needs a new one.
+  bool _ticketSent = false;
+
+  /// A new ticket, tried for a while: the phone may still be finding its way back to its own Wi-Fi.
+  Future<bool> _freshTicket() async {
+    Object? failure;
+    for (var attempt = 0; attempt < 5; attempt++) {
+      try {
+        final ticket = await _app.api.boxTicket();
+        final value = ticket['ticket'] as String? ?? '';
+        if (value.isNotEmpty) {
+          _ticket = value;
+          _ticketSent = false;
+          return true;
+        }
+      } catch (e) {
+        failure = e;
+      }
+      await Future<void>.delayed(const Duration(seconds: 3));
+      if (!mounted) return false;
+    }
+    _show(
+      _Step.join,
+      error: failure == null
+          ? 'Could not prepare the sign-in. Try again.'
+          : describeApiError(failure),
+    );
+    return false;
+  }
+
   // -- 2. onto the device's hotspot, picked from the Wi-Fi list --
 
   Future<void> _join() async {
@@ -176,6 +206,10 @@ class _AddDevicePageState extends State<AddDevicePage> {
       _progress = _Progress.choosing;
       _address = null;
     });
+    // Back to the device after it was handed a ticket: that one is spent (or will be, by a sign-in
+    // that failed), so a new one now, while this phone is on its own Wi-Fi again. Sent again, the old
+    // one came back "This ticket was already used or has expired".
+    if (_ticketSent && !await _freshTicket()) return;
     if (SetupHotspot.joinsByItself) {
       // The same device again once it has started: only its own name in Android's list.
       final joined = await _hotspot.join(
@@ -298,6 +332,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
     _ssid.clear();
     try {
       await _hotspot.connect(ssid: '', password: '', ticket: _ticket);
+      _ticketSent = true;
     } on SetupException catch (e) {
       _show(_Step.join, error: e.message);
       return;
@@ -345,6 +380,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
         password: secure ? password : '',
         ticket: _ticket,
       );
+      _ticketSent = true;
     } on SetupException catch (e) {
       _show(_Step.password, error: e.message);
       return;
