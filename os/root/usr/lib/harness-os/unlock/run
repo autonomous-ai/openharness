@@ -69,5 +69,7 @@ dnsmasq --interface="$device" --bind-interfaces --except-interface=lo --port=0 -
     --dhcp-range=10.42.0.10,10.42.0.100,255.255.255.0,1h --dhcp-leasefile="$STATE/leases" \
     --pid-file="$STATE/dnsmasq.pid"
 echo "harness-unlock: hotspot \"$name\" is up on $device"
+# The screen's password page says so (the theme `harness`, its message): another way in.
+command -v plymouth >/dev/null 2>&1 && plymouth display-message --text="hotspot:$name" 2>/dev/null
 echo $$ > "$STATE/tcpsvd.pid"
 exec tcpsvd -E "$ADDRESS" 80 "$HERE/http"

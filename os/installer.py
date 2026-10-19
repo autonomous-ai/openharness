@@ -26,6 +26,8 @@ LIVE_PAYLOADS = (Path('/run/archiso/copytoram/airootfs.sfs'),
 WORDMARK = ('█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀', '█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█')
 COMMAND_LOG = None
 INSTALL_LOG = Path('/var/log/harness-install.log')
+# On a USB built with HARNESS_OS_KEEP_LOGS: what it installs keeps its journal on disk.
+KEEP_LOGS = Path('/etc/harness-os/keep-logs')
 LAST_LOG = None
 
 
@@ -499,9 +501,13 @@ def install_image(config, source, target, progress, resources):
             # The one account is known: only its password is asked, as the disk's would be.
             write(target, '/etc/systemd/system/getty@tty1.service.d/password.conf',
                   '[Service]\nExecStart=\n' + f"ExecStart=-/usr/bin/agetty --skip-login --login-options '-p -- {config['username']}' --noclear %I $TERM\n")
+        # A USB built with HARNESS_OS_KEEP_LOGS (build.sh) installs computers that keep their logs
+        # across restarts, to read what went wrong after one. For testing; not set for a release.
+        if KEEP_LOGS.is_file():
+            write(target, '/etc/systemd/journald.conf.d/90-harness-keep-logs.conf', '[Journal]\nStorage=persistent\n')
         # An encrypted root cannot appear until its owner returns to unlock it.
         # Do not send a person who paused at the prompt into emergency mode.
-        root_flags = 'subvol=@' + (',x-systemd.device-timeout=0' if config['encrypt'] else '')
+        root_flags ='subvol=@' + (',x-systemd.device-timeout=0' if config['encrypt'] else '')
         kernel_args = f'quiet loglevel=3 rootflags={root_flags}'
         if platform['parameters']:
             kernel_args += ' ' + ' '.join(platform['parameters'])
@@ -529,11 +535,9 @@ def install_image(config, source, target, progress, resources):
         chroot(target, 'systemctl', 'enable', 'NetworkManager', 'systemd-resolved', 'systemd-timesyncd',
                'harness-setup.service')
         chroot(target, 'systemctl', 'disable', 'sshd.service')
-        if not config['encrypt']:
-            # Its account's daemon from the start (the user lingers), not only with a session at the
-            # screen: the screen asks for its password first, and a computer set up from a phone
-            # may never be signed in at it.
-            chroot(target, 'systemctl', '--global', 'enable', 'harness-daemon.service')
+        # Its account's daemon from the start (the user lingers), not only with a session at the
+        # screen: a computer set up and unlocked from a phone may have no screen, or nobody at it.
+        chroot(target, 'systemctl', '--global', 'enable', 'harness-daemon.service')
         report('Preparing startup and recovery…')
         chroot(target, '/usr/lib/harness-os/init-keyring')
         # Keep the live marker through this initial optional package transaction,
