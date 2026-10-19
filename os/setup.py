@@ -48,6 +48,11 @@ NOW = Path('/run/harness-os/setup-now')
 SCREEN = Path('/run/harness-os/setup-screen')
 # Signed in from a phone: its first workspace is OpenCode alone, not with two terminals (onboarding.py).
 FROM_PHONE = STATE / 'set-up-from-phone'
+# A phone's Wi-Fi and sign-in, sent with the computer's password as it started (unlock/http): /run
+# outlives the switch from its startup to the system, and nothing of it reaches the disk.
+PHONE_SETUP = Path('/run/harness-os/phone-setup.json')
+# How long the Wi-Fi card may take to appear in NetworkManager as the system starts.
+DEVICE_WAIT = 30
 HEADLESS = Path('/etc/harness-os/headless')
 DRM = Path('/sys/class/drm')
 USER = 'me'
@@ -663,6 +668,51 @@ def hotspot_wait(now, started):
     return OFFLINE_AT_START if now - started < OFFLINE_AT_START + 5 else OFFLINE_LATER
 
 
+def signed_in_account():
+    """The account this computer is signed in to: the session's `signInAcct` (cli recordSignInAccount)."""
+    try:
+        return json.loads(SESSION.read_text()).get('signInAcct')
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def set_up_as_unlocked():
+    """The rest of a phone's setup, sent with the computer's password while its disk was locked
+    (unlock/http, protocol 2): the Wi-Fi, its password, the sign-in ticket and the phone's account.
+    Joined and signed in as the system starts — the phone never comes back to a second hotspot. Every
+    time, set up before or not: the Wi-Fi given is joined, and an account other than the phone's is
+    signed out for it. One that fails leaves its reason for the hotspot that follows (watch)."""
+    try:
+        request = json.loads(PHONE_SETUP.read_text())
+    except (OSError, ValueError):
+        return
+    finally:
+        PHONE_SETUP.unlink(missing_ok=True)
+    run = int(read_result().get('run') or 0) + 1
+    # The radio comes up a moment after NetworkManager.
+    deadline = time.monotonic() + DEVICE_WAIT
+    while not (device := wifi_device()) and time.monotonic() < deadline:
+        time.sleep(1)
+    ssid = request.get('ssid') if isinstance(request, dict) else None
+    problem = check_request(request, wired=not ssid and online())
+    if problem:
+        log('the phone\'s setup at the unlock: ' + problem)
+        write_result(run=run, state='failed', error='BAD_REQUEST', message=problem)
+        return
+    if ssid and not device:
+        write_result(run=run, state='failed', error='WIFI', ssid=ssid, message='This computer has no Wi-Fi.')
+        return
+    account = request.get('account')
+    if signed_in() and isinstance(account, str) and account and account != signed_in_account():
+        # The phone's account, in place of the one it was signed in to: a sign-out, then its sign-in.
+        log('signed in to another account than the phone\'s: signing out')
+        as_user('/usr/bin/harness', 'logout', timeout=60)
+    security = request.get('security')
+    networks = [dict(ssid=ssid, security=security)] if ssid and isinstance(security, str) else []
+    log('setting up as the phone asked at the unlock')
+    write_result(run=run, **join(request, networks, device))
+
+
 def watch():
     started, waiting_since = time.monotonic(), None
     while True:
@@ -886,6 +936,7 @@ def main():
     if arguments.command == 'name':
         print(hotspot_name())
         return
+    set_up_as_unlocked()
     log(f'watching; hotspot "{hotspot_name()}" when there is no network')
     watch()
 

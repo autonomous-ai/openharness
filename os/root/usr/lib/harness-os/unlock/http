@@ -1,10 +1,18 @@
 #!/bin/sh
 # One request on http://10.42.0.1 while the disk is locked (`run`), on stdin and stdout (tcpsvd).
 #
-#   GET  /setup          {protocol, hotspot, locked: true, wait}: the phone asks for the password
-#   POST /setup/unlock   the computer's password, as the body: it answers the disk's question
-#                        (systemd's ask-password, the one the screen answers), then says whether the
-#                        disk opened: 200, 401 WRONG_PASSWORD, 429 WAIT after many wrong ones, 409 BUSY
+#   GET  /setup             {protocol, hotspot, locked: true, wait}: the phone asks for the password
+#   GET  /setup/networks    the Wi-Fi around ({networks: [...]}, `networks`), from the startup's scan,
+#                           or with ?rescan=1 scanned now on the hotspot's card where it allows that
+#   POST /setup/unlock      the computer's password, as the body: it answers the disk's question
+#                           (systemd's ask-password, the one the screen answers), then says whether the
+#                           disk opened: 200, 401 WRONG_PASSWORD, 429 WAIT after many wrong ones, 409 BUSY
+#
+# Protocol 2: the unlock may carry the rest of the setup too, in one stay on the hotspot — the Wi-Fi
+# chosen, its password, the sign-in ticket and the phone's account, as setup.py's /setup/connect
+# takes them. The body is then the password followed by that JSON, its length in the header
+# X-Harness-Setup-Length. Kept, once the disk opened, in SETUP (/run, which outlives the switch to the
+# system proper; root's alone), where setup.py joins and signs in with it: no second hotspot.
 #
 # The password goes only to systemd-reply-password, on its stdin; it is never written or logged.
 set -u
@@ -15,6 +23,8 @@ MAPPER=${HARNESS_UNLOCK_MAPPER:-/dev/mapper}
 # How long a password may take to open the disk (argon2 takes a few seconds on purpose).
 OPENS=${HARNESS_UNLOCK_OPENS:-40}
 BY_PHONE=${HARNESS_UNLOCK_BY_PHONE:-/run/harness-os/unlocked-by-phone}
+SETUP=${HARNESS_UNLOCK_SETUP:-/run/harness-os/phone-setup.json}
+HERE=$(dirname "$0")
 # Wrong ones before the page makes the phone wait, and the first wait; it doubles after each.
 FREE_TRIES=5
 FIRST_WAIT=30
@@ -55,24 +65,34 @@ opened() {
 }
 
 read -r method target _ || exit 0
+query=
+case $target in *\?*) query=${target#*\?} ;; esac
 target=${target%%\?*}
 length=0
+extra=0
 while read -r line; do
     line=${line%"$CR"}
     [ -z "$line" ] && break
     case $line in
         [Cc]ontent-[Ll]ength:*) length=${line#*:}; length=${length# } ;;
+        [Xx]-[Hh]arness-[Ss]etup-[Ll]ength:*) extra=${line#*:}; extra=${extra# } ;;
     esac
 done
 case $length in ''|*[!0-9]*) length=0 ;; esac
+case $extra in ''|*[!0-9]*) extra=0 ;; esac
 name=$(cat "$STATE/name" 2>/dev/null || echo Harness-Setup)
 
 case "$method $target" in
     'GET /setup')
-        reply '200 OK' "{\"protocol\":1,\"hotspot\":\"$name\",\"locked\":true,\"wait\":$(wait_left)}"
+        reply '200 OK' "{\"protocol\":2,\"hotspot\":\"$name\",\"locked\":true,\"wait\":$(wait_left)}"
         ;;
     'GET /setup/networks')
-        reply '200 OK' '{"networks":[]}'
+        # Asked again (the phone's Rescan): scanned now, beside the hotspot, where the card allows it.
+        if [ "$query" = rescan=1 ] && [ -f "$STATE/device" ]; then
+            fresh=$("$HERE/networks" "$(cat "$STATE/device")" "$name" ap-force) && [ -n "$fresh" ] &&
+                printf '%s\n' "$fresh" > "$STATE/networks.json"
+        fi
+        reply '200 OK' "$(cat "$STATE/networks.json" 2>/dev/null || echo '{"networks":[]}')"
         ;;
     'POST /setup/unlock')
         ;;
@@ -81,8 +101,13 @@ case "$method $target" in
         ;;
 esac
 
-[ "$length" -ge 1 ] && [ "$length" -le 512 ] || reply '400 Bad Request' '{"error":"BAD_REQUEST","message":"Enter the computer'"'"'s password."}'
-password=$(head -c "$length")
+[ "$extra" -le 8192 ] && [ "$extra" -lt "$length" ] || extra=0
+secret=$(( length - extra ))
+[ "$secret" -ge 1 ] && [ "$secret" -le 512 ] || reply '400 Bad Request' '{"error":"BAD_REQUEST","message":"Enter the computer'"'"'s password."}'
+# A byte at a time: head reads ahead on a pipe, and would take the setup that follows with it.
+password=$(dd bs=1 count="$secret" 2>/dev/null)
+setup=
+[ "$extra" -gt 0 ] && setup=$(head -c "$extra")
 left=$(wait_left)
 [ "$left" -gt 0 ] && reply '429 Too Many Requests' "{\"error\":\"WAIT\",\"wait\":$left,\"message\":\"Too many wrong passwords. Try again in $left seconds.\"}"
 mkdir "$STATE/busy" 2>/dev/null || reply '409 Conflict' '{"error":"BUSY","message":"Already trying a password."}'
@@ -109,6 +134,11 @@ if [ "$result" = opened ]; then
     # the screen's first Wi-Fi page reads this and leaves the radio to setup.py's hotspot, for the
     # phone to choose the Wi-Fi (network.py UNLOCKED_BY_PHONE). Nobody at the screen typed anything.
     mkdir -p "$(dirname "$BY_PHONE")" && : > "$BY_PHONE"
+    # The rest of the setup, for setup.py as the system starts: root's alone, and only in /run.
+    if [ -n "$setup" ]; then
+        (umask 077 && printf '%s' "$setup" > "$SETUP")
+        setup=
+    fi
     reply '200 OK' '{"state":"unlocked"}'
 fi
 [ -z "$result" ] && reply '504 Gateway Timeout' '{"error":"TIMEOUT","message":"The computer did not say whether that opened it. Try again."}'

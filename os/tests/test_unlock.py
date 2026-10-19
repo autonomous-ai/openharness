@@ -39,14 +39,20 @@ class Unlock(unittest.TestCase):
         self.env = dict(os.environ, ROOT=str(self.root), HARNESS_UNLOCK_STATE=str(self.root / 'state'),
                         HARNESS_UNLOCK_ASK=str(self.root / 'ask'), HARNESS_UNLOCK_REPLY=str(reply),
                         HARNESS_UNLOCK_MAPPER=str(self.root / 'mapper'), HARNESS_UNLOCK_OPENS='3',
-                        HARNESS_UNLOCK_BY_PHONE=str(self.root / 'run/unlocked-by-phone'))
+                        HARNESS_UNLOCK_BY_PHONE=str(self.root / 'run/unlocked-by-phone'),
+                        HARNESS_UNLOCK_SETUP=str(self.root / 'run/phone-setup.json'))
 
     def ask(self):
         (self.root / 'ask/ask.first').write_text(
             f'[Ask]\nPID=1\nId=cryptsetup:/dev/nvme0n1p3\nSocket={self.root}/sock\n')
 
-    def request(self, method, path, body=b''):
-        head = f'{method} {path} HTTP/1.1\r\nHost: 10.42.0.1\r\nContent-Length: {len(body)}\r\n\r\n'.encode()
+    def request(self, method, path, body=b'', setup=None):
+        extra = ''
+        if setup is not None:
+            setup = json.dumps(setup).encode()
+            extra = f'X-Harness-Setup-Length: {len(setup)}\r\n'
+            body += setup
+        head = f'{method} {path} HTTP/1.1\r\nHost: 10.42.0.1\r\n{extra}Content-Length: {len(body)}\r\n\r\n'.encode()
         done = subprocess.run([os.environ.get('UNLOCK_SHELL', '/bin/sh'), *os.environ.get('UNLOCK_SHELL_ARGS', '').split(), str(HTTP)], input=head + body, capture_output=True,
                               env=self.env, timeout=20)
         status, _, rest = done.stdout.partition(b'\r\n')
@@ -56,8 +62,30 @@ class Unlock(unittest.TestCase):
 
     def test_the_phone_is_told_the_computer_is_locked(self):
         self.assertEqual(self.request('GET', '/setup'),
-                         (200, dict(protocol=1, hotspot='Harness-BD19', locked=True, wait=0)))
+                         (200, dict(protocol=2, hotspot='Harness-BD19', locked=True, wait=0)))
         self.assertEqual(self.request('GET', '/elsewhere')[0], 404)
+
+    def test_the_wifi_around_is_the_startups_scan(self):
+        self.assertEqual(self.request('GET', '/setup/networks'), (200, dict(networks=[])))
+        networks = dict(networks=[dict(ssid='Glinks', signal=80, security='WPA2')])
+        (self.root / 'state/networks.json').write_text(json.dumps(networks))
+        self.assertEqual(self.request('GET', '/setup/networks'), (200, networks))
+
+    def test_the_rest_of_the_setup_comes_with_the_password_and_waits_in_run(self):
+        setup = dict(ssid='Glinks', password='wifi pass 1', ticket='t-1', account='u-1')
+        self.assertEqual(self.request('POST', '/setup/unlock', b'right horse', setup=setup),
+                         (200, dict(state='unlocked')))
+        # The computer's password alone went to the disk's question.
+        self.assertEqual((self.root / 'given').read_text(), 'right horse')
+        kept = self.root / 'run/phone-setup.json'
+        self.assertEqual(json.loads(kept.read_text()), setup)
+        self.assertEqual(kept.stat().st_mode & 0o777, 0o600)
+
+    def test_a_wrong_password_keeps_none_of_the_setup(self):
+        status, body = self.request('POST', '/setup/unlock', b'wrong one', setup=dict(ssid='Glinks'))
+        self.assertEqual((status, body['error']), (401, 'WRONG_PASSWORD'))
+        self.assertEqual((self.root / 'given').read_text(), 'wrong one')
+        self.assertFalse((self.root / 'run/phone-setup.json').exists())
 
     def test_the_right_password_opens_the_disk(self):
         self.assertEqual(self.request('POST', '/setup/unlock', 'right horse'.encode()), (200, dict(state='unlocked')))

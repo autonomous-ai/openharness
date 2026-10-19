@@ -201,6 +201,58 @@ class Change(unittest.TestCase):
         self.assertEqual(setup.read_result()['error'], 'BAD_REQUEST')
 
 
+class SetUpAsUnlocked(unittest.TestCase):
+    """What a phone sent with the computer's password while its disk was locked (unlock/http)."""
+
+    def run_it(self, request, signed_in=False, account='u-1'):
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            sent = folder / 'phone-setup.json'
+            if request is not None:
+                sent.write_text(json.dumps(request))
+            session = folder / 'session.json'
+            session.write_text(json.dumps(dict(signInAcct=account)))
+            users = []
+            with patch.object(setup, 'PHONE_SETUP', sent), patch.object(setup, 'SESSION', session), \
+                 patch.object(setup, 'STATE', folder), patch.object(setup, 'RESULT', folder / 'r.json'), \
+                 patch.object(setup, 'wifi_device', return_value='wlo1'), \
+                 patch.object(setup, 'online', return_value=False), \
+                 patch.object(setup, 'signed_in', return_value=signed_in), \
+                 patch.object(setup, 'as_user', side_effect=lambda *c, timeout=30: users.append(c)), \
+                 patch.object(setup, 'join', return_value=dict(state='done', ssid='Glinks', signedIn=True)) as join:
+                setup.set_up_as_unlocked()
+                self.assertFalse(sent.exists(), 'read once, then gone')
+                return join, users, setup.read_result()
+
+    def test_its_wifi_and_ticket_are_joined_as_the_system_starts(self):
+        request = dict(ssid='Glinks', password='wifi pass 1', security='WPA2', ticket='t', account='u-1')
+        join, users, out = self.run_it(request)
+        join.assert_called_once_with(request, [dict(ssid='Glinks', security='WPA2')], 'wlo1')
+        self.assertEqual((out['state'], out['run']), ('done', 1))
+        self.assertEqual(users, [])
+
+    def test_the_same_account_stays_signed_in(self):
+        _, users, _ = self.run_it(dict(ssid='Glinks', password='wifi pass 1', ticket='t', account='u-1'),
+                                  signed_in=True, account='u-1')
+        self.assertEqual(users, [])
+
+    def test_another_account_is_signed_out_for_the_phones(self):
+        join, users, _ = self.run_it(dict(ssid='Glinks', password='wifi pass 1', ticket='t', account='u-2'),
+                                     signed_in=True, account='u-1')
+        self.assertEqual(users, [('/usr/bin/harness', 'logout')])
+        join.assert_called_once()
+
+    def test_a_bad_request_is_said_and_joins_nothing(self):
+        join, _, out = self.run_it(dict(ssid='', password='x'))
+        join.assert_not_called()
+        self.assertEqual(out['error'], 'BAD_REQUEST')
+
+    def test_nothing_sent_is_nothing_done(self):
+        join, _, out = self.run_it(None)
+        join.assert_not_called()
+        self.assertEqual(out, {})
+
+
 class FromPhone(unittest.TestCase):
     def test_the_mark_is_there_before_the_sign_in_and_stays_only_when_it_worked(self):
         with tempfile.TemporaryDirectory() as folder:

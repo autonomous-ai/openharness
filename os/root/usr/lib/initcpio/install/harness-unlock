@@ -27,6 +27,7 @@ build() {
 
     add_file "$unlock/run" "$unlock/run" 755
     add_file "$unlock/http" "$unlock/http" 755
+    add_file "$unlock/networks" "$unlock/networks" 755
     add_file "$unlock/harness-unlock.service" '/usr/lib/systemd/system/harness-unlock.service' 644
     add_symlink '/usr/lib/systemd/system/initrd.target.wants/harness-unlock.service' \
         '../harness-unlock.service'

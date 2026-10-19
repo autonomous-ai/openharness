@@ -49,8 +49,10 @@ name="Harness-$tail"
 echo "$name" > "$STATE/name"
 
 ip link set "$device" up
-# A scan first: some cards (Intel's) host no access point until they have heard others nearby.
-iw dev "$device" scan >/dev/null 2>&1
+# A scan first: some cards (Intel's) host no access point until they have heard others nearby. It is
+# also the Wi-Fi list the phone chooses from while the disk is locked (`http`, /setup/networks).
+iw dev "$device" scan 2>/dev/null | "$HERE/networks" - "$name" > "$STATE/networks.json" 2>/dev/null ||
+    echo '{"networks":[]}' > "$STATE/networks.json"
 cat > "$STATE/wpa.conf" <<EOF
 ap_scan=2
 network={
