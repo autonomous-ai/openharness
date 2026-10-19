@@ -7,3 +7,6 @@ BaseType_t xSemaphoreGive(SemaphoreHandle_t m);
 SemaphoreHandle_t xSemaphoreCreateRecursiveMutex(void);
 BaseType_t xSemaphoreTakeRecursive(SemaphoreHandle_t m, TickType_t wait);
 BaseType_t xSemaphoreGiveRecursive(SemaphoreHandle_t m);
+#include "task.h"
+TaskHandle_t xSemaphoreGetMutexHolder(SemaphoreHandle_t m);
+void vSemaphoreDelete(SemaphoreHandle_t m);

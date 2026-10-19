@@ -53,10 +53,11 @@ static const char *TAG = "cable";
 // anything arrives. It only bounds how long the task sleeps with nothing to do.
 #define READ_WAIT_MS 100
 
-// A stopped host can leave a legal-length header followed by only half its
-// payload. Magic inside the next welcome cannot escape that pending payload.
-// Expire only an idle gap, not the total duration of a slowly fragmented frame.
-#define FRAME_IDLE_US INT64_C(15000000)
+// The host writes a frame in one go, so a frame whose bytes stop for this long has lost its tail (the USB path drops
+// whole 64-byte packets) or the host stopped mid-write. Waiting for the rest would swallow the next frame instead:
+// a legal-length header holds the decoder until its payload length is met. Only an idle gap counts, not the total
+// duration of a slowly fragmented frame, and the clock starts after the callbacks (a flash erase blocks this task).
+#define FRAME_IDLE_US INT64_C(300000)
 
 // How long a write waits for the host to make room. Finite, and that is the point: an unplugged cable or
 // an unopened port fills the TX FIFO and never drains it, and portMAX_DELAY there parks whatever task
@@ -171,25 +172,32 @@ static void count_frame(uint8_t version, uint8_t type, const uint8_t *payload, s
     s_cb(version, type, payload, payload_len, ctx);
 }
 
+static int64_t s_last_rx_us;   // reader only
+
+// One read's worth: expire a stale partial frame, then feed. Split from the loop for the host test.
+static void reader_step(const uint8_t *chunk, int n)
+{
+    // This task owns the decoder. Expire before feeding a newly arrived read too: scheduling need not provide an
+    // intervening empty read.
+    if (s_decoder.len && esp_timer_get_time() - s_last_rx_us >= FRAME_IDLE_US) {
+        cable_decoder_expire(&s_decoder, count_frame, s_ctx);
+        s_last_rx_us = esp_timer_get_time();
+    }
+    // Never fails and never rejects: everything arriving here is untrusted, starts mid-stream after
+    // every boot, and the only useful response to a byte that makes no sense is to step over it.
+    if (n > 0) {
+        atomic_fetch_add_explicit(&s_rx_bytes, (unsigned)n, memory_order_relaxed);
+        cable_decoder_feed(&s_decoder, chunk, (size_t)n, count_frame, s_ctx);
+        s_last_rx_us = esp_timer_get_time();   // after the callbacks, which may block
+    }
+}
+
 static void reader_task(void *arg)
 {
     (void)arg;
     uint8_t chunk[READ_CHUNK];
-    int64_t last_rx_us = 0;
     while (1) {
-        int n = usb_serial_jtag_read_bytes(chunk, sizeof(chunk), pdMS_TO_TICKS(READ_WAIT_MS));
-        const int64_t now = esp_timer_get_time();
-        // This task owns the decoder. Reset before feeding a newly arrived
-        // read too: scheduling need not provide an intervening empty read.
-        if (s_decoder.len && now - last_rx_us >= FRAME_IDLE_US)
-            cable_decoder_reset(&s_decoder);
-        // Never fails and never rejects: everything arriving here is untrusted, starts mid-stream after
-        // every boot, and the only useful response to a byte that makes no sense is to step over it.
-        if (n > 0) {
-            atomic_fetch_add_explicit(&s_rx_bytes, (unsigned)n, memory_order_relaxed);
-            cable_decoder_feed(&s_decoder, chunk, (size_t)n, count_frame, s_ctx);
-            last_rx_us = now;
-        }
+        reader_step(chunk, usb_serial_jtag_read_bytes(chunk, sizeof(chunk), pdMS_TO_TICKS(READ_WAIT_MS)));
         if (s_tick) s_tick(s_ctx);
     }
 }
@@ -294,7 +302,11 @@ void cable_link_counters(uint32_t *corrupt_frames, uint32_t *discarded_bytes)
 cable_link_stats_t cable_link_stats(void)
 {
     // The decoder's two counters are plain words that only the reader writes; a 32-bit read is not torn.
+    uint32_t isr_rx = 0, ring_drop = 0;
+    usb_serial_jtag_rx_stats(&isr_rx, &ring_drop);
     return (cable_link_stats_t){
+        .isr_rx = isr_rx,
+        .ring_drop = ring_drop,
         .rx_bytes = atomic_load_explicit(&s_rx_bytes, memory_order_relaxed),
         .frames_ok = atomic_load_explicit(&s_frames_ok, memory_order_relaxed),
         .corrupt_frames = s_decoder.corrupt_frames,

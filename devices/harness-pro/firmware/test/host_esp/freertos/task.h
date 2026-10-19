@@ -11,3 +11,4 @@ BaseType_t xTaskNotifyGive(TaskHandle_t t);
 BaseType_t xTaskCreatePinnedToCore(TaskFunction_t fn, const char *name, uint32_t stack, void *arg, unsigned prio,
                                    TaskHandle_t *out, int core);
 uint32_t uxTaskGetStackHighWaterMark(TaskHandle_t t);
+TaskHandle_t xTaskGetCurrentTaskHandle(void);

@@ -41,6 +41,8 @@ const char *pro_cable_fw_version(void);
 // ---- seams ----
 // Messages dropped as malformed / ignored as unknown, cumulative (the heartbeat prints them; the host tests read them).
 void pro_cable_counters(uint32_t *bad, uint32_t *unknown);
+// Frames the daemon's `seq` numbering showed missing (each one asked for a resync), cumulative.
+uint32_t pro_cable_seq_gaps(void);
 // cable_link's callbacks (also what test_pro_cable.c feeds). on_frame runs on the cable_link task.
 void pro_cable_on_frame(uint8_t version, uint8_t type, const uint8_t *payload, size_t payload_len, void *ctx);
 void pro_cable_tick(void *ctx);

@@ -111,6 +111,12 @@ cc "${cc_flags[@]}" -o "$out/test_pro_cable" "$here/test_pro_cable.c" "${cobjs[@
    -lpthread -lm
 "$out/test_pro_cable"
 
+# cable_link: the reader's partial-frame timeout and counters. The test includes cable_link.c (to drive its static
+# reader step on a fake clock) with the USB driver and FreeRTOS as stubs; the file itself is also built stack-capped.
+cc "${cc_flags[@]}" -I"$fw/main/sys" -Wframe-larger-than=1024 -c -o "$out/cable_link.o" "$cable/cable_link.c"
+cc "${cc_flags[@]}" -I"$fw/main/sys" -o "$out/test_cable_link" "$here/test_cable_link.c" "$cable/cable_frame.c"
+"$out/test_cable_link"
+
 # fw_update: the OTA receiver over an in-memory partition (host_esp has the esp_ota_ops / partition / sha256 stand-ins;
 # the cable and UI hooks are recorded by the test). Stack-capped like the rest of the cable task's code.
 cc "${cc_flags[@]}" -DFW_UPDATE_HOST_TEST -Wframe-larger-than=1024 -c -o "$out/fw_update.o" "$fw/main/sys/fw_update.c"

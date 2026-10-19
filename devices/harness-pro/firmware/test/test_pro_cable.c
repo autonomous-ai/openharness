@@ -133,6 +133,8 @@ bool cable_link_send_nowait(uint8_t type, const uint8_t *payload, size_t len)
 }
 bool cable_link_start(cable_frame_cb cb, cable_tick_cb tick, void *ctx) { (void)cb; (void)tick; (void)ctx; return true; }
 void cable_link_set_log_framing(bool on) { (void)on; }
+static int decoder_resets;
+void cable_link_reset_decoder(void) { decoder_resets++; }
 static int64_t now_us = 1000000;
 int64_t esp_timer_get_time(void) { return now_us; }
 const esp_app_desc_t *esp_app_get_description(void) { static const esp_app_desc_t d = { .version = "0.0.0" }; return &d; }
@@ -952,19 +954,69 @@ static void send_shapes(void)
     CHECK(nsent == 1 && !strcmp(sent[0], "{\"t\":\"fw.progress\",\"written\":4096,\"resend\":true}"));
 }
 
-// A frame lost on the way in outside a transfer: ask for both lists once, not again within 5 s, never mid-transfer.
-static void link_resync(void)
+// A frame lost on the way in outside a transfer: ask for the snapshot once, not again within 2 s, never mid-transfer.
+// A welcome that advertises `resync` gets the one request; an older daemon's gets the old swarms.list + agents.list.
+static void link_resync_with(const char *welcome_json, bool new_daemon)
 {
-    welcome(); reset();
+    feed(welcome_json); reset();
+    now_us += 10000 * 1000;   // clear the previous window
     pro_cable_tick(NULL); CHECK(nsent == 0);                  // counter unchanged
     link_corrupt++; pro_cable_tick(NULL);
-    CHECK(nsent == 2 && strstr(sent[0], "swarms.list") && strstr(sent[1], "agents.list"));
-    reset(); link_corrupt++; now_us += 4999 * 1000; pro_cable_tick(NULL); CHECK(nsent == 0);
-    now_us += 1000 * 1000; pro_cable_tick(NULL);               // 5 s on: the pending loss is answered
-    CHECK(nsent == 2);
+    if (new_daemon) CHECK(nsent == 1 && !strcmp(sent[0], "{\"t\":\"resync\"}"));
+    else CHECK(nsent == 2 && strstr(sent[0], "swarms.list") && strstr(sent[1], "agents.list"));
+    const int per = nsent;
+    reset(); link_corrupt++; now_us += 1999 * 1000; pro_cable_tick(NULL); CHECK(nsent == 0);
+    now_us += 1000 * 1000; pro_cable_tick(NULL);               // past 2 s: the pending loss is answered
+    CHECK(nsent == per);
     reset(); offer_active = true; link_corrupt++; now_us += 6000 * 1000; pro_cable_tick(NULL);
     CHECK(nsent == 0);                                        // a transfer covers it with resend
     offer_active = false; pro_cable_tick(NULL); CHECK(nsent == 0);   // and the loss during it is not replayed
+    end_session();
+}
+static void link_resync(void)
+{
+    link_resync_with("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[\"resync\"]}", true);
+    link_resync_with("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":[\"player.library\"]}", false);
+}
+
+// The daemon's `seq`: contiguous frames are silent; a hole counts and asks for a resync (rate-limited); a welcome
+// restarts the count; frames without seq (round-style, old daemon) change nothing; ending the session clears it.
+static void seq_gaps(void)
+{
+    now_us += 10000 * 1000;   // clear link_resync's window
+    feed("{\"t\":\"welcome\",\"seq\":0,\"machine\":{\"id\":\"m\",\"name\":\"M\"},\"features\":[\"resync\"]}");
+    reset();
+    const uint32_t g0 = pro_cable_seq_gaps();
+    feed("{\"t\":\"ping\",\"seq\":1}"); feed("{\"t\":\"ping\",\"seq\":2}"); feed("{\"t\":\"ping\"}");
+    pro_cable_tick(NULL);
+    CHECK(pro_cable_seq_gaps() == g0);
+    for (int i = 0; i < nsent; i++) CHECK(!strstr(sent[i], "resync"));
+    reset();
+    feed("{\"t\":\"ping\",\"seq\":4}");                 // 3 never arrived
+    CHECK(pro_cable_seq_gaps() == g0 + 1);
+    reset(); pro_cable_tick(NULL);
+    CHECK(nsent == 1 && strstr(sent[0], "resync"));
+    reset(); feed("{\"t\":\"ping\",\"seq\":5}"); pro_cable_tick(NULL);
+    for (int i = 0; i < nsent; i++) CHECK(!strstr(sent[i], "resync"));   // 5 follows 4: back in step
+    CHECK(pro_cable_seq_gaps() == g0 + 1);
+    reset();
+    feed("{\"t\":\"ping\",\"seq\":9}"); pro_cable_tick(NULL);        // a second hole inside the 2 s window
+    CHECK(pro_cable_seq_gaps() == g0 + 2);
+    int resyncs = 0;
+    for (int i = 0; i < nsent; i++) resyncs += strstr(sent[i], "resync") != NULL;
+    CHECK(resyncs == 0);
+    reset(); now_us += 2000 * 1000; pro_cable_tick(NULL);
+    CHECK(nsent == 1 && strstr(sent[0], "resync"));   // answered once the window passes
+    reset();
+    feed("{\"t\":\"welcome\",\"seq\":0,\"machine\":{\"id\":\"m\",\"name\":\"M\"},\"features\":[\"resync\"]}");   // the count starts over
+    feed("{\"t\":\"ping\",\"seq\":1}");
+    CHECK(pro_cable_seq_gaps() == g0 + 2);
+    end_session();
+    CHECK(decoder_resets >= 1);                               // the session ended: no half-frame carried over
+    reset();
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m\",\"name\":\"M\"}}");   // a daemon without seq
+    feed("{\"t\":\"ping\"}"); feed("{\"t\":\"ping\",\"seq\":40}");
+    CHECK(pro_cable_seq_gaps() == g0 + 2);                    // a welcome without seq turns the check off for the session
     end_session();
 }
 
@@ -990,6 +1042,7 @@ int main(void)
     session_down_aborts_then_new_offer_ok();
     send_shapes();
     link_resync();
+    seq_gaps();
     printf("test_pro_cable: %d checks passed\n", checks);
     return 0;
 }

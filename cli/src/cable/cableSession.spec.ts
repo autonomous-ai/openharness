@@ -22,6 +22,8 @@ class LoopbackPort implements CablePort {
   isOpen = true
   /** Everything the daemon wrote, decoded back into messages. */
   readonly sent: Array<Record<string, unknown>> = []
+  /** The `seq` of each frame in `sent` (taken off the message, so exact-match specs need not know it); undefined = none. */
+  readonly seqs: Array<number | undefined> = []
   /** The raw bytes of every frame written, so a test can assert the 8 KB cap holds. */
   readonly frames: Uint8Array[] = []
   /** Payloads of every pet slice (CableType.Pet) the daemon wrote. */
@@ -39,7 +41,9 @@ class LoopbackPort implements CablePort {
     this.frames.push(bytes)
     this.decoder.feed(Buffer.from(bytes), (frame) => {
       if (frame.type === CableType.Json) {
-        this.sent.push(JSON.parse(Buffer.from(frame.payload).toString('utf8')) as Record<string, unknown>)
+        const { seq, ...message } = JSON.parse(Buffer.from(frame.payload).toString('utf8')) as Record<string, unknown>
+        this.sent.push(message)
+        this.seqs.push(seq as number | undefined)
       }
       if (frame.type === CableType.Pet) this.petSlices.push(Buffer.from(frame.payload))
     })
@@ -3042,6 +3046,59 @@ describe('hello capabilities', () => {
       ...over,
     })
   }
+
+  it('numbers every frame to a Pro with seq, restarting at each welcome; a round dial gets none', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ ...PRO_HELLO })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.turnDone('a1')
+      expect(port.sent[0].t).toBe('welcome')
+      expect(port.seqs).toEqual(port.seqs.map((_, i) => i))   // 0 on the welcome, then 1, 2, ... with no hole
+      port.say({ ...PRO_HELLO })   // the keepalive hello: a new welcome, the count starts over
+      await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'welcome')).toHaveLength(2))
+      expect(port.seqs[port.sent.findLastIndex((m) => m.t === 'welcome')]).toBe(0)
+      port.sent.length = 0
+      port.seqs.length = 0
+      port.say({ t: 'hello', product: 'harness', mac: 'cc:dd', hw: 'round' })   // another device, no board
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      expect(port.seqs.every((q) => q === undefined)).toBe(true)
+    } finally { await session.stop() }
+  })
+
+  it('advertises resync in the welcome of a Pro only', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ ...PRO_HELLO })
+      await vi.waitFor(() => expect(ofType(port, 'welcome')).toHaveLength(1))
+      expect(ofType(port, 'welcome')[0].features).toContain('resync')
+      port.sent.length = 0
+      port.say({ t: 'hello', product: 'harness', mac: 'cc:dd', hw: 'round' })
+      await vi.waitFor(() => expect(ofType(port, 'welcome')).toHaveLength(1))
+      expect(ofType(port, 'welcome')[0].features).not.toContain('resync')
+    } finally { await session.stop() }
+  })
+
+  it('answers resync with machines, swarms, agents, notices and open questions, at most once per 2 s', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ ...PRO_HELLO })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      await session.question('a2', 'q2', [{ key: 'k', q: 'Closed?', options: ['yes'] }])
+      await session.questionClose('a2', 'q2')
+      port.sent.length = 0
+      port.say({ t: 'resync' })
+      await vi.waitFor(() => expect(port.types()).toContain('question'))
+      const types = port.types()
+      for (const t of ['machines.begin', 'swarms', 'agents.begin', 'agents.end', 'notif.replace']) expect(types).toContain(t)
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'q1' }])   // the closed one is not resent
+      port.sent.length = 0
+      port.say({ t: 'resync' })
+      await settle()
+      expect(port.sent).toEqual([])   // inside the window
+    } finally { await session.stop() }
+  })
 
   it('sends turn.stats only to a stats: turn-v1 device, and only when there is something to say', async () => {
     const { session, port } = await connect(richHost())

@@ -88,6 +88,8 @@ bool cable_link_host_present(void);
 // the two sides disagree about the format or the cable is bad. Without a count those look identical.
 // Safe from any task; the reader owns the writes.
 typedef struct {
+    uint32_t isr_rx;            // bytes the ISR pulled from the hardware FIFO (below the driver's ring buffer)
+    uint32_t ring_drop;         // ring-buffer pushes that failed in the ISR: those bytes are gone
     uint32_t rx_bytes;          // bytes read off the port
     uint32_t frames_ok;         // frames decoded and delivered
     uint32_t corrupt_frames;    // a frame whose CRC or length failed
@@ -103,5 +105,5 @@ void cable_link_counters(uint32_t *corrupt_frames, uint32_t *discarded_bytes);
 //
 // Call it only from the reader's frame or tick callback. The decoder has one
 // reader and no lock; another task must not reset it during a feed. The reader
-// also expires a partial frame after a 15-second gap in received bytes.
+// also expires a partial frame after a 300 ms gap in received bytes (counted corrupt, resynced at once).
 void cable_link_reset_decoder(void);

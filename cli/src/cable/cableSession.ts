@@ -605,6 +605,11 @@ export class CableSession {
   private playerLibraryKey = ''
   private playerLibraryAt = 0
   private swarmsTrimmedKey = ''
+  /** `hello.board === 'pro'`: every JSON frame to it carries a `seq` (a USB loss on its path is silent, and a hole in
+   *  the count is how it notices). Per session: each welcome restarts it at 0. A round dial's frames stay as they were. */
+  private seqOn = false
+  private seq = 0
+  private resyncAt = 0
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
@@ -615,6 +620,9 @@ export class CableSession {
 
   private resetCapabilities(): void {
     this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = false
+    this.seqOn = false
+    this.seq = 0
+    this.resyncAt = 0
     this.playerOffset = this.playerRequest = 0
     this.playerLibraryKey = ''
     this.playerLibraryAt = 0
@@ -1170,6 +1178,8 @@ export class CableSession {
         this.stepsActivity = str('activity') === 'steps-v1'
         this.statsTurn = str('stats') === 'turn-v1'
         this.playerCapable = str('player') === 'library-v1'
+        this.seqOn = str('board') === 'pro'
+        this.seq = 0
         const mac = str('mac') ?? ''
         // Rule 1: every greeting is answered, but only an unfamiliar dial gets the full state.
         await this.send({
@@ -1189,6 +1199,8 @@ export class CableSession {
             'voice.draft',
             'agents.refresh',
             ...(this.playerCapable && this.host.playerLibrary ? ['player.library'] : []),
+            // Only a Pro numbers its frames and asks for `resync`; a round dial's feature list stays as it was.
+            ...(this.seqOn ? ['resync'] : []),
             ...(this.host.form ? ['form'] : []),
             ...(this.host.selectPassage ? ['selection'] : []),
             ...(this.host.visit ? ['visit'] : []),
@@ -1262,6 +1274,9 @@ export class CableSession {
         return
       case 'swarms.list':
         await this.syncSwarms(true)
+        return
+      case 'resync':
+        await this.resync()
         return
       case 'swarm.select':
         // Not answered here: the window switches, its desk changes, and the new `swarms` and ring
@@ -2250,7 +2265,8 @@ export class CableSession {
   private async send(msg: Message): Promise<boolean> {
     if (!this.link?.isOpen) return false
     try {
-      await this.put(this.link, encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(msg), 'utf8')))
+      const framed = this.seqOn ? { ...msg, seq: this.seq++ } : msg
+      await this.put(this.link, encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(framed), 'utf8')))
       return true
     } catch (err) {
       this.log(`cable: write failed (${(err as Error).message})`)
@@ -2462,6 +2478,24 @@ export class CableSession {
     // …and the drawer, which is the one thing a dial that has just greeted us is KNOWN to have lost:
     // its rows live in RAM. Last, because it names agents the pushes above put on the carousel.
     await this.replaceNotifications(this.host.listUnread())
+  }
+
+  /**
+   * A Pro saw a hole in `seq` (or a frame that failed its CRC): resend what a lost frame could have carried. The attach
+   * push minus the history replay, plus the open questions — a replayed `summary` is heavy, and a second burst on a link
+   * that just dropped bytes is what the rate limit (once per 2 s, here and on the device) is there to avoid.
+   */
+  private async resync(): Promise<void> {
+    const now = Date.now()
+    if (now - this.resyncAt < 2_000) return
+    this.resyncAt = now
+    await this.syncMachines(true)
+    await this.syncSwarms(true)
+    await this.syncAgents(true)
+    await this.replaceNotifications(this.host.listUnread())
+    for (const { agentId, id, questions } of this.questionInbox.open()) {
+      if (this.liveTurns.get(agentId) === 'question') await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
+    }
   }
 
   // ── swarms ────────────────────────────────────────────────────────────────────────────────────────

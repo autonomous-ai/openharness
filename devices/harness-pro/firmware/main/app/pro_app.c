@@ -845,12 +845,13 @@ static void heartbeat(uint32_t frames, uint32_t raster_max_us, uint32_t frame_ma
     uint32_t bad = 0, unknown = 0;
     pro_cable_counters(&bad, &unknown);
     // The host watches this line while the renderer is alive, including while asleep.
-    ESP_LOGI(TAG, "alive up=%lus heap=%u/%u psram=%u touches=%lu read_fails=%lu frames=%lu raster_max_us=%lu frame_max_us=%lu stack_free=%u muted=%d link_rx=%lu link_frames=%lu link_corrupt=%lu link_discarded=%lu link_dropped_logs=%lu msg_bad=%lu msg_unknown=%lu%s%s",
+    ESP_LOGI(TAG, "alive up=%lus heap=%u/%u psram=%u touches=%lu read_fails=%lu frames=%lu raster_max_us=%lu frame_max_us=%lu stack_free=%u muted=%d isr_rx=%lu ring_drop=%lu seq_gaps=%lu link_rx=%lu link_frames=%lu link_corrupt=%lu link_discarded=%lu link_dropped_logs=%lu msg_bad=%lu msg_unknown=%lu%s%s",
              (unsigned long)(now / 1000), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
              (unsigned long)touch.presses, (unsigned long)touch.read_failures, (unsigned long)frames,
              (unsigned long)raster_max_us, (unsigned long)frame_max_us,
              (unsigned)uxTaskGetStackHighWaterMark(NULL), (int)pro_settings_muted(),
+             (unsigned long)link.isr_rx, (unsigned long)link.ring_drop, (unsigned long)pro_cable_seq_gaps(),
              (unsigned long)link.rx_bytes, (unsigned long)link.frames_ok, (unsigned long)link.corrupt_frames,
              (unsigned long)link.discarded_bytes, (unsigned long)link.dropped_logs, (unsigned long)bad, (unsigned long)unknown,
              touch.controller_ok ? "" : " TOUCH-DEAD", pro_app_asleep() ? " asleep" : "");

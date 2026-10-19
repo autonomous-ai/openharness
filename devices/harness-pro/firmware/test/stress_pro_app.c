@@ -65,6 +65,7 @@ static uint32_t lib_req_id;
 bool pro_cable_request_library(int offset, uint32_t request) { CHECK(LOCK_DEPTH == 0); lib_req_offset = offset; lib_req_id = request; return true; }
 bool pro_cable_library_supported(void) { return true; }
 cable_link_stats_t cable_link_stats(void) { return (cable_link_stats_t){0}; }
+uint32_t pro_cable_seq_gaps(void) { return 0; }
 void pro_cable_counters(uint32_t *bad, uint32_t *unknown) { *bad = 0; *unknown = 0; }
 void pro_voice_begin(const char *agent) { (void)agent; }
 void pro_voice_end(bool send) { (void)send; }
