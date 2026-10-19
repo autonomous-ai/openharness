@@ -13460,7 +13460,7 @@ class AppNotifier extends ChangeNotifier {
   /// from the apps. The form offers "Use the existing folder" beside this.
   String _projectExistsMessage(String folder, String machine) {
     final name = folder
-        .split('/')
+        .split(RegExp(r'[\\/]'))
         .lastWhere((part) => part.isNotEmpty, orElse: () => folder);
     return '“$name” already exists on $machine. '
         'Choose another name, or use the existing folder.';
@@ -13857,7 +13857,9 @@ class AppNotifier extends ChangeNotifier {
         // open (CLI `existingFolder`): said so, and offered to the person.
         if (failure['existingFolder'] case final String folder
             when failure['code'] == 'PROJECT_EXISTS' &&
-                folder.startsWith('/')) {
+                (folder.startsWith('/') ||
+                    RegExp(r'^[A-Za-z]:[\\/]').hasMatch(folder) ||
+                    folder.startsWith(r'\\'))) {
           creation._existingFolder = folder;
           return creation._complete(_projectExistsMessage(folder, machineName));
         }
