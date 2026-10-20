@@ -392,7 +392,7 @@ fn refuse(code: u32) -> i32 {
     }
 }
 
-/// Raw, and DTR/RTS asserted together in this one call (model::DCB_RAW says why). Reads return as soon as any
+/// Raw, with DTR/RTS set together in this one call (model::DCB_RAW says why). Reads return as soon as any
 /// byte is there, or after 1 s with none, so the reader wakes once a second at most while the dial is quiet.
 fn configure(port: &ComPort) -> Result<(), String> {
     let mut dcb: DCB = unsafe { std::mem::zeroed() };

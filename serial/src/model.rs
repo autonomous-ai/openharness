@@ -149,13 +149,12 @@ pub fn open_failure(code: u32) -> OpenFailure {
     }
 }
 
-/// DCB's bit field for the dial: fBinary, DTR_CONTROL_ENABLE, RTS_CONTROL_ENABLE, nothing else.
+/// DCB's bit field for the dial: fBinary only; DTR_CONTROL_DISABLE and RTS_CONTROL_DISABLE release both lines.
 ///
-/// On ESP32-S3 USB-Serial/JTAG, RTS asserted while DTR is not resets the chip. One SetCommState carries both lines
-/// in one CDC SET_CONTROL_LINE_STATE request, so they go from whatever they were to both asserted at once, as a
-/// macOS open leaves them, never through RTS-without-DTR. Measurement on the test PC is planned in E1.3
-/// (docs/testing/windows-dial-e2e.md).
-pub const DCB_RAW: u32 = 1 | (1 << 4) | (1 << 12);
+/// With both asserted (0x1011), repeat E1.3 measurements on 2026-10-20 received an ESP-ROM boot banner even though
+/// the USB attachment session stayed unchanged. Releasing both is the plan's fallback and cannot put RTS asserted
+/// without DTR. The released-lines configuration still needs the test PC's non-reset measurement before E2.
+pub const DCB_RAW: u32 = 1;
 
 #[cfg(test)]
 mod tests {
@@ -278,10 +277,9 @@ mod tests {
     }
 
     #[test]
-    fn the_dcb_is_binary_with_dtr_and_rts_enabled_and_no_flow_control() {
-        // fBinary (bit 0), fDtrControl = DTR_CONTROL_ENABLE (bits 4-5 = 1), fRtsControl = RTS_CONTROL_ENABLE
-        // (bits 12-13 = 1). Every other bit is 0: no parity check, no CTS/DSR/XON flow control, no abort on error.
-        assert_eq!(DCB_RAW, 0x1011);
+    fn the_dcb_is_binary_with_dtr_and_rts_released_and_no_flow_control() {
+        // fBinary (bit 0) only: DTR/RTS disabled, with no parity check, CTS/DSR/XON flow control or abort on error.
+        assert_eq!(DCB_RAW, 0x1);
     }
 
     #[test]
