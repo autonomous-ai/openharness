@@ -10,10 +10,12 @@ import 'fakes.dart';
 void main() {
   late FakeFinderFiles files;
   late FakeFinderGit git;
+  late List<double?> widths;
 
   Future<void> pumpPanel(WidgetTester tester) async {
     files = FakeFinderFiles();
     git = FakeFinderGit();
+    widths = [];
     tester.view.physicalSize = const Size(1200, 800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -25,7 +27,12 @@ void main() {
             grid.AppTheme.brightness.value = Theme.of(context).brightness;
             return grid.BrightnessScope(
               child: Scaffold(
-                body: FinderPanePanel(root: '/r', files: files, git: git),
+                body: FinderPanePanel(
+                  root: '/r',
+                  files: files,
+                  git: git,
+                  onFixedWidth: widths.add,
+                ),
               ),
             );
           },
@@ -76,7 +83,7 @@ void main() {
     tester,
   ) async {
     await pumpPanel(tester);
-    expect(find.text('No file open'), findsOneWidget);
+    expect(find.byKey(const ValueKey('finder-code-editor')), findsNothing);
 
     await tester.tap(find.text('lib'));
     await tester.pumpAndSettle();
@@ -203,5 +210,36 @@ void main() {
     await tester.pumpAndSettle();
     expect(files.texts.containsKey('/r/notes.md'), isTrue);
     expect(tab('/r/notes.md'), findsOneWidget);
+  });
+
+  testWidgets('with no file open it asks only for its file list\'s width', (
+    tester,
+  ) async {
+    await pumpPanel(tester);
+    expect(widths, [265]);
+
+    await tester.tap(find.text('README.md'));
+    await tester.pumpAndSettle();
+    expect(widths.last, isNull, reason: 'a file open takes its share');
+
+    await tester.tap(find.byKey(const ValueKey('finder-tab-close')));
+    await tester.pumpAndSettle();
+    expect(widths.last, 265);
+  });
+
+  testWidgets('Collapse folds it to a rail; the rail opens it again', (
+    tester,
+  ) async {
+    await pumpPanel(tester);
+    await tester.tap(find.byKey(const ValueKey('finder-collapse')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('finder-rail')), findsOneWidget);
+    expect(widths.last, 44);
+
+    await tester.tap(find.byKey(const ValueKey('finder-rail-changes')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('finder-rail')), findsNothing);
+    expect(find.byKey(const ValueKey('finder-changes')), findsOneWidget);
+    expect(widths.last, 265);
   });
 }

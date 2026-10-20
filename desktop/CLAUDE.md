@@ -468,7 +468,12 @@ add a kind there, not at the call site.
   closes with the terminal. Viewers are never in the saved layout or the desk, so the folder is
   kept per chat in `FinderRoots` (`finder.roots` in the local store); `_syncViewerPane` brings the
   Finder back whenever that chat's terminal is shown — after a restart too — until it is closed by
-  hand or the agent stops. Left: Files (a lazy
+  hand or the agent stops. With no file open the tile is only as wide as its file list, and its
+  header's Collapse (Orca's `PanelLeftClose`) folds it to a 44px rail (`FinderRail`): the panel
+  reports that width (`TerminalPane.fixedWidth`, `AppNotifier.setPaneFixedWidth`) and `PaneGrid`
+  gives it to a full-height edge tile, sliding the others into the rest (`pinFixedColumn`,
+  `widgets/pane_fixed_width.dart`; no divider drag while pinned). Opening a file takes its share
+  back. Left: Files (a lazy
   tree with Git colours, ignored entries faint via `git check-ignore`, a right-click menu, names
   typed in place, Trash rather than delete) or Changes (Conflicts / Changes / Staged / Untracked
   with +/- counts, Stage, Unstage, Discard). Right: tabs — a single click opens a preview tab that

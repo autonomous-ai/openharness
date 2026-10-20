@@ -11,17 +11,20 @@ import '../../widgets/engine_identity.dart';
 import '../finder_controller.dart';
 
 /// The Finder tile's header: its folder, the branch it is on with how far
-/// it is from upstream, Refresh and Close.
+/// it is from upstream, Collapse (to a rail, as Orca folds a sidebar),
+/// Refresh and Close.
 class FinderHeader extends StatelessWidget {
   const FinderHeader({
     super.key,
     required this.controller,
     required this.compact,
+    required this.onCollapse,
     required this.onClose,
   });
 
   final FinderController controller;
   final bool compact;
+  final VoidCallback onCollapse;
   final VoidCallback? onClose;
 
   @override
@@ -67,6 +70,12 @@ class FinderHeader extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
+              ),
+              PaneHeaderButton(
+                key: const ValueKey('finder-collapse'),
+                label: 'Collapse Finder',
+                icon: AppPaneSymbol.collapseLeft,
+                onPressed: onCollapse,
               ),
               PaneHeaderButton(
                 label: 'Refresh',

@@ -111,6 +111,12 @@ class TerminalPane {
   /// Browser viewer input, installed only while its renderer is mounted.
   bool Function()? focusViewerInput;
 
+  /// A width in pixels this tile asks for instead of its share of the tab:
+  /// a Finder showing only its files, or folded to a rail. The grid gives it
+  /// to a full-height tile at the tab's left or right edge
+  /// (`pinFixedColumn`); never saved.
+  double? fixedWidth;
+
   /// What closing this tile must ask first, installed only while its panel
   /// is mounted: a Finder tile's unsaved tabs. False keeps the tile open.
   Future<bool> Function()? beforeClose;

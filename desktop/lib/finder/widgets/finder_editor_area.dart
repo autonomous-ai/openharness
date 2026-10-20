@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
-import '../../shared/theme/app_icons.dart';
-import '../../shared/widgets/empty_state.dart';
 import '../../theme/app_theme.dart';
 import '../finder_controller.dart';
 import '../finder_language.dart';
@@ -25,14 +23,8 @@ class FinderEditorArea extends StatelessWidget {
     listenable: Listenable.merge([controller.tabs, controller]),
     builder: (context, _) {
       final active = controller.tabs.active;
-      if (active == null) {
-        return const EmptyState(
-          icon: AppIcons.file,
-          title: 'No file open',
-          message: 'Choose a file or a change on the left.',
-          compact: true,
-        );
-      }
+      // Shown only while a tab is open (FinderPanePanel); no tab, nothing.
+      if (active == null) return const SizedBox.shrink();
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

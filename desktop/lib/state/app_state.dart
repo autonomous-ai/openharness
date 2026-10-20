@@ -16660,6 +16660,15 @@ class AppNotifier extends ChangeNotifier {
     return null;
   }
 
+  /// A tile's own pixel width ([TerminalPane.fixedWidth]), or null to give
+  /// it back its share of the tab.
+  void setPaneFixedWidth(int paneId, double? width) {
+    final pane = allPanes.where((p) => p.id == paneId).firstOrNull;
+    if (pane == null || pane.fixedWidth == width) return;
+    pane.fixedWidth = width;
+    notifyListeners();
+  }
+
   /// Puts [agentId]'s Finder, if it has one, beside its terminal in every
   /// tab that shows that terminal without it. Whether one went in.
   bool _syncFinderPane(String machineId, String agentId) {
