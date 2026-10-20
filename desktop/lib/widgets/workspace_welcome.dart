@@ -51,7 +51,7 @@ class WorkspaceWelcome extends StatefulWidget {
   final ValueChanged<SwarmDestination>? onOpen;
   final DateTime Function() now;
 
-  /// Super Tabs closed on this computer, so a tab closed by accident is found
+  /// Swarms closed on this computer, so a tab closed by accident is found
   /// on the page a person lands on, not only in the command palette.
   final List<({String id, String name})> closedSuperTabs;
   final ValueChanged<String>? onOpenSuperTab;
@@ -423,7 +423,7 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
           padding: const EdgeInsets.only(bottom: 8, left: 10),
           child: Semantics(
             header: true,
-            child: Text('Closed Super Tabs', style: headerStyle),
+            child: Text('Closed Swarms', style: headerStyle),
           ),
         ),
         for (final tab in widget.closedSuperTabs)

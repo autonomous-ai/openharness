@@ -81,7 +81,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
-    await tester.tap(find.byTooltip('Workgroup options'));
+    await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Archived conversations'));
     await tester.pumpAndSettle();
@@ -155,6 +155,8 @@ void main() {
       await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
     }
+    await tester.tap(find.byKey(const ValueKey('super-project-expand-lead')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('super-group-offline')));
     await tester.pumpAndSettle();
     expect(controller.selectedId, 'offline');
@@ -206,6 +208,8 @@ void main() {
       expect(server.posts, isEmpty);
       await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-project-expand-lead')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-group-offline')));
       await tester.pumpAndSettle();
       expect(controller.selectedId, 'offline');
@@ -219,7 +223,7 @@ void main() {
   );
 
   testWidgets(
-    'flat sidebar keeps local actions in its footer without repeating the app tab name',
+    'projects stay collapsed and creation stays in the sidebar footer',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1100, 700));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -240,12 +244,12 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Pilot'), findsNothing);
+      expect(find.text('Pilot'), findsNWidgets(2));
       expect(find.text('CHATS'), findsNothing);
       expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
-      expect(find.byKey(const ValueKey('super-group-offline')), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
       expect(find.text('New group'), findsNothing);
-      expect(find.byTooltip('Super Tab settings'), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-new-project')), findsOneWidget);
       expect(find.byTooltip('Invite people'), findsOneWidget);
       expect(
         tester.getCenter(find.byTooltip('Invite people')).dx,
@@ -264,6 +268,7 @@ void main() {
         final server = ConversationServer();
         final controller = server.controller();
         await controller.refresh();
+        controller.select('offline');
         await tester.pumpWidget(
           MaterialApp(
             home: Scaffold(

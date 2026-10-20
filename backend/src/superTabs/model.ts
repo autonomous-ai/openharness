@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
+import { canReadAgent, canReadProject, groupProject, projectsOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person { id: string; email: string; role: Role; generation: string }
@@ -12,6 +13,7 @@ export interface AgentConfiguration {
 }
 export interface Agent {
   id: string
+  projectId?: string
   machineId: string
   harnessId: string
   machineOwnerId: string
@@ -73,6 +75,7 @@ export interface Assignment {
 }
 export interface Conversation {
   id: string
+  projectId?: string
   /** Stable, tab-local workgroup reference. Lead has no number. */
   number?: number
   title: string
@@ -96,6 +99,7 @@ export interface SuperTabState {
   id: string
   name: string
   project?: { machineId: string; cwd: string; repositoryUrl: string | null }
+  projects?: SwarmProject[]
   ownerId: string
   environment: string
   /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
@@ -160,8 +164,9 @@ export function conversation(state: SuperTabState, id: string): Conversation {
  * numbers are never reassigned; the store serializes concurrent additions. */
 export function numberConversations(state: SuperTabState): void {
   let next = Math.max(0, ...state.conversations.map(c => c.number ?? 0)) + 1
+  const leads = new Set(projectsOf(state).map(p => p.leadConversationId))
   for (const group of state.conversations) {
-    if (group.id !== 'lead' && group.number == null) group.number = next++
+    if (!leads.has(group.id) && group.number == null) group.number = next++
   }
 }
 export function author(state: SuperTabState, actor: Actor, write = false): Author {
@@ -176,13 +181,15 @@ export function author(state: SuperTabState, actor: Actor, write = false): Autho
   return { kind: 'agent', id: member.id, name: member.name, membershipGeneration: member.membershipGeneration }
 }
 
-export function createSuperTab(id: string, name: string, owner: { id: string; email: string }, environment: string): SuperTabState {
-  return {
+export function createSuperTab(id: string, name: string, owner: { id: string; email: string }, environment: string, visibility?: ProjectVisibility): SuperTabState {
+  const state: SuperTabState = {
     version: 1, id, name, ownerId: owner.id, environment, paused: false,
     people: [{ ...owner, email: owner.email.trim().toLowerCase(), role: 'owner', generation: id }],
     agents: [], invitations: [],
     conversations: [{ id: 'lead', title: 'Lead', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }],
   }
+  if (visibility) state.projects = [{ ...projectsOf(state)[0]!, visibility }]
+  return state
 }
 
 /** Pending invitations are management data, not part of the shared conversation. */
@@ -190,6 +197,23 @@ export function visibleState(state: SuperTabState, actor: Actor): SuperTabState 
   author(state, actor)
   const visible = structuredClone(state)
   numberConversations(visible)
+  if (visible.projects) {
+    visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
+    visible.conversations = visible.conversations.filter(c => canReadProject(state, actor, groupProject(state, c)))
+    visible.agents = visible.agents.filter(a => canReadAgent(state, actor, a))
+    visible.starts = visible.starts?.filter(s => visible.conversations.some(c => c.id === s.request.conversationId))
+    if (!visible.projects.some(p => p.id === 'lead')) {
+      delete visible.project
+      visible.machines = visible.machines?.filter(m => m.scope === 'swarm')
+    }
+    const harnesses = new Set([...visible.agents.map(a => a.harnessId), ...(visible.starts ?? []).flatMap(s => s.harnessId ? [s.harnessId] : [])])
+    for (const pool of visible.machines ?? []) {
+      if (!pool.observation) continue
+      pool.observation.runningHarnessIds = pool.observation.runningHarnessIds.filter(id => harnesses.has(id))
+      pool.observation.stoppedHarnessIds = pool.observation.stoppedHarnessIds.filter(id => harnesses.has(id))
+    }
+    visible.invitations = visible.invitations.filter(i => visible.conversations.some(c => c.id === i.conversationId))
+  }
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
   return visible
 }

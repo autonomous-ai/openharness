@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { startAgent } from './start.js'
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
-function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; refuseModel?: string; frame?: string } = {}) {
+function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; refuseModel?: string; frame?: string; guest?: boolean } = {}) {
   const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
   let nativeState = 'missing', lostJoin = false
@@ -22,6 +22,7 @@ function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?:
     if (type === 'engines_probe') return { engines: [{ engine: (payload.engines as string[])[0], installed: true }] }
     if (type === 'usage_read') return { providers: [] }
     if (type === 'super_tabs') {
+      if (options.guest) return { error: 'GUEST_NOT_ALLOWED' }
       if (payload.action === 'reserveCapacity') return { ok: true, reservationId: start.creationId }
       if (payload.action === 'observeCapacity') return { ok: true, reservationId: start.creationId, harnessId: 'native', released: nativeState === 'cancelled' }
       return { ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 100, projectDiskFreeBytes: 1000 }, tools: { git: true }, devices: {},
@@ -50,6 +51,14 @@ const expectSwitchTo = (f: Parameters<typeof switchCall>[0], selectedModel: stri
   expect(call[2]).toBeGreaterThan(50_000)
   expect(call[2]).toBeLessThanOrEqual(60_000)
 }
+it('asks for an owner contribution instead of widening a guest machine connection', async () => {
+  const f = fixture({ guest: true })
+  expect(await startAgent({ action: 'start', tabId: 'tab', operationId: 'guest-start', request: f.start.request }, f.scoped, where, f.open))
+    .toMatchObject({ error: 'CONTRIBUTION_REQUIRED', detail: expect.stringContaining('Add machine') })
+  expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
+  expect(f.close).toHaveBeenCalledOnce()
+})
+
 it('uses one native creation receipt and joins its captured group after a lost join reply', async () => {
   const f = fixture(); f.loseJoin()
   const input = { action: 'start', tabId: 'tab', operationId: 'user-intent', request: f.start.request }

@@ -21,10 +21,12 @@ class SuperTabWorkspace extends StatefulWidget {
     required this.app,
     required this.canvas,
     required this.onAddAgent,
+    this.onNewProject,
   });
   final AppNotifier app;
   final Widget canvas;
   final ValueChanged<SuperTabConversation> onAddAgent;
+  final VoidCallback? onNewProject;
 
   @override
   State<SuperTabWorkspace> createState() => _SuperTabWorkspaceState();
@@ -180,7 +182,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       if (!current()) return;
       String? inputContext;
       // A narrowly shared harness remains its existing read-only observer.
-      // Controlling a machine and joining a Super Tab are separate grants.
+      // Controlling a machine and joining a Swarm are separate grants.
       if (controller.canWrite && machine?.machine.isShared != true) {
         final stopped = machine?.agents
             .where((a) => a.id == agent.harnessId)
@@ -304,6 +306,89 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     }
   }
 
+  void _focusAgent(
+    SuperTabController controller,
+    String tabId,
+    SuperTabAgent agent,
+    String groupId,
+  ) {
+    if (!mounted ||
+        app.activeSwarmId != tabId ||
+        controller.snapshot
+                ?.conversation(groupId)
+                ?.agentIds
+                .contains(agent.id) !=
+            true) {
+      return;
+    }
+    controller.select(groupId);
+    _terminalRequest = null;
+    _resumeRequest = (groupId, agent.id);
+    controller.selectTerminal(groupId, agent.id);
+    setState(() {});
+  }
+
+  Future<void> _chooseAgentGroup(
+    SuperTabController controller,
+    String tabId,
+    SuperTabAgent agent,
+  ) async {
+    final groups =
+        controller.snapshot?.conversations
+            .where((g) => !g.archived && g.agentIds.contains(agent.id))
+            .toList() ??
+        <SuperTabConversation>[];
+    if (groups.isEmpty) return;
+    if (groups.length == 1) {
+      _focusAgent(controller, tabId, agent, groups.single.id);
+      return;
+    }
+    final chosen = await showAppDialog<String>(
+      context: context,
+      builder: (context) => SuperTabDialogScope(
+        controller: controller,
+        requireWrite: false,
+        projectId: agent.projectId,
+        child: AlertDialog(
+          title: Text(
+            'Open ${controller.snapshot?.agentName(agent.id) ?? agent.name}',
+          ),
+          content: SizedBox(
+            width: 360,
+            child: ListenableBuilder(
+              listenable: controller,
+              builder: (context, _) => ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final group
+                      in controller.snapshot?.conversations ??
+                          <SuperTabConversation>[])
+                    if (!group.archived && group.agentIds.contains(agent.id))
+                      ListTile(
+                        key: ValueKey('super-agent-group-${group.id}'),
+                        title: Text(
+                          controller.snapshot!.isProjectLead(group.id)
+                              ? '${controller.snapshot!.projectFor(group.id)!.name} lead'
+                              : group.label,
+                        ),
+                        onTap: () => Navigator.pop(context, group.id),
+                      ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (chosen != null) _focusAgent(controller, tabId, agent, chosen);
+  }
+
   @override
   Widget build(BuildContext context) {
     final canvas = KeyedSubtree(key: _canvasKey, child: widget.canvas);
@@ -368,31 +453,15 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   onInvite: () =>
                       unawaited(showSuperTabPeople(context, controller)),
                   onAddAgent: widget.onAddAgent,
-                  onOpenTerminal: (agent) {
-                    final group =
-                        controller.selected?.agentIds.contains(agent.id) == true
-                        ? controller.selected
-                        : controller.snapshot?.conversations
-                                  .where(
-                                    (g) =>
-                                        !g.archived &&
-                                        g.assignment?['agentId'] == agent.id,
-                                  )
-                                  .firstOrNull ??
-                              controller.snapshot?.conversations
-                                  .where(
-                                    (g) =>
-                                        !g.archived &&
-                                        g.agentIds.contains(agent.id),
-                                  )
-                                  .firstOrNull;
-                    if (group == null) return;
-                    controller.select(group.id);
-                    _terminalRequest = null;
-                    _resumeRequest = (controller.selectedId, agent.id);
-                    controller.selectTerminal(controller.selectedId, agent.id);
-                    setState(() {});
-                  },
+                  onNewProject: widget.onNewProject,
+                  onOpenTerminal: (agent) => _focusAgent(
+                    controller,
+                    tab.id,
+                    agent,
+                    controller.selectedId,
+                  ),
+                  onChooseAgentTerminal: (agent) =>
+                      unawaited(_chooseAgentGroup(controller, tab.id, agent)),
                   onOpenGroupTerminals: () =>
                       controller.selectGroupTerminals(controller.selectedId),
                   terminalsVisible: agents.isNotEmpty,
@@ -482,7 +551,7 @@ class _PeopleState extends State<_People> {
         child: AlertDialog(
           title: Text(
             person.id == c.accountId
-                ? 'Leave Super Tab?'
+                ? 'Leave Swarm?'
                 : 'Remove ${person.email}?',
           ),
           content: const Text(
@@ -517,7 +586,7 @@ class _PeopleState extends State<_People> {
     builder: (context, _) {
       if (c.accessRevoked) {
         return AlertDialog(
-          content: Text(c.error ?? 'This Super Tab is no longer available.'),
+          content: Text(c.error ?? 'This Swarm is no longer available.'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -577,12 +646,12 @@ class _PeopleState extends State<_People> {
                                     SelectOption(
                                       value: 'collaborator',
                                       label: 'Can collaborate',
-                                      detail: 'Read every conversation and send messages to the shared agents.',
+                                      detail: 'Read accessible projects and send messages to their agents.',
                                     ),
                                     SelectOption(
                                       value: 'viewer',
                                       label: 'Can view',
-                                      detail: 'Read every conversation without sending messages or changing work.',
+                                      detail: 'Read accessible projects without sending messages or changing work.',
                                     ),
                                   ],
                                   onChanged: (role) {

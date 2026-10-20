@@ -76,6 +76,7 @@ abstract final class AppIcons {
   static const dot = LucideIcons.dot400;
   static const download = LucideIcons.download400;
   static const ellipsis = LucideIcons.ellipsis400;
+  static const ellipsisVertical = LucideIcons.ellipsisVertical400;
   static const externalLink = LucideIcons.externalLink400;
   static const eye = LucideIcons.eye400;
   static const eyeOff = LucideIcons.eyeOff400;

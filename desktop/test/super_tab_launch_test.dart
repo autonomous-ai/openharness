@@ -10,6 +10,7 @@ import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/super_tabs/launch.dart';
 import 'package:harness/super_tabs/client.dart';
+import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -124,7 +125,14 @@ class SuperTabFixtureConnection extends WsConn {
     if (type == 'super_tabs') {
       if (payload['action'] == 'wake') return {'ok': true};
       if (payload['action'] == 'prepareContribution') {
-        return {'ok': true, 'state': 'ready', 'cwd': '/work/project', 'engines': ['claude', 'codex', 'pi'], 'maxAgents': 4};
+        return {
+          'ok': true,
+          'state': 'ready',
+          'cwd': '/work/project',
+          'scope': 'swarm',
+          'engines': ['claude', 'codex', 'pi'],
+          'maxAgents': 4,
+        };
       }
       if (payload['action'] == 'prepareNative' ||
           payload['action'] == 'renewNative') {
@@ -149,6 +157,15 @@ class SuperTabFixtureConnection extends WsConn {
         };
       }
       if (payload['path'] == '/api/super-tabs' && payload['method'] == 'POST') {
+        final body = payload['body'] as Map;
+        server.state['projects'] ??= [
+          projectFixture(
+            'lead',
+            'Swarm',
+            'lead',
+            visibility: body['projectVisibility'] as String? ?? 'public',
+          ),
+        ];
         return {
           'ok': true,
           'value': {'id': tabId, 'revision': 0},
@@ -170,10 +187,15 @@ class SuperTabFixtureConnection extends WsConn {
           final group = (server.state['conversations'] as List)
               .cast<Map>()
               .firstWhere((g) => g['id'] == command['conversationId']);
+          (server.state['agents'] as List).last['projectId'] =
+              group['projectId'] ?? 'lead';
           (group['agentIds'] as List).add('lead-agent');
           if (command['lead'] == true) group['leadId'] = 'lead-agent';
           if (command['initialMessage'] is String) {
-            server.append(command['initialMessage'] as String);
+            server.append(
+              command['initialMessage'] as String,
+              conversationId: command['conversationId'] as String,
+            );
           }
         }
       }
@@ -289,8 +311,14 @@ class SuperTabLaunchFixture {
   Future<NewHarnessController> box({
     String engine = 'codex',
     HarnessAttachments? attachments,
+    bool newProject = false,
   }) async {
-    final integration = await SuperTabLaunch.open(app, app.activeSwarm, 'lead');
+    final integration = await SuperTabLaunch.open(
+      app,
+      app.activeSwarm,
+      newProject ? 'new-project' : 'lead',
+      newProject: newProject,
+    );
     final box = NewHarnessController(
       app,
       machineId: 'm',
@@ -308,6 +336,120 @@ class SuperTabLaunchFixture {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test(
+    'guest machine access cannot create a Swarm lead under the owner account',
+    () async {
+      final f = SuperTabLaunchFixture();
+      final box = await f.box(engine: 'claude');
+      f.app.machineStates['m']!.machine = const Machine(
+        machineId: 'm',
+        name: 'Shared Mac',
+        authMode: MachineAuthMode.remote,
+        machineShare: MachineShare(
+          ownerName: 'Another owner',
+          ownerEmail: 'another@example.com',
+          via: 'email',
+          added: true,
+        ),
+      );
+      await expectLater(
+        box.integration!.prepare('m', 'Start work'),
+        throwsA(
+          isA<SuperTabFailure>().having(
+            (e) => e.code,
+            'code',
+            'CONTRIBUTION_REQUIRED',
+          ),
+        ),
+      );
+      expect(f.connection.server.posts, isEmpty);
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+    },
+  );
+
+  test(
+    'a private first project does not expose its title as the swarm name',
+    () async {
+      final f = SuperTabLaunchFixture()..connection.nativeName = 'Private work';
+      final box = await f.box();
+      box.integration!.projectVisibility = 'private';
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(f.app.activeSwarm.name, 'Swarm');
+      final project = f.app.superTabs.peek(tabId)!.snapshot!.projects.single;
+      expect(project.name, 'Private work');
+      expect(project.isPrivate, isTrue);
+      final rename = f.connection.server.posts
+          .map((post) => post['command'] as Map)
+          .singleWhere((command) => command['type'] == 'tab.rename');
+      expect(rename['name'], 'Swarm');
+    },
+  );
+  test(
+    'a new private project keeps the swarm and its other conversations',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.state['name'] = 'Company';
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final localId = f.app.activeSwarmId;
+      final box = await f.box(newProject: true);
+      expect(box.actionLabel, 'New project');
+      box.integration!.projectVisibility = 'private';
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(f.app.swarms, hasLength(1));
+      expect(f.app.activeSwarmId, localId);
+      expect(f.app.activeSwarm.name, 'Company');
+      final c = f.app.superTabs.peek(tabId)!;
+      final project = c.snapshot!.projects.last;
+      expect(project.isPrivate, isTrue);
+      expect(c.selectedId, project.leadConversationId);
+      expect(c.snapshot!.conversation('offline'), isNotNull);
+      expect(
+        f.connection.joins.single['command'],
+        containsPair('conversationId', project.leadConversationId),
+      );
+      expect(
+        f.connection.calls.where((c) => c.$1 == 'agent_create'),
+        hasLength(1),
+      );
+      expect(
+        f.connection.calls.where((c) => c.$2['path'] == '/api/super-tabs'),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'a lost project creation reply keeps its visibility and original receipt',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.state['name'] = 'Company';
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      f.connection.server.loseReply = true;
+      final box = await f.box(newProject: true);
+      box.integration!.projectVisibility = 'private';
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(box.integration!.projectVisibilityLocked, isTrue);
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+      final resumed = await f.box(newProject: true);
+      expect(resumed.integration!.projectVisibility, 'private');
+      expect(resumed.integration!.projectVisibilityLocked, isTrue);
+      expect(
+        await resumed.create(),
+        NewHarnessOutcome.created,
+        reason: resumed.error,
+      );
+      final creations = f.connection.server.posts
+          .where((p) => (p['command'] as Map)['type'] == 'project.create')
+          .toList();
+      expect(creations, hasLength(2));
+      expect(creations[0], creations[1]);
+      expect(f.app.superTabs.peek(tabId)!.snapshot!.projects, hasLength(2));
+      expect(
+        f.connection.calls.where((c) => c.$1 == 'agent_create'),
+        hasLength(1),
+      );
+    },
+  );
   test('switching accounts while files are being sent closes the background writer', () async {
     final f = SuperTabLaunchFixture()..connection.changeAccountOnUpload = true;
     final files = HarnessAttachments()
@@ -465,7 +607,7 @@ void main() {
         final f = SuperTabLaunchFixture()..connection.nativeName = 'hi';
         final initialTab = f.app.activeSwarmId;
         final box = await f.box(engine: engine);
-        expect(box.actionLabel, 'New Super Tab');
+        expect(box.actionLabel, 'New Swarm');
         expect(
           await box.create(),
           NewHarnessOutcome.created,

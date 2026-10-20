@@ -200,39 +200,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 error = null;
               });
               try {
-                // Older tabs can record the project already chosen for their lead.
-                // No folder is inferred across machines from a matching path.
-                if (c.snapshot?.project == null) {
-                  final lead = c.snapshot?.agents
-                      .where((a) => c.snapshot!.isLead(a.id))
-                      .firstOrNull;
-                  final host = lead == null
-                      ? null
-                      : app.stateOf(lead.machineId);
-                  final native = host?.agents
-                      .where((a) => a.id == lead?.harnessId)
-                      .firstOrNull;
-                  final project = native == null
-                      ? null
-                      : host?.projectOf(native);
-                  if (project != null && c.isOwner) {
-                    final recorded = await c.command({
-                      'type': 'tab.project',
-                      'machineId': lead!.machineId,
-                      'project': {
-                        'cwd': project.root ?? project.cwd,
-                        'repositoryUrl': superTabRepositoryUrl(project.remote),
-                      },
-                    });
-                    if (recorded == null) {
-                      throw SuperTabFailure(
-                        'PROJECT_UNAVAILABLE',
-                        c.operationError ??
-                            'Could not read the lead’s project.',
-                      );
-                    }
-                  }
-                }
                 setupId ??= superTabOperationId();
                 final deadline = DateTime.now().add(const Duration(minutes: 5));
                 Map<String, dynamic> prepared;
@@ -241,9 +208,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   prepared = await app.superTabMachineRequest(selected, {
                     'action': 'prepareContribution',
                     'tabId': c.tabId,
+                    'scope': 'swarm',
                     'operationId': setupId,
                   });
-                  if (prepared['state'] == 'ready') break;
+                  if (prepared['state'] == 'ready' &&
+                      prepared['scope'] == 'swarm') {
+                    break;
+                  }
                   if (prepared['state'] != 'preparing') {
                     throw const SuperTabFailure(
                       'UPDATE_REQUIRED',
@@ -267,6 +238,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                         'machineId': selected,
                         'name': machine!.machine.displayName,
                         'cwd': prepared['cwd'],
+                        if (prepared['scope'] != null)
+                          'scope': prepared['scope'],
                         'engines': prepared['engines'],
                         'maxAgents': prepared['maxAgents'],
                       });

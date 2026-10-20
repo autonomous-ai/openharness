@@ -1,4 +1,7 @@
 import 'dart:async';
+
+import '../super_tabs/project_visibility.dart';
+
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -1883,6 +1886,20 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                           : projectName,
                       capsule: true,
                     ),
+                  ),
+                ),
+              if (box.integration?.projectVisibility case final visibility?)
+                FocusTraversalOrder(
+                  order: const NumericFocusOrder(3.5),
+                  child: ProjectVisibility(
+                    key: const ValueKey('new-harness-project-visibility'),
+                    value: visibility,
+                    onChanged:
+                        box.locked || box.integration!.projectVisibilityLocked
+                        ? null
+                        : (value) => setState(
+                            () => box.integration!.projectVisibility = value,
+                          ),
                   ),
                 ),
             ],

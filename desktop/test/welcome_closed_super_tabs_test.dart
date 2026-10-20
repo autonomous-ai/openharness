@@ -32,13 +32,15 @@ Future<List<String>> _mount(
 void main() {
   for (final composer in [false, true]) {
     final layout = composer ? 'composer' : 'classic';
-    testWidgets('$layout welcome lists closed Super Tabs and opens one', (
+    testWidgets('$layout welcome lists closed Swarms and opens one', (
       tester,
     ) async {
       final opened = await _mount(tester, composer: composer);
-      expect(find.text('Closed Super Tabs'), findsOneWidget);
+      expect(find.text('Closed Swarms'), findsOneWidget);
       expect(find.text('Pilot'), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('welcome-closed-super-tab-tab-2')));
+      await tester.tap(
+        find.byKey(const ValueKey('welcome-closed-super-tab-tab-2')),
+      );
       expect(opened, ['tab-2']);
     });
 
@@ -46,7 +48,7 @@ void main() {
       tester,
     ) async {
       await _mount(tester, closed: const [], composer: composer);
-      expect(find.text('Closed Super Tabs'), findsNothing);
+      expect(find.text('Closed Swarms'), findsNothing);
     });
   }
 }

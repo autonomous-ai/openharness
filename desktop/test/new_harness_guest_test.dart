@@ -111,6 +111,36 @@ class _GuestApp extends AppNotifier {
 }
 
 void main() {
+  test('switching from an owned machine clears its folder and uses the guest workspace', () async {
+    final app = _GuestApp();
+    app.machineStates['own'] = MachineState(
+      const Machine(
+        machineId: 'own',
+        name: 'My Mac',
+        authMode: MachineAuthMode.self,
+      ),
+    )..nodeOnline = true;
+    addTearDown(app.dispose);
+    final box = NewHarnessController(
+      app,
+      machineId: 'own',
+      engine: 'claude',
+      folder: '/Users/me/private-project',
+    );
+    addTearDown(box.dispose);
+    await pumpEventQueue();
+    app.refusedAsks.clear();
+    box.focusField(NewHarnessField.machine);
+    box.accept(box.options.singleWhere((o) => o.id == 'dee'));
+    await pumpEventQueue();
+    expect(box.asGuest, isTrue);
+    expect(box.projectLabel, 'My workspace');
+    expect(app.refusedAsks, isEmpty);
+    expect(await box.create(), isNot(NewHarnessOutcome.failed));
+    // An empty folder asks the guest daemon to use its own workspace.
+    expect(app.launches.single['folder'], '');
+  });
+
   test('a guest starts Claude Code or Codex in its own space: no project, harness, model or folder to choose', () async {
     final app = _GuestApp();
     addTearDown(app.dispose);

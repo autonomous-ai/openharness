@@ -60,6 +60,7 @@ void main() {
       f.connection.server.state['project'] = {
         'machineId': 'm',
         'cwd': '/work/project',
+        'scope': 'swarm',
         'repositoryUrl': null,
       };
       final c = await f.app.superTabs.open(tabId);
@@ -97,6 +98,7 @@ void main() {
         'machineId': 'm',
         'name': f.app.stateOf('m')!.machine.displayName,
         'cwd': '/work/project',
+        'scope': 'swarm',
         'engines': ['claude', 'codex', 'pi'],
         'maxAgents': 4,
       });

@@ -1672,7 +1672,9 @@ class AppNotifier extends ChangeNotifier {
       final namesChanged = !mapEquals(names, _superTabNames);
       _superTabNames = names;
       for (final tab in tabs) {
-        final existing = swarms.where((s) => s.superTabId == tab.id).firstOrNull;
+        final existing = swarms
+            .where((s) => s.superTabId == tab.id)
+            .firstOrNull;
         if (existing != null) {
           if (existing.name != tab.name || !existing.nameIsCustom) {
             existing.name = tab.name;
@@ -1713,7 +1715,7 @@ class AppNotifier extends ChangeNotifier {
       if (target == null) {
         throw const SuperTabFailure(
           'MACHINE_UNAVAILABLE',
-          'Connect one of your machines to open Super Tab.',
+          'Connect one of your machines to open Swarm.',
         );
       }
       final result = await superTabMachineRequest(target.machine.machineId, {
@@ -1730,11 +1732,11 @@ class AppNotifier extends ChangeNotifier {
   final StreamController<String> _superTabClosures =
       StreamController<String>.broadcast();
 
-  /// Closing a Super Tab only hides it here, which looks like losing it. Each
+  /// Closing a Swarm only hides it here, which looks like losing it. Each
   /// closure announces its history id so the screen can offer to reopen it.
   Stream<String> get superTabClosures => _superTabClosures.stream;
 
-  /// Super Tabs hidden on this computer that the account still belongs to,
+  /// Swarms hidden on this computer that the account still belongs to,
   /// by name. Saved with the hidden set, so a restart keeps them.
   List<({String id, String name})> get closedSuperTabs {
     final open = {for (final s in swarms) s.superTabId};
@@ -1744,7 +1746,7 @@ class AppNotifier extends ChangeNotifier {
           (
             id: id,
             name: _superTabNames[id]!.trim().isEmpty
-                ? 'Super Tab'
+                ? 'Swarm'
                 : _superTabNames[id]!,
           ),
     ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
@@ -1766,7 +1768,7 @@ class AppNotifier extends ChangeNotifier {
     if (result['error'] != null) {
       throw SuperTabFailure(
         result['error'].toString(),
-        result['detail'] as String? ?? 'Could not reach this Super Tab.',
+        result['detail'] as String? ?? 'Could not reach this Swarm.',
         statusCode: (result['status'] as num?)?.toInt() ?? 0,
       );
     }
@@ -1785,9 +1787,10 @@ class AppNotifier extends ChangeNotifier {
     if (swarm == null) return;
     // A discovery response can beat the creation response back to this
     // computer. Keep the lead form's tab and retain any already-open panes.
-    for (final duplicate in swarms
-        .where((s) => s.id != swarmId && s.superTabId == tabId)
-        .toList()) {
+    for (final duplicate
+        in swarms
+            .where((s) => s.id != swarmId && s.superTabId == tabId)
+            .toList()) {
       for (final pane in duplicate.panes) {
         if (!swarm.panes.contains(pane)) swarm.panes.add(pane);
       }
@@ -1806,7 +1809,7 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The one way to show a Super Tab: focus its view if it is open, else give
+  /// The one way to show a Swarm: focus its view if it is open, else give
   /// it one. An untouched New Tab page named by [intoSwarmId] becomes the view
   /// instead of being left behind. Any history entry for the tab is dropped, so
   /// Reopen later cannot add a second view.
@@ -1848,9 +1851,11 @@ class AppNotifier extends ChangeNotifier {
 
   void _rememberSuperTabVisibility(String tabId, bool visible) {
     if (localStore == null) return;
-    unawaited(superTabs.setTabVisible(tabId, visible).catchError((Object error) {
-      appLog.warn('super-tab', 'Could not save tab visibility: $error');
-    }));
+    unawaited(
+      superTabs.setTabVisible(tabId, visible).catchError((Object error) {
+        appLog.warn('super-tab', 'Could not save tab visibility: $error');
+      }),
+    );
   }
 
   void markSuperTabDraft(String swarmId) {
@@ -3183,7 +3188,7 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// Close removes these views. Super Tabs own work independently of their
+  /// Close removes these views. Swarms own work independently of their
   /// views; ordinary tabs stop a session only when its last view closes.
   Future<void> requestCloseSwarm(String id) {
     final tab = swarms.where((s) => s.id == id).firstOrNull;
@@ -3237,9 +3242,9 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed) return Future.value();
     if (_viewCloseRequests[key] case final pending?) return pending;
     bool canStop(String machineId, String agentId) {
-      // A Super Tab pane is only a view into shared work. This guard also covers
+      // A Swarm pane is only a view into shared work. This guard also covers
       // the close shortcut, native menu and whole-tab dismissal, including a
-      // regular tab becoming a Super Tab while a close review is pending.
+      // regular tab becoming a Swarm while a close review is pending.
       if (tab.isSuperTab) return false;
       if (!swarms.contains(tab) ||
           (wholeTab &&

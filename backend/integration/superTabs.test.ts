@@ -69,6 +69,132 @@ afterAll(async () => {
   await replica?.stop()
 })
 
+describe('private swarm projects on the real control API', () => {
+  it('uses one contributed machine across projects with a separate authorized checkout for each', async () => {
+    const { tab } = await fixture()
+    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+    const machineId = 'swarm-pool-host'
+    await db.machine.create({ data: { machineId, userId: host.sub, apiKey: 'fixture-swarm-pool', managerId: 'fixture',
+      autonomousEnv: 'prod', authMode: 'remote' } })
+    const project = (await run(tab, { type: 'project.create', name: 'Second project', visibility: 'private', brief: '' })).result
+    const conversationId = String(project.conversationId), projectId = String(project.projectId)
+    await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Project lead', configuration: config, lead: true,
+      project: { cwd: '/lead/second', repositoryUrl: 'https://github.com/example/second' } })
+    await run(tab, { type: 'machine.contribute', machineId, name: 'Shared capacity', cwd: '/swarm-root',
+      engines: ['codex'], maxAgents: 2 }, host)
+    await expect(run(tab, { type: 'tab.project', machineId, project: { cwd: '/unrelated', repositoryUrl: null } }))
+      .rejects.toMatchObject({ code: 'HOST_REQUIRED' })
+    const request = { conversationId, machineId, engine: 'codex', name: 'Builder',
+      cwd: `/swarm-root/${projectId}`, worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    await expect(run(tab, { type: 'agent.start', request })).rejects.toMatchObject({ code: 'PROJECT_CONTRIBUTION' })
+    await run(tab, { type: 'machine.contribute', machineId, name: 'Shared capacity', cwd: '/swarm-root',
+      scope: 'swarm', engines: ['codex'], maxAgents: 2 }, host)
+    const pool = (await store.hostPools(host, machineId))[0]!
+    await store.observeMachine(host, tab, machineId, { generation: pool.machine.generation,
+      resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, projectDiskFreeBytes: 100e9,
+        diskFreeBytes: 100e9, diskTotalBytes: 500e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] })
+    expect(pool.projects).toEqual([])
+    await expect(run(tab, { type: 'agent.start', request: { ...request, cwd: '/swarm-root/lead' } }))
+      .rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
+    const secondStart = (await run(tab, { type: 'agent.start', request })).result.startId as string
+    await run(tab, { type: 'agent.start', request: { ...request, conversationId: 'lead', cwd: '/swarm-root/lead' } })
+    const queued = (await store.hostPools(host, machineId))[0]!
+    expect(queued.starts).toHaveLength(2)
+    expect(queued.projects!.find(p => p.id === projectId)).toMatchObject({
+      repository: { machineId: 'test-host', cwd: '/lead/second', repositoryUrl: 'https://github.com/example/second' },
+      conversationIds: [conversationId],
+    })
+    expect((await store.read(host, tab)).state.projects!.some(p => p.id === projectId)).toBe(false)
+    const hostRun = (command: Command) => store.execute(host, tab, { operationId: randomUUID(), command }, undefined, machineId)
+    await hostRun({ type: 'agent.startDispatch', startId: secondStart })
+    const started = await hostRun({ type: 'agent.started', startId: secondStart, harnessId: 'second-builder', configuration: config })
+    await hostRun({ type: 'agent.startSettled', startId: secondStart, warning: null })
+    const agentId = String(started.result.agentId)
+    expect((await store.read(host, tab, agentId)).state.conversations.map(c => c.id)).toEqual([conversationId])
+    await expect(store.messages(host, tab, 'lead', {}, agentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect(await db.machineShare.findUnique({ where: { machineId } })).toBeNull()
+  })
+
+  it('revokes chat, terminal observers, native contexts and old receipts together', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    const project = (await run(tab, { type: 'project.create', name: 'Private project', visibility: 'private', brief: '' })).result
+    const conversationId = String(project.conversationId), projectId = String(project.projectId)
+    const harnessId = randomUUID()
+    const agentId = String((await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId,
+      name: 'Private lead', configuration: config, lead: true })).result.agentId)
+    await run(tab, { ...message('Private result'), conversationId } as Command)
+    expect((await store.read(peer, tab)).state.projects!.map(p => p.id)).not.toContain(projectId)
+    await expect(store.messages(peer, tab, conversationId, {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect(await store.mayObserve(peer, tab, 'test-host', harnessId, host.sub)).toBe(false)
+    expect((await store.hostTabs(host, 'test-host')).find(t => t.agent.id === agentId)!.observers.map(p => p.userId)).not.toContain(peer.sub)
+    await expect(store.messages(host, tab, 'lead', {}, agentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+
+    await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [peer.sub] })
+    expect((await store.messages(peer, tab, conversationId, {})).messages.map(m => m.text)).toContain('Private result')
+    expect(await store.mayObserve(peer, tab, 'test-host', harnessId, host.sub)).toBe(true)
+    const context = await store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId })
+    const command = { ...message('Shared review'), conversationId } as Command
+    const operationId = randomUUID()
+    await run(tab, command, peer, undefined, operationId)
+    await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [] })
+    await expect(run(tab, command, peer, undefined, operationId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(store.native.read(host, tab, context.contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+    expect(await store.mayObserve(peer, tab, 'test-host', harnessId, host.sub)).toBe(false)
+
+    // Removing a roster row cannot erase the terminal's private history.
+    await run(tab, { type: 'agent.remove', agentId })
+    const other = await fixture()
+    await expect(run(other.tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId,
+      name: 'Moved lead', configuration: config, lead: false })).rejects.toMatchObject({ code: 'PROJECT_SESSION' })
+  })
+
+  it('requests one consolidation after five minutes and remains quiet without new reports', async () => {
+    let now = 10_000
+    const timed = new SuperTabStore(db, () => now)
+    const tab = (await timed.create(owner, randomUUID(), 'Updates', 'public')).id
+    const execute = (command: Command, asAgentId?: string) => timed.execute(asAgentId ? host : owner, tab,
+      { operationId: randomUUID(), command }, asAgentId)
+    const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'test-host',
+      harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })).result.agentId)
+    const updates = async () => (await timed.deliveries(host, tab, lead)).filter(d => d.conversationId === 'lead')
+    const group = String((await execute({ type: 'conversation.create', title: 'Work', brief: 'Implement it',
+      checks: [{ description: 'Verified', independent: true }] })).result.conversationId)
+    expect(await updates()).toEqual([])
+    now += 299_999
+    expect(await updates()).toEqual([])
+    now++
+    const polls = await Promise.all(Array.from({ length: 3 }, () => updates()))
+    const ids = new Set(polls.flat().map(d => d.id))
+    expect(ids.size).toBe(1)
+    const requests = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } })
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.source).toMatchObject({ kind: 'update-request' })
+    await execute({ ...message('New evidence'), conversationId: group } as Command)
+    now += 300_000
+    expect((await updates()).map(d => d.id)).toEqual([...ids])
+    const revision = (await timed.read(owner, tab)).revision
+    await execute({ type: 'project.report', projectId: 'lead', throughRevision: revision,
+      text: 'The implementation is ready. Verification is next.' }, lead)
+    expect(await updates()).toEqual([])
+    now += 3_600_000
+    expect(await updates()).toEqual([])
+    expect((await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } })).filter(m =>
+      (m.source as Record<string, unknown>)?.kind === 'project-report')).toHaveLength(1)
+    await execute({ type: 'project.cadence', projectId: 'lead', minutes: 15 })
+    await execute({ ...message('Tests passed'), conversationId: group } as Command)
+    now += 899_999
+    expect(await updates()).toEqual([])
+    now++
+    expect(await updates()).toHaveLength(1)
+  })
+})
+
 describe('Super Tabs on a real Mongo replica set', () => {
   it('contributes project capacity without sharing the computer and fences host execution', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Machine pool')).id

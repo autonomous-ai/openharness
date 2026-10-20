@@ -618,7 +618,7 @@ final harnessCommands = <HarnessCommand>[
     'app.store',
     'Harness Store',
     ShortcutGroup.actions,
-    extraKeys: ['cmd+s'],
+    extraKeys: ['cmd+ctrl+s'],
     keywords: ['install', 'browse harnesses', 'packages', 'extensions'],
     nativeAction: 'store',
   ),
@@ -691,9 +691,9 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'super_tab.new',
-    'New Super Tab',
+    'New Swarm',
     ShortcutGroup.actions,
-    extraKeys: ['cmd+alt+shift+t'],
+    extraKeys: ['cmd+s'],
     hidden: true,
   ),
   if (kDebugSurfaceEnabled)

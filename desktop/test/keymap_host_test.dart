@@ -96,7 +96,9 @@ void main() {
       ('cmd+left', 'pane.focus_left'),
       ('cmd+enter', 'pane.zoom'),
       ('cmd+shift+p', 'navigation.commands'),
-      ('cmd+s', 'app.store'),
+      ('cmd+s', 'super_tab.new'),
+      ('cmd+ctrl+s', 'app.store'),
+      ('cmd+shift+s', 'agent.share'),
       ('cmd+m', 'machines.list'),
       ('cmd+i', 'models.list'),
       ('cmd+shift+l', 'pane.layout'),
@@ -129,6 +131,7 @@ void main() {
     expect(command('cmd+alt+right'), 'swarm.next');
     expect(command('cmd+shift+['), isNull);
     expect(command('cmd+shift+enter'), isNull);
+    expect(command('cmd+alt+shift+t'), isNull);
     expect(command('ctrl+n', KeymapContext.picker), 'picker.next');
     expect(command('cmd+t', KeymapContext.picker), 'swarm.new');
     expect(command('cmd+['), 'navigation.back');
