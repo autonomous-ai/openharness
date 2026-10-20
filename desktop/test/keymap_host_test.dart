@@ -248,6 +248,51 @@ void main() {
     },
   );
 
+  testWidgets('a region keeps its own strokes from the workspace bindings', (
+    tester,
+  ) async {
+    final map = MemoryKeymap();
+    final focus = FocusNode();
+    final delivered = <String>[];
+    var searches = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: KeymapProvider(
+          keymap: map,
+          child: KeymapHost(
+            keymap: map,
+            enabled: () => true,
+            actions: {'swarm.new': () => searches++},
+            child: KeymapRegion(
+              contextKind: KeymapContext.workspace,
+              // An editor's ⌘T would be its own; the workspace keeps the rest.
+              keeps: {KeyStroke.parse('cmd+t')},
+              child: Focus(
+                focusNode: focus,
+                autofocus: true,
+                onKeyEvent: (_, event) {
+                  final stroke = keyStrokeForEvent(event);
+                  if (event is KeyDownEvent && stroke != null) {
+                    delivered.add(stroke.toString());
+                  }
+                  return KeyEventResult.handled;
+                },
+                child: const SizedBox(width: 100, height: 100),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await key(tester, LogicalKeyboardKey.keyT, cmd: true);
+    expect(searches, 0);
+    expect(delivered, ['cmd+t']);
+    await tester.pumpWidget(const SizedBox());
+    focus.dispose();
+    map.dispose();
+  });
+
   testWidgets(
     'modal picker actions stay local and respect active text composition',
     (tester) async {

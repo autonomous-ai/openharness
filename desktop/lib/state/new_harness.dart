@@ -25,6 +25,7 @@ import '../core/permission_modes.dart';
 import '../core/project_folder.dart';
 import '../core/repository_clone.dart';
 import '../core/test_run.dart';
+import '../finder/finder_availability.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/resting_model_words.dart';
 import 'app_state.dart';
@@ -467,7 +468,7 @@ class NewHarnessController extends ChangeNotifier {
         ? engine
         : _initialEngine(isHarnessId(engine) ? null : engine);
     _restorePermissionMode();
-    _model = isTerminal ? null : draft?.model;
+    _model = _noAgentSetup ? null : draft?.model;
     _modelUsage = modelUsage;
     _ownsModelUsage = modelUsage == null;
     _modelUsage?.addListener(_refresh);
@@ -697,6 +698,7 @@ class NewHarnessController extends ChangeNotifier {
       ? [
           for (final engine in allEngines) engine.id,
           for (final agent in cloudAgents) agent.id,
+          kFinderEngine,
           kTerminalEngine,
         ]
       : selectedHarness?.supportedEngines ??
@@ -809,7 +811,7 @@ class NewHarnessController extends ChangeNotifier {
   bool refreshingBranches = false;
   String? branchRefreshError;
   DateTime? _branchesCheckedAt;
-  bool get isGitProject => _gitProject.isGit && !isTerminal && !isCloud;
+  bool get isGitProject => _gitProject.isGit && !_noAgentSetup && !isCloud;
 
   /// A worktree the person picked: the harness works in it, on its branch.
   bool get inWorktree => _project.exact && _gitProject.mainFolder != null;
@@ -937,7 +939,9 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   void retryGitProject() {
-    if (locked || checkingGit || _project.folder == null || isTerminal) return;
+    if (locked || checkingGit || _project.folder == null || _noAgentSetup) {
+      return;
+    }
     error = null;
     _gitFuture = _readGitProject(_gitKey!);
     notifyListeners();
@@ -992,7 +996,7 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   void _syncGitProject() {
-    final key = (_machineId, _project.folder, isTerminal);
+    final key = (_machineId, _project.folder, _noAgentSetup);
     if (_gitKey == key) return;
     if (_gitKey != null) {
       _worktree = null;
@@ -1102,7 +1106,7 @@ class NewHarnessController extends ChangeNotifier {
   static String _modelId(GridModel model) =>
       'model:${jsonEncode([model.grid, model.id])}';
   bool _modelAvailable(GridModel model) =>
-      !isTerminal &&
+      !_noAgentSetup &&
       _modelCatalog?.supportsModelLaunch == true &&
       _modelCatalog!.reachable &&
       _modelCatalog!.canRunLocally(_engine) &&
@@ -1276,7 +1280,7 @@ class NewHarnessController extends ChangeNotifier {
           branchName: _branchName,
           placeholder: placeholder,
         )
-      : _project.folder != null || isTerminal
+      : _project.folder != null || _noAgentSetup
       ? null
       : _project.repository != null
       ? ProjectFolderRequest.remote(_project.repository!)
@@ -1372,7 +1376,7 @@ class NewHarnessController extends ChangeNotifier {
   bool get takesTask => isCloud || takesFirstTask(_base);
   bool get taskTooLong => task.trim().length > kFirstTaskMaxLength;
   List<PermissionMode> get _modes =>
-      isTerminal || isCloud ? const [] : permissionModesOf(_base);
+      _noAgentSetup || isCloud ? const [] : permissionModesOf(_base);
   bool get hasModes => _modes.isNotEmpty;
   String get mode =>
       _modes.any((mode) => mode.id == _mode) ? _mode : kDefaultPermissionMode;
@@ -1438,7 +1442,7 @@ class NewHarnessController extends ChangeNotifier {
   List<NewHarnessField> get fields => [
     NewHarnessField.harness,
     NewHarnessField.agent,
-    if (!isTerminal && !asGuest) NewHarnessField.model,
+    if (!_noAgentSetup && !asGuest) NewHarnessField.model,
     NewHarnessField.machine,
     // A guest picks only among the folders the owner shares, when there are any.
     if (!asGuest || (_guestFolders?.folders.isNotEmpty ?? false))
@@ -1486,6 +1490,13 @@ class NewHarnessController extends ChangeNotifier {
 
   MachineState? get _machine => app.stateOf(_machineId);
   bool get isTerminal => isTerminalEngine(_engine);
+
+  /// A Finder tile rather than a harness: a folder to browse, opened in place.
+  bool get isFinder => isFinderEngine(_engine);
+
+  /// A choice with no agent to set up — no model, permission mode or branch:
+  /// the plain shell and the Finder.
+  bool get _noAgentSetup => isTerminal || isFinder;
 
   /// A cloud agent (Fo, Devin Cloud, Cursor Cloud): it runs on its maker's
   /// servers, so it takes no folder, model, approvals or branch here — a coding
@@ -1993,7 +2004,7 @@ class NewHarnessController extends ChangeNotifier {
       if (_project.generated != null) _project = _generatedProject();
     }
     _restorePermissionMode();
-    if (saved == null || saved.engine != _engine || isTerminal) return;
+    if (saved == null || saved.engine != _engine || _noAgentSetup) return;
     if (!_modelTouched) {
       _model = saved.model;
       if (_model != null) unawaited(refreshModels());
@@ -2240,7 +2251,7 @@ class NewHarnessController extends ChangeNotifier {
     _engine = engine;
     if (changed && _desktopChoices && !_modelTouched) _model = null;
     if (changed) _restorePermissionMode();
-    if (isTerminal) _model = null;
+    if (_noAgentSetup) _model = null;
     if (changed &&
         _harnessId == null &&
         _project.generated != null &&
@@ -3077,18 +3088,18 @@ class NewHarnessController extends ChangeNotifier {
             'autonomous/strudel',
             'autonomous/typst',
             ...harnesses,
+            kFinderEngine,
             kTerminalEngine,
           ])
             if (isHarnessId(id)
                 ? _offered(id)
                 : engines.contains(id) ||
                       isCloudAgentId(id) ||
+                      id == kFinderEngine ||
                       id == kTerminalEngine)
               isHarnessId(id) ? operationId(id) : id,
         })
-          isHarnessId(id)
-              ? row(id)
-              : NewHarnessOption(id: id, title: labelOf(id), engine: id),
+          isHarnessId(id) ? row(id) : _engineOption(id),
       ]);
     }
     return _ranked([
@@ -3097,9 +3108,10 @@ class NewHarnessController extends ChangeNotifier {
         _engine,
         ...app.agentPreference.recent.where((id) => !isHarnessId(id)),
         for (final engine in allEngines) engine.id,
+        kFinderEngine,
         kTerminalEngine,
       })
-        NewHarnessOption(id: id, title: labelOf(id), engine: id),
+        _engineOption(id),
       for (final id in rest.where(installed)) row(id),
       for (final id in rest.where((id) => !installed(id))) row(id),
     ]);
@@ -3110,11 +3122,24 @@ class NewHarnessController extends ChangeNotifier {
       _engine,
       ...app.agentPreference.recent,
       for (final identity in allEngines) identity.id,
+      kFinderEngine,
       kTerminalEngine,
     })
-      if (!isHarnessId(id) && compatibleEngines.contains(id))
-        NewHarnessOption(id: id, title: labelOf(id), engine: id, detail: ''),
+      if (!isHarnessId(id) && compatibleEngines.contains(id)) _engineOption(id),
   ]);
+
+  /// An agent's row. The Finder reads this computer's disk, so on any other
+  /// machine its row says so instead of opening.
+  NewHarnessOption _engineOption(String id) {
+    final finderElsewhere = isFinderEngine(id) && !canOpenFinderOn(_machine);
+    return NewHarnessOption(
+      id: id,
+      title: labelOf(id),
+      engine: id,
+      enabled: !finderElsewhere,
+      why: finderElsewhere ? kFinderElsewhere : null,
+    );
+  }
 
   /// Whether [machine] can be given work now — the same test that enables
   /// its row below.
@@ -3770,6 +3795,7 @@ class NewHarnessController extends ChangeNotifier {
         'will not be sent. Press again to make it anyway.',
       );
     }
+    if (isFinder) return _openFinder();
     final machine = _machine;
     if (machine == null) {
       error = 'Choose a machine.';
@@ -3974,7 +4000,7 @@ class NewHarnessController extends ChangeNotifier {
           // A picked worktree prepared in place is still the one picked.
           exact: _project.exact && attempt.preparedFolder == _project.folder,
         );
-        _gitKey = (_machineId, _project.folder, isTerminal);
+        _gitKey = (_machineId, _project.folder, _noAgentSetup);
         _worktree = false;
         _branchRef = null;
         _gitProject = const GitProjectInfo();
@@ -3996,6 +4022,28 @@ class NewHarnessController extends ChangeNotifier {
     }
     busy = false;
     status = null;
+    return NewHarnessOutcome.created;
+  }
+
+  /// Opens the Finder where the harness would have gone. Nothing starts on
+  /// the machine, so there is nothing to wait for — and nothing remembered
+  /// as the agent of a launch, which would make it the next box's default.
+  NewHarnessOutcome _openFinder() {
+    if (!canOpenFinderOn(_machine)) return _fail(kFinderElsewhere);
+    final folder = _project.folder;
+    if (folder == null) {
+      focusField(NewHarnessField.projectMenu);
+      return _fail('Choose an existing folder to open in Finder.');
+    }
+    final failure = app.openFinderPane(
+      _machineId,
+      folder,
+      swarmId: _targetId,
+      split: split,
+      placement: effectivePlacement,
+    );
+    if (failure != null) return _fail(failure);
+    error = null;
     return NewHarnessOutcome.created;
   }
 

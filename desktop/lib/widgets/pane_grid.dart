@@ -1,3 +1,4 @@
+import '../finder/widgets/finder_pane_panel.dart';
 import '../super_tabs/pane.dart';
 import '../sharing/shared_harness_panel.dart';
 
@@ -1589,6 +1590,17 @@ class _PaneContent extends StatelessWidget {
         hasAccess:
             machine?.machine.sharedHarnesses.any((s) => s.id == grant.id) ==
             true,
+      );
+    }
+
+    // A folder browsed in place: no agent and no terminal behind it.
+    if (pane.finderRoot case final root? when pane.isFinder) {
+      return FinderPanePanel(
+        key: ValueKey('finder-pane-${pane.id}'),
+        root: root,
+        onClose: close,
+        onGuardClose: (guard) => pane.beforeClose = guard,
+        compactHeader: swarmMode,
       );
     }
 

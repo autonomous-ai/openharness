@@ -457,6 +457,24 @@ add a kind there, not at the call site.
   `inventory()` restyles existing panes on each scan). ⚠️ `theme_set`/`theme_set_result` are in the
   E2EE type sets in `cli/src/lib/e2ee/core.ts`, which re-pinned the interop keystone; a daemon
   that predates the type goes silent, which the app treats as "not supported" — never an error.
+- **A Finder tile is a folder, not a terminal** (`lib/finder/`, `PaneKind.finder`), modelled on Orca's
+  Explorer, Source Control and editor tabs. New Harness lists Finder beside Terminal
+  (`kFinderEngine`); choosing it opens a tile through `AppNotifier.openFinderPane` — no agent is
+  created, so like every viewer it is never in the saved layout or the desk. Left: Files (a lazy
+  tree with Git colours, ignored entries faint via `git check-ignore`, a right-click menu, names
+  typed in place, Trash rather than delete) or Changes (Conflicts / Changes / Staged / Untracked
+  with +/- counts, Stage, Unstage, Discard). Right: tabs — a single click opens a preview tab that
+  the next one replaces, a second click or an edit keeps it. Files open in `re_editor` with
+  re_highlight colours, find/replace, ⌘S, the file's own line break and indent; Markdown opens
+  rendered with its source a click away; diffs are whole-file (`--unified=1000000`), folded,
+  inline or side by side. A watcher (FSEvents on macOS) refreshes the tree, clean tabs and Git,
+  with a 60 s safety read; a tab edited when its file changes on disk gets Reload / Keep My Edits.
+  Closing a tile or tab with unsaved edits asks first (`TerminalPane.beforeClose`). ⌘S and ⌘F are
+  workspace bindings elsewhere, so the editor's `KeymapRegion(keeps:)` takes them back while it
+  has focus. The editor highlights on an isolate that headless tests never let answer — check
+  colours with `integration_test/finder_native_test.dart`. Only `LocalFinderFiles`/`LocalFinderGit`
+  exist, so other machines and the browser offer the row disabled (`canOpenFinderOn`) until the
+  daemon serves listings, reads, writes and Git.
 - `third_party/xterm` is a **vendored, patched** xterm 4.0.0 (atomic `replaceRange` fix for scroll
   regions — see its `README.autonomous.md`). Do not replace it with the pub package; the regression
   lives in `test/terminal_session_test.dart`.

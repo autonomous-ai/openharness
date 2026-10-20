@@ -11,8 +11,10 @@ import '../core/models.dart' show SharedHarness;
 /// is, and the tile follows) and never persisted: a restored layout re-opens
 /// it from the agent's next frame, so a stale URL from a previous run can
 /// never be loaded. [companion] and [devices] are built-in native DSH viewers,
-/// derived only after their account's experiment is enabled.
-enum PaneKind { terminal, web, companion, devices }
+/// derived only after their account's experiment is enabled. A [finder] tile
+/// is a folder on its machine, browsed in place (`lib/finder/`): no agent,
+/// so — like the other viewers — it is never in the saved layout or the desk.
+enum PaneKind { terminal, web, companion, devices, finder }
 
 /// One tile in the terminal grid.
 ///
@@ -32,16 +34,26 @@ class TerminalPane {
     this.url,
     this.viewerError,
     this.ownerAgentId,
+    this.finderRoot,
   }) : assert(
          kind != PaneKind.web || (agentId == null && ownerAgentId != null),
          'a web tile belongs to an agent through ownerAgentId, never agentId',
+       ),
+       assert(
+         (kind == PaneKind.finder) == (finderRoot != null) &&
+             (kind != PaneKind.finder || agentId == null),
+         'a Finder tile has a folder and no agent; no other tile has a folder',
        );
 
   final PaneKind kind;
   bool get isWeb => kind == PaneKind.web;
   bool get isCompanion => kind == PaneKind.companion;
   bool get isDevices => kind == PaneKind.devices;
-  bool get isViewer => isWeb || isCompanion || isDevices;
+  bool get isFinder => kind == PaneKind.finder;
+  bool get isViewer => isWeb || isCompanion || isDevices || isFinder;
+
+  /// [PaneKind.finder] only: the folder the tile browses, on [machineId].
+  final String? finderRoot;
 
   /// [PaneKind.web] only: what the tile loads. Changes when the agent's frame
   /// names a new viewer URL; the panel navigates rather than remounts.
@@ -87,6 +99,10 @@ class TerminalPane {
 
   /// Browser viewer input, installed only while its renderer is mounted.
   bool Function()? focusViewerInput;
+
+  /// What closing this tile must ask first, installed only while its panel
+  /// is mounted: a Finder tile's unsaved tabs. False keeps the tile open.
+  Future<bool> Function()? beforeClose;
   SharedHarness? sharedHarness;
   String? sharedOwnerName;
 

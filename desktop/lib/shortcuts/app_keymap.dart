@@ -136,11 +136,17 @@ class KeymapRegion extends InheritedWidget {
     required this.contextKind,
     this.actions,
     this.composing,
+    this.keeps,
     required super.child,
   });
   final KeymapContext contextKind;
   final Map<String, VoidCallback>? actions;
   final bool Function()? composing;
+
+  /// Strokes the focused field takes for itself, ahead of any workspace
+  /// binding — a code editor's ⌘S, ⌘F and ⌘Z. Null keeps none, which is
+  /// every region but an editor.
+  final Set<KeyStroke>? keeps;
   static KeymapRegion? of(BuildContext context) =>
       context.getInheritedWidgetOfExactType<KeymapRegion>();
   @override

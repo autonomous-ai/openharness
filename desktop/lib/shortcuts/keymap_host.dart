@@ -116,6 +116,12 @@ class _KeymapHostState extends State<KeymapHost> with WidgetsBindingObserver {
       return KeyEventResult.ignored;
     }
     final region = KeymapRegion.of(context);
+    if (region?.keeps case final keeps?
+        when keeps.contains(keyStrokeForEvent(event))) {
+      _dispatch.cancel();
+      _notifyPending();
+      return KeyEventResult.ignored;
+    }
     final localActions = region?.actions;
     if (localActions == null && !widget.enabled()) {
       _dispatch.cancel();

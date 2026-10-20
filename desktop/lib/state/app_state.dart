@@ -3124,20 +3124,36 @@ class AppNotifier extends ChangeNotifier {
     final tab = swarms.where((s) => s.id == id).firstOrNull;
     if (tab == null) return Future.value();
     final captured = tab.panes.toList();
-    return _requestViewClose(
-      'tab:$id',
-      tab,
+    return _afterCloseGuards(
       captured,
-      () async {
-        if (tab.panes.length != captured.length ||
-            !captured.every(tab.panes.contains)) {
-          return;
-        }
-        await closeSwarm(id);
-      },
-      tabName: tab.name,
-      wholeTab: true,
+      () => _requestViewClose(
+        'tab:$id',
+        tab,
+        captured,
+        () async {
+          if (tab.panes.length != captured.length ||
+              !captured.every(tab.panes.contains)) {
+            return;
+          }
+          await closeSwarm(id);
+        },
+        tabName: tab.name,
+        wholeTab: true,
+      ),
     );
+  }
+
+  /// Runs [close] once every pane in [panes] with a close check has passed
+  /// it — a Finder tile asks about its unsaved tabs (`TerminalPane.beforeClose`),
+  /// one tile at a time. A tile kept open keeps the whole close from happening.
+  Future<void> _afterCloseGuards(
+    List<TerminalPane> panes,
+    Future<void> Function() close,
+  ) async {
+    for (final pane in panes) {
+      if (pane.beforeClose case final guard? when !await guard()) return;
+    }
+    await close();
   }
 
   Future<void> requestClosePane(int paneId) {
@@ -3156,9 +3172,15 @@ class AppNotifier extends ChangeNotifier {
                   p.ownerAgentId == pane.agentId),
         )
         .toList();
-    return _requestViewClose('pane:${tab.id}:$paneId', tab, captured, () async {
-      if (tab.panes.contains(pane)) await closePane(paneId, swarmId: tab.id);
-    });
+    return _afterCloseGuards(
+      captured,
+      () =>
+          _requestViewClose('pane:${tab.id}:$paneId', tab, captured, () async {
+            if (tab.panes.contains(pane)) {
+              await closePane(paneId, swarmId: tab.id);
+            }
+          }),
+    );
   }
 
   Future<void> _requestViewClose(
@@ -16607,6 +16629,77 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Lays [target] out after a new tile went in at [insertion]: a split keeps
+  /// the arrangement it previewed, and an automatic placement reflows the tab.
+  void _arrangeNewPane(
+    Swarm target,
+    int insertion, {
+    PaneSplitRequest? split,
+    bool autoTile = false,
+  }) {
+    final count = target.panes.length;
+    if (autoTile && split == null) {
+      // A new pane reflows the whole tab. Old manual splits and remembered
+      // sizes for this count must not silently override automatic placement.
+      target.presets.remove(count);
+      target.paneSizes.removeWhere((key, _) => key.startsWith('$count:'));
+      target.arranged = null;
+      target.arrangedKey = null;
+    }
+    if (split != null) {
+      target.pinnedSlots.updateAll(
+        (_, slot) => slot >= insertion ? slot + 1 : slot,
+      );
+      final key = '$count:manual';
+      target.savePaneSizes(key, split.after);
+      target.arranged = split.after;
+      target.arrangedKey = key;
+    }
+  }
+
+  /// Opens a Finder tile on [root] (`lib/finder/`), where New Harness puts a
+  /// harness: [split]'s place, a new tab, or the end of the target tab. Not an
+  /// agent, so nothing is created on the machine and the tile is not saved.
+  /// Returns why it could not open, or null.
+  String? openFinderPane(
+    String machineId,
+    String root, {
+    String? swarmId,
+    PaneSplitRequest? split,
+    HarnessPlacement? placement,
+  }) {
+    final targetId = swarmId ?? activeSwarmId;
+    if (_creationPlacementError(targetId, split, placement: placement)
+        case final error?) {
+      return error;
+    }
+    if (placement == HarnessPlacement.newTab) newSwarm();
+    final target = placement == HarnessPlacement.newTab
+        ? activeSwarm
+        : swarms.firstWhere((s) => s.id == targetId);
+    final insertion = split == null
+        ? target.panes.length
+        : split.paneIds.indexOf(split.paneId) + 1;
+    final pane = TerminalPane(
+      id: _nextPaneId++,
+      machineId: machineId,
+      kind: PaneKind.finder,
+      finderRoot: root,
+    );
+    target.panes.insert(insertion.clamp(0, target.panes.length), pane);
+    _arrangeNewPane(
+      target,
+      insertion,
+      split: split,
+      autoTile: placement != null,
+    );
+    target.focusedPaneId = pane.id;
+    target.zoomedPaneId = null;
+    if (target == activeSwarm && split != null) _paneFocusRequest++;
+    notifyListeners();
+    return null;
+  }
+
   Future<void> assignAgentToPane(
     int? paneId,
     String machineId,
@@ -16779,31 +16872,13 @@ class AppNotifier extends ChangeNotifier {
         pendingLayout.tiles.length == targetPanes.length) {
       target.savePaneSizes('${targetPanes.length}:manual', pendingLayout);
     }
-    if (autoTile && split == null) {
-      // A new pane reflows the whole tab. Old manual splits and remembered
-      // sizes for this count must not silently override automatic placement.
-      target.presets.remove(targetPanes.length);
-      target.paneSizes.removeWhere(
-        (key, _) => key.startsWith('${targetPanes.length}:'),
-      );
-      target.arranged = null;
-      target.arrangedKey = null;
-    }
     if (beside != null) {
       // Pins stay with their panes, wherever the new tile moved them.
       target.pinnedSlots.updateAll(
         (id, _) => targetPanes.indexWhere((p) => p.id == id),
       );
     }
-    if (split != null) {
-      target.pinnedSlots.updateAll(
-        (_, slot) => slot >= insertion ? slot + 1 : slot,
-      );
-      final key = '${targetPanes.length}:manual';
-      target.savePaneSizes(key, split.after);
-      target.arranged = split.after;
-      target.arrangedKey = key;
-    }
+    _arrangeNewPane(target, insertion, split: split, autoTile: autoTile);
     if (firstAgent &&
         !target.nameIsCustom &&
         !target.isCompanions &&
