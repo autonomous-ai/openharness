@@ -908,6 +908,14 @@ const kSwarmShortcuts = [
 /// shortcut sheet prints one row; pane movement uses Command-arrows.
 const int kTabDigitCount = 9;
 
+/// Tab-number hints follow Ctrl alone on Windows and Meta elsewhere.
+bool showsTabShortcutHints(HardwareKeyboard keyboard) => ctrlWorkspacePrefix
+    ? keyboard.isControlPressed &&
+          !keyboard.isShiftPressed &&
+          !keyboard.isAltPressed &&
+          !keyboard.isMetaPressed
+    : keyboard.isMetaPressed;
+
 List<SingleActivator> tabDigitActivators() => (const [
   SingleActivator(LogicalKeyboardKey.digit1, meta: true),
   SingleActivator(LogicalKeyboardKey.digit2, meta: true),

@@ -4643,7 +4643,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   bool _noteKey(KeyEvent event) {
     // Paint hints only; the keymap still owns every shortcut and input event.
-    _tabShortcutHints.value = HardwareKeyboard.instance.isMetaPressed;
+    _tabShortcutHints.value = showsTabShortcutHints(HardwareKeyboard.instance);
     // Off, this is not here at all: every key goes where it went before.
     if (event is! KeyDownEvent || _zoo.daemons == DaemonsSwitch.off) {
       return false;

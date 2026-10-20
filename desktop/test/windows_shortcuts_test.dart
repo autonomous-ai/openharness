@@ -22,6 +22,62 @@ void main() {
     KeymapContext context = KeymapContext.workspace,
   ]) => harnessDefaultKeymap.match(context, [KeyStroke.parse(keys)]).command;
 
+  testWidgets('tab hints follow Ctrl on Windows and ⌘ on the Mac', (
+    tester,
+  ) async {
+    final keyboard = HardwareKeyboard.instance;
+    Future<void> check(List<LogicalKeyboardKey> keys, bool visible) async {
+      for (final key in keys) {
+        await tester.sendKeyDownEvent(key);
+      }
+      try {
+        expect(
+          showsTabShortcutHints(keyboard),
+          visible,
+          reason: '$debugDefaultTargetPlatformOverride: $keys',
+        );
+      } finally {
+        for (final key in keys.reversed) {
+          await tester.sendKeyUpEvent(key);
+        }
+      }
+      expect(showsTabShortcutHints(keyboard), isFalse);
+    }
+
+    await check([], false);
+    await check([LogicalKeyboardKey.controlLeft], true);
+    await check([LogicalKeyboardKey.controlRight], true);
+    await check([
+      LogicalKeyboardKey.controlLeft,
+      LogicalKeyboardKey.shiftLeft,
+    ], false);
+    await check([
+      LogicalKeyboardKey.controlLeft,
+      LogicalKeyboardKey.altLeft,
+    ], false);
+    await check([
+      LogicalKeyboardKey.controlLeft,
+      LogicalKeyboardKey.metaLeft,
+    ], false);
+    await check([LogicalKeyboardKey.metaLeft], false);
+
+    for (final platform in [TargetPlatform.macOS, TargetPlatform.linux]) {
+      debugDefaultTargetPlatformOverride = platform;
+      await check([], false);
+      await check([LogicalKeyboardKey.metaLeft], true);
+      await check([LogicalKeyboardKey.metaRight], true);
+      await check([LogicalKeyboardKey.controlLeft], false);
+      for (final modifier in [
+        LogicalKeyboardKey.shiftLeft,
+        LogicalKeyboardKey.altLeft,
+        LogicalKeyboardKey.controlLeft,
+      ]) {
+        await check([LogicalKeyboardKey.metaLeft, modifier], true);
+      }
+    }
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('single hints omit aliases even when they are the only binding', (
     tester,
   ) async {
