@@ -1,7 +1,12 @@
 # Windows native: the Harness dial on Windows (sub-project E)
 
 Date: 2026-10-19
-Status: draft, for review
+Status: implemented on `feat/windows-dial`; the E5.2 scenario/evidence report is **COMPLETE WITH LIMITS** in the
+[E2E report](../../testing/windows-dial-e2e.md): all eleven dispositions are documented, and the owner explicitly
+waived the remaining blocked cleanup on 2026-10-20. The whole-E review and final I1/M1 follow-up review passed.
+Ready for owner integration with the recorded limits; full hardware acceptance is not claimed. Ships in combined Windows
+[PR #1457](https://github.com/autonomous-ai/openharness/pull/1457) (`feat/windows-desktop` → `main`)
+after E5.2, E5.3 and final review; the owner's session performs the integration.
 
 ## Goal
 
@@ -47,7 +52,7 @@ Windows 11 build 26200): COM3, status OK.
 |---|---|
 | Find the dial, open the port, run the cable protocol (agents, chime, settings, pets, firmware over the cable) | the daemon's `devices` service, `cli/src/cable/` |
 | The Devices tab | the desktop, through `harness_devices_list` and the other `DEVICES_REQUESTS`, and the `harness_devices_changed` push |
-| Re-flash from scratch | the desktop runs `harness flash`; the CLI fetches `flash-circle.sh`, which runs esptool |
+| Re-flash from scratch | the desktop runs `harness flash`; the CLI fetches `flash-circle.ps1` on Windows or `flash-circle.sh` on Unix, which runs esptool |
 | Keep the daemon off the port while flashing | the script runs `harness stop`/`harness start`; the desktop's `SerialPortLease` pauses its own daemon supervision |
 
 **What stops it on Windows.** Everything above the byte stream is platform-free. Below it, `cli/src/cable/serial.ts`
@@ -171,11 +176,13 @@ The exports keep their signatures. On `win32`:
 - **`isUsbConsoleUser()`** on `win32` returns the last `watch` line's `console` (false before the first line). The
   fleet already releases the port when this turns false (`waitingForConsole`); nothing there changes.
 
-The macOS and Linux branches are not touched. `dialPortThere()` (`devicesWake.ts`) still answers false on `win32`:
-on Windows the services run in the core's process (B, Known limits), where the wake is not used: with the devices
-in the core's process, `core/main.ts` starts the `devices` service with the core, unconditionally (the devices
-block, `serviceHost.start('devices', …)`). When Windows services get their own processes, the wake needs a `win32`
-look; that is listed in Known limits.
+The macOS and Linux branches are not touched. On Windows the services currently run in the core's process
+(B, Known limits): `core/main.ts` starts the `devices` service with the core, unconditionally
+(`serviceHost.start('devices', …)`). E also implements the explicit Windows startup path in `devicesWake.ts`:
+if devices are configured outside the core and cable support is enabled, the wake requests them once at
+startup, without `/dev` polling. `dialPortThere()` remains a Unix port check; its false answer on Windows
+does not prevent discovery. The Windows wake path exists; separate service processes on Windows remain
+part of B's architecture limit.
 
 ## 3. Re-flash on Windows
 
@@ -201,13 +208,13 @@ for a detail, `error: ` on stderr for a failure. The lines the desktop reads (`>
 | Running esptool | in the foreground, or in the background for the probe | `Start-Process -NoNewWindow` with its output to files that are copied to the script's own output as they grow, so esptool's `\r` progress reaches the app byte for byte. Every run is bounded and checks for a cancel each second. A run is ended with `taskkill /T /F`: the standalone esptool is two processes (its bootloader and the program), and killing the first leaves the second holding the port |
 | Probe | `esptool chip_id`, 25 s bound, process-group kill | the same command, the same 25 s bound |
 | Firmware | sha256, size, first byte `0xe9` | the same (`Get-FileHash`) |
-| Daemon | writes `flashing`, `harness stop`, `sleep 1`, `trap` → `harness start` | writes the same `flashing` file, `harness stop`, waits up to 5 s for this user's `harness-serial` processes to end (they end with the daemon, §1), `try/finally` → `harness start` |
+| Daemon | writes `flashing`, `harness stop`, `sleep 1`, `trap` → `harness start` | writes a timestamp lease (`flashing.<runId>` for an updated app, otherwise shared `flashing`), `harness stop`, waits up to 5 s for this user's `harness-serial` processes to end (they end with the daemon, §1), `try/finally` removes its lease and runs `harness start` |
 | Running version | `stty` + `cat` 15 s, `App version:` | .NET `SerialPort` at 115200 for 15 s, the same `App version:` match |
 | Confirm | `/dev/tty` prompt | `[Console]::ReadLine()` when stdin is a console; otherwise `--yes` is required, the same message |
 
 **Cancel.** The desktop cannot send a signal that runs a `finally` on Windows. While it waits on esptool, the script
 checks every second for `<cache>\cancel`. When it is there, the script removes it, stops esptool's tree, runs its
-`finally` (removes `flashing`, `harness start`) and exits 130. The file is removed at the script's start too, so an
+`finally` (removes its timestamp lease, `harness start`) and exits 130. The cancel file is removed at the script's start too, so an
 old one cannot cancel a new run.
 
 **One set of numbers.** `CHIP`, `APP_OFFSET`, `OTADATA_OFFSET`, `OTADATA_SIZE`, `NVS_OFFSET`, `NVS_SIZE`,
@@ -231,15 +238,30 @@ the bash path unchanged.
 
 ### 3.3 The desktop
 
-`Flasher.cancel()` on Windows writes `<flasher cache>\cancel` (the same folder `SerialPortLease` reads), then, if the
-run has not ended 15 s later, kills it. A hard kill skips the script's `harness start`; the app's daemon supervision,
-resumed when the lease is released, starts the daemon within its 5 s tick. macOS and Linux keep SIGTERM.
+`Flasher.cancel()` on Windows writes `<flasher cache>\cancel` (the same folder `SerialPortLease` reads), then,
+if the run has not ended 15 s later, requests `taskkill /T /F` for its process tree. A hard kill skips the
+script's `finally`, including `harness start`.
+
+The updated app supplies a new 128-bit lowercase-hex `HARNESS_FLASH_RUN_ID` and the resolved cache path only
+to the CLI child. The CLI forwards them to PowerShell, which accepts exactly 32 lowercase hex characters,
+freezes its lease path as `flashing.<runId>`, then clears the identity from its environment before spawning
+any child. Standalone/older-app calls and invalid identities retain the shared `flashing` path. Each marker
+still contains epoch seconds; `SerialPortLease` reads both protocols with the existing ten-minute stale bound.
+CLI age alone does not choose the marker: an older CLI that inherits the app's identity can pass it to the
+updated script and use a per-run lease. An old cached script still uses the shared marker.
+
+Forced cleanup waits for both successful tree termination and the owned parent exit, then removes only
+that run's exact persisted lease before the flash future resolves and the in-process lease releases.
+Failed termination or cleanup retains the persisted guard. A foreign per-run or shared marker is never
+selected for deletion, even with identical timestamps. Once the guards permit it, supervision can restart
+the daemon on its next eligible tick; this is not a measured restart deadline. The stopped message says
+`Stopped.` without claiming an observed restart. macOS and Linux keep SIGTERM and the bash flasher.
 
 The Flash firmware dialog says "this Mac" twice (`Checking the USB ports on this Mac.`, `Plug the dial into this Mac
-…`); on Windows it says "this computer", and on macOS and Linux it is unchanged. Nothing else in the dialog, the
-Devices tab or About names a Unix port or a Mac tool (checked 2026-10-19; the ports the dialog shows come from the
-script). The in-window menu's `flashFirmware`, About's Flash button and the Devices tab need no other Windows code:
-E2E proves them on the test PC.
+…`); on Windows it says "this computer", and on macOS and Linux it is unchanged. The output heading names
+`flash-circle.ps1` on Windows and retains `flash-circle.sh` on Unix. The ports come from the script.
+The in-window menu's `flashFirmware`, About's Flash button and the Devices tab share this implementation;
+the E2E report records the actual GUI coverage and remaining hardware observations.
 
 ## 4. Packaging and lifecycle
 
@@ -267,7 +289,9 @@ E2E proves them on the test PC.
   restarts.
 - `flash.spec.ts`, `win32` injected: URL, marker check, cache fallback, PowerShell argv.
 - `flash-circle.spec.ts`: the two scripts' numbers match (§3.1).
-- `flasher_test.dart`: cancel on Windows writes the file and kills only after 15 s.
+- `flasher_test.dart`: Windows cooperative cancellation, forced-tree/parent-exit ordering, real per-run lease
+  retirement, failed-kill and foreign-marker preservation, and real child exit through both daemon startup paths;
+  Unix SIGTERM remains covered. Dialog widget tests cover both output headings and the stopped message.
 
 ### 5.2 Windows CI (x64 and arm64)
 
@@ -323,14 +347,103 @@ either; a Windows driver for other USB-serial chips.
 
 ## Known limits
 
-- **The wake.** `dialPortThere()` answers false on Windows. It does not matter while the services run in the core's
-  process; it must get a `win32` look when they move out.
-- **One `harness-serial watch` per running daemon**, dial or not: a few MB of memory and no CPU when idle
-  (scenario 10 records the numbers).
+- **One `harness-serial watch` per running daemon**, dial or not. The plugged idle sample below includes
+  the private test backend and loopback server; it does not isolate E's incremental cost.
 - **Arm64 flashing runs esptool emulated**, as Espressif ships no arm64 Windows build.
 - **`harness-serial.exe` is updated by `install.ps1`, not by the CLI's self-update**, exactly as `harness-pty.exe`
   is: on Windows only `install.ps1` writes `runtime\pty\current-pty`. Its stdio contract (§1) therefore only grows:
   a newer CLI must work with the `harness-serial.exe` an older install laid down.
+- **Older cached PowerShell flasher.** A new app cannot prove ownership of an old script's shared `flashing`
+  marker. Forced cancellation preserves it conservatively, so daemon suppression can remain for the old
+  ten-minute stale interval. The updated script's child-environment clearing also does not apply to old scripts.
+- **Standard-user uninstall over SSH** hit C's documented Windows helper-cleanup restriction: the attempt
+  exited 1 with AccessDenied. This does not establish the desktop uninstall result.
+
+### Validation results and limits (E5.2 complete with limits)
+
+The [E2E report](../../testing/windows-dial-e2e.md) owns the current acceptance verdicts. Scenario 5 passed;
+scenarios 2 and 6 passed their Script checks, with Person screen observations NOT RUN. Scenarios 1 and 3
+are partial. Scenario 7 has successful app flashing, a fresh hello and unchanged attachment session, but
+its native-writer-exit timing does not measure the required CLI-return bound.
+
+Scenario 8 has a scoped PASS for actual GUI cancellation at Writing 17% followed by normal CLI3 recovery.
+The two writers were gone in 1,317 ms and none remained at 15 s. The daemon opened the dial log after
+4.615 s; that proves daemon activity, while first IPC-response timing remains unmeasured. The earlier
+`4c3def3c` and `c95e86208` recovery failures remain historical FAIL results. The exact 13:02 negative
+verdict survived the CLI3 upgrade unchanged, without detection, PnP or manual clearing. From that baseline,
+normal `flash --yes --port COM3` on CLI `4fe12de12` / `0.9.0-dev.dial3` exited 0 in 62.960 s, reported
+`running 0.0.92` without a completion warning, cleared the selected negative verdict, and left both markers
+false. A fresh hello and attachment followed with the same USB session, 2.7990 s after CLI exit. The existing
+app stayed on its prior Done screen; no new dev3 GUI flash was performed.
+
+The tested mixed inputs are app/native `4c3def3c`, PowerShell `c95e86208`, and CLI `4fe12de12`. The latter
+passed the actual Windows native bundle-entry fixture (selected A cleared, sibling B preserved), the focused
+103/103 suite, TypeScript typecheck and independent scoped review. Native workflow
+[39412223533](https://github.com/autonomous-ai/openharness/actions/runs/39412223533) passed all four
+x64/ARM64 jobs; its evidence applies to the unchanged native and PowerShell inputs, not a new whole-runtime build.
+
+The final forced-cancellation/output-heading fix is `444139f69`. The whole-E review and its focused follow-up
+found no remaining E Critical or Important issue after I1/M1 were resolved. Its final Desktop evidence is
+84 passing tests and one existing platform skip assembled from completed selected files, plus scoped analyzer,
+CLI wrapper, website and typecheck results. Seven actual Windows PowerShell 5.1 function fixtures passed against
+the updated PS1. These establish the updated marker protocol and function behavior; they are not a new GUI build,
+actual Windows taskkill/USB run or replacement for the mixed hardware inputs above.
+
+Scenario 10's plugged interval retained the same five process identities. Native same-vector derived
+postprocessing (`3907ce22`, `verified=true`, `postprocessing_only=true`) passed with 20.953125 CPU seconds,
+including the test loopback server; the core used 20.8125 seconds and both serial helpers together used
+0.0625 seconds. The actual snapshots at `13:53:12.1757386Z` and `14:03:13.5336234Z` span 601.3578848 seconds.
+The collector's stored 601.7609357 seconds is stopwatch elapsed at failure: its catch block overwrites the
+earlier elapsed field after the final probe and failed comparison, so it includes that later work. It is not
+the clean snapshot interval. The original failed OrderedDictionary comparison remains a separate FAIL, not
+relabeled as a passing collection. The E2E report contains all five role-only CPU and working-set rows.
+No 600-second rerun, disconnected sample, performance threshold or clock-adjustment explanation is claimed.
+
+Scenario 4's Windows PnP simulation was blocked with exit 3010, requiring a reboot; no reboot, physical unplug
+or hard reset was performed. Fast user switching (9), a second dial, pet changes and physical screen observations
+are NOT RUN. Disconnected idle measurements remain NOT RUN. Scenario 11's standard-user SSH uninstall failed
+partially: the read-only audit found zero owned processes, one serial-helper file and the launcher still present.
+A second, tools-only account's read-only audit passed (zero owned processes/files, no launcher), with no product
+uninstall there. Standard-user desktop uninstall remains NOT RUN. E5.3 records the implemented behavior,
+scoped evidence, owner-waived residual cleanup and remaining limits. E is ready for owner integration with
+these limits, not full hardware acceptance. Only the owner's session integrates E into PR #1457 after final
+documentation commits and scoped review; no agent merge is authorized.
+
+### Recorded cleanup and owner waiver
+
+The owner-portable process/task phase (`ecf33caf`) passed: normal CLI3 stop, exact PTY and loopback-server
+stops, and 24 completed owned NoWait tasks unregistered. Final owned-root process/task counts were both zero.
+It ran `2026-10-20T14:35:20.8387298Z` → `2026-10-20T14:37:27.2000336Z` (receipt elapsed 126.472 s;
+SHA256 `0a3b13b17ea4bbfcd57ae33e784746e1bea597bdfc7f6b98bd345ecb7f53ed68`). This phase deleted no paths,
+accounts or profiles, and is not a product-uninstall result or a global process count.
+
+Existing private proofs were manifested on the Mac before the process/task stop. After that stop and before
+any path/account deletion, the five-proof native ZIP was built, downloaded and verified on the Mac:
+whole ZIP, all five entries and CRC (11,830 bytes; SHA256
+`b9dd06eecfe2348b65076dd3e998421c0657f0775906f5937e6acddc11963fe9`). Both public test-account cleanup
+attempts were blocked by the loaded-profile guard despite zero owned processes; neither user nor profile was
+deleted. Each exact-identity native audit took 31 snapshots: both profiles remained loaded with both hives
+present, RefCount could not be determined, and no exact-identity logon or WTS session was available for a safe
+logoff. Their positive ownership receipts remain retained.
+
+No direct hive unload or shared-host reboot was attempted, and no legitimate original loader handle was
+available. The owner explicitly waived the remaining cleanup: no further cleanup, hive unload, reboot or
+deletion attempts will be made. Both test profiles, dedicated keys, the isolated portable E root and marked
+shared/administrative scratch with ownership receipts remain retained. The remover was prepared only, not run;
+the original kit's planned final scratch cleanup was also not run. The earlier S11
+SSH-uninstall FAIL remains independent of the process/task teardown PASS and blocked account cleanup.
+
+The fresh preservation comparison (`1b6b91b3`) is NOT PASS: three old process identities and three old
+listeners are absent, while the original two tasks are both retained. Cause is unproven; C/shared work ran
+concurrently, without establishing causation. No C restoration or baseline overwrite was attempted. Full
+preexisting-state preservation is not certified by this comparison.
+
+### Carried review follow-ups
+
+- **I2: inherited summary ordering.** The asynchronous summary/next-turn issue in `cli/src/services/devices.ts`
+  is owned by the notification/C follow-up; it is outside E and was not closed by the final fix.
+- **M2: native test deadline.** The unbounded initial `read_line` in `serial/tests/windows.rs` remains deferred
+  to the combined Windows owner. Passing native runs do not establish bounded failure for that test.
 
 ## Risks
 
