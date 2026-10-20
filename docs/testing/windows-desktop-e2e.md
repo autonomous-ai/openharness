@@ -3,7 +3,7 @@
 Status: **in progress**, 20 October 2026. This is the C5.2 acceptance record for
 [`feat/windows-desktop`](../superpowers/plans/2026-10-18-windows-desktop.md#task-c52-the-seven-scenarios-on-the-vm-and-docstestingwindows-desktop-e2emd).
 The seven scenarios are defined in the [Windows desktop design, §4.4](../superpowers/specs/2026-10-18-windows-desktop-design.md#44-end-to-end-on-the-windows-11-arm64-vm).
-Desktop **1.0.0**, **1.0.1**, **1.0.2**, and uninstall-fix **1.0.3** were published to staging
+Desktop **1.0.0**, **1.0.1**, **1.0.2**, uninstall-fix **1.0.3**, and first-key-fix **1.0.4** were published to staging
 for ARM64 and x64. An earlier ARM64 **1.0.1-rc1** ZIP and local x64
 Debug/Release builds were used for diagnosis; those were not the staging N1.
 The ARM VM now has staging CLI `0.4.21-dev.win1` and PTY `0.4.19`. The x64 VM
@@ -18,12 +18,12 @@ record.
 | # | Scenario | Result at this snapshot | Driver |
 | --- | --- | --- | --- |
 | 1 | First install, sign-in, same-version launch | Partial: N installed and same-version launch converged to one installed window. Published x64 1.0.3 launched from an Internet-marked ZIP in a Vietnamese/metacharacter path after its Unknown Publisher warning; the installed app rendered. SmartScreen More info did not appear. | Script, visual automation; sign-in authorized through existing account session |
-| 2 | This computer, terminal, Add Phone, remote Mac | Partial: owned terminal creation, `WIN_42` output, HTTP 200 handoffs on ARM and real DELL x64, and remote row observed. Published x64 1.0.3 and PTY 0.4.19 passed GUI ping/Ctrl+C and synthetic text copy/paste. Duplicate cursor replies caused a new terminal to lose its first key. The source fix passed clean x64 Debug GUI and passive PTY checks; published staging retest is pending. The owner Mac check is pending. | Visual automation, Script |
-| 3 | Notifications, tray, links, paste and font | Partial: tray/links/font and local x64 composer paste observed. On published x64 1.0.3, a completed Kilo turn posted a native Finished notification; clicking its card restored the correct harness. The live tray menu also showed the working Kilo row, Open Harness and Quit; transient banner remains unverified. | Visual automation, Script |
+| 2 | This computer, terminal, Add Phone, remote Mac | Partial: owned terminal creation, `WIN_42` output, HTTP 200 handoffs on ARM and real DELL x64, and remote row observed. Published x64 1.0.3 and PTY 0.4.19 passed GUI ping/Ctrl+C and synthetic text copy/paste. Duplicate cursor replies caused a new terminal to lose its first key. The source fix passed clean x64 Debug checks and the published 1.0.4 retest: the first physical `a` appeared in a fresh GUI-created terminal and was independently confirmed in passive PTY output. The owner Mac check is pending. | Visual automation, Script |
+| 3 | Notifications, tray, links, paste and font | Partial: tray/links/font observed; published x64 1.0.4 composer bitmap, raw PNG-only and file-drop paste passed. On published x64 1.0.3, a completed Kilo turn posted a native Finished notification; clicking its card restored the correct harness. The live tray menu showed the working Kilo row, Open Harness and Quit. Transient banner and literal cold-link exactly-once log remain unverified. | Visual automation, Script |
 | 4 | Staging updates and broken-build rollback | Passed on real x64: real 1.0.0 → 1.0.1 GUI update passed on both VMs. The 1.0.1 → 1.0.2 update kept the ARM counter rising and repaired Settings `DisplayVersion` on both VMs; DELL x64 then updated from 1.0.2 → 1.0.3 through the GUI and rendered signed in. Private fake-CDN truncated/no-executable packages were refused; a no-first-frame package rolled back to 1.0.3 after two failed starts. Counter and daemon/PTY processes survived. | Script, visual automation |
 | 5 | Uninstall through Windows Settings | Passed on 1.0.3 after a 1.0.2 timing failure was fixed: holding the final dialog open over three minutes did not start cleanup early; after OK, the app folder and registrations disappeared while CLI, daemon and agents stayed. | UI Automation |
 | 6 | x64 desktop on ARM64 | Passed across two runs of published x64 1.0.3: install, rendered window, tray and Settings uninstall passed; a later isolated x64 runtime returned HTTP 200 for Add Phone while the backend was connected. The installed ARM app and seven agents were restored afterward. | Script, visual automation, UI Automation |
-| 7 | Install desktop by one PowerShell command | Passed on real x64: cold staging 1.0.3 install rendered immediately, console showed the full completion copy and `still here`, MOTW/temp counts were zero, and the subsequent Settings uninstall removed the app while preserving agents. ARM first-run white-client observation remains unresolved. | Script, visual automation, UI Automation |
+| 7 | Install desktop by one PowerShell command | Passed on real x64: cold staging 1.0.3 install rendered immediately, console showed the full completion copy and `still here`, MOTW/temp counts were zero, and the subsequent Settings uninstall removed the app while preserving agents. A later cold ARM 1.0.4 install rendered at the first passive capture and showed the full completion copy; the earlier white 1.0.3 run is retained below. | Script, visual automation, UI Automation |
 | — | Windows PC controlled from the Mac desktop | Pending owner check. | Person |
 
 The [Windows Desktop workflow run 39298570517](https://github.com/autonomous-ai/openharness/actions/runs/39298570517)
@@ -60,6 +60,10 @@ passed both architectures, including their builds, native integrations and
 46/46 installer specs. Each full Flutter result contained 6,359 passes,
 170 recorded baseline failures and zero new or mandatory-case failures.
 The downloaded test artifacts matched their API SHA-256 digests.
+The [1.0.4 staging run 39375401781](https://github.com/autonomous-ai/openharness/actions/runs/39375401781)
+then built both packages, published only staging, and passed its served size
+and SHA-256 checks. The x64 package used for the live retest additionally
+matched its manifest hash after download.
 
 ## Setup and evidence
 
@@ -163,8 +167,11 @@ renderer duplicate while preserving other replies. Its regression first failed
 with unwanted input frames; 153 related Mac Flutter tests, 129 Windows x64
 tests, targeted analysis and independent review then passed. A GUI-created fresh terminal on the clean x64 Debug build then accepted
 its first physical `a`; a passive PTY screen independently confirmed the
-character. The full Windows CI subsequently passed both architectures; the
-published staging retest is still pending.
+character. The full Windows CI subsequently passed both architectures. On published
+x64 **1.0.4**, the GUI created another fresh Terminal harness against published
+PTY 0.4.19. Its first single physical `a` appeared at the prompt without a
+warm-up key; passive PTY output independently confirmed `PS C:\Users\DELL> a`.
+This passes the published first-key retest.
 
 ### 3. Native Windows behavior
 
@@ -223,6 +230,19 @@ a native tray menu showing **Working (1)**, **C52 toast probe** with **5s**
 elapsed, **Open Harness** and **Quit** in the captured screenshot. The tray
 selector excluded taskbar app buttons before opening the actual notification
 area icon. This verifies the live working-row criterion.
+
+On published x64 **1.0.4**, a final composer check separately attached a
+blue bitmap, an orange PNG copied as an Explorer-style file drop, and a
+green **PNG-only** clipboard payload. Each visible attachment was captured;
+none was submitted to an agent. The raw PNG case advertised only `PNG`,
+with a valid 190-byte PNG and its expected signature, so bitmap fallback
+could not account for the result. The helper initially offered a managed
+payload without getting an attachment, then prematurely disposed its raw
+clipboard owner window. Keeping that private hidden owner alive through
+the paste produced the green attachment. These failed helper attempts are
+retained; no product change was needed. Every completed probe restored the
+prior supported clipboard formats and text, and the synthetic attachments
+and fresh first-key terminal were then removed.
 
 ### 4. Update and rollback
 
@@ -463,6 +483,24 @@ the daemon/core/updater/PTY retained their exact PIDs and start times. The
 unrelated OpenCode harness was preserved. This passes Scenario 7 on real x64;
 it does not resolve the earlier ARM first-render observation.
 
+A final cold ARM64 staging **1.0.4** one-command run started at
+**2026-10-20 05:42:54 UTC** after the 1.0.3 root and registrations were
+removed. The real staging `irm … | iex; Write-Host "still here"` completed
+in about **49 seconds**. At **05:43:57 UTC**, the first passive screenshot
+showed the signed-in composer rendered, before any app focus or resize.
+The installed app was the sole native 1.0.4 process; installed MOTW and
+staging-folder counts were zero. Its daemon, core, worker and PTY PIDs and
+start times matched the pre-install state, and the seven original agents
+were preserved. A later full console screenshot showed the complete
+installed/opening sentence, Start-menu sentence, `still here` and the
+PowerShell prompt. Focusing that console initially returned false in the
+helper; hiding only the owned app exposed the console for the successful
+capture, and also displayed the native first-hide toast. The installed
+shortcut then restored the app, and only the completed installer shell
+was stopped. The prior white 1.0.3 run did not recur here; this is a
+successful retest, not a diagnosis or a claimed rendering fix. The earlier
+post-uninstall receipts still cover the unchanged Rust uninstaller inputs.
+
 ### The Windows PC seen from the Mac
 
 Pending the owner at their signed-in Mac desktop. The VM app showed the remote
@@ -475,14 +513,23 @@ CLI, daemon or `~/.harness`.
 | ID | Finding | Current evidence and impact |
 | --- | --- | --- |
 | G1 | ARM RC1 GUI Ctrl+C did not interrupt an owned PowerShell child. | Isolated PTY host inherited Ctrl+C ignore from its process group. A Windows regression failed before the host fix and passed after it; the full Windows PTY suite passed. Local x64 Release and staging N1 passed GUI Ctrl+C with the patched test host. A later real x64 1.0.3 GUI check passed Ctrl+C through published PTY 0.4.19 after a guarded same-session host setup. ARM still serves its live agents from 0.4.18 despite having 0.4.19 installed; no host replacement was attempted. |
-| G2 | Printable terminal input depended on launch/relaunch state. | ARM RC1 failed early input attempts, then `WIN_42` passed after relaunch. An isolated published-host experiment proved a duplicate cursor-position reply causes the lost first key. Fix `f6bceb53d` suppresses only the renderer duplicate, preserving user input and other queries; 153 related Mac tests, 129 x64 Windows tests and independent review passed. The clean x64 Debug GUI accepted its first physical `a` in a fresh terminal; a passive PTY screen confirmed the character. Published staging retest is pending. |
-| G3 | The ARM client area turned black/white during RC1, N and one-command 1.0.3 sessions. | The process stayed responsive at the OS level. N did not repaint after one app restart, but one scoped window-size change restored its UI; the surface went black again after the CLI restart and another scoped size change restored it. The GPU accepted D3D feature level 12_1. N1, N2 and x64-on-ARM 1.0.3 rendered in other launches; the one-command ARM64 1.0.3 first-run capture was white. A later direct ARM64 ZIP launch rendered after focus without a resize. The cause and first-render reliability remain unproved. |
+| G2 | Printable terminal input depended on launch/relaunch state. | ARM RC1 failed early input attempts, then `WIN_42` passed after relaunch. An isolated published-host experiment proved a duplicate cursor-position reply causes the lost first key. Fix `f6bceb53d` suppresses only the renderer duplicate, preserving user input and other queries; 153 related Mac tests, 129 x64 Windows tests and independent review passed. The clean x64 Debug GUI accepted its first physical `a` in a fresh terminal; a passive PTY screen confirmed the character. Published x64 1.0.4 also accepted the first physical `a` in a new GUI-created terminal; passive PTY output confirmed it. |
+| G3 | The ARM client area turned black/white during RC1, N and one-command 1.0.3 sessions. | The process stayed responsive at the OS level. N did not repaint after one app restart, but one scoped window-size change restored its UI; the surface went black again after the CLI restart and another scoped size change restored it. The GPU accepted D3D feature level 12_1. N1, N2 and x64-on-ARM 1.0.3 rendered in other launches; the one-command ARM64 1.0.3 first-run capture was white. A later direct ARM64 ZIP launch rendered after focus without a resize. The final cold ARM64 1.0.4 one-command run rendered in its first passive capture, without focus or resize. That retest passed; the earlier intermittent white surface is retained without claiming a root-cause fix. |
 | G4 | Notification permission gate reported unavailable while a native probe could post a toast. | The first-toast `Setting()` error is handled in N1 source. Published x64 1.0.3 subsequently posted its own Finished notification, displayed it in Notification Center, and restored the correct harness when clicked. Transient banner presentation remains unverified. |
 | G5 | Published N footer joined its words and counts. | Staging N1 on both x64 and ARM64 visibly separates the words and counts. |
 | G6 | Windows Settings uninstall entry kept the old version after a successful in-app update. | Both staging 1.0.0 → 1.0.1 updates left `DisplayVersion=1.0.0` while About showed 1.0.1. Launcher fix `147ca03bd` has a failing-then-passing regression; live 1.0.1 → 1.0.2 updates on both VMs now show `DisplayVersion=1.0.2`. |
 | G7 | An x64 owned terminal reported `offline ready` after the staging CLI upgrade. | The old PowerShell and test-only PTY host stayed alive, while the restarted daemon saw the host and reopened its stream. A new owned terminal worked on the same host. Exact cause and recovery of the old agent remain unproved. |
 | G8 | ARM 1.0.2 Quit took more than 47 seconds. | The menu Quit removed the tray icon and hid the window, but its process remained alive on two checks and exited by itself within 4 minutes 38 seconds. The native teardown boundary is suspected, not proved; no forced termination or source fix was made. |
 | G9 | Settings uninstall left the installed files. | The hidden cleanup script started before the final modal dialog, exhausted its launcher-exit wait while that dialog remained open, and logged that the launcher was still running. Registry and shortcut were already removed. Commit `826608097` fixes the order; Windows CI passed and the 1.0.3 ARM Settings retest passed after a >3-minute dialog hold. |
+
+Remaining acceptance work is explicit: the owner's Mac-to-Windows terminal
+check, a clean fresh-user CLI bootstrap/sign-in receipt after the initial
+computer-check timeout, and the real cold-link exactly-once log receipt.
+The native integration tests already cover exactly-once link dispatch;
+the earlier live closed-link run established one app window but did not
+capture that literal delivery log. Final test-account cleanup follows the
+owner's Mac check; the shared x64 account's unrelated harness remains
+untouched. These rows keep C5.2 open despite the successful 1.0.4 retests.
 
 ## Timing, limits and safety
 
