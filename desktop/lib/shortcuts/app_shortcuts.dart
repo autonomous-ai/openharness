@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../logging/debug_surface.dart';
+import 'keymap.dart';
+import 'keymap_keyboard.dart';
 
 /// Harness uses Command as a direct prefix for frequent workspace actions.
 /// T opens a tab, N creates a harness. S opens Store, M machines, I models,
@@ -626,6 +628,55 @@ const linuxAltCommandKeys = <String, List<String>>{
   'app.daemon_talk': ['alt+shift+a'],
 };
 
+/// The Windows alias of a Mac chord, independent of the current platform.
+String? windowsCtrlAlias(SingleActivator mac) => windowsCtrlAliasForStroke(
+  keyStrokeFor(
+    mac.trigger,
+    command: mac.meta,
+    control: mac.control,
+    alt: mac.alt,
+    shift: mac.shift,
+  ),
+);
+
+/// The same rule for commands whose Mac defaults are keymap strings.
+String? windowsCtrlAliasForStroke(KeyStroke? mac) {
+  if (mac == null ||
+      !mac.command ||
+      mac.alt ||
+      const {
+        'left',
+        'right',
+        'up',
+        'down',
+        'enter',
+        'backspace',
+        'delete',
+        'home',
+        'end',
+        'tab',
+        'comma',
+        '1',
+        '2',
+        '3',
+        '4',
+        '5',
+        '6',
+        '7',
+        '8',
+        '9',
+        'a',
+        'c',
+        'v',
+        'x',
+        'z',
+        'y',
+      }.contains(mac.key)) {
+    return null;
+  }
+  return KeyStroke(mac.key, control: true, shift: mac.shift).toString();
+}
+
 String platformWorkspaceBinding(String keys) {
   final parts = keys.split('+');
   if (!parts.contains('cmd')) return keys;
@@ -857,6 +908,14 @@ const kSwarmShortcuts = [
 /// shortcut sheet prints one row; pane movement uses Command-arrows.
 const int kTabDigitCount = 9;
 
+/// Tab-number hints follow Ctrl alone on Windows and Meta elsewhere.
+bool showsTabShortcutHints(HardwareKeyboard keyboard) => ctrlWorkspacePrefix
+    ? keyboard.isControlPressed &&
+          !keyboard.isShiftPressed &&
+          !keyboard.isAltPressed &&
+          !keyboard.isMetaPressed
+    : keyboard.isMetaPressed;
+
 List<SingleActivator> tabDigitActivators() => (const [
   SingleActivator(LogicalKeyboardKey.digit1, meta: true),
   SingleActivator(LogicalKeyboardKey.digit2, meta: true),
@@ -955,6 +1014,7 @@ List<TerminalKey> get kTerminalOwnedKeys => [
     TerminalKey([controlKeyLabel, shiftKeyLabel, 'C'], 'Copy'),
     TerminalKey([controlKeyLabel, shiftKeyLabel, 'V'], 'Paste'),
     TerminalKey([controlKeyLabel, shiftKeyLabel, 'A'], 'Select all'),
+    if (windowsKeyLabels) TerminalKey([controlKeyLabel, 'V'], 'Paste'),
   ] else ...const [
     TerminalKey(['⌘', 'C'], 'Copy'),
     TerminalKey(['⌘', 'V'], 'Paste'),
@@ -968,12 +1028,17 @@ List<TerminalKey> get kTerminalOwnedKeys => [
   // ⌘⌫ is taken in the pane on Apple only — elsewhere ⌘ is Super (or Win) and stays the app's.
   if (!_pcTerminalKeys)
     const TerminalKey(['⌘', '⌫'], "Delete to the line's start"),
-  TerminalKey([controlKeyLabel, 'C'], 'Cancel / interrupt in the agent'),
+  TerminalKey(
+    [controlKeyLabel, 'C'],
+    windowsKeyLabels
+        ? 'Copy the selection, or interrupt'
+        : 'Cancel / interrupt in the agent',
+  ),
 ];
 
-/// Linux, and the native Windows app: the terminal's clipboard keys are
-/// Ctrl+Shift chords, as in GNOME Terminal and Windows Terminal. A browser on
-/// Windows keeps the Mac's list, as it did.
+/// Linux and native Windows retain the terminal's Ctrl+Shift clipboard keys.
+/// Windows also accepts Ctrl+V and copies Ctrl+C when output is selected.
+/// A browser on Windows keeps the Mac's list, as it did.
 bool get _pcTerminalKeys =>
     defaultTargetPlatform == TargetPlatform.linux || windowsKeyLabels;
 

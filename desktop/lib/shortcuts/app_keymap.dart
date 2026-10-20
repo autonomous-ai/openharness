@@ -26,12 +26,26 @@ class AppKeymap extends ChangeNotifier {
     await store?.start();
   }
 
-  static KeymapStore fileStore() => KeymapStore(
-    file: File(KeymapStore.defaultPath()),
-    defaults: harnessDefaultBindings,
-    commands: harnessCommandById.keys.toSet(),
-    validate: (map) => validateNativeKeys(map, macOS: Platform.isMacOS),
-  );
+  static KeymapStore fileStore({
+    Map<String, String>? environment,
+    bool? isWindows,
+  }) {
+    final path = KeymapStore.defaultPath(
+      environment: environment,
+      isWindows: isWindows,
+    );
+    final legacy = KeymapStore.legacyPath(
+      environment: environment,
+      isWindows: isWindows,
+    );
+    return KeymapStore(
+      file: File(path),
+      legacyFile: legacy == null || legacy == path ? null : File(legacy),
+      defaults: harnessDefaultBindings,
+      commands: harnessCommandById.keys.toSet(),
+      validate: (map) => validateNativeKeys(map, macOS: Platform.isMacOS),
+    );
+  }
 
   Iterable<KeyBinding> bindings(
     String command, {
@@ -44,7 +58,10 @@ class AppKeymap extends ChangeNotifier {
     String command, {
     KeymapContext context = KeymapContext.workspace,
   }) {
-    final binding = bindings(command, context: context).firstOrNull;
+    final binding = bindings(
+      command,
+      context: context,
+    ).where((binding) => !binding.outsideTerminal).firstOrNull;
     return binding == null ? null : describeKeyBinding(binding);
   }
 
@@ -136,15 +153,46 @@ class KeymapRegion extends InheritedWidget {
     required this.contextKind,
     this.actions,
     this.composing,
+    this.terminalFocusNode,
     required super.child,
   });
   final KeymapContext contextKind;
   final Map<String, VoidCallback>? actions;
   final bool Function()? composing;
+
+  /// Only this renderer owns terminal input; pane chrome remains outside.
+  final FocusNode? terminalFocusNode;
   static KeymapRegion? of(BuildContext context) =>
       context.getInheritedWidgetOfExactType<KeymapRegion>();
   @override
   bool updateShouldNotify(KeymapRegion oldWidget) => false;
+}
+
+/// Marks the terminal composer, whose Ctrl+W/U edit its own line.
+/// Other text fields in a terminal region keep the ordinary app aliases.
+class KeymapComposer extends InheritedWidget {
+  const KeymapComposer({
+    super.key,
+    this.focusNode,
+    this.paste,
+    required super.child,
+  });
+
+  final FocusNode? focusNode;
+  final Future<void> Function()? paste;
+
+  static KeymapComposer? forFocus(FocusNode? focus) {
+    final context = focus?.context;
+    if (context == null || !context.mounted) return null;
+    final composer = context.getInheritedWidgetOfExactType<KeymapComposer>();
+    return identical(composer?.focusNode, focus) ? composer : null;
+  }
+
+  static bool contains(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<KeymapComposer>() != null;
+
+  @override
+  bool updateShouldNotify(KeymapComposer oldWidget) => false;
 }
 
 String? effectiveShortcutHint(BuildContext context, ShortcutAction action) {
@@ -155,7 +203,9 @@ String? effectiveShortcutHint(BuildContext context, ShortcutAction action) {
   if (command == null) return null;
   final binding = (map?.current ?? harnessDefaultKeymap)
       .bindingsFor(KeymapContext.workspace)
-      .where((binding) => binding.command == command.id)
+      .where(
+        (binding) => binding.command == command.id && !binding.outsideTerminal,
+      )
       .firstOrNull;
   return binding == null ? null : describeKeyBinding(binding);
 }
@@ -177,7 +227,9 @@ String? effectiveCommandHint(
   final bindings = (KeymapTheme.of(context)?.current ?? harnessDefaultKeymap)
       .bindingsFor(contextKind);
   final binding = bindings
-      .where((binding) => binding.command == command)
+      .where(
+        (binding) => binding.command == command && !binding.outsideTerminal,
+      )
       .firstOrNull;
   return binding == null ? null : describeKeyBinding(binding);
 }
@@ -190,7 +242,10 @@ List<ShortcutRow> effectiveShortcutRows(
   if (map == null && contextKind == KeymapContext.workspace) {
     return shortcutRows();
   }
-  final bindings = (map ?? harnessDefaultKeymap).bindingsFor(contextKind);
+  final bindings = (map ?? harnessDefaultKeymap)
+      .bindingsFor(contextKind)
+      .where((binding) => !binding.outsideTerminal)
+      .toList();
   final defaultDigits =
       !contextKind.isPicker &&
       List.generate(kTabDigitCount, (i) {

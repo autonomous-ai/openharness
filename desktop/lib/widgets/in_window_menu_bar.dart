@@ -1,9 +1,11 @@
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../core/runtime_platform.dart';
+import '../shortcuts/app_keymap.dart' show KeymapComposer;
 import '../shared/theme/app_pane_icon.dart';
 import '../core/test_run.dart';
 import '../core/windows_status_tray.dart' show quitHarness;
@@ -11,6 +13,7 @@ import '../screens/swarm_menu_bus.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import 'engine_identity.dart';
+import 'terminal_edit_actions.dart';
 
 /// Runs one app-menu action — the same strings the macOS application menu
 /// reports over `harness/app_menu`, handled once in
@@ -31,9 +34,9 @@ typedef AppMenuActionHandler = Future<void> Function(String action);
 ///
 /// The tab strip and the title-bar buttons are not here: on Linux and Windows Flutter
 /// draws those itself, as it does anywhere AppKit is not drawing them. Two
-/// standard menus are deliberately not mirrored row for row: Edit lacks
-/// AppKit's Cut/Copy/Paste roles (the terminal owns those keys; only the rows
-/// that reach Dart are drawn), and Window carries the two rows this app can
+/// standard menus are deliberately not mirrored row for row: Windows adds
+/// Edit's clipboard roles so they can reach the focused field or terminal;
+/// Linux keeps its Find rows, and Window carries the two rows this app can
 /// act on itself. Each row shows the shortcut the keymap gives its action,
 /// which is where macOS takes its key equivalents from too. On macOS and in a browser this renders nothing; [visible] exists so a widget
 /// test can force the bar on without caring which OS the host is. Widget
@@ -89,6 +92,8 @@ class LinuxTitleBarActions extends ChangeNotifier {
 
 final linuxTitleBarActions = LinuxTitleBarActions();
 
+enum EditMenuTarget { textField, terminal, none }
+
 class InWindowMenuBar extends StatefulWidget {
   const InWindowMenuBar({
     super.key,
@@ -119,6 +124,43 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
   final _controllers = <String, MenuController>{};
 
   MenuController? _openMenu;
+  FocusNode? _editFocus;
+
+  bool get _windows =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+
+  EditableTextState? _editable(FocusNode? focus) {
+    final context = focus?.context;
+    if (context == null || !context.mounted) return null;
+    return context is StatefulElement && context.state is EditableTextState
+        ? context.state as EditableTextState
+        : context.findAncestorStateOfType<EditableTextState>();
+  }
+
+  EditMenuTarget _target(FocusNode? focus) {
+    final context = focus?.context;
+    if (context == null || !context.mounted) return EditMenuTarget.none;
+    if (_editable(focus) != null) {
+      return EditMenuTarget.textField;
+    }
+    return TerminalEditActions.forFocus(focus) == null
+        ? EditMenuTarget.none
+        : EditMenuTarget.terminal;
+  }
+
+  void _focusChanged() {
+    if (!_windows || !mounted) return;
+    final focus = FocusManager.instance.primaryFocus;
+    // Menu buttons and overlay rows temporarily own focus. Only that chrome
+    // may retain the previous editor; another field, dialog or pane replaces it.
+    if (focus?.context?.findAncestorWidgetOfExactType<_MenuFocusRegion>() !=
+        null) {
+      return;
+    }
+    setState(
+      () => _editFocus = _target(focus) == EditMenuTarget.none ? null : focus,
+    );
+  }
 
   SwarmMenuState get _state => widget.state ?? swarmMenuBus.state;
 
@@ -126,11 +168,15 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
   void initState() {
     super.initState();
     _state.addListener(_changed);
+    _editFocus = FocusManager.instance.primaryFocus;
+    FocusManager.instance.addListener(_focusChanged);
   }
 
   @override
   void dispose() {
     _state.removeListener(_changed);
+    FocusManager.instance.removeListener(_focusChanged);
+    _editFocus = null;
     super.dispose();
   }
 
@@ -461,12 +507,35 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
     ];
   }
 
-  /// AppKit's Edit menu carries the text-editing roles a terminal owns, so
-  /// only the rows that reach Dart are drawn here: the terminal's Find rows,
-  /// then Search Commands, last as on macOS.
+  /// Windows exposes editing roles using the focused editor's own actions.
+  /// Linux keeps the terminal's Find rows and Search Commands, as on macOS.
   List<Widget> _buildEditMenu() {
     final state = _state;
     return [
+      if (_windows) ...[
+        _editRow(
+          'cut',
+          'Cut',
+          'Ctrl+X',
+          const CopySelectionTextIntent.cut(SelectionChangedCause.keyboard),
+        ),
+        _editRow('copy', 'Copy', 'Ctrl+C', CopySelectionTextIntent.copy),
+        _editRow(
+          'paste',
+          'Paste',
+          'Ctrl+V',
+          const PasteTextIntent(SelectionChangedCause.keyboard),
+        ),
+        _editRow(
+          'select-all',
+          'Select All',
+          _target(_editFocus) == EditMenuTarget.terminal
+              ? 'Ctrl+Shift+A'
+              : 'Ctrl+A',
+          const SelectAllTextIntent(SelectionChangedCause.keyboard),
+        ),
+        const AppMenuDivider(),
+      ],
       _swarmRow(
         key: 'menu-bar-find-terminal',
         label: 'Find in Terminal…',
@@ -493,6 +562,63 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
         action: 'commands',
       ),
     ];
+  }
+
+  Widget _editRow(String command, String label, String hint, Intent intent) {
+    final target = _target(_editFocus);
+    final enabled =
+        target != EditMenuTarget.none &&
+        (command != 'cut' || target == EditMenuTarget.textField);
+    if (!enabled) {
+      return KeyedSubtree(key: Key('menu-bar-$command'), child: _label(label));
+    }
+    return AppMenuItem(
+      key: Key('menu-bar-$command'),
+      label: label,
+      trailing: Text(
+        hint,
+        style: grid.AppType.monoLabel(color: grid.AppPalette.textFaint),
+      ),
+      onPressed: () {
+        final focus = _editFocus;
+        final current = _target(focus);
+        final field = _editable(focus);
+        final value = field?.widget.controller.value;
+        _closeAll();
+        if (current == EditMenuTarget.none) {
+          _editFocus = null;
+          return;
+        }
+        if (current == EditMenuTarget.terminal && command == 'cut') return;
+        final context = focus!.context!;
+        focus.requestFocus();
+        // Windows selects the whole field when keyboard focus returns. Apply
+        // that focus transition before invoking an async Paste, then keep the
+        // selection the user had when they entered the menu.
+        FocusManager.instance.applyFocusChangesIfNeeded();
+        if (!context.mounted || _target(focus) == EditMenuTarget.none) {
+          _editFocus = null;
+          return;
+        }
+        if (field != null &&
+            field.mounted &&
+            field.widget.controller.text == value!.text) {
+          field.widget.controller.selection = value.selection;
+        }
+        final terminal = TerminalEditActions.forFocus(focus);
+        if (terminal != null && command == 'copy') {
+          terminal.copy();
+        } else if (terminal != null && command == 'paste') {
+          terminal.paste();
+        } else if (command == 'paste' &&
+            KeymapComposer.forFocus(focus)?.paste != null) {
+          KeymapComposer.forFocus(focus)!.paste!();
+        } else {
+          // Select All uses xterm's own action, just as its keyboard shortcut.
+          Actions.invoke(context, intent);
+        }
+      },
+    );
   }
 
   /// MainFlutterWindow.swift's rows before Full Screen, SwarmTitlebar.swift's
@@ -804,44 +930,50 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
   Widget _menu(String label, List<Widget> children, {VoidCallback? onOpen}) {
     final controller = _controllers.putIfAbsent(label, MenuController.new);
     final isOpen = identical(_openMenu, controller);
-    return MenuAnchor(
-      controller: controller,
-      style: _panelStyle,
-      onOpen: () {
-        setState(() => _openMenu = controller);
-        onOpen?.call();
-      },
-      onClose: () {
-        if (identical(_openMenu, controller)) {
-          setState(() => _openMenu = null);
-        }
-      },
-      menuChildren: children,
-      child: TextButton(
-        key: Key('menu-bar-${label.toLowerCase()}'),
-        onPressed: () {
-          // Read at press time, not from the build's capture: the button does
-          // not rebuild between a menu closing and the click that reopens it.
-          final wasOpen = controller.isOpen;
-          _closeAll();
-          if (!wasOpen) controller.open();
+    return _menuFocusRegion(
+      MenuAnchor(
+        controller: controller,
+        style: _panelStyle,
+        onOpen: () {
+          setState(() => _openMenu = controller);
+          onOpen?.call();
         },
-        style: TextButton.styleFrom(
-          foregroundColor: isOpen
-              ? grid.AppPalette.textPrimary
-              : grid.AppPalette.textSecondary,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          minimumSize: const Size(0, 28),
-          shape: const RoundedRectangleBorder(),
-          textStyle: const TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.w500,
+        onClose: () {
+          if (identical(_openMenu, controller)) {
+            setState(() => _openMenu = null);
+          }
+        },
+        menuChildren: [for (final child in children) _menuFocusRegion(child)],
+        child: TextButton(
+          key: Key('menu-bar-${label.toLowerCase()}'),
+          onPressed: () {
+            // Read at press time, not from the build's capture: the button does
+            // not rebuild between a menu closing and the click that reopens it.
+            final wasOpen = controller.isOpen;
+            _closeAll();
+            if (!wasOpen) controller.open();
+          },
+          style: TextButton.styleFrom(
+            foregroundColor: isOpen
+                ? grid.AppPalette.textPrimary
+                : grid.AppPalette.textSecondary,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            minimumSize: const Size(0, 28),
+            shape: const RoundedRectangleBorder(),
+            textStyle: const TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w500,
+            ),
           ),
+          child: Text(label),
         ),
-        child: Text(label),
       ),
     );
   }
+
+  Widget _menuFocusRegion(Widget child) => _windows
+      ? TextFieldTapRegion(child: _MenuFocusRegion(child: child))
+      : child;
 
   /// The keymap's chord for [action], set quietly at the row's end where a
   /// native menu draws its key equivalent.
@@ -888,6 +1020,14 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
   // command the current pane cannot take.
   Widget _label(String text, {String? note, bool faint = false}) =>
       _MenuLabelRow(text, note: note, faint: faint);
+}
+
+/// Marks both the strip and its overlay, which is outside the strip's tree.
+class _MenuFocusRegion extends InheritedWidget {
+  const _MenuFocusRegion({required super.child});
+
+  @override
+  bool updateShouldNotify(_MenuFocusRegion oldWidget) => false;
 }
 
 /// A non-interactive menu row, matched to [AppMenuItem]'s metrics so a
