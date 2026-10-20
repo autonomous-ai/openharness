@@ -24,8 +24,8 @@ $code = 0
 $harness = Join-Path $env:USERPROFILE '.harness\bin\harness.exe'
 if (Test-Path -LiteralPath $harness -PathType Leaf) {
   try {
-    $raw = (& $harness devices list --json 2>&1) -join "`n"
-    if ($LASTEXITCODE -ne 0) { throw 'devices list failed' }
+    $raw = (& $harness hardware list --json 2>&1) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw 'hardware list failed' }
     $doc = $raw | ConvertFrom-Json
     if ($null -eq $doc -or -not $doc.PSObject.Properties['hosts']) { throw 'no hosts document' }
     foreach ($h in @($doc.hosts)) {
@@ -41,10 +41,10 @@ if (Test-Path -LiteralPath $harness -PathType Leaf) {
     }
   } catch {
     # Failed CLI output can include account details or the entire response; never echo it into evidence.
-    'devices list unavailable (command failed or invalid JSON)'
+    'hardware list unavailable (command failed or invalid JSON)'
     $code = 1
   }
-} else { 'devices list unavailable (CLI not installed)'; $code = 1 }
+} else { 'hardware list unavailable (CLI not installed)'; $code = 1 }
 
 $serial = @(Get-Process -Name 'harness-serial' -ErrorAction SilentlyContinue | Where-Object {
   $_.Path -and $_.Path.StartsWith("$env:USERPROFILE\", [StringComparison]::OrdinalIgnoreCase)
