@@ -535,18 +535,20 @@ function boundedIdentityPart(value: unknown, max = 200): value is string {
 export function validTerminalRuntime(value: unknown): value is TerminalRuntimeRef {
   if (!value || typeof value !== 'object') return false
   const runtime = value as Partial<TerminalRuntimeRef>
-  return runtime.backend === 'tmux' && typeof runtime.paneId === 'string' && PANE_RE.test(runtime.paneId)
+  if (runtime.backend === 'tmux') return typeof runtime.paneId === 'string' && PANE_RE.test(runtime.paneId)
+  if (runtime.backend === 'herdr') return typeof runtime.paneId === 'string' && /^w[A-Za-z0-9]+:p[A-Za-z0-9]+$/.test(runtime.paneId)
+  return false
 }
 
 function retiredRuntime(value: unknown): boolean {
-  return !!value && typeof value === 'object' && (value as { backend?: unknown }).backend === 'herdr'
+  if (!value || typeof value !== 'object') return false
+  const runtime = value as { backend?: unknown; paneId?: unknown }
+  return runtime.backend === 'herdr' && (typeof runtime.paneId !== 'string' || !/^w[A-Za-z0-9]+:p[A-Za-z0-9]+$/.test(runtime.paneId))
 }
 
 /**
- * Earlier builds could also place an agent in a Herdr pane. That backend is gone, so its runtimes are
- * dropped on read — the rest of the row is untouched, and a primary that named one falls to the first
- * remaining tmux route. Returns `null` for a row left with no terminal at all: nothing can reach it.
- * A row without a retired runtime is returned as is.
+ * A herdr runtime with no pane id cannot be addressed. Drop that runtime. A row left with no
+ * terminal at all is dropped. A valid herdr pane stays.
  */
 function withoutRetiredRuntimes(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value
@@ -618,7 +620,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
     || typeof row.primaryRuntimeKey !== 'string'
     || !Array.isArray(row.runtimes) || runtimes.length !== row.runtimes.length || !runtimes.length
     || (projectedTmuxPane ? row.tmuxPane !== projectedTmuxPane : row.tmuxPane !== undefined)
-    || (primary !== '' && !runtimes.some((runtime) => terminalRouteKey(runtime) === primary))
+    || (primary !== '' && !runtimes.some((runtime) => terminalRouteKey(runtime) === primary) && !primary.startsWith('herdr\u0000'))
     // Older dormant rows intentionally persisted an empty primary. Accept and repair those once; new
     // rows keep terminal routing independent from engine activity.
     || (active && primary === '')

@@ -9,16 +9,16 @@ function assertKeyPart(value: string, field: string): string {
 
 /** Stable route key. */
 export function terminalRouteKey(runtime: TerminalRuntimeRef): string {
-  return `tmux${SEP}${assertKeyPart(runtime.paneId, 'tmux pane id')}`
+  return `${runtime.backend}${SEP}${assertKeyPart(runtime.paneId, `${runtime.backend} pane id`)}`
 }
 
-export function terminalInstanceId(_runtime: TerminalRuntimeRef): string {
-  return 'tmux:default'
+export function terminalInstanceId(runtime: TerminalRuntimeRef): string {
+  return runtime.backend === 'tmux' ? 'tmux:default' : 'herdr:local'
 }
 
 /** Human-readable locator label for status and logs. */
 export function terminalRuntimeLabel(runtime: TerminalRuntimeRef): string {
-  return `tmux:${runtime.paneId}`
+  return `${runtime.backend}:${runtime.paneId}`
 }
 
 /** Stable placement key. For tmux the pane id is both the route and the placement identity. */

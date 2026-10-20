@@ -38,7 +38,9 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
     // running to rediscover. Its retained pane is still visible in the app.
     registry.setActive(row.agentId, false)
     await vi.waitFor(async () => {
-      const capture = await backend.capture(row.runtimes[0])
+      const runtime = row.runtimes[0]
+      if (!runtime || runtime.backend !== 'tmux') throw new Error('expected a tmux pane')
+      const capture = await backend.capture(runtime)
       expect(capture).toMatchObject({ state: 'succeeded', value: expect.stringContaining('keep this unsent draft') })
     })
     expect(await control.captureTerminal(row.agentId)).toBeNull()

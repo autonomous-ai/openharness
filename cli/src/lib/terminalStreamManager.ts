@@ -11,7 +11,7 @@ import { sleptFor } from './sleepAware.js'
 import { writePasteDropFile, writePasteImageFile } from './pasteDropFiles.js'
 import type { TerminalBackendCoordinator } from './terminalBackendCoordinator.js'
 import { terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
-import { KEYFRAME_MAX_BYTES, type TerminalStreamHandle, type TerminalStreamSize } from './terminalTypes.js'
+import { KEYFRAME_MAX_BYTES, type TerminalRuntimeRef, type TerminalStreamHandle, type TerminalStreamSize } from './terminalTypes.js'
 import {
   TerminalBinaryKind,
   TERMINAL_LOCAL_IMAGE_PASTE_MAX_PAYLOAD_BYTES,
@@ -446,9 +446,14 @@ export class TerminalStreamManager {
       this.sendError(connId, 'TERMINAL_ENGINE_UNSUPPORTED', { requestId })
       return
     }
-    const streamRuntime = session.runtimes.find((runtime) => runtime.backend === 'tmux'
+    // Any runtime whose backend can stream: tmux, or a herdr pane (lib/herdrStream.ts). A herdr-only
+    // session (omp under herdr) used to be refused here with TERMINAL_RUNTIME_UNAVAILABLE, and the
+    // app's detail view sat on its loading skeleton retrying forever.
+    const streamable = (runtime: TerminalRuntimeRef): boolean => runtime.backend === 'tmux' || runtime.backend === 'herdr'
+    const streamRuntime = session.runtimes.find((runtime) => streamable(runtime)
       && terminalRouteKey(runtime) === session.primaryRuntimeKey)
       ?? session.runtimes.find((runtime) => runtime.backend === 'tmux')
+      ?? session.runtimes.find((runtime) => streamable(runtime))
     if (!streamRuntime) {
       this.sendError(connId, 'TERMINAL_RUNTIME_UNAVAILABLE', { requestId })
       return

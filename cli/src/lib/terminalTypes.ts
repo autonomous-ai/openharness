@@ -1,6 +1,6 @@
 import type { AgentEngine } from '../engines/types.js'
 
-export type TerminalBackendName = 'tmux'
+export type TerminalBackendName = 'tmux' | 'herdr'
 
 /** PID reuse-safe identity for the process that owns a Harness agent. */
 export interface ProcessIdentity {
@@ -22,10 +22,17 @@ export interface TmuxRuntimeRef {
   paneId: string
 }
 
-export type TerminalRuntimeRef = TmuxRuntimeRef
+/** A pane on this machine's herdr. Ids are `w<workspace>:p<n>`, scoped to that server. */
+export interface HerdrRuntimeRef {
+  backend: 'herdr'
+  paneId: string
+}
+
+export type TerminalRuntimeRef = TmuxRuntimeRef | HerdrRuntimeRef
 
 /** Untrusted route hints from hooks. */
-export type HookTerminalHint = { backend: 'tmux'; paneId: string }
+export type HookTerminalHint = { backend: 'tmux'; paneId: string } | { backend: 'herdr'; paneId: string }
+
 
 export interface TerminalRootObservation {
   runtime: TerminalRuntimeRef

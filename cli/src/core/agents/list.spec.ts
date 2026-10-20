@@ -55,6 +55,14 @@ describe('the agents a guest asks for', () => {
 })
 
 describe('the agents a window asks for', () => {
+  it('leaves out the stopped work its listStopped rule excludes', async () => {
+    const { replies, ask } = setup([session('live')], [session('other-tool'), session('mine')], {
+      listStopped: (s) => s.agentId !== 'other-tool',
+    })
+    await ask({ includeStopped: true })
+    expect(replies[0].agents.map((agent: AgentFrame) => agent.id).sort()).toEqual(['live', 'mine'])
+  })
+
   it('every live agent\'s frame, oldest first, an id breaking a tie, and nothing stopped unless asked for', async () => {
     const [a, b, c] = [session('b-agent'), session('a-agent'), session('c-agent')]
     const { created, replies, ask, deps } = setup([a, b, c], [session('saved')])

@@ -78,11 +78,17 @@ export interface AgentListDeps {
   monitorCompletions: Pick<MonitorCompletions, 'state'>
   /** The cloud agents' harnesses (core/agents/cloud.ts): listed with the rest, with no pane. */
   cloudFrames?: () => CloudAgentFrame[]
+  /**
+   * Whether a stopped harness is offered at all. A herdr pane someone else opened and then closed is
+   * kept on disk as stopped work but not listed, or every closed pane another tool ran comes back as
+   * a paused row. Absent: every stopped harness is listed.
+   */
+  listStopped?: (s: RegisteredSession) => boolean
 }
 
 export function createAgentList({
   registry, stoppedAgents, toProject, toStoppedProject, harnessResourcesReader, harnessStorageReader,
-  monitorActivityProvider, monitorCompletions, cloudFrames = () => [],
+  monitorActivityProvider, monitorCompletions, cloudFrames = () => [], listStopped = () => true,
 }: AgentListDeps) {
   /**
    * Answers `agents_list` through `reply`: before it returns, or, for the monitor's readings, once
@@ -107,7 +113,7 @@ export function createAgentList({
     const projects: Array<AgentFrame | CloudAgentFrame> = await Promise.all(sessions.map((s) => toProject(s)))
     // Older clients/devices keep their live-only contract. The desktop picker
     // explicitly asks for stopped work and receives no stale terminal routes.
-    const savedSessions = payload.includeStopped === true && sessionRole() !== 'device' ? stoppedAgents.available(sessions) : []
+    const savedSessions = payload.includeStopped === true && sessionRole() !== 'device' ? stoppedAgents.available(sessions).filter(listStopped) : []
     projects.push(...await Promise.all(savedSessions.map(s => toStoppedProject(s))))
     // A cloud harness is listed while it runs, and once stopped where stopped agents are asked for.
     projects.push(...cloudFrames().filter((frame) => frame.status !== 'stopped' || (payload.includeStopped === true && sessionRole() !== 'device')))

@@ -490,31 +490,27 @@ describe('registry remote display names', () => {
     expect(registry.list()).toHaveLength(2)
   })
 
-  it('drops runtimes a retired Herdr backend left on disk, and agents left with none', async () => {
+  it('keeps a herdr pane and drops one with no pane id', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
     registry.openProcessAgent({ agentId: 'mixed', engine: 'claude', tmuxPane: '%40', processIdentity: processIdentity(940) })
     const [row] = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
-    const herdr = { backend: 'herdr', endpointId: 'herdr:default:abc', sessionName: 'default', terminalId: 'terminal-1', paneId: 'w1:p1' }
-    const herdrKey = 'herdr\u0000herdr:default:abc\u0000w1:p1'
+    const herdr = { backend: 'herdr', paneId: 'w1:p1' }
+    const other = { backend: 'herdr', paneId: 'w2:p1' }
+    const broken = { backend: 'herdr', endpointId: 'gone' }
     const { tmuxPane: _pane, ...herdrOnly } = row
     writeFileSync(join(dataDir, 'registry.json'), JSON.stringify([
-      { ...row, runtimes: [...row.runtimes, herdr], primaryRuntimeKey: herdrKey },
-      { ...herdrOnly, agentId: 'herdr-only', sessionId: '', processIdentity: null, runtimes: [herdr], primaryRuntimeKey: herdrKey },
+      { ...row, runtimes: [...row.runtimes, herdr], primaryRuntimeKey: 'herdr\u0000w1:p1' },
+      { ...herdrOnly, agentId: 'herdr-only', sessionId: '', processIdentity: null, runtimes: [other], primaryRuntimeKey: 'herdr\u0000w2:p1' },
+      { ...herdrOnly, agentId: 'broken', sessionId: '', processIdentity: null, runtimes: [broken], primaryRuntimeKey: 'herdr\u0000gone' },
     ]), { mode: 0o600 })
 
     const { registry: reloaded } = await loadRegistryModule()
     reloaded.load()
 
-    expect(reloaded.byAgent('mixed')?.runtimes).toEqual([{ backend: 'tmux', paneId: '%40' }])
-    expect(reloaded.byAgent('mixed')?.primaryRuntimeKey).toBe('tmux\u0000%40')
-    expect(reloaded.byAgent('herdr-only')).toBeUndefined()
-    const persisted = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
-    expect(persisted.map((entry: { agentId: string }) => entry.agentId)).toEqual(['mixed'])
-    expect(JSON.stringify(persisted)).not.toContain('herdr')
-    // Still writable: nothing about the retired rows blocked the file.
-    reloaded.openProcessAgent({ agentId: 'after', engine: 'claude', tmuxPane: '%41', processIdentity: processIdentity(941) })
-    expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))).toHaveLength(2)
+    expect(reloaded.byAgent('mixed')?.runtimes).toEqual([{ backend: 'herdr', paneId: 'w1:p1' }, { backend: 'tmux', paneId: '%40' }])
+    expect(reloaded.byAgent('herdr-only')?.runtimes).toEqual([{ backend: 'herdr', paneId: 'w2:p1' }])
+    expect(reloaded.byAgent('broken')).toBeUndefined()
   })
 
   it('repairs a Codex parent registry entry overwritten with a child rollout', async () => {

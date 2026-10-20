@@ -76,6 +76,7 @@ import { createHandoffDependencies } from './handoffDependencies.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from '../lib/hostTheme.js'
 import { restoreAgents, tmuxSurvey, type RestoreAgentsDeps, type RestoreSummary } from '../lib/restoreAgents.js'
+import { restoreMissingHerdrPanes } from '../lib/herdrRestore.js'
 import { createRetainExitedSession } from '../lib/retainExitedSession.js'
 import { createKeepAbandonedConversation } from '../lib/keepAbandonedConversation.js'
 import { RESUME_READINESS_BUDGET_MS } from '../lib/resumeStoppedAgent.js'
@@ -99,6 +100,7 @@ import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
 import { confirmHomes, sessionCodexHome } from '../lib/engineHomes.js'
 import { sessionStoreContracts } from '../engines/sessionStoreContracts.js'
 import { argvTokens, clearPaneRemainOnExit, lookupPaneEngineProcess, processRows, resolvePaneEngineProcess, tmuxPaneInfo, tmuxPaneState } from '../lib/tmux.js'
+import { HerdrBackend, OwnedHerdrPanes } from '../lib/herdrBackend.js'
 import { ALL_TERMINAL_BACKENDS } from '../config/terminalConfig.js'
 import { TerminalBackendCoordinator } from '../lib/terminalBackendCoordinator.js'
 import { TerminalStreamManager } from '../lib/terminalStreamManager.js'
@@ -528,9 +530,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   await registry.transaction(() => {
     for (const session of registry.list()) registry.setActive(session.agentId, false)
   })
-  // Unset means AUTO: watch every backend usable on this machine, which is tmux and only tmux (see
-  // config/terminalConfig.ts). `parseTerminalBackends` drops a retired `herdr` still named in someone's
-  // environment rather than refusing to boot on it.
+  // Unset means both backends (config/terminalConfig.ts). Herdr is this machine's local socket only;
+  // a machine without it logs that once and goes on with tmux.
   const backendsExplicit = env.TERMINAL_BACKENDS !== undefined
   const terminalConfig = {
     backends: env.TERMINAL_BACKENDS ?? ALL_TERMINAL_BACKENDS,
@@ -564,7 +565,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // reaches sessions created after it without rebuilding the backend.
   let hostTheme: HostTheme = loadHostTheme() ?? DEFAULT_HOST_THEME
   const tmuxBackend = terminalConfig.backends.includes('tmux') && !tmuxUnavailable ? new TmuxBackend(() => hostTheme) : null
-  const terminalBackends = tmuxBackend ? [tmuxBackend] : []
+  // The panes this daemon created, kept across restarts: only those may be closed, respawned or restored.
+  const herdrBackend = terminalConfig.backends.includes('herdr') ? new HerdrBackend(undefined, new OwnedHerdrPanes(join(env.ADAPTER_DATA_DIR, 'herdr-owned-panes.json'))) : null
+  const terminalBackends = [tmuxBackend, herdrBackend].filter((backend) => backend !== null)
   const terminals = new TerminalBackendCoordinator(
     terminalBackends,
     terminalConfig.backends,
@@ -1284,6 +1287,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The monitor's readings, through its port (services/monitor.ts): none while it is off.
     harnessResourcesReader: () => (ports.monitor ?? MONITOR_OFF).resources(), harnessStorageReader: (agents, invalidate) => (ports.monitor ?? MONITOR_OFF).storage(agents, invalidate),
     cloudFrames: () => cloud.frames(),
+    // A stopped herdr harness is listed only when this daemon made its pane (core/agents/list.ts).
+    listStopped: (s) => !herdrBackend || !s.runtimes.some((runtime) => runtime.backend === 'herdr' && !herdrBackend.owns(runtime.paneId)),
   }).agentsList
   backend.agentGuest = (agentId) => registry.resolve(agentId)?.guest ?? null
   const questionWatcher = asking.questionWatcher
@@ -2347,6 +2352,33 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     console.warn(`[restore] skipped · ${error instanceof Error ? error.message : error}`
       + ' · agents keep their rows and come back on the next start')
    }
+  }
+  if (herdrBackend) {
+    try {
+      // One snapshot plus each pane's process-info; any failed or timed-out check and nothing is created.
+      const { livePaneIds, failedChecks } = await herdrBackend.restoreSurvey()
+      const herdrSummary = await restoreMissingHerdrPanes({
+        rows: registry.list().filter(entry => entry.runtimes.some(runtime => runtime.backend === 'herdr')),
+        livePaneIds,
+        failedChecks,
+        owned: (paneId) => herdrBackend.owns(paneId),
+        create: async (entry) => {
+          const argv = buildEngineLaunchArgv(entry.engine, { cwd: entry.cwd ?? homedir(), installIfMissing: engineInstallRecipe(entry.engine) })
+          const created = await herdrBackend.create({ cwd: entry.cwd ?? homedir(), label: buildHarnessSessionLabel(entry.engine), command: argv })
+          return created.state === 'succeeded' ? { ok: true, paneId: created.runtime.paneId } : { ok: false, reason: created.reason }
+        },
+        adopt: (agentId, paneId, kept) => {
+          const runtime = { backend: 'herdr' as const, paneId }
+          registry.updateRuntimes(agentId, [...kept, runtime], terminalRouteKey(runtime))
+        },
+        log: message => console.log(message),
+      })
+      if (herdrSummary.restored.length || herdrSummary.failed.length) {
+        console.log(`[restore] herdr restored ${herdrSummary.restored.length} · failed ${herdrSummary.failed.length}`)
+      }
+    } catch (error) {
+      console.warn(`[restore] herdr skipped · ${error instanceof Error ? error.message : error}`)
+    }
   }
   })
   // Every DSH agent the registry kept gets its viewer and verdict watch back — restored or not, an
