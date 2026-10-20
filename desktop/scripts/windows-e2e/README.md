@@ -27,6 +27,11 @@ exits nonzero on a failed check, missing attachment session, or helper error/tim
 serials are shortened and native diagnostics are redacted. `Seconds` accepts 1-300
 (default 10); helper startup and exit waits each have a five-second deadline.
 
+- `$D ps dial-state.ps1 Lines=8`: read host/device state, this user's serial-process count and recent dial heartbeats/cable events; identifiers are shortened and settings values omitted. A failed device query returns nonzero after the remaining diagnostics.
+- `$D run hold-port.ps1 Port=COM3 Seconds=30`: hold a COM port for 1-300 seconds, then release it; an unavailable port exits 3.
+- `$D ps install-build.ps1 'Zip=Downloads\dial-install.zip'`: unpack a manifest build with `install.ps1` at the zip root, install it into this owned profile with updates disabled, and print its version; installer/version failures return nonzero.
+- `$D run harness-cli.ps1 'Arguments=["start"]'`: run `start`, `stop`, `flash` or `uninstall` in the owned active desktop session, print the exit code and last 15 output lines, and return that code; argument arrays also support `'Arguments=["flash","--version","0.0.70"]'`.
+
 `EV` defaults to `$E2E_WORK/evidence`; inspect/redact screenshots before sharing.
 `E2E_VM_ROOT` is an optional admin scratch parent (default: admin's TEMP).
 The tools create a new `harness-desktop-e2e-<run-id>` child, never adopt an
