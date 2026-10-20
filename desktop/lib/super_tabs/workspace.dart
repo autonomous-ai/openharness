@@ -535,7 +535,7 @@ class _PeopleState extends State<_People> {
       return Dialog(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        shape: const RoundedRectangleBorder(),
+        shape: DesktopChrome.bareDialogShape,
         child: DesktopDialogSurface(
           child: SizedBox(
             width: 460,

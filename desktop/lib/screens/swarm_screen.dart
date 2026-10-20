@@ -450,6 +450,23 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool _pickingFolder = false;
   bool _newHarnessHidden = false;
   bool _routeIsCurrent = true;
+
+  /// What covers the workspace, as the titlebar sees it: the one source of the
+  /// titlebar's state (`enabled`, `stripEnabled`) and of what a titlebar click
+  /// clears first ([_onNative]). A titlebar dropdown is an overlay, not a
+  /// cover: the titlebar stays as it is, and a click there closes it.
+  _TitlebarCover get _titlebarCover {
+    if (_spokenPaletteOpen) return _TitlebarCover.modal;
+    if (settingsPageOnTop.value != null) return _TitlebarCover.settingsPage;
+    if (!_routeIsCurrent || _dialogOpen) return _TitlebarCover.modal;
+    return _TitlebarCover.none;
+  }
+
+  /// The titlebar dropdown open now (the avatar's menu, the bell's inbox): the
+  /// titlebar action of its button, and its closer. That button closes it.
+  (String, void Function())? _titlebarDropdown;
+  final _accountButtonKey = GlobalKey();
+  final _notificationsButtonKey = GlobalKey();
   bool _footerPreviewCurrent = false;
   String? _linkDialogMachineId;
   bool _browserMachineSetupHandled = false;
@@ -679,6 +696,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _face.voiceLine.addListener(_voiceChanged);
     _daemonsPreview?.addListener(_syncDaemon);
     _experimentalFeatures.addListener(_experimentalFeaturesChanged);
+    settingsPageOnTop.addListener(_titlebarCoverChanged);
     app.agentPulse.addListener(_face.pulse);
     _face.dialogOpen = () =>
         _dialogOpen ||
@@ -868,6 +886,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     HardwareKeyboard.instance.removeHandler(_noteKey);
     _daemonsPreview?.removeListener(_syncDaemon);
     _experimentalFeatures.removeListener(_experimentalFeaturesChanged);
+    settingsPageOnTop.removeListener(_titlebarCoverChanged);
     _slotTimer?.cancel();
     if (_daemonCommandsOn) daemonCommandsActive.value = false;
     unawaited(_zooPushes?.cancel());
@@ -1184,6 +1203,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         builder: (context) => Dialog(
           backgroundColor: Colors.transparent,
           elevation: 0,
+          shape: DesktopChrome.bareDialogShape,
           insetPadding: const EdgeInsets.all(24),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 1200, maxHeight: 800),
@@ -1911,8 +1931,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final usage = _subscriptionUsage;
     int activityInk(HarnessActivity activity) =>
         activityColor(activity, terminalTheme, color: prefs.color).toARGB32();
+    final cover = _titlebarCover;
     final payload = {
-      'enabled': _routeIsCurrent && !_dialogOpen && !_spokenPaletteOpen,
+      // Menus and shortcuts; the tab row and its icons also over Settings.
+      'enabled': cover == _TitlebarCover.none,
+      'stripEnabled': cover != _TitlebarCover.modal,
       'reduceMotion': _reduceMotion,
       'activeId': app.activeSwarmId,
       'searchTooltip': _commandTooltip('Open Harness', 'harnesses.list'),
@@ -2291,7 +2314,34 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
   }
 
+  /// What the titlebar tells rather than asks: keys held, the daemon hovered.
+  static const _nativeReports = {'keymapPending', 'daemonHover', 'daemonLook'};
+
+  /// Every titlebar call. The one rule: what it asks for is meant for the
+  /// workspace. The button of an open dropdown closes it; any other action
+  /// closes it as it runs ([dismissTransientMenus]); a row click pops the
+  /// Settings page first; a modal still drops it ([_actOnNative]).
   Future<void> _onNative(MethodCall call) async {
+    var action = call;
+    final args = call.arguments is Map ? call.arguments as Map : const {};
+    // AppKit wraps the row's clicks while its menus are off, which, with the
+    // row live, is only over the Settings page.
+    final fromRow = call.method == 'rowAction';
+    if (fromRow) {
+      final method = args['method'];
+      if (method is! String) return;
+      action = MethodCall(method, args['arguments']);
+    }
+    if (mounted && !_nativeReports.contains(action.method)) {
+      if (_closeTitlebarDropdown(action.method)) return;
+      if (fromRow && _titlebarCover == _TitlebarCover.settingsPage) {
+        await _leaveSettings();
+      }
+    }
+    return _actOnNative(action);
+  }
+
+  Future<void> _actOnNative(MethodCall call) async {
     if (mounted && call.method == 'keymapPending') {
       final keys = (call.arguments as Map?)?['keys'];
       if (keys is List &&
@@ -3189,13 +3239,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
               onPressed: _shortcutsEnabled ? () => unawaited(_signIn()) : null,
             )
           else
-            WorkspaceAvatarButton(
-              key: const ValueKey('swarm-account-button'),
-              initial: _accountInitial,
-              tooltip: _accountTooltip,
-              onPressed: _shortcutsEnabled
-                  ? () => unawaited(_showAccountMenu())
-                  : null,
+            KeyedSubtree(
+              key: _accountButtonKey,
+              child: WorkspaceAvatarButton(
+                key: const ValueKey('swarm-account-button'),
+                initial: _accountInitial,
+                tooltip: _accountTooltip,
+                onPressed: _shortcutsEnabled
+                    ? () => unawaited(_showAccountMenu())
+                    : null,
+              ),
             ),
         ];
 
@@ -3209,20 +3262,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// Sign in: the sign-in screen, over the desk (`showSignInSheet`).
   Future<void> _signIn() => _dialog(() => showSignInSheet(context, app));
 
-  /// The avatar's menu (`widgets/account_menu.dart`). Its rows open what the
-  /// app already has, once the menu itself has closed: a [_dialog] made from
-  /// inside one is refused.
+  /// The avatar's menu (`widgets/account_menu.dart`), a titlebar dropdown.
+  /// Its rows open what the app already has once it has closed.
   Future<void> _showAccountMenu() async {
+    if (_closeTitlebarDropdown('account')) return;
     final user = app.currentUser;
-    AccountMenuChoice? choice;
-    await _dialog(() async {
-      choice = await showAccountMenu(
+    final choice = await _titlebarDropdownFor(
+      'account',
+      (onOpen) => showAccountMenu(
         context,
         name: user?.name ?? '',
         email: user?.email ?? '',
         topInset: _native ? 0 : _tabBarHeight,
-      );
-    });
+        onOpen: onOpen,
+        ownsPointer: (position) => _owns(_accountButtonKey, position),
+      ),
+    );
     if (!mounted) return;
     switch (choice) {
       case AccountMenuChoice.addPhone:
@@ -3251,6 +3306,54 @@ class _SwarmScreenState extends State<SwarmScreen> {
       compactBelow: widget.chrome?.compactBelow ?? 0,
     ),
   );
+
+  void _titlebarCoverChanged() {
+    if (mounted && _menuHost) _syncNative();
+  }
+
+  /// A row click over the Settings page: pop it, and wait for the frame after,
+  /// by which its opener ([_dialog]) has finished and the workspace is the
+  /// current route again, so the click lands where it was aimed.
+  Future<void> _leaveSettings() async {
+    final page = settingsPageOnTop.value;
+    if (page == null) return;
+    page.navigator?.pop();
+    await page.popped;
+    await WidgetsBinding.instance.endOfFrame;
+  }
+
+  /// Shows a titlebar dropdown, remembering it under [opener], the titlebar
+  /// action of its button, while it is open.
+  Future<T?> _titlebarDropdownFor<T>(
+    String opener,
+    Future<T?> Function(void Function(void Function() close) onOpen) show,
+  ) async {
+    (String, void Function())? mine;
+    try {
+      return await show((close) {
+        _titlebarDropdown = mine = (opener, close);
+      });
+    } finally {
+      if (identical(_titlebarDropdown, mine)) _titlebarDropdown = null;
+    }
+  }
+
+  /// Closes the dropdown [opener]'s button opened; false when it is not open.
+  bool _closeTitlebarDropdown(String opener) {
+    final open = _titlebarDropdown;
+    if (open == null || open.$1 != opener) return false;
+    open.$2();
+    return true;
+  }
+
+  /// Whether [position] is on the button behind [key], which toggles its own
+  /// dropdown rather than having the dropdown close under it.
+  bool _owns(GlobalKey key, Offset position) {
+    final box = key.currentContext?.findRenderObject();
+    return box is RenderBox &&
+        box.hasSize &&
+        (box.localToGlobal(Offset.zero) & box.size).contains(position);
+  }
 
   /// Harness ▸ Add Phone… and `> add phone`: the QR a phone scans to sign in
   /// and pair with this computer. See `widgets/add_phone_dialog.dart`.
@@ -5887,16 +5990,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _search?.setModelSelection(null, null);
     _onboarding.acknowledge(OnboardingStep.models);
     _openResourcePicker(':');
-    if (_search?.isModelMode == true && initialTab != ModelsTab.all) {
-      _search!.setQuery(
-        ':${switch (initialTab) {
-          ModelsTab.local => 'local',
-          ModelsTab.shared => 'shared',
-          ModelsTab.apis => 'api',
-          ModelsTab.subscriptions => 'subscription',
-          ModelsTab.all => '',
-        }}',
-      );
+    // A tab opens on its section with nothing typed: a `:local` filter was
+    // text the person had to delete before searching every model.
+    final section = switch (initialTab) {
+      ModelsTab.local => ModelSearchSection.local,
+      ModelsTab.shared => ModelSearchSection.shared,
+      ModelsTab.apis => ModelSearchSection.apis,
+      ModelsTab.subscriptions => ModelSearchSection.subscriptions,
+      ModelsTab.all => null,
+    };
+    if (section != null && _search?.isModelMode == true) {
+      _search!.openModelSection(section);
     }
   }
 
@@ -6909,49 +7013,56 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
   }
 
-  Future<void> _showNotificationInbox() => _dialog(() async {
-    await showNotificationInbox(
-      context,
-      app: app,
-      topInset: _native ? 0 : _tabBarHeight,
-      onOpen: (row) async {
-        final destination = swarmDestinations(app)
-            .where(
-              (item) =>
-                  item.machineId == row.machineId &&
-                  item.agentId == row.agentId,
-            )
-            .firstOrNull;
-        if (destination == null) return false;
-        final readToken = app.agentUnread.readTokenFor(
-          row.machineId,
-          row.agentId,
-        );
-        final questionId = app
-            .questionFor(row.machineId, row.agentId)
-            ?.requestId;
-        final opened = await activateSwarmDestination(
-          app,
-          destination,
-          destinationSwarmId: app.activeSwarmId,
-        );
-        // Opening acknowledges this notification. Its question stays pending
-        // until the daemon confirms an answer, independently of unread state.
-        if (opened &&
-            app.agentUnread.readTokenFor(row.machineId, row.agentId) ==
-                readToken &&
-            app.questionFor(row.machineId, row.agentId)?.requestId ==
-                questionId) {
-          app.readAgentNotification(
+  /// The bell's inbox, a titlebar dropdown.
+  Future<void> _showNotificationInbox() async {
+    if (_closeTitlebarDropdown('notificationInbox')) return;
+    await _titlebarDropdownFor<void>(
+      'notificationInbox',
+      (onOpened) => showNotificationInbox(
+        context,
+        app: app,
+        topInset: _native ? 0 : _tabBarHeight,
+        onOpened: onOpened,
+        ownsPointer: (position) => _owns(_notificationsButtonKey, position),
+        onOpen: (row) async {
+          final destination = swarmDestinations(app)
+              .where(
+                (item) =>
+                    item.machineId == row.machineId &&
+                    item.agentId == row.agentId,
+              )
+              .firstOrNull;
+          if (destination == null) return false;
+          final readToken = app.agentUnread.readTokenFor(
             row.machineId,
             row.agentId,
-            readToken: readToken,
           );
-        }
-        return opened;
-      },
+          final questionId = app
+              .questionFor(row.machineId, row.agentId)
+              ?.requestId;
+          final opened = await activateSwarmDestination(
+            app,
+            destination,
+            destinationSwarmId: app.activeSwarmId,
+          );
+          // Opening acknowledges this notification. Its question stays pending
+          // until the daemon confirms an answer, independently of unread state.
+          if (opened &&
+              app.agentUnread.readTokenFor(row.machineId, row.agentId) ==
+                  readToken &&
+              app.questionFor(row.machineId, row.agentId)?.requestId ==
+                  questionId) {
+            app.readAgentNotification(
+              row.machineId,
+              row.agentId,
+              readToken: readToken,
+            );
+          }
+          return opened;
+        },
+      ),
     );
-  });
+  }
 
   Future<void> _revealForDevice() async {
     if (!RuntimePlatform.isMacOS ||
@@ -8932,13 +9043,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
     ),
   );
 
-  Widget _notificationsButton(TerminalTheme theme) =>
-      WorkspaceNotificationsButton(
-        key: const ValueKey('workspace-notifications-button'),
-        count: _unread,
-        foreground: theme.foreground,
-        onPressed: _shortcutsEnabled ? _showNotificationInbox : null,
-      );
+  Widget _notificationsButton(TerminalTheme theme) => KeyedSubtree(
+    key: _notificationsButtonKey,
+    child: WorkspaceNotificationsButton(
+      key: const ValueKey('workspace-notifications-button'),
+      count: _unread,
+      foreground: theme.foreground,
+      onPressed: _shortcutsEnabled ? _showNotificationInbox : null,
+    ),
+  );
 
   /// The tab list, inside the arrows' scroller whenever the host scrolls tabs
   /// by mouse — drawn only while [arrows], the list overflowing.
@@ -9039,4 +9152,18 @@ class _SuperTabClosedTextState extends State<_SuperTabClosedText> {
   @override
   Widget build(BuildContext context) =>
       const Text('Super Tab closed. Its agents keep running.');
+}
+
+/// What covers the workspace, as the titlebar sees it
+/// ([_SwarmScreenState._titlebarCover]).
+enum _TitlebarCover {
+  /// Nothing, or only a titlebar dropdown: menus, shortcuts and the row are on.
+  none,
+
+  /// The Settings page: the row stays on and pops it before acting; menus and
+  /// shortcuts wait.
+  settingsPage,
+
+  /// A dialog, the spoken palette or another route: the whole titlebar waits.
+  modal,
 }

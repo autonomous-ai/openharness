@@ -2257,6 +2257,10 @@ class SwarmSearchController extends ChangeNotifier {
       final first = rows.indexWhere(canSubmit);
       if (first >= 0) cursor = first;
     }
+    if (_openSection case final section? when isModelMode) {
+      final first = rows.indexWhere((row) => modelSection(row) == section);
+      if (first >= 0) cursor = first;
+    }
     _selectedId = selected?.id;
     matchCount = rows
         .where(
@@ -2286,9 +2290,22 @@ class SwarmSearchController extends ChangeNotifier {
     ];
   }
 
+  /// The model section the picker opened on, with nothing typed: its first row
+  /// stays selected as the rows arrive, until somebody types, moves or picks.
+  ModelSearchSection? _openSection;
+
+  /// Select the first row of [section], as the footer's Models and
+  /// Subscriptions do, instead of typing a filter the person must delete.
+  void openModelSection(ModelSearchSection section) {
+    _openSection = section;
+    _filter();
+    notifyListeners();
+  }
+
   void setQuery(String value) {
     if (query == value) return;
     if (_quickAccessPrefix.hasMatch(value.trimLeft())) _groupScope = null;
+    _openSection = null;
     query = value;
     if (isStoreMode) _refreshStore();
     cursor = 0;
@@ -2310,6 +2327,7 @@ class SwarmSearchController extends ChangeNotifier {
 
   void move(int delta) {
     if (rows.isEmpty) return;
+    _openSection = null;
     cursor = ((cursor < 0 && delta < 0 ? 0 : cursor) + delta) % rows.length;
     _selectedId = selected!.id;
     _chosen = true;
@@ -2331,6 +2349,7 @@ class SwarmSearchController extends ChangeNotifier {
   SwarmSearchSelection? submit([SwarmDestination? row]) {
     final destination = row ?? selected;
     if (destination == null || !canSubmit(destination)) return null;
+    _openSection = null;
     if (canExpandApi(destination)) {
       final api = models!.entries[destination.modelId]!.api!;
       final opening = expandedApis.add(api.id);

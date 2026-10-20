@@ -308,6 +308,7 @@ class _AgentMessagesViewState extends State<AgentMessagesView> {
           elevation: 0,
           insetPadding: const EdgeInsets.all(16),
           backgroundColor: Colors.transparent,
+          shape: DesktopChrome.bareDialogShape,
           child: SizedBox(
             width: 640,
             child: DesktopDialogSurface(

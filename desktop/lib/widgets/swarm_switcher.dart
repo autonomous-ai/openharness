@@ -88,6 +88,7 @@ class _SwarmHistoryState extends State<_SwarmHistory> {
         insetPadding: const EdgeInsets.all(20),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        shape: DesktopChrome.bareDialogShape,
         child: SizedBox(
           width: 680,
           height: 480,

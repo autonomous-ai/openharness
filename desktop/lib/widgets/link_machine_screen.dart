@@ -37,6 +37,7 @@ Future<void> showLinkMachineScreenDialog(
     builder: (context) => Dialog(
       backgroundColor: Colors.transparent,
       elevation: 0,
+      shape: DesktopChrome.bareDialogShape,
       insetPadding: const EdgeInsets.all(20),
       child: ListenableBuilder(
         listenable: notifier,

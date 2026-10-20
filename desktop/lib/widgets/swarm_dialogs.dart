@@ -133,6 +133,7 @@ class _ProjectDialogState extends State<_ProjectDialog> {
     return Dialog(
       backgroundColor: Colors.transparent,
       elevation: 0,
+      shape: DesktopChrome.bareDialogShape,
       insetPadding: const EdgeInsets.all(24),
       child: SizedBox(
         width: 508,

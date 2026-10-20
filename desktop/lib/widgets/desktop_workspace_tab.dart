@@ -104,9 +104,10 @@ class DesktopWorkspaceTab extends StatefulWidget {
   }
 
   // × inside the tab's curved body, shown only on hover; at rest the name and
-  // status have the whole tab. A 20pt target: 16pt was easy to click by
-  // mistake (owner, 2026-10-12).
-  static const closeWidth = 20.0;
+  // status have the whole tab. The pane close button's square target
+  // ([grid.AppDesktop.tabCloseSize]): 16pt was easy to click by mistake
+  // (owner, 2026-10-12).
+  static const closeWidth = grid.AppDesktop.tabCloseSize;
   static const _restingInset = grid.AppDesktop.tabShoulder + 6;
   static const _revealedInset = closeWidth + grid.AppDesktop.tabCloseInset;
   static const _statusWidth = 16.0, _indicatorGap = 6.0;
@@ -325,7 +326,8 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final enabled = widget.onSelect != null;
-    final quietOpacity = MediaQuery.highContrastOf(context) ? .7 : .45;
+    // The × is full ink at rest, as the pane's (AppIcons.closeInk).
+    const quietOpacity = AppIcons.closeInk;
     final focusVisible = _focused || widget.highlighted;
     // Workspace palettes can stay dark beside light app surfaces. Match the
     // native tab bar's ink to its own surface, independent of terminal colors.
@@ -547,7 +549,7 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints.tightFor(
                             width: DesktopWorkspaceTab.closeWidth,
-                            height: 32,
+                            height: DesktopWorkspaceTab.closeWidth,
                           ),
                           style: _accessoryStyle(foreground, quietOpacity),
                           icon: const Icon(
