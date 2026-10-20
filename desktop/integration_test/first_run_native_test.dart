@@ -11,6 +11,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/test_run.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/first_arrival.dart';
 import 'package:harness/terminal/terminal_binary.dart';
@@ -26,6 +27,12 @@ void main() {
   if (!kUnderTest) throw StateError('Requires FLUTTER_TEST=1');
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   final captures = Platform.environment['HARNESS_FIRST_RUN_CAPTURES'];
+  final oldPalette = grid.AppTheme.palette.value;
+  final oldBrightness = grid.AppTheme.brightness.value;
+  tearDownAll(() {
+    grid.AppTheme.palette.value = oldPalette;
+    grid.AppTheme.brightness.value = oldBrightness;
+  });
   setUpAll(() async {
     await loadCaptureFonts(captures);
     await windowManager.ensureInitialized();
@@ -39,9 +46,13 @@ void main() {
     (tester) async {
       var retried = 0, fresh = 0, opened = 0;
       for (final brightness in [Brightness.light, Brightness.dark]) {
+        grid.AppTheme.palette.value = brightness == Brightness.light
+            ? HarnessPalette.paper
+            : HarnessPalette.graphite;
         grid.AppTheme.brightness.value = brightness;
         await tester.pumpWidget(
           MaterialApp(
+            debugShowCheckedModeBanner: false,
             theme: grid.buildAppTheme(brightness: brightness),
             home: Scaffold(
               body: Center(
@@ -127,9 +138,13 @@ void main() {
         ),
       );
       for (final brightness in [Brightness.light, Brightness.dark]) {
+        grid.AppTheme.palette.value = brightness == Brightness.light
+            ? HarnessPalette.paper
+            : HarnessPalette.graphite;
         grid.AppTheme.brightness.value = brightness;
         await tester.pumpWidget(
           MaterialApp(
+            debugShowCheckedModeBanner: false,
             theme: grid.buildAppTheme(brightness: brightness),
             home: Scaffold(
               body: TerminalPanel(
