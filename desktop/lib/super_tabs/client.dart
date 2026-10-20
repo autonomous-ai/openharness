@@ -11,6 +11,8 @@ typedef SuperTabTransport = Future<Object?> Function(
   Map<String, dynamic>? body,
 });
 
+typedef SuperTabListing = ({String id, String name});
+
 /// Account-scoped client state. Backend membership never comes from the saved
 /// layout, and a late response cannot cross an account change.
 class SuperTabClient {
@@ -18,12 +20,23 @@ class SuperTabClient {
     required this.transport,
     required this.storage,
     this.onSnapshot,
+    this.onTabs,
+    this.discoveryInterval = const Duration(seconds: 15),
   });
   final SuperTabTransport transport;
   final LocalKeyValueStore storage;
   final void Function(SuperTabController)? onSnapshot;
+  final void Function(List<SuperTabListing>, Set<String> hidden)? onTabs;
+  final Duration discoveryInterval;
   String? _account;
   int _generation = 0;
+  Timer? _discoveryTimer;
+  Future<void>? _discovering, _loadingHidden;
+  Future<void> _savingHidden = Future.value();
+  Set<String> _hidden = {};
+  final _creating = <String>{};
+  final _visibility = <String, bool>{};
+  Object? discoveryError;
   final _controllers = <String, Future<SuperTabController>>{};
   final _loaded = <String, SuperTabController>{};
   SuperTabController? peek(String id) => _loaded[id];
@@ -32,6 +45,13 @@ class SuperTabClient {
     if (_account == account) return;
     _account = account;
     _generation++;
+    _discoveryTimer?.cancel();
+    _discovering = null;
+    _loadingHidden = null;
+    _hidden = {};
+    _creating.clear();
+    _visibility.clear();
+    discoveryError = null;
     for (final controller in _loaded.values) {
       controller.revokeAccess(
         'The account changed. Open this Super Tab again.',
@@ -49,6 +69,112 @@ class SuperTabClient {
     }
     _controllers.clear();
     _loaded.clear();
+    if (account != null &&
+        onTabs != null &&
+        discoveryInterval > Duration.zero) {
+      unawaited(refreshTabs());
+      _discoveryTimer = Timer.periodic(
+        discoveryInterval,
+        (_) => unawaited(refreshTabs()),
+      );
+    }
+  }
+
+  Future<void> _readHidden(String account, int generation) =>
+      _loadingHidden ??= () async {
+        final raw = await storage.read('super_tab.hidden.$account');
+        if (generation != _generation) return;
+        _hidden = raw == null
+            ? <String>{}
+            : (jsonDecode(raw) as List).whereType<String>().toSet();
+        for (final entry in _visibility.entries) {
+          if (entry.value) {
+            _hidden.remove(entry.key);
+          } else {
+            _hidden.add(entry.key);
+          }
+        }
+      }();
+
+  /// Closing a tab hides its view on this computer. Membership and running
+  /// agents stay on the backend; another computer still discovers that tab.
+  Future<void> setTabVisible(String id, bool visible) async {
+    final account = _account;
+    final generation = _generation;
+    if (account == null) return;
+    if (visible) _creating.remove(id);
+    _visibility[id] = visible;
+    if (visible) {
+      _hidden.remove(id);
+    } else {
+      _hidden.add(id);
+    }
+    await _readHidden(account, generation);
+    if (generation != _generation) return;
+    final saved = jsonEncode(_hidden.toList()..sort());
+    final write = _savingHidden
+        .catchError((Object _) {})
+        .then((_) => storage.write('super_tab.hidden.$account', saved));
+    _savingHidden = write;
+    await write;
+  }
+
+  /// The lead form already represents a creation in flight on this computer.
+  /// Its backend row can arrive through discovery before the lead is ready.
+  void deferTabDiscovery(String id) => _creating.add(id);
+
+  /// Discovery is account membership, independent of this computer's saved
+  /// layout. Read every page before applying; a failed page cannot drop tabs.
+  Future<void> refreshTabs() {
+    if (_account == null || onTabs == null) return Future.value();
+    if (_discovering case final active?) return active;
+    final generation = _generation;
+    final account = _account!;
+    final read = () async {
+      try {
+        await _readHidden(account, generation);
+        if (generation != _generation) return;
+        final tabs = <String, SuperTabListing>{};
+        final cursors = <String>{};
+        String? after;
+        do {
+          final page = await map(
+            'GET',
+            '/api/super-tabs${after == null ? '' : '?after=${Uri.encodeComponent(after)}'}',
+          );
+          if (generation != _generation) return;
+          if (page['tabs'] is! List) {
+            throw const FormatException('Missing tabs');
+          }
+          for (final raw in page['tabs'] as List) {
+            final row = superTabMap(raw);
+            if (row['id'] is! String || row['name'] is! String) {
+              throw const FormatException('Invalid tab');
+            }
+            final id = row['id'] as String;
+            tabs[id] = (id: id, name: row['name'] as String);
+          }
+          after = page['next'] as String?;
+          if (after != null && !cursors.add(after)) {
+            throw const FormatException('Repeated tab cursor');
+          }
+        } while (after != null);
+        discoveryError = null;
+        onTabs!(
+          tabs.values.toList(),
+          Set.unmodifiable({..._hidden, ..._creating}),
+        );
+      } catch (error) {
+        if (generation == _generation) {
+          discoveryError = error;
+          _loadingHidden = null;
+        }
+      }
+    }();
+    _discovering = read;
+    return read.whenComplete(() {
+      if (identical(_discovering, read)) _discovering = null;
+    });
   }
 
   Future<Object?> request(

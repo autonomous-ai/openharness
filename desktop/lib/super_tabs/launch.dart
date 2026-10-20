@@ -115,8 +115,10 @@ class SuperTabLaunch {
         body: {'operationId': saved['operationId'], 'name': 'Super Tab'},
       );
       saved['tabId'] = created['id'];
+      app.superTabs.deferTabDiscovery(saved['tabId'] as String);
       await persist();
     }
+    app.superTabs.deferTabDiscovery(saved['tabId'] as String);
     final command = 'harness super-tab --tab ${saved['tabId']}';
     final prompt =
         'You are an agent in a shared Harness Super Tab. '

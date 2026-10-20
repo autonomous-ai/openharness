@@ -1654,6 +1654,41 @@ class AppNotifier extends ChangeNotifier {
 
   late final superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
+    discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
+    onTabs: (tabs, hidden) {
+      // The browser can learn its account before the saved layout finishes
+      // loading. Discovery must not persist over that workspace during boot.
+      if (_disposed ||
+          status != AppStatus.authenticated ||
+          currentUser?.id == null) {
+        return;
+      }
+      var changed = false;
+      for (final tab in tabs) {
+        final existing = swarms.where((s) => s.superTabId == tab.id).firstOrNull;
+        if (existing != null) {
+          if (existing.name != tab.name || !existing.nameIsCustom) {
+            existing.name = tab.name;
+            existing.nameIsCustom = true;
+            changed = true;
+          }
+        } else if (!hidden.contains(tab.id)) {
+          swarms.add(
+            Swarm(
+              id: newDeskId(),
+              name: tab.name,
+              nameIsCustom: true,
+              kind: 'superTab',
+            )..superTabId = tab.id,
+          );
+          changed = true;
+        }
+      }
+      if (changed) {
+        _persistLayout();
+        notifyListeners();
+      }
+    },
     onSnapshot: (controller) {
       if (_disposed || controller.accountId != currentUser?.id) return;
       var shown = false;
@@ -1718,16 +1753,29 @@ class AppNotifier extends ChangeNotifier {
   void bindSuperTab(String swarmId, String tabId, String name) {
     final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
     if (swarm == null) return;
+    // A discovery response can beat the creation response back to this
+    // computer. Keep the lead form's tab and retain any already-open panes.
+    for (final duplicate in swarms
+        .where((s) => s.id != swarmId && s.superTabId == tabId)
+        .toList()) {
+      for (final pane in duplicate.panes) {
+        if (!swarm.panes.contains(pane)) swarm.panes.add(pane);
+      }
+      if (_activeSwarmId == duplicate.id) _activeSwarmId = swarm.id;
+      swarms.remove(duplicate);
+    }
     swarm.kind = 'superTab';
     swarm.superTabId = tabId;
     swarm.name = name;
     swarm.nameIsCustom = true;
     swarm.isNewTabPage = false;
+    _rememberSuperTabVisibility(tabId, true);
     _persistLayout();
     notifyListeners();
   }
 
   void openSuperTab(String tabId, String name) {
+    _rememberSuperTabVisibility(tabId, true);
     final existing = swarms.where((s) => s.superTabId == tabId).firstOrNull;
     if (existing != null) {
       selectSwarm(existing.id);
@@ -1735,6 +1783,13 @@ class AppNotifier extends ChangeNotifier {
     }
     newSwarm(newTabPage: true);
     bindSuperTab(activeSwarmId, tabId, name);
+  }
+
+  void _rememberSuperTabVisibility(String tabId, bool visible) {
+    if (localStore == null) return;
+    unawaited(superTabs.setTabVisible(tabId, visible).catchError((Object error) {
+      appLog.warn('super-tab', 'Could not save tab visibility: $error');
+    }));
   }
 
   void markSuperTabDraft(String swarmId) {
@@ -3001,6 +3056,9 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     final removed = swarms.removeAt(index);
+    if (removed.superTabId case final tabId?) {
+      _rememberSuperTabVisibility(tabId, false);
+    }
     Swarm? replacement;
     if (swarms.isEmpty) {
       replacement = Swarm(id: 'swarm-${_nextSwarmId++}');
@@ -3335,6 +3393,9 @@ class AppNotifier extends ChangeNotifier {
     final saved = _closedHistory[index] as ClosedSwarm;
     if (!_canReopenSwarm(saved)) return;
     _closedHistory.removeAt(index);
+    if (saved.superTabId case final tabId?) {
+      _rememberSuperTabVisibility(tabId, true);
+    }
     if (swarms.length == 1 && saved.replacesUntouchedWelcome(swarms.single)) {
       swarms.clear();
     }
