@@ -208,7 +208,8 @@ void main() {
     expect(command('ctrl+shift+d'), 'pane.split_down');
     expect(command('ctrl+shift+m'), 'machines.list');
     expect(command('ctrl+shift+i'), 'models.list');
-    expect(command('ctrl+shift+s'), 'app.store');
+    expect(command('ctrl+shift+s'), 'super_tab.new');
+    expect(harnessCommandById['app.store']!.keys, isEmpty);
     expect(command('ctrl+shift+y'), 'agent_messages.activity');
     expect(command('alt+shift+f'), 'pane.toggle_shading');
     expect(command('ctrl+1'), 'swarm.select_1');

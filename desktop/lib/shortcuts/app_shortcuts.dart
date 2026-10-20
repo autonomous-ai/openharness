@@ -577,6 +577,9 @@ const windowsCommandKeys = <String, List<String>>{
   // ⌘⌥ would be Ctrl+Alt, which is AltGr on many keyboards: Linux's key.
   'app.daemon_talk': ['alt+shift+a'],
   'app.onboarding_review': ['alt+shift+o'],
+  // ⌘⌃S collapses to Ctrl+Shift+S, which is New Swarm (⌘S), and Alt+Shift+S
+  // is Share (⇧⌘S). Store stays in the palette and menu.
+  'app.store': [],
   // Ctrl+Shift+R renames the selected machine in the picker.
   'picker.refresh': ['ctrl+r'],
   // Ctrl+Shift+Backspace removes the selected resource in the picker.
