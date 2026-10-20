@@ -16,6 +16,17 @@ $D admin parse-check.ps1
 
 `VM_HOST` defaults to `192.168.65.3`. `E2E_WORK` defaults to ignored `.work/`;
 it contains private run/account receipts and passwords, never commit it.
+`VM_ADMIN` names the administrator account (default `admin`, the ARM64 VM's). For the x64 test PC (sub-project E,
+the dial) set `VM_HOST` and `VM_ADMIN` to the values the owner gives; they are never written in the repo.
+`put-admin <file>` copies one file (`harness-serial.exe`) into this run's admin scratch folder.
+
+After owner-approved access and confirming no other process holds the dial, use
+`$D put-admin path/to/harness-serial.exe` and `$D admin serial-check.ps1 Port=COM3 Seconds=10`.
+`WatchOnly=true` reports the attachment session without opening the port. The measurement
+exits nonzero on a failed check, missing attachment session, or helper error/timeout;
+serials are shortened and native diagnostics are redacted. `Seconds` accepts 1-300
+(default 10); helper startup and exit waits each have a five-second deadline.
+
 `EV` defaults to `$E2E_WORK/evidence`; inspect/redact screenshots before sharing.
 `E2E_VM_ROOT` is an optional admin scratch parent (default: admin's TEMP).
 The tools create a new `harness-desktop-e2e-<run-id>` child, never adopt an
@@ -82,3 +93,7 @@ shellcheck desktop/scripts/windows-e2e/desktop-e2e.sh
 Windows PowerShell 5.1 parsing, Add-Type/hxrun compilation, scheduled-task behavior,
 screenshots/UIA/input/clipboard/console detection and owned cleanup still require
 the root-owned native validation. No local test claims those checks passed.
+`test_serial_check.py` runs the measurement script against a private fake executable
+on Windows with Python and Windows PowerShell 5.1. It checks success, failure,
+timeouts, redaction and child cleanup without opening a port; other hosts skip
+these tests explicitly. Real dial measurements remain separate acceptance evidence.

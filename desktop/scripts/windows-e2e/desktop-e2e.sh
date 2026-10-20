@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Windows desktop tooling. All private run state is under E2E_WORK (.work by default).
 # Commands: preflight, user-add [user], push [user], driver [user], kilo [user],
-# session-on/off [user], fetch version arch [--run id], put zip [user],
+# session-on/off [user], fetch version arch [--run id], put zip [user], put-admin file,
 # run/ps/admin script.ps1 [Name=value ...], sh/sh-admin 'command', shot name,
 # state, logs, procs, variant kind zip version, truncated zip, stamp label,
 # cdn-ca/stage/serve/stop/status/on/off, cleanup [user]. See README.md.
@@ -10,6 +10,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(git -C "$here" rev-parse --show-toplevel)
 b=$root/cli/scripts/windows-cli-e2e
 host=${VM_HOST:-192.168.65.3}
+# The VM uses admin; the x64 dial PC's account/address come from the owner via the environment.
+admin=${VM_ADMIN:-admin}
 work=${E2E_WORK:-$here/.work}
 ev=${EV:-$work/evidence}
 cdn=${FAKE_CDN_DIR:-$work/fake-cdn}
@@ -17,7 +19,7 @@ ssh_opts=(-o BatchMode=yes -o ConnectTimeout=15 -o LogLevel=ERROR)
 vm_tools=(invoke.ps1 ownership.ps1 session-run.ps1 app-processes.ps1 test-app-processes.ps1 screenshot.ps1 input.ps1 uia.ps1 watch-windows.ps1
   start-app.ps1 clipboard.ps1 keep-awake.ps1 stage-zip.ps1 desktop-state.ps1 desktop-logs.ps1
   browser-link.ps1 parse-check.ps1 selftest.ps1 driver.cmd)
-admin_tools=(invoke.ps1 ownership.ps1 session-run.ps1 winlogon.ps1 desktop-procs.ps1 cleanup.ps1 parse-check.ps1)
+admin_tools=(invoke.ps1 ownership.ps1 session-run.ps1 winlogon.ps1 desktop-procs.ps1 cleanup.ps1 parse-check.ps1 serial-check.ps1)
 umask 077
 mkdir -p "$work/users" "$ev"
 chmod 700 "$work"
@@ -43,7 +45,7 @@ admin_root() {
   if [ ! -f "$work/vm-root.txt" ]; then
     local base=${E2E_VM_ROOT:-} encoded_base status=0
     encoded_base=$(tools args-b64 "Base=$base" "RunId=$run_id")
-    E2E_RAW=1 vm_ps admin > "$work/vm-root.txt.new" <<PS || status=$?
+    E2E_RAW=1 vm_ps "$admin" > "$work/vm-root.txt.new" <<PS || status=$?
 \$ErrorActionPreference = 'Stop'
 \$p = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$encoded_base')) | ConvertFrom-Json
 \$base = if (\$p.Base) { \$p.Base } else { \$env:TEMP }
@@ -79,9 +81,9 @@ put_files() {
 push_admin() {
   local dir files=() f
   dir=$(admin_root)
-  printf '%s\n' "\$r=Get-Content -Raw -LiteralPath $(ps_quote "$dir/run.json") | ConvertFrom-Json; if (\$r.run_id -cne '$run_id') { throw 'admin run ownership mismatch' }" | vm_ps admin >/dev/null
+  printf '%s\n' "\$r=Get-Content -Raw -LiteralPath $(ps_quote "$dir/run.json") | ConvertFrom-Json; if (\$r.run_id -cne '$run_id') { throw 'admin run ownership mismatch' }" | vm_ps "$admin" >/dev/null
   for f in "${admin_tools[@]}"; do files+=("$here/$f"); done
-  put_files admin "$dir" "${files[@]}" "$b/vm-cdn.ps1"
+  put_files "$admin" "$dir" "${files[@]}" "$b/vm-cdn.ps1"
 }
 invoke() {
   local who=$1 dir=$2 script=$3 encoded
@@ -105,15 +107,15 @@ session() {
   require_owner "$u"
   inner=$(tools args-b64 "$@"); dir=$(admin_root)
   if [ "${NO_WAIT:-}" = 1 ]; then
-    invoke admin "$dir" session-run.ps1 "User=$u" "RunId=$run_id" "Script=$script" "ArgsB64=$inner" "TimeoutSec=${RUN_TIMEOUT:-120}" NoWait=true
+    invoke "$admin" "$dir" session-run.ps1 "User=$u" "RunId=$run_id" "Script=$script" "ArgsB64=$inner" "TimeoutSec=${RUN_TIMEOUT:-120}" NoWait=true
   else
-    invoke admin "$dir" session-run.ps1 "User=$u" "RunId=$run_id" "Script=$script" "ArgsB64=$inner" "TimeoutSec=${RUN_TIMEOUT:-120}"
+    invoke "$admin" "$dir" session-run.ps1 "User=$u" "RunId=$run_id" "Script=$script" "ArgsB64=$inner" "TimeoutSec=${RUN_TIMEOUT:-120}"
   fi
 }
 # This is a baseline, not a demand to stop every shared listener/task.
 preflight() {
   stamp preflight
-  E2E_RAW=1 vm_ps admin > "$work/preflight.json.new" <<'PS'
+  E2E_RAW=1 vm_ps "$admin" > "$work/preflight.json.new" <<'PS'
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $processes = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(harness|harness-desktop|node|explorer)\.exe$' } | Select-Object ProcessId, SessionId, Name, CreationDate)
@@ -136,7 +138,7 @@ user_add() {
   printf '%s %s\n' "$u" "$pw" >> "$work/users.txt"
   encoded=$(tools args-b64 "User=$u" "Password=$pw" "Root=$dir" "RunId=$run_id")
   # Account creation produces the positive SID receipt before first-login can start any process for it.
-  E2E_RAW=1 vm_ps admin > "$work/users/$u.json.new" <<PS
+  E2E_RAW=1 vm_ps "$admin" > "$work/users/$u.json.new" <<PS
 \$ErrorActionPreference='Stop'
 \$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$encoded')) | ConvertFrom-Json
 if (Get-LocalUser -Name \$p.User -ErrorAction SilentlyContinue) { throw 'the account already exists; it is never adopted or removed by this run' }
@@ -153,7 +155,7 @@ PS
   require_owner "$u"
   VM_HOST=$host "$b/first-login.sh" "$u" "$pw" 2>&1 | quiet | scrub
   # Refuse a profile alias before copying tools. The account's recorded SID is authoritative.
-  E2E_RAW=1 vm_ps admin >/dev/null <<PS
+  E2E_RAW=1 vm_ps "$admin" >/dev/null <<PS
 \$ErrorActionPreference='Stop'
 . $(ps_quote "$dir/ownership.ps1")
 \$o=Read-Owner '$u' '$run_id'
@@ -200,7 +202,7 @@ session_on() {
 session_off() {
   local u dir
   u=$(the_user "${1:-}"); require_owner "$u"; dir=$(admin_root)
-  vm_ps admin <<PS
+  vm_ps "$admin" <<PS
 \$ErrorActionPreference='Stop'
 . $(ps_quote "$dir/ownership.ps1")
 \$o=Read-Owner '$u' '$run_id'
@@ -291,11 +293,11 @@ cdn_stop() {
     rm -f "$cdn/serve.pid" "$cdn/serve.identity"
   fi
 }
-cdn_status() { push_admin; invoke admin "$(admin_root)" vm-cdn.ps1 Status=true; }
+cdn_status() { push_admin; invoke "$admin" "$(admin_root)" vm-cdn.ps1 Status=true; }
 cleanup() {
   local u dir
   u=$(the_user "${1:-}"); require_owner "$u"; dir=$(admin_root)
-  invoke admin "$dir" cleanup.ps1 "User=$u" "RunId=$run_id"
+  invoke "$admin" "$dir" cleanup.ps1 "User=$u" "RunId=$run_id"
   # A failed/partial cleanup retains receipts/passwords for a root-owned recovery.
   mv "$work/users/$u.json" "$work/users/$u.cleaned.json"
   if [ -f "$work/users.txt" ]; then
@@ -306,7 +308,7 @@ cleanup() {
   preflight
   tools compare-baseline "$work/baseline.json" "$work/preflight.json"
   if ! find "$work/users" -name '*.json' ! -name '*.cleaned.json' -print -quit | grep -q .; then
-    vm_ps admin <<PS
+    vm_ps "$admin" <<PS
 \$ErrorActionPreference='Stop'
 \$dir=$(ps_quote "$dir")
 \$marker=Get-Content -LiteralPath (Join-Path \$dir 'run.json') -Raw | ConvertFrom-Json
@@ -337,6 +339,10 @@ case "$command" in
   session-off) session_off "$@" ;;
   fetch) fetch "$@" ;;
   put) put "$@" ;;
+  put-admin)
+    f=${1:?file required}; [ -f "$f" ] || { echo "no file $f" >&2; exit 2; }
+    dir=$(admin_root)
+    put_files "$admin" "$dir" "$f" ;;
   run|ps)
     script=${1:?script.ps1 required}; shift
     u=$(the_user ''); require_owner "$u"
@@ -347,13 +353,13 @@ case "$command" in
     script=${1:?script.ps1 required}; shift
     [[ "$script" =~ ^[a-z][a-z0-9-]*\.ps1$ ]] || { echo 'invalid tool filename' >&2; exit 2; }
     push_admin
-    invoke admin "$(admin_root)" "$script" "$@" ;;
+    invoke "$admin" "$(admin_root)" "$script" "$@" ;;
   sh) u=$(the_user ''); require_owner "$u"; vm "$u" "${1:?command required}" ;;
-  sh-admin) vm admin "${1:?command required}" ;;
+  sh-admin) vm "$admin" "${1:?command required}" ;;
   shot) shot "$@" ;;
   state) u=$(the_user ''); require_owner "$u"; invoke "$u" e2e desktop-state.ps1 "$@" ;;
   logs) u=$(the_user ''); require_owner "$u"; invoke "$u" e2e desktop-logs.ps1 "$@" ;;
-  procs) u=$(the_user ''); require_owner "$u"; invoke admin "$(admin_root)" desktop-procs.ps1 "User=$u" "RunId=$run_id" ;;
+  procs) u=$(the_user ''); require_owner "$u"; invoke "$admin" "$(admin_root)" desktop-procs.ps1 "User=$u" "RunId=$run_id" ;;
   variant) tools zip-variant "${1:?kind}" "${2:?zip}" "${3:?version}" --out-dir "$work/zips" ;;
   truncated) tools truncate "${1:?zip}" --out-dir "$work/zips/truncated" ;;
   cdn-ca) cdn_ca ;;
