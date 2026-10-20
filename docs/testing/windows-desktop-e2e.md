@@ -18,7 +18,7 @@ record.
 | --- | --- | --- | --- |
 | 1 | First install, sign-in, same-version launch | Partial: N installed and same-version launch converged to one installed window. Mark-of-the-Web launch and SmartScreen behavior unresolved. | Script, visual automation; sign-in authorized through existing account session |
 | 2 | This computer, terminal, Add Phone, remote Mac | Partial: owned terminal creation, `WIN_42` output, HTTP 200 handoffs on ARM and real DELL x64, and remote row observed. ARM RC1 Ctrl+C failed; patched host passed with local x64 Release and published x64 N1 apps. Published PTY 0.4.19 GUI Ctrl+C remains unverified: the serving ARM host is still 0.4.18, and DELL's cross-session host could not be safely recognized by its limited GUI daemon. | Visual automation, Script |
-| 3 | Notifications, tray, links, paste and font | Partial: tray/links/font and local x64 composer paste observed. One N1 hidden-app Kilo turn stalled while the backend was offline, so completed-turn toast/click and full tray working row remain unverified. | Visual automation, Script |
+| 3 | Notifications, tray, links, paste and font | Partial: tray/links/font and local x64 composer paste observed. A later hidden-app ARM 1.0.3 Kilo turn completed and the app logged its done event, but no visible toast was captured; toast click and full tray working row remain unverified. | Visual automation, Script |
 | 4 | Staging updates and broken-build rollback | Partial: real 1.0.0 → 1.0.1 GUI update passed on both VMs. The 1.0.1 → 1.0.2 update kept the ARM counter rising and repaired Settings `DisplayVersion` on both VMs; DELL x64 then updated from 1.0.2 → 1.0.3 through the GUI and rendered signed in. Fake-CDN broken-build rollback remains unverified. | Script, visual automation |
 | 5 | Uninstall through Windows Settings | Passed on 1.0.3 after a 1.0.2 timing failure was fixed: holding the final dialog open over three minutes did not start cleanup early; after OK, the app folder and registrations disappeared while CLI, daemon and agents stayed. | UI Automation |
 | 6 | x64 desktop on ARM64 | Passed across two runs of published x64 1.0.3: install, rendered window, tray and Settings uninstall passed; a later isolated x64 runtime returned HTTP 200 for Add Phone while the backend was connected. The installed ARM app and seven agents were restored afterward. | Script, visual automation, UI Automation |
@@ -149,6 +149,16 @@ interactive native probe showed that Windows could post a generic toast, but
 the product's permission check had returned HRESULT `0x80070490` earlier;
 the probe is not product-toast evidence. The working-agent tray row was also
 not demonstrated. These findings keep the scenario partial.
+
+With the backend connected, a later native ARM64 1.0.3 app had Desktop
+Notifications enabled and was hidden while one owned Kilo turn ran. Its pane
+returned the requested answer in **9.4 seconds**, and the app log received a
+`turn_summary` notification with `kind=done`. A toast check about 46 seconds
+later and a masked screenshot about 74 seconds later found no visible toast.
+The toast may have expired before observation; its appearance and click target
+are still unverified. The test Kilo agent was deleted, the original seven
+agents and rising counter remained available, and the native 1.0.3 window was
+restored. Desktop Notifications remained enabled.
 
 ### 4. Update and rollback
 
@@ -319,7 +329,9 @@ creation marker; the Session 0 scan read the marker. The daemon drops rows
 without that marker, so it cannot prove that the discovery file still names
 the same process and will not trust the host. This bounds the failure to the
 cross-session process-identity check, rather than a terminal input or Ctrl+C
-result. The host and either daemon were not restarted; DELL remained signed in
+result. A limited-session read-only follow-up could read the same creation
+time through CIM, while a .NET process-handle start-time read failed. The host
+and either daemon were not restarted; DELL remained signed in
 and backend connected with zero agents. Published 0.4.19 GUI Ctrl+C needs a
 host started in a compatible user context for a valid E2E check.
 
