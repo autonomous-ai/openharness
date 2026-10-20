@@ -330,10 +330,14 @@ without that marker, so it cannot prove that the discovery file still names
 the same process and will not trust the host. This bounds the failure to the
 cross-session process-identity check, rather than a terminal input or Ctrl+C
 result. A limited-session read-only follow-up could read the same creation
-time through CIM, while a .NET process-handle start-time read failed. The host
-and either daemon were not restarted; DELL remained signed in
-and backend connected with zero agents. Published 0.4.19 GUI Ctrl+C needs a
-host started in a compatible user context for a valid E2E check.
+time through CIM, while a .NET process-handle start-time read failed. An
+authenticated host inventory then confirmed **zero panes**. Its protocol
+accepted a guarded shutdown, but a Session 0 process started the replacement
+0.4.19 host before the limited Session 1 task did. The test stopped after that
+single attempt. DELL remained signed in, backend connected, with the same
+daemon and zero agents; the replacement host also had zero panes. Published
+0.4.19 GUI Ctrl+C needs a host started in a compatible user context for a
+valid E2E check.
 
 The staging `desktop/install.ps1` served the staging manifest base and enabled
 app installation. Its real `irm …/staging/desktop/install.ps1 | iex` command ran
