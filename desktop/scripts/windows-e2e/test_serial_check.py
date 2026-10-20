@@ -73,6 +73,7 @@ def ps_quote(value):
 
 
 def powershell(source, **kwargs):
+    source = "$ProgressPreference='SilentlyContinue'; " + source
     encoded = base64.b64encode(source.encode('utf-16le')).decode('ascii')
     return subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
                           capture_output=True, text=True, timeout=30, **kwargs)
@@ -111,10 +112,13 @@ class SerialCheckTest(unittest.TestCase):
                 # Detect and remove only a leaked fixture binary in this test's private directory.
                 rows = events.read_text().splitlines() if events.exists() else []
                 pids = [int(row.split(':')[1]) for row in rows]
-                leaked = powershell(f"$ids=@({','.join(map(str, pids))}); "
+                # PS 5.1 leaves $? false for an already-exited PID; explicit success follows all checks.
+                # Unexpected inspection/Stop-Process errors must terminate before that success exit.
+                leaked = powershell("$ErrorActionPreference='Stop'; "
+                                    f"$ids=@({','.join(map(str, pids))}); "
                                     "foreach ($childId in $ids) { $p=Get-Process -Id $childId -ErrorAction SilentlyContinue; "
                                     f"if ($p -and $p.Path -eq {ps_quote(root / self.binary.name)}) {{ "
-                                    "$p.Id; $p | Stop-Process -Force } }")
+                                    "$p.Id; $p | Stop-Process -Force } }; exit 0")
                 self.assertEqual(leaked.returncode, 0, leaked.stdout + leaked.stderr)
                 self.assertEqual(leaked.stdout.strip(), '', 'script leaked an owned fake child')
             self.assertLess(time.monotonic() - started, 22)
