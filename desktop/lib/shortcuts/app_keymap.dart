@@ -58,7 +58,10 @@ class AppKeymap extends ChangeNotifier {
     String command, {
     KeymapContext context = KeymapContext.workspace,
   }) {
-    final binding = bindings(command, context: context).firstOrNull;
+    final binding = bindings(
+      command,
+      context: context,
+    ).where((binding) => !binding.outsideTerminal).firstOrNull;
     return binding == null ? null : describeKeyBinding(binding);
   }
 
@@ -181,7 +184,9 @@ String? effectiveShortcutHint(BuildContext context, ShortcutAction action) {
   if (command == null) return null;
   final binding = (map?.current ?? harnessDefaultKeymap)
       .bindingsFor(KeymapContext.workspace)
-      .where((binding) => binding.command == command.id)
+      .where(
+        (binding) => binding.command == command.id && !binding.outsideTerminal,
+      )
       .firstOrNull;
   return binding == null ? null : describeKeyBinding(binding);
 }
@@ -203,7 +208,9 @@ String? effectiveCommandHint(
   final bindings = (KeymapTheme.of(context)?.current ?? harnessDefaultKeymap)
       .bindingsFor(contextKind);
   final binding = bindings
-      .where((binding) => binding.command == command)
+      .where(
+        (binding) => binding.command == command && !binding.outsideTerminal,
+      )
       .firstOrNull;
   return binding == null ? null : describeKeyBinding(binding);
 }
@@ -216,7 +223,10 @@ List<ShortcutRow> effectiveShortcutRows(
   if (map == null && contextKind == KeymapContext.workspace) {
     return shortcutRows();
   }
-  final bindings = (map ?? harnessDefaultKeymap).bindingsFor(contextKind);
+  final bindings = (map ?? harnessDefaultKeymap)
+      .bindingsFor(contextKind)
+      .where((binding) => !binding.outsideTerminal)
+      .toList();
   final defaultDigits =
       !contextKind.isPicker &&
       List.generate(kTabDigitCount, (i) {

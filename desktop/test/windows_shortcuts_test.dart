@@ -1,12 +1,17 @@
 // Windows' keys: Ctrl where the Mac has ⌘, but never a chord a terminal
 // program answers. The full table is in the C3.6 plan and in CLAUDE.md.
 import 'package:flutter/foundation.dart';
+import 'package:harness/shortcuts/app_keymap.dart';
+import 'package:harness/shortcuts/keymap_native.dart';
+
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shortcuts/app_shortcuts.dart';
 import 'package:harness/shortcuts/keymap.dart';
 import 'package:harness/shortcuts/keymap_commands.dart';
+
+import 'keymap_host_test.dart' show MemoryKeymap;
 
 void main() {
   setUp(() => debugDefaultTargetPlatformOverride = TargetPlatform.windows);
@@ -16,6 +21,75 @@ void main() {
     String keys, [
     KeymapContext context = KeymapContext.workspace,
   ]) => harnessDefaultKeymap.match(context, [KeyStroke.parse(keys)]).command;
+
+  testWidgets('single hints omit aliases even when they are the only binding', (
+    tester,
+  ) async {
+    final map = MemoryKeymap();
+    addTearDown(map.dispose);
+    Future<void> check(String? hint, List<List<String>> chords) async {
+      await tester.pumpWidget(
+        KeymapProvider(
+          keymap: map,
+          child: Builder(
+            builder: (context) {
+              expect(map.hint('swarm.new'), hint);
+              expect(effectiveCommandHint(context, 'swarm.new'), hint);
+              expect(
+                effectiveShortcutHint(context, ShortcutAction.newSwarm),
+                hint,
+              );
+              expect(
+                effectiveShortcutRows(
+                  context,
+                  KeymapContext.workspace,
+                ).singleWhere((row) => row.label == 'New Tab').chords,
+                chords,
+              );
+              return const SizedBox();
+            },
+          ),
+        ),
+      );
+    }
+
+    await check('Ctrl+Shift+T', [
+      ['Ctrl', 'Shift', 'T'],
+    ]);
+    final alias = harnessDefaultBindings.firstWhere(
+      (b) => b.command == 'swarm.new' && b.outsideTerminal,
+    );
+    final everywhere = harnessDefaultBindings.firstWhere(
+      (b) => b.command == 'swarm.new' && !b.outsideTerminal,
+    );
+    map.map = ResolvedKeymap([alias, everywhere], const KeymapConfig.empty());
+    map.version++;
+    await check('Ctrl+Shift+T', [
+      ['Ctrl', 'Shift', 'T'],
+    ]);
+    map.map = ResolvedKeymap([alias], const KeymapConfig.empty());
+    map.version++;
+    await check(null, []);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  test('native snapshot excludes outside-terminal aliases', () {
+    final map = AppKeymap();
+    addTearDown(map.dispose);
+    final contexts = nativeKeymapSnapshot(map)['contexts'] as Map;
+    final bindings = contexts.values.expand((rows) => rows as List).cast<Map>();
+    expect(
+      bindings.where((row) => (row['keys'] as List).join(' ') == 'ctrl+t'),
+      isEmpty,
+    );
+    expect(
+      bindings
+          .where((row) => row['command'] == 'swarm.new')
+          .map((row) => row['hint'])
+          .toSet(),
+      {'Ctrl+Shift+T'},
+    );
+  });
 
   test('the workspace takes Ctrl+Shift, Ctrl and Alt+Shift', () {
     expect(

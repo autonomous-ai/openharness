@@ -1,4 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:harness/shortcuts/keymap.dart';
+import 'package:harness/shortcuts/keymap_commands.dart';
+import 'package:harness/shortcuts/keymap_native.dart';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -6,6 +11,8 @@ import 'package:harness/screens/swarm_menu_bus.dart';
 import 'package:harness/shared/theme/app_theme.dart';
 import 'package:harness/shared/widgets/app_menu.dart' show AppMenuItem;
 import 'package:harness/widgets/in_window_menu_bar.dart';
+
+import 'keymap_host_test.dart' show MemoryKeymap;
 
 /// The in-window menu bar's wiring (Linux and Windows).
 ///
@@ -433,6 +440,33 @@ void main() {
     await tap(tester, 'menu-bar-file');
     expect(find.text('Remove Leader'), findsOneWidget);
     expect(find.text('Make Leader'), findsNothing);
+  });
+
+  testWidgets('Windows New Tab menu hint uses the everywhere key', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final map = MemoryKeymap();
+    addTearDown(map.dispose);
+    // Hint selection must not depend on the alias being declared last.
+    map.map = ResolvedKeymap([
+      ...harnessDefaultBindings.where((b) => b.outsideTerminal),
+      ...harnessDefaultBindings.where((b) => !b.outsideTerminal),
+    ], const KeymapConfig.empty());
+    await swarmMenuBus.send('keymapState', nativeKeymapSnapshot(map));
+    await pumpBar(tester);
+    await tap(tester, 'menu-bar-file');
+    final row = find.byKey(const Key('menu-bar-new-tab'));
+    expect(
+      find.descendant(of: row, matching: find.text('Ctrl+Shift+T')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: row, matching: find.text('Ctrl+T')),
+      findsNothing,
+    );
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('rows show the chord the keymap gives their action', (
