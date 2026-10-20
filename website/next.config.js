@@ -9,6 +9,7 @@ module.exports = {
     // '/cli/install.sh' and '/desktop/install.sh' moved to the CDN (see redirects() below) — nothing
     // left here to trace for either.
     '/flash-circle.sh': ['./src/app/flash-circle.sh/flash-circle.sh'],
+    '/flash-circle.ps1': ['./src/app/flash-circle.ps1/flash-circle.ps1'],
     '/hub/[id]': ['./public/open-harnesses/**/*'],
     '/hub/[id]/fork': ['./public/open-harnesses/**/*'],
     '/hub/[id]/download': ['./public/open-harnesses/**/*'],

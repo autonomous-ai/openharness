@@ -149,6 +149,34 @@ jobs:
         run: |
           $paths = @('src/lib/ptyHostBackend.contract.spec.ts', 'src/lib/ptyHost', 'src/lib/windows', 'src/scripts/installPs1.spec.ts', 'src/scripts/windowsCiChecks.spec.ts', 'src/lib/uninstall', 'src/engines/kit/hookRemoval.spec.ts', 'src/engines/kit/windowsHooks.spec.ts', 'src/engines/kit/windowsFiles.spec.ts', 'src/engines/kit/nativePaths.windows.spec.ts', 'src/engines/kit/launchExecutable.windows.spec.ts', 'src/engines/removeHooks.spec.ts', 'src/engines/windowsHomes.spec.ts')
           npx vitest run @paths --maxWorkers=1
+      # The Windows flasher (sub-project E), as Windows PowerShell 5.1 runs it, with no board: its version, a refused
+      # port name, and a download and check of the newest published firmware into a cache folder whose name a shell
+      # would mangle (Review Focus 1). It writes to no device and publishes nothing.
+      - name: 'Flasher: without a board'
+        if: ${{ !inputs.release }}
+        shell: powershell
+        run: |
+          # Own website dependencies; the Windows-gated cases use only private caches and fake children.
+          Push-Location website
+          try {
+            npm ci
+            if ($LASTEXITCODE -ne 0) { throw 'website npm ci failed' }
+            npx vitest run src/app/flash-circle.ps1
+            if ($LASTEXITCODE -ne 0) { throw 'Windows flasher behavior specs failed' }
+          } finally { Pop-Location }
+          $ps1 = 'website\src\app\flash-circle.ps1\flash-circle.ps1'
+          $said = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ps1 --version-info
+          if ($said -notmatch '^flash-circle \d+\.\d+\.\d+$') { throw "--version-info said: $said" }
+          $bad = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ps1, '--port', 'NUL' -Wait -PassThru -NoNewWindow
+          if ($bad.ExitCode -ne 1) { throw "--port NUL exited $($bad.ExitCode), not 1" }
+          # Built from [char] codes: this step's own source must not depend on how the runner encodes it.
+          $odd = "Nguy$([char]0x1EC5)n V$([char]0x0103)n A' & 100%"
+          $env:HARNESS_FLASHER_CACHE = Join-Path (Join-Path $env:RUNNER_TEMP $odd) 'flasher'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ps1 --no-flash
+          if ($LASTEXITCODE -ne 0) { throw "--no-flash exited $LASTEXITCODE" }
+          $images = @(Get-ChildItem -LiteralPath (Join-Path $env:HARNESS_FLASHER_CACHE 'firmware\commander') -Filter '*.bin')
+          if ($images.Count -ne 1 -or $images[0].Length -lt 100000) { throw "expected one firmware image, found $($images.Count)" }
+          Write-Host "ok   $($images[0].Name), $($images[0].Length) bytes, checked against the manifest"
       - name: Collect the payload
         shell: pwsh
         run: |
