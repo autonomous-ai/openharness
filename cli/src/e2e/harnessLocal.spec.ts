@@ -1,4 +1,5 @@
-import type { Server } from 'node:http'
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { startHookServer, type HookServerHandlers } from '../hookServer.js'
 import { machineId } from './harnessLocal.js'
@@ -16,6 +17,8 @@ afterEach(async () => {
 })
 
 async function daemon(): Promise<void> {
+  // A pinned id skips the daemon altogether: this test would then pass without asking it.
+  delete process.env.HARNESS_MACHINE_ID
   const started = await startHookServer(0, {
     onStatus: () => ({ version: '9.9.9', pid: 1, computerId: 'c1', machineId: 'm1', signedIn: true, localWs: { path: '/api/local-ws' }, localSocket: null }),
   } as Partial<HookServerHandlers> as HookServerHandlers)
@@ -27,5 +30,14 @@ describe('the e2e reads the machine it drives', () => {
   it('from a daemon that answers the full status only with the local credential', async () => {
     await daemon()
     await expect(machineId()).resolves.toBe('m1')
+  })
+
+  it('says the credential could not be read when the daemon gives only its public status', async () => {
+    delete process.env.HARNESS_MACHINE_ID
+    // What a daemon answers a caller without its credential (hookServer.ts `publicStatus`).
+    server = createServer((_req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ credentialRequired: true, version: '9.9.9', pid: 1, computerId: 'c1' })) })
+    await new Promise<void>((done) => server!.listen(0, '127.0.0.1', done))
+    process.env.HARNESS_PORT = String((server.address() as AddressInfo).port)
+    await expect(machineId()).rejects.toThrow(/wants its local credential, and this process could not read it/)
   })
 })
