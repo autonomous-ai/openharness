@@ -44,7 +44,11 @@ if (mode === 'watch') {
     if (behaviour === 'partial') { await write(process.stderr, 'open'); exitAtEndOfStdin() }
     else await write(process.stderr, 'open\n')
     process.stdin.on('data', (chunk) => process.stdout.write(chunk))
-    if (behaviour === 'stubborn-open') process.on('SIGTERM', () => {})
+    if (behaviour === 'stubborn-open') {
+      process.on('SIGTERM', () => {})
+      // A signal listener alone lets Node exit naturally after stdin EOF, hiding a missing kill deadline.
+      setInterval(() => {}, 1000)
+    }
     else process.stdin.on('end', () => process.exit(0))
     if (behaviour.startsWith('unplug:')) {
       await sleep(Number(behaviour.slice('unplug:'.length)))

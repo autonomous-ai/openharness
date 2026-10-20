@@ -40,7 +40,13 @@ const alive = (pid: number | undefined) => { if (!pid) return false; try { proce
 let watches: WindowsDialWatch[] = []
 afterEach(async () => {
   for (const watch of watches.splice(0)) watch.stop()
-  for (const child of children.splice(0)) { if (alive(child.pid)) child.kill('SIGKILL') }
+  for (const child of children.splice(0)) {
+    if (alive(child.pid)) child.kill('SIGKILL')
+    child.stdin?.destroy()
+    child.stdout?.destroy()
+    child.stderr?.destroy()
+    await until(() => !alive(child.pid), 1_000)
+  }
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
   vi.unstubAllEnvs()
 })
@@ -269,11 +275,34 @@ describe('the link to one dial', () => {
   it('kills an opened child that ignores stdin EOF before reporting close', async () => {
     vi.stubEnv('FAKE_SERIAL_OPEN', 'stubborn-open')
     const stream = await openWindowsPort(fake(['open', 'COM3'])!, { spawn: trackedSpawn, closeWaitMs: 60 })
-    const pid = children.at(-1)!.pid
+    const child = children.at(-1)!
     const closed = new Promise(resolve => stream.once('close', resolve))
     stream.destroy()
     await closed
-    expect(alive(pid)).toBe(false)
+    expect(alive(child.pid)).toBe(false)
+    expect(child.signalCode).toBe('SIGKILL')
+    expect(child.exitCode).not.toBe(0)
+  })
+
+  it('closes a backpressured child and all owned pipes without consuming the readable stream', async () => {
+    const stream = await openWindowsPort({ file: process.execPath, args: ['-e', `
+      process.stderr.write('open\\n')
+      process.stdout.write(Buffer.alloc(256 * 1024, 7))
+      process.stdin.resume()
+      process.stdin.on('end', () => process.exit(0))
+    `] }, { spawn: trackedSpawn, closeWaitMs: 60 })
+    const child = children.at(-1)!
+    // Wait for real readable backpressure, rather than assuming the child has produced its bytes.
+    await until(() => stream.readableLength >= stream.readableHighWaterMark)
+    expect(child.stdout?.isPaused()).toBe(true)
+    let closed = false
+    stream.once('close', () => { closed = true })
+    stream.destroy()
+    await until(() => closed, 400)
+    expect(alive(child.pid)).toBe(false)
+    expect(child.stdin?.destroyed).toBe(true)
+    expect(child.stdout?.destroyed).toBe(true)
+    expect(child.stderr?.destroyed).toBe(true)
   })
 
   it('closes stdin on writable EOF and waits for the child to release the port', async () => {

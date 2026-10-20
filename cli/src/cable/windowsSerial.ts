@@ -280,10 +280,16 @@ function childStream(proc: ChildProcessWithoutNullStreams, stderr: () => string,
     destroy(error, done) {
       if (ended) { done(error); return }
       proc.once('close', () => done(error))
+      // An unread burst can leave stdout paused after push() fills the readable buffer. Drain it
+      // during teardown so the child's stdio can close; the data handler must not pause it again.
+      proc.stdout.resume()
       endChild(proc, closeWaitMs)
     },
   })
-  proc.stdout.on('data', (chunk: Buffer) => { if (!stream.push(chunk)) proc.stdout.pause() })
+  proc.stdout.on('data', (chunk: Buffer) => {
+    if (stream.destroyed) return
+    if (!stream.push(chunk)) proc.stdout.pause()
+  })
   proc.stdout.on('error', (error) => stream.destroy(error))
   proc.once('close', (code) => {
     ended = true
