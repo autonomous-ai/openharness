@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/link.dart';
 
 import '../core/models.dart';
+import '../measurement/hub_usage.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
@@ -15,16 +16,22 @@ import 'shared_harness_panel.dart';
 
 /// Public landing and private recipient view, using the same encrypted renderer as desktop.
 /// It does not add a machine, receive a peer key, or restore the visitor's workspace.
+/// It counts, as the Hub does ([HubUsage]), the page drawn, what the link showed, how long a live
+/// harness stayed in view and the clicks on it; never the link, its key, the harness or the reader.
 class SharedAgentPage extends StatefulWidget {
   const SharedAgentPage({
     super.key,
     required this.app,
     required this.location,
     this.dio,
+    this.usage,
   });
   final AppNotifier app;
   final SharedAgentLocation location;
   final Dio? dio;
+
+  /// Tests pass their own; the page otherwise counts into the app's [hubUsage].
+  final HubUsage? usage;
   @override
   State<SharedAgentPage> createState() => _SharedAgentPageState();
 }
@@ -45,15 +52,73 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
   int _revision = 0;
   Timer? _offlineRetry;
   late bool _signedIn = widget.app.status == AppStatus.authenticated;
+  late final _usage = widget.usage ?? hubUsage;
+  bool _viewCounted = false;
+  final _opens = <SharedOpen>{};
+  VisibleTime? _dwell;
   @override
   void initState() {
     super.initState();
+    _usage.accessToken = _accessToken;
+    _countView();
+    unawaited(_load());
+  }
+
+  /// A staging link or account is the team's own, not a reader's.
+  bool get _measured =>
+      widget.location.environment != 'stag' &&
+      widget.app.config.autonomousEnv != 'stag';
+
+  void _count(String metric) {
+    if (_measured) _usage.count(metric);
+  }
+
+  void _countAction(SharedAction action) => _count(action.metric);
+
+  /// Once per page, as soon as it is known whether the reader is signed in.
+  void _countView() {
+    final status = widget.app.status;
+    if (_viewCounted ||
+        (status != AppStatus.authenticated &&
+            status != AppStatus.unauthenticated)) {
+      return;
+    }
+    _viewCounted = true;
+    _count(sharedViewMetric(member: status == AppStatus.authenticated));
+  }
+
+  void _countOpen(SharedOpen open) {
+    if (_opens.add(open)) _count(open.metric);
+    // Counted, then sent with the rest, as the page goes or the panel leaves.
+    if (open == SharedOpen.live) {
+      _dwell ??= VisibleTime((shown) {
+        _count(sharedDwellMetric(shown));
+        _usage.flush();
+      });
+    }
+  }
+
+  Future<String?> _accessToken() async {
+    final auth = widget.app.viewer?.auth;
+    return auth != null && await auth.hasSession()
+        ? await auth.accessToken()
+        : null;
+  }
+
+  void _signIn() {
+    _countAction(SharedAction.signInClick);
+    unawaited(widget.app.login());
+  }
+
+  void _retry() {
+    _countAction(SharedAction.retry);
     unawaited(_load());
   }
 
   @override
   void didUpdateWidget(SharedAgentPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _countView();
     final signedIn = widget.app.status == AppStatus.authenticated;
     if (signedIn != _signedIn || oldWidget.location.id != widget.location.id) {
       _signedIn = signedIn;
@@ -65,6 +130,8 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
   void dispose() {
     _revision++;
     _offlineRetry?.cancel();
+    _dwell?.finish();
+    _usage.accessToken = null;
     if (widget.dio == null) _dio.close(force: true);
     super.dispose();
   }
@@ -85,10 +152,7 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
           'This link is incomplete. Ask the owner to copy the full link again.',
         );
       }
-      final auth = widget.app.viewer?.auth;
-      final token = auth != null && await auth.hasSession()
-          ? await auth.accessToken()
-          : null;
+      final token = await _accessToken();
       final response = await _dio.get(
         '${widget.app.config.apiBaseUrl}/api/shared-agents/${widget.location.id}',
         options: Options(
@@ -100,6 +164,9 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
       );
       if (!mounted || revision != _revision) return;
       if (response.statusCode != 200) {
+        _countOpen(
+          response.statusCode == 401 ? SharedOpen.private : SharedOpen.noAccess,
+        );
         setState(() {
           _signInRequired = response.statusCode == 401;
           _error = _signInRequired
@@ -116,6 +183,7 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
         );
       }
       if (data['online'] != true) {
+        _countOpen(SharedOpen.offline);
         setState(() {
           _loading = false;
           _error = 'The owner’s machine is offline. This page reconnects when it comes back.';
@@ -126,12 +194,14 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
         );
         return;
       }
+      _countOpen(SharedOpen.live);
       setState(() {
         _data = data;
         _loading = false;
       });
     } catch (error) {
       if (mounted && revision == _revision) {
+        _countOpen(SharedOpen.failed);
         setState(() {
           _loading = false;
           _error = error is FormatException ? error.message : 'Could not open this link. Check your connection and try again.';
@@ -167,10 +237,20 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
                       builder: (context, follow) => DesktopPill(
                         label: 'Harness',
                         quiet: true,
-                        onPressed: follow,
+                        onPressed: follow == null
+                            ? null
+                            : () {
+                                _countAction(SharedAction.productPage);
+                                follow();
+                              },
                       ),
                     ),
-                    const WebDownloadButton(),
+                    WebDownloadButton(
+                      open: (uri) {
+                        _countAction(SharedAction.getApp);
+                        return openInNewTab(uri);
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -201,9 +281,8 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
                         _data = null;
                         _error = 'Viewing paused.';
                       }),
-                      onSignIn: _signedIn
-                          ? null
-                          : () => unawaited(widget.app.login()),
+                      onSignIn: _signedIn ? null : _signIn,
+                      onUsage: _countAction,
                     )
                   : Center(
                       child: SingleChildScrollView(
@@ -258,12 +337,12 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
                                           : 'Sign in',
                                       onPressed: widget.app.signingIn
                                           ? null
-                                          : () => unawaited(widget.app.login()),
+                                          : _signIn,
                                     ),
                                   if (!_loading && !_signInRequired)
                                     DesktopPill(
                                       label: 'Retry',
-                                      onPressed: _load,
+                                      onPressed: _retry,
                                     ),
                                   if (!_loading && _signedIn && _data == null)
                                     DesktopPill(

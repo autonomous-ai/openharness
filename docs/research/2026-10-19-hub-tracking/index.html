@@ -88,11 +88,11 @@
   <p class="lede">Every counter the Hub sends, pinned on the real pages at harness.autonomous.ai, then how to read the totals and which questions they answer. Counting has been live since <b>v1.2.86_backend</b> and <b>v1.3.56_web</b> on 2026-10-19, 03:36 UTC. The screenshots are production, taken the same day with counting switched off in the test browser.</p>
   <nav class="toc">
     <a href="#path">Where a count goes</a><a href="#explore">1 · Explore</a><a href="#harness">2 · A harness</a><a href="#phone">2b · On a phone</a>
-    <a href="#publish">3 · Publish &amp; notifications</a><a href="#all">Every counter</a><a href="#read">Reading it</a><a href="#questions">Questions</a><a href="#limits">Limits</a><a href="#optimize">To optimize</a><a href="#first">First reading</a><a href="#decided">Decided</a>
+    <a href="#publish">3 · Publish &amp; notifications</a><a href="#shared">4 · A shared link</a><a href="#all">Every counter</a><a href="#read">Reading it</a><a href="#questions">Questions</a><a href="#limits">Limits</a><a href="#optimize">To optimize</a><a href="#first">First reading</a><a href="#decided">Decided</a>
   </nav>
 
   <div class="principles">
-    <div><b>Daily totals only</b>A fixed list of 48 counters, added up per UTC day. No click trail, no per-person history.</div>
+    <div><b>Daily totals only</b>A fixed list of 65 counters, added up per UTC day. No click trail, no per-person history.</div>
     <div><b>Visitors too, cookies never</b>The browser sends with <code>credentials: 'omit'</code>; the website's server forwards without cookie or sign-in.</div>
     <div><b>Opt-outs are absent</b>Global Privacy Control, Do Not Track, a member who turned sharing off, staging accounts and <code>next dev</code> send nothing.</div>
     <div><b>Visits and clicks, not people</b>One person can be many views. Steps are not linked, so totals are not a funnel.</div>
@@ -106,7 +106,7 @@
     <div class="step"><b>Daily totals</b><span>The same receipt + atomic increment store as setup counts; today or yesterday only.</span></div>
     <div class="step"><b>usage:daily → hub</b><span>Per day: views, entries, actions, dwell, two ratios with numerator and denominator.</span></div>
   </div>
-  <p class="note"><b>Code:</b> <code>website/src/lib/community/hubMeasure.ts</code> (collector), <code>website/src/app/api/hub-usage/route.ts</code> (forwarder), <code>backend/src/lib/hubMetricsContract.ts</code> (the 48 names), <code>backend/src/analytics/dailyHubUsage.ts</code> (report). The website's copy of the names is checked against the backend's by <code>hubMetrics.spec.ts</code>.</p>
+  <p class="note"><b>Code:</b> <code>website/src/lib/community/hubMeasure.ts</code> (collector), <code>website/src/app/api/hub-usage/route.ts</code> (forwarder), <code>desktop/lib/measurement/hub_usage.dart</code> (the web app's collector, for shared links), <code>backend/src/lib/hubMetricsContract.ts</code> (the 65 names), <code>backend/src/analytics/dailyHubUsage.ts</code> (report). The website's copy of the names is checked against the backend's by <code>hubMetrics.spec.ts</code>, the web app's by <code>hub_usage_contract_test.dart</code>.</p>
 
   <h2 id="explore">1. Explore: what a visitor sees first</h2>
   <p class="lede">The front door. A visitor gets the heading, the desktop app and Sign in; then filters and cards.</p>
@@ -216,13 +216,27 @@
   </div>
   <p class="note">A creator's page counts <code>hub_view_creator_*</code>, its Follow <code>hub_follow</code>, and its cards like Explore's.</p>
 
+  <h2 id="shared">4. A shared link: someone's live harness</h2>
+  <p class="lede"><code>harness.autonomous.ai/s/&lt;id&gt;#key=…</code> is the web app (Flutter), not the Hub's pages, but it counts the same way and through the same <code>/api/hub-usage</code>. The link, its key, the harness and its owner are never sent. A staging link (<code>?env=stag</code>) or account, a debug build and the desktop app send nothing.</p>
+  <ol class="legend">
+    <li><i class="pin view">1</i><div><b>The page drawn</b><code class="m">hub_view_shared_visitor|member</code><small>Once per page, as soon as the app knows whether the reader is signed in.</small></div></li>
+    <li><i class="pin view">2</i><div><b>What the link showed</b><code class="m">hub_shared_open_live|offline|private|no_access|failed</code><small>Each at most once per page: an offline owner's reconnects every 10 s add nothing, and offline then live counts both. <code>private</code>: a private link before sign-in. <code>no_access</code>: not invited, or the link stopped. <code>failed</code>: an incomplete link, a changed owner identity, or no connection.</small></div></li>
+    <li><i class="pin">3</i><div><b>A live viewer drew</b><code class="m">hub_shared_viewer_shown</code><small>Once, on its first frame: the harness shows a picture (Blender, slides, a site), not only a terminal.</small></div></li>
+    <li><i class="pin">4</i><div><b>Comments</b><code class="m">hub_shared_comments_open · hub_shared_comment_post</code><small>The panel opened by its button; a comment saved.</small></div></li>
+    <li><i class="pin">5</i><div><b>Sign in</b><code class="m">hub_shared_sign_in_click</code><small>On a private link, or under the comments.</small></div></li>
+    <li><i class="pin">6</i><div><b>Retry</b><code class="m">hub_shared_retry</code><small>After offline, a failure, or a dropped connection.</small></div></li>
+    <li><i class="pin">7</i><div><b>Leaving for the product</b><code class="m">hub_shared_get_app · hub_shared_product_page</code><small>Download app; the Harness mark (the product page, in a new tab).</small></div></li>
+    <li><i class="pin dwell">8</i><div><b>Time in view</b><code class="m">hub_shared_dwell_under_10s|10s_to_1m|over_1m</code><small>From the first live answer until the page goes, hidden time not counted; once per page.</small></div></li>
+  </ol>
+  <p class="note">No entry is counted here: where shared links are pasted (chat apps, mail) mostly sends no referrer, and its visits would blur the Hub's own <code>hub_entry_*</code>.</p>
+
   <h2 id="all">Every counter</h2>
-  <p class="lede">The 48 names the backend accepts (<code>HUB_METRICS</code>). Nothing else can be sent: an unknown name refuses the report.</p>
+  <p class="lede">The 65 names the backend accepts (<code>HUB_METRICS</code>). Nothing else can be sent: an unknown name refuses the report.</p>
   <div class="table-wrap"><table>
     <thead><tr><th>Counter</th><th>When it counts</th><th>Where</th></tr></thead>
     <tbody>
-      <tr class="group"><td colspan="3">Views · 12</td></tr>
-      <tr><td class="k"><code>hub_view_{page}_{visitor|member}</code></td><td>A page drawn, once per navigation, after the reader is known. Pages: <code>feed</code> (Explore, Following, Yours), <code>creator</code>, <code>harness</code>, <code>publish</code>, <code>notifications</code>, <code>fork</code>.</td><td><code>useHubView</code></td></tr>
+      <tr class="group"><td colspan="3">Views · 14</td></tr>
+      <tr><td class="k"><code>hub_view_{page}_{visitor|member}</code></td><td>A page drawn, once per navigation, after the reader is known. Pages: <code>feed</code> (Explore, Following, Yours), <code>creator</code>, <code>harness</code>, <code>publish</code>, <code>notifications</code>, <code>fork</code>, <code>shared</code> (a shared link, section 4).</td><td><code>useHubView</code></td></tr>
       <tr class="group"><td colspan="3">Entry · 5</td></tr>
       <tr><td class="k"><code>hub_entry_{direct|search|social|internal|other}</code></td><td>The first Hub page of a tab's visit, classed from the referrer's host in the browser. Search: Google, Bing, DuckDuckGo and similar. Social: X, Facebook, LinkedIn, Reddit, Hacker News, Threads, Bluesky, YouTube, Discord, Telegram, Instagram. Internal: another page of harness.autonomous.ai.</td><td><code>countHubEntry</code></td></tr>
       <tr class="group"><td colspan="3">Feeds · 7</td></tr>
@@ -249,6 +263,13 @@
       <tr><td class="k"><code>hub_publish_started|ok|failed</code></td><td>Publish or Save changes submitted, and how it ended.</td><td>publish/page</td></tr>
       <tr class="group"><td colspan="3">Time on a harness · 3</td></tr>
       <tr><td class="k"><code>hub_harness_dwell_{under_10s|10s_to_1m|over_1m}</code></td><td>Visible time of one harness view, as it is left.</td><td><code>useHarnessDwell</code></td></tr>
+      <tr class="group"><td colspan="3">A shared link · 15</td></tr>
+      <tr><td class="k"><code>hub_shared_open_{live|offline|private|no_access|failed}</code></td><td>What the link showed, each once per page.</td><td>SharedAgentPage</td></tr>
+      <tr><td class="k"><code>hub_shared_viewer_shown</code></td><td>Its live viewer's first frame.</td><td>SharedHarnessPanel</td></tr>
+      <tr><td class="k"><code>hub_shared_comments_open</code> · <code>hub_shared_comment_post</code></td><td>Comments opened by the button; a comment saved.</td><td>SharedHarnessPanel</td></tr>
+      <tr><td class="k"><code>hub_shared_sign_in_click</code> · <code>hub_shared_retry</code></td><td>Sign in (private link, comments); Retry (page or panel).</td><td>SharedAgentPage, SharedHarnessPanel</td></tr>
+      <tr><td class="k"><code>hub_shared_get_app</code> · <code>hub_shared_product_page</code></td><td>Download app; the Harness mark.</td><td>SharedAgentPage</td></tr>
+      <tr><td class="k"><code>hub_shared_dwell_{under_10s|10s_to_1m|over_1m}</code></td><td>Visible time from the first live answer until the page goes.</td><td><code>VisibleTime</code></td></tr>
     </tbody>
   </table></div>
 
@@ -271,6 +292,8 @@ DATABASE_URL=&lt;read-only&gt; npm run usage:daily -- 14   # keep output in .har
       <tr><td>Do people stay?</td><td>Dwell buckets, against <code>hub_view_harness</code></td><td>Mostly under 10 s: the output loads slowly or the page does not say what it is; look at output load and the first screen.</td></tr>
       <tr><td>How do people share, and does it bring readers?</td><td><code>hub_share_*</code> by row; <code>hub_entry_social</code> over time</td><td>Copy dominates: keep it first. Social entries flat: preview images and titles (link previews were fixed in v1.3.58_web).</td></tr>
       <tr><td>Do readers talk?</td><td><code>hub_comments_open</code>, <code>hub_comment_post</code>, prompts shown in comments</td><td>Opens but no posts: a prompt or example question in the empty panel.</td></tr>
+      <tr><td>Does a shared link reach a live harness?</td><td><code>hub_shared_open_live</code> against <code>hub_view_shared_*</code>; <code>_offline</code>, <code>_private</code>, <code>_no_access</code>, <code>_failed</code></td><td>Mostly offline: show the owner's last output while their machine is away. Many private before sign-in, few <code>hub_shared_sign_in_click</code>: say who invited the reader and why to sign in.</td></tr>
+      <tr><td>Does a shared link bring people to Harness?</td><td><code>hub_shared_get_app</code> + <code>hub_shared_product_page</code> ÷ <code>hub_view_shared_visitor</code>; <code>hub_shared_dwell_*</code></td><td>Long dwell, few clicks: a "make one like this" call to action beside the live harness.</td></tr>
       <tr><td>Does search work?</td><td><code>hub_feed_search</code> followed by <code>hub_card_open</code> (same days)</td><td>Searches with few opens: search creators too (the placeholder promises it), fuzzy matching.</td></tr>
     </tbody>
   </table></div>

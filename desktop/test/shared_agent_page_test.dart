@@ -8,6 +8,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/measurement/hub_usage.dart';
 import 'package:harness/sharing/shared_agent_location.dart';
 import 'package:harness/sharing/shared_agent_page.dart';
 import 'package:harness/sharing/shared_harness_panel.dart';
@@ -64,6 +65,8 @@ void main() {
     Brightness brightness = Brightness.dark,
     Size size = const Size(800, 600),
     double scale = 1,
+    String environment = 'stag',
+    HubUsage? usage,
   }) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = size;
@@ -85,7 +88,8 @@ void main() {
           child: SharedAgentPage(
             app: app,
             dio: dio,
-            location: SharedAgentLocation(id, pinnedKey, 'stag'),
+            location: SharedAgentLocation(id, pinnedKey, environment),
+            usage: usage,
           ),
         ),
       ),
@@ -228,4 +232,38 @@ void main() {
       );
     }
   }
+
+  testWidgets(
+    'counts what a shared link showed once each, and never the link',
+    (tester) async {
+      final bodies = <String>[];
+      final usage = HubUsage(
+        enabled: () => true,
+        post: (body, _) => bodies.add(body),
+      );
+      app.status = AppStatus.unauthenticated;
+      await show(tester, pinnedKey: key, environment: 'prod', usage: usage);
+      await tester.pump(const Duration(seconds: 10));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(find.widgetWithText(TextButton, 'Retry'));
+      await tester.pump(const Duration(milliseconds: 50));
+      usage.flush();
+      expect(requests.length, greaterThanOrEqualTo(3));
+      expect(jsonDecode(bodies.single)['counters'], {
+        'hub_view_shared_visitor': 1,
+        'hub_shared_open_offline': 1,
+        'hub_shared_retry': 1,
+      });
+      expect(bodies.single, isNot(contains(id)));
+      expect(bodies.single, isNot(contains(key)));
+      await tester.pumpWidget(const SizedBox());
+      usage.flush();
+      bodies.clear();
+      // A staging link is the team's own.
+      await show(tester, pinnedKey: key, usage: usage);
+      usage.flush();
+      expect(bodies, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }

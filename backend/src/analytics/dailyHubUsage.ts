@@ -1,4 +1,4 @@
-import { HUB_ACTIONS, HUB_DWELL, HUB_ENTRY_SOURCES, HUB_METRICS, HUB_READERS, HUB_VIEW_PAGES } from '../lib/hubMetricsContract.js'
+import { HUB_ACTIONS, HUB_DWELL, HUB_ENTRY_SOURCES, HUB_METRICS, HUB_READERS, HUB_SHARED_OPENS, HUB_VIEW_PAGES } from '../lib/hubMetricsContract.js'
 
 const DAY = 86_400_000
 type Row = { dayUtc: Date; metric: string; value: number }
@@ -21,6 +21,8 @@ function hubDay(c: Record<string, number> | undefined) {
   return {
     views, entries: pick(HUB_ENTRY_SOURCES, source => `hub_entry_${source}`, c), actions,
     harnessDwell: pick(HUB_DWELL, bucket => `hub_harness_dwell_${bucket}`, c),
+    sharedOpens: pick(HUB_SHARED_OPENS, open => `hub_shared_open_${open}`, c),
+    sharedDwell: pick(HUB_DWELL, bucket => `hub_shared_dwell_${bucket}`, c),
     forkClicksPerHarnessView: ratio(actions.fork, views.harness.visitor + views.harness.member),
     signInClicksPerPromptShown: ratio(actions.sign_in_prompt_click, actions.sign_in_prompt_shown),
   }
@@ -44,6 +46,8 @@ export function dailyHubUsage(rows: Row[], days: number, now: Date) {
       views: 'A Hub page drawn, once per navigation; visitor is signed out, member signed in.',
       entries: 'The first Hub page of a browser tab\'s visit, by where it came from, classified in the browser; no referrer is sent.',
       harnessDwell: 'How long a harness page stayed visible, once per view.',
+      sharedOpens: 'What a shared link (`/s/:id`) showed, each outcome at most once per page: live, the owner\'s machine offline, private before sign-in, no access, or failed.',
+      sharedDwell: 'How long a live shared harness stayed visible, once per page.',
       ratios: 'Two separate daily totals divided; a click can follow a view counted on another day. Keep the numerator and denominator.',
       trust: 'Public, credential-free counts: they can be fabricated. Directional only; no margins are kept, so no suppression applies.',
     },

@@ -36,3 +36,17 @@ it('splits views by reader, counts entries, actions and dwell, and keeps both si
   expect(today.totals?.forkClicksPerHarnessView).toEqual({ numerator: 0, denominator: 0, ratio: null })
   expect(JSON.stringify(hub)).not.toContain('PRIVATE_CANARY')
 })
+
+it('reads a shared link apart: what it showed, how long it stayed, and its clicks', () => {
+  const [day] = dailyHubUsage([
+    r('2026-10-13', 'hub_view_shared_visitor', 9), r('2026-10-13', 'hub_shared_open_live', 6), r('2026-10-13', 'hub_shared_open_offline', 3),
+    r('2026-10-13', 'hub_shared_dwell_10s_to_1m', 4), r('2026-10-13', 'hub_shared_get_app', 2),
+  ], 1, new Date('2026-10-13T12:00:00Z')).daily
+  expect(day.totals).toMatchObject({
+    views: { shared: { visitor: 9, member: 0 } },
+    sharedOpens: { live: 6, offline: 3, private: 0, no_access: 0, failed: 0 },
+    sharedDwell: { under_10s: 0, '10s_to_1m': 4, over_1m: 0 },
+    harnessDwell: { '10s_to_1m': 0 },
+    actions: { shared_get_app: 2, get_app: 0 },
+  })
+})
