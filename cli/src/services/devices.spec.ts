@@ -121,7 +121,17 @@ vi.mock('../lib/voiceRouter.js', () => ({
 }))
 
 const jevMade = vi.hoisted(() => vi.fn())
-vi.mock('../lib/jev/jevClient.js', async (orig) => ({ ...(await orig<object>()), createJevDecide: (...a: unknown[]) => { jevMade(...a); return async () => { throw new Error('no jev here') } } }))
+vi.mock('../lib/jev/jevClient.js', async (orig) => {
+  const actual = await orig<typeof import('../lib/jev/jevClient.js')>()
+  return {
+    ...actual,
+    createJevDecide: (options: Parameters<typeof actual.createJevDecide>[0]) => {
+      jevMade(options)
+      // Keep the real hosted request and answer parsing, without discovering a key or calling OpenRouter.
+      return actual.createJevDecide({ ...options, key: async () => null })
+    },
+  }
+})
 
 const { startDevices } = await import('./devices.js')
 
@@ -388,6 +398,40 @@ describe('what the windows say, reaching the dial', () => {
       delete process.env.HARNESS_NOTIFY_SMART
       start({ decideTier: null })
       expect(jevMade).toHaveBeenCalledTimes(1)
+    })
+
+    it('asks the signed-in backend for a default tier, sends its answer to the dial, and tallies it', async () => {
+      delete process.env.HARNESS_NOTIFY_SMART
+      const backend = vi.fn(async () => ({ status: 200, body: { data: { answers: {
+        tier: { choice: 'alert', probabilities: { alert: 0.8, list: 0.15, silent: 0.05 } },
+      } } } }))
+      const core = fakeCore({ dataDir, account: { backend } })
+      const { port } = start({ core, decideTier: null })
+      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'The requested build is ready.' } })
+      await vi.waitFor(() => expect(calls('summary')).toEqual([
+        ['a1', 'The requested build is ready.', 'done', 'alert', undefined, false],
+      ]))
+      expect(backend).toHaveBeenCalledExactlyOnceWith('POST', '/api/route/jev', {
+        state: {
+          agent: '', engine: '', recap: 'The requested build is ready.', duration_s: null,
+          work: { tests_passed: undefined, tests_failed: undefined, commits: undefined },
+          recent: { alerts_30m: 0, lists_30m: 0 },
+        },
+        questions: { tier: {
+          type: 'choice', instructions: expect.any(String),
+          criteria: { alert: expect.any(String), list: expect.any(String), silent: expect.any(String) },
+        } },
+      })
+      expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · .* · alert · jev · p=alert=0\.80,list=0\.15,silent=0\.05 · \d+ms$/))
+      expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · day \d{4}-\d\d-\d\d · alert 1 · list 0 · silent 0$/))
+    })
+
+    it('keeps a recap in the list when the decider rejects', async () => {
+      const { port } = start({ decideTier: async () => { throw new Error('decision unavailable') } })
+      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'The requested build is ready.', fullText: 'The full build report.' } })
+      await vi.waitFor(() => expect(calls('summary')).toEqual([
+        ['a1', 'The requested build is ready.', 'done', 'list', 'The full build report.', false],
+      ]))
     })
 
     it('keeps the next turn behind a recap still waiting on the decider', async () => {

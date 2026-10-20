@@ -72,6 +72,35 @@ describe('when the devices\' process is asked for', () => {
     return { devices, want, log, plug: (names: string[]) => { dev = names } }
   }
 
+  it('starts Windows USB dial discovery once without reading /dev or scheduling scans, even with no dial', () => {
+    const listDev = vi.fn(() => [])
+    const { devices, want, log } = wake({ platform: 'win32', listDev })
+    devices.start(both)
+    devices.start(both)
+    vi.advanceTimersByTime(DIAL_LOOK_MS * 5)
+    expect(want.mock.calls).toEqual([['devices']])
+    expect(log).toHaveBeenCalledWith('[devices] Windows USB dial discovery: asking for the devices\' process')
+    expect(listDev).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('does not start Windows discovery when cable is disabled, devices run inline, or devices were already requested', () => {
+    const listDev = vi.fn(() => [])
+    const disabled = wake({ platform: 'win32', cableDisabled: true, listDev })
+    disabled.devices.start(both)
+    const inline = wake({ platform: 'win32', listDev })
+    inline.devices.start(new Set(['wifi']))
+    const early = wake({ platform: 'win32', listDev })
+    early.devices.ask('devices', 'an explicit request before binding')
+    early.devices.start(both)
+    expect(disabled.want).not.toHaveBeenCalled()
+    expect(inline.want).not.toHaveBeenCalled()
+    expect(early.want.mock.calls).toEqual([['devices']])
+    expect(early.log).toHaveBeenCalledWith('[devices] an explicit request before binding: asking for the devices\' process')
+    expect(listDev).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('looks at /dev every two seconds until a dial\'s port is there, asks once, and looks no more', () => {
     const { devices, want, log, plug } = wake()
     devices.start(both)

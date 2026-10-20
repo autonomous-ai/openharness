@@ -34,6 +34,11 @@ describe('the pty host beside a Windows bundle', () => {
     expect(readdirSync(join(repo.outDir, 'pty')).sort()).toEqual(['OpenConsole.exe', 'conpty.dll', 'harness-launch.exe', 'harness-pty.exe', 'harness.exe'])
   })
 
+  it('copies harness-serial from serial/ beside pty/ when it was built', () => {
+    const repo = repository([HOST, LAUNCHER, COMMAND, 'vendor/conpty/x64/conpty.dll', 'vendor/conpty/x64/OpenConsole.exe', '../serial/target/release/harness-serial.exe'])
+    expect(copyPtyPayload({ ...repo, platform: 'win32', arch: 'x64' })).toEqual(['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe'])
+  })
+
   it('copies only what is there: the host without a launcher or payload, nothing without the host', () => {
     const hostOnly = repository([HOST])
     expect(copyPtyPayload({ ...hostOnly, platform: 'win32', arch: 'x64' })).toEqual(['harness-pty.exe'])

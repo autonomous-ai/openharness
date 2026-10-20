@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import tempfile
 import unittest
 import zipfile
@@ -430,11 +431,12 @@ class PreservationTest(unittest.TestCase):
 
 
 class ShellSafetyTest(Temp):
-    def run_tool(self, command, owned=False, root_failure=False):
+    def run_tool(self, command, owned=False, root_failure=False, admin=None):
         scripts = Path(__file__).resolve().parent
         fake = self.dir / 'bin'
         fake.mkdir(exist_ok=True)
         trace = self.dir / 'transport.jsonl'
+        trace.unlink(missing_ok=True)
         # A local fake transport records serialized commands; it performs no SSH/network/native operation.
         stub = '#!' + sys.executable + '\n' + r'''
 import base64, json, os, sys
@@ -465,11 +467,54 @@ elif "-Script 'session-run.ps1'" in source:
                 'sid': 'S-1-5-21-1-2-3-1005', 'profile': r'C:\Users\hxtool', 'created': True}))
         env = dict(os.environ, PATH=str(fake)+os.pathsep+os.environ['PATH'], TEST_TRACE=str(trace),
                    E2E_WORK=str(work), EV=str(self.dir/'evidence'), E2E_USER='hxtool',
+                   VM_HOST='kit-test.invalid',
                    TEST_ROOT_FAILURE='1' if root_failure else '0')
+        env.pop('VM_ADMIN', None)
+        if admin is not None:
+            env['VM_ADMIN'] = admin
         result = subprocess.run(['bash', str(scripts/'desktop-e2e.sh'), *command], env=env,
                                 capture_output=True, text=True, timeout=15)
         calls = [json.loads(line) for line in trace.read_text().splitlines()] if trace.exists() else []
         return result, calls
+
+    def test_admin_commands_use_the_configured_account_for_every_transport(self):
+        for command in (['sh-admin', 'whoami'], ['admin', 'parse-check.ps1']):
+            with self.subTest(command=command):
+                result, calls = self.run_tool(command, admin='kit-owner')
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(calls)
+                destinations = [arg for call in calls for arg in call['args'] if '@' in arg]
+                self.assertTrue(destinations)
+                self.assertTrue(all(arg.startswith('kit-owner@kit-test.invalid') for arg in destinations), destinations)
+
+    def test_default_admin_account_still_works(self):
+        result, calls = self.run_tool(['sh-admin', 'whoami'])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('admin@kit-test.invalid', calls[0]['args'])
+
+    def test_put_admin_copies_one_file_to_this_runs_scratch(self):
+        binary = self.dir / 'harness serial.exe'
+        binary.write_bytes(b'fixture, never executed')
+        result, calls = self.run_tool(['put-admin', str(binary)], admin='kit-owner')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        copies = [call for call in calls if str(binary) in call['args']]
+        self.assertEqual(len(copies), 1)
+        self.assertEqual(copies[0]['args'][-1],
+                         'kit-owner@kit-test.invalid:C:/Users/admin/Temp/harness-desktop-e2e-' + 'a'*32 + '/')
+        self.assertTrue(all(not arg.startswith('admin@') for call in calls for arg in call['args']))
+
+    def test_put_admin_missing_file_refuses_before_any_transport(self):
+        result, calls = self.run_tool(['put-admin', str(self.dir / 'absent.exe')])
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('no file', result.stderr)
+        self.assertEqual(calls, [])
+
+    def test_put_admin_failed_scratch_creation_never_copies(self):
+        binary = self.dir / 'harness-serial.exe'
+        binary.write_bytes(b'fixture, never executed')
+        result, calls = self.run_tool(['put-admin', str(binary)], root_failure=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(calls), 1)
 
     def test_unowned_cleanup_and_session_refuse_before_any_transport(self):
         for command in ('cleanup', 'session-on', 'session-off'):
@@ -498,6 +543,68 @@ elif "-Script 'session-run.ps1'" in source:
         result, calls = self.run_tool(['session-on'], owned=True, root_failure=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(calls), 1)
+
+
+POWERSHELL = shutil.which('powershell.exe') if os.name == 'nt' else os.environ.get('HARNESS_TEST_POWERSHELL')
+
+
+@unittest.skipUnless(POWERSHELL, 'PowerShell unavailable; set HARNESS_TEST_POWERSHELL for a local behavior check')
+class DialStateTest(Temp):
+    def run_dial_state(self, hardware):
+        # Execute the actual helper with only its Windows identity/process and CLI boundaries replaced.
+        # The two CLI namespaces deliberately return different real-world document shapes.
+        scripts = Path(__file__).resolve().parent
+        script = self.dir / 'dial-state.ps1'
+        shutil.copyfile(scripts / script.name, script)
+        (self.dir / 'ownership.ps1').write_text('function Assert-OwnedUser { }\n', encoding='ascii')
+        profile = self.dir / 'profile'
+        binary = profile / '.harness/bin/harness.exe'
+        binary.parent.mkdir(parents=True)
+        binary.write_text('fixture, never executed', encoding='ascii')
+        (profile / '.harness/logs').mkdir()
+        trace = self.dir / 'argv.json'
+        source = r'''
+$ErrorActionPreference = 'Stop'
+function Invoke-FixtureHarness {
+    ConvertTo-Json -InputObject @($args) -Compress | Set-Content -LiteralPath $env:DIAL_ARGV
+    $global:LASTEXITCODE = 0
+    if (($args -join ' ') -eq 'hardware list --json') { $env:DIAL_HARDWARE }
+    elseif (($args -join ' ') -eq 'devices list --json') { '{"members":[],"frozen":null,"frozenPeers":[]}' }
+    else { $global:LASTEXITCODE = 2 }
+}
+Set-Alias -Name (Join-Path $env:USERPROFILE '.harness\bin\harness.exe') -Value Invoke-FixtureHarness
+function Get-Process { }
+& $env:DIAL_SCRIPT
+'''
+        env = dict(os.environ, USERPROFILE=str(profile), DIAL_SCRIPT=str(script), DIAL_ARGV=str(trace),
+                   DIAL_HARDWARE=json.dumps(hardware))
+        encoded = base64.b64encode(source.encode('utf-16le')).decode('ascii')
+        result = subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+                                env=env, capture_output=True, text=True, timeout=15)
+        return result, json.loads(trace.read_text(encoding='utf-8-sig')) if trace.exists() else []
+
+    def test_dial_state_reads_hardware_hosts_without_exposing_settings_values(self):
+        result, argv = self.run_dial_state({'hosts': [{
+            'machineId': '0123456789abcdef', 'name': 'Fixture computer', 'online': True, 'available': True,
+            'status': {'devices': [{'id': 'fedcba9876543210', 'attached': True, 'fw': '1.2.3', 'hw': 'circle',
+                                   'settings': {'brightness': 73, 'face': 'private-face-value'}, 'updating': False}]},
+        }]})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(argv, ['hardware', 'list', '--json'])
+        self.assertEqual(result.stdout.splitlines(), [
+            'host 01234567... online=True available=True devices=1',
+            '  device fedcba98... attached=True fw=1.2.3 hw=circle settings=brightness,face updating=False',
+            'harness-serial processes of this user: 0', 'dial log: (none yet)',
+        ])
+
+    def test_dial_state_rejects_trust_members_output_and_still_reports_diagnostics(self):
+        result, argv = self.run_dial_state({'members': [], 'frozen': None, 'frozenPeers': []})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(argv, ['hardware', 'list', '--json'])
+        self.assertEqual(result.stdout.splitlines(), [
+            'hardware list unavailable (command failed or invalid JSON)',
+            'harness-serial processes of this user: 0', 'dial log: (none yet)',
+        ])
 
 
 if __name__ == '__main__':

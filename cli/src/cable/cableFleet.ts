@@ -22,7 +22,7 @@ export interface CableFleetOptions {
   verdicts?: DialVerdicts
   /** Does another process have this tty open? A port somebody else is using is not looked at. */
   inUse?: (path: string) => Promise<boolean>
-  /** Only the foreground macOS account may automatically own physical USB. */
+  /** Only the account at the screen may automatically own physical USB (macOS: the console user; Windows: the console session). */
   canUseUsb?: () => boolean
   /** How often a board ruled out is checked for another program working on it. */
   watchEveryMs?: number
@@ -148,7 +148,7 @@ export class CableFleet {
 
   private async reconcile(): Promise<void> {
     if (!this.canUseUsb()) {
-      if (!this.waitingForConsole) this.host.log('cable: USB belongs to the active macOS account — releasing this connection')
+      if (!this.waitingForConsole) this.host.log('cable: USB belongs to the account at this computer\'s screen — releasing this connection')
       this.waitingForConsole = true
       await Promise.allSettled([...this.entries.values()].map(entry => entry.session.stop()))
       if (this.entries.size) { this.entries.clear(); this.publish() }

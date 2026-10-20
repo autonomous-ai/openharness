@@ -108,6 +108,16 @@ function Processes([string]$filter) {
 # shells) passed the check for this one on the VM (task B5.14). Another user's process shows no ExecutablePath here.
 do { $hosts = @(Processes "Name='harness-pty.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$root\", 'OrdinalIgnoreCase') }); if ($hosts.Count) { break }; Start-Sleep 1 } while ((Get-Date) -lt $deadline)
 if (-not $hosts.Count) { Fail "no harness-pty.exe from $root runs after creating a terminal" }
+# The dial's watch (sub-project E): a stale payload or an open/probe child under this install root must not satisfy
+# this check. Require the selected payload's binary and its watch command, even with no dial plugged in.
+$ptyVersion = (Get-Content -LiteralPath (Join-Path $root 'runtime\pty\current-pty') -Raw).Trim()
+$serialBinary = "$root\runtime\pty\$ptyVersion\harness-serial.exe"
+$watchCommand = '^(?:"' + [regex]::Escape($serialBinary) + '"|' + [regex]::Escape($serialBinary) + ')\s+watch\s*$'
+$deadline = (Get-Date).AddSeconds(30)
+do { $watch = @(Processes "Name='harness-serial.exe'" | Where-Object { [string]::Equals($_.ExecutablePath, $serialBinary, 'OrdinalIgnoreCase') -and $_.CommandLine -match $watchCommand }); if ($watch.Count) { break }; Start-Sleep 1 } while ((Get-Date) -lt $deadline)
+if (-not $watch.Count) { Fail "no harness-serial.exe watch from $serialBinary runs 30 s after the daemon started" }
+if ($watch.Count -ne 1) { Fail "$($watch.Count) harness-serial.exe watches from $serialBinary run; one watch was expected" }
+Write-Host "ok   the dial watch runs: $($watch[0].CommandLine)"
 # The PowerShell the terminal runs, a child of the host: what the install promises, so none is a failure.
 $deadline = (Get-Date).AddSeconds(30)
 do {

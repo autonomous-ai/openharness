@@ -154,6 +154,11 @@ by itself. Mirroring only helps laptops on networks that block that download, an
 sha256 block to paste back into `esptool_pinned_sha()` when `ESPTOOL_VERSION` is bumped. It does not
 touch `metadata.json`.
 
+**Windows.** `flash-circle.ps1` beside it (`website/src/app/flash-circle.ps1/`) is the same flasher for Windows
+PowerShell 5.1: same steps, flags, numbers and output, so `harness flash` and the desktop app run it unchanged on
+Windows. `flash-circle-ps1.spec.ts` fails if a number differs from the bash script's. Bumping `ESPTOOL_VERSION` means
+both pins; `upload-flasher.sh` prints both blocks and mirrors the Windows zip with the rest.
+
 ## 6. Production hardening — TODO before public shipment
 
 The OTA path is now HTTPS (CA-verified) + SHA-256 over a public bucket. Remaining items before

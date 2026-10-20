@@ -41,7 +41,7 @@ describe('the install manifest of a local build', () => {
     expect(zipCommand('C:\\o\\p.zip', 'C:\\p', 'win32', 'C:\\Windows')).toEqual({ file: 'C:\\Windows\\System32\\tar.exe', args: ['-a', '-cf', 'C:\\o\\p.zip', '-C', 'C:\\p', ...PTY_FILES] })
     expect(zipCommand('/o/p.zip', '/p', 'darwin')).toEqual({ file: '/usr/bin/tar', args: ['-a', '-cf', '/o/p.zip', '-C', '/p', ...PTY_FILES] })
     expect(zipCommand('/o/p.zip', '/p', 'linux')).toEqual({ file: 'python3', args: ['-m', 'zipfile', '-c', '/o/p.zip', ...PTY_FILES], cwd: '/p' })
-    expect(PTY_FILES).toEqual(['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe'])
+    expect(PTY_FILES).toEqual(['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe'])
   })
 
   it.skipIf(process.platform === 'linux' && spawnSync('python3', ['--version']).status !== 0)('writes the manifest and every file it names, with the digests of the bytes on disk', () => {

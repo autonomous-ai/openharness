@@ -2,11 +2,73 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/harness_file_store.dart';
 import 'package:harness/core/serial_port_lease.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 
 void main() {
+  test('per-run Windows leases and the legacy marker each block until retired or stale', () {
+    final dir = Directory.systemTemp.createTempSync('flasher-leases-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final environment = {'HARNESS_FLASHER_CACHE': dir.path};
+    final current = '${DateTime.now().millisecondsSinceEpoch ~/ 1000}\n';
+    final owned = File('${dir.path}/flashing.${'a' * 32}')
+      ..writeAsStringSync(current);
+    final foreign = File('${dir.path}/flashing.${'b' * 32}')
+      ..writeAsStringSync(current);
+    final legacy = File('${dir.path}/flashing')..writeAsStringSync(current);
+    expect(
+      SerialPortLease.heldByAnotherProcess(environment: environment),
+      isTrue,
+    );
+    legacy.deleteSync();
+    expect(
+      SerialPortLease.heldByAnotherProcess(environment: environment),
+      isTrue,
+    );
+    owned.deleteSync();
+    expect(
+      SerialPortLease.heldByAnotherProcess(environment: environment),
+      isTrue,
+    );
+    foreign.writeAsStringSync(
+      '${DateTime.now().subtract(const Duration(hours: 2)).millisecondsSinceEpoch ~/ 1000}\n',
+    );
+    // Other cache files must not become leases merely because they hold a fresh number.
+    File('${dir.path}/flashing.backup').writeAsStringSync(current);
+    File('${dir.path}/cancel').writeAsStringSync(current);
+    expect(
+      SerialPortLease.heldByAnotherProcess(environment: environment),
+      isFalse,
+    );
+  });
+
+  test(
+    'the flasher folder uses HARNESS_FLASHER_CACHE, else the Harness home',
+    () {
+      expect(
+        SerialPortLease.flasherDirectory(
+          environment: {
+            'HARNESS_FLASHER_CACHE': '/x/f',
+            'HOME': '/h',
+            'USERPROFILE': '/h',
+          },
+        ),
+        '/x/f',
+      );
+      expect(
+        SerialPortLease.flasherDirectory(
+          environment: {'HOME': '/h', 'USERPROFILE': '/h'},
+        ),
+        HarnessFileStore.defaultDirectoryPath(
+          environment: {'HOME': '/h', 'USERPROFILE': '/h'},
+          name: 'flasher',
+        ),
+      );
+    },
+  );
+
   test('the lease is released even when the work throws', () async {
     expect(SerialPortLease.held, isFalse);
     await expectLater(

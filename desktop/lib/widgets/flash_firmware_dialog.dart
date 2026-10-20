@@ -104,7 +104,7 @@ class _FlashDialogState extends State<_FlashDialog> {
       _phase = result.ok ? _Phase.done : _Phase.failed;
       if (!result.ok) {
         _problem = result.cancelled
-            ? 'Stopped. Harness has been started again.'
+            ? 'Stopped.'
             : _lastTrouble() ?? 'The flasher exited with ${result.exitCode}.';
       }
     });
@@ -188,7 +188,7 @@ class _FlashDialogState extends State<_FlashDialog> {
         null,
         grid.AppPalette.accentOnSurface,
         'Looking for the dial…',
-        'Checking the USB ports on this Mac.',
+        'Checking the USB ports on ${flashHostName()}.',
       ),
       _Phase.ready => (
         AppIcons.zap,
@@ -201,7 +201,7 @@ class _FlashDialogState extends State<_FlashDialog> {
         grid.AppPalette.warn,
         'No dial found',
         _problem ??
-            'Plug the dial into this Mac with a USB cable, then look '
+            'Plug the dial into ${flashHostName()} with a USB cable, then look '
                 'again.',
       ),
       _Phase.flashing => (
@@ -460,7 +460,7 @@ class _FlashDialogState extends State<_FlashDialog> {
                 ),
                 const Spacer(),
                 Text(
-                  'flash-circle.sh',
+                  widget.flasher.scriptName,
                   style: grid.AppType.monoMeta(
                     color: grid.AppPalette.textFaint,
                   ),

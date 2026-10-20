@@ -29,6 +29,17 @@ abstract final class SerialPortLease {
   /// fault than the one this prevents, and a silent one.
   static const _staleAfter = Duration(minutes: 10);
 
+  /// Where the flasher keeps downloads, its `flashing` flag and the Windows `cancel` file.
+  /// Honours the script's override so both sides look in the same folder.
+  static String flasherDirectory({Map<String, String>? environment}) {
+    final env = environment ?? Platform.environment;
+    return env['HARNESS_FLASHER_CACHE'] ??
+        HarnessFileStore.defaultDirectoryPath(
+          environment: environment,
+          name: 'flasher',
+        );
+  }
+
   /// Whether a flash started OUTSIDE this app is holding the port.
   ///
   /// The in-process counter only knows about flashes this app started. Someone running
@@ -39,26 +50,36 @@ abstract final class SerialPortLease {
   /// The flasher writes this file before it stops the daemon and removes it when it starts it again.
   static bool heldByAnotherProcess({Map<String, String>? environment}) {
     try {
-      // Honours the same override the flasher script reads, so the two sides cannot end up looking
-      // in different places.
-      final env = environment ?? Platform.environment;
-      final dir =
-          env['HARNESS_FLASHER_CACHE'] ??
-          HarnessFileStore.defaultDirectoryPath(
-            environment: environment,
-            name: 'flasher',
+      final dir = flasherDirectory(environment: environment);
+      if (_fresh(File('$dir/flashing'))) return true;
+      // App-started Windows flashes have unique files so a forced stop can retire exactly its
+      // own lease. Bash and standalone/older PowerShell scripts keep the shared timestamp above.
+      final directory = Directory(dir);
+      if (!directory.existsSync()) return false;
+      final runName = RegExp(r'^flashing\.[0-9a-f]{32}$');
+      return directory
+          .listSync(followLinks: false)
+          .whereType<File>()
+          .any(
+            (file) =>
+                runName.hasMatch(file.uri.pathSegments.last) && _fresh(file),
           );
-      final file = File('$dir/flashing');
-      if (!file.existsSync()) return false;
+    } catch (_) {
+      // Unreadable is not "being flashed": failing open here only risks the collision this guards
+      // against, while failing closed would strand the daemon on any filesystem hiccup.
+      return false;
+    }
+  }
+
+  static bool _fresh(File file) {
+    try {
       final started = int.tryParse(file.readAsStringSync().trim());
       if (started == null) return false;
       final age = DateTime.now().difference(
         DateTime.fromMillisecondsSinceEpoch(started * 1000),
       );
       return !age.isNegative && age < _staleAfter;
-    } catch (_) {
-      // Unreadable is not "being flashed": failing open here only risks the collision this guards
-      // against, while failing closed would strand the daemon on any filesystem hiccup.
+    } on FileSystemException {
       return false;
     }
   }

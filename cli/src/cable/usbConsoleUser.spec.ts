@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { isUsbConsoleUser } from './usbConsoleUser.js'
 
 describe('physical USB ownership', () => {
+  it('follows harness-serial on Windows: the console session owns the dial', () => {
+    expect(isUsbConsoleUser({ platform: 'win32', windowsConsole: () => true })).toBe(true)
+    expect(isUsbConsoleUser({ platform: 'win32', windowsConsole: () => false })).toBe(false)
+  })
+
   it('allows the active macOS account and excludes a daemon left in another login', () => {
     const consoleUid = () => 501
     expect(isUsbConsoleUser({ platform: 'darwin', uid: 501, consoleUid })).toBe(true)

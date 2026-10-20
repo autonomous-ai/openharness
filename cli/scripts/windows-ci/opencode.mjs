@@ -11,12 +11,13 @@
  *   node opencode.mjs refused <folder>   the create must be refused with ENGINE_LAUNCH_REFUSED and B4.12's sentence
  *                                        (lib/windows/launch.ts windowsEngineUnavailable), and leave no harness.
  *
- * PORT is the daemon's port (18473 by default). Node 22 or later (its global WebSocket).
+ * PORT is the daemon's port (18473 by default). Uses the installed daemon's existing local credential.
  */
 import { randomUUID } from 'node:crypto'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { WebSocket } from 'ws'
 
 const ARM_SENTENCE = 'OpenCode does not run on Windows on Arm yet: its Arm build stops before its screen opens. Use another engine on this computer.'
 const PROMPT = 'Reply with the single word ok.'
@@ -32,9 +33,23 @@ const port = process.env.PORT || '18473'
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
 const say = (line) => console.log(`[opencode] ${line}`)
 
+/** Run 39362659040 reached a live daemon but its TCP upgrade now requires this user's local credential. */
+function installedCredential() {
+  const file = join(root, 'cli', 'data', 'hook-credential')
+  try {
+    const info = lstatSync(file)
+    if (!info.isFile() || info.size > 128) throw new Error('invalid credential file')
+    const value = readFileSync(file, 'utf8').trim()
+    if (!/^[A-Za-z0-9_-]{43}$/.test(value)) throw new Error('invalid credential value')
+    return value
+  } catch {
+    throw new Error(`Cannot read a valid local credential at ${file}; check the installed daemon.`)
+  }
+}
+
 /** The loopback socket, selected as this computer: requests answered by their `<type>_result` frame. */
 async function connect() {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/local-ws`)
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/local-ws`, { headers: { 'X-Harness-Local': installedCredential() } })
   const frames = []
   const waiters = []
   ws.onmessage = (event) => {
@@ -43,7 +58,7 @@ async function connect() {
     frames.push(frame)
     for (const waiter of [...waiters]) if (waiter.test(frame)) { waiters.splice(waiters.indexOf(waiter), 1); waiter.done(frame) }
   }
-  await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error(`no daemon on 127.0.0.1:${port}`)) })
+  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.on('error', reject) })
   const wait = (test, ms, what) => new Promise((resolve, reject) => {
     const hit = frames.find(test)
     if (hit) return resolve(hit)

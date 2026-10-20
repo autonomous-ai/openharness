@@ -29,7 +29,7 @@ $HarnessScriptPath = $MyInvocation.MyCommand.Path
 
 $HarnessCliVersionPattern = '^\d+\.\d+\.\d+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$'
 $HarnessPtyVersionPattern = '^\d+(\.\d+)*$'
-$HarnessPtyFiles = @('harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe')
+$HarnessPtyFiles = @('harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe')
 
 function Get-HarnessPlatform {
   # The platform from the NATIVE architecture, read where Windows keeps it for the whole system. An x64
@@ -376,7 +376,8 @@ function Install-HarnessCli {
 }
 
 function Install-HarnessPty {
-  # runtime\pty\<version>\ with the host, the launcher, the harness command and ConPTY, then current-pty and
+  # runtime\pty\<version>\ with the host, the launcher, the harness command, ConPTY and harness-serial (the dial's
+  # port, sub-project E), then current-pty and
   # bin\harness-launch.exe. A complete version folder is never replaced: a host may be running from it, and a running
   # .exe cannot be overwritten on Windows (A's spec, host upgrade). It returns the version folder.
   param([string]$Root, $Entry, [string]$Source, [string]$Tar)

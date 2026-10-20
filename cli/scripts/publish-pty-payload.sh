@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Publish the Windows pty payload that install.ps1 lays down in %USERPROFILE%\.harness\runtime\pty\<version>\.
-# The payload is harness-pty.exe, harness-launch.exe, harness.exe (the `harness` command) and the ConPTY pair
-# (conpty.dll, OpenConsole.exe). This script
+# The payload is harness-pty.exe, harness-launch.exe, harness.exe (the `harness` command), the ConPTY pair
+# (conpty.dll, OpenConsole.exe) and harness-serial.exe (serial/, the dial's serial port). This script
 # publishes:
 #   - one zip per architecture, files at its root, under <OBJECT_PREFIX>/pty/<version>/ (OBJECT_PREFIX is harness by
 #     default; harness/staging keeps a staging build off the released paths). These are immutable, like every
@@ -49,7 +49,7 @@ if [ "$PTY_VERSION" != "$VERSION" ]; then
   fi
 fi
 # The payload, as install.ps1 ($HarnessPtyFiles) checks it.
-FILES=(harness-pty.exe harness-launch.exe harness.exe conpty.dll OpenConsole.exe)
+FILES=(harness-pty.exe harness-launch.exe harness.exe conpty.dll OpenConsole.exe harness-serial.exe)
 
 for command in node python3; do
   command -v "$command" >/dev/null 2>&1 || { echo "error: $command is required" >&2; exit 1; }
