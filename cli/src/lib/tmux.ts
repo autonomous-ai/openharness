@@ -695,6 +695,10 @@ export const ENGINE_PROCESS_SIGNATURES: Readonly<Record<RegisteredSession['engin
     basenames: [/^pi$/],
     entrypoints: [/pi-coding-agent[\/\\]dist[\/\\]cli\.js$/],
   },
+  omp: {
+    basenames: [/^omp$/],
+    entrypoints: [],
+  },
   hermes: {
     basenames: [/^hermes$/, /^hermes-agent$/],
     entrypoints: [/hermes-agent[\/\\]hermes$/, /(?:^|[\/\\])hermes_cli(?:[\/\\]|\.|$)/],

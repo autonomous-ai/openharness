@@ -11,6 +11,7 @@ const OFFICIAL_COMMANDS = {
   cursor: 'curl https://cursor.com/install -fsS | bash',
   opencode: 'curl -fsSL https://opencode.ai/install | bash',
   pi: 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent',
+  omp: 'curl -fsSL https://omp.sh/install | sh',
   hermes: 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash',
   commandcode: 'npm i -g command-code',
   devin: 'curl -fsSL https://cli.devin.ai/install.sh | bash',

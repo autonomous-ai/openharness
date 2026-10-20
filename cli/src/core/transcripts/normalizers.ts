@@ -22,6 +22,7 @@ import type { KiloReader } from '../../engines/kilo/reader.js'
 import type { MuseNormalizer } from '../../engines/muse/normalizer.js'
 import type { OpencodeReader } from '../../engines/opencode/reader.js'
 import type { PiNormalizer } from '../../engines/pi/normalizer.js'
+import type { OmpNormalizer } from '../../engines/omp/normalizer.js'
 
 export function createSessionNormalizers() {
   // Per-session web turn-lifecycle state; the device mirror keeps its own state + recap.
@@ -30,6 +31,7 @@ export function createSessionNormalizers() {
   const opencodeReaders = new Map<string, OpencodeReader>()
   const kiloReaders = new Map<string, KiloReader>()
   const piNormalizers = new Map<string, PiNormalizer>()
+  const ompNormalizers = new Map<string, OmpNormalizer>()
   const museNormalizers = new Map<string, MuseNormalizer>()
   const ampNormalizers = new Map<string, AmpNormalizer>()
   const grokNormalizers = new Map<string, GrokNormalizer>()
@@ -46,6 +48,7 @@ export function createSessionNormalizers() {
       ?? opencodeReaders.get(sessionId)?.turnOpen
       ?? kiloReaders.get(sessionId)?.turnOpen
       ?? piNormalizers.get(sessionId)?.turnOpen
+      ?? ompNormalizers.get(sessionId)?.turnOpen
       ?? museNormalizers.get(sessionId)?.turnOpen
       ?? ampNormalizers.get(sessionId)?.turnOpen
       ?? grokNormalizers.get(sessionId)?.turnOpen
@@ -63,6 +66,7 @@ export function createSessionNormalizers() {
       || opencodeReaders.has(sessionId)
       || kiloReaders.has(sessionId)
       || piNormalizers.has(sessionId)
+      || ompNormalizers.has(sessionId)
       || museNormalizers.has(sessionId)
       || ampNormalizers.has(sessionId)
       || grokNormalizers.has(sessionId)
@@ -81,6 +85,7 @@ export function createSessionNormalizers() {
     kiloReaders.get(sessionId)?.stop()
     kiloReaders.delete(sessionId)
     piNormalizers.delete(sessionId)
+    ompNormalizers.delete(sessionId)
     museNormalizers.delete(sessionId)
     ampNormalizers.delete(sessionId)
     grokNormalizers.delete(sessionId)
@@ -101,6 +106,7 @@ export function createSessionNormalizers() {
     opencodeReaders.get(sessionId)?.closeTurn()
     kiloReaders.get(sessionId)?.closeTurn()
     piNormalizers.get(sessionId)?.closeTurn()
+    ompNormalizers.get(sessionId)?.closeTurn()
     museNormalizers.get(sessionId)?.closeTurn()
     ampNormalizers.get(sessionId)?.closeTurn()
     grokNormalizers.get(sessionId)?.closeTurn()
@@ -120,7 +126,7 @@ export function createSessionNormalizers() {
   }
 
   return {
-    liveParsers, cursorNormalizers, opencodeReaders, kiloReaders, piNormalizers,
+    liveParsers, cursorNormalizers, opencodeReaders, kiloReaders, piNormalizers, ompNormalizers,
     museNormalizers, ampNormalizers, grokNormalizers, agyNormalizers, copilotNormalizers, hermesReaders,
     devinReaders, commandcodeNormalizers,
     sessionTurnState, sessionTurnOpen, hasState, forget, closeTurns, stopPollers,

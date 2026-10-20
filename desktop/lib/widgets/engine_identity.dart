@@ -116,6 +116,16 @@ const _engines = <String, EngineIdentity>{
     homepage: 'https://pi.dev',
     blurb: "A small, extensible coding agent for the terminal.",
   ),
+  'omp': EngineIdentity(
+    id: 'omp',
+    label: 'Oh My Pi',
+    category: 'Code',
+    tagline: 'Terminal coding agent, built on Pi',
+    creator: 'can1357',
+    color: Colors.white,
+    homepage: 'https://github.com/can1357/oh-my-pi',
+    blurb: "A batteries-included coding agent for the terminal, built on Pi.",
+  ),
   'hermes': EngineIdentity(
     id: 'hermes',
     label: 'Hermes',

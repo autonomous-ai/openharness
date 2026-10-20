@@ -18,7 +18,7 @@ import { terminalScreen } from './kit/screen.js'
 import { isTerminalEngine, type AgentEngine, type ProcessEngine } from './types.js'
 
 /** The engines whose code the core loads only when one of their sessions needs it. */
-export const OTHER_ENGINES = ['opencode', 'cursor', 'kilo', 'devin', 'hermes', 'amp', 'agy', 'grok', 'copilot', 'commandcode', 'muse', 'pi'] as const satisfies readonly ProcessEngine[]
+export const OTHER_ENGINES = ['opencode', 'cursor', 'kilo', 'devin', 'hermes', 'amp', 'agy', 'grok', 'copilot', 'commandcode', 'muse', 'pi', 'omp'] as const satisfies readonly ProcessEngine[]
 export type OtherEngine = (typeof OTHER_ENGINES)[number]
 export function isOtherEngine(engine: string): engine is OtherEngine { return (OTHER_ENGINES as readonly string[]).includes(engine) }
 
@@ -44,6 +44,7 @@ const MODULES = {
   commandcode: () => import('./commandcode/inProcess.js'),
   muse: () => import('./muse/inProcess.js'),
   pi: () => import('./pi/inProcess.js'),
+  omp: () => import('./omp/inProcess.js'),
 } satisfies Record<OtherEngine | 'screens' | 'hooks' | 'databaseHistory', () => Promise<unknown>>
 export type InProcessModules = { [Name in keyof typeof MODULES]: Awaited<ReturnType<(typeof MODULES)[Name]>> }
 

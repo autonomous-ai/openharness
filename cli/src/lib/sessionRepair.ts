@@ -14,8 +14,9 @@
  *     unbound until its next turn, which is recoverable — mis-binding is not.
  */
 
-import { realpath, stat } from 'fs/promises'
+import { readdir, readlink, realpath, stat } from 'fs/promises'
 import { basename, dirname, isAbsolute, join, sep } from 'path'
+import { homedir } from 'node:os'
 import { env } from '../config/env.js'
 import type { SessionStoreContract } from '../engines/facets/sessionStore.js'
 import { identityBytes, identityEntries, identityFile, identityHead, identityScanBudget, IdentityReadUnavailable } from '../engines/kit/identityScan.js'
@@ -154,6 +155,24 @@ async function readTranscriptHead(path: string, sidechain: string | null, reques
 async function readTranscriptMeta(path: string): Promise<TranscriptMeta | null> {
   const head = await readTranscriptHead(path, null)
   return head?.cwd ? { cwd: head.cwd } : null
+}
+
+async function ompSessionMeta(path: string): Promise<TranscriptMeta | null> {
+  if (basename(path) === '__advisor.jsonl') return null
+  return readTranscriptMeta(path)
+}
+
+async function ompHeldSession(pid: number): Promise<RepairedSession | null> {
+  let links: string[]
+  try { links = await readdir(`/proc/${pid}/fd`) } catch { return null }
+  const root = `${join(homedir(), '.omp', 'agent', 'sessions')}/`
+  for (const fd of links) {
+    let target = ''
+    try { target = await readlink(`/proc/${pid}/fd/${fd}`) } catch { continue }
+    if (!target.endsWith('.jsonl') || target.includes('__advisor') || !target.startsWith(root)) continue
+    return { sessionId: idFromFile(target), transcriptPath: target }
+  }
+  return null
 }
 
 /**
@@ -376,6 +395,11 @@ export async function findLiveSession(
   const dirList = placeholders(dirs.length)
   // Native identity is eager. Optional interpretation cannot keep a process unbound.
   switch (engine) {
+    case 'omp': {
+      const held = opts?.pid ? await ompHeldSession(opts.pid) : null
+      if (held) return held
+      return fileEngineSession(join(homedir(), '.omp', 'agent', 'sessions'), cwd, startedAtMs, ompSessionMeta, opts)
+    }
     case 'pi':
       return fileEngineSession(join(env.PI_HOME, 'agent', 'sessions'), cwd, startedAtMs, readTranscriptMeta, opts)
     case 'commandcode':

@@ -18,6 +18,7 @@ const ENGINE_LABELS: Record<AgentEngine, string> = {
   cursor: 'Cursor',
   opencode: 'OpenCode',
   pi: 'Pi',
+  omp: 'Oh My Pi',
   hermes: 'Hermes',
   commandcode: 'Command Code',
   devin: 'Devin',

@@ -223,6 +223,7 @@ if [ -n "${ZSH_VERSION-}" ]; then
     (( $+aliases[cursor-agent] || $+functions[cursor-agent] )) || function cursor-agent { _hn_agent cursor "$@"; }
     (( $+aliases[opencode] || $+functions[opencode] )) || function opencode { _hn_agent opencode "$@"; }
     (( $+aliases[pi] || $+functions[pi] )) || function pi { _hn_agent pi "$@"; }
+    (( $+aliases[omp] || $+functions[omp] )) || function omp { _hn_agent omp "$@"; }
     (( $+aliases[hermes] || $+functions[hermes] )) || function hermes { _hn_agent hermes "$@"; }
     (( $+aliases[cmd] || $+functions[cmd] )) || function cmd { _hn_agent commandcode "$@"; }
     (( $+aliases[devin] || $+functions[devin] )) || function devin { _hn_agent devin "$@"; }
@@ -238,6 +239,7 @@ elif [ -n "${BASH_VERSION-}" ]; then
     alias cursor-agent >/dev/null 2>&1 || declare -F cursor-agent >/dev/null || function cursor-agent { _hn_agent cursor "$@"; }
     alias opencode >/dev/null 2>&1 || declare -F opencode >/dev/null || function opencode { _hn_agent opencode "$@"; }
     alias pi >/dev/null 2>&1 || declare -F pi >/dev/null || function pi { _hn_agent pi "$@"; }
+    alias omp >/dev/null 2>&1 || declare -F omp >/dev/null || function omp { _hn_agent omp "$@"; }
     alias hermes >/dev/null 2>&1 || declare -F hermes >/dev/null || function hermes { _hn_agent hermes "$@"; }
     alias cmd >/dev/null 2>&1 || declare -F cmd >/dev/null || function cmd { _hn_agent commandcode "$@"; }
     alias devin >/dev/null 2>&1 || declare -F devin >/dev/null || function devin { _hn_agent devin "$@"; }

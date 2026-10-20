@@ -16,6 +16,11 @@
     "opencode/provider-argument": null,
     "pi/plain": null,
     "pi/provider-argument": null,
+    "omp/plain": null,
+    "omp/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
     "hermes/plain": null,
     "hermes/provider-argument": null,
     "commandcode/plain": null,
@@ -415,6 +420,9 @@
       "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
     },
     "instructions/pi": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/omp": {
       "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
     },
     "instructions/hermes": {
@@ -479,6 +487,11 @@
     "opencode/provider-argument": null,
     "pi/plain": null,
     "pi/provider-argument": null,
+    "omp/plain": null,
+    "omp/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
     "hermes/plain": null,
     "hermes/provider-argument": null,
     "commandcode/plain": null,
@@ -878,6 +891,9 @@
       "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
     },
     "instructions/pi": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/omp": {
       "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
     },
     "instructions/hermes": {
