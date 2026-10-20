@@ -12,8 +12,9 @@ import '../core/models.dart' show SharedHarness;
 /// it from the agent's next frame, so a stale URL from a previous run can
 /// never be loaded. [companion] and [devices] are built-in native DSH viewers,
 /// derived only after their account's experiment is enabled. A [finder] tile
-/// is a folder on its machine, browsed in place (`lib/finder/`): no agent,
-/// so — like the other viewers — it is never in the saved layout or the desk.
+/// is a folder on its machine, browsed in place (`lib/finder/`), opened beside
+/// the chat New Harness starts with it; like the other viewers it is never in
+/// the saved layout or the desk.
 enum PaneKind { terminal, web, companion, devices, finder }
 
 /// One tile in the terminal grid.
@@ -52,6 +53,15 @@ class TerminalPane {
   bool get isFinder => kind == PaneKind.finder;
   bool get isViewer => isWeb || isCompanion || isDevices || isFinder;
 
+  /// Whether this is [agentId]'s own viewer on [machineId] — its harness's
+  /// page, or the Finder opened with its chat — which lives beside that
+  /// agent's terminal, so it moves and closes with it.
+  bool viewsAgent(String machineId, String? agentId) =>
+      (isWeb || isFinder) &&
+      agentId != null &&
+      this.machineId == machineId &&
+      ownerAgentId == agentId;
+
   /// [PaneKind.finder] only: the folder the tile browses, on [machineId].
   final String? finderRoot;
 
@@ -60,8 +70,9 @@ class TerminalPane {
   String? url;
   String? viewerError;
 
-  /// The agent whose viewer this is. The native companion viewer can exist
-  /// before its agent starts, then follows the selected individual.
+  /// The agent whose viewer this is: a web viewer's harness, a Finder's
+  /// chat. The native companion viewer can exist before its agent starts,
+  /// then follows the selected individual.
   /// Kept OFF [agentId]
   /// on purpose — everything that attaches a terminal, persists a layout or
   /// remembers a closed agent keys on [agentId] being set, and none of that

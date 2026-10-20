@@ -1359,7 +1359,7 @@ class NewHarnessController extends ChangeNotifier {
             knownHarnessBase[canonicalHarnessId(engine)] ??
             'claude'
       : engine;
-  String get _base => _engine;
+  String get _base => isFinder ? finderChat : _engine;
 
   // Browsing previews an engine without changing the launch draft. Keep that
   // engine while its settings are open in a child picker.
@@ -1491,11 +1491,21 @@ class NewHarnessController extends ChangeNotifier {
   MachineState? get _machine => app.stateOf(_machineId);
   bool get isTerminal => isTerminalEngine(_engine);
 
-  /// A Finder tile rather than a harness: a folder to browse, opened in place.
+  /// A Finder: the folder to browse, with a [finderChat] beside it.
   bool get isFinder => isFinderEngine(_engine);
 
+  /// The agent a Finder's chat runs: the one this person last launched, else
+  /// the one they are signed in to here, else the product default — the
+  /// same order [_initialEngine] opens the box on.
+  String get finderChat {
+    final last = app.agentPreference.successfulLaunch?.engine;
+    if (allEngines.any((engine) => engine.id == last)) return last!;
+    return _accountAgent() ?? defaultHarnessEngine;
+  }
+
   /// A choice with no agent to set up — no model, permission mode or branch:
-  /// the plain shell and the Finder.
+  /// the plain shell, and the Finder, whose chat starts on its defaults in
+  /// exactly the folder the Finder shows.
   bool get _noAgentSetup => isTerminal || isFinder;
 
   /// A cloud agent (Fo, Devin Cloud, Cursor Cloud): it runs on its maker's
@@ -3128,14 +3138,15 @@ class NewHarnessController extends ChangeNotifier {
       if (!isHarnessId(id) && compatibleEngines.contains(id)) _engineOption(id),
   ]);
 
-  /// An agent's row. The Finder reads this computer's disk, so on any other
-  /// machine its row says so instead of opening.
+  /// An agent's row. The Finder names the chat it opens with, and reads this
+  /// computer's disk, so on any other machine its row says so instead.
   NewHarnessOption _engineOption(String id) {
     final finderElsewhere = isFinderEngine(id) && !canOpenFinderOn(_machine);
     return NewHarnessOption(
       id: id,
       title: labelOf(id),
       engine: id,
+      detail: isFinderEngine(id) ? 'With a ${labelOf(finderChat)} chat' : '',
       enabled: !finderElsewhere,
       why: finderElsewhere ? kFinderElsewhere : null,
     );
@@ -3795,7 +3806,7 @@ class NewHarnessController extends ChangeNotifier {
         'will not be sent. Press again to make it anyway.',
       );
     }
-    if (isFinder) return _openFinder();
+    if (isFinder && !canOpenFinderOn(_machine)) return _fail(kFinderElsewhere);
     final machine = _machine;
     if (machine == null) {
       error = 'Choose a machine.';
@@ -3807,7 +3818,7 @@ class NewHarnessController extends ChangeNotifier {
     var harness = asGuest ? null : _harnessId;
     final model = asGuest ? null : _model;
     final terminal = isTerminalEngine(choice);
-    final base = choice;
+    final base = _base;
     // The daemon's launch installs a missing engine inside its new terminal.
     // A cached availability probe must not block that first launch.
     final recheck = checking;
@@ -3976,9 +3987,17 @@ class NewHarnessController extends ChangeNotifier {
         destination?.stageAttachments == null) {
       _deliverFiles(attempt.agentId, files, launchMessage);
     }
+    if (failure == null && isFinder && attempt.agentId != null) {
+      final root = attempt.preparedFolder ?? folder;
+      final problem = root == null
+          ? 'The chat has no folder for the Finder to show.'
+          : app.openFinderBeside(_machineId, attempt.agentId!, root);
+      if (problem != null) return _fail('Chat started. $problem');
+    }
     // Creation can replace an embedded form before this future returns. Save
-    // the confirmed choices even if that form has already been disposed.
-    if (failure == null && attempt.agentId != null) {
+    // the confirmed choices even if that form has already been disposed. A
+    // Finder is not remembered as the agent: the next box would open on it.
+    if (failure == null && attempt.agentId != null && !isFinder) {
       unawaited(
         app.agentPreference.remember(
           choice,
@@ -4022,28 +4041,6 @@ class NewHarnessController extends ChangeNotifier {
     }
     busy = false;
     status = null;
-    return NewHarnessOutcome.created;
-  }
-
-  /// Opens the Finder where the harness would have gone. Nothing starts on
-  /// the machine, so there is nothing to wait for — and nothing remembered
-  /// as the agent of a launch, which would make it the next box's default.
-  NewHarnessOutcome _openFinder() {
-    if (!canOpenFinderOn(_machine)) return _fail(kFinderElsewhere);
-    final folder = _project.folder;
-    if (folder == null) {
-      focusField(NewHarnessField.projectMenu);
-      return _fail('Choose an existing folder to open in Finder.');
-    }
-    final failure = app.openFinderPane(
-      _machineId,
-      folder,
-      swarmId: _targetId,
-      split: split,
-      placement: effectivePlacement,
-    );
-    if (failure != null) return _fail(failure);
-    error = null;
     return NewHarnessOutcome.created;
   }
 

@@ -459,8 +459,12 @@ add a kind there, not at the call site.
   that predates the type goes silent, which the app treats as "not supported" — never an error.
 - **A Finder tile is a folder, not a terminal** (`lib/finder/`, `PaneKind.finder`), modelled on Orca's
   Explorer, Source Control and editor tabs. New Harness lists Finder beside Terminal
-  (`kFinderEngine`); choosing it opens a tile through `AppNotifier.openFinderPane` — no agent is
-  created, so like every viewer it is never in the saved layout or the desk. Left: Files (a lazy
+  (`kFinderEngine`), and a Finder never opens alone (owner, 2026-10-20): choosing it starts a chat
+  (`NewHarnessController.finderChat` — the last launched agent, else the signed-in one, else the
+  default; its defaults, no worktree, the first message goes to it) and
+  `AppNotifier.openFinderBeside` puts the tile LEFT of that terminal at 70/30, as a harness's web
+  viewer sits. It is the chat's viewer (`ownerAgentId`, `TerminalPane.viewsAgent`): it moves and
+  closes with the terminal and, like every viewer, is not in the saved layout or the desk. Left: Files (a lazy
   tree with Git colours, ignored entries faint via `git check-ignore`, a right-click menu, names
   typed in place, Trash rather than delete) or Changes (Conflicts / Changes / Staged / Untracked
   with +/- counts, Stage, Unstage, Discard). Right: tabs — a single click opens a preview tab that

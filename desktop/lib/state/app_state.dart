@@ -3166,10 +3166,7 @@ class AppNotifier extends ChangeNotifier {
         .where(
           (p) =>
               identical(p, pane) ||
-              (!pane.isWeb &&
-                  p.isWeb &&
-                  p.machineId == pane.machineId &&
-                  p.ownerAgentId == pane.agentId),
+              p.viewsAgent(pane.machineId, pane.agentId),
         )
         .toList();
     return _afterCloseGuards(
@@ -11783,8 +11780,7 @@ class AppNotifier extends ChangeNotifier {
     for (final pane in allPanes.toList()) {
       final owned =
           pane.machineId == machineId &&
-          (pane.agentId == agentId ||
-              (pane.isWeb && pane.ownerAgentId == agentId));
+          (pane.agentId == agentId || pane.viewsAgent(machineId, agentId));
       if (!owned) continue;
       // The explicit Close owns these panes until its disk-safe acknowledgement,
       // so it can preserve recently-closed layout and composer history normally.
@@ -11894,28 +11890,33 @@ class AppNotifier extends ChangeNotifier {
         viewerError: agent.viewerError,
         ownerAgentId: agent.id,
       );
-      swarm.panes.insert(insertion, pane);
+      _insertViewer(swarm, insertion, pane);
       // Counts opening a pane with a URL or a known launch error, not rendering its private page.
       productMeasurement.begin(ProductFlow.viewerOpen)(
         agent.viewerError == null ? ProductOutcome.ok : ProductOutcome.failed,
       );
-      // The same bookkeeping a split does when it grows the grid by one:
-      // pins past the insertion slide right, and the shape is re-derived.
-      swarm.pinnedSlots.updateAll(
-        (_, slot) => slot >= insertion ? slot + 1 : slot,
-      );
-      swarm.arranged = null;
-      swarm.arrangedKey = null;
-      // Alone with its terminal, the viewer takes 70% of the tab and the
-      // assistant keeps 30%. Only when nobody has sized this pair
-      // by hand: a manual layout is the user's.
-      if (swarm.panes.length == 2 && swarm.paneSizes['2:manual'] == null) {
-        swarm.savePaneSizes('2:manual', PaneArrangement.viewerBesideTerminal);
-      }
       changed = true;
     }
     if (changed) _persistLayout();
     return changed;
+  }
+
+  /// Puts a viewer into [swarm] at [insertion], beside its terminal.
+  void _insertViewer(Swarm swarm, int insertion, TerminalPane viewer) {
+    swarm.panes.insert(insertion, viewer);
+    // The same bookkeeping a split does when it grows the grid by one:
+    // pins past the insertion slide right, and the shape is re-derived.
+    swarm.pinnedSlots.updateAll(
+      (_, slot) => slot >= insertion ? slot + 1 : slot,
+    );
+    swarm.arranged = null;
+    swarm.arrangedKey = null;
+    // Alone with its terminal, the viewer takes 70% of the tab and the
+    // assistant keeps 30%. Only when nobody has sized this pair
+    // by hand: a manual layout is the user's.
+    if (swarm.panes.length == 2 && swarm.paneSizes['2:manual'] == null) {
+      swarm.savePaneSizes('2:manual', PaneArrangement.viewerBesideTerminal);
+    }
   }
 
   /// Opening an essential (Harness Monitor, Memories) reveals its ordinary DSH pair: its viewer is
@@ -16629,75 +16630,38 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Lays [target] out after a new tile went in at [insertion]: a split keeps
-  /// the arrangement it previewed, and an automatic placement reflows the tab.
-  void _arrangeNewPane(
-    Swarm target,
-    int insertion, {
-    PaneSplitRequest? split,
-    bool autoTile = false,
-  }) {
-    final count = target.panes.length;
-    if (autoTile && split == null) {
-      // A new pane reflows the whole tab. Old manual splits and remembered
-      // sizes for this count must not silently override automatic placement.
-      target.presets.remove(count);
-      target.paneSizes.removeWhere((key, _) => key.startsWith('$count:'));
-      target.arranged = null;
-      target.arrangedKey = null;
-    }
-    if (split != null) {
-      target.pinnedSlots.updateAll(
-        (_, slot) => slot >= insertion ? slot + 1 : slot,
+  /// Opens a Finder tile on [root] LEFT of [agentId]'s terminal, where a
+  /// harness's viewer sits: New Harness's Finder is a folder with a chat
+  /// beside it, never a folder alone. It is that chat's viewer from then on
+  /// ([TerminalPane.viewsAgent]) — it moves and closes with the terminal — and,
+  /// like every viewer, it is not saved. Returns why it could not open, or null.
+  String? openFinderBeside(String machineId, String agentId, String root) {
+    for (final swarm in swarms) {
+      final at = swarm.panes.indexWhere(
+        (pane) =>
+            !pane.isViewer &&
+            pane.machineId == machineId &&
+            pane.agentId == agentId,
       );
-      final key = '$count:manual';
-      target.savePaneSizes(key, split.after);
-      target.arranged = split.after;
-      target.arrangedKey = key;
+      if (at < 0) continue;
+      if (swarm.panes.length >= maxPanes) {
+        return 'This tab is full, so the Finder could not open beside the chat.';
+      }
+      _insertViewer(
+        swarm,
+        at,
+        TerminalPane(
+          id: _nextPaneId++,
+          machineId: machineId,
+          kind: PaneKind.finder,
+          finderRoot: root,
+          ownerAgentId: agentId,
+        ),
+      );
+      notifyListeners();
+      return null;
     }
-  }
-
-  /// Opens a Finder tile on [root] (`lib/finder/`), where New Harness puts a
-  /// harness: [split]'s place, a new tab, or the end of the target tab. Not an
-  /// agent, so nothing is created on the machine and the tile is not saved.
-  /// Returns why it could not open, or null.
-  String? openFinderPane(
-    String machineId,
-    String root, {
-    String? swarmId,
-    PaneSplitRequest? split,
-    HarnessPlacement? placement,
-  }) {
-    final targetId = swarmId ?? activeSwarmId;
-    if (_creationPlacementError(targetId, split, placement: placement)
-        case final error?) {
-      return error;
-    }
-    if (placement == HarnessPlacement.newTab) newSwarm();
-    final target = placement == HarnessPlacement.newTab
-        ? activeSwarm
-        : swarms.firstWhere((s) => s.id == targetId);
-    final insertion = split == null
-        ? target.panes.length
-        : split.paneIds.indexOf(split.paneId) + 1;
-    final pane = TerminalPane(
-      id: _nextPaneId++,
-      machineId: machineId,
-      kind: PaneKind.finder,
-      finderRoot: root,
-    );
-    target.panes.insert(insertion.clamp(0, target.panes.length), pane);
-    _arrangeNewPane(
-      target,
-      insertion,
-      split: split,
-      autoTile: placement != null,
-    );
-    target.focusedPaneId = pane.id;
-    target.zoomedPaneId = null;
-    if (target == activeSwarm && split != null) _paneFocusRequest++;
-    notifyListeners();
-    return null;
+    return 'The chat closed before its Finder could open.';
   }
 
   Future<void> assignAgentToPane(
@@ -16872,13 +16836,31 @@ class AppNotifier extends ChangeNotifier {
         pendingLayout.tiles.length == targetPanes.length) {
       target.savePaneSizes('${targetPanes.length}:manual', pendingLayout);
     }
+    if (autoTile && split == null) {
+      // A new pane reflows the whole tab. Old manual splits and remembered
+      // sizes for this count must not silently override automatic placement.
+      target.presets.remove(targetPanes.length);
+      target.paneSizes.removeWhere(
+        (key, _) => key.startsWith('${targetPanes.length}:'),
+      );
+      target.arranged = null;
+      target.arrangedKey = null;
+    }
     if (beside != null) {
       // Pins stay with their panes, wherever the new tile moved them.
       target.pinnedSlots.updateAll(
         (id, _) => targetPanes.indexWhere((p) => p.id == id),
       );
     }
-    _arrangeNewPane(target, insertion, split: split, autoTile: autoTile);
+    if (split != null) {
+      target.pinnedSlots.updateAll(
+        (_, slot) => slot >= insertion ? slot + 1 : slot,
+      );
+      final key = '${targetPanes.length}:manual';
+      target.savePaneSizes(key, split.after);
+      target.arranged = split.after;
+      target.arrangedKey = key;
+    }
     if (firstAgent &&
         !target.nameIsCustom &&
         !target.isCompanions &&
@@ -17567,9 +17549,7 @@ class AppNotifier extends ChangeNotifier {
     final viewers = <TerminalPane>[];
     if (!pane.isWeb && pane.agentId != null) {
       for (final viewer in source.panes.toList()) {
-        if (viewer.isWeb &&
-            viewer.machineId == pane.machineId &&
-            viewer.ownerAgentId == pane.agentId) {
+        if (viewer.viewsAgent(pane.machineId, pane.agentId)) {
           source.remove(viewer);
           viewers.add(viewer);
         }
@@ -17650,11 +17630,7 @@ class AppNotifier extends ChangeNotifier {
     }
     bool closesWithPane(TerminalPane candidate) =>
         candidate == pane ||
-        (!pane.isWeb &&
-            pane.agentId != null &&
-            candidate.isWeb &&
-            candidate.machineId == pane.machineId &&
-            candidate.ownerAgentId == pane.agentId);
+        candidate.viewsAgent(pane.machineId, pane.agentId);
     if (tab.kind == 'harness' &&
         tab.panes.every(closesWithPane) &&
         !_activeAgentCreations.any((attempt) => attempt._targetId == tab.id)) {
@@ -17691,9 +17667,7 @@ class AppNotifier extends ChangeNotifier {
     // viewer's own close above is different — it is a choice about the page.
     if (!pane.isWeb && pane.agentId != null) {
       for (final viewer in tab.panes.toList()) {
-        if (viewer.isWeb &&
-            viewer.machineId == pane.machineId &&
-            viewer.ownerAgentId == pane.agentId) {
+        if (viewer.viewsAgent(pane.machineId, pane.agentId)) {
           tab.remove(viewer);
         }
       }
@@ -18162,9 +18136,7 @@ class AppNotifier extends ChangeNotifier {
         swarm.remove(pane);
         released.add(pane);
         for (final viewer in swarm.panes.toList()) {
-          if (viewer.isWeb &&
-              viewer.machineId == pane.machineId &&
-              viewer.ownerAgentId == pane.agentId) {
+          if (viewer.viewsAgent(pane.machineId, pane.agentId)) {
             swarm.remove(viewer);
           }
         }
