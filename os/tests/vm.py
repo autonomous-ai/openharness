@@ -384,7 +384,10 @@ class VM:
                 pass
         if status or any(result.get('status') == 'error' for result in results):
             raise RuntimeError('The test account sign-in failed: ' + json.dumps(results[-1:] or output[-300:]))
-        self.command('for n in $(seq 1 60); do curl -s http://127.0.0.1:18473/api/status | '
+        # Asked over the daemon's own socket, as wait-runtime does: over the loopback port a caller
+        # without the local credential is told only which daemon this is, never `signedIn`.
+        self.command('for n in $(seq 1 60); do s=$(curl -s http://127.0.0.1:18473/api/status | jq -r ".localSocket // empty"); '
+                     '[ -S "$s" ] && curl -s --unix-socket "$s" http://localhost/api/status | '
                      'grep -q \'"signedIn":true\' && exit 0; sleep 1; done; exit 1', timeout=75)
         # Signed in from outside hn (as a phone's setup does), hn learns it at its next account check,
         # at most a minute away: the page leaves once it has.
