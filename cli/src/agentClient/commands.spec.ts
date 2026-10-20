@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, waitCommand, whoamiCommand, type ClientDeps } from './commands.js'
+import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, waitCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
 import { agentSettingsPath } from '../lib/agentSettings.js'
@@ -1657,5 +1657,98 @@ describe('harness whoami', () => {
     const h = harness(new FakeDaemon())
     expect(await whoamiCommand(['x'], h.deps)).toBe(EXIT.usage)
     expect(h.err[0]).toBe('harness whoami takes no names and no --machine: it is about you, here.')
+  })
+})
+
+describe('a cloud harness (#1444)', () => {
+  const cloud = (id: string, state: string, over: Partial<Frame> = {}) => frame(id, {
+    engine: 'devin-cloud', location: 'cloud', tmuxPane: null, project: null, sessionId: id,
+    activity: { state: state === 'working' || state === 'starting' ? 'working' : 'idle' },
+    cloud: { state, links: [{ label: 'Session', url: 'https://app.devin.ai/sessions/1' }] }, ...over,
+  })
+  const transcript = (d: FakeDaemon, messages: Array<{ from: string; text: string }>) => {
+    d.extra.cloud_transcript = () => ({ messages: messages.map((m, i) => ({ id: String(i), at: '', ...m })), total: messages.length })
+  }
+
+  it('shows its state from the cloud, its last words and its links, reading no screen', async () => {
+    const d = new FakeDaemon()
+    d.frames = [cloud('devin', 'idle')]
+    transcript(d, [{ from: 'person', text: 'old' }, { from: 'agent', text: 'old answer' }, { from: 'person', text: 'reply to the thread' }, { from: 'agent', text: 'On it.' }, { from: 'agent', text: 'Replied.' }])
+    const h = harness(d)
+    expect(await showCommand(['devin', '--json'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ state: 'idle', ask: 'reply to the thread', answer: 'On it.\n\nReplied.',
+      links: [{ label: 'Session', url: 'https://app.devin.ai/sessions/1' }] })
+    expect(d.requests.some((r) => r.type === 'agent_close' || r.type === 'session_get')).toBe(false)
+    const text = harness(d)
+    expect(await showCommand(['devin'], text.deps)).toBe(EXIT.ok)
+    expect(text.out).toContain('Session: https://app.devin.ai/sessions/1')
+  })
+
+  it('says it needs the person while it asks, though its frame says idle, and how the answer goes to it', async () => {
+    const d = new FakeDaemon()
+    d.frames = [cloud('devin', 'needs_input')]
+    transcript(d, [{ from: 'person', text: 'go' }, { from: 'agent', text: 'Which branch?' }])
+    const h = harness(d)
+    expect(await showCommand(['devin', '--json'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ state: 'needs-input', needsPerson: true, answer: 'Which branch?',
+      next: [{ run: "harness reply devin -- <the person's answer>" }] })
+    const w = harness(d)
+    expect(await waitCommand(['devin'], w.deps)).toBe(EXIT.needsInput)
+  })
+
+  it('waits while it starts and works, and returns when it is done or failed', async () => {
+    const d = new FakeDaemon()
+    const states = ['starting', 'working', 'working', 'idle']
+    d.extra.agents_list = () => ({ agents: [cloud('devin', states.length > 1 ? states.shift()! : states[0])] })
+    const h = harness(d)
+    expect(await waitCommand(['devin'], h.deps)).toBe(EXIT.ok)
+    expect(h.out).toEqual(['devin: idle · read it: harness show devin'])
+    expect(d.requests.some((r) => r.type === 'agent_close')).toBe(false)
+    d.extra.agents_list = () => ({ agents: [cloud('devin', 'failed')] })
+    const f = harness(d)
+    expect(await waitCommand(['devin', '--json'], f.deps)).toBe(EXIT.stopped)
+    expect(JSON.parse(f.out.join('\n')).harnesses[0].state).toBe('failed')
+  })
+
+  it('replies with the person\'s words, and refuses an agent, a terminal harness and no words', async () => {
+    const d = new FakeDaemon()
+    d.frames = [cloud('devin', 'needs_input'), frame('kid')]
+    const sent: Record<string, unknown>[] = []
+    d.extra.cloud_send = (payload) => { sent.push(payload); return { ok: true } }
+    const h = harness(d)
+    expect(await replyCommand(['devin', '--', 'the', 'release', 'branch'], h.deps)).toBe(EXIT.ok)
+    expect(sent).toEqual([{ agentId: 'devin', text: 'the release branch' }])
+    expect(h.out.join('\n')).toMatch(/^Sent to devin\.\nNext: harness wait devin/)
+    expect(await replyCommand(['kid', '--', 'x'], harness(d).deps)).toBe(EXIT.usage)
+    expect(await replyCommand(['devin'], harness(d).deps)).toBe(EXIT.usage)
+    d.extra.cloud_send = () => ({ error: 'CLOUD_FAILED', detail: 'Devin Cloud is still working.' })
+    const busy = harness(d)
+    expect(await replyCommand(['devin', '--', 'x'], busy.deps)).not.toBe(EXIT.ok)
+    expect(busy.err.join('\n')).toMatch(/still working/)
+    d.frames.push(frame('lead'))
+    const before = d.requests.length
+    const agent = harness(d)
+    expect(await replyCommand(['devin', '--', 'x'], agent.deps)).toBe(EXIT.refused)
+    expect(d.requests.slice(before).some((r) => r.type === 'cloud_send')).toBe(false)
+    // The agent is told to tell the person, never to run the reply it would be refused.
+    const shown = harness(d)
+    expect(await showCommand(['devin', '--json'], shown.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(shown.out.join('\n')).next).toEqual([{ tell: expect.stringMatching(/tell the person/) }])
+  })
+
+  it('says a failed one failed in the cloud, shows nothing read when its conversation cannot be read, and will not close one', async () => {
+    const d = new FakeDaemon()
+    d.frames = [cloud('devin', 'failed')]
+    const w = harness(d)
+    expect(await waitCommand(['devin'], w.deps)).toBe(EXIT.stopped)
+    expect(w.out).toEqual(['devin: failed · it failed in the cloud; what it said and its links: harness show devin'])
+    d.extra.cloud_transcript = () => ({ error: 'SERVICE_UNAVAILABLE' })
+    const s = harness(d)
+    expect(await showCommand(['devin'], s.deps)).toBe(EXIT.ok)
+    expect(s.out).toContain('No turn yet.')
+    const c = harness(d)
+    expect(await closeCommand(['devin'], c.deps)).toBe(EXIT.usage)
+    expect(c.err.join('\n')).toMatch(/stop it in Harness/)
+    expect(d.requests.some((r) => r.type === 'agent_close' && r.payload.mode !== 'inspect')).toBe(false)
   })
 })

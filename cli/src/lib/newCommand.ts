@@ -7,6 +7,7 @@ import { formatNext, type NextStep } from '../agentClient/next.js'
 import { folderTrust } from '../engines/launchPrep.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineName } from '../messages/model.js'
+import { isCloudAgent } from './cloudAgents.js'
 import { projectFolderSlug } from './agentNames.js'
 import { permissionModeFlags } from './engineLaunch.js'
 import { projectsRoot } from './projectFolder.js'
@@ -44,6 +45,10 @@ export interface NewArgs {
   modeGiven: boolean
   prompt: string | null
   name: string | null
+  /** A cloud coding agent's GitHub repository, `owner/name` or its address, as typed: the machine reads it. */
+  repo: string | null
+  /** Devin Cloud's ACU limit. */
+  acuLimit: number | null
   json: boolean
 }
 
@@ -70,6 +75,9 @@ export const NEW_USAGE = [
   '  -- <words…>    everything after -- is the first message, unquoted:',
   '                   harness new codex -- fix the flaky login test',
   '  --name <n>     the harness\'s name until the agent titles its session',
+  '  --repo <r>     a cloud coding agent\'s GitHub repository: owner/name or https://github.com/owner/name',
+  '                 (Cursor Cloud needs one; Devin Cloud works without)',
+  '  --acu-limit <n>  the most ACUs Devin Cloud may spend (1-1000; 5 when left out)',
   '  --json         print the result as one JSON line',
   '',
   'An agent refused (its limits, or the person has not let agents start agents) exits 5: do not retry.',
@@ -88,6 +96,8 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
   let modeGiven = false
   let prompt: string | null = null
   let name: string | null = null
+  let repo: string | null = null
+  let acuLimit: number | null = null
   let json = false
   const value = (flag: string, index: number): string => {
     const next = argv[index + 1]
@@ -108,6 +118,16 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
     else if (word === '--mode') { mode = value(word, i); modeGiven = true; i++ }
     else if (word === '--prompt' || word === '--task') { prompt = value(word, i); i++ }
     else if (word === '--name') { name = value(word, i); i++ }
+    else if (word === '--repo') {
+      repo = value(word, i).trim()
+      if (!repo) throw new NewUsageError('--repo needs a value.')
+      i++
+    }
+    else if (word === '--acu-limit') {
+      acuLimit = Number(value(word, i))
+      if (!Number.isInteger(acuLimit) || acuLimit < 1 || acuLimit > 1000) throw new NewUsageError('--acu-limit takes a whole number from 1 to 1000.')
+      i++
+    }
     else if (word === '--machine') {
       if (machine !== null) throw new NewUsageError('Name one machine.')
       machine = value(word, i).trim()
@@ -130,6 +150,9 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
       folder = word
     }
     else words.push(word)
+  }
+  if ((repo !== null || acuLimit !== null) && !isCloudAgent(words[0])) {
+    throw new NewUsageError(`${repo !== null ? '--repo' : '--acu-limit'} is for a cloud agent: harness new devin-cloud ${repo !== null ? '--repo owner/name' : '--acu-limit 10'} -- <task>`)
   }
   if (!MODES.has(mode)) throw new NewUsageError(`--mode is one of ${[...MODES].join(', ')}.`)
   if (words.length > 2) throw new NewUsageError(`Too many words: ${words.slice(2).join(' ')}.`)
@@ -164,7 +187,7 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string })
     if (machine === null) cwd = env.cwd
     else projectName = ''
   }
-  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, modeGiven, prompt, name, json }
+  return { agent: words[0] ?? 'claude', machine, cwd, projectName, mode, modeGiven, prompt, name, repo, acuLimit, json }
 }
 
 /** The `agent_create` payload for [args]: the same fields the app's box sends. [baseEngine] is the
@@ -198,6 +221,8 @@ export function newAgentPayload(args: NewArgs, cwd: string | null, baseEngine = 
     ...(terminal || mode === null ? {} : { permissionMode: mode }),
     ...(args.prompt ? { prompt: args.prompt } : {}),
     ...(args.name ? { name: args.name } : {}),
+    ...(args.repo ? { repositoryUrl: args.repo } : {}),
+    ...(args.acuLimit !== null ? { acuLimit: args.acuLimit } : {}),
     creationId: randomUUID(),
   }
 }

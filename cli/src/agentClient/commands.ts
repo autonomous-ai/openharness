@@ -29,7 +29,7 @@ import { formatNext, type NextStep } from './next.js'
 import { AgentClientError, openDaemon, whereFor, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath, type Pending, type Started } from './ledger.js'
 import { messagesRpc, type Rpc } from '../messages/rpc.js'
-import { asSaid, callerOf, clip, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type Frame, type HistoryEvent, type Row, type State } from './model.js'
+import { asSaid, callerOf, clip, cloudTurn, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
 export interface ClientDeps {
   pane?: string | undefined
@@ -60,6 +60,11 @@ ${ON_MACHINE}`
 export const SHOW_USAGE = `Usage: harness show [--machine <name>] <name> [--chars N] [--json]
 
 A harness's state and its last turn: what it was asked and what it answered (the first N characters, 4000 by default).
+${ON_MACHINE}`
+export const REPLY_USAGE = `Usage: harness reply [--machine <name>] <name> [--json] -- <words…>
+
+Says <words> to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer to the question it asked, or what to do next.
+The person's, or a program's acting for them; an agent does not answer for the person.
 ${ON_MACHINE}`
 export const WAIT_USAGE = `Usage: harness wait [--machine <name>] <name>[,<name>…] [--any] [--timeout 30m] [--json]
 
@@ -411,6 +416,11 @@ async function inspect(t: { daemon: Daemon; frame: Frame }): Promise<Screen | nu
 
 /** The last turn, from the end of the transcript, a page at a time: never the whole file (the attach OOM). */
 async function readLastTurn(t: { daemon: Daemon; frame: Frame }, pages = 4) {
+  if (t.frame.location === 'cloud') {
+    const reply = await t.daemon.request('cloud_transcript', { agentId: t.frame.id })
+    if (typeof reply.error === 'string') return null
+    return cloudTurn(Array.isArray(reply.messages) ? reply.messages as Array<Record<string, unknown>> : [])
+  }
   if (!t.frame.sessionId) return null
   let before: string | undefined
   let events: HistoryEvent[] = []
@@ -646,7 +656,8 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
     try {
       t = await target(s, o, names[0], away)
       const listed = stateOf(t.frame)
-      const screen = listed === 'stopped' || listed === 'offline' ? null : await inspect(t)
+      // A cloud harness has no screen: its state is the cloud service's.
+      const screen = listed === 'stopped' || listed === 'offline' || t.frame.location === 'cloud' ? null : await inspect(t)
       const state: State = screen === 'draft' ? 'idle' : screen ?? listed
       const turn = await readLastTurn(t)
       const parent = o.ledger.parentOf({ machineId: t.machineId, agentId: t.frame.id })
@@ -654,12 +665,17 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       const answer = turn?.answer ?? ''
       // A name the verbs take: an unnamed harness is called by its session title, a sentence, so by its id's start.
       const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
-      const next = showNext(s.env, state, t.yours, at)
+      const next = t.frame.location === 'cloud' && state === 'needs-input' && !o.caller && !o.orphan
+        // Answered by the person, or a program speaking for them (the lamp): no agent tool says it.
+        ? [{ run: `harness reply ${at} -- <the person's answer>`, when: 'it waits for the person: tell them what it asks' }]
+        // `close` takes no cloud harness.
+        : showNext(s.env, state, t.yours && t.frame.location !== 'cloud', at)
       const result = {
         name: t.frame.name, id: t.frame.id, agent: engineName(t.frame.engine ?? ''), machine: t.machine, state, startedBy,
         folder: t.frame.project?.cwd ?? null, branch: t.frame.project?.branch ?? null,
         ask: turn?.ask ?? null, answer: clip(answer, chars), truncated: answer.length > chars, tools: turn?.tools ?? 0, next,
         ...(state === 'needs-input' ? { needsPerson: true } : {}),
+        ...(t.frame.cloud?.links?.length ? { links: t.frame.cloud.links } : {}),
       }
       if (flags.has('--json')) s.out(JSON.stringify(result, null, 1))
       else {
@@ -672,9 +688,38 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
           s.out(result.answer || '(no text)')
           if (result.truncated) s.out(`… ${answer.length - chars} more characters: ${step(s.env, 'show', onAway(result.name ?? t.frame.id, away), { flag: `--chars ${answer.length}`, arg: `chars: ${answer.length}` })}`)
         }
+        for (const link of result.links ?? []) s.out(`${link.label}: ${link.url}`)
         const said = formatNext(next)
         if (said) s.out(said)
       }
+      return EXIT.ok
+    } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
+  })
+}
+
+// ── reply ──────────────────────────────────────────────────────────────────────────────────────────
+
+export function replyCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
+  return run(REPLY_USAGE, deps, wantsJson, argv, async (s) => {
+    const dash = argv.indexOf('--')
+    const { names, flags, machine } = words(dash < 0 ? argv : argv.slice(0, dash), { '--json': 'flag' })
+    const text = dash < 0 ? '' : argv.slice(dash + 1).join(' ').trim()
+    if (names.length !== 1) throw new UsageError(names.length ? 'Name one harness.' : 'Name the harness to reply to.')
+    if (!text) throw new UsageError('Give the words after --: harness reply <name> -- <words>')
+    const away = await machineOf(s, s.where(), machine)
+    const o = await opened(s)
+    let t: Target | null = null
+    try {
+      if (o.caller || o.orphan) throw new AgentClientError('NOT_YOURS', 'Only the person replies to a cloud harness: tell them what it asked.')
+      t = await target(s, o, names[0], away)
+      const name = t.frame.name ?? t.frame.id.slice(0, 8)
+      // A terminal agent is typed to in its pane; nothing here sends it words.
+      if (t.frame.location !== 'cloud') throw new UsageError(`${name} is not a cloud harness: open it in Harness to talk to it.`)
+      const reply = await t.daemon.request('cloud_send', { agentId: t.frame.id, text }, 3 * 60_000)
+      if (typeof reply.error === 'string') throw new AgentClientError(reply.error, typeof reply.detail === 'string' && reply.detail ? reply.detail : `${name} did not take it (${reply.error}).`)
+      const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
+      const next: NextStep[] = [{ run: step(s.env, 'wait', at), when: 'for its answer' }]
+      s.out(flags.has('--json') ? JSON.stringify({ ok: true, name, id: t.frame.id, next }) : `Sent to ${name}.\n${formatNext(next)}`)
       return EXIT.ok
     } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
   })
@@ -769,6 +814,11 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         if (!frame) return ended(t, (await list(t.daemon, true)).some((f) => f.id === t.frame.id) ? 'stopped' : 'gone')
         t.frame = frame
         if (frame.status === 'stopped') return ended(t, 'stopped')
+        // A cloud harness says where it is itself, with no screen to read: done once it is no longer starting or working.
+        if (frame.location === 'cloud') {
+          const state = stateOf(frame)
+          return state === 'idle' || state === 'needs-input' || state === 'failed' ? state : null
+        }
         // The daemon says it is working: no need to read its screen.
         const screen = frame.activity?.state === 'working' ? 'working' : await inspect(t)
         if (screen === 'working') { sawWorking.add(t); idle.delete(t); return null }
@@ -845,6 +895,7 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
           : r.state === 'needs-input' ? 'it waits for the person (a question or a permission); only the person answers it'
           : r.state === 'timeout' ? `still working; wait again or read it: ${read}`
           : r.state === 'installing' || r.state === 'starting' ? `${askedLine(s.env, following.find((a) => a.row.creation.creationId === r.id)!, away)}`
+          : r.state === 'failed' && targets.some((t) => t.frame.id === r.id) ? `it failed in the cloud; what it said and its links: ${read}`
           : r.state === 'failed' ? `it never started: ${r.detail || 'its machine refused it'}`
           // Harness closes one another agent started once it has sat idle half an hour (services/agentCleanup.ts): its
           // answer is still there to read.
@@ -895,6 +946,8 @@ export function closeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
         return EXIT.ok
       }
       const name = t.frame.name ?? t.frame.id.slice(0, 8)
+      // `agent_close` has no cloud harness to close (lib/closeAgentService.ts): it answered "changed, try again" for good.
+      if (t.frame.location === 'cloud') throw new UsageError(`${name} runs in its maker's cloud: stop it in Harness. Its conversation is kept either way.`)
       if (o.orphan) throw new AgentClientError('NOT_YOURS', ORPHAN, 'ORPHAN')
       if (o.caller && o.caller.agentId === t.frame.id && t.machineId === o.where.machineId) {
         throw new AgentClientError('NOT_YOURS', 'That is your own harness. The person closes it.')
