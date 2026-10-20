@@ -107,6 +107,41 @@ void main() {
         .setMockMethodCallHandler(SystemChannels.platform, null);
   });
 
+  for (final letter in [LogicalKeyboardKey.keyC, LogicalKeyboardKey.keyV]) {
+    onPlatform(TargetPlatform.windows, 'held $letter owns repeats and release', (tester) async {
+      final app = createApp();
+      app.stateOf('m')!.terminalPasteRawAvailable = true;
+      final frames = <TerminalBinaryFrame>[];
+      final session = liveSession('a0', frames);
+      session.terminal.write('hello');
+      await mount(tester, app, session);
+      final view = tester.widget<TerminalView>(find.byType(TerminalView));
+      if (letter == LogicalKeyboardKey.keyC) {
+        view.controller!.setSelection(session.terminal.buffer.createAnchor(0, 0),
+          session.terminal.buffer.createAnchor(5, 0));
+      }
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(letter);
+      await tester.pump();
+      await tester.sendKeyRepeatEvent(letter);
+      // Ownership lasts even if the modifier is released before the letter.
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyRepeatEvent(letter);
+      await tester.sendKeyUpEvent(letter);
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(input(frames), isEmpty);
+      expect(reads, letter == LogicalKeyboardKey.keyV ? 1 : 0);
+      expect(frames.where((f) => f.kind == TerminalBinaryKind.paste),
+        hasLength(letter == LogicalKeyboardKey.keyV ? 1 : 0));
+      frames.clear();
+      await key(tester, LogicalKeyboardKey.keyC, ctrl: true);
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(input(frames), '\x03');
+      await tester.pumpWidget(const SizedBox());
+      session.dispose(); app.dispose();
+    });
+  }
+
   onPlatform(
     TargetPlatform.windows,
     'composer Ctrl+V uploads an image without changing the draft',

@@ -123,6 +123,52 @@ void main() {
   });
 
   group('rebindBindings', () {
+    for (final scope in KeymapContext.values) {
+      test('legacy custom alias prefix survives in ${scope.name}', () {
+        debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        final map = ResolvedKeymap(harnessDefaultBindings, KeymapConfig([
+          binding('ctrl+t ctrl+x', 'pane.zoom', context: scope, custom: true),
+        ]));
+        for (final context in KeymapContext.values) {
+          final inherits = scope == KeymapContext.workspace || context == scope ||
+              (scope == KeymapContext.picker && context == KeymapContext.project);
+          expect(map.match(context, [KeyStroke.parse('ctrl+t')]).command,
+              inherits ? null : 'swarm.new');
+          if (inherits) {
+            expect(map.match(context, 'ctrl+t ctrl+x'.split(' ').map(KeyStroke.parse)).command, 'pane.zoom');
+          }
+        }
+      });
+    }
+
+    test('old recorder null rows suppress new aliases but explicit rows win', () {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final upgradedDefaults = harnessDefaultBindings;
+      final oldDefaults = upgradedDefaults.where((row) => !row.outsideTerminal).toList();
+      final saved = rebindBindings(const [], oldDefaults,
+        command: 'swarm.new', context: KeymapContext.workspace,
+        stroke: KeyStroke.parse('f6'));
+      for (final explicit in [false, true]) {
+        final map = ResolvedKeymap(upgradedDefaults, KeymapConfig([
+          if (explicit) binding('ctrl+t', 'pane.zoom', custom: true),
+          ...saved,
+        ]));
+        for (final context in KeymapContext.values) {
+          expect(map.match(context, [KeyStroke.parse('ctrl+t')]).command,
+              explicit ? 'pane.zoom' : null);
+          expect(map.match(context, [KeyStroke.parse('f6')]).command, 'swarm.new');
+        }
+      }
+    });
+
+    test('ordinary defaults still reject custom prefix ambiguity', () {
+      expect(() => ResolvedKeymap([binding('ctrl+t', 'swarm.new')],
+        KeymapConfig([binding('ctrl+t ctrl+x', 'pane.zoom', custom: true)])),
+        throwsFormatException);
+    });
+
     test('rebinding a Windows command drops its Ctrl alias', () {
       debugDefaultTargetPlatformOverride = TargetPlatform.windows;
       addTearDown(() => debugDefaultTargetPlatformOverride = null);

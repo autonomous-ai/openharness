@@ -108,6 +108,24 @@ Widget terminalKeymapHost(
 
 void main() {
   group('native Windows terminal aliases', () {
+    testWidgets('pane header buttons count as outside the terminal view', (tester) async {
+      final map = MemoryKeymap();
+      final focus = FocusNode();
+      var opened = 0, closed = 0, created = 0;
+      await tester.pumpWidget(terminalKeymapHost(map, {
+        'swarm.new': () => opened++, 'swarm.close': () => closed++,
+        'agent.new': () => created++,
+      }, TextButton(focusNode: focus, autofocus: true,
+        onPressed: () {}, child: const Text('Pane action'))));
+      await tester.pump();
+      await key(tester, LogicalKeyboardKey.keyT, ctrl: true);
+      await key(tester, LogicalKeyboardKey.keyW, ctrl: true);
+      await key(tester, LogicalKeyboardKey.keyN, ctrl: true);
+      expect([opened, closed, created], [1, 1, 1]);
+      await tester.pumpWidget(const SizedBox());
+      focus.dispose(); map.dispose();
+    }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
+
     testWidgets('Ctrl+T in the terminal view reaches the terminal', (
       tester,
     ) async {
